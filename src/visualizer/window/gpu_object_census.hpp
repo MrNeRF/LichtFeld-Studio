@@ -39,8 +39,6 @@ namespace lfs::vis {
         // True if any destroy-without-create underflow was observed (clamped to 0).
         [[nodiscard]] bool underflowFlagged() const noexcept;
 
-        void reset();
-
     private:
         using Key = std::pair<GpuObjectKind, std::string>;
         std::map<Key, std::int64_t> counts_;

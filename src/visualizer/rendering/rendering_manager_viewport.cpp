@@ -1061,6 +1061,12 @@ namespace lfs::vis {
         }
 
         int band_height_limit = tile_height_limit;
+        // #1574 1-deep export pipelining: submit ticket for band N, render band N+1,
+        // then wait ticket N (memcpy on deliver), submit N+1, ... At most one outstanding
+        // export ticket. With the 3-deep OutputSlotRing + cell pin, Preview reuse of the
+        // sourced ring cell blocks until that ticket retires — so a second outstanding
+        // export ticket is unnecessary for source-image safety.
+        std::optional<std::uint64_t> outstanding_export_ticket;
         for (int tile_y = 0; tile_y < height;) {
             int tile_height = std::min(band_height_limit, height - tile_y);
             const auto intrinsics = previewTileIntrinsics(
@@ -1094,6 +1100,9 @@ namespace lfs::vis {
                               tile_y,
                               tile_height,
                               rendered.error());
+                    if (outstanding_export_ticket) {
+                        (void)vksplat_viewport_renderer_->waitReadbackTicket(*outstanding_export_ticket);
+                    }
                     return {};
                 }
                 tile_height = std::max(kMinPreviewSubdivisionHeight, tile_height / 2);
@@ -1102,20 +1111,39 @@ namespace lfs::vis {
                          tile_y,
                          tile_height);
             }
-            auto copied = vksplat_viewport_renderer_->readOutputImageIntoCpuHwc(
+            // After render of band N: wait prior band's copy (if any), then submit band N.
+            if (outstanding_export_ticket) {
+                auto waited = vksplat_viewport_renderer_->waitReadbackTicket(*outstanding_export_ticket);
+                if (!waited) {
+                    LOG_TRACE("Gaussian preview tiled prior-band readback failed at tile y={}: {}",
+                              tile_y,
+                              waited.error());
+                    return {};
+                }
+                outstanding_export_ticket.reset();
+            }
+            auto ticket = vksplat_viewport_renderer_->submitReadOutputImageIntoCpuHwcTicket(
                 *last_vulkan_context_,
                 VksplatViewportRenderer::OutputSlot::Preview,
                 output,
                 0,
                 tile_y);
-            if (!copied) {
-                LOG_TRACE("Gaussian preview tiled readback failed at tile y={} height={}: {}",
+            if (!ticket) {
+                LOG_TRACE("Gaussian preview tiled readback submit failed at tile y={} height={}: {}",
                           tile_y,
                           tile_height,
-                          copied.error());
+                          ticket.error());
                 return {};
             }
+            outstanding_export_ticket = *ticket;
             tile_y += tile_height;
+        }
+        if (outstanding_export_ticket) {
+            auto waited = vksplat_viewport_renderer_->waitReadbackTicket(*outstanding_export_ticket);
+            if (!waited) {
+                LOG_TRACE("Gaussian preview tiled final-band readback failed: {}", waited.error());
+                return {};
+            }
         }
 
         return std::make_shared<lfs::core::Tensor>(std::move(output));

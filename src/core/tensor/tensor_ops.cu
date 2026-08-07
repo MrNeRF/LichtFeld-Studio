@@ -1933,34 +1933,6 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    // DEPRECATED: Old scalar kernel (kept for compatibility)
-    template <typename T>
-    __global__ void cat_last_dim_kernel(
-        T* output,
-        const T** input_ptrs,
-        const size_t* input_sizes,
-        size_t num_tensors,
-        size_t num_rows,
-        size_t row_size) {
-        size_t row = blockIdx.x * blockDim.x + threadIdx.x;
-        if (row >= num_rows)
-            return;
-
-        size_t result_offset = 0;
-        for (size_t t = 0; t < num_tensors; ++t) {
-            size_t tensor_dim_size = input_sizes[t];
-
-            const T* src = input_ptrs[t] + row * tensor_dim_size;
-            T* dst = output + row * row_size + result_offset;
-
-            for (size_t i = 0; i < tensor_dim_size; ++i) {
-                dst[i] = src[i];
-            }
-
-            result_offset += tensor_dim_size;
-        }
-    }
-
     void launch_cat_last_dim(
         void* output,
         const std::vector<Tensor>& tensors,

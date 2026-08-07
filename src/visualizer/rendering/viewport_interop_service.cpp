@@ -210,6 +210,12 @@ namespace lfs::vis {
 
     void ViewportInteropService::releaseSlotTarget(VulkanContext& context,
                                                    VulkanSceneInteropTarget& target) {
+        // Pending vectors must never outlive the units they reference.
+        if (target.unit != nullptr) {
+            std::erase_if(pending_layout_commits_, [&](const PendingLayoutCommit& commit) {
+                return commit.unit == target.unit;
+            });
+        }
         if (target.pool_serial == 0 || !interop_pool_) {
             target = {};
             return;
@@ -323,6 +329,10 @@ namespace lfs::vis {
     }
 
     void ViewportInteropService::resetChannel(Channel& channel) {
+        // Pending vectors must never outlive the units they reference.
+        std::erase_if(pending_layout_commits_, [&](const PendingLayoutCommit& commit) {
+            return commit.channel == &channel;
+        });
         // split_right / depth_blit clear published_* before the empty-vector early return;
         // scene does not.
         if (channel.policy.publishes_published) {
@@ -638,10 +648,8 @@ namespace lfs::vis {
         assert(target.unit != nullptr);
         auto& unit = *target.unit;
 
-        // Skip the upload (and the queue-blocking layout transitions inside it)
-        // when this slot already holds the same content. Renderer cache-HIT
-        // frames keep image_generation stable while alternating tensor pointers,
-        // so identity-by-pointer is unsafe — use the source generation.
+        // Skip the upload when this slot already holds the same content.
+        // Cache-hit publish is unchanged (immediate, not deferred to frame barriers).
         if (channel.source_generation != 0 &&
             target.uploaded_source_generation == channel.source_generation &&
             unit.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
@@ -651,91 +659,254 @@ namespace lfs::vis {
             return;
         }
 
-        if (unit.layout != VK_IMAGE_LAYOUT_GENERAL) {
-            // Reused units start from a defined tracked layout (typically READ_ONLY).
-            // Never transition from UNDEFINED here — only cold create uses UNDEFINED→GENERAL.
-            std::optional<lfs::core::ScopedTimer> timer;
-            if (channel.policy.log_timer_perf) {
-                timer.emplace("interop.transition_to_GENERAL",
-                              lfs::core::LogLevel::Performance,
-                              LFS_SOURCE_SITE_CURRENT());
-            }
-            const std::uint64_t vulkan_ready_value = ++unit.timeline_value;
-            if (!context.transitionImageLayoutImmediate(
-                    unit.image.image,
-                    unit.layout,
-                    VK_IMAGE_LAYOUT_GENERAL,
-                    VulkanContext::ImmediateTransitionOptions::signalAt(
-                        {unit.semaphore.semaphore, vulkan_ready_value}))) {
-                fail_required_interop(
-                    std::format("image transition to GENERAL failed: {}", context.lastError()));
-            }
-            unit.layout = VK_IMAGE_LAYOUT_GENERAL;
-        }
+        // Defer Phase 1–2 work to prepareFrame so →GENERAL transitions coalesce.
+        pending_uploads_.push_back(ChannelUploadPlan{
+            .channel = &channel,
+            .target = &target,
+        });
+    }
 
-        assert(unit.layout == VK_IMAGE_LAYOUT_GENERAL &&
-               "CUDA surf2Dwrite requires VK_IMAGE_LAYOUT_GENERAL");
-        {
-            std::optional<lfs::core::ScopedTimer> timer;
-            if (channel.policy.log_timer_perf) {
-                timer.emplace("interop.copyTensorToSurface",
-                              lfs::core::LogLevel::Performance,
-                              LFS_SOURCE_SITE_CURRENT());
+    void ViewportInteropService::rollbackUnsubmittedLayoutCommits(VulkanContext& context) {
+        // If endFrame never successfully submitted after recordFrameBarriers, the
+        // GENERAL→READ_ONLY barrier never ran on-device; restore tracked layout.
+        const std::uint64_t successful = context.lastSuccessfulFrameSubmitSerial();
+        for (const auto& commit : pending_layout_commits_) {
+            if (commit.unit == nullptr) {
+                continue;
             }
-            if (!unit.interop.wait(unit.timeline_value, upload_stream_.stream())) {
-                fail_required_interop(std::format("CUDA wait for Vulkan image release failed: {}",
-                                                  unit.interop.lastError()));
-            }
-            if (!unit.interop.copyTensorToSurface(*channel.source_image, upload_stream_.stream())) {
-                fail_required_interop(std::format("CUDA copy failed: {}", unit.interop.lastError()));
+            if (successful <= commit.frame_submit_marker) {
+                commit.unit->layout = VK_IMAGE_LAYOUT_GENERAL;
+                if (commit.channel != nullptr && commit.channel->policy.publishes_published) {
+                    clearPublished(*commit.channel);
+                }
             }
         }
-        const std::uint64_t signal_value = ++unit.timeline_value;
-        {
-            std::optional<lfs::core::ScopedTimer> timer;
-            if (channel.policy.log_timer_perf) {
-                timer.emplace("interop.cuda_signal",
-                              lfs::core::LogLevel::Performance,
-                              LFS_SOURCE_SITE_CURRENT());
-            }
-            if (!unit.interop.signal(signal_value, upload_stream_.stream())) {
-                fail_required_interop(std::format("CUDA signal failed: {}", unit.interop.lastError()));
-            }
-        }
-        {
-            std::optional<lfs::core::ScopedTimer> timer;
-            if (channel.policy.log_timer_perf) {
-                timer.emplace("interop.transition_to_READ_ONLY",
-                              lfs::core::LogLevel::Performance,
-                              LFS_SOURCE_SITE_CURRENT());
-            }
-            if (!context.transitionImageLayoutImmediate(
-                    unit.image.image,
-                    VK_IMAGE_LAYOUT_GENERAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VulkanContext::ImmediateTransitionOptions::waitOn(
-                        {unit.semaphore.semaphore, signal_value},
-                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))) {
-                fail_required_interop(
-                    std::format("Vulkan wait for CUDA signal failed: {}", context.lastError()));
-            }
-        }
-        unit.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        target.uploaded_source_generation = channel.source_generation;
-        ++target.generation;
-        if (channel.policy.publishes_published) {
-            publishFromTarget(channel, target);
-        }
+        pending_layout_commits_.clear();
+    }
+
+    void ViewportInteropService::syncUnsubmittedLayoutCommits(VulkanContext& context) {
+        teardown_context_ = &context;
+        // Prior frame: unrecorded barriers (beginFrame failed) leave layout GENERAL.
+        pending_frame_barriers_.clear();
+        rollbackUnsubmittedLayoutCommits(context);
     }
 
     void ViewportInteropService::prepareFrame(VulkanContext& context, const bool resize_deferring) {
         teardown_context_ = &context;
+        // Frame accounting starts here (prepare runs before beginFrame).
+        context.resetImmediateSubmitsThisFrame();
         ensureUploadStream();
         // Non-blocking drain once per prepareFrame (retired → free when safe).
         drainInteropPool(context, /*force=*/false);
+
+        syncUnsubmittedLayoutCommits(context);
+
+        pending_uploads_.clear();
         prepareChannel(context, channels_->scene, resize_deferring);
         prepareChannel(context, channels_->split_right, resize_deferring);
         prepareChannel(context, channels_->depth_blit, resize_deferring);
+
+        // Phase 1 — one coalesced pre-frame →GENERAL submit for every unit that needs it.
+        std::vector<VulkanContext::ImmediateLayoutTransition> general_transitions;
+        general_transitions.reserve(pending_uploads_.size());
+        std::vector<PooledInteropUnit*> units_transitioned_to_general;
+        units_transitioned_to_general.reserve(pending_uploads_.size());
+        {
+            std::optional<lfs::core::ScopedTimer> timer;
+            // Scene-channel timer name retained when any scene upload is present.
+            for (const auto& plan : pending_uploads_) {
+                if (plan.channel != nullptr && plan.channel->policy.log_timer_perf) {
+                    timer.emplace("interop.transition_to_GENERAL",
+                                  lfs::core::LogLevel::Performance,
+                                  LFS_SOURCE_SITE_CURRENT());
+                    break;
+                }
+            }
+            for (const auto& plan : pending_uploads_) {
+                assert(plan.channel != nullptr && plan.target != nullptr && plan.target->unit != nullptr);
+                auto& unit = *plan.target->unit;
+                if (unit.layout == VK_IMAGE_LAYOUT_GENERAL) {
+                    continue;
+                }
+                // Reused units start from a defined tracked layout (typically READ_ONLY).
+                // Never transition from UNDEFINED here — only cold create uses UNDEFINED→GENERAL.
+                const std::uint64_t vulkan_ready_value = ++unit.timeline_value;
+                general_transitions.push_back(VulkanContext::ImmediateLayoutTransition{
+                    .image = unit.image.image,
+                    .old_layout = unit.layout,
+                    .new_layout = VK_IMAGE_LAYOUT_GENERAL,
+                    .options = VulkanContext::ImmediateTransitionOptions::signalAt(
+                        {unit.semaphore.semaphore, vulkan_ready_value}),
+                });
+                units_transitioned_to_general.push_back(&unit);
+            }
+            if (!general_transitions.empty()) {
+                if (!context.transitionImageLayoutsImmediate(general_transitions)) {
+                    // Timeline values were advanced for the batch before submit; on failure
+                    // those values never signal. Reset every planned channel so units (and
+                    // their counters) are destroyed rather than left waiting forever.
+                    const std::string message = std::format(
+                        "batched image transition to GENERAL failed: {}", context.lastError());
+                    if (!upload_stream_.synchronize()) {
+                        // best-effort
+                    }
+                    for (const auto& plan : pending_uploads_) {
+                        if (plan.channel == nullptr) {
+                            continue;
+                        }
+                        plan.channel->disabled = true;
+                        resetChannel(*plan.channel);
+                        LOG_ERROR("{}: {}", plan.channel->policy.failure_log_prefix, message);
+                    }
+                    pending_uploads_.clear();
+                    throw std::runtime_error(message);
+                }
+                for (auto* unit : units_transitioned_to_general) {
+                    unit->layout = VK_IMAGE_LAYOUT_GENERAL;
+                }
+            }
+        }
+
+        // Phase 2 — CUDA wait/copy/signal per channel (shared upload stream, unchanged order).
+        for (const auto& plan : pending_uploads_) {
+            auto& channel = *plan.channel;
+            auto& target = *plan.target;
+            auto& unit = *target.unit;
+
+            const auto fail_required_interop = [this, &channel](std::string message) -> void {
+                channel.disabled = true;
+                if (!upload_stream_.synchronize()) {
+                    message += std::format("; CUDA upload drain failed: {}",
+                                           upload_stream_.lastError());
+                }
+                resetChannel(channel);
+                LOG_ERROR("{}: {}", channel.policy.failure_log_prefix, message);
+                throw std::runtime_error(std::move(message));
+            };
+
+            assert(unit.layout == VK_IMAGE_LAYOUT_GENERAL &&
+                   "CUDA surf2Dwrite requires VK_IMAGE_LAYOUT_GENERAL");
+            {
+                std::optional<lfs::core::ScopedTimer> timer;
+                if (channel.policy.log_timer_perf) {
+                    timer.emplace("interop.copyTensorToSurface",
+                                  lfs::core::LogLevel::Performance,
+                                  LFS_SOURCE_SITE_CURRENT());
+                }
+                if (!unit.interop.wait(unit.timeline_value, upload_stream_.stream())) {
+                    fail_required_interop(std::format("CUDA wait for Vulkan image release failed: {}",
+                                                      unit.interop.lastError()));
+                }
+                if (!unit.interop.copyTensorToSurface(*channel.source_image, upload_stream_.stream())) {
+                    fail_required_interop(std::format("CUDA copy failed: {}", unit.interop.lastError()));
+                }
+            }
+            const std::uint64_t signal_value = ++unit.timeline_value;
+            {
+                std::optional<lfs::core::ScopedTimer> timer;
+                if (channel.policy.log_timer_perf) {
+                    timer.emplace("interop.cuda_signal",
+                                  lfs::core::LogLevel::Performance,
+                                  LFS_SOURCE_SITE_CURRENT());
+                }
+                if (!unit.interop.signal(signal_value, upload_stream_.stream())) {
+                    fail_required_interop(std::format("CUDA signal failed: {}", unit.interop.lastError()));
+                }
+            }
+            // GENERAL→READ_ONLY + publish move to recordFrameBarriers (frame CB).
+            pending_frame_barriers_.push_back(PendingFrameBarrier{
+                .unit = &unit,
+                .target = &target,
+                .channel = &channel,
+                .cuda_signal_value = signal_value,
+                .source_generation = channel.source_generation,
+            });
+        }
+        pending_uploads_.clear();
+    }
+
+    void ViewportInteropService::recordFrameBarriers(VkCommandBuffer frame_cb,
+                                                     VulkanContext& context) {
+        if (pending_frame_barriers_.empty()) {
+            return;
+        }
+        if (frame_cb == VK_NULL_HANDLE) {
+            LOG_ERROR("recordFrameBarriers requires a non-null frame command buffer");
+            pending_frame_barriers_.clear();
+            return;
+        }
+
+        std::vector<VkImageMemoryBarrier2> barriers;
+        barriers.reserve(pending_frame_barriers_.size());
+        for (const auto& pending : pending_frame_barriers_) {
+            if (pending.unit == nullptr) {
+                continue;
+            }
+            // Explicit scopes from layoutAccess; unit.layout is source of truth (no tracker map).
+            const auto source = VulkanImageBarrierTracker::layoutAccess(
+                VK_IMAGE_LAYOUT_GENERAL, VulkanImageBarrierTracker::AccessDirection::Source);
+            const auto destination = VulkanImageBarrierTracker::layoutAccess(
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VulkanImageBarrierTracker::AccessDirection::Destination);
+            VkImageMemoryBarrier2 barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            barrier.srcStageMask = source.stage;
+            barrier.srcAccessMask = source.access;
+            barrier.dstStageMask = destination.stage;
+            barrier.dstAccessMask = destination.access;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = pending.unit->image.image;
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+            barriers.push_back(barrier);
+        }
+        if (!barriers.empty()) {
+            VkDependencyInfo dependency{};
+            dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size());
+            dependency.pImageMemoryBarriers = barriers.data();
+            vkCmdPipelineBarrier2(frame_cb, &dependency);
+        }
+
+        // Marker: last successful submit serial at record time. Next prepareFrame
+        // (or export-locked syncUnsubmittedLayoutCommits) rolls back if no newer
+        // successful endFrame submit occurred.
+        const std::uint64_t commit_marker = context.lastSuccessfulFrameSubmitSerial();
+        for (const auto& pending : pending_frame_barriers_) {
+            if (pending.unit == nullptr || pending.target == nullptr || pending.channel == nullptr) {
+                continue;
+            }
+            // F2-2: only commit layout/publish when the frame wait is accepted.
+            // A rejected wait marks the frame invalid for submit; leaving layout
+            // GENERAL keeps CacheHit/bind from sampling a still-GENERAL GPU image.
+            if (!context.addFrameTimelineWait(pending.unit->semaphore.semaphore,
+                                              pending.cuda_signal_value,
+                                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)) {
+                LOG_ERROR(
+                    "recordFrameBarriers: addFrameTimelineWait failed; leaving layout GENERAL: {}",
+                    context.lastError());
+                continue;
+            }
+            pending.unit->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            pending.target->uploaded_source_generation = pending.source_generation;
+            ++pending.target->generation;
+            // Publishing channels publish at sample-frame time, not before CUDA handoff.
+            if (pending.channel->policy.publishes_published) {
+                publishFromTarget(*pending.channel, *pending.target);
+            }
+            pending_layout_commits_.push_back(PendingLayoutCommit{
+                .unit = pending.unit,
+                .channel = pending.channel,
+                .frame_submit_marker = commit_marker,
+            });
+        }
+        pending_frame_barriers_.clear();
     }
 
     void ViewportInteropService::bindViewportParams(VulkanViewportPassParams& params,
@@ -861,6 +1032,9 @@ namespace lfs::vis {
         if (context) {
             teardown_context_ = context;
         }
+        pending_uploads_.clear();
+        pending_frame_barriers_.clear();
+        pending_layout_commits_.clear();
         if (!upload_stream_.synchronize()) {
             LOG_WARN("CUDA/Vulkan GUI upload stream synchronization failed during shutdown: {}",
                      upload_stream_.lastError());

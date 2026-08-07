@@ -88,18 +88,6 @@ namespace lfs::sequencer {
         keyframes_.erase(keyframes_.begin() + static_cast<ptrdiff_t>(index));
     }
 
-    void AnimationTrack::updateKeyframe(size_t index, float time, const AnimationValue& value) {
-        LFS_ASSERT_MSG(index < keyframes_.size(), "Animation keyframe index is out of range");
-        LFS_ASSERT_MSG(getValueType(value) == type_, "Keyframe value type must match track type");
-        LFS_ASSERT_MSG(std::isfinite(time) && std::abs(time) <= MAX_SEQUENCER_TIME_SECONDS,
-                       "Animation keyframe time is outside the supported range");
-        LFS_ASSERT_MSG(finiteAnimationValue(value), "Animation keyframe value must be bounded and finite");
-
-        keyframes_[index].time = time;
-        keyframes_[index].value = normalizedAnimationValue(value);
-        sortKeyframes();
-    }
-
     std::optional<AnimationValue> AnimationTrack::evaluate(float time) const {
         LFS_ASSERT_MSG(std::isfinite(time), "Animation evaluation time must be finite");
         if (keyframes_.empty()) {

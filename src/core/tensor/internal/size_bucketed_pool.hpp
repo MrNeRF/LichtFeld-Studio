@@ -304,18 +304,6 @@ namespace lfs::core {
             }
         }
 
-        void print_stats() const {
-            uint64_t hits = stats_.cache_hits.load();
-            uint64_t misses = stats_.cache_misses.load();
-            double hit_rate = (hits + misses > 0) ? (100.0 * hits / (hits + misses)) : 0.0;
-
-            LOG_INFO("SizeBucketedPool Statistics:");
-            LOG_INFO("  Cache hits: {} ({:.1f}%)", hits, hit_rate);
-            LOG_INFO("  Cache misses: {}", misses);
-            LOG_INFO("  Bytes cached: {:.2f} MB", stats_.bytes_cached.load() / (1024.0 * 1024.0));
-            LOG_INFO("  Bytes wasted (rounding): {:.2f} MB", stats_.bytes_wasted.load() / (1024.0 * 1024.0));
-        }
-
         // Calculate waste percentage for a given size
         static double get_waste_percentage(size_t bytes) {
             size_t bucket = get_bucket_size(bytes);

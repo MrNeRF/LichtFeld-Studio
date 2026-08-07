@@ -12,6 +12,7 @@
 #include "lod_upload_engine.hpp"
 #include "output_image_pool.hpp"
 #include "output_slot_ring.hpp"
+#include "readback_ticket_ring.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
 #include "rendering/rendering.hpp"
@@ -218,6 +219,36 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<float, std::string> sampleDepthAtPixel(
             VulkanContext& context,
             const DepthSampleRequest& request) const;
+
+        // Async readback tickets (#1574). Destination buffers must remain valid until
+        // the ticket is Ready (poll/wait delivers) or Failed.
+        enum class ReadbackTicketStatus : std::uint8_t {
+            NotReady = 0,
+            Ready = 1,
+            Failed = 2,
+        };
+        [[nodiscard]] std::expected<std::uint64_t, std::string> submitReadOutputImageIntoCpuHwcTicket(
+            VulkanContext& context,
+            OutputSlot output_slot,
+            lfs::core::Tensor& destination,
+            int destination_x,
+            int destination_y) const;
+        [[nodiscard]] std::expected<std::uint64_t, std::string> submitReadOutputDepthImageTicket(
+            VulkanContext& context,
+            OutputSlot output_slot,
+            lfs::core::Tensor& destination) const;
+        [[nodiscard]] std::expected<ReadbackTicketStatus, std::string> pollReadbackTicket(
+            std::uint64_t ticket) const;
+        [[nodiscard]] std::expected<void, std::string> waitReadbackTicket(
+            std::uint64_t ticket) const;
+        // Mark ticket Failed (if Outstanding) and clear meta.dest so the host may drop
+        // its storage without UAF. Pins stay until the timeline completes and freeCell runs.
+        void abandonReadbackTicket(std::uint64_t ticket) const;
+        // Observability counters for LOG_PERF / GT compare cycles.
+        [[nodiscard]] std::size_t outstandingReadbackTickets() const;
+        [[nodiscard]] std::uint64_t readbackRingFullWaitCount() const;
+        [[nodiscard]] std::uint64_t readbackCellPinWaitCount() const;
+
         [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
@@ -448,44 +479,68 @@ namespace lfs::vis {
         // Drain/trim the viewport output-image pool. Predicates mirror scratch
         // retirement (producer timeline) plus graphics-frame submit serials.
         // force=true only after device idle; never destroys live acquisitions.
-        void drainOutputImagePool(bool force);
+        // When readback_mutex_held is true the caller already owns readback_mutex_
+        // (release* paths); the pin predicate must not re-lock (F3-1).
+        void drainOutputImagePool(bool force, bool readback_mutex_held = false);
+        // Free Failed ticket cells once the readback timeline reaches their ticket
+        // (non-blocking). Caller must hold readback_mutex_.
+        void reclaimCompletedFailedReadbackCells() const;
         void trimOutputImagePoolAged();
         void trimOutputImagePoolIdle();
         // Clamps input-storage retirements left keyed to a timeline value a
         // failed/early-exit frame never signalled (run on every render exit).
         void clampOrphanedInputRetirements();
 
-        // Lazily creates a persistent transfer command pool + buffer + fence reused by
-        // readOutputImage / sampleDepthAtPixel instead of allocating a fresh pool/fence
-        // per call. Torn down in reset() while the device is still valid.
+        // 3-deep readback ticket ring (#1574): per-slot cmdbufs + staging, timeline
+        // completion (replaces the single readback fence). Torn down in reset().
         [[nodiscard]] std::expected<void, std::string> ensureReadbackContext() const;
-        [[nodiscard]] std::expected<void, std::string> ensureReadbackStagingBuffer(
+        [[nodiscard]] std::expected<void, std::string> ensureReadbackSlotStaging(
             VulkanContext& context,
+            std::size_t cell,
             VkDeviceSize required_bytes) const;
-        [[nodiscard]] std::expected<void, std::string> submitReadbackAndWait(
+        [[nodiscard]] std::expected<std::size_t, std::string> acquireReadbackCell() const;
+        [[nodiscard]] std::expected<std::uint64_t, std::string> submitReadbackTicket(
             VulkanContext& context,
+            std::size_t cell,
             VkCommandBuffer command_buffer,
+            VkQueue submit_queue,
             std::uint64_t completion_value,
             VkPipelineStageFlags wait_stage,
-            VkDeviceSize byte_count,
+            ReadbackTicketRing::TicketMeta meta,
             std::string_view validation_label,
             std::string_view operation_label,
-            bool reset_fence = true,
             std::source_location location = std::source_location::current()) const;
+        [[nodiscard]] std::expected<ReadbackTicketStatus, std::string> pollReadbackTicketLocked(
+            std::uint64_t ticket) const;
+        [[nodiscard]] std::expected<void, std::string> waitReadbackTicketLocked(
+            std::uint64_t ticket) const;
+        [[nodiscard]] std::expected<void, std::string> deliverReadbackTicket(
+            std::size_t cell) const;
+        [[nodiscard]] std::expected<void, std::string> waitReadbackTimelineValue(
+            std::uint64_t value,
+            std::string_view fingerprint) const;
+        // Ring-cell pin: block OutputSlotRing reuse until readbacks sourcing the cell retire.
+        [[nodiscard]] lfs::Status waitReadbackPinsForFrameRingCell(std::size_t ring_slot) const;
         [[nodiscard]] lfs::Result<glm::ivec2> latestOutputImageSize(OutputSlot output_slot) const;
 
         VulkanContext* context_ = nullptr;
         bool initialized_ = false;
-        // Persistent readback transfer resources (see ensureReadbackContext). Mutable
-        // because the readback samplers are const but reuse these across calls.
+        // Readback ticket ring resources (#1574). Mutable because public readbacks are const.
         mutable std::mutex readback_mutex_;
-        mutable VkCommandPool readback_pool_ = VK_NULL_HANDLE;
-        mutable VkCommandBuffer readback_cmd_ = VK_NULL_HANDLE;
-        mutable VkFence readback_fence_ = VK_NULL_HANDLE;
-        mutable VkBuffer readback_staging_buffer_ = VK_NULL_HANDLE;
-        mutable VmaAllocation readback_staging_allocation_ = VK_NULL_HANDLE;
-        mutable VmaAllocationInfo readback_staging_info_{};
-        mutable VkDeviceSize readback_staging_capacity_ = 0;
+        mutable ReadbackTicketRing readback_ring_{};
+        mutable VkCommandPool readback_graphics_pool_ = VK_NULL_HANDLE;
+        mutable VkCommandPool readback_transfer_pool_ = VK_NULL_HANDLE;
+        struct ReadbackSlotResources {
+            VkCommandBuffer graphics_cmd = VK_NULL_HANDLE;
+            VkCommandBuffer transfer_cmd = VK_NULL_HANDLE;
+            VkBuffer staging_buffer = VK_NULL_HANDLE;
+            VmaAllocation staging_allocation = VK_NULL_HANDLE;
+            VmaAllocationInfo staging_info{};
+            VkDeviceSize staging_capacity = 0;
+        };
+        mutable std::array<ReadbackSlotResources, ReadbackTicketRing::kRingSize> readback_slots_{};
+        mutable VkSemaphore readback_timeline_ = VK_NULL_HANDLE;
+        mutable std::uint64_t next_readback_ticket_ = 0;
         VulkanGSRenderer renderer_;
         VulkanGSPipelineBuffers buffers_;
         struct LodUploadSignature {

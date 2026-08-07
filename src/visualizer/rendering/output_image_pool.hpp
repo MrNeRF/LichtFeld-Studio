@@ -92,6 +92,16 @@ namespace lfs::vis {
         explicit GpuResourcePool(BytesFn bytes_fn = {})
             : bytes_fn_(std::move(bytes_fn)) {}
 
+        // Move-only: Entry owns Payload via unique_ptr. Explicit deletes stop MSVC from
+        // instantiating the implicit copy-assignment (which eagerly walks unordered_map's
+        // list element assign and errors on non-copyable Entry). GCC/libstdc++ defers that
+        // check until odr-use, so Ubuntu hid the landmine. A GPU resource pool must never
+        // be copied; move (or reconstruct in place) is the only transfer path.
+        GpuResourcePool(const GpuResourcePool&) = delete;
+        GpuResourcePool& operator=(const GpuResourcePool&) = delete;
+        GpuResourcePool(GpuResourcePool&&) = default;
+        GpuResourcePool& operator=(GpuResourcePool&&) = default;
+
         [[nodiscard]] std::optional<Acquired> acquire(const Key& key) {
             for (auto it = free_serials_.begin(); it != free_serials_.end(); ++it) {
                 const auto entry_it = entries_.find(*it);

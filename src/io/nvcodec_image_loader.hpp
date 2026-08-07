@@ -85,22 +85,6 @@ namespace lfs::io {
             DecodeFormat format = DecodeFormat::RGB,
             bool output_uint8 = false);
 
-        // Load and decode multiple images in batch
-        std::vector<lfs::core::Tensor> load_images_batch_gpu(
-            const std::vector<std::filesystem::path>& paths,
-            int resize_factor = 1,
-            int max_width = 0);
-
-        // Batch decode JPEG blobs from memory
-        std::vector<lfs::core::Tensor> batch_decode_from_memory(
-            const std::vector<std::vector<uint8_t>>& jpeg_blobs,
-            void* cuda_stream = nullptr);
-
-        // Batch decode from spans (zero-copy)
-        std::vector<lfs::core::Tensor> batch_decode_from_spans(
-            const std::vector<std::pair<const uint8_t*, size_t>>& jpeg_spans,
-            void* cuda_stream = nullptr);
-
         // Encode GPU tensor to JPEG bytes (RGB)
         std::vector<uint8_t> encode_to_jpeg(
             const lfs::core::Tensor& image,

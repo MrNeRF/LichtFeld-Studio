@@ -124,7 +124,6 @@ namespace lfs::vis {
                     const PanelInputState& input,
                     RenderingManager* rm, SceneManager* sm,
                     gui::FilmStripRenderer& film_strip);
-        void compositeToScreen(int screen_w, int screen_h);
         void clearPendingComposite();
 
         void setFilmStripAttached(bool attached) { film_strip_attached_ = attached; }

@@ -54,11 +54,6 @@ namespace lfs::rendering {
 
     struct GpuFrame {
         TextureHandle color;
-        TextureHandle depth;
-        // Presentation orientation for the screen quad. Geometry/camera conventions live elsewhere.
-        bool flip_y = false;
-        bool depth_is_ndc = false;
-        bool color_has_alpha = false;
         float near_plane = DEFAULT_NEAR_PLANE;
         float far_plane = DEFAULT_FAR_PLANE;
         bool orthographic = false;

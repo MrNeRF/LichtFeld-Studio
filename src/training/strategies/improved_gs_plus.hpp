@@ -10,6 +10,7 @@
 #include "optimizer/scheduler.hpp"
 #include "trainer.hpp"
 
+#include <cassert>
 #include <vector>
 
 class CropDampingStrategyTest_IgsPlusRejectedRowsAreNeverSampledAtZeroScale_Test;
@@ -46,10 +47,14 @@ namespace lfs::training {
         void remove_gaussians(const lfs::core::Tensor& mask) override;
 
         // IStrategy interface - optimizer access
-        AdamOptimizer& get_optimizer() override { return *_optimizer; }
-        const AdamOptimizer& get_optimizer() const override { return *_optimizer; }
-        ExponentialLR* get_scheduler() { return _scheduler.get(); }
-        const ExponentialLR* get_scheduler() const { return _scheduler.get(); }
+        AdamOptimizer& get_optimizer() override {
+            assert(_optimizer);
+            return *_optimizer;
+        }
+        const AdamOptimizer& get_optimizer() const override {
+            assert(_optimizer);
+            return *_optimizer;
+        }
 
         // Serialization for checkpoints
         void serialize(std::ostream& os) const override;
@@ -96,7 +101,6 @@ namespace lfs::training {
         void LAS_densify(const lfs::core::Tensor& scores, const int64_t allocation_budget);
 
         void reset_opacity();
-        void prune_post_reset();
         void opacity_prune(const int iter);
         void remove(const lfs::core::Tensor& is_prune);
         void mark_as_free(const lfs::core::Tensor& indices);

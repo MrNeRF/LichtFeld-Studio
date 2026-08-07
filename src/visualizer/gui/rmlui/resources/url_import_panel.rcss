@@ -58,17 +58,6 @@
     line-height: 1.5;
     color: #a9a093;
 }
-
-.urlimp-path {
-    font-family: "JetBrains Mono";
-    color: #d8d0c3;
-}
-
-.urlimp-hint-optional {
-    color: #a9a093;
-    font-size: 10dp;
-}
-
 .urlimp-progress {
     display: flex;
     flex-direction: column;

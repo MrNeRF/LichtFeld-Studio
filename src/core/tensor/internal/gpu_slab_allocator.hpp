@@ -172,21 +172,6 @@ namespace lfs::core {
 
         const Stats& stats() const { return stats_; }
 
-        void print_stats() const {
-            LOG_INFO("GPUSlabAllocator Statistics:");
-            LOG_INFO("  Total slab memory: {:.2f} MB", stats_.total_slab_memory / (1024.0 * 1024.0));
-            LOG_INFO("  Allocations: {}", stats_.alloc_count.load());
-            LOG_INFO("  Deallocations: {}", stats_.free_count.load());
-            LOG_INFO("  Misses: {}", stats_.miss_count.load());
-
-            for (size_t i = 0; i < NUM_SIZE_CLASSES; i++) {
-                if (stats_.blocks_per_class[i] > 0) {
-                    LOG_INFO("  Class {} ({} bytes): {} blocks",
-                             i, get_block_size(i), stats_.blocks_per_class[i]);
-                }
-            }
-        }
-
         GPUSlabAllocator(const GPUSlabAllocator&) = delete;
         GPUSlabAllocator& operator=(const GPUSlabAllocator&) = delete;
 

@@ -523,13 +523,6 @@ namespace lfs::vis::gui {
         overlay_->render(sdl_buf.window_w, sdl_buf.window_h);
     }
 
-    void SequencerUIManager::compositeOverlays(const int screen_w, const int screen_h) {
-        if (panel_)
-            panel_->compositeToScreen(screen_w, screen_h);
-        if (overlay_)
-            overlay_->compositeToScreen(screen_w, screen_h);
-    }
-
     bool SequencerUIManager::blocksPointer(const double x, const double y) const {
         return overlay_ &&
                (overlay_->wantsInput() || overlay_->isMouseOverEditOverlay(static_cast<float>(x),

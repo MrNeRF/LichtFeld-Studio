@@ -178,11 +178,6 @@ namespace lfs::training {
             return uid_to_frame_idx_.begin()->first;
         }
 
-        /// Get learned parameters for a specific frame as [1,9] tensor
-        /// Returns: [exposure, color_params[0:8]] for distillation target
-        /// @param uid Original frame UID (translated internally)
-        lfs::core::Tensor get_params_for_frame(int uid) const;
-
         /// Return camera ids ordered by the contiguous camera index used by internal tensors.
         [[nodiscard]] std::vector<int> ordered_camera_ids() const;
 

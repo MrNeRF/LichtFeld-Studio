@@ -156,7 +156,6 @@ namespace lfs::vis {
         float near_plane = lfs::rendering::DEFAULT_NEAR_PLANE;
         float far_plane = lfs::rendering::DEFAULT_FAR_PLANE;
         bool orthographic = false;
-        bool color_has_alpha = false;
 
         [[nodiscard]] const std::shared_ptr<lfs::core::Tensor>& primaryDepth() const {
             return depth_panels[0].depth;
@@ -171,7 +170,6 @@ namespace lfs::vis {
             .near_plane = result.near_plane,
             .far_plane = result.far_plane,
             .orthographic = result.orthographic,
-            .color_has_alpha = result.color_has_alpha,
         };
         for (size_t i = 0; i < result.depth_panel_count && i < metadata.depth_panels.size(); ++i) {
             metadata.depth_panels[i] = {

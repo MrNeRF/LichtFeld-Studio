@@ -144,10 +144,6 @@ namespace lfs::vis::input {
         return keyboardFocus() == InputTarget::Viewport;
     }
 
-    bool InputRouter::isGuiKeyboardFocused() const {
-        return keyboardFocus() == InputTarget::Gui;
-    }
-
     bool InputRouter::isTextInputActive() const {
         return queryGuiInputState().text_input_active;
     }

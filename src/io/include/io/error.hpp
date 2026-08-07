@@ -130,26 +130,6 @@ namespace lfs::io {
         }
 
         [[nodiscard]] bool is(ErrorCode c) const { return code == c; }
-
-        [[nodiscard]] bool is_filesystem_error() const {
-            const int c = static_cast<int>(code);
-            return c >= 100 && c < 200;
-        }
-
-        [[nodiscard]] bool is_validation_error() const {
-            const int c = static_cast<int>(code);
-            return c >= 200 && c < 300;
-        }
-
-        [[nodiscard]] bool is_save_error() const {
-            const int c = static_cast<int>(code);
-            return c >= 300 && c < 400;
-        }
-
-        [[nodiscard]] bool is_load_error() const {
-            const int c = static_cast<int>(code);
-            return c >= 400 && c < 500;
-        }
     };
 
     template <typename T>

@@ -130,8 +130,6 @@ namespace lfs::vis {
 
         std::deque<float> getPSNRBuffer() const;
         void updatePSNR(float psnr);
-        void setLastPSNR(float psnr) { last_psnr_.store(psnr); }
-        float getLastPSNR() const { return last_psnr_.load(); }
         void updateEvaluationMetrics(int iteration, float psnr, float ssim);
         std::optional<EvaluationMetricsSnapshot> getLastEvaluationMetrics() const;
         void clearEvaluationMetrics();
@@ -163,7 +161,6 @@ namespace lfs::vis {
 
         // Camera access
         std::shared_ptr<const lfs::core::Camera> getCamById(int camId) const;
-        std::vector<std::shared_ptr<lfs::core::Camera>> getCamList() const;
         std::vector<std::shared_ptr<lfs::core::Camera>> getAllCamList() const;
         std::expected<lfs::training::Trainer::CameraMetricsSnapshot, std::string> computeCameraMetricsForCameraId(
             int camera_id,
@@ -240,7 +237,6 @@ namespace lfs::vis {
         static constexpr int MAX_PSNR_POINTS = 200;
         std::deque<float> psnr_buffer_;
         mutable std::mutex psnr_buffer_mutex_;
-        std::atomic<float> last_psnr_{0.0f};
         std::mutex temporary_pause_mutex_;
         std::uint32_t temporary_pause_depth_ = 0;
         bool temporary_pause_initially_paused_ = false;

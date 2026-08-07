@@ -116,8 +116,6 @@ namespace lfs::core {
         void log(LogLevel level, const SourceSite& loc, std::string_view msg);
 
         // Module control
-        void enable_module(LogModule module, bool enabled = true);
-        void set_module_level(LogModule module, LogLevel level);
         void set_level(LogLevel level);
         void flush();
         [[nodiscard]] LogLevel level() const;

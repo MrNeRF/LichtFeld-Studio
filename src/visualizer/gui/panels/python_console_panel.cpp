@@ -1596,28 +1596,6 @@ namespace lfs::vis::gui::panels {
         history_index_ = -1;
     }
 
-    void PythonConsoleState::historyUp() {
-        std::lock_guard lock(mutex_);
-        if (command_history_.empty())
-            return;
-        if (history_index_ < 0) {
-            history_index_ = static_cast<int>(command_history_.size()) - 1;
-        } else if (history_index_ > 0) {
-            history_index_--;
-        }
-    }
-
-    void PythonConsoleState::historyDown() {
-        std::lock_guard lock(mutex_);
-        if (history_index_ < 0)
-            return;
-        if (history_index_ < static_cast<int>(command_history_.size()) - 1) {
-            history_index_++;
-        } else {
-            history_index_ = -1;
-        }
-    }
-
     terminal::TerminalWidget* PythonConsoleState::getTerminal() {
         return terminal_.get();
     }

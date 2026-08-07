@@ -495,12 +495,6 @@ namespace lfs::core {
 #endif
         }
 
-        void print_stats() const {
-            LOG_DEBUG(get_stats());
-            GPUSlabAllocator::instance().print_stats();
-            SizeBucketedPool::instance().print_stats();
-        }
-
         CudaMemoryPool(const CudaMemoryPool&) = delete;
         CudaMemoryPool& operator=(const CudaMemoryPool&) = delete;
 

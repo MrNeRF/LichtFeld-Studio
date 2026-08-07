@@ -176,10 +176,8 @@ namespace lfs::python {
 
     // Menu interface for C++ code
     LFS_PYTHON_RUNTIME_API void draw_python_menu_items(MenuLocation location);
-    LFS_PYTHON_RUNTIME_API bool has_python_menu_items(MenuLocation location);
 
     // Menu bar entry interface for C++ UI code (Python-driven menu bar)
-    LFS_PYTHON_RUNTIME_API bool has_menu_bar_entries();
     LFS_PYTHON_RUNTIME_API std::vector<MenuBarEntry> get_menu_bar_entries();
     LFS_PYTHON_RUNTIME_API void draw_menu_bar_entry(const std::string& idname);
 
@@ -228,8 +226,6 @@ namespace lfs::python {
                                               bool rad_streamable = true);
 
     using HasToolbarCallback = bool (*)();
-
-    LFS_PYTHON_RUNTIME_API bool has_python_toolbar();
 
     // Operator callbacks
     using CancelActiveOperatorCallback = void (*)();
@@ -293,7 +289,6 @@ namespace lfs::python {
     using MenuBarEntryVisitor = void (*)(const char* idname, const char* label, int order, void* user_data);
 
     // Menu bar entry callbacks
-    using HasMenuBarEntriesCallback = bool (*)();
     using GetMenuBarEntriesCallback = void (*)(MenuBarEntryVisitor, void* user_data);
     using DrawMenuBarEntryCallback = void (*)(const char* idname);
 
@@ -303,7 +298,6 @@ namespace lfs::python {
         bool (*has_menus)(MenuLocation) = nullptr;
 
         // Menu bar entries (Python-driven top-level menus)
-        bool (*has_menu_bar_entries)() = nullptr;
         void (*get_menu_bar_entries)(MenuBarEntryVisitor, void*) = nullptr;
         void (*draw_menu_bar_entry)(const char*) = nullptr;
         void (*collect_menu_content)(const char*, MenuItemVisitor, void*) = nullptr;
@@ -314,7 +308,6 @@ namespace lfs::python {
         bool (*has_modals)() = nullptr;
 
         // Toolbar
-        bool (*has_toolbar)() = nullptr;
 
         // Lifecycle
         void (*cleanup)() = nullptr;
@@ -745,7 +738,7 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void set_invalidate_poll_cache_callback(InvalidatePollCacheCallback cb);
     LFS_PYTHON_RUNTIME_API void invalidate_poll_caches(uint8_t dependency = 7);
 
-    // Signal bridge callbacks - registered by Python module, called by visualizer
+    // Signal bridge callbacks - registered by Python module, live push APIs used by visualizer (progress/psnr may be unwired)
     using SignalFlushCallback = void (*)();
     using TrainingProgressCallback = void (*)(int iteration, float loss, std::size_t num_gaussians);
     using TrainingStateCallback = void (*)(bool is_training, const char* state);
@@ -766,7 +759,7 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void set_signal_bridge_callbacks(const SignalBridgeCallbacks& callbacks);
 
-    // Signal update functions - called by visualizer, dispatch to Python via callbacks
+    // Signal update functions - live push APIs used by visualizer (progress/psnr may be unwired), dispatch to Python via callbacks
     LFS_PYTHON_RUNTIME_API void update_training_progress(int iteration, float loss, std::size_t num_gaussians);
     LFS_PYTHON_RUNTIME_API void update_training_state(bool is_training, const char* state);
     LFS_PYTHON_RUNTIME_API void update_trainer_loaded(bool has_trainer, int max_iterations, int initial_iteration = 0);

@@ -825,23 +825,6 @@ namespace lfs::training {
         return all_indices;
     }
 
-    // From ImprovedGS but not used
-    [[maybe_unused]] void ImprovedGSPlus::prune_post_reset() {
-        const float q = 0.2f;
-        const lfs::core::Tensor opacity = _splat_data->get_opacity();
-
-        auto [sorted_val, sorted_idx] = opacity.sort();
-
-        int num_gaussians = opacity.shape()[0];
-        int q_index = static_cast<int>(num_gaussians * q);
-
-        float quantile_threshold = sorted_val[q_index].item_as<float>();
-
-        const lfs::core::Tensor prune_mask = (opacity < quantile_threshold);
-
-        lfs::training::ImprovedGSPlus::remove(prune_mask);
-    }
-
     void ImprovedGSPlus::opacity_prune(const int iter) {
         if (iter >= _params->stop_refine) {
             return;

@@ -61,8 +61,6 @@ namespace lfs::mcp {
         static ResourceRegistry& instance();
 
         void register_resource(McpResource resource, ResourceHandler handler);
-        void unregister_resource(const std::string& uri);
-
         void register_resource_prefix(std::string uri_prefix, ResourceHandler handler);
         void unregister_resource_prefix(const std::string& uri_prefix);
 

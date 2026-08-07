@@ -857,23 +857,6 @@ namespace lfs::training {
         }
     }
 
-    lfs::core::Tensor PPISP::get_params_for_frame(int uid) const {
-        assert(finalized_ && "Must call finalize() before get_params_for_frame()");
-        const int frame_idx = translate_frame(uid);
-
-        // Get exposure param for this frame: exposure_params_[frame_idx]
-        auto exposure = exposure_params_.slice(0, frame_idx, frame_idx + 1);
-
-        // Get color params for this frame: color_params_ is flat [num_frames * 8]
-        // Extract [frame_idx * 8 : (frame_idx + 1) * 8]
-        size_t color_start = static_cast<size_t>(frame_idx) * 8;
-        auto color = color_params_.slice(0, color_start, color_start + 8);
-
-        // Concatenate: [1] + [8] = [9], then reshape to [1, 9]
-        auto params = lfs::core::Tensor::cat({exposure, color}, 0);
-        return params.reshape({1, 9});
-    }
-
     std::vector<int> PPISP::ordered_camera_ids() const {
         assert(finalized_ && "Must call finalize() before ordered_camera_ids()");
         std::vector<int> ordered(static_cast<size_t>(num_cameras_));

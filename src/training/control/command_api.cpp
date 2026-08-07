@@ -190,11 +190,6 @@ namespace lfs::training {
         return filtered;
     }
 
-    void CommandCenter::enqueue_command(const Command& cmd) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        pending_commands_.push_back(cmd);
-    }
-
     void CommandCenter::drain_enqueued(TrainingSnapshot& view) {
         std::vector<Command> local;
         {

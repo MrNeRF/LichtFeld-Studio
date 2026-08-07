@@ -64,12 +64,6 @@ body {
     min-width: 0;
     gap: 4dp;
 }
-
-.toolbar-spacer {
-    flex: 1;
-    min-width: 12dp;
-}
-
 button {
     height: 24dp;
     min-width: 0;
@@ -161,23 +155,6 @@ button {
 .btn-clear {
     width: 30dp;
 }
-
-.btn-sm {
-    width: 54dp;
-}
-
-.btn-md {
-    width: 66dp;
-}
-
-.btn-lg {
-    width: 78dp;
-}
-
-.btn-xl {
-    width: 104dp;
-}
-
 button:hover {
     background-color: rgb(58, 58, 58);
 }
@@ -289,16 +266,6 @@ button.disabled {
 #syntax-status.status-error {
     color: rgb(221, 94, 94);
 }
-
-.font-group {
-    margin-left: auto;
-}
-
-.font-button {
-    width: 28dp;
-    padding: 0;
-}
-
 #font-status {
     display: none;
     width: 58dp;

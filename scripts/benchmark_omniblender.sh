@@ -25,7 +25,7 @@ do
     echo "========================================="
 
     # Run training with evaluation
-    ./cmake-build-release/LichtFeld-Studio \
+    ./build/LichtFeld-Studio \
         -d $SCENE_DIR/$SCENE/transform.json \
         -o $RESULT_DIR/$SCENE/ \
         --eval \

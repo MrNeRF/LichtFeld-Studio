@@ -17,8 +17,5 @@ namespace lfs {
                                    float tol = 1e-6f,
                                    int max_points_to_sample = 50000);
 
-        // Median Absolute Deviation: median of L2 distances from each point to the given median.
-        float geometric_mad(std::span<const glm::vec3> points, const glm::vec3& median);
-
     } // namespace geometry
 } // namespace lfs

@@ -110,17 +110,6 @@ namespace lfs::vis {
             return name;
         }
 
-        int colorByte(const float value) {
-            return static_cast<int>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
-        }
-
-        ThemePackedColor packColor(const int r, const int g, const int b, const int a) {
-            return (static_cast<ThemePackedColor>(a & 0xff) << 24u) |
-                   (static_cast<ThemePackedColor>(b & 0xff) << 16u) |
-                   (static_cast<ThemePackedColor>(g & 0xff) << 8u) |
-                   static_cast<ThemePackedColor>(r & 0xff);
-        }
-
     } // namespace
 
     // Color utilities
@@ -144,58 +133,7 @@ namespace lfs::vis {
         return {color.x, color.y, color.z, alpha};
     }
 
-    ThemePackedColor toU32(const ThemeColor& color) {
-        return packColor(colorByte(color.x),
-                         colorByte(color.y),
-                         colorByte(color.z),
-                         colorByte(color.w));
-    }
-
-    ThemePackedColor toU32WithAlpha(const ThemeColor& color, const float alpha) {
-        return packColor(colorByte(color.x),
-                         colorByte(color.y),
-                         colorByte(color.z),
-                         colorByte(alpha));
-    }
-
     // Theme computed colors
-    ThemePackedColor Theme::primary_u32() const { return toU32(palette.primary); }
-    ThemePackedColor Theme::error_u32() const { return toU32(palette.error); }
-    ThemePackedColor Theme::success_u32() const { return toU32(palette.success); }
-    ThemePackedColor Theme::warning_u32() const { return toU32(palette.warning); }
-    ThemePackedColor Theme::text_u32() const { return toU32(palette.text); }
-    ThemePackedColor Theme::text_dim_u32() const { return toU32(palette.text_dim); }
-    ThemePackedColor Theme::border_u32() const { return toU32(palette.border); }
-    ThemePackedColor Theme::surface_u32() const { return toU32(palette.surface); }
-
-    ThemePackedColor Theme::selection_fill_u32() const { return toU32WithAlpha(palette.primary, SELECTION_FILL_ALPHA); }
-    ThemePackedColor Theme::selection_border_u32() const { return toU32WithAlpha(palette.primary, SELECTION_BORDER_ALPHA); }
-    ThemePackedColor Theme::selection_line_u32() const { return toU32WithAlpha(palette.primary, SELECTION_LINE_ALPHA); }
-
-    ThemePackedColor Theme::polygon_vertex_u32() const { return toU32(palette.warning); }
-    ThemePackedColor Theme::polygon_vertex_hover_u32() const { return toU32(lighten(palette.warning, 0.2f)); }
-    ThemePackedColor Theme::polygon_close_hint_u32() const { return toU32WithAlpha(palette.success, POLYGON_CLOSE_ALPHA); }
-
-    ThemePackedColor Theme::overlay_background_u32() const { return toU32WithAlpha(overlay.background, OVERLAY_BG_ALPHA); }
-    ThemePackedColor Theme::overlay_text_u32() const { return toU32(overlay.text); }
-    ThemePackedColor Theme::overlay_shadow_u32() const { return packColor(0, 0, 0, 180); }
-    ThemePackedColor Theme::overlay_hint_u32() const { return toU32WithAlpha(overlay.text_dim, OVERLAY_HINT_ALPHA); }
-    ThemePackedColor Theme::overlay_border_u32() const { return toU32(overlay.border); }
-    ThemePackedColor Theme::overlay_icon_u32() const { return toU32(overlay.icon); }
-    ThemePackedColor Theme::overlay_highlight_u32() const { return toU32WithAlpha(overlay.highlight, OVERLAY_HIGHLIGHT_ALPHA); }
-    ThemePackedColor Theme::overlay_selection_u32() const { return toU32WithAlpha(overlay.selection, OVERLAY_SELECTION_ALPHA); }
-    ThemePackedColor Theme::overlay_selection_flash_u32() const { return toU32WithAlpha(overlay.selection_flash, OVERLAY_SELECTION_FLASH_ALPHA); }
-
-    ThemePackedColor Theme::progress_bar_bg_u32() const { return toU32WithAlpha(overlay.background, OVERLAY_BG_ALPHA); }
-    ThemePackedColor Theme::progress_bar_fill_u32() const { return toU32WithAlpha(palette.warning, PROGRESS_FILL_ALPHA); }
-    ThemePackedColor Theme::progress_marker_u32() const { return toU32WithAlpha(palette.error, PROGRESS_MARKER_ALPHA); }
-
-    ThemeColor Theme::button_normal() const { return palette.surface; }
-    ThemeColor Theme::button_hovered() const { return palette.surface_bright; }
-    ThemeColor Theme::button_active() const { return darken(palette.surface_bright, 0.05f); }
-    ThemeColor Theme::button_selected() const { return palette.primary; }
-    ThemeColor Theme::button_selected_hovered() const { return lighten(palette.primary, 0.1f); }
-
     ThemeColor Theme::toolbar_background() const { return withAlpha(palette.surface, TOOLBAR_BG_ALPHA); }
     ThemeColor Theme::subtoolbar_background() const { return withAlpha(darken(palette.surface, 0.03f), SUBTOOLBAR_BG_ALPHA); }
 
@@ -204,17 +142,6 @@ namespace lfs::vis {
     ThemeColor Theme::menu_active() const { return withAlpha(palette.primary, menu.active_alpha); }
     ThemeColor Theme::menu_popup_background() const { return lighten(palette.surface, menu.popup_lighten); }
     ThemeColor Theme::menu_border() const { return withAlpha(palette.border, menu.border_alpha); }
-    ThemePackedColor Theme::menu_bottom_border_u32() const { return toU32(darken(palette.surface, menu.bottom_border_darken)); }
-
-    ThemePackedColor Theme::viewport_border_u32() const { return toU32WithAlpha(darken(palette.background, viewport.border_darken), viewport.border_alpha); }
-
-    ThemePackedColor Theme::row_even_u32() const { return toU32(palette.row_even); }
-    ThemePackedColor Theme::row_odd_u32() const { return toU32(palette.row_odd); }
-
-    void Theme::pushContextMenuStyle() const {}
-
-    void Theme::popContextMenuStyle() {}
-
     void Theme::pushModalStyle() const {}
 
     void Theme::popModalStyle() {}
@@ -237,10 +164,6 @@ namespace lfs::vis {
     const std::string& currentThemeId() {
         ensureInitialized();
         return g_current_theme_id;
-    }
-
-    std::string normalizeThemeId(std::string name) {
-        return normalizeThemeIdImpl(std::move(name));
     }
 
     void setTheme(const Theme& t) {
@@ -760,26 +683,6 @@ namespace lfs::vis {
         return themePreset("dark");
     }
 
-    const Theme& lightTheme() {
-        return themePreset("light");
-    }
-
-    const Theme& gruvboxTheme() {
-        return themePreset("gruvbox");
-    }
-
-    const Theme& catppuccinMochaTheme() {
-        return themePreset("catppuccin_mocha");
-    }
-
-    const Theme& catppuccinLatteTheme() {
-        return themePreset("catppuccin_latte");
-    }
-
-    const Theme& nordTheme() {
-        return themePreset("nord");
-    }
-
     void visitThemePresets(const ThemePresetVisitor& visitor) {
         ensureThemesLoaded();
         for (const auto& preset : g_theme_presets) {
@@ -1209,14 +1112,6 @@ namespace lfs::vis {
             // Silently ignore - not critical
         }
         return "dark";
-    }
-
-    void saveThemePreference(const bool is_dark) {
-        saveThemePreferenceName(is_dark ? "dark" : "light");
-    }
-
-    bool loadThemePreference() {
-        return loadThemePreferenceName() != "light";
     }
 
     void saveUiScalePreference(float scale) {

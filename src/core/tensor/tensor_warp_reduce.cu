@@ -41,54 +41,6 @@ namespace lfs::core::tensor_ops {
      *
      * Expected speedup: 10-20x over naive implementation!
      */
-    template <typename T, typename Op>
-    __global__ void warp_reduce_full_kernel(
-        const T* __restrict__ input,
-        T* __restrict__ output,
-        size_t n,
-        T init_value,
-        Op op) {
-        size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        size_t idx = vec_idx * 4;
-
-        T val = init_value;
-
-        // Vectorized load: 4 elements per thread
-        if constexpr (std::is_same_v<T, float>) {
-            if (idx + 3 < n) {
-                // Load 4 floats in one transaction (16 bytes aligned)
-                float4 vals = reinterpret_cast<const float4*>(input)[vec_idx];
-
-                // Apply operation and combine
-                T a = vals.x;
-                T b = vals.y;
-                T c = vals.z;
-                T d = vals.w;
-
-                val = op(op(op(a, b), c), d);
-            } else if (idx < n) {
-                // Handle remainder (last 1-3 elements)
-                for (size_t i = idx; i < n && i < idx + 4; ++i) {
-                    val = op(val, input[i]);
-                }
-            }
-        } else {
-            // Fallback for non-float types
-            if (idx < n) {
-                for (size_t i = idx; i < n && i < idx + 4; ++i) {
-                    val = op(val, input[i]);
-                }
-            }
-        }
-
-        // Block-level warp reduction
-        val = warp_ops::block_reduce_sum(val);
-
-        // First thread in each block writes result
-        if (threadIdx.x == 0) {
-            atomicAdd(output, val);
-        }
-    }
 
     /**
      * @brief TWO-STAGE sum reduction with Packed128 (OPTIMIZED - llm.c pattern)

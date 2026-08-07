@@ -350,15 +350,18 @@ namespace {
             commandBatchInProgress = false;
             last_timeline_signal_values_.clear();
             pending_timeline_waits_.clear();
+            buffer_retire_timeline_ = fakeVkHandle<VkSemaphore>(0x5001);
+            next_buffer_retire_value_ = 1;
+            retired_buffer_shells_.clear();
+            test_buffer_handle_counter_ = 0xB1000;
+            current_vram = 0;
+            peak_vram = 0;
 
             deviceInfo.subgroupSize = 32;
             deviceInfo.sharedSize = 48 * 1024;
             deviceInfo.maxGroupsX = 65535;
             deviceInfo.maxGroupsY = 65535;
             deviceInfo.maxGroupsZ = 65535;
-            deviceInfo.maxThreadsX = 1024;
-            deviceInfo.maxThreadsY = 1024;
-            deviceInfo.maxThreadsZ = 64;
 
             // Injectable no-op push-descriptor proc (spec §3.3).
             vk_cmd_push_descriptor_set_ = &DispatchScript::push_descriptor_set;
@@ -376,6 +379,10 @@ namespace {
                 slot.command_buffer = VK_NULL_HANDLE;
                 slot.timestamp_query_pool = VK_NULL_HANDLE;
             }
+            // Force-free retired shells without real VMA (allocator already null).
+            retired_buffer_shells_.clear();
+            buffer_retire_timeline_ = VK_NULL_HANDLE;
+            next_buffer_retire_value_ = 1;
             command_buffer = VK_NULL_HANDLE;
             timestamp_query_pool = VK_NULL_HANDLE;
             fence = VK_NULL_HANDLE;
@@ -387,6 +394,7 @@ namespace {
             allocator = VK_NULL_HANDLE;
             vk_cmd_push_descriptor_set_ = nullptr;
             barrier_planner_.reset();
+            current_vram = 0;
         }
 
         // Expose protected dispatch / barrier APIs for scripted tests.
@@ -926,15 +934,18 @@ namespace {
             commandBatchInProgress = false;
             last_timeline_signal_values_.clear();
             pending_timeline_waits_.clear();
+            buffer_retire_timeline_ = fakeVkHandle<VkSemaphore>(0x5101);
+            next_buffer_retire_value_ = 1;
+            retired_buffer_shells_.clear();
+            test_buffer_handle_counter_ = 0xC1000;
+            current_vram = 0;
+            peak_vram = 0;
 
             deviceInfo.subgroupSize = 32;
             deviceInfo.sharedSize = 48 * 1024;
             deviceInfo.maxGroupsX = 65535;
             deviceInfo.maxGroupsY = 65535;
             deviceInfo.maxGroupsZ = 65535;
-            deviceInfo.maxThreadsX = 1024;
-            deviceInfo.maxThreadsY = 1024;
-            deviceInfo.maxThreadsZ = 64;
 
             vk_cmd_push_descriptor_set_ = &DispatchScript::push_descriptor_set;
 
@@ -1066,6 +1077,9 @@ namespace {
                 slot.command_buffer = VK_NULL_HANDLE;
                 slot.timestamp_query_pool = VK_NULL_HANDLE;
             }
+            retired_buffer_shells_.clear();
+            buffer_retire_timeline_ = VK_NULL_HANDLE;
+            next_buffer_retire_value_ = 1;
             command_buffer = VK_NULL_HANDLE;
             timestamp_query_pool = VK_NULL_HANDLE;
             fence = VK_NULL_HANDLE;
@@ -1077,6 +1091,7 @@ namespace {
             allocator = VK_NULL_HANDLE;
             vk_cmd_push_descriptor_set_ = nullptr;
             barrier_planner_.reset();
+            current_vram = 0;
 
             // Skip vmaDestroy on forged readbacks.
             lod_selection_readback_initialized_ = false;

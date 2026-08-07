@@ -66,23 +66,6 @@ namespace lfs::io {
         }
 
         /**
-         * @brief Find all loaders that can handle the given path
-         * @param path File or directory path
-         * @return Vector of loader pointers (may be empty)
-         */
-        std::vector<IDataLoader*> findAllLoaders(const std::filesystem::path& path) const {
-            std::lock_guard lock(mutex_);
-
-            std::vector<IDataLoader*> result;
-            for (const auto& loader : loaders_) {
-                if (loader->canLoad(path)) {
-                    result.push_back(loader.get());
-                }
-            }
-            return result;
-        }
-
-        /**
          * @brief Get all supported file extensions
          * @return Sorted vector of unique extensions
          */

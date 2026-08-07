@@ -122,7 +122,6 @@ namespace lfs::training {
         void allocate_gradients();
         void allocate_gradients(size_t capacity);
         void zero_grad(int iteration);
-        bool has_gradients() const;
         lfs::core::Tensor& get_grad(ParamType type);
 
         // Learning rate
@@ -145,7 +144,6 @@ namespace lfs::training {
         // MCMC operations (atomically update params + optimizer state)
         void add_new_params(ParamType type, const lfs::core::Tensor& new_values, bool validate = false);
         void add_new_params_gather(ParamType type, const lfs::core::Tensor& indices);
-        void relocate_params_at_indices(ParamType type, const std::vector<int64_t>& indices);
         void relocate_params_at_indices_gpu(ParamType type, const int64_t* indices_device, size_t n_indices);
 
         // Low-level state manipulation
@@ -157,7 +155,6 @@ namespace lfs::training {
         const AdamParamState* get_state(ParamType type) const;
         AdamParamState* get_state_mutable(ParamType type);
         int64_t get_step_count(ParamType type) const;
-        void set_state(ParamType type, const AdamParamState& state);
         const AdamConfig& get_config() const { return config_; }
 
         // Serialization
@@ -168,7 +165,6 @@ namespace lfs::training {
 
         // Control notifications for external mutations
         void reset_state(ParamType type);
-        void invalidate_state(ParamType type);
 
     private:
         AdamConfig config_;

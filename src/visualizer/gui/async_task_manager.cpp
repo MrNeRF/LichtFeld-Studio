@@ -512,13 +512,11 @@ namespace lfs::vis::gui {
         return frame.contiguous();
     }
 
-    rendering::FrameMetadata makeVideoExportFrameMetadata(const rendering::FrameView& frame_view,
-                                                          const bool color_has_alpha) {
+    rendering::FrameMetadata makeVideoExportFrameMetadata(const rendering::FrameView& frame_view) {
         return rendering::FrameMetadata{
             .valid = true,
             .far_plane = frame_view.far_plane,
-            .orthographic = frame_view.orthographic,
-            .color_has_alpha = color_has_alpha};
+            .orthographic = frame_view.orthographic};
     }
 
     std::expected<lfs::core::Tensor, std::string> renderVideoExportFrame(
@@ -603,7 +601,7 @@ namespace lfs::vis::gui {
                 auto frame_image = std::make_shared<lfs::core::Tensor>(std::move(*video_frame));
                 auto materialized = engine.materializeGpuFrame(
                     frame_image,
-                    makeVideoExportFrameMetadata(frame_view, render_environment),
+                    makeVideoExportFrameMetadata(frame_view),
                     {width, height});
                 if (!materialized || !materialized->valid()) {
                     return std::unexpected(materialized ? LOC(lichtfeld::Strings::Runtime::RENDERED_GAUSSIAN_INVALID)

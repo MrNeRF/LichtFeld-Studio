@@ -1393,15 +1393,6 @@ namespace lfs::vis {
         testing_hovered_gaussian_id_ = hovered_gaussian_id;
     }
 
-    void SelectionService::clearTestingOverrides() {
-        testing_screen_positions_.reset();
-        testing_camera_screen_positions_.clear();
-        testing_viewport_.reset();
-        testing_hovered_gaussian_id_.reset();
-        viewport_screen_positions_.fill(nullptr);
-        viewport_screen_position_keys_ = {};
-    }
-
     std::optional<SelectionService::ViewerViewportContext> SelectionService::resolveViewerViewportContext(
         const std::optional<glm::vec2> screen_point,
         const std::optional<SplitViewPanelId> panel_override) const {

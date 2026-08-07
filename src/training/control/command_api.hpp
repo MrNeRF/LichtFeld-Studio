@@ -117,8 +117,6 @@ namespace lfs::training {
 
         std::expected<void, std::string> execute(const Command& cmd);
 
-        // Enqueue a command to be executed later on the training thread.
-        void enqueue_command(const Command& cmd);
         void drain_enqueued(TrainingSnapshot& view);
 
         std::vector<OperationInfo> operations(std::optional<CommandTarget> target = std::nullopt) const;

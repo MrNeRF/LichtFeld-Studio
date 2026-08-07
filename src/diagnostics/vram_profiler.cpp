@@ -60,7 +60,6 @@ namespace lfs::diagnostics {
         constexpr std::size_t kTopNLive = 10;
         constexpr std::size_t kHistRingCapacity = 256;
         constexpr std::size_t kGpuEventPoolSize = 64;
-        constexpr std::size_t kAccountedHistoryLength = 64;
 
         template <std::size_t Capacity>
         struct RingBuffer {
@@ -344,7 +343,6 @@ namespace lfs::diagnostics {
         std::chrono::steady_clock::time_point iter_window_origin{};
         std::uint64_t iter_window_count = 0;
         double iter_per_second = 0.0;
-        std::deque<std::size_t> accounted_history;
     };
 
     VramProfiler& VramProfiler::instance() {
@@ -382,7 +380,6 @@ namespace lfs::diagnostics {
             impl_->last_iteration_tp = std::chrono::steady_clock::time_point{};
             impl_->iter_window_origin = std::chrono::steady_clock::time_point{};
             impl_->iter_window_count = 0;
-            impl_->accounted_history.clear();
             impl_->pinned_host_used = 0;
             impl_->pinned_host_cached = 0;
             impl_->pinned_host_peak = 0;
@@ -428,10 +425,6 @@ namespace lfs::diagnostics {
             impl_->iter_window_count = 0;
         }
 
-        impl_->accounted_history.push_back(impl_->accounted_live_bytes);
-        while (impl_->accounted_history.size() > kAccountedHistoryLength)
-            impl_->accounted_history.pop_front();
-
         impl_->iter_counters.clear();
         impl_->iter_allocation_events_start = impl_->allocation_events;
         impl_->iter_free_events_start = impl_->free_events;
@@ -468,10 +461,6 @@ namespace lfs::diagnostics {
             upsert_scope_node(impl_->scope_nodes, allocation.key.scope, false, false, false);
         }
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    void VramProfiler::setIteration(const int iteration) {
-        impl_->iteration.store(iteration, std::memory_order_relaxed);
     }
 
     void VramProfiler::pushScope(std::string_view scope) {
@@ -720,24 +709,6 @@ namespace lfs::diagnostics {
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
-    void VramProfiler::recordBytes(std::string_view scope,
-                                   std::string_view label,
-                                   const std::size_t bytes,
-                                   const VramAllocationMethod method) {
-        if (!enabled() || bytes == 0 || scope.empty() || label.empty()) {
-            return;
-        }
-
-        std::lock_guard lock(impl_->mutex);
-        auto& metric = impl_->metrics[MetricKey{std::string(scope), std::string(label)}];
-        metric.allocated_bytes += bytes;
-        metric.peak_bytes = std::max(metric.peak_bytes, bytes);
-        metric.allocation_count += 1;
-        metric.method = method;
-        upsert_scope_node(impl_->scope_nodes, scope, false, false, false);
-        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
-    }
-
     void VramProfiler::recordCurrentBytes(std::string_view scope,
                                           std::string_view label,
                                           const std::size_t bytes,
@@ -816,26 +787,6 @@ namespace lfs::diagnostics {
         node.last_ms = elapsed_ms;
         node.max_ms = std::max(node.max_ms, elapsed_ms);
         node.wall_ring.push(std::max(elapsed_ms, 0.0));
-        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    void VramProfiler::recordGpuTimerSample(std::string_view scope, const double elapsed_ms) {
-        if (!enabled() || scope.empty() || !std::isfinite(elapsed_ms) || elapsed_ms < 0.0) {
-            return;
-        }
-        std::lock_guard lock(impl_->mutex);
-        const auto parts = split_scope_path(scope);
-        if (parts.empty()) {
-            return;
-        }
-        const auto path = join_parts(parts, parts.size());
-        upsert_scope_node(impl_->scope_nodes, path, false, true, false);
-        auto& node = impl_->scope_nodes[path];
-        node.timer_scope = true;
-        node.gpu_call_count += 1;
-        node.gpu_total_ms += elapsed_ms;
-        node.gpu_last_ms = elapsed_ms;
-        node.gpu_max_ms = std::max(node.gpu_max_ms, elapsed_ms);
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -1010,18 +961,6 @@ namespace lfs::diagnostics {
         std::lock_guard lock(impl_->mutex);
         impl_->exportable_splat_bytes = bytes;
         impl_->process.exportable_splat_bytes = bytes;
-        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    void VramProfiler::captureCudaContextBaseline() {
-        std::size_t used = 0;
-        if (!sample_cuda_used_bytes(used))
-            return;
-        std::lock_guard lock(impl_->mutex);
-        if (impl_->cuda_context_baseline == 0) {
-            impl_->cuda_context_baseline = used;
-            impl_->process.cuda_context_baseline = used;
-        }
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -1243,8 +1182,6 @@ namespace lfs::diagnostics {
             add_accounted_method(metric.method, metric.live_bytes);
         }
         out.accounted_peak_bytes = impl_->accounted_peak_bytes;
-        out.accounted_live_history.assign(impl_->accounted_history.begin(),
-                                          impl_->accounted_history.end());
         out.process = impl_->process;
         out.rows.reserve(impl_->metrics.size() + impl_->static_metrics.size());
         std::unordered_map<std::string, VramTreeNodeSnapshot> tree_nodes;

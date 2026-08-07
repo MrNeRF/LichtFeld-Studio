@@ -4,6 +4,7 @@
 #include "core/error.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
+#include <cassert>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -204,10 +205,6 @@ void VulkanGSPipeline::setVulkanDispatch(lfs::rendering::VulkanDispatch dispatch
     vulkan_dispatch_ = std::move(dispatch);
 }
 
-const lfs::rendering::VulkanDispatch& VulkanGSPipeline::vulkanDispatch() const noexcept {
-    return vulkan_dispatch_;
-}
-
 const lfs::rendering::SubmissionState& VulkanGSPipeline::lastSubmissionState() const noexcept {
     return last_submission_state_;
 }
@@ -311,6 +308,7 @@ void VulkanGSPipeline::initializeExternal(VkInstance external_instance,
     createCommandPool();
     createFence();
     createQueryPools();
+    createBufferRetireTimeline();
 
     commandBatchInProgress = false;
 }
@@ -392,9 +390,60 @@ void VulkanGSPipeline::assignBufferLabels(VulkanGSPipelineBuffers& buffers) {
 #undef _
 }
 
+void VulkanGSPipeline::createBufferRetireTimeline() {
+    if (device == VK_NULL_HANDLE) {
+        lfs::rendering::throw_renderer_contract(
+            "createBufferRetireTimeline requires an initialized device",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (buffer_retire_timeline_ != VK_NULL_HANDLE) {
+        return;
+    }
+    VkSemaphoreTypeCreateInfo type_info{};
+    type_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+    type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+    type_info.initialValue = 0;
+
+    VkSemaphoreCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    create_info.pNext = &type_info;
+
+    const VkResult result =
+        vkCreateSemaphore(device, &create_info, nullptr, &buffer_retire_timeline_);
+    if (result != VK_SUCCESS) {
+        buffer_retire_timeline_ = VK_NULL_HANDLE;
+        lfs::rendering::throw_vk_result(
+            result,
+            "vkCreateSemaphore",
+            std::format(
+                "VkSplat buffer-retire timeline creation failed (device={:#x}, result={}({}))",
+                lfs::rendering::vkHandleValue(device),
+                lfs::rendering::vkResultToString(result),
+                static_cast<int>(result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    next_buffer_retire_value_ = 1;
+    setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
+                       buffer_retire_timeline_,
+                       "vksplat.buffer_retire_timeline");
+}
+
+void VulkanGSPipeline::destroyBufferRetireTimeline() {
+    if (buffer_retire_timeline_ == VK_NULL_HANDLE) {
+        return;
+    }
+    if (device != VK_NULL_HANDLE) {
+        vkDestroySemaphore(device, buffer_retire_timeline_, nullptr);
+    }
+    buffer_retire_timeline_ = VK_NULL_HANDLE;
+    next_buffer_retire_value_ = 1;
+}
+
 void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {
     HOST_GUARD;
     waitForPendingBatch();
+    drainRetiredBufferShells(/*force=*/true);
+    assert(retired_buffer_shells_.empty());
 #define _(name)                                   \
     {                                             \
         destroyBuffer(buffers.name.deviceBuffer); \
@@ -497,6 +546,10 @@ void VulkanGSPipeline::cleanup() {
                 LFS_SOURCE_SITE_CURRENT());
         }
 
+        drainRetiredBufferShells(/*force=*/true);
+        assert(retired_buffer_shells_.empty());
+        destroyBufferRetireTimeline();
+
         for (_ComputePipeline* pipeline : all_compute_pipelines)
             destroyComputePipeline(*pipeline);
         all_compute_pipelines.clear();
@@ -529,6 +582,12 @@ void VulkanGSPipeline::cleanup() {
         }
     }
 
+    // Device already null (or never initialized): drop any leftover shells without VMA free.
+    if (!retired_buffer_shells_.empty()) {
+        drainRetiredBufferShells(/*force=*/true);
+    }
+    buffer_retire_timeline_ = VK_NULL_HANDLE;
+    next_buffer_retire_value_ = 1;
     allocator = VK_NULL_HANDLE;
     device = VK_NULL_HANDLE;
     instance = VK_NULL_HANDLE;
@@ -569,9 +628,6 @@ void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_dev
         limits.maxComputeWorkGroupCount[0],
         limits.maxComputeWorkGroupCount[1],
         limits.maxComputeWorkGroupCount[2],
-        limits.maxComputeWorkGroupSize[0],
-        limits.maxComputeWorkGroupSize[1],
-        limits.maxComputeWorkGroupSize[2],
     };
 }
 
@@ -765,6 +821,10 @@ void VulkanGSPipeline::createShaderModule(const std::vector<uint32_t>& spirv_cod
 }
 
 void VulkanGSPipeline::beginCommandBatch() {
+    // Cheap non-blocking poll: free growth shells whose timeline keys completed.
+    // commandBatchInProgress is false here, so destroyBufferRetired's active-batch contract holds.
+    drainRetiredBufferShells(/*force=*/false);
+
     if (commandBatchInProgress) {
         lfs::rendering::throw_renderer_contract(
             std::format(
@@ -1804,12 +1864,7 @@ void VulkanGSPipeline::createComputeDescriptorSetLayout(_ComputePipeline& pipeli
     }
 }
 
-void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const std::string& spirv_path, uint32_t min_shared_memory, bool compatible_subgroup_size) {
-
-    if (min_shared_memory > this->deviceInfo.sharedSize) {
-        pipeline.shader = VK_NULL_HANDLE;
-        return;
-    }
+void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const std::string& spirv_path, bool compatible_subgroup_size) {
 
     pipeline.diagnostic_name = spirvDiagnosticName(spirv_path);
     const auto spirv_code = loadSpirv(spirv_path);
@@ -1879,13 +1934,12 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const s
             pipeline_result,
             "vkCreateComputePipelines",
             std::format(
-                "VkSplat compute pipeline creation failed (pipeline='{}', layout={:#x}, shader={:#x}, required_subgroup={}, device_subgroup={}, min_shared_bytes={}, device_shared_bytes={}, result={}({}))",
+                "VkSplat compute pipeline creation failed (pipeline='{}', layout={:#x}, shader={:#x}, required_subgroup={}, device_subgroup={}, device_shared_bytes={}, result={}({}))",
                 pipeline.diagnostic_name,
                 lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
                 lfs::rendering::vkHandleValue(pipeline.shader),
                 compatible_subgroup_size ? SUBGROUP_SIZE : 0,
                 deviceInfo.subgroupSize,
-                min_shared_memory,
                 deviceInfo.sharedSize,
                 lfs::rendering::vkResultToString(pipeline_result),
                 static_cast<int>(pipeline_result)),

@@ -39,7 +39,6 @@ namespace lfs::rendering {
             bool flip_y = false;
             float far_plane = DEFAULT_FAR_PLANE;
             bool orthographic = false;
-            bool color_has_alpha = false;
         };
 
         struct EnvironmentImageCache {
@@ -265,8 +264,7 @@ namespace lfs::rendering {
                 .valid = result.valid,
                 .flip_y = result.flip_y,
                 .far_plane = result.far_plane,
-                .orthographic = result.orthographic,
-                .color_has_alpha = result.color_has_alpha};
+                .orthographic = result.orthographic};
         }
 
         [[nodiscard]] std::optional<glm::mat4> cameraVisualizerTransform(
@@ -599,8 +597,7 @@ namespace lfs::rendering {
                 .depth = std::move(depth_tensor),
                 .valid = true,
                 .far_plane = request.frame_view.far_plane,
-                .orthographic = request.frame_view.orthographic,
-                .color_has_alpha = request.transparent_background};
+                .orthographic = request.frame_view.orthographic};
         }
 
         [[nodiscard]] Result<Tensor> toCpuChwFloatTensor(const Tensor& image) {
@@ -966,23 +963,11 @@ namespace lfs::rendering {
                 cached_tensor_frame_id_ = next_tensor_frame_id_++;
             }
 
-            TextureHandle depth_handle{};
-            if (metadata.primaryDepth() && metadata.primaryDepth()->is_valid()) {
-                depth_handle = {
-                    .id = cached_tensor_frame_id_,
-                    .size = viewport_size,
-                    .texcoord_scale = metadata.depth_texcoord_scale};
-            }
-
             return GpuFrame{
                 .color =
                     {.id = cached_tensor_frame_id_,
                      .size = viewport_size,
                      .texcoord_scale = glm::vec2(1.0f)},
-                .depth = depth_handle,
-                .flip_y = metadata.flip_y,
-                .depth_is_ndc = metadata.depth_is_ndc,
-                .color_has_alpha = metadata.color_has_alpha,
                 .near_plane = metadata.near_plane,
                 .far_plane = metadata.far_plane,
                 .orthographic = metadata.orthographic};

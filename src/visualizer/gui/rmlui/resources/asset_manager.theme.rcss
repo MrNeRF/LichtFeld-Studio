@@ -151,42 +151,17 @@
     border-bottom-color: @{border};
 }
 
-.asset-checkbox {
-    background-color: @{alpha(background,0.7)};
-    border-color: @{primary};
-    color: @{primary};
-}
-
-.asset-checkbox.is-checked {
-    background-color: @{primary};
-    color: @{background};
-}
-
 .asset-pill-mp4 {
     background-color: @{alpha(warning,0.25)};
     color: @{warning};
-}
-
-.asset-video-duration {
-    color: @{text};
-    background-color: @{alpha(background,0.7)};
 }
 
 .asset-card-title {
     color: @{text};
 }
 
-.asset-favorite {
-    color: @{warning};
-}
-
 .asset-card-meta {
     color: @{text_dim};
-}
-
-.asset-card-tag {
-    color: @{text_dim};
-    background-color: @{lighten(surface_bright,0.06)};
 }
 
 .asset-card-button {
@@ -239,10 +214,6 @@
     color: @{text};
 }
 
-.asset-info-favorite {
-    color: @{warning};
-}
-
 .asset-info-section-title {
     color: @{text_dim};
 }
@@ -259,17 +230,6 @@
     color: @{text};
 }
 
-.asset-open-viewer-btn {
-    color: @{text};
-    background-color: @{lighten(surface_bright,0.06)};
-    border-color: @{border};
-}
-
-.asset-open-viewer-btn:hover {
-    background-color: @{lighten(surface_bright,0.12)};
-    border-color: @{primary};
-}
-
 /* ── Footer / Batch Actions ─────────────────────────────── */
 
 #asset-popup-footer {
@@ -277,31 +237,3 @@
     border-top-color: @{border};
 }
 
-.asset-batch-title {
-    color: @{text};
-}
-
-.asset-batch-subtitle {
-    color: @{text_dim};
-}
-
-.asset-batch-button {
-    color: @{text};
-    background-color: @{lighten(surface_bright,0.06)};
-    border-color: @{border};
-}
-
-.asset-batch-button:hover {
-    background-color: @{lighten(surface_bright,0.12)};
-    border-color: @{primary};
-}
-
-.asset-batch-button.is-danger {
-    color: @{error};
-    border-color: @{alpha(error,0.5)};
-}
-
-.asset-batch-button.is-danger:hover {
-    background-color: @{alpha(error,0.15)};
-    border-color: @{error};
-}

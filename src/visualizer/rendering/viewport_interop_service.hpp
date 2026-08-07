@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
+#include <vector>
 #include <vulkan/vulkan.h>
 
 namespace lfs::vis {
@@ -138,7 +139,19 @@ namespace lfs::vis {
         void clearDepthBlitImage();
 
         // Throws std::runtime_error on hard interop failure (callers catch).
+        // Phase 1–2 of #1575: coalesce →GENERAL immediates + CUDA upload; defers
+        // GENERAL→READ_ONLY barriers to recordFrameBarriers.
         void prepareFrame(VulkanContext& context, bool resize_deferring);
+
+        // F2-1: run layout-commit rollback + discard unrecorded frame barriers on
+        // every GUI frame that may endFrame, including export-locked frames that
+        // skip prepareFrame Phases 1–2. prepareFrame calls this at its head.
+        void syncUnsubmittedLayoutCommits(VulkanContext& context);
+
+        // Phase 3 of #1575: record GENERAL→SHADER_READ_ONLY barriers into the open
+        // frame CB and attach CUDA S2 timeline waits to the frame submit. Call
+        // immediately after beginFrame succeeds, before any sampling of interop images.
+        void recordFrameBarriers(VkCommandBuffer frame_cb, VulkanContext& context);
 
         void bindViewportParams(VulkanViewportPassParams& params,
                                 std::size_t frame_slot,
@@ -178,6 +191,28 @@ namespace lfs::vis {
         struct PooledInteropUnit;
         struct VulkanSceneInteropTarget;
 
+        // Decision-pass plan: channel is ready for Phase 1–2 upload.
+        struct ChannelUploadPlan {
+            Channel* channel = nullptr;
+            VulkanSceneInteropTarget* target = nullptr;
+        };
+        // After CUDA signal S2: defer GENERAL→READ_ONLY + publish to the frame CB.
+        struct PendingFrameBarrier {
+            PooledInteropUnit* unit = nullptr;
+            VulkanSceneInteropTarget* target = nullptr;
+            Channel* channel = nullptr;
+            std::uint64_t cuda_signal_value = 0;
+            std::uint64_t source_generation = 0;
+        };
+        // Layout committed to READ_ONLY at record time; marker is lastSuccessful
+        // frame serial at record — rolled back if no newer successful submit exists.
+        struct PendingLayoutCommit {
+            PooledInteropUnit* unit = nullptr;
+            Channel* channel = nullptr;
+            std::uint64_t frame_submit_marker = 0;
+        };
+
+        // Decision + setup only; may append to pending_uploads_ for Phase 1–2.
         void prepareChannel(VulkanContext& context, Channel& channel, bool resize_deferring);
         void resetChannel(Channel& channel);
         void clearPublished(Channel& channel);
@@ -185,6 +220,7 @@ namespace lfs::vis {
         void ensureUploadStream();
         void drainInteropPool(VulkanContext& context, bool force);
         void releaseSlotTarget(VulkanContext& context, VulkanSceneInteropTarget& target);
+        void rollbackUnsubmittedLayoutCommits(VulkanContext& context);
         [[nodiscard]] bool sourceOk(const Channel& channel) const;
         [[nodiscard]] static ChannelPolicy policyFor(ChannelId id);
 
@@ -192,6 +228,13 @@ namespace lfs::vis {
         bool upload_stream_init_attempted_ = false;
         VulkanContext* teardown_context_ = nullptr;
         bool shut_down_ = false;
+
+        // Built during prepareFrame decision pass; consumed by Phase 1–2 in prepareFrame.
+        std::vector<ChannelUploadPlan> pending_uploads_;
+        // After CUDA signal: GENERAL→READ_ONLY + publish deferred to recordFrameBarriers.
+        std::vector<PendingFrameBarrier> pending_frame_barriers_;
+        // Layout set to READ_ONLY at record time; rolled back if endFrame never submitted.
+        std::vector<PendingLayoutCommit> pending_layout_commits_;
 
         // Scene-only external image path (VkSplat / compositor output).
         VkImage external_scene_image_ = VK_NULL_HANDLE;

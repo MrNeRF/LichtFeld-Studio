@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -370,24 +371,36 @@ namespace lfs::vis {
 
         struct TimelineSubmitWait {
             VkTimelineSemaphoreSubmitInfo timeline_info{};
-            VkSemaphore semaphore = VK_NULL_HANDLE;
-            std::uint64_t value = 0;
-            VkPipelineStageFlags stage = 0;
+            VkSemaphore wait_semaphore = VK_NULL_HANDLE;
+            std::uint64_t wait_value = 0;
+            VkPipelineStageFlags wait_stage = 0;
+            VkSemaphore signal_semaphore = VK_NULL_HANDLE;
+            std::uint64_t signal_value = 0;
 
             void attach(VkSubmitInfo& submit_info,
-                        const VkSemaphore wait_semaphore,
-                        const std::uint64_t wait_value,
-                        const VkPipelineStageFlags wait_stage) {
-                semaphore = wait_semaphore;
-                value = wait_value;
-                stage = wait_stage;
+                        const VkSemaphore wait_sem,
+                        const std::uint64_t wait_val,
+                        const VkPipelineStageFlags wait_dst_stage,
+                        const VkSemaphore signal_sem = VK_NULL_HANDLE,
+                        const std::uint64_t signal_val = 0) {
+                wait_semaphore = wait_sem;
+                wait_value = wait_val;
+                wait_stage = wait_dst_stage;
+                signal_semaphore = signal_sem;
+                signal_value = signal_val;
                 timeline_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
                 timeline_info.waitSemaphoreValueCount = 1;
-                timeline_info.pWaitSemaphoreValues = &value;
+                timeline_info.pWaitSemaphoreValues = &wait_value;
+                if (signal_semaphore != VK_NULL_HANDLE) {
+                    timeline_info.signalSemaphoreValueCount = 1;
+                    timeline_info.pSignalSemaphoreValues = &signal_value;
+                    submit_info.signalSemaphoreCount = 1;
+                    submit_info.pSignalSemaphores = &signal_semaphore;
+                }
                 submit_info.pNext = &timeline_info;
                 submit_info.waitSemaphoreCount = 1;
-                submit_info.pWaitSemaphores = &semaphore;
-                submit_info.pWaitDstStageMask = &stage;
+                submit_info.pWaitSemaphores = &wait_semaphore;
+                submit_info.pWaitDstStageMask = &wait_stage;
             }
         };
 
@@ -404,10 +417,9 @@ namespace lfs::vis {
                 VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                 VK_ACCESS_2_TRANSFER_READ_BIT,
             };
-            // This is the acquire half of the compute-to-graphics semaphore
-            // dependency. TOP_OF_PIPE on the submit wait prevents this leading
-            // layout transition from executing early; the barrier therefore has
-            // no queue-local source scope and only describes its transfer use.
+            // Acquire half of the compute→readback semaphore dependency. TOP_OF_PIPE
+            // (or TRANSFER) on the submit wait prevents this leading layout transition
+            // from executing early; empty source scope, transfer-only destination.
             context.imageBarriers().transitionImage(command_buffer,
                                                     image,
                                                     image_generation,
@@ -415,6 +427,40 @@ namespace lfs::vis {
                                                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                                     external_producer,
                                                     transfer_read);
+        }
+
+        // Transfer-queue cmdbufs must not emit fragment stages. Clamp restore scopes
+        // to TRANSFER/ALL_COMMANDS (never FRAGMENT_SHADER from SHADER_READ_ONLY).
+        void restoreOutputImageAfterReadback(VulkanContext& context,
+                                             const VkCommandBuffer command_buffer,
+                                             const VkImage image,
+                                             const std::uint64_t image_generation,
+                                             const VkImageLayout restore_layout,
+                                             const bool transfer_queue) {
+            using AccessScope = VulkanImageBarrierTracker::AccessScope;
+            if (!transfer_queue) {
+                context.imageBarriers().transitionImage(command_buffer,
+                                                        image,
+                                                        image_generation,
+                                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                                        restore_layout);
+                return;
+            }
+            constexpr AccessScope transfer_write{
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_TRANSFER_READ_BIT,
+            };
+            constexpr AccessScope all_commands_read{
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_MEMORY_READ_BIT,
+            };
+            context.imageBarriers().transitionImage(command_buffer,
+                                                    image,
+                                                    image_generation,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    restore_layout,
+                                                    transfer_write,
+                                                    all_commands_read);
         }
 
         // Retire GUI frames that may still fragment-sample a published Main/split
@@ -1820,7 +1866,8 @@ namespace lfs::vis {
         releasePrivateScratchBuffers();
         releaseSharedScratchArena();
         drainRetiredScratchBuffers(false);
-        drainOutputImagePool(false);
+        reclaimCompletedFailedReadbackCells();
+        drainOutputImagePool(false, /*readback_mutex_held=*/true);
         trimOutputImagePoolAged();
         logVramBreakdownIfChanged("preview_release");
     }
@@ -1845,7 +1892,8 @@ namespace lfs::vis {
 
         releaseOutputSlot(OutputSlot::SplitLeft, /*evict=*/true);
         releaseOutputSlot(OutputSlot::SplitRight, /*evict=*/true);
-        drainOutputImagePool(false);
+        reclaimCompletedFailedReadbackCells();
+        drainOutputImagePool(false, /*readback_mutex_held=*/true);
         trimOutputImagePoolAged();
         logVramBreakdownIfChanged("split_output_release");
     }
@@ -1916,7 +1964,8 @@ namespace lfs::vis {
         releasePrivateScratchBuffers();
         releaseSharedScratchArena();
         drainRetiredScratchBuffers(false);
-        drainOutputImagePool(false);
+        reclaimCompletedFailedReadbackCells();
+        drainOutputImagePool(false, /*readback_mutex_held=*/true);
         trimOutputImagePoolIdle();
         logVramBreakdownIfChanged("scene_release");
     }
@@ -1932,34 +1981,42 @@ namespace lfs::vis {
                           formatVkCheckFailure(
                               "vkDeviceWaitIdle(device)",
                               idle_result,
-                              std::format("VkSplat renderer reset could not retire device work before resource destruction (device={:#x}, readback_fence={:#x}, readback_command_pool={:#x}, readback_command_buffer={:#x})",
+                              std::format("VkSplat renderer reset could not retire device work before resource destruction (device={:#x}, readback_timeline={:#x}, graphics_pool={:#x}, transfer_pool={:#x})",
                                           vkHandleValue(device),
-                                          vkHandleValue(readback_fence_),
-                                          vkHandleValue(readback_pool_),
-                                          vkHandleValue(readback_cmd_)),
+                                          vkHandleValue(readback_timeline_),
+                                          vkHandleValue(readback_graphics_pool_),
+                                          vkHandleValue(readback_transfer_pool_)),
                               __FILE__,
                               __LINE__));
             }
-            if (readback_fence_ != VK_NULL_HANDLE) {
-                vkDestroyFence(device, readback_fence_, nullptr);
-                readback_fence_ = VK_NULL_HANDLE;
+            // Fail outstanding tickets after device idle so any waiter state sees error.
+            readback_ring_.failAllOutstanding("VkSplat renderer reset destroyed outstanding readbacks");
+            for (std::size_t i = 0; i < readback_slots_.size(); ++i) {
+                auto& slot = readback_slots_[i];
+                if (slot.staging_buffer != VK_NULL_HANDLE) {
+                    vmaDestroyBuffer(context_->allocator(),
+                                     slot.staging_buffer,
+                                     slot.staging_allocation);
+                }
+                slot = {};
+                readback_ring_.freeCell(i);
             }
-            if (readback_pool_ != VK_NULL_HANDLE) {
-                vkDestroyCommandPool(device, readback_pool_, nullptr);
-                readback_pool_ = VK_NULL_HANDLE;
-                readback_cmd_ = VK_NULL_HANDLE;
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.vksplat.readback_buffer", "shared", 0);
+            if (readback_graphics_pool_ != VK_NULL_HANDLE) {
+                vkDestroyCommandPool(device, readback_graphics_pool_, nullptr);
+                readback_graphics_pool_ = VK_NULL_HANDLE;
             }
-            if (readback_staging_buffer_ != VK_NULL_HANDLE) {
-                lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-                    "vulkan.vksplat.readback_buffer", "shared", 0);
-                vmaDestroyBuffer(context_->allocator(),
-                                 readback_staging_buffer_,
-                                 readback_staging_allocation_);
-                readback_staging_buffer_ = VK_NULL_HANDLE;
-                readback_staging_allocation_ = VK_NULL_HANDLE;
-                readback_staging_info_ = {};
-                readback_staging_capacity_ = 0;
+            if (readback_transfer_pool_ != VK_NULL_HANDLE) {
+                vkDestroyCommandPool(device, readback_transfer_pool_, nullptr);
+                readback_transfer_pool_ = VK_NULL_HANDLE;
             }
+            if (readback_timeline_ != VK_NULL_HANDLE) {
+                vkDestroySemaphore(device, readback_timeline_, nullptr);
+                readback_timeline_ = VK_NULL_HANDLE;
+            }
+            next_readback_ticket_ = 0;
+            readback_ring_.reset();
         }
         stopLodStreaming("VkSplat renderer reset before LOD upload completed");
         releaseSharedScratchArena();
@@ -3814,15 +3871,58 @@ namespace lfs::vis {
         }
     }
 
-    void VksplatViewportRenderer::drainOutputImagePool(const bool force) {
+    void VksplatViewportRenderer::reclaimCompletedFailedReadbackCells() const {
+        if (context_ == nullptr || readback_timeline_ == VK_NULL_HANDLE) {
+            return;
+        }
+        std::uint64_t current = 0;
+        if (vkGetSemaphoreCounterValue(context_->device(), readback_timeline_, &current) !=
+            VK_SUCCESS) {
+            return;
+        }
+        struct Ctx {
+            std::uint64_t current = 0;
+        } ctx{current};
+        readback_ring_.reclaimFailedIf(
+            [](const std::uint64_t ticket, void* raw) -> bool {
+                const auto* c = static_cast<const Ctx*>(raw);
+                return ticket != 0 && c->current >= ticket;
+            },
+            &ctx);
+    }
+
+    void VksplatViewportRenderer::drainOutputImagePool(const bool force,
+                                                       const bool readback_mutex_held) {
         if (context_ == nullptr) {
             return;
+        }
+        if (!force) {
+            if (readback_mutex_held) {
+                reclaimCompletedFailedReadbackCells();
+            } else {
+                std::lock_guard<std::mutex> lock(readback_mutex_);
+                reclaimCompletedFailedReadbackCells();
+            }
         }
         const auto destroy_fn = [this](VulkanContext::ExternalImage& image) {
             context_->destroyExternalImage(image);
         };
-        auto producer_pred = [this](const VulkanContext::ExternalImage&, const std::uint64_t value) {
-            return renderTimelineValueRetired(value);
+        // Pool pin (#1574): AND "no non-Free ticket sources this image".
+        // Mapping (not a deviation): consumer_pred is called with the consumer
+        // frame serial, not acquisition_serial, so we pin by VkImage handle —
+        // which is 1:1 with an acquisition while the entry is Retired. Intent
+        // remains "no pool free while a ticket references the image."
+        // F3-1: never re-lock readback_mutex_ when the caller already holds it.
+        auto producer_pred = [this, readback_mutex_held](const VulkanContext::ExternalImage& image,
+                                                         const std::uint64_t value) {
+            if (!renderTimelineValueRetired(value)) {
+                return false;
+            }
+            if (readback_mutex_held) {
+                return !readback_ring_.hasOutstandingForImage(image.image);
+            }
+            std::lock_guard<std::mutex> lock(readback_mutex_);
+            return !readback_ring_.hasOutstandingForImage(image.image);
         };
         const std::uint64_t retired_serial = context_->retiredFrameSubmitSerial();
         auto consumer_pred = [retired_serial](const std::uint64_t serial) {
@@ -4460,9 +4560,10 @@ namespace lfs::vis {
         const std::string_view reason) {
         // Timeline handle check stays on the renderer; the ring is GPU-free.
         if (render_complete_timeline_ == VK_NULL_HANDLE) {
-            return {};
+            // Still honor readback cell pins when the render timeline is absent.
+            return waitReadbackPinsForFrameRingCell(ring_slot);
         }
-        return ring_.waitUntilReusable(
+        auto status = ring_.waitUntilReusable(
             ring_slot,
             reason,
             [this](const std::uint64_t value) {
@@ -4505,6 +4606,44 @@ namespace lfs::vis {
                 }
                 return {};
             });
+        if (!status) {
+            return status;
+        }
+        // Ring-cell pin (#1574): replace the serialization the old host fence wait
+        // provided against the next compute-queue render of this frame-ring cell.
+        return waitReadbackPinsForFrameRingCell(ring_slot);
+    }
+
+    lfs::Status VksplatViewportRenderer::waitReadbackPinsForFrameRingCell(
+        const std::size_t ring_slot) const {
+        std::lock_guard<std::mutex> lock(readback_mutex_);
+        if (readback_timeline_ == VK_NULL_HANDLE) {
+            return {};
+        }
+        const std::uint64_t pin = readback_ring_.maxTicketForFrameRingCell(ring_slot);
+        if (pin == 0) {
+            return {};
+        }
+        std::uint64_t current = 0;
+        if (vkGetSemaphoreCounterValue(context_->device(), readback_timeline_, &current) ==
+                VK_SUCCESS &&
+            current >= pin) {
+            return {};
+        }
+        readback_ring_.noteCellPinWait();
+        LOG_PERF("vksplat.readback.cell_pin_wait ring_cell={} ticket={} (must be 0 steady-state)",
+                 ring_slot,
+                 pin);
+        auto waited = waitReadbackTimelineValue(pin, "vksplat.readback.cell_pin");
+        if (!waited) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DeadlineExceeded,
+                .domain = lfs::ErrorDomain::Rendering,
+                .user_message = waited.error(),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+        return {};
     }
 
     std::size_t VksplatViewportRenderer::acquireRingSlot() {
@@ -5559,86 +5698,136 @@ namespace lfs::vis {
         if (!context_ || context_->device() == VK_NULL_HANDLE) {
             return std::unexpected("VkSplat readback context requested before device initialization");
         }
-        if (readback_pool_ != VK_NULL_HANDLE) {
+        if (readback_graphics_pool_ != VK_NULL_HANDLE && readback_timeline_ != VK_NULL_HANDLE) {
             return {};
         }
         const VkDevice device = context_->device();
-        VkCommandPoolCreateInfo pool_info{};
-        pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        pool_info.queueFamilyIndex = context_->graphicsQueueFamily();
-        if (const VkResult r = vkCreateCommandPool(device, &pool_info, nullptr, &readback_pool_);
-            r != VK_SUCCESS) {
-            return std::unexpected(vkError(
-                "vkCreateCommandPool(device, &pool_info, nullptr, &readback_pool_)",
-                r,
-                std::format("VkSplat readback command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
-                            vkHandleValue(device),
-                            pool_info.queueFamilyIndex,
-                            static_cast<std::uint32_t>(pool_info.flags))));
+
+        auto create_pool = [&](const uint32_t family,
+                               VkCommandPool& pool,
+                               const std::string_view name) -> std::expected<void, std::string> {
+            if (pool != VK_NULL_HANDLE) {
+                return {};
+            }
+            VkCommandPoolCreateInfo pool_info{};
+            pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+            pool_info.queueFamilyIndex = family;
+            if (const VkResult r = vkCreateCommandPool(device, &pool_info, nullptr, &pool);
+                r != VK_SUCCESS) {
+                return std::unexpected(vkError(
+                    "vkCreateCommandPool(readback)",
+                    r,
+                    std::format("VkSplat readback command-pool creation failed (device={:#x}, queue_family={}, name={})",
+                                vkHandleValue(device),
+                                family,
+                                name)));
+            }
+            context_->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL, pool, name);
+            return {};
+        };
+
+        if (const auto g = create_pool(context_->graphicsQueueFamily(),
+                                       readback_graphics_pool_,
+                                       "vksplat.readback.pool.graphics");
+            !g) {
+            return g;
         }
-        context_->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
-                                     readback_pool_,
-                                     "vksplat.readback.pool");
-        VkCommandBufferAllocateInfo command_info{};
-        command_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        command_info.commandPool = readback_pool_;
-        command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        command_info.commandBufferCount = 1;
-        if (const VkResult r = vkAllocateCommandBuffers(device, &command_info, &readback_cmd_);
-            r != VK_SUCCESS) {
-            vkDestroyCommandPool(device, readback_pool_, nullptr);
-            readback_pool_ = VK_NULL_HANDLE;
-            return std::unexpected(vkError(
-                "vkAllocateCommandBuffers(device, &command_info, &readback_cmd_)",
-                r,
-                std::format("VkSplat readback command-buffer allocation failed (device={:#x}, command_pool={:#x}, requested_count={})",
-                            vkHandleValue(device),
-                            vkHandleValue(command_info.commandPool),
-                            command_info.commandBufferCount)));
+        if (context_->hasDedicatedTransferQueue()) {
+            if (const auto t = create_pool(context_->transferQueueFamily(),
+                                           readback_transfer_pool_,
+                                           "vksplat.readback.pool.transfer");
+                !t) {
+                return t;
+            }
         }
-        context_->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER,
-                                     readback_cmd_,
-                                     "vksplat.readback.command");
-        VkFenceCreateInfo fence_info{};
-        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        if (const VkResult r = vkCreateFence(device, &fence_info, nullptr, &readback_fence_);
-            r != VK_SUCCESS) {
-            const std::string error = vkError(
-                "vkCreateFence(device, &fence_info, nullptr, &readback_fence_)",
-                r,
-                std::format("VkSplat readback fence creation failed (device={:#x}, command_buffer={:#x}, flags={:#x})",
-                            vkHandleValue(device),
-                            vkHandleValue(readback_cmd_),
-                            static_cast<std::uint32_t>(fence_info.flags)));
-            vkDestroyCommandPool(device, readback_pool_, nullptr);
-            readback_pool_ = VK_NULL_HANDLE;
-            readback_cmd_ = VK_NULL_HANDLE;
-            return std::unexpected(error);
+
+        for (std::size_t i = 0; i < readback_slots_.size(); ++i) {
+            auto& slot = readback_slots_[i];
+            if (slot.graphics_cmd == VK_NULL_HANDLE) {
+                VkCommandBufferAllocateInfo command_info{};
+                command_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+                command_info.commandPool = readback_graphics_pool_;
+                command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                command_info.commandBufferCount = 1;
+                if (const VkResult r =
+                        vkAllocateCommandBuffers(device, &command_info, &slot.graphics_cmd);
+                    r != VK_SUCCESS) {
+                    return std::unexpected(vkError(
+                        "vkAllocateCommandBuffers(readback graphics)",
+                        r,
+                        std::format("cell={}", i)));
+                }
+                context_->setDebugObjectNamef(VK_OBJECT_TYPE_COMMAND_BUFFER,
+                                              slot.graphics_cmd,
+                                              "vksplat.readback.cmd.graphics[{}]",
+                                              i);
+            }
+            if (readback_transfer_pool_ != VK_NULL_HANDLE && slot.transfer_cmd == VK_NULL_HANDLE) {
+                VkCommandBufferAllocateInfo command_info{};
+                command_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+                command_info.commandPool = readback_transfer_pool_;
+                command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                command_info.commandBufferCount = 1;
+                if (const VkResult r =
+                        vkAllocateCommandBuffers(device, &command_info, &slot.transfer_cmd);
+                    r != VK_SUCCESS) {
+                    return std::unexpected(vkError(
+                        "vkAllocateCommandBuffers(readback transfer)",
+                        r,
+                        std::format("cell={}", i)));
+                }
+                context_->setDebugObjectNamef(VK_OBJECT_TYPE_COMMAND_BUFFER,
+                                              slot.transfer_cmd,
+                                              "vksplat.readback.cmd.transfer[{}]",
+                                              i);
+            }
         }
-        context_->setDebugObjectName(VK_OBJECT_TYPE_FENCE,
-                                     readback_fence_,
-                                     "vksplat.readback.fence");
+
+        if (readback_timeline_ == VK_NULL_HANDLE) {
+            VkSemaphoreTypeCreateInfo type_info{};
+            type_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+            type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+            type_info.initialValue = 0;
+            VkSemaphoreCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            info.pNext = &type_info;
+            if (const VkResult r = vkCreateSemaphore(device, &info, nullptr, &readback_timeline_);
+                r != VK_SUCCESS) {
+                return std::unexpected(vkError(
+                    "vkCreateSemaphore(vksplat.timeline.readback)",
+                    r));
+            }
+            context_->setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
+                                         readback_timeline_,
+                                         "vksplat.timeline.readback");
+            next_readback_ticket_ = 0;
+        }
         return {};
     }
 
-    std::expected<void, std::string> VksplatViewportRenderer::ensureReadbackStagingBuffer(
+    std::expected<void, std::string> VksplatViewportRenderer::ensureReadbackSlotStaging(
         VulkanContext& context,
+        const std::size_t cell,
         const VkDeviceSize required_bytes) const {
         if (required_bytes == 0) {
             return std::unexpected("VkSplat readback staging buffer requested with zero bytes");
         }
-        if (readback_staging_buffer_ != VK_NULL_HANDLE &&
-            readback_staging_capacity_ >= required_bytes &&
-            readback_staging_info_.pMappedData != nullptr) {
+        if (cell >= readback_slots_.size()) {
+            return std::unexpected("VkSplat readback staging cell out of range");
+        }
+        auto& slot = readback_slots_[cell];
+        if (slot.staging_buffer != VK_NULL_HANDLE &&
+            slot.staging_capacity >= required_bytes &&
+            slot.staging_info.pMappedData != nullptr) {
             return {};
         }
 
         constexpr VkDeviceSize kReadbackAlignment = VkDeviceSize{64} << 10;
         const VkDeviceSize current_growth =
-            readback_staging_capacity_ > std::numeric_limits<VkDeviceSize>::max() / 3u
-                ? readback_staging_capacity_
-                : readback_staging_capacity_ + readback_staging_capacity_ / 2u;
+            slot.staging_capacity > std::numeric_limits<VkDeviceSize>::max() / 3u
+                ? slot.staging_capacity
+                : slot.staging_capacity + slot.staging_capacity / 2u;
         const VkDeviceSize target = std::max(required_bytes, current_growth);
         if (target > std::numeric_limits<VkDeviceSize>::max() - (kReadbackAlignment - 1u)) {
             return std::unexpected("VkSplat readback staging capacity overflow");
@@ -5669,87 +5858,122 @@ namespace lfs::vis {
             &new_info);
         if (result != VK_SUCCESS || new_buffer == VK_NULL_HANDLE) {
             return std::unexpected(vkError(
-                "vmaCreateBuffer(context.allocator(), &buffer_info, &alloc_info, &new_buffer, &new_allocation, &new_info)",
+                "vmaCreateBuffer(readback staging)",
                 result,
-                std::format("VkSplat shared readback-buffer allocation failed (allocator={:#x}, required_size={}, requested_capacity={}, usage={:#x}, returned_buffer={:#x})",
-                            reinterpret_cast<std::uintptr_t>(context.allocator()),
-                            required_bytes,
-                            capacity,
-                            static_cast<std::uint32_t>(buffer_info.usage),
-                            vkHandleValue(new_buffer))));
+                std::format("cell={}, required={}, capacity={}", cell, required_bytes, capacity)));
         }
         if (new_info.pMappedData == nullptr || new_info.size < capacity) {
-            const std::string error = std::format(
-                "VkSplat shared readback allocation must be mapped and cover its advertised capacity (buffer={:#x}, allocation={:#x}, mapped={:#x}, allocation_size={}, required_size={}, requested_capacity={}) ({}:{})",
-                vkHandleValue(new_buffer),
-                reinterpret_cast<std::uintptr_t>(new_allocation),
-                reinterpret_cast<std::uintptr_t>(new_info.pMappedData),
-                new_info.size,
-                required_bytes,
-                capacity,
-                __FILE__,
-                __LINE__);
             vmaDestroyBuffer(context.allocator(), new_buffer, new_allocation);
-            return std::unexpected(error);
+            return std::unexpected(std::format(
+                "VkSplat readback staging must be mapped (cell={}, capacity={})",
+                cell,
+                capacity));
         }
         context.setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
                                     new_buffer,
-                                    "vksplat.readback.staging[{}]",
+                                    "vksplat.readback.staging[{}][{}]",
+                                    cell,
                                     capacity);
 
-        if (readback_staging_buffer_ != VK_NULL_HANDLE) {
-            vmaDestroyBuffer(context.allocator(),
-                             readback_staging_buffer_,
-                             readback_staging_allocation_);
+        if (slot.staging_buffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(context.allocator(), slot.staging_buffer, slot.staging_allocation);
         }
-        readback_staging_buffer_ = new_buffer;
-        readback_staging_allocation_ = new_allocation;
-        readback_staging_info_ = new_info;
-        readback_staging_capacity_ = capacity;
+        slot.staging_buffer = new_buffer;
+        slot.staging_allocation = new_allocation;
+        slot.staging_info = new_info;
+        slot.staging_capacity = capacity;
+
+        std::size_t total = 0;
+        for (const auto& s : readback_slots_) {
+            total += static_cast<std::size_t>(s.staging_info.size);
+        }
         lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
             "vulkan.vksplat.readback_buffer",
             "shared",
-            static_cast<std::size_t>(new_info.size));
+            total);
         return {};
     }
 
-    std::expected<void, std::string> VksplatViewportRenderer::submitReadbackAndWait(
+    std::expected<std::size_t, std::string> VksplatViewportRenderer::acquireReadbackCell() const {
+        // F3-2: reclaim Failed cells whose timeline is already complete before acquire.
+        reclaimCompletedFailedReadbackCells();
+        if (auto free = readback_ring_.tryAcquireCell(); free.has_value()) {
+            return *free;
+        }
+        // Ring-full: bounded-wait the oldest active (Outstanding or Failed) ticket.
+        const auto oldest = readback_ring_.oldestActiveCell();
+        if (!oldest.has_value()) {
+            return std::unexpected("VkSplat readback ring full with no active tickets");
+        }
+        readback_ring_.noteRingFullWait();
+        const std::uint64_t ticket = readback_ring_.cell(*oldest).ticket_value;
+        const auto state = readback_ring_.cell(*oldest).state;
+        LOG_PERF("vksplat.readback.ring_full_wait ticket={} state={} (must be 0 steady-state)",
+                 ticket,
+                 state == ReadbackTicketRing::State::Failed ? "Failed" : "Outstanding");
+        if (state == ReadbackTicketRing::State::Failed) {
+            // Wait timeline only — do not deliver; free once complete.
+            if (const auto waited =
+                    waitReadbackTimelineValue(ticket, "vksplat.readback.reclaim_failed");
+                !waited) {
+                return std::unexpected(waited.error());
+            }
+            readback_ring_.freeCell(*oldest);
+        } else if (const auto waited = waitReadbackTicketLocked(ticket); !waited) {
+            // Wait failed → markFailed left the cell pinned; try reclaim if timeline advanced.
+            reclaimCompletedFailedReadbackCells();
+            if (auto free = readback_ring_.tryAcquireCell(); free.has_value()) {
+                return *free;
+            }
+            return std::unexpected(waited.error());
+        }
+        reclaimCompletedFailedReadbackCells();
+        if (auto free = readback_ring_.tryAcquireCell(); free.has_value()) {
+            return *free;
+        }
+        return std::unexpected("VkSplat readback ring still full after waiting oldest ticket");
+    }
+
+    std::expected<std::uint64_t, std::string> VksplatViewportRenderer::submitReadbackTicket(
         VulkanContext& context,
+        const std::size_t cell,
         const VkCommandBuffer command_buffer,
+        const VkQueue submit_queue,
         const std::uint64_t completion_value,
         const VkPipelineStageFlags wait_stage,
-        const VkDeviceSize byte_count,
+        ReadbackTicketRing::TicketMeta meta,
         const std::string_view validation_label,
         const std::string_view operation_label,
-        const bool reset_fence,
         const std::source_location location) const {
+        const auto submit_t0 = std::chrono::steady_clock::now();
+        if (readback_timeline_ == VK_NULL_HANDLE) {
+            return std::unexpected("VkSplat readback timeline missing");
+        }
+        if (next_readback_ticket_ == std::numeric_limits<std::uint64_t>::max()) {
+            return std::unexpected("VkSplat readback ticket counter exhausted");
+        }
+        const std::uint64_t ticket = ++next_readback_ticket_;
+        meta.ticket_value = ticket;
+
         VkSubmitInfo submit_info{};
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffer;
         TimelineSubmitWait render_wait{};
         render_wait.attach(
-            submit_info, vulkan_render_complete_timeline_, completion_value, wait_stage);
+            submit_info,
+            vulkan_render_complete_timeline_,
+            completion_value,
+            wait_stage,
+            readback_timeline_,
+            ticket);
 
-        const VkQueue submit_queue = context.graphicsQueue();
         if (auto error = validateQueueSubmit(
-                validation_label, submit_queue, submit_info, readback_fence_, true, location)) {
+                validation_label, submit_queue, submit_info, VK_NULL_HANDLE, false, location)) {
             return std::unexpected(std::move(*error));
         }
 
-        const VkDevice device = context.device();
-        if (reset_fence) {
-            const VkResult result = vkResetFences(device, 1, &readback_fence_);
-            if (result != VK_SUCCESS) {
-                return std::unexpected(vkError(
-                    std::format("vkResetFences({})", operation_label),
-                    result,
-                    std::string_view{},
-                    location));
-            }
-        }
-
-        VkResult result = vkQueueSubmit(submit_queue, 1, &submit_info, readback_fence_);
+        const VkResult result = vkQueueSubmit(submit_queue, 1, &submit_info, VK_NULL_HANDLE);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError(
                 std::format("vkQueueSubmit({})", operation_label),
@@ -5757,39 +5981,298 @@ namespace lfs::vis {
                 std::string_view{},
                 location));
         }
-        // Phase 7C-P3 C8: bounded readback fence wait. Persistent fence is
-        // retained on non-Ready (AMB-4); caller fails without manufacturing Ready.
-        {
-            lfs::rendering::WaitContext wait_ctx;
-            wait_ctx.fingerprint = "vksplat.readback.wait_fence";
-            wait_ctx.owner_quarantine_flag = &gpu_wait_quarantined_;
-            auto wait_outcome = lfs::rendering::wait_fence_bounded(
-                device,
-                readback_fence_,
-                std::stop_token{},
-                lfs::rendering::VulkanWaitPolicy{},
-                wait_ctx);
-            if (!wait_outcome.has_value() ||
-                *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
-                return std::unexpected(std::format(
-                    "VkSplat {} readback wait did not reach Ready (fence={:#x}): {} ({}:{})",
-                    operation_label,
-                    lfs::rendering::vkHandleValue(readback_fence_),
-                    formatWaitFailure(wait_outcome),
-                    location.file_name(),
-                    static_cast<int>(location.line())));
-            }
+        try {
+            readback_ring_.markSubmitted(cell, std::move(meta));
+        } catch (const std::exception& e) {
+            return std::unexpected(std::format(
+                "VkSplat {} readback ticket bookkeeping failed: {}",
+                operation_label,
+                e.what()));
         }
-        result = vmaInvalidateAllocation(
-            context.allocator(), readback_staging_allocation_, 0, byte_count);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError(
-                std::format("vmaInvalidateAllocation({})", operation_label),
-                result,
-                std::string_view{},
-                location));
+        LOG_PERF("vksplat.readback.submit_us={}",
+                 std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - submit_t0)
+                     .count());
+        return ticket;
+    }
+
+    std::expected<void, std::string> VksplatViewportRenderer::waitReadbackTimelineValue(
+        const std::uint64_t value,
+        const std::string_view fingerprint) const {
+        if (readback_timeline_ == VK_NULL_HANDLE || value == 0) {
+            return std::unexpected("VkSplat readback timeline wait missing handle/value");
+        }
+        std::uint64_t current = 0;
+        if (vkGetSemaphoreCounterValue(context_->device(), readback_timeline_, &current) ==
+                VK_SUCCESS &&
+            current >= value) {
+            return {};
+        }
+        const auto wait_t0 = std::chrono::steady_clock::now();
+        VkSemaphoreWaitInfo wait_info{};
+        wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+        wait_info.semaphoreCount = 1;
+        wait_info.pSemaphores = &readback_timeline_;
+        wait_info.pValues = &value;
+        lfs::rendering::WaitContext wait_ctx;
+        wait_ctx.fingerprint = fingerprint;
+        wait_ctx.owner_quarantine_flag = &gpu_wait_quarantined_;
+        auto wait_outcome = lfs::rendering::wait_semaphores_bounded(
+            context_->device(),
+            wait_info,
+            std::stop_token{},
+            lfs::rendering::VulkanWaitPolicy{},
+            wait_ctx);
+        LOG_PERF("vksplat.readback.ticket_wait_us={} fingerprint={}",
+                 std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - wait_t0)
+                     .count(),
+                 fingerprint);
+        if (!wait_outcome.has_value() ||
+            *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+            // AMB-4: non-Ready keeps persistent error / quarantine; no manufactured Ready.
+            return std::unexpected(std::format(
+                "VkSplat readback timeline wait did not reach Ready "
+                "(semaphore={:#x}, value={}): {}",
+                lfs::rendering::vkHandleValue(readback_timeline_),
+                value,
+                formatWaitFailure(wait_outcome)));
         }
         return {};
+    }
+
+    std::expected<void, std::string> VksplatViewportRenderer::deliverReadbackTicket(
+        const std::size_t cell) const {
+        auto& meta = readback_ring_.cell(cell);
+        auto& slot = readback_slots_[cell];
+        if (meta.state != ReadbackTicketRing::State::Outstanding) {
+            if (meta.state == ReadbackTicketRing::State::Failed) {
+                return std::unexpected(meta.error.empty() ? "readback ticket failed" : meta.error);
+            }
+            return std::unexpected("readback ticket not outstanding for delivery");
+        }
+        const VkResult inv = vmaInvalidateAllocation(
+            context_->allocator(),
+            slot.staging_allocation,
+            0,
+            static_cast<VkDeviceSize>(meta.byte_count));
+        if (inv != VK_SUCCESS) {
+            readback_ring_.markFailed(cell, vkError("vmaInvalidateAllocation(readback)", inv));
+            return std::unexpected(readback_ring_.cell(cell).error);
+        }
+        const auto* const src = static_cast<const std::uint8_t*>(slot.staging_info.pMappedData);
+        if (src == nullptr) {
+            readback_ring_.markFailed(cell, "readback staging mapped pointer is null");
+            return std::unexpected(readback_ring_.cell(cell).error);
+        }
+
+        using DeliveryKind = ReadbackTicketRing::DeliveryKind;
+        // F3-3: never memcpy into a cleared / abandoned dest.
+        switch (meta.delivery) {
+        case DeliveryKind::DepthSample: {
+            if (meta.dest == nullptr || meta.byte_count < sizeof(float)) {
+                readback_ring_.markFailed(cell, "depth sample delivery missing destination");
+                return std::unexpected(readback_ring_.cell(cell).error);
+            }
+            assert(meta.dest != nullptr && "deliver must not write a cleared dest");
+            std::memcpy(meta.dest, src, sizeof(float));
+            break;
+        }
+        case DeliveryKind::DepthFloatPlane: {
+            if (meta.dest == nullptr) {
+                readback_ring_.markFailed(cell, "depth plane delivery missing destination");
+                return std::unexpected(readback_ring_.cell(cell).error);
+            }
+            assert(meta.dest != nullptr && "deliver must not write a cleared dest");
+            std::memcpy(meta.dest, src, static_cast<std::size_t>(meta.byte_count));
+            break;
+        }
+        case DeliveryKind::ColorHwc: {
+            if (meta.dest == nullptr) {
+                readback_ring_.markFailed(cell, "color HWC delivery missing destination");
+                return std::unexpected(readback_ring_.cell(cell).error);
+            }
+            assert(meta.dest != nullptr && "deliver must not write a cleared dest");
+            const std::size_t src_row_pixels = static_cast<std::size_t>(meta.width);
+            const std::size_t dst_row_pixels = static_cast<std::size_t>(meta.dest_width);
+            const std::size_t dst_channels = static_cast<std::size_t>(meta.dest_channels);
+            if (meta.dest_is_float) {
+                auto* const dst = static_cast<float*>(meta.dest);
+                for (int row = 0; row < meta.height; ++row) {
+                    const auto* const src_row =
+                        src + static_cast<std::size_t>(row) * src_row_pixels * 4u;
+                    auto* const dst_row =
+                        dst + ((static_cast<std::size_t>(meta.dest_y + row) * dst_row_pixels +
+                                static_cast<std::size_t>(meta.dest_x)) *
+                               dst_channels);
+                    for (int col = 0; col < meta.width; ++col) {
+                        const std::size_t s = static_cast<std::size_t>(col) * 4u;
+                        const std::size_t d = static_cast<std::size_t>(col) * dst_channels;
+                        dst_row[d] = static_cast<float>(src_row[s]) / 255.0f;
+                        dst_row[d + 1u] = static_cast<float>(src_row[s + 1u]) / 255.0f;
+                        dst_row[d + 2u] = static_cast<float>(src_row[s + 2u]) / 255.0f;
+                        if (dst_channels == 4u) {
+                            dst_row[d + 3u] = static_cast<float>(src_row[s + 3u]) / 255.0f;
+                        }
+                    }
+                }
+            } else {
+                auto* const dst = static_cast<std::uint8_t*>(meta.dest);
+                for (int row = 0; row < meta.height; ++row) {
+                    const auto* const src_row =
+                        src + static_cast<std::size_t>(row) * src_row_pixels * 4u;
+                    auto* const dst_row =
+                        dst + ((static_cast<std::size_t>(meta.dest_y + row) * dst_row_pixels +
+                                static_cast<std::size_t>(meta.dest_x)) *
+                               dst_channels);
+                    if (dst_channels == 4u) {
+                        std::memcpy(dst_row, src_row, src_row_pixels * 4u);
+                        continue;
+                    }
+                    for (int col = 0; col < meta.width; ++col) {
+                        const std::size_t s = static_cast<std::size_t>(col) * 4u;
+                        const std::size_t d = static_cast<std::size_t>(col) * dst_channels;
+                        dst_row[d] = src_row[s];
+                        dst_row[d + 1u] = src_row[s + 1u];
+                        dst_row[d + 2u] = src_row[s + 2u];
+                    }
+                }
+            }
+            break;
+        }
+        }
+        readback_ring_.freeCell(cell);
+        return {};
+    }
+
+    std::expected<VksplatViewportRenderer::ReadbackTicketStatus, std::string>
+    VksplatViewportRenderer::pollReadbackTicketLocked(const std::uint64_t ticket) const {
+        reclaimCompletedFailedReadbackCells();
+        auto* meta = readback_ring_.findByTicket(ticket);
+        if (meta == nullptr) {
+            return ReadbackTicketStatus::Failed;
+        }
+        if (meta->state == ReadbackTicketRing::State::Failed) {
+            return std::unexpected(meta->error.empty() ? "readback ticket failed" : meta->error);
+        }
+        if (meta->state != ReadbackTicketRing::State::Outstanding) {
+            return ReadbackTicketStatus::Failed;
+        }
+        // Locate cell index (needed for markFailed on poll error and for deliver).
+        std::size_t cell = ReadbackTicketRing::kRingSize;
+        for (std::size_t i = 0; i < ReadbackTicketRing::kRingSize; ++i) {
+            if (readback_ring_.cell(i).ticket_value == ticket) {
+                cell = i;
+                break;
+            }
+        }
+        if (cell >= ReadbackTicketRing::kRingSize) {
+            return std::unexpected("readback ticket cell lost");
+        }
+        std::uint64_t current = 0;
+        if (vkGetSemaphoreCounterValue(context_->device(), readback_timeline_, &current) !=
+            VK_SUCCESS) {
+            // F3-3: do not leave Outstanding with a host dest that may be cleared.
+            readback_ring_.markFailed(
+                cell, "vkGetSemaphoreCounterValue(readback timeline) failed");
+            return std::unexpected(readback_ring_.cell(cell).error);
+        }
+        if (current < ticket) {
+            return ReadbackTicketStatus::NotReady;
+        }
+        if (const auto delivered = deliverReadbackTicket(cell); !delivered) {
+            return std::unexpected(delivered.error());
+        }
+        return ReadbackTicketStatus::Ready;
+    }
+
+    std::expected<void, std::string> VksplatViewportRenderer::waitReadbackTicketLocked(
+        const std::uint64_t ticket) const {
+        auto* meta = readback_ring_.findByTicket(ticket);
+        if (meta == nullptr) {
+            return std::unexpected("unknown readback ticket");
+        }
+        if (meta->state == ReadbackTicketRing::State::Failed) {
+            return std::unexpected(meta->error.empty() ? "readback ticket failed" : meta->error);
+        }
+        if (const auto waited =
+                waitReadbackTimelineValue(ticket, "vksplat.readback.wait_ticket");
+            !waited) {
+            readback_ring_.markFailed(
+                // find cell
+                [&]() -> std::size_t {
+                    for (std::size_t i = 0; i < ReadbackTicketRing::kRingSize; ++i) {
+                        if (readback_ring_.cell(i).ticket_value == ticket) {
+                            return i;
+                        }
+                    }
+                    return 0;
+                }(),
+                waited.error());
+            return std::unexpected(waited.error());
+        }
+        const auto polled = pollReadbackTicketLocked(ticket);
+        if (!polled) {
+            return std::unexpected(polled.error());
+        }
+        if (*polled != ReadbackTicketStatus::Ready) {
+            return std::unexpected("readback ticket not Ready after timeline wait");
+        }
+        return {};
+    }
+
+    std::expected<VksplatViewportRenderer::ReadbackTicketStatus, std::string>
+    VksplatViewportRenderer::pollReadbackTicket(const std::uint64_t ticket) const {
+        std::lock_guard<std::mutex> lock(readback_mutex_);
+        return pollReadbackTicketLocked(ticket);
+    }
+
+    std::expected<void, std::string> VksplatViewportRenderer::waitReadbackTicket(
+        const std::uint64_t ticket) const {
+        std::lock_guard<std::mutex> lock(readback_mutex_);
+        return waitReadbackTicketLocked(ticket);
+    }
+
+    void VksplatViewportRenderer::abandonReadbackTicket(const std::uint64_t ticket) const {
+        if (ticket == 0) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(readback_mutex_);
+        auto* meta = readback_ring_.findByTicket(ticket);
+        if (meta == nullptr) {
+            return;
+        }
+        std::size_t cell = ReadbackTicketRing::kRingSize;
+        for (std::size_t i = 0; i < ReadbackTicketRing::kRingSize; ++i) {
+            if (readback_ring_.cell(i).ticket_value == ticket) {
+                cell = i;
+                break;
+            }
+        }
+        if (cell >= ReadbackTicketRing::kRingSize) {
+            return;
+        }
+        // F3-3: clear dest under the ring lock before the host drops storage.
+        meta->dest = nullptr;
+        if (meta->state == ReadbackTicketRing::State::Outstanding) {
+            readback_ring_.markFailed(cell, "readback ticket abandoned by host");
+        }
+        reclaimCompletedFailedReadbackCells();
+    }
+
+    std::size_t VksplatViewportRenderer::outstandingReadbackTickets() const {
+        std::lock_guard<std::mutex> lock(readback_mutex_);
+        return readback_ring_.outstandingCount();
+    }
+
+    std::uint64_t VksplatViewportRenderer::readbackRingFullWaitCount() const {
+        std::lock_guard<std::mutex> lock(readback_mutex_);
+        return readback_ring_.ringFullWaitCount();
+    }
+
+    std::uint64_t VksplatViewportRenderer::readbackCellPinWaitCount() const {
+        std::lock_guard<std::mutex> lock(readback_mutex_);
+        return readback_ring_.cellPinWaitCount();
     }
 
     lfs::Result<glm::ivec2> VksplatViewportRenderer::latestOutputImageSize(
@@ -5929,14 +6412,7 @@ namespace lfs::vis {
         if (&context != context_) {
             return std::unexpected("VkSplat depth readback received a different Vulkan context");
         }
-        // Producer ordering is the timeline wait below (max of slot completion and
-        // last_submitted_render_value_). Source is the pixel_depth scratch buffer,
-        // which GUI frames never fragment-sample, so no graphics-queue consumer wait.
-        try {
-            const_cast<VulkanGSRenderer&>(renderer_).waitForPendingBatch();
-        } catch (const std::exception& e) {
-            return std::unexpected(std::format("VkSplat depth readback pending-batch wait failed: {}", e.what()));
-        }
+        // Produce ordering is the timeline wait on the readback submit.
 
         const auto& output = ring_.latestSlot(outputSlotIndex(output_slot));
         const std::uint64_t completion_value =
@@ -5966,17 +6442,23 @@ namespace lfs::vis {
                 __LINE__));
         }
 
-        if (const auto staging_ready = ensureReadbackStagingBuffer(context, byte_count);
+        if (const auto ready = ensureReadbackContext(); !ready) {
+            return std::unexpected(ready.error());
+        }
+        const auto cell_or = acquireReadbackCell();
+        if (!cell_or) {
+            return std::unexpected(cell_or.error());
+        }
+        const std::size_t cell = *cell_or;
+        if (const auto staging_ready = ensureReadbackSlotStaging(context, cell, byte_count);
             !staging_ready) {
             return std::unexpected(staging_ready.error());
         }
 
-        if (const auto ready = ensureReadbackContext(); !ready) {
-            return std::unexpected(ready.error());
-        }
-        VkResult result = VK_SUCCESS;
-        const VkCommandBuffer command_buffer = readback_cmd_;
-        result = vkResetCommandBuffer(command_buffer, 0);
+        // pixel_depth buffers are EXCLUSIVE on the graphics family — stay on graphics.
+        auto& slot = readback_slots_[cell];
+        const VkCommandBuffer command_buffer = slot.graphics_cmd;
+        VkResult result = vkResetCommandBuffer(command_buffer, 0);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkResetCommandBuffer(VkSplat depth readback)", result));
         }
@@ -5988,9 +6470,6 @@ namespace lfs::vis {
             return std::unexpected(vkError("vkBeginCommandBuffer(VkSplat depth readback)", result));
         }
 
-        // The timeline wait on this submit acquires the async-compute write.
-        // Keep the queue-local barrier's source scope empty so it does not claim
-        // that a graphics-family command buffer can synchronize the other queue.
         VkBufferMemoryBarrier2 depth_barrier{};
         depth_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
         depth_barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
@@ -6012,22 +6491,11 @@ namespace lfs::vis {
         copy_region.srcOffset = depth_buffer.offset;
         copy_region.dstOffset = 0;
         copy_region.size = byte_count;
-        vkCmdCopyBuffer(command_buffer, depth_buffer.buffer, readback_staging_buffer_, 1, &copy_region);
+        vkCmdCopyBuffer(command_buffer, depth_buffer.buffer, slot.staging_buffer, 1, &copy_region);
 
         result = vkEndCommandBuffer(command_buffer);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkEndCommandBuffer(VkSplat depth readback)", result));
-        }
-        if (const auto submitted = submitReadbackAndWait(
-                context,
-                command_buffer,
-                completion_value,
-                VK_PIPELINE_STAGE_TRANSFER_BIT,
-                byte_count,
-                "VkSplat depth readback submit",
-                "VkSplat depth readback");
-            !submitted) {
-            return std::unexpected(submitted.error());
         }
 
         auto tensor = lfs::core::Tensor::empty(
@@ -6037,12 +6505,35 @@ namespace lfs::vis {
         if (!tensor.is_valid()) {
             return std::unexpected("VkSplat depth readback failed to allocate CPU tensor");
         }
-        const auto* const src = static_cast<const float*>(readback_staging_info_.pMappedData);
         auto* const dst = tensor.ptr<float>();
-        if (src == nullptr || dst == nullptr) {
-            return std::unexpected("VkSplat depth readback has null mapped data");
+        if (dst == nullptr) {
+            return std::unexpected("VkSplat depth readback has null destination");
         }
-        std::memcpy(dst, src, static_cast<std::size_t>(byte_count));
+
+        ReadbackTicketRing::TicketMeta meta{};
+        meta.ring_cell = ring_.latestRingSlot(outputSlotIndex(output_slot));
+        meta.byte_count = byte_count;
+        meta.width = size->x;
+        meta.height = size->y;
+        meta.delivery = ReadbackTicketRing::DeliveryKind::DepthFloatPlane;
+        meta.dest = dst;
+
+        const auto ticket = submitReadbackTicket(
+            context,
+            cell,
+            command_buffer,
+            context.graphicsQueue(),
+            completion_value,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            std::move(meta),
+            "VkSplat depth readback submit",
+            "VkSplat depth readback");
+        if (!ticket) {
+            return std::unexpected(ticket.error());
+        }
+        if (const auto waited = waitReadbackTicketLocked(*ticket); !waited) {
+            return std::unexpected(waited.error());
+        }
         LOG_PERF("vksplat.readback.readPreviewDepth took_us={}",
                  std::chrono::duration_cast<std::chrono::microseconds>(
                      std::chrono::steady_clock::now() - readback_t0)
@@ -6050,9 +6541,11 @@ namespace lfs::vis {
         return std::make_shared<lfs::core::Tensor>(std::move(tensor));
     }
 
-    std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
-    VksplatViewportRenderer::readOutputDepthImage(VulkanContext& context, const OutputSlot output_slot) const {
-        const auto readback_t0 = std::chrono::steady_clock::now();
+    std::expected<std::uint64_t, std::string>
+    VksplatViewportRenderer::submitReadOutputDepthImageTicket(
+        VulkanContext& context,
+        const OutputSlot output_slot,
+        lfs::core::Tensor& destination) const {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
             return std::unexpected("VkSplat output depth readback requested before renderer initialization");
@@ -6060,11 +6553,7 @@ namespace lfs::vis {
         if (&context != context_) {
             return std::unexpected("VkSplat output depth readback received a different Vulkan context");
         }
-        try {
-            const_cast<VulkanGSRenderer&>(renderer_).waitForPendingBatch();
-        } catch (const std::exception& e) {
-            return std::unexpected(std::format("VkSplat output depth readback pending-batch wait failed: {}", e.what()));
-        }
+        // Produce ordering is the timeline wait on the readback submit.
 
         const auto& output = ring_.latestSlot(outputSlotIndex(output_slot));
         if (output.depth_image.image == VK_NULL_HANDLE ||
@@ -6079,11 +6568,20 @@ namespace lfs::vis {
             return std::unexpected(
                 "VkSplat output depth readback has no submitted image producer to wait on");
         }
+        if (!destination.is_valid() ||
+            destination.device() != lfs::core::Device::CPU ||
+            destination.dtype() != lfs::core::DataType::Float32 ||
+            destination.ndim() != 2 ||
+            static_cast<int>(destination.size(0)) != output.size.y ||
+            static_cast<int>(destination.size(1)) != output.size.x ||
+            !destination.is_contiguous()) {
+            return std::unexpected(
+                "VkSplat output depth ticket destination must be a contiguous CPU [H,W] float32 matching the slot");
+        }
         if (!waitForOutputImageConsumers(context, output_slot)) {
             return std::unexpected(context.lastError());
         }
 
-        const VkDevice device = context.device();
         const std::size_t pixel_count =
             static_cast<std::size_t>(output.size.x) * static_cast<std::size_t>(output.size.y);
         const VkDeviceSize byte_count = static_cast<VkDeviceSize>(pixel_count * sizeof(float));
@@ -6091,17 +6589,31 @@ namespace lfs::vis {
             return std::unexpected("VkSplat output depth readback received an empty image");
         }
 
-        if (const auto staging_ready = ensureReadbackStagingBuffer(context, byte_count);
+        if (const auto ready = ensureReadbackContext(); !ready) {
+            return std::unexpected(ready.error());
+        }
+        const auto cell_or = acquireReadbackCell();
+        if (!cell_or) {
+            return std::unexpected(cell_or.error());
+        }
+        const std::size_t cell = *cell_or;
+        if (const auto staging_ready = ensureReadbackSlotStaging(context, cell, byte_count);
             !staging_ready) {
             return std::unexpected(staging_ready.error());
         }
 
-        if (const auto ready = ensureReadbackContext(); !ready) {
-            return std::unexpected(ready.error());
-        }
-        VkResult result = VK_SUCCESS;
-        const VkCommandBuffer command_buffer = readback_cmd_;
-        result = vkResetCommandBuffer(command_buffer, 0);
+        // Preview image readbacks use the transfer queue when the image was created
+        // with the transfer family in its concurrent list; Main/split stay on graphics.
+        const bool use_transfer =
+            output_slot == OutputSlot::Preview && context.hasDedicatedTransferQueue();
+        auto& slot = readback_slots_[cell];
+        const VkCommandBuffer command_buffer =
+            use_transfer && slot.transfer_cmd != VK_NULL_HANDLE ? slot.transfer_cmd
+                                                                : slot.graphics_cmd;
+        const VkQueue submit_queue =
+            use_transfer ? context.transferQueue() : context.graphicsQueue();
+
+        VkResult result = vkResetCommandBuffer(command_buffer, 0);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkResetCommandBuffer(VkSplat output depth readback)", result));
         }
@@ -6134,52 +6646,73 @@ namespace lfs::vis {
         vkCmdCopyImageToBuffer(command_buffer,
                                output.depth_image.image,
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               readback_staging_buffer_,
+                               slot.staging_buffer,
                                1,
                                &copy_region);
 
-        context.imageBarriers().transitionImage(
-            command_buffer,
-            output.depth_image.image,
-            output.image_generation,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            restore_layout);
+        restoreOutputImageAfterReadback(context,
+                                        command_buffer,
+                                        output.depth_image.image,
+                                        output.image_generation,
+                                        restore_layout,
+                                        use_transfer);
 
         result = vkEndCommandBuffer(command_buffer);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkEndCommandBuffer(VkSplat output depth readback)", result));
         }
-        result = vkResetFences(device, 1, &readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkResetFences(VkSplat output depth readback)", result));
-        }
 
-        if (const auto submitted = submitReadbackAndWait(
-                context,
-                command_buffer,
-                output.completion_value,
-                kOutputImageReadbackWaitStage,
-                byte_count,
-                "VkSplat output depth readback submit",
-                "VkSplat output depth readback",
-                false);
-            !submitted) {
-            return std::unexpected(submitted.error());
-        }
+        ReadbackTicketRing::TicketMeta meta{};
+        meta.ring_cell = ring_.latestRingSlot(outputSlotIndex(output_slot));
+        meta.source_depth_image = output.depth_image.image;
+        meta.byte_count = byte_count;
+        meta.width = output.size.x;
+        meta.height = output.size.y;
+        meta.delivery = ReadbackTicketRing::DeliveryKind::DepthFloatPlane;
+        meta.dest = destination.data_ptr();
 
+        return submitReadbackTicket(
+            context,
+            cell,
+            command_buffer,
+            submit_queue,
+            output.completion_value,
+            kOutputImageReadbackWaitStage,
+            std::move(meta),
+            "VkSplat output depth readback submit",
+            "VkSplat output depth readback");
+    }
+
+    std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
+    VksplatViewportRenderer::readOutputDepthImage(VulkanContext& context, const OutputSlot output_slot) const {
+        const auto readback_t0 = std::chrono::steady_clock::now();
+        // Need size under lock briefly for allocation; ticket API takes destination.
+        glm::ivec2 size{0, 0};
+        {
+            std::lock_guard<std::mutex> lock(readback_mutex_);
+            if (!context_) {
+                return std::unexpected("VkSplat output depth readback requested before renderer initialization");
+            }
+            const auto& output = ring_.latestSlot(outputSlotIndex(output_slot));
+            size = output.size;
+        }
+        if (size.x <= 0 || size.y <= 0) {
+            return std::unexpected("VkSplat output depth readback requested for an empty output slot");
+        }
         auto tensor = lfs::core::Tensor::empty(
-            {static_cast<std::size_t>(output.size.y), static_cast<std::size_t>(output.size.x)},
+            {static_cast<std::size_t>(size.y), static_cast<std::size_t>(size.x)},
             lfs::core::Device::CPU,
             lfs::core::DataType::Float32);
         if (!tensor.is_valid()) {
             return std::unexpected("VkSplat output depth readback failed to allocate CPU tensor");
         }
-        const auto* const src = static_cast<const float*>(readback_staging_info_.pMappedData);
-        auto* const dst = tensor.ptr<float>();
-        if (src == nullptr || dst == nullptr) {
-            return std::unexpected("VkSplat output depth readback has null mapped data");
+        const auto ticket = submitReadOutputDepthImageTicket(context, output_slot, tensor);
+        if (!ticket) {
+            return std::unexpected(ticket.error());
         }
-        std::memcpy(dst, src, static_cast<std::size_t>(byte_count));
+        if (const auto waited = waitReadbackTicket(*ticket); !waited) {
+            return std::unexpected(waited.error());
+        }
         LOG_PERF("vksplat.readback.readOutputDepthImage took_us={}",
                  std::chrono::duration_cast<std::chrono::microseconds>(
                      std::chrono::steady_clock::now() - readback_t0)
@@ -6187,13 +6720,13 @@ namespace lfs::vis {
         return std::make_shared<lfs::core::Tensor>(std::move(tensor));
     }
 
-    std::expected<void, std::string> VksplatViewportRenderer::readOutputImageIntoCpuHwc(
+    std::expected<std::uint64_t, std::string>
+    VksplatViewportRenderer::submitReadOutputImageIntoCpuHwcTicket(
         VulkanContext& context,
         const OutputSlot output_slot,
         lfs::core::Tensor& destination,
         const int destination_x,
         const int destination_y) const {
-        const auto readback_t0 = std::chrono::steady_clock::now();
         if (!destination.is_valid() ||
             destination.device() != lfs::core::Device::CPU ||
             destination.ndim() != 3 ||
@@ -6216,11 +6749,7 @@ namespace lfs::vis {
         if (&context != context_) {
             return std::unexpected("VkSplat output readback received a different Vulkan context");
         }
-        try {
-            const_cast<VulkanGSRenderer&>(renderer_).waitForPendingBatch();
-        } catch (const std::exception& e) {
-            return std::unexpected(std::format("VkSplat output readback pending-batch wait failed: {}", e.what()));
-        }
+        // Produce ordering is the timeline wait on the readback submit.
 
         const auto& output = ring_.latestSlot(outputSlotIndex(output_slot));
         if (output.image.image == VK_NULL_HANDLE ||
@@ -6256,17 +6785,31 @@ namespace lfs::vis {
             return std::unexpected("VkSplat output readback has zero bytes");
         }
 
-        if (const auto staging_ready = ensureReadbackStagingBuffer(context, byte_count);
+        if (const auto ready = ensureReadbackContext(); !ready) {
+            return std::unexpected(ready.error());
+        }
+        const auto cell_or = acquireReadbackCell();
+        if (!cell_or) {
+            return std::unexpected(cell_or.error());
+        }
+        const std::size_t cell = *cell_or;
+        if (const auto staging_ready = ensureReadbackSlotStaging(context, cell, byte_count);
             !staging_ready) {
             return std::unexpected(staging_ready.error());
         }
 
-        if (const auto ready = ensureReadbackContext(); !ready) {
-            return std::unexpected(ready.error());
-        }
-        VkResult result = VK_SUCCESS;
-        const VkCommandBuffer command_buffer = readback_cmd_;
-        result = vkResetCommandBuffer(command_buffer, 0);
+        // Preview → transfer when available; Main/SplitLeft/SplitRight stay on graphics
+        // so same-queue ordering with GUI fragment sampling is preserved.
+        const bool use_transfer =
+            output_slot == OutputSlot::Preview && context.hasDedicatedTransferQueue();
+        auto& slot = readback_slots_[cell];
+        const VkCommandBuffer command_buffer =
+            use_transfer && slot.transfer_cmd != VK_NULL_HANDLE ? slot.transfer_cmd
+                                                                : slot.graphics_cmd;
+        const VkQueue submit_queue =
+            use_transfer ? context.transferQueue() : context.graphicsQueue();
+
+        VkResult result = vkResetCommandBuffer(command_buffer, 0);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkResetCommandBuffer(VkSplat readback)", result));
         }
@@ -6298,82 +6841,62 @@ namespace lfs::vis {
         vkCmdCopyImageToBuffer(command_buffer,
                                output.image.image,
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               readback_staging_buffer_,
+                               slot.staging_buffer,
                                1,
                                &copy_region);
 
-        context.imageBarriers().transitionImage(
-            command_buffer,
-            output.image.image,
-            output.image_generation,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            restore_layout);
+        restoreOutputImageAfterReadback(context,
+                                        command_buffer,
+                                        output.image.image,
+                                        output.image_generation,
+                                        restore_layout,
+                                        use_transfer);
 
         result = vkEndCommandBuffer(command_buffer);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkEndCommandBuffer(VkSplat readback)", result));
         }
 
-        if (const auto submitted = submitReadbackAndWait(
-                context,
-                command_buffer,
-                output.completion_value,
-                kOutputImageReadbackWaitStage,
-                byte_count,
-                "VkSplat color readback submit",
-                "VkSplat readback");
-            !submitted) {
-            return submitted;
-        }
+        ReadbackTicketRing::TicketMeta meta{};
+        meta.ring_cell = ring_.latestRingSlot(outputSlotIndex(output_slot));
+        meta.source_image = output.image.image;
+        meta.byte_count = byte_count;
+        meta.width = output.size.x;
+        meta.height = output.size.y;
+        meta.dest_x = destination_x;
+        meta.dest_y = destination_y;
+        meta.dest_width = destination_width;
+        meta.dest_channels = static_cast<int>(destination.size(2));
+        meta.dest_is_float = destination.dtype() == lfs::core::DataType::Float32;
+        meta.delivery = ReadbackTicketRing::DeliveryKind::ColorHwc;
+        meta.dest = destination.data_ptr();
 
-        const auto* const rgba = static_cast<const std::uint8_t*>(readback_staging_info_.pMappedData);
-        void* const destination_data = destination.data_ptr();
-        if (!rgba || !destination_data) {
-            return std::unexpected("VkSplat output readback has null mapped data");
-        }
+        return submitReadbackTicket(
+            context,
+            cell,
+            command_buffer,
+            submit_queue,
+            output.completion_value,
+            kOutputImageReadbackWaitStage,
+            std::move(meta),
+            "VkSplat color readback submit",
+            "VkSplat readback");
+    }
 
-        const std::size_t src_row_pixels = static_cast<std::size_t>(output.size.x);
-        const std::size_t dst_row_pixels = static_cast<std::size_t>(destination_width);
-        const std::size_t dst_channels = static_cast<std::size_t>(destination.size(2));
-        if (destination.dtype() == lfs::core::DataType::Float32) {
-            auto* const dst = static_cast<float*>(destination_data);
-            for (int row = 0; row < output.size.y; ++row) {
-                const auto* const src_row = rgba + static_cast<std::size_t>(row) * src_row_pixels * 4u;
-                auto* const dst_row =
-                    dst + ((static_cast<std::size_t>(destination_y + row) * dst_row_pixels +
-                            static_cast<std::size_t>(destination_x)) *
-                           dst_channels);
-                for (int col = 0; col < output.size.x; ++col) {
-                    const std::size_t src = static_cast<std::size_t>(col) * 4u;
-                    const std::size_t dst_index = static_cast<std::size_t>(col) * dst_channels;
-                    dst_row[dst_index] = static_cast<float>(src_row[src]) / 255.0f;
-                    dst_row[dst_index + 1u] = static_cast<float>(src_row[src + 1u]) / 255.0f;
-                    dst_row[dst_index + 2u] = static_cast<float>(src_row[src + 2u]) / 255.0f;
-                    if (dst_channels == 4u) {
-                        dst_row[dst_index + 3u] = static_cast<float>(src_row[src + 3u]) / 255.0f;
-                    }
-                }
-            }
-        } else {
-            auto* const dst = static_cast<std::uint8_t*>(destination_data);
-            for (int row = 0; row < output.size.y; ++row) {
-                const auto* const src_row = rgba + static_cast<std::size_t>(row) * src_row_pixels * 4u;
-                auto* const dst_row =
-                    dst + ((static_cast<std::size_t>(destination_y + row) * dst_row_pixels +
-                            static_cast<std::size_t>(destination_x)) *
-                           dst_channels);
-                if (dst_channels == 4u) {
-                    std::memcpy(dst_row, src_row, src_row_pixels * 4u);
-                    continue;
-                }
-                for (int col = 0; col < output.size.x; ++col) {
-                    const std::size_t src = static_cast<std::size_t>(col) * 4u;
-                    const std::size_t dst_index = static_cast<std::size_t>(col) * dst_channels;
-                    dst_row[dst_index] = src_row[src];
-                    dst_row[dst_index + 1u] = src_row[src + 1u];
-                    dst_row[dst_index + 2u] = src_row[src + 2u];
-                }
-            }
+    std::expected<void, std::string> VksplatViewportRenderer::readOutputImageIntoCpuHwc(
+        VulkanContext& context,
+        const OutputSlot output_slot,
+        lfs::core::Tensor& destination,
+        const int destination_x,
+        const int destination_y) const {
+        const auto readback_t0 = std::chrono::steady_clock::now();
+        const auto ticket = submitReadOutputImageIntoCpuHwcTicket(
+            context, output_slot, destination, destination_x, destination_y);
+        if (!ticket) {
+            return std::unexpected(ticket.error());
+        }
+        if (const auto waited = waitReadbackTicket(*ticket); !waited) {
+            return std::unexpected(waited.error());
         }
         LOG_PERF("vksplat.readback.readOutputImageIntoCpuHwc took_us={}",
                  std::chrono::duration_cast<std::chrono::microseconds>(
@@ -6393,11 +6916,7 @@ namespace lfs::vis {
         if (&context != context_) {
             return std::unexpected("VkSplat depth sample received a different Vulkan context");
         }
-        try {
-            const_cast<VulkanGSRenderer&>(renderer_).waitForPendingBatch();
-        } catch (const std::exception& e) {
-            return std::unexpected(std::format("VkSplat depth sample pending-batch wait failed: {}", e.what()));
-        }
+        // Produce ordering is the timeline wait on the readback submit.
 
         const auto& output = ring_.latestSlot(outputSlotIndex(request.output_slot));
         if (output.depth_image.image == VK_NULL_HANDLE ||
@@ -6436,17 +6955,29 @@ namespace lfs::vis {
         }
 
         constexpr VkDeviceSize byte_count = sizeof(float);
-        if (const auto staging_ready = ensureReadbackStagingBuffer(context, byte_count);
+        if (const auto ready = ensureReadbackContext(); !ready) {
+            return std::unexpected(ready.error());
+        }
+        const auto cell_or = acquireReadbackCell();
+        if (!cell_or) {
+            return std::unexpected(cell_or.error());
+        }
+        const std::size_t cell = *cell_or;
+        if (const auto staging_ready = ensureReadbackSlotStaging(context, cell, byte_count);
             !staging_ready) {
             return std::unexpected(staging_ready.error());
         }
 
-        if (const auto ready = ensureReadbackContext(); !ready) {
-            return std::unexpected(ready.error());
-        }
-        VkResult result = VK_SUCCESS;
-        const VkCommandBuffer command_buffer = readback_cmd_;
-        result = vkResetCommandBuffer(command_buffer, 0);
+        const bool use_transfer =
+            request.output_slot == OutputSlot::Preview && context.hasDedicatedTransferQueue();
+        auto& slot = readback_slots_[cell];
+        const VkCommandBuffer command_buffer =
+            use_transfer && slot.transfer_cmd != VK_NULL_HANDLE ? slot.transfer_cmd
+                                                                : slot.graphics_cmd;
+        const VkQueue submit_queue =
+            use_transfer ? context.transferQueue() : context.graphicsQueue();
+
+        VkResult result = vkResetCommandBuffer(command_buffer, 0);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkResetCommandBuffer(VkSplat depth sample)", result));
         }
@@ -6476,36 +7007,48 @@ namespace lfs::vis {
         vkCmdCopyImageToBuffer(command_buffer,
                                output.depth_image.image,
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               readback_staging_buffer_,
+                               slot.staging_buffer,
                                1,
                                &copy_region);
 
-        context.imageBarriers().transitionImage(
-            command_buffer,
-            output.depth_image.image,
-            output.image_generation,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            restore_layout);
+        restoreOutputImageAfterReadback(context,
+                                        command_buffer,
+                                        output.depth_image.image,
+                                        output.image_generation,
+                                        restore_layout,
+                                        use_transfer);
 
         result = vkEndCommandBuffer(command_buffer);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkEndCommandBuffer(VkSplat depth sample)", result));
         }
 
-        if (const auto submitted = submitReadbackAndWait(
-                context,
-                command_buffer,
-                output.completion_value,
-                kOutputImageReadbackWaitStage,
-                byte_count,
-                "VkSplat depth-sample submit",
-                "VkSplat depth sample");
-            !submitted) {
-            return std::unexpected(submitted.error());
-        }
-
         float depth = -1.0f;
-        std::memcpy(&depth, readback_staging_info_.pMappedData, sizeof(depth));
+        ReadbackTicketRing::TicketMeta meta{};
+        meta.ring_cell = ring_.latestRingSlot(outputSlotIndex(request.output_slot));
+        meta.source_depth_image = output.depth_image.image;
+        meta.byte_count = byte_count;
+        meta.width = 1;
+        meta.height = 1;
+        meta.delivery = ReadbackTicketRing::DeliveryKind::DepthSample;
+        meta.dest = &depth;
+
+        const auto ticket = submitReadbackTicket(
+            context,
+            cell,
+            command_buffer,
+            submit_queue,
+            output.completion_value,
+            kOutputImageReadbackWaitStage,
+            std::move(meta),
+            "VkSplat depth-sample submit",
+            "VkSplat depth sample");
+        if (!ticket) {
+            return std::unexpected(ticket.error());
+        }
+        if (const auto waited = waitReadbackTicketLocked(*ticket); !waited) {
+            return std::unexpected(waited.error());
+        }
         if (!std::isfinite(depth) || depth <= 0.0f || depth >= 1.0e9f) {
             depth = -1.0f;
         }
