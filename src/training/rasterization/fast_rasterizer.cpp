@@ -484,6 +484,19 @@ namespace lfs::training {
             const std::string message = forward_ctx.error_message
                                             ? forward_ctx.error_message
                                             : "unknown forward failure";
+            // ISS-025: instance-count overflow is a bad frame, not a run-killer.
+            // FailedPrecondition → trainer skips the step and continues.
+            if (forward_ctx.instance_count_overflow) {
+                return std::unexpected(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::CUDA,
+                    .user_message =
+                        "Pathological splat extents produced more tile instances "
+                        "than the 32-bit FastGS path can represent; skipping step.",
+                    .detail = message,
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
             return std::unexpected(lfs::make_error(lfs::ErrorInit{
                 .code = forward_ctx.resource_exhausted
                             ? lfs::ErrorCode::ResourceExhausted

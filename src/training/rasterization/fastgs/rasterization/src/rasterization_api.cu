@@ -407,6 +407,21 @@ namespace fast_lfs::rasterization {
 
             return ctx;
 
+        } catch (const std::overflow_error& e) {
+            // ISS-025: pathological instance counts (garbage scale/rot after
+            // post-grow corruption, etc.). Soft-fail the frame; trainer skips
+            // the step instead of killing the run.
+            if (frame_started && arena) {
+                arena->end_frame(frame_id);
+                frame_started = false;
+            }
+            last_forward_error = e.what();
+            ForwardContext error_ctx = {};
+            error_ctx.success = false;
+            error_ctx.instance_count_overflow = true;
+            error_ctx.error_message = last_forward_error.c_str();
+            error_ctx.frame_id = frame_id;
+            return error_ctx;
         } catch (const std::exception& e) {
             // Clean up frame on error and return error context instead of throwing
             if (frame_started && arena) {

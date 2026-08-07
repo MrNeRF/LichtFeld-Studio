@@ -4211,6 +4211,24 @@ namespace lfs::training {
                                 }
 
                                 lfs::Error forward_error = std::move(rasterize_result.error());
+                                // ISS-025: pathological 32-bit instance overflow must not
+                                // kill the run — skip the step (loud error) and continue.
+                                if (forward_error.code() == lfs::ErrorCode::FailedPrecondition &&
+                                    forward_error.detail().find(
+                                        "instance count exceeds 32-bit") != std::string::npos) {
+                                    LOG_ERROR(
+                                        "Skipping iteration {} after FastGS instance overflow "
+                                        "(bad frame, training continues): {}",
+                                        iter,
+                                        forward_error.detail());
+                                    nvtxRangePop();
+                                    nvtxRangePop();
+                                    return iter < get_total_iterations() &&
+                                                   !stop_requested_.load() &&
+                                                   !stop_token.stop_requested()
+                                               ? StepDisposition::Continue
+                                               : StepDisposition::Stop;
+                                }
                                 const RetryDecision decision = classify_forward_retry(
                                     forward_error, forward_stamp, forward_attempts);
                                 if (decision == RetryDecision::DoNotRetry) {

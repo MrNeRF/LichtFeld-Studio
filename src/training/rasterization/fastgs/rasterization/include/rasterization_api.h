@@ -50,9 +50,12 @@ namespace fast_lfs::rasterization {
         void* grad_opacity_helper = nullptr;
         void* grad_color_helper = nullptr;
         void* primitive_normals = nullptr;
-        // Error handling for OOM
+        // Error handling for OOM / pathological frames
         bool success = false;
         bool resource_exhausted = false;
+        // ISS-025: 32-bit instance-count overflow (garbage extents). Soft —
+        // fail the step, do not kill the training run.
+        bool instance_count_overflow = false;
         const char* error_message = nullptr;
     };
 
