@@ -21,12 +21,6 @@ namespace lfs::vis::gui {
         float left_dock_width = 320.0f;
         bool show_sequencer = false;
         std::string active_main_tab;
-        bool window_state_saved = false;
-        int window_x = 0;
-        int window_y = 0;
-        int window_width = 1280;
-        int window_height = 720;
-        bool window_maximized = false;
         std::string file_association;
         std::unordered_map<std::string, bool> window_visibility;
 

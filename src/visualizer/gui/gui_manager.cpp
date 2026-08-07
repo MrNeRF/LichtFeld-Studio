@@ -40,6 +40,7 @@
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/vulkan_ui_texture.hpp"
+#include <nlohmann/json.hpp>
 
 #include "gui/gpu_memory_query.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -2996,6 +2997,43 @@ namespace lfs::vis::gui {
                 return nullptr;
             }
         }
+        std::optional<WindowManager::PersistentWindowState> loadWindowState() {
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths || !std::filesystem::is_regular_file(paths->windowStateFile()))
+                return std::nullopt;
+            try {
+                std::ifstream file(paths->windowStateFile());
+                const auto json = nlohmann::json::parse(file);
+                WindowManager::PersistentWindowState state;
+                state.x = json.value("x", state.x);
+                state.y = json.value("y", state.y);
+                state.width = json.value("width", state.width);
+                state.height = json.value("height", state.height);
+                state.maximized = json.value("maximized", state.maximized);
+                if (state.width <= 0 || state.height <= 0)
+                    return std::nullopt;
+                return state;
+            } catch (const std::exception& error) {
+                LOG_WARN("Unable to load window state: {}", error.what());
+                return std::nullopt;
+            }
+        }
+
+        void saveWindowState(const WindowManager::PersistentWindowState& state) {
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths)
+                return;
+            const nlohmann::json json = {
+                {"x", state.x},
+                {"y", state.y},
+                {"width", state.width},
+                {"height", state.height},
+                {"maximized", state.maximized},
+            };
+            if (const auto result = paths->writeWindowStateAtomically(json.dump(2) + '\n'); !result)
+                LOG_WARN("Unable to save window state: {}", result.error());
+        }
+
     } // namespace
 
     GuiManager::GuiManager(VisualizerImpl* viewer)
@@ -3007,15 +3045,9 @@ namespace lfs::vis::gui {
         const LayoutState saved_layout = panel_layout_.loadState();
         show_vram_hud_ = saved_layout.perf_hud_visible;
         perf_hud_expanded_ = saved_layout.perf_hud_expanded;
-        if (saved_layout.window_state_saved) {
+        if (const auto saved_window = loadWindowState()) {
             if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr) {
-                window_manager->setInitialWindowState({
-                    .x = saved_layout.window_x,
-                    .y = saved_layout.window_y,
-                    .width = saved_layout.window_width,
-                    .height = saved_layout.window_height,
-                    .maximized = saved_layout.window_maximized,
-                });
+                window_manager->setInitialWindowState(*saved_window);
             }
         }
 
@@ -3789,19 +3821,8 @@ namespace lfs::vis::gui {
             dev_resource_watch_.scan_future.wait();
 
         panel_layout_.saveState(window_states_);
-        if (!reset_window_geometry_on_next_start_) {
-            if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr) {
-                const auto window = window_manager->persistentWindowState();
-                LayoutState state;
-                state.load(false);
-                state.window_state_saved = true;
-                state.window_x = window.x;
-                state.window_y = window.y;
-                state.window_width = window.width;
-                state.window_height = window.height;
-                state.window_maximized = window.maximized;
-                state.save();
-            }
+        if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr) {
+            saveWindowState(window_manager->persistentWindowState());
         }
 
         if (video_widget_)
@@ -6637,7 +6658,6 @@ namespace lfs::vis::gui {
         window_states_["python_console"] = false;
         PanelRegistry::instance().reset_floating_panel_layouts();
         rml_viewport_overlay_.resetVramHudLayout();
-        reset_window_geometry_on_next_start_ = true;
         panel_layout_.saveState(window_states_);
 
         if (backup->has_value())

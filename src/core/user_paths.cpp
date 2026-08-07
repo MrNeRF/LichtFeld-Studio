@@ -233,12 +233,21 @@ namespace lfs::core {
         return backupAndRemoveFile(layoutFile(), backupDir(), "layout");
     }
 
+    std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetWindowState() const {
+        return backupAndRemoveFile(windowStateFile(), backupDir(), "window");
+    }
+
     std::filesystem::path UserPaths::preferencesFile() const { return config_dir_ / "preferences.json"; }
     std::expected<void, std::string>
     UserPaths::writePreferencesAtomically(const std::string& serialized_json) const {
         return writeTextAtomically(preferencesFile(), serialized_json);
     }
+    std::expected<void, std::string>
+    UserPaths::writeWindowStateAtomically(const std::string& serialized_json) const {
+        return writeTextAtomically(windowStateFile(), serialized_json);
+    }
     std::filesystem::path UserPaths::layoutFile() const { return config_dir_ / "layout.json"; }
+    std::filesystem::path UserPaths::windowStateFile() const { return config_dir_ / "window.json"; }
     std::filesystem::path UserPaths::keymapDir() const { return config_dir_ / "keymaps"; }
     std::filesystem::path UserPaths::presetDir() const { return data_dir_ / "presets"; }
     std::filesystem::path UserPaths::assetLibraryDir() const { return data_dir_ / "asset_library"; }

@@ -51,6 +51,8 @@ namespace lfs::core {
         /** Move layout.json to a timestamped backup, if it exists. */
         [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
         resetLayout() const;
+        [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
+        resetWindowState() const;
 
         [[nodiscard]] const std::filesystem::path& configDir() const noexcept { return config_dir_; }
         [[nodiscard]] const std::filesystem::path& dataDir() const noexcept { return data_dir_; }
@@ -64,6 +66,9 @@ namespace lfs::core {
         [[nodiscard]] std::expected<void, std::string>
         writePreferencesAtomically(const std::string& serialized_json) const;
         [[nodiscard]] std::filesystem::path layoutFile() const;
+        [[nodiscard]] std::filesystem::path windowStateFile() const;
+        [[nodiscard]] std::expected<void, std::string>
+        writeWindowStateAtomically(const std::string& serialized_json) const;
         [[nodiscard]] std::filesystem::path keymapDir() const;
         [[nodiscard]] std::filesystem::path presetDir() const;
         [[nodiscard]] std::filesystem::path assetLibraryDir() const;

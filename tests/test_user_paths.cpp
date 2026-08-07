@@ -71,4 +71,76 @@ namespace {
         EXPECT_NE(contents.find("\"ui_scale\": \"auto\""), std::string::npos);
     }
 
+    TEST_F(UserPathsContractTest, ResetPreferencesBacksUpExistingFile) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+        ASSERT_TRUE(paths.ensureDirectories().has_value());
+
+        {
+            std::ofstream preferences(paths.preferencesFile(), std::ios::binary);
+            preferences << R"({"theme":"light","ui_scale":"150"})";
+        }
+
+        const auto reset = paths.resetPreferences();
+        ASSERT_TRUE(reset.has_value()) << reset.error();
+        ASSERT_TRUE(reset->has_value());
+        EXPECT_TRUE(fs::is_regular_file(**reset));
+        EXPECT_TRUE(fs::is_regular_file(paths.preferencesFile()));
+        std::ifstream backup(**reset, std::ios::binary);
+        const std::string backup_contents((std::istreambuf_iterator<char>(backup)), {});
+        EXPECT_EQ(backup_contents, R"({"theme":"light","ui_scale":"150"})");
+    }
+
+    TEST_F(UserPathsContractTest, ResetLayoutBacksUpExistingFile) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+        ASSERT_TRUE(paths.ensureDirectories().has_value());
+
+        {
+            std::ofstream layout(paths.layoutFile(), std::ios::binary);
+            layout << R"({"right_panel_width":420})";
+        }
+
+        const auto reset = paths.resetLayout();
+        ASSERT_TRUE(reset.has_value()) << reset.error();
+        ASSERT_TRUE(reset->has_value());
+        EXPECT_TRUE(fs::is_regular_file(**reset));
+        EXPECT_FALSE(fs::exists(paths.layoutFile()));
+    }
+
+    TEST_F(UserPathsContractTest, ResetWindowStateBacksUpExistingFile) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+        ASSERT_TRUE(paths.ensureDirectories().has_value());
+
+        {
+            std::ofstream window(paths.windowStateFile(), std::ios::binary);
+            window << R"({"x":10,"y":20,"width":1280,"height":720,"maximized":false})";
+        }
+
+        const auto reset = paths.resetWindowState();
+        ASSERT_TRUE(reset.has_value()) << reset.error();
+        ASSERT_TRUE(reset->has_value());
+        EXPECT_TRUE(fs::is_regular_file(**reset));
+        EXPECT_FALSE(fs::exists(paths.windowStateFile()));
+    }
+
+    TEST_F(UserPathsContractTest, ResetWithoutExistingFilesCreatesNoBackup) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+        ASSERT_TRUE(paths.ensureDirectories().has_value());
+
+        const auto preferences_reset = paths.resetPreferences();
+        ASSERT_TRUE(preferences_reset.has_value()) << preferences_reset.error();
+        EXPECT_FALSE(preferences_reset->has_value());
+
+        const auto layout_reset = paths.resetLayout();
+        ASSERT_TRUE(layout_reset.has_value()) << layout_reset.error();
+        EXPECT_FALSE(layout_reset->has_value());
+    }
+
 } // namespace
