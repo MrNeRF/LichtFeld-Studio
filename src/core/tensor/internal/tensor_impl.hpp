@@ -399,6 +399,7 @@ namespace lfs::core {
         friend void pin_operands(std::initializer_list<const Tensor*> tensors);
         friend std::shared_ptr<Tensor> internal::lazy_executor_snapshot_operand(
             const Tensor& source);
+        friend Tensor broadcast_to(const Tensor& src, const TensorShape& target);
 
         struct TensorState {
             // Capacity management for in-place growth (like std::vector)
@@ -660,9 +661,14 @@ namespace lfs::core {
                         result.numel(), op, result.stream());
                     // No sync - tensor operation
                 } else {
-                    // CPU broadcasting: materialize broadcasts first
-                    auto a_broadcast = a_needs_broadcast ? broadcast_to(broadcast_shape) : clone();
-                    auto b_broadcast = b_needs_broadcast ? other.broadcast_to(broadcast_shape) : other.clone();
+                    // CPU broadcasting: expand may return zero-stride views (WO-W.1);
+                    // linear apply_binary_cpu needs dense storage — materialize.
+                    auto a_broadcast = a_needs_broadcast
+                                           ? broadcast_to(broadcast_shape).contiguous()
+                                           : clone();
+                    auto b_broadcast = b_needs_broadcast
+                                           ? other.broadcast_to(broadcast_shape).contiguous()
+                                           : other.clone();
                     pin_operands({&a_broadcast, &b_broadcast});
                     apply_binary_cpu(a_broadcast.ptr<SrcT>(), b_broadcast.ptr<SrcT>(),
                                      result.ptr<OutT>(), result.numel(), op);
@@ -750,6 +756,7 @@ namespace lfs::core {
             tensor_contract::require_dtype(
                 *this, DataType::Float32, "in-place scalar operation", "input",
                 LFS_SOURCE_SITE_CURRENT());
+            reject_inplace_on_zero_stride("in-place scalar op");
 
             if (!is_contiguous()) {
                 return mutate_logical_view(
@@ -798,6 +805,7 @@ namespace lfs::core {
             tensor_contract::require_dtype(
                 *this, DataType::Float32, "in-place binary operation", "destination",
                 LFS_SOURCE_SITE_CURRENT());
+            reject_inplace_on_zero_stride("in-place binary op");
 
             if (!is_contiguous()) {
                 return mutate_logical_view(
@@ -1128,6 +1136,61 @@ namespace lfs::core {
             }
             propagate_view_meta(view);
             return view;
+        }
+
+        /// Zero-copy expand / broadcast_to view. Logical numel may grow; broadcast
+        /// dims receive stride 0. Shares storage with *this (WO-W.1).
+        Tensor create_broadcast_view(const TensorShape& target_shape,
+                                     std::vector<size_t> new_strides) const {
+            LFS_ASSERT_MSG(new_strides.size() == target_shape.rank(),
+                           "broadcast view shape and stride ranks must match");
+            materialize_if_deferred();
+            LFS_ASSERT_MSG(is_valid(),
+                           "broadcast view requires a valid source tensor");
+
+            Tensor view;
+            view.data_ = data_;
+            view.data_owner_ = data_owner_;
+            view.shape_ = target_shape;
+            view.strides_ = std::move(new_strides);
+            view.storage_offset_ = storage_offset_;
+            view.device_ = device_;
+            view.dtype_ = dtype_;
+            view.is_view_ = true;
+            view.id_ = profiling_enabled_ ? next_id_++ : 0;
+
+            size_t expected_stride = 1;
+            view.is_contiguous_ = true;
+            for (int dimension = static_cast<int>(target_shape.rank()) - 1;
+                 dimension >= 0; --dimension) {
+                if (view.strides_[static_cast<size_t>(dimension)] != expected_stride) {
+                    view.is_contiguous_ = false;
+                    break;
+                }
+                expected_stride *= target_shape[static_cast<size_t>(dimension)];
+            }
+            // size-1 dims may legally have any stride in contiguous layout; if any
+            // stride is 0 and rank>0 with elements, mark non-contiguous.
+            if (view.is_contiguous_) {
+                for (size_t s : view.strides_) {
+                    if (s == 0 && target_shape.elements() > 1) {
+                        view.is_contiguous_ = false;
+                        break;
+                    }
+                }
+            }
+            propagate_view_meta(view);
+            return view;
+        }
+
+        /// Reject in-place mutation of expand/broadcast views (shared cells).
+        void reject_inplace_on_zero_stride(const char* op_name) const {
+            if (has_zero_stride()) {
+                throw std::runtime_error(
+                    std::string(op_name) +
+                    " is not supported on zero-stride expand/broadcast views "
+                    "(materialize with contiguous() first)");
+            }
         }
 
         std::vector<size_t> resolve_dims(std::span<const int> dims) const;
@@ -1595,6 +1658,23 @@ namespace lfs::core {
             return strides_[dim];
         }
         size_t storage_offset() const { return storage_offset_; }
+
+        /// True if any dimension has stride 0 (expand / broadcast_to views).
+        /// Such views share storage cells across logical indices; in-place mutation
+        /// is rejected and non-allowlisted kernels must materialize first (WO-W.1).
+        /// Contiguous size-1 dims use non-zero row-major strides, so an explicit 0
+        /// only appears on expand/broadcast views (and rare as_strided constructions).
+        bool has_zero_stride() const {
+            if (!is_valid()) {
+                return false;
+            }
+            for (size_t s : strides_) {
+                if (s == 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         Tensor cpu() const { return to(Device::CPU); }
         Tensor cuda() const { return to(Device::CUDA); }

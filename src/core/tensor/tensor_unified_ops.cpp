@@ -1863,22 +1863,24 @@ namespace lfs::core {
 
         Tensor a_broadcast, b_broadcast, c_broadcast;
 
+        // where kernels (CUDA shape-indexed OR CPU linear) require dense expanded
+        // storage. broadcast_to is a zero-stride view (WO-W.1) — materialize.
         if (shape_ == shape_abc) {
             a_broadcast = clone();
         } else {
-            a_broadcast = broadcast_to(shape_abc);
+            a_broadcast = broadcast_to(shape_abc).contiguous();
         }
 
         if (b.shape() == shape_abc) {
             b_broadcast = b.clone();
         } else {
-            b_broadcast = b.broadcast_to(shape_abc);
+            b_broadcast = b.broadcast_to(shape_abc).contiguous();
         }
 
         if (c.shape() == shape_abc) {
             c_broadcast = c.clone();
         } else {
-            c_broadcast = c.broadcast_to(shape_abc);
+            c_broadcast = c.broadcast_to(shape_abc).contiguous();
         }
 
         Tensor b_cast = (b_broadcast.dtype() == out_dtype) ? b_broadcast : b_broadcast.to(out_dtype);
@@ -2029,8 +2031,13 @@ namespace lfs::core {
         LFS_ASSERT_MSG(broadcast::can_broadcast(shape_.dims(), other.shape().dims()),
                        "broadcast shapes are incompatible");
 
-        Tensor a_broadcast = (shape_ == bcast_shape) ? this->clone() : broadcast_to(bcast_shape);
-        Tensor b_broadcast = (other.shape() == bcast_shape) ? other.clone() : other.broadcast_to(bcast_shape);
+        // _broadcasted consumers expect dense expanded storage.
+        Tensor a_broadcast = (shape_ == bcast_shape)
+                                 ? this->clone()
+                                 : broadcast_to(bcast_shape).contiguous();
+        Tensor b_broadcast = (other.shape() == bcast_shape)
+                                 ? other.clone()
+                                 : other.broadcast_to(bcast_shape).contiguous();
 
         if (match_dtype && dtype_ != other.dtype()) {
             auto common_dtype = promote_types(dtype_, other.dtype());

@@ -1228,3 +1228,56 @@ Gate ≤4.065 still **PASS**.
 Default joint codec **stays ON**. Infrastructure left in place.
 
 - **Commit:** `993314d5`
+
+## WO-W.1 — Zero-stride expand / broadcast_to views + firewall
+
+- **Branch:** `lfs-elite-fW` (from `lfs-elite` @ `d89434aa`)
+- **Change:**
+  - `broadcast_to` / `expand` create zero-stride views (metadata only; same-shape no longer clones).
+  - `Tensor::has_zero_stride()`, `create_broadcast_view`, `reject_inplace_on_zero_stride`.
+  - Correctness firewall: allowlist in `tensor_zero_stride.hpp` (Contiguous/Clone/ElementwiseFirewall/BroadcastBinary/Reduce).
+  - Non-allowlisted linear consumers materialize via `.contiguous()` (where, CPU binary, `_broadcasted`, expr CPU paths, matmul expand→bmm).
+  - In-place on expand views throws (`add_`, `zero_`, `fill_`, …).
+  - Tests: `tests/test_zero_stride_expand.cpp` (15 cases).
+
+### Fail evidence (TDD)
+
+Compile-first fail (API missing `has_zero_stride`):
+```
+.lfs-cache-source/tests/test_zero_stride_expand.cpp:99: error: ‘class lfs::core::Tensor’ has no member named ‘has_zero_stride’
+.lfs-cache-source/tests/test_zero_stride_expand.cpp:146: error: ‘class lfs::core::Tensor’ has no member named ‘has_zero_stride’
+… (all ZeroStrideExpand.* tests that call has_zero_stride)
+```
+Pre-change behavior: expand/broadcast_to always `Tensor::empty` + copy (or `clone()` for same shape) — alloc-counter test would see driver alloc on cold large expand.
+
+### Pass evidence
+```
+[==========] Running 15 tests from 1 test suite.
+[  PASSED  ] 15 tests.  (ZeroStrideExpand.*)
+[==========] 1148 tests from 54 test suites ran. (tensor-related filter)
+[  PASSED  ] 1148 tests.
+```
+
+### Dual-workload gate (LFS_SH_VALUE_FP32=1; tip SH-quant default hits pre-existing G3 crash in `resize_swizzled_storage_preserving` @ SH degree step)
+
+**Bonsai** med×3:
+
+| metric | F3 tip-ish | after W.1 | gate |
+|---|---:|---:|:---|
+| wall_s | 7.49 | **7.41** | neutral+ |
+| steady_ms/iter | 3.168 | **3.244** | ≤4.065 **PASS** (noise) |
+| B/splat | 409.4 | **409.4** | flat **PASS** |
+| last_loss | 0.03–0.04 | 0.029–0.043 | ok |
+
+**Bicycle** med×3 (7000 iters):
+
+| metric | F3 | after W.1 |
+|---|---:|---:|
+| wall_s | 21.96 | **22.46** |
+| steady_ms/iter | 2.843 | **2.974** |
+| B/splat | 409.4 | **409.4** |
+| final loss range | 0.082–0.149 | 0.086–0.115 |
+
+Gate: dual-workload **neutral** (no quality anomaly; ms within noise). Expand itself no longer allocates.
+
+- **Commit:** `b140792c`
