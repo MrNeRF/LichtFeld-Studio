@@ -1150,7 +1150,7 @@ Profile: `perf_campaign/profiles/fix22-f1-bonsai-late/summary.md`
 
 Runs: `perf_campaign/runs/fix22_f1_bonsai/`
 
-- **Commit:** (this)
+- **Commit:** `a93cd668`
 
 ## FIX-2.2 F2 — fused block_reduce_min4 bounds
 
@@ -1180,7 +1180,7 @@ Runs: `perf_campaign/runs/fix22_f1_bonsai/`
 
 Gate ≤4.065 still **PASS**.
 
-- **Commit:** (this)
+- **Commit:** `60d97b26`
 
 ## FIX-2.2 F3 — hoist inv ranges + fast log/exp transcode
 
@@ -1227,4 +1227,4 @@ Gate ≤4.065 still **PASS**.
 
 Default joint codec **stays ON**. Infrastructure left in place.
 
-- **Commit:** (this)
+- **Commit:** `993314d5`
