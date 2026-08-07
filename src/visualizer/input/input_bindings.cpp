@@ -270,8 +270,6 @@ namespace lfs::vis::input {
     }
 
     bool InputBindings::saveProfileToFile(const std::filesystem::path& path) const {
-        if (!g_persistence_enabled.load(std::memory_order_acquire))
-            return false;
         using json = nlohmann::json;
 
         json j;
@@ -333,8 +331,6 @@ namespace lfs::vis::input {
     }
 
     bool InputBindings::loadProfileFromFile(const std::filesystem::path& path) {
-        if (!g_persistence_enabled.load(std::memory_order_acquire))
-            return false;
         using json = nlohmann::json;
 
         try {
