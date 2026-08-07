@@ -203,3 +203,18 @@
 - **Actions:** fixcodec.done written post-hoc with provenance; fixinteg unit launched with
   MemoryMax=16G (High=12G unchanged); watchdog glob extended to fix*/warp* output names
   (previously only worker?/fleet? were stall-watched).
+
+## ISS-022 — post-merge viewport regression: VkSplat degraded mode on deleted-mask contract
+- **Status:** OPEN — fix worker dispatched (WO-FIX-VIEWER-MASK).
+- Repro: GUI + `-d bonsai`; at "Training finished" the viewport logs
+  `VkSplat deleted mask must be a contiguous CUDA bool tensor of size N`
+  (vksplat_input_packer.cpp:464) and enters degraded mode (frozen last image).
+- Analysis: master fa81f3eb added a strict packer contract (mask numel == live N,
+  contiguous CUDA bool). Campaign-side MRNF/MCMC free-slot + bounded-compaction code
+  (mrnf.cpp:254-259, mcmc.cpp set_deleted_mask_rows/prune) can leave the mask sized to the
+  pre-compaction N (or capacity), violating the contract post-merge. Composition bug: both
+  sides individually gated green; headless bench never exercises the Vulkan packer (GUI-only).
+- User-reported startup segfault (5 rapid GUI starts 15:44-45) does NOT reproduce at 20:3x:
+  clean start bare + with dataset; no LichtFeld-Studio segfault in kernel journal or
+  coredumpctl (only known lichtfeld_tests teardown reds). Timing coincides with the
+  merge-gate bench holding the GPU — contention suspected, awaiting owner re-test.
