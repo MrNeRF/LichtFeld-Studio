@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/exportable_storage.hpp"
 #include "core/splat_data.hpp"
 #include "lod_page_cache.hpp"
 #include "lod_pool_quant.hpp"
 #include "lod_upload_engine.hpp"
 #include "output_image_pool.hpp"
+#include "output_slot_ring.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
 #include "rendering/rendering.hpp"
@@ -270,7 +272,7 @@ namespace lfs::vis {
         // Returns the next candidate without mutating timeline state. The value
         // is committed only after VulkanGSPipeline confirms vkQueueSubmit
         // accepted its signal operation.
-        [[nodiscard]] std::expected<std::uint64_t, std::string> nextRenderCompletionValue(
+        [[nodiscard]] lfs::Result<std::uint64_t> nextRenderCompletionValue(
             std::string_view pass) const;
         [[nodiscard]] std::expected<InputBindingResult, std::string> prepareInputs(
             VulkanContext& context,
@@ -308,13 +310,13 @@ namespace lfs::vis {
             const lfs::rendering::ViewportRenderRequest& request,
             std::size_t num_splats,
             std::size_t ring_slot);
-        [[nodiscard]] std::expected<void, std::string> ensureOutputImages(
+        [[nodiscard]] lfs::Status ensureOutputImages(
             VulkanContext& context,
             glm::ivec2 size,
             OutputSlot output_slot,
             std::size_t ring_slot);
         [[nodiscard]] std::expected<void, std::string> ensureComposePipeline(VulkanContext& context);
-        [[nodiscard]] std::expected<void, std::string> composePixelState(
+        [[nodiscard]] lfs::Status composePixelState(
             VulkanContext& context,
             VkCommandBuffer cmd,
             const VulkanGSRendererUniforms& uniforms,
@@ -326,7 +328,7 @@ namespace lfs::vis {
             float depth_min,
             float depth_max,
             lfs::rendering::DepthVisualizationMode depth_visualization_mode);
-        [[nodiscard]] std::expected<void, std::string> waitForRingSlot(
+        [[nodiscard]] lfs::Status waitForRingSlot(
             std::size_t ring_slot,
             std::string_view reason);
         [[nodiscard]] std::size_t acquireRingSlot();
@@ -470,7 +472,7 @@ namespace lfs::vis {
             std::string_view operation_label,
             bool reset_fence = true,
             std::source_location location = std::source_location::current()) const;
-        [[nodiscard]] std::expected<glm::ivec2, std::string> latestOutputImageSize(OutputSlot output_slot) const;
+        [[nodiscard]] lfs::Result<glm::ivec2> latestOutputImageSize(OutputSlot output_slot) const;
 
         VulkanContext* context_ = nullptr;
         bool initialized_ = false;
@@ -578,33 +580,10 @@ namespace lfs::vis {
         };
         LodPageInputStorage lod_page_inputs_;
         std::unique_ptr<ComposePipeline> compose_;
-        struct OutputImageSlot {
-            VulkanContext::ExternalImage image{};
-            VulkanContext::ExternalImage depth_image{};
-            glm::ivec2 size{0, 0};       // valid/logical extent
-            glm::ivec2 alloc_size{0, 0}; // allocated (ceil64) extent
-            VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
-            VkImageLayout depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-            // Content identity for consumers (compose may overwrite). Not a tracker key.
-            std::uint64_t generation = 0;
-            // Resource identity for VulkanImageBarrierTracker (#1478). Set from the
-            // color pool acquisition serial when the VkImages are (re)acquired.
-            std::uint64_t image_generation = 0;
-            // Pool acquisition serials (0 = none). Slot images are non-owning
-            // copies; the pool Entry holds the authoritative ExternalImage.
-            std::uint64_t color_pool_serial = 0;
-            std::uint64_t depth_pool_serial = 0;
-            // Timeline value signalled by the compute submission that produced
-            // this exact ring image. Graphics-queue readbacks wait this value;
-            // a host wait alone is not a Vulkan cross-queue memory dependency.
-            std::uint64_t completion_value = 0;
-        };
-        static constexpr std::size_t kOutputSlotCount = 4;
-        static constexpr std::size_t kFrameRingSize = 3;
-        std::array<std::array<OutputImageSlot, kFrameRingSize>, kOutputSlotCount> output_slots_{};
+        static constexpr std::size_t kOutputSlotCount = OutputSlotRing::kOutputSlotCount;
+        static constexpr std::size_t kFrameRingSize = OutputSlotRing::kFrameRingSize;
+        OutputSlotRing ring_{};
         OutputImagePool output_pool_{};
-        std::array<std::size_t, kOutputSlotCount> latest_output_ring_slot_{};
-        std::array<std::uint64_t, kOutputSlotCount> output_generations_{};
         // Vulkan-only completion counter for queue-to-queue dependencies. Keep
         // this separate from the externally shared CUDA payload below so Vulkan
         // readbacks never depend on external-payload tracking semantics.
@@ -619,11 +598,10 @@ namespace lfs::vis {
         bool depth_capture_mode_ = false;
         // When set, the capture rasterizer writes expected (alpha-weighted) depth.
         bool depth_capture_expected_ = false;
-        std::array<std::uint64_t, kFrameRingSize> ring_completion_values_{};
         // Phase 7C-P3: owner latch for bounded ring/readback waits. Quarantine
-        // never zeros ring_completion_values_ (would manufacture a free slot).
+        // never zeros ring completion watermarks (would manufacture a free slot).
+        // Injected into wait context; policy stays on the renderer (not the ring).
         mutable std::atomic<bool> gpu_wait_quarantined_{false};
-        std::size_t next_ring_slot_ = 0;
         // Whether the last main render used the macro-tile chain; the
         // selection-overlay re-render reuses its sorted buffers and must match.
         bool last_render_used_macro_chain_ = false;

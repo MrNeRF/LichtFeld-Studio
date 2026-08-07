@@ -8,9 +8,11 @@ external/libtorch
 external/release/libtorch/
 external/debug/libtorch/
 output*
-# Epic #1497: pool sources match the training-output glob above.
+# Epic #1497 / #1567: sources match the training-output glob above.
 !src/visualizer/rendering/output_image_pool.hpp
 !src/visualizer/rendering/output_image_pool.cpp
+!src/visualizer/rendering/output_slot_ring.hpp
+!src/visualizer/rendering/output_slot_ring.cpp
 results
 .idea
 data

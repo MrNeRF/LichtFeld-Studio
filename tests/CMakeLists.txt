@@ -302,6 +302,8 @@ list(APPEND TEST_FILES test_vulkan_image_tracker.cpp)
 list(APPEND TEST_FILES test_vulkan_gpu_census.cpp)
 # Epic #1497: output image pool (GPU-free host bookkeeping).
 list(APPEND TEST_FILES test_output_image_pool.cpp)
+# Epic #1568 / #1567: output slot ring (GPU-free host bookkeeping).
+list(APPEND TEST_FILES test_output_slot_ring.cpp)
 # Epic #1568 / #1566: payload-generic GpuResourcePool + subrect fit helper.
 list(APPEND TEST_FILES test_gpu_resource_pool.cpp)
 list(APPEND TEST_FILES test_viewport_scratch_bucket.cpp)
