@@ -139,25 +139,38 @@ namespace fast_lfs::optimizer {
         float bias_correction2_sqrt_rcp,
         cudaStream_t stream = nullptr);
 
-    // Joint (u,log_s) densify reset: encode true (m,v)=(0,0) under each prim's
-    // current block bounds (codes for u=0,log_s=0 — not raw zero bytes).
-    // Contiguous params: n_attr cells/row, bits 8 or 16.
+    // Joint (u,log_s) densify reset: encode true (m,v)=(0,0). Widens block
+    // bounds to include 0 when needed and re-encodes the block (MJ-2).
+    // Contiguous params: n_attr cells/row, bits 8 or 16. n_prims = live N.
     void joint_encode_zero_rows_at_indices(
         std::uint8_t* packed,
-        const float* bounds, // float4 per 256-splat block
+        float* bounds, // float4 per 256-splat block (mutable — may widen)
         const int64_t* indices_device,
         const int n_indices,
         const int n_attr,
         const int bits,
+        const int n_prims,
         cudaStream_t stream = nullptr);
 
     // Same for swizzled shN: walks float4 slots via shAt layout.
     void joint_encode_zero_shN_at_indices(
         std::uint8_t* packed,
-        const float* bounds,
+        float* bounds,
         const int64_t* indices_device,
         const int n_indices,
         const int slots_per_primitive,
+        const int bits,
+        const int n_prims,
+        cudaStream_t stream = nullptr);
+
+    // MJ-3: re-encode gathered joint rows under destination block bounds.
+    void joint_transcode_gathered_rows_at_indices(
+        std::uint8_t* packed,
+        const float* bounds,
+        const int64_t* indices_device,
+        const int n_new,
+        const int old_N,
+        const int n_attr,
         const int bits,
         cudaStream_t stream = nullptr);
 

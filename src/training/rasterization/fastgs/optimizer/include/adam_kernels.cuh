@@ -589,25 +589,58 @@ namespace fast_lfs::optimizer::kernels::adam {
         }
     }
 
-    // Encode (u,log_s)=(0,0) under current block bounds → true (m,v)=(0,0).
+    // MJ-2: expand block bounds to include (u,log_s)=(0,0) so encode_us(0,0) is
+    // representable. When expansion is needed, re-encode every live cell in the
+    // block under the new bounds (decode under old first) so non-target prims
+    // stay consistent. Raw zero codes under bounds that exclude 0 decode to the
+    // block minimum, not (m,v)=(0,0).
+    __device__ __forceinline__ float4 joint_expand_bounds_include_zero(const float4 mm) {
+        return make_float4(fminf(mm.x, 0.0f), fmaxf(mm.y, 0.0f),
+                           fminf(mm.z, 0.0f), fmaxf(mm.w, 0.0f));
+    }
+
+    __device__ __forceinline__ bool joint_bounds_equal(const float4 a, const float4 b) {
+        return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w;
+    }
+
+    // Encode (u,log_s)=(0,0) under (possibly widened) block bounds → true (m,v)=(0,0).
     // Contiguous [N, n_attr] cells; packed is [N, n_attr * bpc] uint8.
+    // bounds is mutable; n_prims is the live primitive count for block re-encode.
     template <int BITS>
     __global__ void joint_encode_zero_rows_cu(
         uint8_t* packed,
-        const float* bounds,
+        float* bounds,
         const int64_t* indices,
         const int n_indices,
-        const int n_attr) {
+        const int n_attr,
+        const int n_prims) {
         using C = lfs::training::joint_adam::DeviceCodec<BITS>;
         const int idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= n_indices)
             return;
         const int64_t prim = indices[idx];
+        if (prim < 0 || (n_prims > 0 && prim >= static_cast<int64_t>(n_prims)))
+            return;
         const int bidx = static_cast<int>(prim / 256);
-        const float4 mm = *reinterpret_cast<const float4*>(bounds + 4 * bidx);
+        float4* mm_ptr = reinterpret_cast<float4*>(bounds + 4 * bidx);
+        const float4 old_mm = *mm_ptr;
+        const float4 new_mm = joint_expand_bounds_include_zero(old_mm);
+        if (!joint_bounds_equal(old_mm, new_mm)) {
+            const int block_begin = bidx * 256;
+            const int block_end = (n_prims > 0) ? min(block_begin + 256, n_prims)
+                                                : (block_begin + 256);
+            for (int p = block_begin; p < block_end; ++p) {
+                for (int a = 0; a < n_attr; ++a) {
+                    const int64_t cell = static_cast<int64_t>(p) * n_attr + a;
+                    const float2 us = C::decode_us(packed, cell, old_mm);
+                    C::encode_us(packed, cell, us.x, us.y, new_mm);
+                }
+            }
+            *mm_ptr = new_mm;
+        }
         for (int a = 0; a < n_attr; ++a) {
             const int64_t cell = prim * static_cast<int64_t>(n_attr) + a;
-            C::encode_us(packed, cell, 0.0f, 0.0f, mm);
+            C::encode_us(packed, cell, 0.0f, 0.0f, new_mm);
         }
     }
 
@@ -615,26 +648,84 @@ namespace fast_lfs::optimizer::kernels::adam {
     template <int BITS>
     __global__ void joint_encode_zero_shN_cu(
         uint8_t* packed,
-        const float* bounds,
+        float* bounds,
         const int64_t* indices,
         const int n_indices,
-        const int slots_per_primitive) {
+        const int slots_per_primitive,
+        const int n_prims) {
         using C = lfs::training::joint_adam::DeviceCodec<BITS>;
         const int idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= n_indices)
             return;
         const int64_t prim = indices[idx];
+        if (prim < 0 || (n_prims > 0 && prim >= static_cast<int64_t>(n_prims)))
+            return;
         const int bidx = static_cast<int>(prim / 256);
-        const float4 mm = *reinterpret_cast<const float4*>(bounds + 4 * bidx);
+        float4* mm_ptr = reinterpret_cast<float4*>(bounds + 4 * bidx);
+        const float4 old_mm = *mm_ptr;
+        const float4 new_mm = joint_expand_bounds_include_zero(old_mm);
         const uint slots = static_cast<uint>(slots_per_primitive);
-        for (uint k = 0; k < slots; ++k) {
-            // shAt(p, k, slots) = (p/R)*(slots*R) + k*R + (p%R)
-            constexpr uint R = 32u;
-            const uint p = static_cast<uint>(prim);
+        constexpr uint R = 32u;
+
+        auto sh_cell = [&](const uint p, const uint k, const int c) -> int64_t {
             const uint slot = (p / R) * (slots * R) + k * R + (p % R);
-            for (int c = 0; c < 4; ++c) {
-                C::encode_us(packed, static_cast<int64_t>(slot) * 4 + c, 0.0f, 0.0f, mm);
+            return static_cast<int64_t>(slot) * 4 + c;
+        };
+
+        if (!joint_bounds_equal(old_mm, new_mm) && slots > 0u) {
+            const int block_begin = bidx * 256;
+            const int block_end = (n_prims > 0) ? min(block_begin + 256, n_prims)
+                                                : (block_begin + 256);
+            for (int p = block_begin; p < block_end; ++p) {
+                for (uint k = 0; k < slots; ++k) {
+                    for (int c = 0; c < 4; ++c) {
+                        const int64_t cell = sh_cell(static_cast<uint>(p), k, c);
+                        const float2 us = C::decode_us(packed, cell, old_mm);
+                        C::encode_us(packed, cell, us.x, us.y, new_mm);
+                    }
+                }
             }
+            *mm_ptr = new_mm;
+        }
+        for (uint k = 0; k < slots; ++k) {
+            for (int c = 0; c < 4; ++c) {
+                C::encode_us(packed, sh_cell(static_cast<uint>(prim), k, c),
+                             0.0f, 0.0f, new_mm);
+            }
+        }
+    }
+
+    // MJ-3: after raw gather of packed codes across blocks, re-encode each new
+    // row under its destination block bounds (decode under source bounds).
+    template <int BITS>
+    __global__ void joint_transcode_gathered_rows_cu(
+        uint8_t* packed,
+        const float* bounds,
+        const int64_t* indices,
+        const int n_new,
+        const int old_N,
+        const int n_attr) {
+        using C = lfs::training::joint_adam::DeviceCodec<BITS>;
+        const int k = blockIdx.x * blockDim.x + threadIdx.x;
+        if (k >= n_new)
+            return;
+        const int64_t src = indices[k];
+        const int64_t dst = static_cast<int64_t>(old_N) + k;
+        if (src < 0)
+            return;
+        const float4 src_mm = *reinterpret_cast<const float4*>(bounds + 4 * static_cast<int>(src / 256));
+        const float4 dst_mm = *reinterpret_cast<const float4*>(bounds + 4 * static_cast<int>(dst / 256));
+        // Same block + identical bounds: codes already correct after raw gather.
+        if (src_mm.x == dst_mm.x && src_mm.y == dst_mm.y &&
+            src_mm.z == dst_mm.z && src_mm.w == dst_mm.w &&
+            (src / 256) == (dst / 256)) {
+            return;
+        }
+        for (int a = 0; a < n_attr; ++a) {
+            // Raw gather left src codes at dst; decode with src bounds, encode with dst.
+            const int64_t dst_cell = dst * n_attr + a;
+            const float2 us = C::decode_us(packed, dst_cell, src_mm);
+            C::encode_us(packed, dst_cell, us.x, us.y, dst_mm);
         }
     }
 

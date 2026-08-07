@@ -15,6 +15,7 @@
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -118,13 +119,22 @@ namespace lfs::training {
             new_bounds = lfs::core::Tensor::zeros(shape, device);
         }
         if (!zero_all && joint_bounds.is_valid() && joint_bounds.numel() > 0) {
+            // MN-6: keep the source alive until the D2D copy finishes. Destroying
+            // joint_bounds immediately after cudaMemcpyAsync races the async read.
+            const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+            lfs::core::waitForCUDAStream(stream, joint_bounds.stream());
+            lfs::core::waitForCUDAStream(stream, new_bounds.stream());
             const size_t copy_n = std::min(joint_bounds.numel(), new_bounds.numel());
+            auto old_bounds = std::move(joint_bounds);
             LFS_CUDA_CHECK(cudaMemcpyAsync(
-                new_bounds.ptr<float>(), joint_bounds.ptr<float>(),
-                copy_n * sizeof(float), cudaMemcpyDeviceToDevice,
-                lfs::core::getCurrentCUDAStream()));
+                new_bounds.ptr<float>(), old_bounds.ptr<float>(),
+                copy_n * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+            joint_bounds = std::move(new_bounds);
+            // old_bounds destroyed after sync
+        } else {
+            joint_bounds = std::move(new_bounds);
         }
-        joint_bounds = std::move(new_bounds);
     }
 
     uint64_t AdamOptimizer::slow_path_grow_count() noexcept {
@@ -239,26 +249,29 @@ namespace lfs::training {
             }
 
             const size_t param_size = param.shape()[0];
-            if (type == ParamType::ShN && splat_data_.max_sh_coeffs_rest() == 0) {
+            const auto layout_rest =
+                static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
+            if (type == ParamType::ShN && layout_rest == 0) {
                 state = AdamParamState{};
-                state.size = param_size;
+                state.size = 0;
                 LOG_INFO("AdamOptimizer: no SH-rest optimizer state for max SH degree 0");
                 continue;
             }
 
-            // shN is stored in vksplat swizzled layout as a 1D float tensor; capacity
-            // along dim 0 must be expressed in floats, not primitive rows.
-            const size_t effective_capacity = (type == ParamType::ShN)
-                                                  ? lfs::core::sh_swizzled_float_count(
-                                                        capacity,
-                                                        static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest()))
-                                                  : capacity;
-            const size_t alloc_cap = (effective_capacity > param_size) ? effective_capacity : param_size;
+            // BL-2: moments always track the float4-swizzle layout. Under q16, param.shape()[0]
+            // is the pad-dropped u16 cell count (45/prim for SH3), not the float cell count
+            // (48/prim). Never seed state.size / moment tensors from the u16 shape.
+            const size_t logical_size =
+                (type == ParamType::ShN)
+                    ? lfs::core::sh_swizzled_float_count(
+                          static_cast<size_t>(splat_data_.size()), layout_rest)
+                    : param_size;
+            const size_t effective_capacity =
+                (type == ParamType::ShN)
+                    ? lfs::core::sh_swizzled_float_count(capacity, layout_rest)
+                    : capacity;
+            const size_t alloc_cap = std::max(effective_capacity, logical_size);
 
-            // Handle zero-size tensors (e.g., shN with sh-degree 0 has shape [N, 0, 3]).
-            // Moment tensors are persistent Adam state. Gradients are transient and allocated
-            // lazily by get_grad(); fused fastgs backward never needs the full gradient buffers.
-            //
             // Force the direct/reserved allocator for shN so capacity is recorded even when
             // N already fits in the current swizzled block. Without this, the fast path in
             // extend_state_for_new_params trips on capacity()==0.
@@ -270,7 +283,7 @@ namespace lfs::training {
             state.exp_avg_sq.set_name("adam." + name + ".exp_avg_sq");
             state.grad = {};
             state.capacity = alloc_cap;
-            state.size = param_size;
+            state.size = logical_size;
             state.step_count = 0;
             LOG_DEBUG("allocate_gradients({}): cap={}", name, state.capacity);
         }
@@ -368,10 +381,19 @@ namespace lfs::training {
                                               size_t moment_capacity, size_t prim_capacity) {
         using namespace joint_adam;
         const auto& shape = param.shape();
-        const size_t moment_rows = shape[0];
-        moment_capacity = std::max(moment_capacity, moment_rows);
         const size_t prim_rows = scale_row_count(type);
         prim_capacity = std::max(prim_capacity, prim_rows);
+
+        // BL-2: shN moments are always float4-swizzle cells, never pad-dropped q16 cells.
+        const auto layout_rest =
+            static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
+        const size_t shN_float_rows =
+            (type == ParamType::ShN)
+                ? lfs::core::sh_swizzled_float_count(prim_rows, layout_rest)
+                : 0;
+        const size_t moment_rows =
+            (type == ParamType::ShN) ? shN_float_rows : shape[0];
+        moment_capacity = std::max(moment_capacity, moment_rows);
 
         if (joint_codec_enabled()) {
             // Joint (u, log_s): packed bytes + float4 bounds per 256-splat block.
@@ -387,9 +409,9 @@ namespace lfs::training {
             lfs::core::TensorShape packed_shape;
             size_t packed_cap_rows = 0;
             if (type == ParamType::ShN) {
-                // 1D: one packed cell per swizzled float element
-                const size_t n_floats = shape[0];
-                packed_shape = lfs::core::TensorShape({n_floats * static_cast<size_t>(bpc)});
+                // 1D: one packed cell per swizzled float element (float layout, not q16).
+                packed_shape = lfs::core::TensorShape(
+                    {shN_float_rows * static_cast<size_t>(bpc)});
                 packed_cap_rows = moment_capacity * static_cast<size_t>(bpc);
             } else {
                 // Contiguous [N, C] → [N, C * bpc]
@@ -416,15 +438,22 @@ namespace lfs::training {
         }
 
         // Legacy uint8 m/v + per-primitive scales.
+        // shN: 1D float-layout cells (never q16 param shape).
         state.joint_bits = 0;
         state.joint_bounds = {};
+        const lfs::core::TensorShape moment_shape =
+            (type == ParamType::ShN) ? lfs::core::TensorShape({shN_float_rows}) : shape;
         const bool moment_direct = (moment_capacity > moment_rows) || type == ParamType::ShN;
         if (moment_direct && moment_capacity > 0) {
-            state.exp_avg = lfs::core::Tensor::zeros_direct(shape, moment_capacity, param.device(), lfs::core::DataType::UInt8);
-            state.exp_avg_sq = lfs::core::Tensor::zeros_direct(shape, moment_capacity, param.device(), lfs::core::DataType::UInt8);
+            state.exp_avg = lfs::core::Tensor::zeros_direct(
+                moment_shape, moment_capacity, param.device(), lfs::core::DataType::UInt8);
+            state.exp_avg_sq = lfs::core::Tensor::zeros_direct(
+                moment_shape, moment_capacity, param.device(), lfs::core::DataType::UInt8);
         } else {
-            state.exp_avg = lfs::core::Tensor::zeros(shape, param.device(), lfs::core::DataType::UInt8);
-            state.exp_avg_sq = lfs::core::Tensor::zeros(shape, param.device(), lfs::core::DataType::UInt8);
+            state.exp_avg = lfs::core::Tensor::zeros(
+                moment_shape, param.device(), lfs::core::DataType::UInt8);
+            state.exp_avg_sq = lfs::core::Tensor::zeros(
+                moment_shape, param.device(), lfs::core::DataType::UInt8);
         }
         fill_quantized_moment_zero_point(state.exp_avg);
 
@@ -877,14 +906,20 @@ namespace lfs::training {
                             auto new_bounds = lfs::core::Tensor::zeros_direct(
                                 lfs::core::TensorShape({nb, size_t{4}}), nb_cap, param.device());
                             if (state.joint_bounds.is_valid() && state.joint_bounds.numel() > 0) {
+                                const cudaStream_t bstream = lfs::core::getCurrentCUDAStream();
+                                lfs::core::waitForCUDAStream(bstream, state.joint_bounds.stream());
+                                lfs::core::waitForCUDAStream(bstream, new_bounds.stream());
                                 const size_t copy_n = std::min(state.joint_bounds.numel(),
                                                                new_bounds.numel());
+                                auto old_jb = std::move(state.joint_bounds);
                                 LFS_CUDA_CHECK(cudaMemcpyAsync(
-                                    new_bounds.ptr<float>(), state.joint_bounds.ptr<float>(),
-                                    copy_n * sizeof(float), cudaMemcpyDeviceToDevice,
-                                    lfs::core::getCurrentCUDAStream()));
+                                    new_bounds.ptr<float>(), old_jb.ptr<float>(),
+                                    copy_n * sizeof(float), cudaMemcpyDeviceToDevice, bstream));
+                                LFS_CUDA_CHECK(cudaStreamSynchronize(bstream));
+                                state.joint_bounds = std::move(new_bounds);
+                            } else {
+                                state.joint_bounds = std::move(new_bounds);
                             }
-                            state.joint_bounds = std::move(new_bounds);
                         }
                     }
                 }
@@ -937,12 +972,28 @@ namespace lfs::training {
                                   static_cast<int>(lfs::core::sh_float4_slots_for_rest(layout_rest) * 4u),
                                   active_rest > 0 && iteration > SH_WARMUP_ITERATIONS);
         // Phase 2.1: wire SH value quant single-writer re-encode into fused Adam.
+        // BL-1: legacy codec has zero q16 handling (indexes float4 over a u16 buffer).
+        // Only joint shN Adam can re-encode value codes; dequant when falling back.
         if (fused.shN.enabled && splat_data_.shN_value_quantized() &&
             splat_data_.shN_value_bounds().is_valid()) {
-            fused.shN.sh_value_bounds = splat_data_.shN_value_bounds().ptr<float>();
-            fused.shN.sh_value_bits = 16;
-            fused.shN.sh_value_n_cells = static_cast<int>(
-                lfs::core::sh_value_quant::n_value_cells_per_prim(layout_rest));
+            const auto* shN_state = get_state(ParamType::ShN);
+            if (shN_state != nullptr && shN_state->is_joint()) {
+                fused.shN.sh_value_bounds = splat_data_.shN_value_bounds().ptr<float>();
+                fused.shN.sh_value_bits = 16;
+                fused.shN.sh_value_n_cells = static_cast<int>(
+                    lfs::core::sh_value_quant::n_value_cells_per_prim(layout_rest));
+            } else {
+                LOG_WARN("BL-1: legacy Adam codec + q16 shN is unsupported; "
+                         "dequantising shN to fp32 for fused step");
+                (void)sh_value::ensure_shN_fp32_for_mutation(splat_data_);
+                // Re-bind param after dequant (storage replaced).
+                auto& shN_param = get_param(ParamType::ShN);
+                fused.shN.param = static_cast<float*>(shN_param.data_ptr());
+                fused.shN.n_elements = static_cast<int>(shN_param.numel());
+                fused.shN.sh_value_bounds = nullptr;
+                fused.shN.sh_value_bits = 0;
+                fused.shN.sh_value_n_cells = 0;
+            }
         }
         fused.scaling = prepare_param(ParamType::Scaling, 3, true);
         fused.rotation = prepare_param(ParamType::Rotation, 4, true);
@@ -1016,6 +1067,7 @@ namespace lfs::training {
                         static_cast<int>(indices.size()),
                         slots,
                         state.joint_bits,
+                        static_cast<int>(splat_data_.size()),
                         stream);
                 }
             } else {
@@ -1031,6 +1083,7 @@ namespace lfs::training {
                         static_cast<int>(indices.size()),
                         n_attr,
                         state.joint_bits,
+                        static_cast<int>(splat_data_.size()),
                         stream);
                 }
             }
@@ -1150,11 +1203,44 @@ namespace lfs::training {
                     state.grad.reserve(target_cap);
             }
             // Bounds: grow-only to cover ceil(new_N/256); zero-init new blocks only.
+            const size_t old_N = new_size - n_new;
             const size_t prim_cap =
                 state.capacity > 0 ? state.capacity
                                    : compute_new_capacity(new_size, new_size);
             ensure_joint_bounds_capacity(state.joint_bounds, new_size, prim_cap,
                                          param.device(), /*zero_all=*/false);
+            // MJ-3: raw gather copies codes across blocks with different bounds → garbage.
+            // Transcode decode(src bounds) → encode(dst bounds) for the new rows.
+            if (n_new > 0 && state.joint_bounds.is_valid()) {
+                const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
+                const int row_bytes = static_cast<int>(tensor_row_size(state.exp_avg));
+                const int n_attr = bpc > 0 ? row_bytes / bpc : 0;
+                if (n_attr > 0) {
+                    const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                    lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
+                    lfs::core::waitForCUDAStream(stream, state.joint_bounds.stream());
+                    lfs::core::waitForCUDAStream(stream, indices.stream());
+                    const bool idx_i64 = indices.dtype() == lfs::core::DataType::Int64;
+                    lfs::core::Tensor idx64;
+                    const int64_t* idx_ptr = nullptr;
+                    if (idx_i64) {
+                        idx_ptr = indices.ptr<int64_t>();
+                    } else {
+                        idx64 = indices.to(lfs::core::DataType::Int64);
+                        idx_ptr = idx64.ptr<int64_t>();
+                    }
+                    fast_lfs::optimizer::joint_transcode_gathered_rows_at_indices(
+                        state.exp_avg.ptr<uint8_t>(),
+                        state.joint_bounds.ptr<float>(),
+                        idx_ptr,
+                        static_cast<int>(n_new),
+                        static_cast<int>(old_N),
+                        n_attr,
+                        state.joint_bits,
+                        stream);
+                    state.exp_avg.set_stream(stream);
+                }
+            }
             state.size = new_size;
             state.capacity = state.exp_avg.capacity();
             return;
@@ -1313,6 +1399,57 @@ namespace lfs::training {
             state.capacity = state.exp_avg.is_valid() ? state.exp_avg.capacity() : new_size;
             LFS_DEBUG_ASSERT_MSG(state.capacity >= state.size,
                                  "extend_state_for_new_params(joint): capacity < size");
+
+            // MJ-3: raw zero codes under a live mid-block's non-zero bounds do NOT
+            // decode to (m,v)=(0,0). Zero-encode the newly appended prim rows.
+            if (n_new > 0 && prim_n >= n_new && state.exp_avg.is_valid() &&
+                state.joint_bounds.is_valid()) {
+                const size_t old_prims = prim_n - n_new;
+                std::vector<int64_t> new_idx(n_new);
+                for (size_t i = 0; i < n_new; ++i)
+                    new_idx[i] = static_cast<int64_t>(old_prims + i);
+                const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                int64_t* d_idx = nullptr;
+                const size_t idx_bytes = n_new * sizeof(int64_t);
+                LFS_CUDA_CHECK(cudaMallocAsync(&d_idx, idx_bytes, stream));
+                LFS_CUDA_CHECK(cudaMemcpyAsync(d_idx, new_idx.data(), idx_bytes,
+                                               cudaMemcpyHostToDevice, stream));
+                lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
+                lfs::core::waitForCUDAStream(stream, state.joint_bounds.stream());
+                if (type == ParamType::ShN) {
+                    const int slots = static_cast<int>(lfs::core::sh_float4_slots_for_rest(
+                        static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest())));
+                    if (slots > 0) {
+                        fast_lfs::optimizer::joint_encode_zero_shN_at_indices(
+                            state.exp_avg.ptr<uint8_t>(),
+                            state.joint_bounds.ptr<float>(),
+                            d_idx,
+                            static_cast<int>(n_new),
+                            slots,
+                            state.joint_bits,
+                            static_cast<int>(prim_n),
+                            stream);
+                    }
+                } else {
+                    const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
+                    const int row_bytes = static_cast<int>(tensor_row_size(state.exp_avg));
+                    const int n_attr = bpc > 0 ? row_bytes / bpc : 0;
+                    if (n_attr > 0) {
+                        fast_lfs::optimizer::joint_encode_zero_rows_at_indices(
+                            state.exp_avg.ptr<uint8_t>(),
+                            state.joint_bounds.ptr<float>(),
+                            d_idx,
+                            static_cast<int>(n_new),
+                            n_attr,
+                            state.joint_bits,
+                            static_cast<int>(prim_n),
+                            stream);
+                    }
+                }
+                state.exp_avg.set_stream(stream);
+                state.joint_bounds.set_stream(stream);
+                LFS_CUDA_CHECK(cudaFreeAsync(d_idx, stream));
+            }
             return;
         }
 
@@ -1524,7 +1661,25 @@ namespace lfs::training {
 
             // Extend the swizzled param buffer by `growth` zero floats. The new range
             // [old_floats, new_floats) covers all swizzled slots of primitives in
-            // [old_N, new_N).
+            // [old_N, new_N). cuda.direct / q16-expand storage cannot reserve in place —
+            // reallocate with headroom when capacity is short (cross-block densify).
+            if (param.capacity() < new_floats) {
+                const size_t target = std::max(
+                    compute_new_capacity(new_floats, new_floats), new_floats);
+                auto fresh = lfs::core::Tensor::zeros_direct(
+                    lfs::core::TensorShape({old_floats}), target, param.device(),
+                    param.dtype());
+                if (old_floats > 0 && param.is_valid() && param.numel() > 0) {
+                    const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                    lfs::core::waitForCUDAStream(stream, param.stream());
+                    const size_t nbytes = old_floats * lfs::core::dtype_size(param.dtype());
+                    LFS_CUDA_CHECK(cudaMemcpyAsync(
+                        fresh.data_ptr(), param.data_ptr(), nbytes,
+                        cudaMemcpyDeviceToDevice, stream));
+                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                }
+                param = std::move(fresh);
+            }
             param.append_zeros(growth);
 
             const bool indices_are_i64 = indices.dtype() == lfs::core::DataType::Int64;
@@ -1558,15 +1713,85 @@ namespace lfs::training {
                 }
             };
 
-            gather_new_swizzled_rows(param);
+            // Param gather is float/q16 specific. Under q16 densify paths dequant first
+            // (ensure_shN_fp32_for_mutation); still only gather when float storage.
+            if (param.dtype() == lfs::core::DataType::Float32) {
+                gather_new_swizzled_rows(param);
+            }
 
-            // Extend the Adam state. Moments are uint8 swizzled (gather parent bytes); scales
-            // are per-primitive {N} (gather parent scale by primitive index via append_gather).
+            // Extend the Adam state.
             const auto name = param_name(type);
             if (states_.contains(name)) {
                 auto& state = states_[name];
-                if (state.exp_avg.is_valid() && state.exp_avg_sq.is_valid() &&
-                    state.exp_avg_scale.is_valid() && state.exp_avg_sq_scale.is_valid()) {
+
+                // MJ-4: joint codec has no exp_avg_sq/scales — legacy gate was a silent no-op.
+                if (state.is_joint() && state.exp_avg.is_valid()) {
+                    const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
+                    const size_t packed_growth = growth * static_cast<size_t>(bpc);
+                    const size_t packed_new = state.exp_avg.shape()[0] + packed_growth;
+                    const bool fits = state.exp_avg.capacity() > 0 &&
+                                      packed_new <= state.exp_avg.capacity();
+                    if (fits) {
+                        state.exp_avg.append_zeros(packed_growth);
+                    } else {
+                        note_slow_path_grow("add_new_params_gather(shN,joint)", name);
+                        const size_t prim_cap = compute_new_capacity(new_N, new_N);
+                        const size_t moment_cap =
+                            lfs::core::sh_swizzled_float_count(prim_cap, layout_rest);
+                        // Preserve existing packed codes then grow.
+                        auto old_packed = std::move(state.exp_avg);
+                        alloc_quantized_state(type, state, param, moment_cap, prim_cap);
+                        if (old_packed.is_valid() && old_packed.numel() > 0 &&
+                            state.exp_avg.is_valid()) {
+                            const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                            lfs::core::waitForCUDAStream(stream, old_packed.stream());
+                            const size_t copy_n =
+                                std::min(old_packed.numel(), state.exp_avg.numel());
+                            LFS_CUDA_CHECK(cudaMemcpyAsync(
+                                state.exp_avg.ptr<uint8_t>(), old_packed.ptr<uint8_t>(),
+                                copy_n * sizeof(uint8_t), cudaMemcpyDeviceToDevice, stream));
+                            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                        }
+                    }
+                    ensure_joint_bounds_capacity(state.joint_bounds, new_N,
+                                                 std::max(new_N, state.capacity),
+                                                 param.device(), /*zero_all=*/false);
+                    state.size = new_floats;
+                    state.capacity = state.exp_avg.is_valid() ? state.exp_avg.capacity() : new_floats;
+                    // Zero-encode new prim rows under (possibly non-zero) block bounds.
+                    if (n_new > 0 && state.joint_bounds.is_valid()) {
+                        std::vector<int64_t> new_idx(n_new);
+                        for (size_t i = 0; i < n_new; ++i)
+                            new_idx[i] = static_cast<int64_t>(old_N + i);
+                        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                        int64_t* d_idx = nullptr;
+                        const size_t idx_bytes = n_new * sizeof(int64_t);
+                        LFS_CUDA_CHECK(cudaMallocAsync(&d_idx, idx_bytes, stream));
+                        LFS_CUDA_CHECK(cudaMemcpyAsync(d_idx, new_idx.data(), idx_bytes,
+                                                       cudaMemcpyHostToDevice, stream));
+                        const int slots = static_cast<int>(
+                            lfs::core::sh_float4_slots_for_rest(layout_rest));
+                        if (slots > 0) {
+                            lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
+                            lfs::core::waitForCUDAStream(stream, state.joint_bounds.stream());
+                            fast_lfs::optimizer::joint_encode_zero_shN_at_indices(
+                                state.exp_avg.ptr<uint8_t>(),
+                                state.joint_bounds.ptr<float>(),
+                                d_idx,
+                                static_cast<int>(n_new),
+                                slots,
+                                state.joint_bits,
+                                static_cast<int>(new_N),
+                                stream);
+                            state.exp_avg.set_stream(stream);
+                            state.joint_bounds.set_stream(stream);
+                        }
+                        LFS_CUDA_CHECK(cudaFreeAsync(d_idx, stream));
+                    }
+                    LFS_DEBUG_ASSERT_MSG(state.capacity >= state.size,
+                                         "add_new_params_gather(shN,joint): capacity < size");
+                } else if (state.exp_avg.is_valid() && state.exp_avg_sq.is_valid() &&
+                           state.exp_avg_scale.is_valid() && state.exp_avg_sq_scale.is_valid()) {
                     const bool fits =
                         state.exp_avg.capacity() >= new_floats &&
                         state.exp_avg_sq.capacity() >= new_floats &&
@@ -1716,6 +1941,7 @@ namespace lfs::training {
                         static_cast<int>(n_indices),
                         slots,
                         state.joint_bits,
+                        static_cast<int>(splat_data_.size()),
                         stream);
                 }
             } else {
@@ -1730,6 +1956,7 @@ namespace lfs::training {
                         static_cast<int>(n_indices),
                         n_attr,
                         state.joint_bits,
+                        static_cast<int>(splat_data_.size()),
                         stream);
                 }
             }
@@ -1950,9 +2177,21 @@ namespace lfs::training {
             const bool is_shN = (name == "shN");
             const ParamType ptype = *maybe_type;
             const auto& parameter = get_param(ptype);
-            const size_t expected_state_size = version == 1 && is_shN
-                                                   ? static_cast<size_t>(splat_data_.size())
-                                                   : parameter.shape()[0];
+            // BL-2: shN state.size is always float4-swizzle cells, never q16 u16 cells.
+            // After a fused step the heal sets state.size = float_layout; strategy re-quant
+            // before deserialize leaves parameter.shape()[0] as u16 count — do not compare
+            // those units.
+            const auto layout_rest =
+                static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
+            size_t expected_state_size = parameter.shape()[0];
+            if (is_shN) {
+                if (version == 1) {
+                    expected_state_size = static_cast<size_t>(splat_data_.size());
+                } else {
+                    expected_state_size = lfs::core::sh_swizzled_float_count(
+                        static_cast<size_t>(splat_data_.size()), layout_rest);
+                }
+            }
             if (!parameter.is_valid() || state.size != expected_state_size)
                 throw std::runtime_error("Invalid AdamOptimizer checkpoint: state size does not match model");
 
@@ -2000,13 +2239,18 @@ namespace lfs::training {
                     state.joint_bounds.ndim() != 2 || state.joint_bounds.shape()[1] != 4) {
                     throw std::runtime_error("Invalid AdamOptimizer checkpoint: joint moment schema mismatch");
                 }
+                // MN-5: accept grow-only bounds tables (shape >= live blocks). Compaction
+                // can leave extra zero blocks; never require strict equality.
                 const size_t expected_bounds = joint_adam::n_bounds_for_prims(primitive_rows);
-                if (state.joint_bounds.shape()[0] != expected_bounds) {
+                if (!state.joint_bounds.is_valid() ||
+                    state.joint_bounds.shape()[0] < expected_bounds) {
                     throw std::runtime_error("Invalid AdamOptimizer checkpoint: joint bounds size mismatch");
                 }
                 if (is_shN) {
-                    // Packed 1D: one cell per swizzled float, bpc bytes each.
-                    const size_t expected_bytes = parameter.shape()[0] * static_cast<size_t>(bpc);
+                    // Packed 1D: one cell per float4-swizzle float, bpc bytes each (BL-2).
+                    const size_t expected_bytes =
+                        lfs::core::sh_swizzled_float_count(primitive_rows, layout_rest) *
+                        static_cast<size_t>(bpc);
                     if (state.exp_avg.ndim() != 1 || state.exp_avg.numel() != expected_bytes ||
                         state.joint_bits != 8) {
                         throw std::runtime_error("Invalid AdamOptimizer checkpoint: joint shN packed shape mismatch");
@@ -2032,10 +2276,13 @@ namespace lfs::training {
                 // v2/v3 legacy: uint8 moments + per-primitive fp32 scales.
                 is >> state.exp_avg >> state.exp_avg_sq >> state.exp_avg_scale >> state.exp_avg_sq_scale;
                 const size_t primitive_rows = static_cast<size_t>(splat_data_.size());
+                // BL-2: shN moments are float-layout 1D, not param (q16) shape.
+                const lfs::core::TensorShape expected_moment_shape =
+                    is_shN ? lfs::core::TensorShape({expected_state_size}) : parameter.shape();
                 if (state.exp_avg.dtype() != lfs::core::DataType::UInt8 ||
                     state.exp_avg_sq.dtype() != lfs::core::DataType::UInt8 ||
-                    state.exp_avg.shape() != parameter.shape() ||
-                    state.exp_avg_sq.shape() != parameter.shape() ||
+                    state.exp_avg.shape() != expected_moment_shape ||
+                    state.exp_avg_sq.shape() != expected_moment_shape ||
                     state.exp_avg_scale.dtype() != lfs::core::DataType::Float32 ||
                     state.exp_avg_sq_scale.dtype() != lfs::core::DataType::Float32 ||
                     state.exp_avg_scale.ndim() != 1 || state.exp_avg_scale.numel() != primitive_rows ||

@@ -1004,3 +1004,41 @@ Python SceneCamera) — **not** FastGS blend/grad. All FastGS numerical gradient
 ### Commit
 **`35ca0e4a`** perf(fastgs): warp-level sub-tile culling for forward blend_cu (WO-WARP-FWD)
 
+
+## dual-rep optimizer-state cluster (BL-1, BL-2, MJ-1..4, MN-5/6) — 2026-08-07
+
+Adversarial-review dual-representation cluster (quant codes + joint moments
+everywhere except the fused fastgs path). TDD suite `DualRepOptimizer.*`
+written first; production fixes landed with all 10 cases green.
+
+### Findings fixed
+- **BL-1** legacy + q16 OOB: `prepare_fastgs_fused_adam` dequants when
+  `!is_joint()`; legacy kernel branch returns if `sh_value_bits != 0`.
+- **BL-2** joint shN moments sized from float layout not u16 cells;
+  `allocate_gradients`/`alloc_quantized_state`/deserialize use
+  `sh_swizzled_float_count`; checkpoint roundtrip **after fused prepare**
+  (past SH warmup) with quant ON — the prior gap.
+- **MJ-1** grid-overhang: `primitive_idx >= n_primitives` clears touch on
+  joint path; legacy path returns early.
+- **MJ-2** `joint_encode_zero_*` widens block bounds to include (0,0) and
+  re-encodes the block so zeros decode to true (m,v)=(0,0).
+- **MJ-3** joint grow zero-encodes new rows; gather transcodes across
+  blocks (`joint_transcode_gathered_rows`).
+- **MJ-4** joint branch in `add_new_params_gather(ShN)` grows packed moments
+  (legacy gate no longer silently no-ops).
+- **MN-5** load accepts `joint_bounds.shape[0] >= expected` (grow-only slack).
+- **MN-6** bounds grow keeps source alive until D2D copy completes.
+
+### Evidence
+```
+./build/tests/lichtfeld_tests --gtest_filter='DualRepOptimizer.*'
+# 10/10 PASSED
+
+./build/tests/lichtfeld_tests --gtest_filter=\
+'DualRepOptimizer.*:AdamCapacityInvariant.*:JointAdam*:CheckpointResumeRoundtripTest.*:MCMCTest.*:MRNFStrategyTest.*:ShValueStorage*'
+# 48/48 PASSED
+```
+
+New mandatory quant-ON strategy smoke:
+- `DualRepOptimizer.MCMC_InitializeWithBothCodecsOn`
+- `DualRepOptimizer.MRNF_InitializeWithBothCodecsOn`

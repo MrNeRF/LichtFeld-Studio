@@ -293,11 +293,12 @@ namespace fast_lfs::optimizer {
 
     void joint_encode_zero_rows_at_indices(
         std::uint8_t* packed,
-        const float* bounds,
+        float* bounds,
         const int64_t* indices_device,
         const int n_indices,
         const int n_attr,
         const int bits,
+        const int n_prims,
         cudaStream_t stream) {
         LFS_VALIDATE_CUDA_DEVICE_POINTER(packed, "packed");
         LFS_VALIDATE_CUDA_DEVICE_POINTER(bounds, "bounds");
@@ -310,10 +311,10 @@ namespace fast_lfs::optimizer {
         const dim3 block(config::block_size_adam_step);
         if (bits == 16) {
             kernels::adam::joint_encode_zero_rows_cu<16><<<grid, block, 0, stream>>>(
-                packed, bounds, indices_device, n_indices, n_attr);
+                packed, bounds, indices_device, n_indices, n_attr, n_prims);
         } else if (bits == 8) {
             kernels::adam::joint_encode_zero_rows_cu<8><<<grid, block, 0, stream>>>(
-                packed, bounds, indices_device, n_indices, n_attr);
+                packed, bounds, indices_device, n_indices, n_attr, n_prims);
         } else {
             throw std::runtime_error("joint_encode_zero_rows: bits must be 8 or 16");
         }
@@ -322,11 +323,12 @@ namespace fast_lfs::optimizer {
 
     void joint_encode_zero_shN_at_indices(
         std::uint8_t* packed,
-        const float* bounds,
+        float* bounds,
         const int64_t* indices_device,
         const int n_indices,
         const int slots_per_primitive,
         const int bits,
+        const int n_prims,
         cudaStream_t stream) {
         LFS_VALIDATE_CUDA_DEVICE_POINTER(packed, "packed");
         LFS_VALIDATE_CUDA_DEVICE_POINTER(bounds, "bounds");
@@ -339,14 +341,44 @@ namespace fast_lfs::optimizer {
         const dim3 block(config::block_size_adam_step);
         if (bits == 16) {
             kernels::adam::joint_encode_zero_shN_cu<16><<<grid, block, 0, stream>>>(
-                packed, bounds, indices_device, n_indices, slots_per_primitive);
+                packed, bounds, indices_device, n_indices, slots_per_primitive, n_prims);
         } else if (bits == 8) {
             kernels::adam::joint_encode_zero_shN_cu<8><<<grid, block, 0, stream>>>(
-                packed, bounds, indices_device, n_indices, slots_per_primitive);
+                packed, bounds, indices_device, n_indices, slots_per_primitive, n_prims);
         } else {
             throw std::runtime_error("joint_encode_zero_shN: bits must be 8 or 16");
         }
         LFS_CUDA_LAUNCH_CHECK(stream, "joint_encode_zero_shN_at_indices");
+    }
+
+    void joint_transcode_gathered_rows_at_indices(
+        std::uint8_t* packed,
+        const float* bounds,
+        const int64_t* indices_device,
+        const int n_new,
+        const int old_N,
+        const int n_attr,
+        const int bits,
+        cudaStream_t stream) {
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(packed, "packed");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(bounds, "bounds");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(indices_device, "indices_device");
+        if (n_new <= 0)
+            return;
+        if (n_attr <= 0)
+            throw std::runtime_error("n_attr must be positive");
+        const dim3 grid(div_round_up(n_new, config::block_size_adam_step));
+        const dim3 block(config::block_size_adam_step);
+        if (bits == 16) {
+            kernels::adam::joint_transcode_gathered_rows_cu<16><<<grid, block, 0, stream>>>(
+                packed, bounds, indices_device, n_new, old_N, n_attr);
+        } else if (bits == 8) {
+            kernels::adam::joint_transcode_gathered_rows_cu<8><<<grid, block, 0, stream>>>(
+                packed, bounds, indices_device, n_new, old_N, n_attr);
+        } else {
+            throw std::runtime_error("joint_transcode_gathered_rows: bits must be 8 or 16");
+        }
+        LFS_CUDA_LAUNCH_CHECK(stream, "joint_transcode_gathered_rows_at_indices");
     }
 
 } // namespace fast_lfs::optimizer

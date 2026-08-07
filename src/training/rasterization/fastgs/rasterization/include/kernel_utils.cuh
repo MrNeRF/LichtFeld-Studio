@@ -509,6 +509,12 @@ namespace fast_lfs::rasterization::kernels {
         bool apply_step = true;
         bool touch = p.enabled && sh_layout_slots > 0u &&
                      p.joint_packed != nullptr && p.joint_bounds != nullptr;
+        // MJ-1: grid overhang threads (ceil(N/256)*256 - N) must stay in the reduce
+        // with ±inf identities — never decode/encode into capacity slack / OOB.
+        if (touch && p.n_primitives > 0 &&
+            primitive_idx >= static_cast<uint>(p.n_primitives)) {
+            touch = false;
+        }
         if (touch && p.frozen_mask != nullptr &&
             primitive_idx < static_cast<uint>(p.frozen_mask_size) &&
             p.frozen_mask[primitive_idx]) {
@@ -695,6 +701,12 @@ namespace fast_lfs::rasterization::kernels {
             return;
         }
         if (!p.enabled || n_slots_to_update == 0u || sh_layout_slots == 0u)
+            return;
+        // BL-1: legacy path indexes float4 slots; refuse q16 (host must dequant first).
+        if (p.sh_value_bits != 0)
+            return;
+        // MJ-1 sibling: no primitive-range guard on legacy path either.
+        if (p.n_primitives > 0 && primitive_idx >= static_cast<uint>(p.n_primitives))
             return;
         float row_step_size = p.step_size;
         if (p.frozen_mask != nullptr &&

@@ -168,6 +168,7 @@ set(TEST_FILES
     test_mrnf_strategy.cpp
     test_compact_splats_peak.cpp
     test_adam_capacity_invariant.cpp
+    test_dual_rep_optimizer.cpp
     test_sparsity_optimizer.cpp
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
