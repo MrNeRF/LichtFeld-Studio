@@ -246,7 +246,7 @@ namespace lfs::training::sh_value {
             static_cast<std::uint32_t>(n_primitives),
             slots,
             n_cells);
-        LFS_CUDA_CHECK_LAST_ERROR("encode_shN_float4_to_u16");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "encode_shN_float4_to_u16");
     }
 
     void decode_shN_u16_to_float4(
@@ -269,7 +269,7 @@ namespace lfs::training::sh_value {
             static_cast<std::uint32_t>(n_primitives),
             slots,
             n_cells);
-        LFS_CUDA_CHECK_LAST_ERROR("decode_shN_u16_to_float4");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_u16_to_float4");
     }
 
 } // namespace lfs::training::sh_value
