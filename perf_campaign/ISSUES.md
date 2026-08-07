@@ -254,21 +254,32 @@
   back to pre-commit state (no partial grow), not merely make capacity-ensure succeed.
 - Ops note: owner GUI runs at 22:24-22:29 overlapped the capensure2 bench gate; those bench
   numbers are contamination-suspect — supervisor must re-validate before accepting.
+- **Landed with WO-FIX-GTCACHE-GUI:** `AdamOptimizer::preflight_grow_capacity` aborts densify
+  before free_mask / multi-param mutation when capacity-ensure would fail; regression test
+  `ForcedGrowFailureLeavesModelUntouched`. Strategies (MRNF/MCMC/ImprovedGS+) call preflight
+  first. Mid-commit capacity-ensure throw path no longer mutates partial params.
 
 ### Residual after ISS-023 close (filed as ISS-024)
 Post-densify-grow GUI OOM on `vksplat.shared_scratch` (~4003 MiB request) is **not** the
 capacity-ensure abort. Tracked as ISS-024.
 
 ## ISS-024 — GUI post-densify OOM: shared_scratch / instance buffers after exportable grow
-- **Status:** OPEN — residual after ISS-023 (`69e22bad`). Interacts with WO-FIX-GTCACHE-GUI.
-- Repro: GUI bonsai `-i 2000 --train` (max_cap 5M or 500k). After first densify
-  `Exportable splat storage grew for densify: capacity≈496k`, next steps fail:
+- **Status:** RE-SCOPED / effectively closed as VRAM-greed symptom — residual disease is ISS-025.
+- Original repro: GUI bonsai after densify grow →
   `External rasterizer arena 'vksplat.shared_scratch' grow failed (need≈4003 MiB)` →
-  `OUT_OF_MEMORY: Failed to allocate instance buffers`. Training ends ~iter 1408.
-- Note: request ≈ max_cap×8 KiB for max_cap=500k suggests sizing may use max_cap not live N.
-- Severity: GUI training still cannot complete past densify on this machine; headless bench OK.
-- Do not re-open ISS-023: capacity-ensure grow path is proven (log line present, no
-  capacity-ensure failed).
+  `OUT_OF_MEMORY: Failed to allocate instance buffers` (~iter 1408).
+- **After WO-FIX-GTCACHE-GUI (2026-08-07):** interactive GT device cap
+  (`min(25% free, 1 GiB hard ceiling)`, pinned remainder) frees ~4.4 GiB vs the old
+  free−2GiB all-or-nothing device fill (est=5412.8 → device≈1020 MiB + pinned≈4393 MiB).
+  GUI evidence (`/tmp/lfs-gtcache-gui*.log`): **no** `shared_scratch grow failed need≈4003`,
+  densify `Exportable splat storage grew … capacity≈495k` succeeds, training dies later on
+  FastGS/VkSplat instance explosion (ISS-025):
+  `FastGS instance count exceeds 32-bit range: ~3.8e9 instances from ~330k primitives`.
+- **Judgement on ~4 GiB request:** not a legitimate max_cap×8 KiB sizing heuristic.
+  `estimateSharedScratchBytes(N≈500k)` is ~160–200 MiB; the 4003 MiB arena grow was the
+  training arena attempting to satisfy a pathological n_instances (same root as ISS-025).
+  Real ceiling for healthy frames remains live-N + tile-instance growth, not max_cap floor.
+- Do not re-open ISS-023. Track remaining GUI densify-after failure under ISS-025.
 
 ## ISS-025 — GUI post-grow instance explosion: depth-wave budget + forward raster failure + loss regression
 - **Status:** OPEN — two Fable analysts dispatched (independent lenses), owner reproduces.

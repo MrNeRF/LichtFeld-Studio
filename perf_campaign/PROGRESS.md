@@ -1397,3 +1397,75 @@ The next `push-clean.sh` force-push **supersedes mirror commit `9b1ebb42`**. Its
 
 ### Status
 **DONE.**
+
+---
+
+## WO-FIX-GTCACHE-GUI / MJ-13 — interactive GT device cache VRAM policy (2026-08-07)
+
+### Problem
+GUI bonsai full-res: `GT cache budget: device=true … est=5412.8 MiB … reason=device_within_budget`
+→ 292 images × ~18.5 MiB = **5.4 GiB** device-resident GT. Policy was free−2 GiB headroom
+all-or-nothing — fine for headless downscaled bench, hostile with densify + viewer.
+
+MJ-13 (adversarial): GT cache invisible to OOM/pressure; eviction stats always 0.
+
+### TDD (fail → pass)
+Budget pure tests first (`GtCacheBudgetGate.Interactive*`): interactive
+`min(25% free, 1 GiB ceiling)` + partial device + pinned remainder; headless free−2GiB
+unchanged. Pressure test: fill cache → reclaim → retry path + hit recovery.
+Atomicity: `ForcedGrowFailureLeavesModelUntouched` (preflight + add_new_params throw
+leaves row counts untouched).
+
+Post-fix targeted:
+```
+[  PASSED  ] 17 tests.   # GtCacheBudgetGate.* + GtDeviceCacheTest.*
+[  PASSED  ] SplatExportableStorageTest.ForcedGrowFailureLeavesModelUntouched
+```
+
+### Implementation
+1. **Interactive budget** (`evaluate_gt_cache_budget(..., interactive)`):
+   device_budget = min(0.25×free, 1 GiB [, programmatic cap]); partial device when
+   est > budget; pinned for remainder. Headless/CLI: free−headroom all-or-nothing.
+2. **No env knobs:** deleted `LFS_GT_CACHE` / `LFS_GT_CACHE_CAP` / `LFS_GT_PINNED_CACHE`
+   reads. Session flag from `!params.optimization.headless`; loader also upgrades if
+   viewer shared-scratch arena is installed (`using_external_backing`).
+3. **MJ-13:** registry of live loaders + `PressureClient "gt-device-cache"` (prio 5);
+   `reclaim_gt_device_cache_for_pressure()`; `recover_forward_oom` clears active loader;
+   HUD gauges `vram.audit.gt_cache.bytes` / `.pinned_bytes`; real eviction counters.
+4. **Partial store:** when device full and pinned enabled, new keys go pinned (no LRU thrash).
+5. **ISS-023 addendum 2:** `AdamOptimizer::preflight_grow_capacity` before free_mask /
+   multi-param densify mutation (MRNF / MCMC / ImprovedGS+).
+
+### Gate — full suite
+**3472 ran → 3416 PASS / 14 FAIL** (same 14 pre-existing reds; +8 green vs 3408 prior).
+Our new tests all green. No new reds (red-provenance clean).
+
+### Gate — dual-workload headless (unchanged)
+| workload | med steady_ms | dl_wait | gt_cache MiB | B/splat | runs |
+|---|---:|---:|---:|---:|---|
+| bonsai ×3 (`20260807T211335Z`) | **2.614** | **0.005** | 338.8 | **307.4** | ~2.615–2.62 band |
+| bicycle 7k ×3 (`20260807T211408Z`) | **2.657** | **0.004** | 564.4 | **307.4** | ~2.65–2.67 band |
+
+Headless log reason remains `device_within_budget` with full-scene device fill.
+
+### Gate — GUI repro (`timeout 45 ./build/LichtFeld-Studio -d ~/data/360_v2/bonsai -o /tmp/lfs-gtcache-out2 --train`)
+```
+GT cache budget: device=true pinned=true est=5412.8 MiB free_vram=13922.0
+  headroom=1024.0 MiB cap=1024.0 MiB reason=device_partial_interactive_use_pinned
+GT cache warm: 55 device entries / 1019.5 MiB
+GT cache: device=55/1019.5 MiB hits=273  pinned=237/4393.3 MiB hits=1140
+  inserts=292 evictions=0
+```
+- Device tier **1.0 GiB** vs prior **5.4 GiB** (−4.4 GiB).
+- **ISS-024 shared_scratch ~4003 MiB grow OOM: gone** under the new budget.
+- Residual densify-after failure is **ISS-025** (pathological FastGS n_instances /
+  depth-wave budget), not a legitimate max_cap×8 KiB sizing floor.
+- MJ-13 upgraded from ship-as-documented → **fixed** (pressure client + real evictions + HUD).
+
+### Commits
+- fix(gt-cache): interactive VRAM budget, pressure reclaim, no LFS_GT_* knobs
+- fix(iss023): preflight densify capacity before multi-param grow
+- docs: PROGRESS/ISSUES for GT-cache GUI + ISS-024 re-scope
+
+### Status
+**DONE** for GT-cache policy + MJ-13 + densify preflight. ISS-024 re-scoped; ISS-025 open.
