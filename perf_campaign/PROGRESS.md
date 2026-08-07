@@ -1160,3 +1160,72 @@ ledger fixture, PythonIOTest.PlySaveCancellationKeepsExistingTarget pre-existing
 ### Commits
 (see git log; one commit per finding group)
 
+
+## MN-11 — merge origin/master into lfs-elite — 2026-08-07
+
+**Owner request:** MERGE (not rebase). Incoming past merge-base `cc6c552d`:
+- `fa81f3eb` Remove the remaining viewport host drains and resize churn
+- `e1221526` End the remaining per-frame CPU waits on the GPU (incl. dead-code audit)
+- `43fdd3ff` style: apply clang-format (~208-file sweep)
+
+### Merge
+- **Commit:** `f446c79a` `merge(MN-11): origin/master into lfs-elite (viewport drains + format sweep)`
+- **Elite count:** `origin/master..HEAD` **174 → 175** (pre-merge 174 + merge commit; no elite history lost)
+- **Conflicts (7):** functional compose vs dead-code take-master vs campaign keepers
+
+| file | resolution |
+|---|---|
+| `checkpoint.cpp` | keep campaign cold-load guard (loaded strategy `has_checkpoint_runtime_state` before `get_optimizer`) — supersedes master`s weaker check |
+| `mcmc_kernels.{hpp,cu}` | keep Philox `launch_inject_noise_kernel` / `inject_noise_kernel`; drop master-deleted dead gather/histogram/etc. |
+| `adam_optimizer.cpp` | take master dead-code removal of unreferenced `invalidate_state` (joint fields elsewhere intact) |
+| `vram_profiler.cpp` | keep campaign `out.training_state = …`; drop `accounted_live_history` (master removed history deque) |
+| `tensor_impl.hpp` | take master no-op `compute_alignment` + removal of write-only alignment accessors |
+| `mrnf.hpp` | both: `strategy_utils.hpp` + `<cassert>` (master assert on `get_optimizer` auto-merged) |
+
+Auto-merged functional viewport/trainer paths. Spot-check retained:
+- MJ-12 detach-before-release (`vksplat_viewport_renderer.cpp`)
+- NVRM teardown order comments (`training_manager.cpp`)
+- warp-cull blend_cu / blend_backward_cu, Philox noise, joint adam codec
+
+clang-format applied over campaign-touched overlap + staged C++ merge files.
+
+### Gate — build
+`./perf_campaign/build.sh build` → **exit 0** (log `/tmp/mn11_build.log`)
+
+### Gate — full suite
+`./build/tests/lichtfeld_tests --gtest_brief=1` → **3403 PASS / 42 SKIP / 14 FAIL**
+(3459 total, 43.6s). **No new reds.** All 14 failures pre-existing:
+
+| red | provenance |
+|---|---|
+| VideoFrameExtractorOutputNaming ×3 | ISS-016; test file ancestor of merge-base `eb3b4ca0` |
+| TensorReserveInplaceCat.Overflow… | ISS-017 |
+| PythonIntegrationTest.SceneCamera… | ISS-019 / FIX-INTEG documented env red |
+| PythonIOTest.PlySaveCancellation… | FIX-INTEG MJ-6 note: red before+after |
+| NaNInfGPUCheckTest.InfDetection_Large | PROGRESS pre-existing env red |
+| PipelinedImageLoaderTest ×4 + PipelinedLoaderLedger ×1 | fixture/env reds (PROGRESS warpcull + FIX-INTEG) |
+| SceneValidityTest.MigrateTrainingModel… | PROGRESS pre-existing |
+| VramProfilerMetricsTest.TopLiveSorted… | suite-order pollution (PROGRESS WO-G: process exit 1 only for this) |
+
+Test sources all ancestors of `cc6c552d` (git log `--diff-filter=A`).
+
+### Gate — dual-workload bench
+`flock /tmp/lfs-bench.lock ./perf_campaign/bench.sh --runs 3 --build-dir build`
+(+ bicycle: `LFS_BENCH_DATASET=…/bicycle … --iters 7000`)
+
+Ref after FIX-INTEG: bonsai **2.615 / 307.4**, bicycle **2.661 / 307.4**.
+
+| workload | med steady_ms | B/splat | allocs/iter | loss | vs FIX-INTEG |
+|---|---:|---:|---:|---|---|
+| bonsai ×3 (`20260807T134411Z_run{1,2,3}`) | **2.604** | **307.4** | 0.11 | 0.034–0.039 | unchanged/improved |
+| bicycle 7k ×3 (`20260807T134441Z_run{1,2,3}`) | **2.673** | **307.4** | 0.10 | 0.102–0.130 | ~+0.5% noise (ref 2.661) |
+
+Loss curves healthy. B/splat stable.
+
+### GUI follow-up (owner-run)
+Master viewport commits are GUI-functional (async readbacks, interop batching, buffer
+retirement). **Repeat the 10-min manual GUI check (ISS-007) post-merge** before publication.
+Do **not** push from this worker — owner runs `push-clean.sh`.
+
+### Status
+**MN-11 resolved.**
