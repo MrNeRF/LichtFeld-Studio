@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/user_paths.hpp"
 #include "py_rml.hpp"
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"

@@ -45,10 +45,15 @@ namespace lfs::vis {
         constexpr unsigned kResizeBottom = 1u << 3;
 
         bool windowRectangleVisibleOnAnyDisplay(const WindowManager::PersistentWindowState& state) {
-            const int display_count = SDL_GetNumVideoDisplays();
+            int display_count = 0;
+            SDL_DisplayID* displays = SDL_GetDisplays(&display_count);
+            if (!displays)
+                return false;
+
+            bool visible = false;
             for (int display = 0; display < display_count; ++display) {
                 SDL_Rect bounds{};
-                if (!SDL_GetDisplayBounds(display, &bounds))
+                if (!SDL_GetDisplayBounds(displays[display], &bounds))
                     continue;
 
                 const int left = std::max(state.x, bounds.x);
@@ -57,9 +62,11 @@ namespace lfs::vis {
                 const int bottom = std::min(state.y + state.height, bounds.y + bounds.h);
                 if (right - left >= kMinimumVisibleWindowWidth &&
                     bottom - top >= kMinimumVisibleWindowHeight)
-                    return true;
+                    visible = true;
+                break;
             }
-            return false;
+            SDL_free(displays);
+            return visible;
         }
 
         void sanitizeInitialWindowState(WindowManager::PersistentWindowState& state) {
@@ -67,7 +74,8 @@ namespace lfs::vis {
                 return;
 
             SDL_Rect fallback{};
-            if (SDL_GetDisplayBounds(0, &fallback)) {
+            const SDL_DisplayID primary_display = SDL_GetPrimaryDisplay();
+            if (primary_display && SDL_GetDisplayBounds(primary_display, &fallback)) {
                 state.x = fallback.x + (fallback.w - state.width) / 2;
                 state.y = fallback.y + (fallback.h - state.height) / 2;
                 LOG_WARN("Saved window geometry is outside all displays; centering it on the primary display");
