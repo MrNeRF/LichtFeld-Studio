@@ -1097,9 +1097,16 @@ namespace lfs::core {
         }
         LFS_ASSERT_MSG(op != ReduceOp::CountNonzero && op != ReduceOp::Norm,
                        "count_nonzero and norm must use their dedicated tensor operations");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 ||
-                           dtype_ == DataType::Bool,
-                       "reduce currently supports only Float32, Int32, and Bool");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Float16 ||
+                           dtype_ == DataType::Int32 || dtype_ == DataType::Bool,
+                       "reduce currently supports only Float32, Float16, Int32, and Bool");
+        // Float16: reduce in f32 then cast back (kernels are float-specialized).
+        // Avoids Theme-B silent holes; cost is one convert each way.
+        if (dtype_ == DataType::Float16) {
+            Tensor f32 = this->to(DataType::Float32);
+            Tensor out = f32.reduce(op, args);
+            return out.to(DataType::Float16);
+        }
         if (dtype_ == DataType::Bool && op == ReduceOp::Max) {
             return reduce(ReduceOp::Any, args);
         }
@@ -1393,80 +1400,112 @@ namespace lfs::core {
         pin_operands({this});
 
         // FAST PATH: 2D dim=0 reduction (column sums) - use specialized kernel
-        // This is faster than transpose+contiguous+reduce because it avoids the copy
-        if (args.axes.size() == 1 && device_ == Device::CUDA && shape_.rank() == 2 &&
-            dtype_ == DataType::Float32 && is_contiguous_) {
-            int dim = args.axes[0];
-            if (dim < 0)
-                dim += 2;
-            if (dim == 0 && (op == ReduceOp::Sum || op == ReduceOp::Mean ||
-                             op == ReduceOp::Max || op == ReduceOp::Min)) {
-                size_t M = shape_[0]; // rows (reduction dim)
-                size_t N = shape_[1]; // cols (output size)
+        // This is faster than transpose+contiguous+reduce because it avoids the copy.
+        // Honor path override so microbench can A/B strided_fast vs transpose on 2D.
+        {
+            using RP = tensor_ops::ReducePathForTesting;
+            const RP override = tensor_ops::reduce_path_override_for_testing();
+            const bool force_w2 = (override == RP::StridedFast || override == RP::Transpose);
+            if (!force_w2 && args.axes.size() == 1 && device_ == Device::CUDA &&
+                shape_.rank() == 2 && dtype_ == DataType::Float32 && is_contiguous_) {
+                int dim = args.axes[0];
+                if (dim < 0)
+                    dim += 2;
+                if (dim == 0 && (op == ReduceOp::Sum || op == ReduceOp::Mean ||
+                                 op == ReduceOp::Max || op == ReduceOp::Min)) {
+                    size_t M = shape_[0]; // rows (reduction dim)
+                    size_t N = shape_[1]; // cols (output size)
 
-                std::vector<size_t> out_shape = args.keepdim ? std::vector<size_t>{1, N} : std::vector<size_t>{N};
-                auto result = empty_on_tensor_stream(TensorShape(out_shape), device_, dtype_, *this);
+                    std::vector<size_t> out_shape =
+                        args.keepdim ? std::vector<size_t>{1, N} : std::vector<size_t>{N};
+                    auto result =
+                        empty_on_tensor_stream(TensorShape(out_shape), device_, dtype_, *this);
 
-                LOG_DEBUG("[COLUMN REDUCE] M={}, N={}, op={}", M, N, static_cast<int>(op));
-                tensor_ops::launch_column_reduce(ptr<float>(), result.ptr<float>(), M, N, op, result.stream());
-                internal::lazy_ir_record_reduce(*this, result, op_name);
-                return result;
+                    LOG_DEBUG("[COLUMN REDUCE] M={}, N={}, op={}", M, N, static_cast<int>(op));
+                    tensor_ops::launch_column_reduce(ptr<float>(), result.ptr<float>(), M, N, op,
+                                                     result.stream());
+                    tensor_ops::set_reduce_last_path_for_testing(RP::Column);
+                    internal::lazy_ir_record_reduce(*this, result, op_name);
+                    return result;
+                }
             }
         }
 
-        // OPTIMIZATION: For single-axis reduction where the reduction dimension is NOT the last,
-        // it's faster to transpose the tensor so the reduction dim becomes contiguous, then reduce.
-        // This trades a memory copy for much better memory coalescing in the reduction kernel.
-        //
-        // Example: [1024, 1024].sum({0}) with row-major layout:
-        //   - Strided: Each output element reads 1024 values with stride=1024 → ~74 us
-        //   - Transposed: Copy to column-major, then contiguous reduce → ~15 us
-        //
-        // Threshold: Only use this optimization when inner_size >= 256 (strided access hurts)
-        if (args.axes.size() == 1 && device_ == Device::CUDA && shape_.rank() >= 2) {
+        // WO-W.2: non-last-dim reduce with large inner_size.
+        // Prefer modern strided/column-style kernel over permute+contiguous when
+        // the measured heuristic says so; keep transpose for the cheap-copy edge
+        // class (argmin of microbench — see should_prefer_strided_over_transpose).
+        // Float16 is converted at reduce entry, so this path is Float32 only.
+        if (args.axes.size() == 1 && device_ == Device::CUDA && shape_.rank() >= 2 &&
+            is_contiguous_ && dtype_ == DataType::Float32 &&
+            (op == ReduceOp::Sum || op == ReduceOp::Mean ||
+             op == ReduceOp::Max || op == ReduceOp::Min)) {
             int dim = args.axes[0];
             if (dim < 0)
                 dim += static_cast<int>(shape_.rank());
 
             if (dim >= 0 && dim < static_cast<int>(shape_.rank()) - 1) {
-                // Calculate inner_size (product of dims after the reduction dim)
+                size_t outer_size = 1;
+                for (int i = 0; i < dim; ++i) {
+                    outer_size *= shape_[static_cast<size_t>(i)];
+                }
+                const size_t reduce_size = shape_[static_cast<size_t>(dim)];
                 size_t inner_size = 1;
-                for (size_t i = dim + 1; i < shape_.rank(); ++i) {
+                for (size_t i = static_cast<size_t>(dim) + 1; i < shape_.rank(); ++i) {
                     inner_size *= shape_[i];
                 }
 
-                // Transpose+contiguous+reduce is faster than strided segmented reduce
-                // The copy overhead is offset by better memory coalescing in reduction
                 if (inner_size >= 256) {
-                    // Build permutation to move dim to the last position
-                    // e.g., for dim=0, rank=2: [0,1] → [1,0]
-                    // e.g., for dim=1, rank=3: [0,1,2] → [0,2,1]
+                    using RP = tensor_ops::ReducePathForTesting;
+                    const RP override = tensor_ops::reduce_path_override_for_testing();
+                    bool use_strided =
+                        tensor_ops::should_prefer_strided_over_transpose(
+                            outer_size, reduce_size, inner_size);
+                    if (override == RP::StridedFast) {
+                        use_strided = true;
+                    } else if (override == RP::Transpose) {
+                        use_strided = false;
+                    }
+
+                    if (use_strided) {
+                        std::vector<size_t> out_dims;
+                        for (size_t i = 0; i < shape_.rank(); ++i) {
+                            if (static_cast<int>(i) == dim) {
+                                if (args.keepdim)
+                                    out_dims.push_back(1);
+                            } else {
+                                out_dims.push_back(shape_[i]);
+                            }
+                        }
+                        auto result = empty_on_tensor_stream(
+                            TensorShape(out_dims), device_, dtype_, *this);
+                        LOG_DEBUG("[STRIDED FAST] outer={} reduce={} inner={} op={}",
+                                  outer_size, reduce_size, inner_size, static_cast<int>(op));
+                        tensor_ops::launch_strided_reduce_fast(
+                            ptr<float>(), result.ptr<float>(),
+                            outer_size, reduce_size, inner_size, op, result.stream());
+                        tensor_ops::set_reduce_last_path_for_testing(RP::StridedFast);
+                        internal::lazy_ir_record_reduce(*this, result, op_name);
+                        return result;
+                    }
+
+                    // Transpose path (wins for short-reduce / wide-output edge class)
                     std::vector<int> perm;
                     for (size_t i = 0; i < shape_.rank(); ++i) {
                         if (static_cast<int>(i) != dim) {
                             perm.push_back(static_cast<int>(i));
                         }
                     }
-                    perm.push_back(dim); // dim goes to the last position
+                    perm.push_back(dim);
 
-                    LOG_DEBUG("[REDUCE TRANSPOSE] dim={}, inner_size={}, perm=[{}], shape=[{}]",
-                              dim, inner_size,
-                              perm.size() > 0 ? std::to_string(perm[0]) + (perm.size() > 1 ? "," + std::to_string(perm[1]) : "") + (perm.size() > 2 ? "," + std::to_string(perm[2]) : "") : "",
-                              shape_.rank() > 0 ? std::to_string(shape_[0]) + (shape_.rank() > 1 ? "," + std::to_string(shape_[1]) : "") + (shape_.rank() > 2 ? "," + std::to_string(shape_[2]) : "") : "");
+                    LOG_DEBUG("[REDUCE TRANSPOSE] dim={}, inner_size={}, outer={}, reduce={}",
+                              dim, inner_size, outer_size, reduce_size);
 
-                    // Permute and make contiguous (this does the transpose copy)
                     Tensor transposed = this->permute(perm).contiguous();
+                    tensor_ops::set_reduce_last_path_for_testing(RP::Transpose);
 
-                    LOG_DEBUG("[REDUCE TRANSPOSE] transposed shape=[{}], is_contiguous={}",
-                              transposed.shape().rank() > 0 ? std::to_string(transposed.shape()[0]) + (transposed.shape().rank() > 1 ? "," + std::to_string(transposed.shape()[1]) : "") + (transposed.shape().rank() > 2 ? "," + std::to_string(transposed.shape()[2]) : "") : "",
-                              transposed.is_contiguous() ? "true" : "false");
-
-                    // Verify transposed tensor has expected number of elements
-                    LOG_DEBUG("[REDUCE TRANSPOSE] orig numel={}, transposed numel={}", numel(), transposed.numel());
-
-                    // Now reduce along the LAST dimension (which is contiguous)
                     ReduceArgs new_args = args;
-                    new_args.axes = {static_cast<int>(transposed.shape().rank()) - 1}; // Use transposed.shape()!
+                    new_args.axes = {static_cast<int>(transposed.shape().rank()) - 1};
 
                     Tensor reduced = transposed.reduce(op, new_args);
                     if (!args.keepdim) {
@@ -1961,22 +2000,24 @@ namespace lfs::core {
         // Only expand when a true broadcast is required.
         Tensor a_broadcast, b_broadcast, c_broadcast;
 
+        // where kernels (CUDA shape-indexed OR CPU linear) require dense expanded
+        // storage. broadcast_to is a zero-stride view (WO-W.1) — materialize.
         if (shape_ == shape_abc) {
             a_broadcast = *this;
         } else {
-            a_broadcast = broadcast_to(shape_abc);
+            a_broadcast = broadcast_to(shape_abc).contiguous();
         }
 
         if (b.shape() == shape_abc) {
             b_broadcast = b;
         } else {
-            b_broadcast = b.broadcast_to(shape_abc);
+            b_broadcast = b.broadcast_to(shape_abc).contiguous();
         }
 
         if (c.shape() == shape_abc) {
             c_broadcast = c;
         } else {
-            c_broadcast = c.broadcast_to(shape_abc);
+            c_broadcast = c.broadcast_to(shape_abc).contiguous();
         }
 
         Tensor b_cast = (b_broadcast.dtype() == out_dtype) ? b_broadcast : b_broadcast.to(out_dtype);
@@ -2127,8 +2168,13 @@ namespace lfs::core {
         LFS_ASSERT_MSG(broadcast::can_broadcast(shape_.dims(), other.shape().dims()),
                        "broadcast shapes are incompatible");
 
-        Tensor a_broadcast = (shape_ == bcast_shape) ? this->clone() : broadcast_to(bcast_shape);
-        Tensor b_broadcast = (other.shape() == bcast_shape) ? other.clone() : other.broadcast_to(bcast_shape);
+        // _broadcasted consumers expect dense expanded storage.
+        Tensor a_broadcast = (shape_ == bcast_shape)
+                                 ? this->clone()
+                                 : broadcast_to(bcast_shape).contiguous();
+        Tensor b_broadcast = (other.shape() == bcast_shape)
+                                 ? other.clone()
+                                 : other.broadcast_to(bcast_shape).contiguous();
 
         if (match_dtype && dtype_ != other.dtype()) {
             auto common_dtype = promote_types(dtype_, other.dtype());

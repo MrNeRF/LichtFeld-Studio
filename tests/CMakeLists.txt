@@ -142,6 +142,8 @@ set(TEST_FILES
     test_slice_mm_bug.cpp
     test_tensor_random.cpp
     test_tensor_broadcast.cpp
+    test_zero_stride_expand.cpp
+    test_strided_reduce_w2.cpp
     test_tensor_masking.cpp
     test_theme_a_strided_ops.cpp
     test_tensor_lazy_gather.cpp

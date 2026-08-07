@@ -1978,6 +1978,7 @@ namespace lfs::core {
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid(),
                        "zero_ requires a valid tensor");
+        reject_inplace_on_zero_stride("zero_");
         if (numel() == 0) {
             return *this;
         }
@@ -2008,6 +2009,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 || dtype_ == DataType::Bool,
                        "fill_ currently supports only Float32, Int32, and Bool");
         detail::require_scalar_representable(dtype_, value, "fill_");
+        reject_inplace_on_zero_stride("fill_");
         if (numel() == 0) {
             return *this;
         }
