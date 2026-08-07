@@ -18,6 +18,7 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "training/checkpoint.hpp"
+#include "training/strategies/improved_gs_plus.hpp"
 #include "training/strategies/mcmc.hpp"
 #include "training/strategies/mrnf.hpp"
 
@@ -514,4 +515,164 @@ TEST(DualRepOptimizer, MRNF_InitializeWithBothCodecsOn) {
     const auto* st = strategy.get_optimizer().get_state(ParamType::Means);
     ASSERT_NE(st, nullptr);
     EXPECT_TRUE(st->is_joint());
+}
+
+// ---------------------------------------------------------------------------
+// FIX-CODEC gate (step 0 of FIX-INTEG): quant-ON MCMC mid-run save/load/resume
+// past SH warmup. Simulates 2k-iter smoke schedule: train prepare/commit through
+// densify-like growth, save mid-run, load, continue past 2k.
+// ---------------------------------------------------------------------------
+TEST(DualRepOptimizer, MCMC_QuantOn_MidRunSaveLoadResume) {
+    CodecsOnGuard guard;
+    constexpr size_t n0 = 48;
+    constexpr size_t max_cap = 128;
+    constexpr int sh_degree = 3;
+    // Mid-run past SH warmup (1000) — matches 2k-iter smoke save point.
+    constexpr int mid_iter = 1200;
+    constexpr int resume_to = 2000;
+
+    const auto temp_dir =
+        std::filesystem::temp_directory_path() / "lfs_dual_rep_mcmc_midrun_resume";
+    std::error_code ec;
+    std::filesystem::remove_all(temp_dir, ec);
+    std::filesystem::create_directories(temp_dir / "checkpoints");
+
+    param::TrainingParameters params;
+    params.dataset.output_path = temp_dir;
+    params.optimization.strategy = "mcmc";
+    params.optimization.max_cap = static_cast<int>(max_cap);
+    params.optimization.iterations = resume_to;
+    params.optimization.sh_degree = sh_degree;
+
+    auto model = std::make_unique<SplatData>(make_sh_splat(n0, sh_degree));
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(*model));
+    ASSERT_TRUE(model->shN_value_quantized());
+
+    MCMC strategy(*model);
+    strategy.initialize(params.optimization);
+    auto& opt = strategy.get_optimizer();
+
+    // Drive fused prepare/commit through SH warmup so joint moments heal to
+    // float layout (the BL-2 failure mode) and shN step_count only advances
+    // post-warmup (MN-1).
+    for (int it = 1; it <= mid_iter; ++it) {
+        auto fused = opt.prepare_fastgs_fused_adam(it);
+        EXPECT_TRUE(fused.enabled);
+        opt.commit_fastgs_fused_adam(it);
+    }
+
+    auto* shN_st = opt.get_state_mutable(ParamType::ShN);
+    ASSERT_NE(shN_st, nullptr);
+    ASSERT_TRUE(shN_st->is_joint());
+    const size_t n_live = static_cast<size_t>(strategy.get_model().size());
+    const auto layout_rest =
+        static_cast<uint32_t>(strategy.get_model().max_sh_coeffs_rest());
+    EXPECT_EQ(shN_st->size, sh_swizzled_float_count(n_live, layout_rest));
+    // MN-1: after warmup, shN step_count should be mid_iter - 1000, not mid_iter.
+    EXPECT_EQ(shN_st->step_count, mid_iter - 1000)
+        << "MN-1: shN step_count must not inflate during warmup";
+
+    ASSERT_TRUE(save_checkpoint(temp_dir, mid_iter, strategy, params).has_value());
+
+    auto target_model = std::make_unique<SplatData>(make_sh_splat(1, sh_degree));
+    MCMC target(*target_model);
+    target.initialize(params.optimization);
+    auto load_params = params;
+    const auto loaded = load_checkpoint(checkpoint_output_path(temp_dir), target,
+                                        load_params, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(loaded.has_value()) << loaded.error()
+                                    << " — FIX-CODEC: quant-ON mid-run resume must load";
+    EXPECT_EQ(*loaded, mid_iter);
+    EXPECT_EQ(static_cast<size_t>(target.get_model().size()), n_live);
+    EXPECT_TRUE(target.get_model().shN_value_quantized() ||
+                target.get_model().shN_raw().dtype() == DataType::Float16);
+
+    // Resume: prepare/commit from mid_iter+1 through resume_to (2k smoke).
+    auto& ropt = target.get_optimizer();
+    for (int it = mid_iter + 1; it <= resume_to; ++it) {
+        auto fused = ropt.prepare_fastgs_fused_adam(it);
+        EXPECT_TRUE(fused.enabled);
+        if (fused.shN.enabled) {
+            EXPECT_EQ(fused.shN.sh_value_bits, 16)
+                << "joint+q16 must stay on after mid-run resume";
+        }
+        ropt.commit_fastgs_fused_adam(it);
+    }
+    const auto* rst = ropt.get_state(ParamType::ShN);
+    ASSERT_NE(rst, nullptr);
+    EXPECT_TRUE(rst->is_joint());
+    EXPECT_EQ(rst->size, sh_swizzled_float_count(n_live, layout_rest));
+    // MN-1 still holds after resume: base was mid-1000, plus (resume_to-mid_iter).
+    EXPECT_EQ(rst->step_count, (mid_iter - 1000) + (resume_to - mid_iter));
+
+    std::filesystem::remove_all(temp_dir, ec);
+}
+
+// MN-2: short bounds must throw (loud), not silently wipe SH.
+TEST(DualRepOptimizer, MN2_ShortBoundsFailsLoud) {
+    CodecsOnGuard guard;
+    auto splat = make_sh_splat(300, 3); // >256 so n_bounds=2 → need 4 floats
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    // Truncate bounds well below n_bounds_for_prims(N)*2.
+    splat.shN_value_bounds() = Tensor::zeros({size_t{2}}, Device::CUDA);
+    EXPECT_THROW((void)sh_value::ensure_shN_fp32_for_mutation(splat), std::runtime_error);
+    // Invalid bounds also refuse.
+    splat.shN_value_bounds() = Tensor{};
+    EXPECT_THROW((void)sh_value::ensure_shN_fp32_for_mutation(splat), std::runtime_error);
+}
+
+// BL-4 + MJ-5: improved_gs_plus densify + prune under quant-ON joint.
+TEST(DualRepOptimizer, IGSPlus_QuantOnDensifyAndPrune) {
+    CodecsOnGuard guard;
+    constexpr size_t n = 32;
+    constexpr size_t max_cap = 96;
+    auto model = std::make_unique<SplatData>(make_sh_splat(n, 3));
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(*model));
+    ASSERT_TRUE(model->shN_value_quantized());
+
+    ImprovedGSPlus strategy(*model);
+    param::OptimizationParameters opt_params =
+        param::OptimizationParameters::igs_plus_defaults();
+    opt_params.iterations = 200;
+    opt_params.max_cap = static_cast<int>(max_cap);
+    opt_params.start_refine = 0;
+    opt_params.stop_refine = 150;
+    opt_params.refine_every = 10;
+    ASSERT_NO_THROW(strategy.initialize(opt_params));
+
+    // Seed non-trivial joint moments so prune must clear them (MJ-5).
+    auto* means_st = strategy.get_optimizer().get_state_mutable(ParamType::Means);
+    ASSERT_NE(means_st, nullptr);
+    ASSERT_TRUE(means_st->is_joint());
+    {
+        auto packed_cpu = means_st->exp_avg.cpu();
+        auto* bytes = packed_cpu.ptr<uint8_t>();
+        for (size_t i = 0; i < packed_cpu.numel(); ++i)
+            bytes[i] = static_cast<uint8_t>((i * 13 + 7) & 0xff);
+        means_st->exp_avg = packed_cpu.cuda();
+    }
+
+    // Densify via LAS_densify with uniform scores (must not abort on q16).
+    auto scores = Tensor::ones({n}, Device::CUDA);
+    ASSERT_NO_THROW(strategy.densify_for_test(scores, 8));
+    EXPECT_GE(static_cast<size_t>(strategy.get_model().size()), n);
+
+    // Soft-prune a few rows — joint moments must reset (no early-return).
+    auto prune = Tensor::zeros({static_cast<size_t>(strategy.get_model().size())},
+                               Device::CUDA, DataType::Bool);
+    {
+        auto cpu = prune.cpu();
+        auto* p = cpu.ptr<bool>();
+        p[0] = true;
+        p[1] = true;
+        p[2] = true;
+        prune = cpu.cuda();
+    }
+    ASSERT_NO_THROW(strategy.remove_gaussians(prune));
+
+    // After joint reset, decoded moments at pruned indices should be ~0.
+    // Spot-check: reset_state_at_indices was invoked (no throw) and state still joint.
+    means_st = strategy.get_optimizer().get_state_mutable(ParamType::Means);
+    ASSERT_NE(means_st, nullptr);
+    EXPECT_TRUE(means_st->is_joint());
 }

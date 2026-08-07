@@ -11,6 +11,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "edge_rasterizer.hpp"
 #include "gsplat_rasterizer.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 
 #include "core/tensor/internal/memory_pool.hpp"
@@ -417,6 +418,19 @@ namespace lfs::training {
     }
 
     void ImprovedGSPlus::LAS_densify(const lfs::core::Tensor& scores, const int64_t budget_for_alloc) {
+        // BL-4: densify kernels read/write float shN; dequant q16 for the mutation
+        // window (mirrors MCMC ensure_shN_fp32_for_mutation).
+        const bool shN_expanded =
+            lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        struct ShNCommitGuard {
+            lfs::core::SplatData* splat;
+            bool expanded;
+            ~ShNCommitGuard() {
+                if (expanded && splat)
+                    lfs::training::sh_value::commit_shN_after_mutation(*splat);
+            }
+        } shn_guard{_splat_data, shN_expanded};
+
         // Phase 4.7: fused Gumbel-topk sample (without replacement) — replaces Theme-A
         // Tensor::multinomial and matches MCMC's custom sampling path.
         const size_t n_scores = scores.numel();
@@ -955,31 +969,63 @@ namespace lfs::training {
             _splat_data->rotation_raw().device());
         _splat_data->rotation_raw().index_put_(prune_indices, zero_rotation);
 
-        // Zero optimizer states in-place (preserves capacity)
+        // Zero optimizer states in-place (preserves capacity).
+        // MJ-5: joint codec has no exp_avg_scale — early-return left stale moments on
+        // pruned slots (reused after soft-delete). Mirror MCMC joint reset branch.
         auto zero_optimizer_state = [&](ParamType param_type) {
             auto* state = _optimizer->get_state_mutable(param_type);
             if (!state)
                 return;
 
-            // Quantised moments: zero per-primitive scales to reset moments to zero (both
-            // contiguous and swizzled layouts). grad keeps its native-layout zeroing.
-            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
-                return;
-            auto scale_zeros = lfs::core::Tensor::zeros(
-                lfs::core::TensorShape({prune_indices.numel()}), state->exp_avg_scale.device());
-            state->exp_avg_scale.index_put_(prune_indices, scale_zeros);
-            state->exp_avg_sq_scale.index_put_(prune_indices, scale_zeros);
-
-            if (param_type == ParamType::ShN) {
-                const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-                if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
-                    auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
-                                       ? prune_indices
-                                       : prune_indices.to(lfs::core::DataType::Int32);
-                    lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+            if (state->is_joint()) {
+                auto idx_cpu = prune_indices.cpu();
+                std::vector<int64_t> host_idx;
+                host_idx.reserve(static_cast<size_t>(num_pruned));
+                if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
+                    const auto* p = idx_cpu.ptr<int64_t>();
+                    host_idx.assign(p, p + num_pruned);
+                } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
+                    const auto* p = idx_cpu.ptr<int32_t>();
+                    for (int64_t i = 0; i < num_pruned; ++i)
+                        host_idx.push_back(static_cast<int64_t>(p[i]));
                 }
-                return;
+                if (!host_idx.empty())
+                    _optimizer->reset_state_at_indices(param_type, host_idx);
+                if (param_type == ParamType::ShN) {
+                    const auto layout_rest =
+                        static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
+                    if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                        auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
+                                           ? prune_indices
+                                           : prune_indices.to(lfs::core::DataType::Int32);
+                        lfs::core::shN_swizzled_zero_at_indices(
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(),
+                            layout_rest);
+                    }
+                    return;
+                }
+            } else {
+                // Legacy: zero scales → moments dequantise to zero.
+                if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
+                    return;
+                auto scale_zeros = lfs::core::Tensor::zeros(
+                    lfs::core::TensorShape({prune_indices.numel()}), state->exp_avg_scale.device());
+                state->exp_avg_scale.index_put_(prune_indices, scale_zeros);
+                state->exp_avg_sq_scale.index_put_(prune_indices, scale_zeros);
+
+                if (param_type == ParamType::ShN) {
+                    const auto layout_rest =
+                        static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
+                    if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                        auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
+                                           ? prune_indices
+                                           : prune_indices.to(lfs::core::DataType::Int32);
+                        lfs::core::shN_swizzled_zero_at_indices(
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(),
+                            layout_rest);
+                    }
+                    return;
+                }
             }
 
             if (state->grad.is_valid() && state->grad.numel() > 0) {

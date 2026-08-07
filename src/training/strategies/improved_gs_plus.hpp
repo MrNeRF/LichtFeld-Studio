@@ -79,6 +79,11 @@ namespace lfs::training {
         // Get indices of active (non-free) Gaussians for export
         lfs::core::Tensor get_active_indices() const;
 
+        // Test hook (BL-4/MJ-5 densify under quant) — thin wrapper over LAS_densify.
+        void densify_for_test(const lfs::core::Tensor& scores, const int64_t allocation_budget) {
+            LAS_densify(scores, allocation_budget);
+        }
+
     private:
         friend class ::CropDampingStrategyTest_IgsPlusRejectedRowsAreNeverSampledAtZeroScale_Test;
 
