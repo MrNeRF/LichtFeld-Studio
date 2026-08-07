@@ -4497,6 +4497,7 @@ namespace lfs::training {
                                                          recovery_session
                                                              ->writer_lock()}
                                                    : std::nullopt),
+                                    .writer_lock_wait = std::chrono::seconds(30),
                                 };
                         const auto save_snapshot =
                             [&]()

@@ -1345,43 +1345,71 @@ namespace {
             ASSERT_EQ(
                 hydration->checkpoint_uuid,
                 std::optional(checkpoint_uuids.front()));
+            ASSERT_TRUE(hydration->checkpoint_header.has_value());
 
-            auto trainer = std::make_unique<lfs::training::Trainer>(scene);
-            auto init_result = trainer->initialize(resumed_params);
-            ASSERT_TRUE(init_result.has_value()) << "Failed to init trainer: " << init_result.error();
+            const auto* display_model =
+                scene.getTrainingModel();
+            ASSERT_NE(display_model, nullptr);
+            const size_t display_gaussians =
+                display_model->size();
+            ASSERT_GT(display_gaussians, 0u);
 
-            std::optional<lfs::training::CheckpointLoadResult>
-                restored;
-            const auto restore_visit =
-                checkpoint->visit_stream(
-                    [&](std::istream& source,
-                        const std::uint64_t bytes)
-                        -> lfs::Result<void> {
-                        restored =
-                            trainer->load_checkpoint(
-                                source, bytes,
-                                lfs::core::path_to_utf8(
-                                    project_path));
-                        return {};
-                    });
-            ASSERT_TRUE(restore_visit)
-                << lfs::format_for_developer(
-                       restore_visit.error());
-            ASSERT_TRUE(restored.has_value());
-            ASSERT_TRUE(restored->has_value())
-                << restored->error();
-            EXPECT_EQ(**restored, checkpoint_iteration);
+            auto installed =
+                lfs::training::
+                    installTrainerFromProjectCheckpoint(
+                        scene, *document,
+                        checkpoint_uuids.front(),
+                        resumed_params,
+                        lfs::core::path_to_utf8(
+                            project_path),
+                        hydration->checkpoint_header
+                            ->iteration);
+            ASSERT_TRUE(installed.has_value())
+                << installed.error();
+            ASSERT_NE(installed->trainer, nullptr);
+            EXPECT_EQ(
+                installed->iteration,
+                checkpoint_iteration);
+            EXPECT_EQ(
+                installed->trainer
+                    ->get_current_iteration(),
+                checkpoint_iteration);
+            EXPECT_EQ(
+                static_cast<size_t>(
+                    installed->trainer->get_strategy()
+                        .get_model()
+                        .size()),
+                display_gaussians);
+            // Optimizer/strategy adoption: strategy and
+            // Adam are live after stream restore.
+            EXPECT_GT(
+                installed->trainer->get_strategy()
+                    .get_optimizer()
+                    .get_lr(),
+                0.0f);
+            EXPECT_EQ(
+                installed->trainer->getParams()
+                    .optimization.refine_every,
+                static_cast<size_t>(100));
+            EXPECT_TRUE(
+                installed->trainer->getParams()
+                    .optimization.headless);
 
-            trainer->get_strategy_mutable().set_optimization_params(resumed_params.optimization);
+            auto trainer =
+                std::move(installed->trainer);
+            trainer->get_strategy_mutable()
+                .set_optimization_params(
+                    resumed_params.optimization);
             trainer->setParams(resumed_params);
 
-            // After loading the embedded checkpoint, iteration should be at
-            // the project snapshot point.
-            EXPECT_EQ(trainer->get_current_iteration(), checkpoint_iteration);
-            EXPECT_EQ(trainer->getParams().optimization.iterations, static_cast<size_t>(total_iter));
-            EXPECT_EQ(trainer->getParams().optimization.refine_every, static_cast<size_t>(100));
-            EXPECT_EQ(trainer->getParams().optimization.stop_refine, static_cast<size_t>(total_iter));
-            EXPECT_TRUE(trainer->getParams().optimization.headless);
+            EXPECT_EQ(
+                trainer->getParams()
+                    .optimization.iterations,
+                static_cast<size_t>(total_iter));
+            EXPECT_EQ(
+                trainer->getParams()
+                    .optimization.stop_refine,
+                static_cast<size_t>(total_iter));
 
             auto train_result = trainer->train();
             ASSERT_TRUE(train_result.has_value())
@@ -1421,5 +1449,287 @@ namespace {
             std::make_tuple("mcmc", 0, 2, 4),
             std::make_tuple("mcmc", 0, 1200, 2100)),
         TestName);
+
+    class ProjectCheckpointTrainerInstall
+        : public ::testing::Test {
+    protected:
+        void TearDown() override {
+            lfs::training::TrainingSnapshotService::
+                reset_process_pinned_d2h_calibration_for_testing();
+        }
+    };
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           SharedHelperRestoresTrainerAndGaussianCount) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_project_ckpt_helper_pos";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        constexpr int iterations = 3;
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path =
+            std::filesystem::path(TEST_DATA_DIR) /
+            "bicycle";
+        params.dataset.images = TEST_IMAGES;
+        params.dataset.output_path = output_path;
+        params.optimization.iterations = iterations;
+        params.optimization.strategy = "mcmc";
+        params.optimization.sh_degree = 0;
+        params.optimization.headless = true;
+        params.optimization.max_cap = 100000;
+        params.optimization.refine_every = 100;
+        const size_t stop_refine =
+            static_cast<size_t>(iterations);
+        params.optimization.start_refine =
+            std::min<size_t>(500, stop_refine);
+        params.optimization.stop_refine = stop_refine;
+        params.optimization.save_steps = {
+            static_cast<size_t>(iterations)};
+
+        {
+            lfs::core::Scene scene;
+            ASSERT_TRUE(
+                lfs::training::loadTrainingDataIntoScene(
+                    params, scene))
+                << "load training data failed";
+            ASSERT_TRUE(
+                lfs::training::initializeTrainingModel(
+                    params, scene))
+                << "init model failed";
+            auto trainer =
+                std::make_unique<lfs::training::Trainer>(
+                    scene);
+            auto init = trainer->initialize(params);
+            ASSERT_TRUE(init)
+                << "Failed to init trainer: "
+                << init.error();
+            auto train = trainer->train();
+            ASSERT_TRUE(train)
+                << "seed train failed: "
+                << lfs::format_for_developer(
+                       train.error());
+            EXPECT_EQ(
+                trainer->get_current_iteration(),
+                iterations);
+            trainer->shutdown();
+        }
+
+        const auto project_path =
+            output_path / "project.licht";
+        ASSERT_TRUE(std::filesystem::is_regular_file(
+            project_path));
+
+        auto document =
+            lfs::io::project::ProjectDocument::open(
+                project_path);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(
+                   document.error());
+        const auto checkpoint_uuids =
+            document->checkpoint_uuids();
+        ASSERT_EQ(checkpoint_uuids.size(), 1u);
+
+        std::optional<
+            lfs::core::CheckpointParametersLoadResult>
+            checkpoint_params_result;
+        const auto* checkpoint =
+            document->find_checkpoint(
+                checkpoint_uuids.front());
+        ASSERT_NE(checkpoint, nullptr);
+        ASSERT_TRUE(checkpoint->visit_stream(
+            [&](std::istream& source,
+                const std::uint64_t bytes)
+                -> lfs::Result<void> {
+                checkpoint_params_result =
+                    lfs::core::load_checkpoint_params(
+                        source, bytes);
+                return {};
+            }));
+        ASSERT_TRUE(checkpoint_params_result.has_value());
+        ASSERT_TRUE(checkpoint_params_result->has_value())
+            << checkpoint_params_result->error();
+
+        auto ckpt_params =
+            std::move(**checkpoint_params_result);
+        ckpt_params.resume_checkpoint.reset();
+        ckpt_params.resume_project = project_path;
+        ckpt_params.dataset.data_path =
+            std::filesystem::path(TEST_DATA_DIR) /
+            "bicycle";
+        ckpt_params.dataset.output_path = output_path;
+
+        lfs::core::Scene scene;
+        const auto hydration = document->hydrate(scene);
+        ASSERT_TRUE(hydration)
+            << lfs::format_for_developer(
+                   hydration.error());
+        ASSERT_TRUE(hydration->trainer_state_pending);
+        ASSERT_TRUE(hydration->checkpoint_header);
+        const auto* display =
+            scene.getTrainingModel();
+        ASSERT_NE(display, nullptr);
+        const size_t display_count = display->size();
+        ASSERT_GT(display_count, 0u);
+
+        auto installed =
+            lfs::training::
+                installTrainerFromProjectCheckpoint(
+                    scene, *document,
+                    checkpoint_uuids.front(),
+                    ckpt_params,
+                    lfs::core::path_to_utf8(
+                        project_path),
+                    hydration->checkpoint_header
+                        ->iteration);
+        ASSERT_TRUE(installed.has_value())
+            << installed.error();
+        ASSERT_NE(installed->trainer, nullptr);
+        EXPECT_EQ(
+            installed->iteration,
+            hydration->checkpoint_header->iteration);
+        EXPECT_EQ(
+            installed->trainer->get_current_iteration(),
+            hydration->checkpoint_header->iteration);
+        EXPECT_EQ(
+            static_cast<size_t>(
+                installed->trainer->get_strategy()
+                    .get_model()
+                    .size()),
+            display_count);
+        EXPECT_GT(
+            installed->trainer->get_strategy()
+                .get_optimizer()
+                .get_lr(),
+            0.0f);
+        EXPECT_EQ(
+            scene.getTrainingModel()->size(),
+            display_count);
+
+        installed->trainer->shutdown();
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           MissingDatasetPathLeavesDisplayIntact) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_project_ckpt_helper_neg";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        constexpr int iterations = 3;
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path =
+            std::filesystem::path(TEST_DATA_DIR) /
+            "bicycle";
+        params.dataset.images = TEST_IMAGES;
+        params.dataset.output_path = output_path;
+        params.optimization.iterations = iterations;
+        params.optimization.strategy = "mcmc";
+        params.optimization.sh_degree = 0;
+        params.optimization.headless = true;
+        params.optimization.max_cap = 100000;
+        params.optimization.refine_every = 100;
+        const size_t stop_refine =
+            static_cast<size_t>(iterations);
+        params.optimization.start_refine =
+            std::min<size_t>(500, stop_refine);
+        params.optimization.stop_refine = stop_refine;
+        params.optimization.save_steps = {
+            static_cast<size_t>(iterations)};
+
+        {
+            lfs::core::Scene scene;
+            ASSERT_TRUE(
+                lfs::training::loadTrainingDataIntoScene(
+                    params, scene))
+                << "load training data failed";
+            ASSERT_TRUE(
+                lfs::training::initializeTrainingModel(
+                    params, scene))
+                << "init model failed";
+            auto trainer =
+                std::make_unique<lfs::training::Trainer>(
+                    scene);
+            auto init = trainer->initialize(params);
+            ASSERT_TRUE(init)
+                << "Failed to init trainer: "
+                << init.error();
+            auto train = trainer->train();
+            ASSERT_TRUE(train)
+                << "seed train failed: "
+                << lfs::format_for_developer(
+                       train.error());
+            trainer->shutdown();
+        }
+
+        const auto project_path =
+            output_path / "project.licht";
+        ASSERT_TRUE(std::filesystem::is_regular_file(
+            project_path));
+
+        auto document =
+            lfs::io::project::ProjectDocument::open(
+                project_path);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(
+                   document.error());
+        const auto checkpoint_uuids =
+            document->checkpoint_uuids();
+        ASSERT_EQ(checkpoint_uuids.size(), 1u);
+
+        lfs::core::Scene scene;
+        const auto hydration = document->hydrate(scene);
+        ASSERT_TRUE(hydration)
+            << lfs::format_for_developer(
+                   hydration.error());
+        ASSERT_TRUE(hydration->trainer_state_pending);
+        ASSERT_TRUE(hydration->checkpoint_header);
+        const auto* display =
+            scene.getTrainingModel();
+        ASSERT_NE(display, nullptr);
+        const size_t display_count = display->size();
+        const auto node_count_before =
+            scene.getNodes().size();
+
+        lfs::core::param::TrainingParameters bad_params;
+        bad_params.dataset.data_path =
+            output_path / "missing_dataset_root";
+        bad_params.dataset.output_path = output_path;
+        bad_params.optimization.strategy = "mcmc";
+        bad_params.optimization.headless = true;
+
+        auto installed =
+            lfs::training::
+                installTrainerFromProjectCheckpoint(
+                    scene, *document,
+                    checkpoint_uuids.front(),
+                    bad_params,
+                    lfs::core::path_to_utf8(
+                        project_path),
+                    hydration->checkpoint_header
+                        ->iteration);
+        ASSERT_FALSE(installed.has_value());
+        EXPECT_NE(
+            installed.error().find(
+                "Dataset path does not exist"),
+            std::string::npos)
+            << installed.error();
+
+        // Display shell intact; no trainer constructed.
+        ASSERT_NE(scene.getTrainingModel(), nullptr);
+        EXPECT_EQ(
+            scene.getTrainingModel()->size(),
+            display_count);
+        EXPECT_EQ(
+            scene.getNodes().size(),
+            node_count_before);
+
+        std::filesystem::remove_all(output_path, ec);
+    }
 
 } // namespace

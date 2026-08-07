@@ -14,7 +14,10 @@
 #include "core/splat_data_transform.hpp"
 #include "dataset.hpp"
 #include "io/loader.hpp"
+#include "io/project_document.hpp"
+#include "trainer.hpp"
 #include <algorithm>
+#include <filesystem>
 #include <format>
 #include <memory>
 #include <numeric>
@@ -944,6 +947,90 @@ namespace lfs::training {
             }
         },
                           load_result.data);
+    }
+
+    std::expected<ProjectCheckpointTrainer, std::string>
+    installTrainerFromProjectCheckpoint(
+        lfs::core::Scene& scene,
+        const lfs::io::project::ProjectDocument& document,
+        const lfs::core::Uuid& checkpoint_uuid,
+        const lfs::core::param::TrainingParameters& params,
+        const std::string_view source_name,
+        const int expected_iteration,
+        const std::optional<lfs::io::project::RecoverySession>&
+            recovery_session,
+        lfs::core::SplatTensorAllocator tensor_allocator) {
+        if (params.dataset.data_path.empty()) {
+            return std::unexpected(
+                "Project checkpoint has no dataset path");
+        }
+        if (!std::filesystem::exists(
+                params.dataset.data_path)) {
+            return std::unexpected(std::format(
+                "Dataset path does not exist: {}",
+                lfs::core::path_to_utf8(
+                    params.dataset.data_path)));
+        }
+
+        auto trainer = std::make_unique<Trainer>(scene);
+        if (recovery_session) {
+            trainer->set_recovery_session(*recovery_session);
+        }
+        if (!params.python_scripts.empty()) {
+            trainer->set_python_scripts(params.python_scripts);
+        }
+        if (tensor_allocator) {
+            trainer->setSplatTensorAllocator(
+                std::move(tensor_allocator));
+        }
+        if (const auto initialized =
+                trainer->initialize(params);
+            !initialized) {
+            return std::unexpected(std::format(
+                "Failed to initialize trainer from project: {}",
+                initialized.error()));
+        }
+        const auto* checkpoint =
+            document.find_checkpoint(checkpoint_uuid);
+        if (!checkpoint) {
+            return std::unexpected(
+                "Project CKPT handle disappeared");
+        }
+        std::optional<CheckpointLoadResult> restored;
+        auto visited = checkpoint->visit_stream(
+            [&](std::istream& source,
+                const std::uint64_t bytes)
+                -> lfs::Result<void> {
+                restored = trainer->load_checkpoint(
+                    source, bytes, source_name);
+                return {};
+            });
+        if (!visited) {
+            return std::unexpected(std::format(
+                "Failed to stream project CKPT: {}",
+                lfs::format_for_developer(visited.error())));
+        }
+        if (!restored || !*restored) {
+            return std::unexpected(std::format(
+                "Failed to restore project trainer state: {}",
+                restored ? restored->error()
+                         : "CKPT visitor did not run"));
+        }
+        const int restored_iteration = **restored;
+        if (restored_iteration != expected_iteration ||
+            trainer->get_current_iteration() !=
+                expected_iteration) {
+            return std::unexpected(std::format(
+                "Project resume iteration mismatch: "
+                "display={} trainer={} expected={}",
+                restored_iteration,
+                trainer->get_current_iteration(),
+                expected_iteration));
+        }
+        return ProjectCheckpointTrainer{
+            .trainer = std::move(trainer),
+            .iteration = restored_iteration,
+        };
     }
 
 } // namespace lfs::training

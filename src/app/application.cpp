@@ -442,83 +442,63 @@ namespace lfs::app {
 
                 auto manager = std::make_shared<vis::TrainerManager>();
                 {
-                    auto trainer = std::make_unique<training::Trainer>(scene);
                     const auto& effective_params =
                         checkpoint_params
                             ? *checkpoint_params
                             : *params;
 
                     if (!effective_params.python_scripts.empty()) {
-                        trainer->set_python_scripts(effective_params.python_scripts);
                         vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(effective_params.python_scripts);
                     }
 
                     if (training_project) {
-                        if (const auto* recovery_session =
+                        std::optional<
+                            io::project::RecoverySession>
+                            recovery_session;
+                        if (const auto* session =
                                 training_project->document
                                     .recovery_session()) {
-                            trainer
-                                ->set_recovery_session(
-                                    *recovery_session);
+                            recovery_session = *session;
                         }
-                        if (const auto initialized =
-                                trainer->initialize(
-                                    effective_params);
-                            !initialized) {
-                            LOG_ERROR(
-                                "Failed to initialize trainer from "
-                                "project: {}",
-                                initialized.error());
-                            return 1;
-                        }
-                        const auto* checkpoint =
-                            training_project
-                                ->document
-                                .document()
-                                .find_checkpoint(
-                                    training_project
-                                        ->checkpoint_uuid);
-                        if (!checkpoint) {
-                            LOG_ERROR(
-                                "Project CKPT handle disappeared");
-                            return 1;
-                        }
-                        std::optional<
+                        auto installed =
                             training::
-                                CheckpointLoadResult>
-                            restored;
-                        auto visited =
-                            checkpoint->visit_stream(
-                                [&](std::istream& source,
-                                    const std::uint64_t
-                                        bytes)
-                                    -> lfs::Result<void> {
-                                    restored =
-                                        trainer
-                                            ->load_checkpoint(
-                                                source,
-                                                bytes,
-                                                core::
-                                                    path_to_utf8(
-                                                        *params
-                                                             ->resume_project));
-                                    return {};
-                                });
-                        if (!visited || !restored ||
-                            !*restored ||
-                            **restored !=
-                                training_project
-                                    ->iteration) {
+                                installTrainerFromProjectCheckpoint(
+                                    scene,
+                                    training_project
+                                        ->document
+                                        .document(),
+                                    training_project
+                                        ->checkpoint_uuid,
+                                    effective_params,
+                                    core::path_to_utf8(
+                                        *params
+                                             ->resume_project),
+                                    training_project
+                                        ->iteration,
+                                    recovery_session);
+                        if (!installed) {
                             LOG_ERROR(
                                 "Failed to complete project CKPT "
-                                "hydration before TCP training");
+                                "hydration before TCP training: {}",
+                                installed.error());
                             return 1;
                         }
+                        manager->setTrainer(
+                            std::move(installed->trainer));
                     } else {
                         // Legacy .resume auto-load remains unchanged.
+                        auto trainer =
+                            std::make_unique<training::Trainer>(
+                                scene);
+                        if (!effective_params.python_scripts
+                                 .empty()) {
+                            trainer->set_python_scripts(
+                                effective_params
+                                    .python_scripts);
+                        }
                         trainer->setParams(effective_params);
+                        manager->setTrainer(std::move(trainer));
                     }
-                    manager->setTrainer(std::move(trainer));
                 }
 
                 core::Tensor::trim_memory_pool();
@@ -663,23 +643,9 @@ namespace lfs::app {
                         return 1;
                     }
 
-                    auto trainer =
-                        std::make_unique<
-                            training::Trainer>(
-                            scene);
-                    if (const auto* recovery_session =
-                            project->document
-                                .recovery_session()) {
-                        trainer
-                            ->set_recovery_session(
-                                *recovery_session);
-                    }
                     if (!project->params
                              .python_scripts
                              .empty()) {
-                        trainer->set_python_scripts(
-                            project->params
-                                .python_scripts);
                         vis::gui::panels::
                             PythonScriptManagerState::
                                 getInstance()
@@ -697,80 +663,36 @@ namespace lfs::app {
                             "headless Python scripts");
                         return 1;
                     }
-                    if (const auto result =
-                            trainer->initialize(
-                                project->params);
-                        !result) {
-                        LOG_ERROR(
-                            "Failed to initialize trainer from "
-                            "project display state: {}",
-                            result.error());
-                        return 1;
-                    }
-
-                    const auto* checkpoint =
-                        project->document
-                            .document()
-                            .find_checkpoint(
-                                project
-                                    ->checkpoint_uuid);
-                    if (!checkpoint) {
-                        LOG_ERROR(
-                            "Project CKPT handle disappeared before "
-                            "full trainer hydration");
-                        return 1;
-                    }
                     std::optional<
-                        training::CheckpointLoadResult>
-                        full_restore;
-                    auto visited =
-                        checkpoint->visit_stream(
-                            [&](std::istream& source,
-                                const std::uint64_t
-                                    bytes)
-                                -> lfs::Result<void> {
-                                full_restore =
-                                    trainer
-                                        ->load_checkpoint(
-                                            source,
-                                            bytes,
-                                            core::
-                                                path_to_utf8(
-                                                    *params
-                                                         ->resume_project));
-                                return {};
-                            });
-                    if (!visited) {
-                        LOG_ERROR(
-                            "Failed to stream project CKPT: {}",
-                            lfs::format_for_developer(
-                                visited.error()));
-                        return 1;
+                        io::project::RecoverySession>
+                        recovery_session;
+                    if (const auto* session =
+                            project->document
+                                .recovery_session()) {
+                        recovery_session = *session;
                     }
-                    if (!full_restore ||
-                        !*full_restore) {
+                    auto installed =
+                        training::
+                            installTrainerFromProjectCheckpoint(
+                                scene,
+                                project->document
+                                    .document(),
+                                project
+                                    ->checkpoint_uuid,
+                                project->params,
+                                core::path_to_utf8(
+                                    *params
+                                         ->resume_project),
+                                project->iteration,
+                                recovery_session);
+                    if (!installed) {
                         LOG_ERROR(
                             "Failed to restore project trainer state: {}",
-                            full_restore
-                                ? full_restore
-                                      ->error()
-                                : "CKPT visitor did not run");
+                            installed.error());
                         return 1;
                     }
-                    if (**full_restore !=
-                            project->iteration ||
-                        trainer
-                                ->get_current_iteration() !=
-                            project->iteration) {
-                        LOG_ERROR(
-                            "Project resume iteration mismatch: "
-                            "display={} trainer={} expected={}",
-                            **full_restore,
-                            trainer
-                                ->get_current_iteration(),
-                            project->iteration);
-                        return 1;
-                    }
+                    auto trainer =
+                        std::move(installed->trainer);
                     LOG_INFO(
                         "Project display hydration complete; full "
                         "trainer state restored at iteration {}",

@@ -1643,6 +1643,12 @@ namespace lfs::training {
     TrainingSnapshotService::~TrainingSnapshotService() =
         default;
 
+    void TrainingSnapshotService::
+        reset_process_pinned_d2h_calibration_for_testing() {
+        std::scoped_lock lock(calibration_mutex);
+        process_pinned_d2h_bytes_per_second = 0.0;
+    }
+
     lfs::Result<void> TrainingSnapshotService::initialize(
         const TrainingSnapshotCaptureRequest& request) {
         if (impl_->initialized) {

@@ -261,6 +261,8 @@ namespace lfs::training {
 
         [[nodiscard]] TrainingSnapshotServiceMetrics metrics() const;
 
+        static void reset_process_pinned_d2h_calibration_for_testing();
+
     private:
         std::unique_ptr<Impl> impl_;
     };
