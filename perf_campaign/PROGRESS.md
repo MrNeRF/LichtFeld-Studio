@@ -630,4 +630,4 @@ Runs: bonsai `20260807T065803Z_run{1,2,3}`; bicycle `20260807T065831Z_run{1,2,3}
 - CheckpointAllocatorRegression (ISS-014, excluded — segfault)
 
 ### Commits
-See git log for WO-G5 hashes.
+**Commit:** `5f667096`
