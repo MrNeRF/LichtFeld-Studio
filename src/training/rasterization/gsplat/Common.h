@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
 #include "core/checked_arithmetic.hpp"
 #include "core/cuda_allocation.hpp"
@@ -11,6 +12,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -106,28 +108,45 @@ namespace gsplat_lfs {
             maybe_inject_cuda_allocation_failure(label);
         }
 
-        void after_allocate(void*, size_t, std::string_view) const noexcept {}
+        // Count real driver allocs (gate G2) so gsplat high-water pools are visible
+        // to alloc_counter / steady-state smoke tests. Pool reuse does not call this.
+        void after_allocate(void*, size_t, std::string_view) const noexcept {
+            lfs::core::alloc_counter::record();
+        }
         void before_deallocate(void*) const noexcept {}
-    };
-
-    struct GsplatCubWorkspaceTraits {
-        static constexpr std::string_view allocation_label = "rasterizer.gsplat.cub_workspace";
-        static constexpr std::string_view diagnostic_scope = "gsplat";
     };
 
     using DirectDeviceBuffer = lfs::core::UniqueCudaAllocation<
         lfs::core::DirectCudaAllocator, GsplatAllocationHooks>;
     using StreamOrderedDeviceBuffer = lfs::core::UniqueCudaAllocation<
         lfs::core::StreamOrderedCudaAllocator, GsplatAllocationHooks>;
-    using GsplatCubWorkspace = lfs::core::CudaCubWorkspace<
-        StreamOrderedDeviceBuffer, GsplatCubWorkspaceTraits>;
 
+    /// Grow-only CUB temp storage shared by gsplat scan/sort (thread-local).
+    /// Returns a workspace of at least @p bytes; never shrinks until release.
+    [[nodiscard]] void* ensure_gsplat_cub_workspace(size_t bytes, cudaStream_t stream);
+    bool release_gsplat_cub_workspace() noexcept;
+
+    /// Grow-only intermediate for fused SH backward color grads (thread-local).
+    /// Replaces per-backward StreamOrderedDeviceBuffer malloc/free of C×N×ch floats.
+    [[nodiscard]] void* ensure_gsplat_color_grad_workspace(size_t bytes, cudaStream_t stream);
+    bool release_gsplat_color_grad_workspace() noexcept;
+
+    /// Run a CUB query+execute pair against the pooled high-water workspace
+    /// instead of malloc/free every call (legacy CudaCubWorkspace path).
     template <typename Operation>
     void run_cub_operation(const std::string_view name,
                            const cudaStream_t stream,
                            Operation&& operation) {
-        lfs::core::run_cub_operation<GsplatCubWorkspace>(
-            name, stream, std::forward<Operation>(operation));
+        size_t workspace_bytes = 0;
+        LFS_CUDA_CHECK_MSG(operation(nullptr, workspace_bytes),
+                           "{} workspace query", name);
+        LFS_ASSERT_MSG(
+            workspace_bytes > 0,
+            std::string(name) + " returned an empty workspace for a nonempty operation");
+        void* const workspace = ensure_gsplat_cub_workspace(workspace_bytes, stream);
+        size_t storage_bytes = workspace_bytes;
+        LFS_CUDA_CHECK_MSG(operation(workspace, storage_bytes),
+                           "gsplat CUB workspace operation: {}", name);
     }
 
     //

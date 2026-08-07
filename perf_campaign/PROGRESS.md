@@ -754,3 +754,89 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 | Bicycle loss range | 0.098–0.121 | — | 0.079–0.107 (healthy) |
 | B/splat | 429 | 429 | 429 (Phase 2 next) |
 36/36 campaign tests green. NVRM use-after-free ordering bug fixed; TLS release paths added.
+
+---
+
+## Task R — Gsplat path: persistent high-water isect buffers + pooled temps
+
+- **Branch:** `lfs-elite-fR`
+- **Scope:** `src/training/rasterization/gsplat/*`, `gsplat_rasterizer.*`, trainer
+  gsplat/gut branch only, `tests/test_gsplat_rasterizer.cpp`.
+- **Change:**
+  1. `intersect_tile` no longer `cudaMalloc`s/`release()`s `isect_ids` +
+     `flatten_ids` every call. Both live in the existing TLS
+     `IntersectBufferCache` as grow-only high-water buffers (same pattern as
+     sort pairs / cum_tiles). Callers must not free the returned pointers.
+  2. Dropped all `cudaFree` / `cudaFreeAsync` of isect/flatten in
+     `gsplat_rasterizer` (forward error, backward, inference wrapper) and
+     trainer tile-zero cleanup (`gut` early-exit).
+  3. CUB scan/sort temps: replace per-call `CudaCubWorkspace` malloc/free with
+     TLS grow-only `ensure_gsplat_cub_workspace`.
+  4. Fused SH backward color-grad intermediate: TLS grow-only
+     `ensure_gsplat_color_grad_workspace` (was per-bwd `StreamOrderedDeviceBuffer`).
+  5. `GsplatAllocationHooks::after_allocate` records into `alloc_counter` so
+     gsplat Direct/stream-ordered pools are visible to G2-style tests.
+  6. TLS release on `release_intersect_thread_local_cache()` also drops CUB +
+     color-grad workspaces (thread exit already called from training manager /
+     MCP).
+- **Resume:** unfinished worktree from prior attempt kept; fixed test compile
+  (`CameraModelType` ambiguous vs gsplat global enum — qualify
+  `lfs::core::CameraModelType`).
+- **Fail evidence (TDD / pre-change code path at HEAD):**
+  ```
+  # Intersect.cpp (pre): every n_isects>0 path:
+  DirectDeviceBuffer isect_ids(...);   // cudaMalloc
+  DirectDeviceBuffer flatten_ids(...); // cudaMalloc
+  result.isect_ids = isect_ids.release();  // transfer ownership
+  # trainer.cpp gsplat tile cleanup:
+  cudaFree(gsplat_ctx->isect_ids_ptr);
+  cudaFree(gsplat_ctx->flatten_ids_ptr);
+  # gsplat_rasterizer backward: cudaFreeAsync both every step
+  # Conceptual: SteadyStateSecondForwardHasZeroIsectAllocs would see delta2≥2
+  ```
+- **Pass evidence:**
+  ```
+  [==========] Running 5 tests from 1 test suite.
+  [  PASSED  ] GsplatRasterizerTest.CudaAllocationFailureAbortsAndRecovers
+  [  PASSED  ] GsplatRasterizerTest.ForwardPassBasic
+  [  PASSED  ] GsplatRasterizerTest.InferenceWrapper
+  [  PASSED  ] GsplatRasterizerTest.SteadyStateSecondForwardHasZeroIsectAllocs
+  [  PASSED  ] GsplatRasterizerTest.GutModeSmokeBench
+  [  PASSED  ] 5 tests.
+  GUT_SMOKE_BENCH ms/forward=0.0982327 allocs/forward=0 iters=30 N=256 128x128
+  ```
+- **Gut microbench (unit, gut=true, N=256, 128×128, 30 iters after 5 warmup):**
+
+  | metric | after |
+  |---|---:|
+  | ms/forward | **0.098** |
+  | allocs/forward | **0.0** |
+
+- **Dual-workload gate (flock, default FastGS/mrnf — gsplat path not on hot
+  train path; gate is no-regression for shared trainer/build surface):**
+
+  **Bonsai** 3×2000 — runs `20260807T103426Z_run{1,2,3}` vs Wave 2:
+
+  | metric | Wave 2 | after R | Δ |
+  |---|---:|---:|---|
+  | wall_s (med) | 8.94 | **9.01** | +0.8% noise |
+  | steady_ms/iter | 4.065 | **4.095** | +0.7% flat |
+  | steady_allocs/iter | 0.05 | **0.05** | 0 |
+  | peak VRAM MiB | 938.3 | **1054.7** | device-wide free variance (ISS-008) |
+  | B/splat | 429.0 | 429.0 | 0 |
+  | last_loss | ~0.03–0.04 | 0.027–0.031 | ok |
+
+  **Bicycle canary** 3×7000 — runs `20260807T103502Z_run{1,2,3}`:
+
+  | metric | Wave 2 / bicycle base | after R | Δ |
+  |---|---:|---:|---|
+  | wall_s (med) | 31.15 / ~30.4 | **30.47** | −2.2% vs base |
+  | steady_ms/iter | 3.208 | **3.205** | −0.1% |
+  | steady_allocs/iter | 0.04 | **0.04** | 0 |
+  | peak VRAM MiB | 1026.3 | **1142.7** | device-wide free variance |
+  | final loss range | 0.079–0.107 | **0.082–0.166** | high-variance OK; densify→500k healthy |
+
+  Gate: no FastGS ms/iter regression; G2 allocs held; bicycle quality canary
+  clean (growth to max_cap, no NaN/collapse). Gsplat path itself: 0 steady
+  driver allocs on fixed-size gut forward.
+- **Commit:** `0256de81`
