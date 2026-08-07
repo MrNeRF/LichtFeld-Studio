@@ -182,3 +182,14 @@
   integration → not a merge blocker, but a ship blocker.
 - **Related:** SogFormatTest failures (6+, shN export path) and ISS-013 graph-capture
   crasher — same fix order.
+
+## ISS-015 — FastGS numerical-gradient tests FAIL on campaign lfs-elite (QUALITY-CRITICAL)
+- **Severity:** CRITICAL (analytical vs finite-difference gradients diverge: Means, Opacity,
+  Scaling, Sh0, DenseTile variants). Loss-curve gates were too coarse to catch this.
+- **Repro:** lichtfeld_tests --gtest_filter='FastGSGradientTest.*:FastGSDenseTileGradientTest.*'
+- **Suspect range:** f06a8885..lfs-elite hot gradient-path commits (1.3 reg-fold, 1.4 bg
+  fusion, BWD-A clamp, G2 joint codec tail, G3 SH decode). BWD-A claimed bit-identical
+  grads — verify that claim during bisect.
+- **Also red campaign-era (same sweep):** scheduler integration x2, crop-mask damping,
+  VideoFrameExtractor x3, loader sidecar x2, TensorReserveInplaceCat overflow edge.
+- **Process gap:** workers gated on targeted tests + bench, never the full suite → RULE UPDATED.
