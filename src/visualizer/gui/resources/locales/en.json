@@ -258,6 +258,9 @@
     "status.select_item": "Select an item to view details",
     "status.one_item_selected": "1 item selected",
     "status.multi_items_selected": "{count} items selected",
+    "status.showing_assets.one": "Showing {count} asset",
+    "status.showing_assets.few": "Showing {count} assets",
+    "status.showing_assets.other": "Showing {count} assets",
     "type.splat": "Splat",
     "type.pcl": "PointCloud",
     "type.rad": "RAD",
@@ -1831,7 +1834,13 @@
     "confirm_uninstall_no": "No",
     "load_on_startup": "Load on Startup",
     "view.grid": "Grid view",
-    "view.list": "List view"
+    "view.list": "List view",
+    "registry_loaded.one": "Registry loaded: {count} plugin in the marketplace catalog.",
+    "registry_loaded.few": "Registry loaded: {count} plugins in the marketplace catalog.",
+    "registry_loaded.other": "Registry loaded: {count} plugins in the marketplace catalog.",
+    "registry_unavailable.one": "Registry unavailable: showing {count} fallback plugin.",
+    "registry_unavailable.few": "Registry unavailable: showing {count} fallback plugins.",
+    "registry_unavailable.other": "Registry unavailable: showing {count} fallback plugins."
   },
   "sequencer": {
     "edit_focal_length": "Edit Focal Length...",

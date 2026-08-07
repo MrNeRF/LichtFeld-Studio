@@ -252,6 +252,9 @@
     "status.select_item": "詳細を表示するには項目を選択してください",
     "status.one_item_selected": "1 項目選択中",
     "status.multi_items_selected": "{count} 項目選択中",
+    "status.showing_assets.one": "{count} 件のアセットを表示中",
+    "status.showing_assets.few": "{count} 件のアセットを表示中",
+    "status.showing_assets.other": "{count} 件のアセットを表示中",
     "panel_title": "アセットマネージャー",
     "import_button": "インポート",
     "import_from_url": "URLからインポート",
@@ -1735,7 +1738,13 @@
     "confirm_uninstall_no": "いいえ",
     "load_on_startup": "起動時に読み込む",
     "view.grid": "グリッド表示",
-    "view.list": "リスト表示"
+    "view.list": "リスト表示",
+    "registry_loaded.one": "レジストリを読み込みました: マーケットプレイスカタログに {count} 件のプラグインがあります。",
+    "registry_loaded.few": "レジストリを読み込みました: マーケットプレイスカタログに {count} 件のプラグインがあります。",
+    "registry_loaded.other": "レジストリを読み込みました: マーケットプレイスカタログに {count} 件のプラグインがあります。",
+    "registry_unavailable.one": "レジストリを利用できません: {count} 件のフォールバックプラグインを表示しています。",
+    "registry_unavailable.few": "レジストリを利用できません: {count} 件のフォールバックプラグインを表示しています。",
+    "registry_unavailable.other": "レジストリを利用できません: {count} 件のフォールバックプラグインを表示しています。"
   },
   "sequencer": {
     "edit_focal_length": "焦点距離を編集...",

@@ -877,6 +877,9 @@
     "status.select_item": "Seleccione un elemento para ver detalles",
     "status.one_item_selected": "1 elemento seleccionado",
     "status.multi_items_selected": "{count} elementos seleccionados",
+    "status.showing_assets.one": "Mostrando {count} recurso",
+    "status.showing_assets.few": "Mostrando {count} recursos",
+    "status.showing_assets.other": "Mostrando {count} recursos",
     "toolbar.import": "Importar",
     "toolbar.search_icon": "Buscar",
     "toolbar.search_placeholder": "Buscar activos...",
@@ -1831,7 +1834,13 @@
     "confirm_uninstall_no": "No",
     "load_on_startup": "Cargar al Iniciar",
     "view.grid": "Vista de cuadrícula",
-    "view.list": "Vista de lista"
+    "view.list": "Vista de lista",
+    "registry_loaded.one": "Registro cargado: {count} plugin en el catálogo del marketplace.",
+    "registry_loaded.few": "Registro cargado: {count} plugins en el catálogo del marketplace.",
+    "registry_loaded.other": "Registro cargado: {count} plugins en el catálogo del marketplace.",
+    "registry_unavailable.one": "Registro no disponible: mostrando {count} plugin de respaldo.",
+    "registry_unavailable.few": "Registro no disponible: mostrando {count} plugins de respaldo.",
+    "registry_unavailable.other": "Registro no disponible: mostrando {count} plugins de respaldo."
   },
   "sequencer": {
     "edit_focal_length": "Editar la Longitud Focal...",

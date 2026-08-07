@@ -252,6 +252,9 @@
     "status.select_item": "Seleziona un elemento per visualizzare i dettagli",
     "status.one_item_selected": "1 elemento selezionato",
     "status.multi_items_selected": "{count} elementi selezionati",
+    "status.showing_assets.one": "Visualizzazione di {count} risorsa",
+    "status.showing_assets.few": "Visualizzazione di {count} risorse",
+    "status.showing_assets.other": "Visualizzazione di {count} risorse",
     "toolbar.import": "Importa",
     "toolbar.search_icon": "Cerca",
     "toolbar.search_placeholder": "Cerca risorse...",
@@ -1735,7 +1738,13 @@
     "confirm_uninstall_no": "No",
     "load_on_startup": "Carica all'avvio",
     "view.grid": "Vista a griglia",
-    "view.list": "Vista a elenco"
+    "view.list": "Vista a elenco",
+    "registry_loaded.one": "Registro caricato: {count} plugin nel catalogo del marketplace.",
+    "registry_loaded.few": "Registro caricato: {count} plugin nel catalogo del marketplace.",
+    "registry_loaded.other": "Registro caricato: {count} plugin nel catalogo del marketplace.",
+    "registry_unavailable.one": "Registro non disponibile: visualizzazione di {count} plugin di fallback.",
+    "registry_unavailable.few": "Registro non disponibile: visualizzazione di {count} plugin di fallback.",
+    "registry_unavailable.other": "Registro non disponibile: visualizzazione di {count} plugin di fallback."
   },
   "sequencer": {
     "edit_focal_length": "Modifica lunghezza focale...",

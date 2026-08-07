@@ -258,6 +258,9 @@
     "status.select_item": "选择文件夹以查看详情",
     "status.one_item_selected": "已选择 1 个文件夹",
     "status.multi_items_selected": "已选择 {count} 个文件夹",
+    "status.showing_assets.one": "正在显示 {count} 个资源",
+    "status.showing_assets.few": "正在显示 {count} 个资源",
+    "status.showing_assets.other": "正在显示 {count} 个资源",
     "type.splat": "Splat",
     "type.pcl": "PointCloud",
     "type.rad": "RAD",
@@ -1838,7 +1841,13 @@
     "confirm_uninstall_no": "否",
     "load_on_startup": "启动时加载",
     "view.grid": "网格视图",
-    "view.list": "列表视图"
+    "view.list": "列表视图",
+    "registry_loaded.one": "注册表已加载：市场目录中有 {count} 个插件。",
+    "registry_loaded.few": "注册表已加载：市场目录中有 {count} 个插件。",
+    "registry_loaded.other": "注册表已加载：市场目录中有 {count} 个插件。",
+    "registry_unavailable.one": "注册表不可用：正在显示 {count} 个备用插件。",
+    "registry_unavailable.few": "注册表不可用：正在显示 {count} 个备用插件。",
+    "registry_unavailable.other": "注册表不可用：正在显示 {count} 个备用插件。"
   },
   "sequencer": {
     "edit_focal_length": "编辑焦距...",
