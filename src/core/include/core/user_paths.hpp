@@ -17,8 +17,9 @@ namespace lfs::core {
     /**
      * Per-invocation overrides for the user-owned storage tree.
      *
-     * `explicit_root` is intended for --user-dir and automated tests. `portable`
-     * uses `.lichtfeld` next to the executable directory supplied by the caller.
+     * `explicit_root` is intended for application callers and automated tests.
+     * The internal `portable` option uses `.lichtfeld` next to the executable
+     * directory supplied by the caller.
      * Neither option reads or mutates the process environment.
      */
     struct UserPathOptions {
@@ -34,7 +35,7 @@ namespace lfs::core {
      * - Windows: `%USERPROFILE%/.lichtfeld/{config,data,cache,logs}`.
      * - Linux: XDG config/data/cache/state locations, with plugins kept under
      *   `~/.lichtfeld` for first-generation compatibility.
-     * - `LFS_HOME`, --user-dir, and --portable use one unified root on every OS.
+     * - `LFS_HOME` and explicit roots use one unified root on every OS.
      */
     class LFS_CORE_API UserPaths {
     public:

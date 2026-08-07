@@ -1318,10 +1318,14 @@ _add_dll_dirs()
 
     void set_user_plugin_loading_enabled(const bool enabled) noexcept {
         g_user_plugin_loading_enabled.store(enabled, std::memory_order_release);
+        // Safe mode is an opt-in recovery state. Do not overwrite an
+        // externally supplied LFS_SAFE_MODE=1 during a normal launch.
+        if (enabled)
+            return;
 #ifdef _WIN32
-        (void)_putenv_s("LFS_SAFE_MODE", enabled ? "0" : "1");
+        (void)_putenv_s("LFS_SAFE_MODE", "1");
 #else
-        (void)setenv("LFS_SAFE_MODE", enabled ? "0" : "1", 1);
+        (void)setenv("LFS_SAFE_MODE", "1", 1);
 #endif
     }
 

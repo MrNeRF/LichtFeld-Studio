@@ -27,7 +27,7 @@ file.
 ## User storage roots
 
 The default root follows the platform policy implemented by `UserPaths`.
-Explicit user roots and portable roots use one isolated `.lichtfeld` tree.
+Explicit application roots use one isolated `.lichtfeld` tree.
 The application never scans old profile directories and never imports files
 from them automatically.
 
@@ -72,13 +72,6 @@ disables automatic persistence for recovery-sensitive state. It must not
 overwrite an externally supplied `LFS_SAFE_MODE=1` when starting normally.
 Explicit user actions such as keymap export remain separate from automatic
 persistence and should remain available in safe mode.
-
-## Portable mode
-
-Portable storage is supported only when the corresponding command-line option
-is registered and wired to `UserPathOptions`. Documentation and parser
-behaviour must remain synchronized: an advertised flag must work, and an
-internal-only option must not be presented as a user-facing CLI feature.
 
 ## Project state boundary
 
