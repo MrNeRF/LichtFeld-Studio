@@ -28,58 +28,6 @@ namespace lfs::vis::gui {
         return config_dir.empty() ? std::filesystem::path{} : config_dir / "layout.json";
     }
 
-    void LayoutState::save() const {
-        if (!g_persistence_enabled.load(std::memory_order_acquire))
-            return;
-        try {
-            const auto path = getConfigPath();
-            if (path.empty())
-                return;
-            std::filesystem::create_directories(path.parent_path());
-
-            nlohmann::json j;
-            j["right_panel_width"] = right_panel_width;
-            j["scene_panel_ratio"] = scene_panel_ratio;
-            j["python_console_width"] = python_console_width;
-            j["bottom_dock_height"] = bottom_dock_height;
-            j["left_dock_width"] = left_dock_width;
-            j["show_sequencer"] = show_sequencer;
-            j["active_main_tab"] = active_main_tab;
-
-            if (!file_association.empty())
-                j["file_association"] = file_association;
-
-            nlohmann::json windows;
-            for (const auto& [name, visible] : window_visibility) {
-                windows[name] = visible;
-            }
-            j["windows"] = windows;
-
-            nlohmann::json vram_hud;
-            vram_hud["x"] = vram_hud_x;
-            vram_hud["y"] = vram_hud_y;
-            vram_hud["width"] = vram_hud_width;
-            vram_hud["height"] = vram_hud_height;
-            vram_hud["active_tab"] = vram_hud_active_tab;
-            vram_hud["collapsed"] = vram_hud_collapsed_paths;
-            j["vram_hud"] = vram_hud;
-
-            nlohmann::json perf_hud;
-            perf_hud["visible"] = perf_hud_visible;
-            perf_hud["expanded"] = perf_hud_expanded;
-            j["perf_hud"] = perf_hud;
-
-            std::ofstream file(path);
-            if (file) {
-                file << j.dump(2);
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to save layout state: {}", e.what());
-        } catch (...) {
-            LOG_WARN("Failed to save layout state: unknown error");
-        }
-    }
-
     void LayoutState::load(const bool log_success) {
         if (!g_persistence_enabled.load(std::memory_order_acquire))
             return;

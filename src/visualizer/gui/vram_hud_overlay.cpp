@@ -302,15 +302,6 @@ namespace lfs::vis::gui {
         if (!persistence_dirty_)
             return;
         (void)sanitizeGeometry();
-        LayoutState ls;
-        ls.load(false);
-        ls.vram_hud_x = pos_x_;
-        ls.vram_hud_y = pos_y_;
-        ls.vram_hud_width = size_w_;
-        ls.vram_hud_height = size_h_;
-        ls.vram_hud_active_tab = active_tab_;
-        ls.vram_hud_collapsed_paths.assign(collapsed_paths_.begin(), collapsed_paths_.end());
-        ls.save();
         persistence_dirty_ = false;
     }
 

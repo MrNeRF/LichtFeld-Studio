@@ -3115,7 +3115,6 @@ namespace lfs::vis::gui {
             } else {
                 return;
             }
-            ls.save();
         };
 
         enqueueModal(std::move(req));
@@ -3820,7 +3819,6 @@ namespace lfs::vis::gui {
         if (dev_resource_watch_.scan_future.valid())
             dev_resource_watch_.scan_future.wait();
 
-        panel_layout_.saveState(window_states_);
         if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr) {
             saveWindowState(window_manager->persistentWindowState());
         }
@@ -6658,7 +6656,6 @@ namespace lfs::vis::gui {
         window_states_["python_console"] = false;
         PanelRegistry::instance().reset_floating_panel_layouts();
         rml_viewport_overlay_.resetVramHudLayout();
-        panel_layout_.saveState(window_states_);
 
         if (backup->has_value())
             LOG_INFO("Layout reset; backed up previous state to {}", backup->value().string());

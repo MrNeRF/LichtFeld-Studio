@@ -33,7 +33,6 @@ namespace lfs::vis::gui {
         bool perf_hud_visible = false;
         bool perf_hud_expanded = true;
 
-        void save() const;
         void load(bool log_success = true);
         static std::filesystem::path getConfigDir();
         LFS_VIS_API static void setPersistenceEnabled(bool enabled) noexcept;

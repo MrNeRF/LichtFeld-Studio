@@ -42,21 +42,6 @@ namespace lfs::vis::gui {
         return state;
     }
 
-    void PanelLayoutManager::saveState(
-        const std::unordered_map<std::string, bool>& window_visibility) const {
-        LayoutState state;
-        state.load(false);
-        state.right_panel_width = right_panel_width_;
-        state.scene_panel_ratio = scene_panel_ratio_;
-        state.python_console_width = python_console_width_;
-        state.bottom_dock_height = bottom_dock_height_;
-        state.left_dock_width = left_dock_width_;
-        state.show_sequencer = show_sequencer_;
-        state.active_main_tab = active_tab_id_;
-        state.window_visibility = window_visibility;
-        state.save();
-    }
-
     void PanelLayoutManager::applyState(const LayoutState& state) {
         right_panel_width_ = state.right_panel_width;
         scene_panel_ratio_ = state.scene_panel_ratio;
