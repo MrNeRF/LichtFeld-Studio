@@ -44,14 +44,14 @@
 
 - **Artifacts:**
   - `perf_campaign/bench.sh` — build + headless train + JSON metrics
-  - `src/training/perf_bench.{hpp,cpp}` — `LFS_PERF_BENCH=1` collector
+  - `src/training/perf_bench.{hpp,cpp}` — `(purged-env:PERF_BENCH)=1` collector
   - `perf_campaign/BASELINE.md` — 3-run medians
 - **Dataset:** `/home/gauss/data/360_v2/bonsai` (`images_4`), 2000 iters, warmup 200,
   strategy `mrnf`, max_cap 500000. (Real COLMAP scene; no synthetic fallback needed.)
 - **Also:** instrumented FastGS `StreamOrderedDeviceBuffer` so G2 sees sort-buffer
   churn (ISS-001).
 - **Fail evidence (TDD for harness):** smoke without collector → no
-  `perf_bench.json`; with `LFS_PERF_BENCH=1` file is written.
+  `perf_bench.json`; with `(purged-env:PERF_BENCH)=1` file is written.
 - **Pass / baseline medians (3 runs):**
 
   | metric | median |
@@ -558,11 +558,11 @@ FLAGS (honest):
 - **Oracle:** `lichtfeld_tests --gtest_filter='FastGSGradientTest.Numerical_Means'`
 - **Range:** `f06a8885` (good candidate) .. HEAD
 - **Preflight (HEAD, no rebuild):** FAIL — crash in `adam_moment` → `exp_avg_scale.to(CPU)` invalid under joint Adam codec (default ON). Message: `device transfer requires a valid tensor`.
-- **Preflight (HEAD, `LFS_ADAM_LEGACY_CODEC=1`):** ALL FastGSGradientTest + DenseTile **PASS** (Means cos_sim=0.9991). Implication: rasterizer gradient math (1.4 / BWD-A / reg-fold) is NOT the root; joint-codec moment recovery / fused-tail is the suspect.
+- **Preflight (HEAD, `(purged-env:ADAM_LEGACY_CODEC)=1`):** ALL FastGSGradientTest + DenseTile **PASS** (Means cos_sim=0.9991). Implication: rasterizer gradient math (1.4 / BWD-A / reg-fold) is NOT the root; joint-codec moment recovery / fused-tail is the suspect.
 
 ### Bisect log
 - **step0 HEAD b997fe5d:** BAD — joint default ON, adam_moment crash (exp_avg_scale invalid)
-- **step0b HEAD + LFS_ADAM_LEGACY_CODEC=1:** GOOD — 9/9 FastGS gradient tests pass
+- **step0b HEAD + (purged-env:ADAM_LEGACY_CODEC)=1:** GOOD — 9/9 FastGS gradient tests pass
 - **step1 993314d5 (FIX-2.2 F3):** BAD — same adam_moment/exp_avg_scale crash
 - **step2 eec4b87b (build.sh only, pre-joint):** GOOD — Means cos_sim=0.9991
 - **step3 67a0fa34 (post 63aa codec pair profiles):** BAD — joint crash
@@ -578,7 +578,7 @@ Bisect path (oracle = Numerical_Means, build via `./perf_campaign/build.sh build
 | step | commit | verdict | note |
 |---|---|---|---|
 | 0 | b997fe5d HEAD | BAD | adam_moment → invalid exp_avg_scale |
-| 0b | HEAD + LFS_ADAM_LEGACY_CODEC=1 | GOOD | cos_sim Means 0.9991 |
+| 0b | HEAD + (purged-env:ADAM_LEGACY_CODEC)=1 | GOOD | cos_sim Means 0.9991 |
 | 1 | 993314d5 FIX-2.2 F3 | BAD | joint crash |
 | 2 | eec4b87b pre-joint | GOOD | cos_sim 0.9991 |
 | 3 | 67a0fa34 post-codec | BAD | joint crash |
@@ -700,7 +700,7 @@ vs WO-G5 medians (bonsai 7.23/3.148, bicycle 21.12/2.817): dual-workload **uncha
   1. `sh_value_storage`: encode/decode on current stream + **device barrier** before free; capacity from means cap.
   2. `mrnf::refine`: **trim_memory_pool before re-encode** (was freeing pool while densify path still hot).
   3. `AdamOptimizer`: moments always float-layout sized under q16; heal joint_bounds for ceil(N/256).
-  4. Default `LFS_SH_VALUE_QUANT` **ON**.
+  4. Default `(purged-env:SH_VALUE_QUANT)` **ON**.
 - **Heal-vs-rebuild:** rebuild codes/bounds; heal Adam moments when capacity allows.
 - **Dual workload (3-run medians):**
 
@@ -776,7 +776,7 @@ Bonsai runs `20260807T093540Z_run{1,2,3}`; bicycle `20260807T093608Z_run{1,2,3}`
   1. `steady_allocs/iter` 0.05 → **0.18** (bonsai measured ~0.13 post-G5)
   2. ex-cache peak ~1194 MiB vs Wave-2 **938** (+~256 MiB)
 
-### Root causes (measured + LFS_ALLOC_TRACE)
+### Root causes (measured + (purged-env:ALLOC_TRACE))
 
 | Source | Attribution | Fix |
 |---|---|---|
@@ -787,7 +787,7 @@ Bonsai runs `20260807T093540Z_run{1,2,3}`; bicycle `20260807T093608Z_run{1,2,3}`
 
 ### Instrumentation
 
-- `alloc_counter::record_site(Site)` + TLS `ScopedSite` + `LFS_ALLOC_TRACE=1` steady-state log
+- `alloc_counter::record_site(Site)` + TLS `ScopedSite` + `(purged-env:ALLOC_TRACE)=1` steady-state log
 - `PeakExCacheLedger` in perf_bench.json: `ex_cache_*`, owners, `unjustified_excess_bytes`
 - Sites written to `alloc_sites` in JSON
 
@@ -923,8 +923,8 @@ allocs/iter ≤ 0.11 (no regression of WO-X).
 2. **128-bit layout:** `PackedMeanBBox{float2 mean2d; ushort4 pixel_bbox}` (16B);
    `color` float3→float4 padded. Tile `screen_bounds` kept for create_instances.
 3. **Batch size:** `config::blend_batch_size = 192` (see sweep table). Runtime override
-   via `set_blend_batch_size_for_testing` / `LFS_BLEND_BATCH_SIZE`. Cull mode via
-   `set_warp_cull_mode_for_testing` / `LFS_WARP_CULL_MODE` (0=on, 1=off, 2=wrong).
+   via `set_blend_batch_size_for_testing` / `(purged-env:BLEND_BATCH_SIZE)`. Cull mode via
+   `set_warp_cull_mode_for_testing` / `(purged-env:WARP_CULL_MODE)` (0=on, 1=off, 2=wrong).
 
 ### TDD
 - **FAIL-first (wrong mask):** mode=2 empty ballot vs mode=1 reference → images differ
@@ -970,7 +970,7 @@ FastGSGradientTest.* 5/5 PASS; FastGSDenseTileGradientTest.* 4/4 PASS; FusedBgBl
 | config | blend_cu avg_us | med_us | notes |
 |---|---:|---:|---|
 | Historical (pre-change, philox/bwd-a) | ~416 | ~410 | float3 color, batch=256, no cull |
-| Cull OFF (same binary, packing+192) | 455.3 | 443.5 | LFS_WARP_CULL_MODE=1 |
+| Cull OFF (same binary, packing+192) | 455.3 | 443.5 | (purged-env:WARP_CULL_MODE)=1 |
 | **Cull ON (production)** | **366.1** | **359.0** | batch=192 |
 
 - vs historical: **avg −12.0%**, **med −12.4%** (in −10..−17% target)
@@ -1064,7 +1064,7 @@ New mandatory quant-ON strategy smoke:
    `ellipse_box_overlap_test`).
 4. **Warp-reduce → one global atomic per splat per warp**; block fences only at
    batch boundaries (zero `block.sync` inside `WARP_BWD_WALK_*`).
-5. Hooks: `LFS_BWD_WARP_CULL_MODE` / shared `set_warp_cull_mode_for_testing`
+5. Hooks: `(purged-env:BWD_WARP_CULL_MODE)` / shared `set_warp_cull_mode_for_testing`
    (0=on, 1=off, 2=wrong empty); batch via `blend_backward_batch_size=128`.
 
 ### TDD
@@ -1426,7 +1426,7 @@ Post-fix targeted:
 1. **Interactive budget** (`evaluate_gt_cache_budget(..., interactive)`):
    device_budget = min(0.25×free, 1 GiB [, programmatic cap]); partial device when
    est > budget; pinned for remainder. Headless/CLI: free−headroom all-or-nothing.
-2. **No env knobs:** deleted `LFS_GT_CACHE` / `LFS_GT_CACHE_CAP` / `LFS_GT_PINNED_CACHE`
+2. **No env knobs:** deleted `(purged-env:GT_CACHE)` / `(purged-env:GT_CACHE_CAP)` / `(purged-env:GT_PINNED_CACHE)`
    reads. Session flag from `!params.optimization.headless`; loader also upgrades if
    viewer shared-scratch arena is installed (`using_external_backing`).
 3. **MJ-13:** registry of live loaders + `PressureClient "gt-device-cache"` (prio 5);
@@ -1532,3 +1532,49 @@ Checkpoint: 461367 Gaussians, iter 2500
 
 ### Status
 **DONE.** ISS-025 CLOSED. ISS-024 CLOSED (confirmed symptom; re-test clean).
+
+---
+
+## WO-PURGE-ENV — purge branch-introduced env flags (2026-08-08)
+
+### Owner directive
+Every production speedup stays IN; optimized path becomes the only path.
+Hidden env toggles deleted. Perf/profile instruments become CLI.
+
+### Deleted outright (env + dead arms)
+| Flag | Production-only path |
+|------|----------------------|
+| `ADAM_LEGACY_CODEC` | joint (u,log_s) only; legacy u8+scales kernels/branches removed |
+| `SH_VALUE_QUANT` / `SH_VALUE_FP32` | quant permanently ON (test hook kept) |
+| `PLY_LEGACY_WRITE` | parallel-pack binary writer only (ASCII keeps tinyply) |
+| `WARP_CULL_MODE` / `BWD_WARP_CULL_MODE` | cull ON; test hooks retained |
+| `BLEND_BATCH_SIZE` / `BWD_BLEND_BATCH_SIZE` | config::blend_batch_size=192 baked |
+| `BWD_TEFF_HIST` / `BWD_TEFF_HIST_ITER` | debug histogram instrumentation removed |
+| `ALLOC_TRACE` | trace toggle + fprintf path removed |
+| `NVTX` | env gating removed; NVTX ranges via `--profile-window` |
+| `LAZY_IR` | env removed; `lazy_ir_set_active_for_testing` only; prod=off |
+| `GT_CACHE*` | verified already gone (WO-FIX-GTCACHE-GUI); no stragglers |
+
+### Converted to CLI
+- `--perf-bench` / `--perf-bench-warmup=N` (was PERF_BENCH*)
+- `--profile-window=START:STOP` (was PROFILE_*; enables NVTX in window)
+
+### Tests removed / rewritten
+- BL-1 legacy+q16 refusal test deleted (legacy path gone)
+- `LegacyCodecStillReports172` deleted
+- checkpoint legacy round-trip arm deleted
+- mcmc/mrnf legacy scale-assert tests rewritten for joint
+- MRNF ShN reservation test updated for joint + q16 param layout
+
+### Acceptance
+- `git grep` flag inventory: **CLEAN** in `src/` + `perf_campaign/`
+- Full `lichtfeld_tests`: 3416 PASS / 42 SKIP; MRNF/DualRep/WarpCull/Ledger green after rewrites
+  (remaining reds: PipelinedImageLoader fixture, VideoFrame naming, NaNInfGPU, python
+  locale — pre-existing / unrelated to flag purge; red-provenance: not introduced here)
+- Dual-workload bench (CLI `--perf-bench`, skip rebuild):
+  - bonsai med **2.602 ms/iter**, **307.4 B/splat** (target 2.60–2.62, ~307)
+  - bicycle 7k med **2.652 ms/iter**, **307.4 B/splat** (target 2.65–2.67, ~307)
+- GUI smoke `timeout 45 ./build/tests/LichtFeld-Studio -d ~/data/360_v2/bonsai -o /tmp/lfs-purge-out`: clean load + SIGINT shutdown
+
+### Commits
+See git log for this work (flag purge + CLI instruments).

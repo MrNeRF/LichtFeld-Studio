@@ -3,7 +3,7 @@
 
 // Worker T — PLY save/load throughput microbench (1M synthetic SH3 splats).
 // Records wall + MB/s for save and load; verifies roundtrip means/opacity.
-// Env: LFS_PLY_LEGACY_WRITE=1 forces tinyply write path for A/B baseline.
+// Binary PLY uses parallel-pack writer (only path).
 
 #include <chrono>
 #include <cmath>
@@ -167,16 +167,13 @@ TEST(PlyIoThroughput, OneMillionSplatSaveLoadRoundtrip) {
         EXPECT_LT(tail_err, 1e-5) << "means drift after PLY roundtrip (tail)";
     }
 
-    const char* legacy = std::getenv("LFS_PLY_LEGACY_WRITE");
-    const bool is_legacy = legacy && legacy[0] == '1' && legacy[1] == '\0';
-
     // Always print so campaign can scrape numbers into PROGRESS.md.
     std::printf(
         "\n[PlyIoThroughput] path=%s N=%zu file=%.1f MiB\n"
         "  SAVE wall=%.3f s  throughput=%.1f MiB/s\n"
         "  LOAD wall=%.3f s  throughput=%.1f MiB/s\n"
         "  means max_abs_err (first 4k)=%.3e opacity=%.3e\n",
-        is_legacy ? "LEGACY(tinyply)" : "FAST(pack+buffered)",
+        "FAST(pack+buffered)",
         kN, mib_of(file_bytes), save_s, save_mibs, load_s, load_mibs,
         means_err_head, opacity_err);
 

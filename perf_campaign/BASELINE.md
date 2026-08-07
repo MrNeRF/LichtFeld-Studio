@@ -36,7 +36,7 @@ steady-state allocs/iter, peak VRAM, or quality (loss/PSNR).
 | max_cap | 500000 |
 | Headless | yes |
 | Eval / PSNR | off (`last_psnr = -1`) |
-| Env | `LFS_PERF_BENCH=1` |
+| CLI | `--perf-bench` / `--perf-bench-warmup=N` |
 
 Raw per-run JSON: `perf_campaign/runs/20260806T171556Z_run{1,2,3}/bench_report.json`  
 Aggregate: `perf_campaign/runs/latest_aggregate.json`
@@ -97,7 +97,7 @@ because the soft-delete mask / other aux can be present; unit test with pure
 ./perf_campaign/bench.sh
 
 # Three-run baseline (writes perf_campaign/runs/<stamp>_run*/ + latest_aggregate.json)
-LFS_BENCH_ITERS=2000 LFS_PERF_BENCH_WARMUP=200 LFS_BENCH_MAX_CAP=500000 \
+LFS_BENCH_ITERS=2000 LFS_BENCH_WARMUP=200 LFS_BENCH_MAX_CAP=500000 \
   LFS_BENCH_DATASET=/home/gauss/data/360_v2/bonsai \
   ./perf_campaign/bench.sh --runs 3
 ```

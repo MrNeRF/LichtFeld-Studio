@@ -18,6 +18,7 @@ class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/sh_value_codec.hpp"
@@ -33,20 +34,8 @@ using namespace lfs::core;
 using namespace lfs::training;
 
 namespace {
-    // Phase 2.2 / 2.1: densify/serialize tests below still assert legacy uint8+scale
-    // moment layout AND float4-swizzled shN sizes. Force both codecs OFF for those
-    // cases; joint + SH q16 are covered by TrainingStateLedger / ShValueStorage /
-    // JointAdamCodec unit tests and the fused training path (dual gate).
-    struct LegacyAdamCodecGuard {
-        LegacyAdamCodecGuard() {
-            joint_adam::set_joint_codec_enabled_for_testing(false);
-            sh_value::set_sh_value_quant_enabled_for_testing(false);
-        }
-        ~LegacyAdamCodecGuard() {
-            sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
-            joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
-        }
-    };
+    // Joint (u,log_s) is the only Adam codec. Tests that previously forced the
+    // removed legacy uint8+scales path now run under joint (production) semantics.
 } // namespace
 
 namespace {
@@ -207,7 +196,6 @@ TEST(MRNFStrategyTest, RemoveGaussiansKeepsOptimizerStateUsable) {
 }
 
 TEST(MRNFStrategyTest, QuantizedShNFirstMomentStartsAtSignedZeroPoint) {
-    LegacyAdamCodecGuard legacy_guard;
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -220,25 +208,21 @@ TEST(MRNFStrategyTest, QuantizedShNFirstMomentStartsAtSignedZeroPoint) {
 
     const auto* shN_state = strategy.get_optimizer().get_state(ParamType::ShN);
     ASSERT_NE(shN_state, nullptr);
+    ASSERT_TRUE(shN_state->is_joint());
     ASSERT_TRUE(shN_state->exp_avg.is_valid());
-    ASSERT_TRUE(shN_state->exp_avg_sq.is_valid());
+    ASSERT_TRUE(shN_state->joint_bounds.is_valid());
     ASSERT_EQ(shN_state->exp_avg.dtype(), DataType::UInt8);
-    ASSERT_EQ(shN_state->exp_avg_sq.dtype(), DataType::UInt8);
-
-    const auto exp_avg_cpu = shN_state->exp_avg.cpu();
-    const auto exp_avg_sq_cpu = shN_state->exp_avg_sq.cpu();
-    const auto* exp_avg = exp_avg_cpu.ptr<std::uint8_t>();
-    const auto* exp_avg_sq = exp_avg_sq_cpu.ptr<std::uint8_t>();
-    for (size_t i = 0; i < exp_avg_cpu.numel(); ++i) {
-        EXPECT_EQ(exp_avg[i], static_cast<std::uint8_t>(128));
-    }
-    for (size_t i = 0; i < exp_avg_sq_cpu.numel(); ++i) {
-        EXPECT_EQ(exp_avg_sq[i], static_cast<std::uint8_t>(0));
+    // Joint: all-zero packed + bounds decode to (m,v)=(0,0) — free zero moments.
+    const auto packed = shN_state->exp_avg.cpu();
+    const auto* bytes = packed.ptr<std::uint8_t>();
+    for (size_t i = 0; i < packed.numel(); ++i) {
+        EXPECT_EQ(bytes[i], static_cast<std::uint8_t>(0));
     }
 }
 
 TEST(MRNFStrategyTest, RemoveGaussiansCompactsQuantizedAdamScalesAndPreservesShNDtype) {
-    LegacyAdamCodecGuard legacy_guard;
+    // Legacy per-primitive scale compaction removed with the legacy Adam codec.
+    // Joint path: compact preserves joint packed moments + dtype.
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -249,22 +233,7 @@ TEST(MRNFStrategyTest, RemoveGaussiansCompactsQuantizedAdamScalesAndPreservesShN
 
     strategy.initialize(opt_params);
 
-    auto set_scale_rows = [](AdamParamState* state, const size_t rows, const float offset) {
-        ASSERT_NE(state, nullptr);
-        std::vector<float> first(rows);
-        std::vector<float> second(rows);
-        for (size_t i = 0; i < rows; ++i) {
-            first[i] = offset + static_cast<float>(i);
-            second[i] = offset + 100.0f + static_cast<float>(i);
-        }
-        state->exp_avg_scale = Tensor::from_vector(first, TensorShape({rows}), Device::CUDA);
-        state->exp_avg_sq_scale = Tensor::from_vector(second, TensorShape({rows}), Device::CUDA);
-    };
-
     constexpr size_t initial_rows = 10;
-    set_scale_rows(strategy.get_optimizer().get_state_mutable(ParamType::Means), initial_rows, 10.0f);
-    set_scale_rows(strategy.get_optimizer().get_state_mutable(ParamType::ShN), initial_rows, 20.0f);
-
     const auto remove_mask = Tensor::from_vector(
         std::vector<bool>{false, true, false, true, false, false, false, false, false, false},
         TensorShape({initial_rows}),
@@ -272,54 +241,21 @@ TEST(MRNFStrategyTest, RemoveGaussiansCompactsQuantizedAdamScalesAndPreservesShN
 
     strategy.remove_gaussians(remove_mask);
 
-    const std::vector<float> expected_means{10.0f, 12.0f, 14.0f, 15.0f, 16.0f, 17.0f, 18.0f, 19.0f};
-    const std::vector<float> expected_shN{20.0f, 22.0f, 24.0f, 25.0f, 26.0f, 27.0f, 28.0f, 29.0f};
-
-    auto expect_scale_rows = [](const AdamParamState* state,
-                                const std::vector<float>& expected,
-                                const size_t expected_capacity) {
-        ASSERT_NE(state, nullptr);
-        ASSERT_TRUE(state->exp_avg_scale.is_valid());
-        ASSERT_TRUE(state->exp_avg_sq_scale.is_valid());
-        EXPECT_EQ(state->exp_avg_scale.numel(), expected.size());
-        EXPECT_EQ(state->exp_avg_sq_scale.numel(), expected.size());
-        EXPECT_EQ(state->exp_avg_scale.capacity(), expected_capacity);
-        EXPECT_EQ(state->exp_avg_sq_scale.capacity(), expected_capacity);
-
-        const auto exp_avg_scale_cpu = state->exp_avg_scale.cpu();
-        const auto exp_avg_sq_scale_cpu = state->exp_avg_sq_scale.cpu();
-        const float* exp_avg_scale = exp_avg_scale_cpu.ptr<float>();
-        const float* exp_avg_sq_scale = exp_avg_sq_scale_cpu.ptr<float>();
-        for (size_t i = 0; i < expected.size(); ++i) {
-            EXPECT_FLOAT_EQ(exp_avg_scale[i], expected[i]);
-            EXPECT_FLOAT_EQ(exp_avg_sq_scale[i], expected[i] + 100.0f);
-        }
-    };
-
     const auto* means_state = strategy.get_optimizer().get_state(ParamType::Means);
     const auto* shN_state = strategy.get_optimizer().get_state(ParamType::ShN);
-    expect_scale_rows(means_state, expected_means, 32);
-    expect_scale_rows(shN_state, expected_shN, 32);
-
+    ASSERT_NE(means_state, nullptr);
     ASSERT_NE(shN_state, nullptr);
-    ASSERT_TRUE(shN_state->exp_avg.is_valid());
-    ASSERT_TRUE(shN_state->exp_avg_sq.is_valid());
+    EXPECT_TRUE(means_state->is_joint());
+    EXPECT_TRUE(shN_state->is_joint());
+    EXPECT_TRUE(means_state->exp_avg.is_valid());
+    EXPECT_TRUE(shN_state->exp_avg.is_valid());
     EXPECT_EQ(shN_state->exp_avg.dtype(), DataType::UInt8);
-    EXPECT_EQ(shN_state->exp_avg_sq.dtype(), DataType::UInt8);
+    constexpr size_t expected_rows = 8;
     EXPECT_EQ(shN_state->size,
-              sh_swizzled_float_count(expected_shN.size(), static_cast<uint32_t>(splat_data.max_sh_coeffs_rest())));
-    EXPECT_EQ(shN_state->capacity,
-              sh_swizzled_float_count(32, static_cast<uint32_t>(splat_data.max_sh_coeffs_rest())));
-
-    const auto exp_avg_cpu = shN_state->exp_avg.cpu();
-    const auto* exp_avg = exp_avg_cpu.ptr<std::uint8_t>();
-    for (size_t i = 0; i < exp_avg_cpu.numel(); ++i) {
-        EXPECT_EQ(exp_avg[i], static_cast<std::uint8_t>(128));
-    }
+              sh_swizzled_float_count(expected_rows, static_cast<uint32_t>(splat_data.max_sh_coeffs_rest())));
 }
 
 TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
-    LegacyAdamCodecGuard legacy_guard;
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -335,10 +271,9 @@ TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
 
     auto* means_state = strategy.get_optimizer().get_state_mutable(ParamType::Means);
     ASSERT_NE(means_state, nullptr);
+    ASSERT_TRUE(means_state->is_joint());
     // grad is allocated lazily via get_grad(); force allocation before fill.
     strategy.get_optimizer().get_grad(ParamType::Means);
-    means_state->exp_avg_scale.fill_(5.0f);
-    means_state->exp_avg_sq_scale.fill_(6.0f);
     means_state->grad.fill_(7.0f);
 
     strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
@@ -353,41 +288,23 @@ TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
 
     ASSERT_EQ(splat_data.size(), initial_size + 1);
     ASSERT_EQ(means_state->size, initial_size + 1);
+    EXPECT_TRUE(means_state->is_joint());
+    EXPECT_TRUE(means_state->exp_avg.is_valid());
+    EXPECT_TRUE(means_state->joint_bounds.is_valid());
 
-    const auto exp_avg_cpu = means_state->exp_avg.cpu();
-    const auto exp_avg_sq_cpu = means_state->exp_avg_sq.cpu();
-    const auto exp_avg_scale_cpu = means_state->exp_avg_scale.cpu();
-    const auto exp_avg_sq_scale_cpu = means_state->exp_avg_sq_scale.cpu();
     const auto grad_cpu = means_state->grad.cpu();
-
-    const auto* exp_avg_ptr = exp_avg_cpu.ptr<std::uint8_t>();
-    const auto* exp_avg_sq_ptr = exp_avg_sq_cpu.ptr<std::uint8_t>();
-    const float* exp_avg_scale_ptr = exp_avg_scale_cpu.ptr<float>();
-    const float* exp_avg_sq_scale_ptr = exp_avg_sq_scale_cpu.ptr<float>();
     const float* grad_ptr = grad_cpu.ptr<float>();
-
+    // Parent row 0 and new child have zeroed grads; sibling row 1 keeps prior fill.
     for (int c = 0; c < 3; ++c) {
-        EXPECT_EQ(exp_avg_ptr[c], static_cast<std::uint8_t>(128));
-        EXPECT_EQ(exp_avg_sq_ptr[c], static_cast<std::uint8_t>(0));
         EXPECT_FLOAT_EQ(grad_ptr[c], 0.0f);
     }
-    EXPECT_FLOAT_EQ(exp_avg_scale_ptr[0], 0.0f);
-    EXPECT_FLOAT_EQ(exp_avg_sq_scale_ptr[0], 0.0f);
-
     for (int c = 0; c < 3; ++c) {
         EXPECT_FLOAT_EQ(grad_ptr[3 + c], 7.0f);
     }
-    EXPECT_FLOAT_EQ(exp_avg_scale_ptr[1], 5.0f);
-    EXPECT_FLOAT_EQ(exp_avg_sq_scale_ptr[1], 6.0f);
-
     const size_t child_offset = initial_size * 3;
     for (int c = 0; c < 3; ++c) {
-        EXPECT_EQ(exp_avg_ptr[child_offset + c], static_cast<std::uint8_t>(128));
-        EXPECT_EQ(exp_avg_sq_ptr[child_offset + c], static_cast<std::uint8_t>(0));
         EXPECT_FLOAT_EQ(grad_ptr[child_offset + c], 0.0f);
     }
-    EXPECT_FLOAT_EQ(exp_avg_scale_ptr[initial_size], 0.0f);
-    EXPECT_FLOAT_EQ(exp_avg_sq_scale_ptr[initial_size], 0.0f);
 }
 
 TEST(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
@@ -437,7 +354,7 @@ TEST(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
 }
 
 TEST(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
-    LegacyAdamCodecGuard legacy_guard;
+
     constexpr int n_gaussians = 10;
     constexpr size_t max_cap = 70;
 
@@ -453,28 +370,40 @@ TEST(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
                                         const AdamOptimizer& optimizer,
                                         const int max_degree) {
         const auto layout_rest = static_cast<uint32_t>(sh_rest_coefficients_for_degree(max_degree));
-        const size_t expected_logical =
+        // Adam moments always track float4-swizzle cell count (joint packed).
+        const size_t expected_moment_logical =
             sh_swizzled_float_count(static_cast<size_t>(n_gaussians), layout_rest);
-        const size_t expected_capacity = sh_swizzled_float_count(max_cap, layout_rest);
+        const size_t expected_moment_capacity = sh_swizzled_float_count(max_cap, layout_rest);
 
         ASSERT_TRUE(splat_data.shN().is_valid());
-        EXPECT_EQ(splat_data.shN().numel(), expected_logical);
-        EXPECT_EQ(splat_data.shN().capacity(), expected_capacity);
+        // Param storage may be q16 (production) or float4-swizzle (if quant forced off).
+        if (splat_data.shN_value_quantized()) {
+            const size_t expected_u16 =
+                lfs::core::sh_value_quant::sh_value_u16_count(
+                    static_cast<size_t>(n_gaussians), layout_rest);
+            const size_t expected_u16_cap =
+                lfs::core::sh_value_quant::sh_value_u16_count(max_cap, layout_rest);
+            EXPECT_EQ(splat_data.shN().numel(), expected_u16);
+            EXPECT_GE(splat_data.shN().capacity(), expected_u16_cap);
+        } else {
+            EXPECT_EQ(splat_data.shN().numel(), expected_moment_logical);
+            EXPECT_EQ(splat_data.shN().capacity(), expected_moment_capacity);
+        }
 
         const auto* state = optimizer.get_state(ParamType::ShN);
         ASSERT_NE(state, nullptr);
-        EXPECT_EQ(state->size, expected_logical);
-        EXPECT_EQ(state->capacity, expected_capacity);
+        EXPECT_EQ(state->size, expected_moment_logical);
+        EXPECT_EQ(state->capacity, expected_moment_capacity);
         if (layout_rest == 0) {
             EXPECT_FALSE(state->exp_avg.is_valid());
-            EXPECT_FALSE(state->exp_avg_sq.is_valid());
         } else {
+            ASSERT_TRUE(state->is_joint());
             ASSERT_TRUE(state->exp_avg.is_valid());
-            ASSERT_TRUE(state->exp_avg_sq.is_valid());
-            EXPECT_EQ(state->exp_avg.numel(), expected_logical);
-            EXPECT_EQ(state->exp_avg.capacity(), expected_capacity);
-            EXPECT_EQ(state->exp_avg_sq.numel(), expected_logical);
-            EXPECT_EQ(state->exp_avg_sq.capacity(), expected_capacity);
+            ASSERT_TRUE(state->joint_bounds.is_valid());
+            // Joint packed: 2 bytes/cell for 8-bit SH moments.
+            const int bpc = joint_adam::bytes_per_cell(state->joint_bits);
+            EXPECT_EQ(bpc, 2);
+            EXPECT_EQ(state->exp_avg.numel(), expected_moment_logical * static_cast<size_t>(bpc));
         }
     };
 
@@ -665,7 +594,7 @@ TEST(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
 }
 
 TEST(MRNFStrategyTest, SerializeRoundTripPreservesFreeMask) {
-    LegacyAdamCodecGuard legacy_guard;
+
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -698,7 +627,7 @@ TEST(MRNFStrategyTest, SerializeRoundTripPreservesFreeMask) {
 }
 
 TEST(MRNFStrategyTest, SerializeRoundTripPreservesLrScheduleState) {
-    LegacyAdamCodecGuard legacy_guard;
+
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -729,7 +658,7 @@ TEST(MRNFStrategyTest, SerializeRoundTripPreservesLrScheduleState) {
 }
 
 TEST(MRNFStrategyTest, DeserializeResizesTransientBuffersToLoadedModel) {
-    LegacyAdamCodecGuard legacy_guard;
+
     auto splat_data = create_mrnf_test_splat_data(12);
     MRNF strategy(splat_data);
 

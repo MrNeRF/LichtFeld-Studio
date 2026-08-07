@@ -485,6 +485,21 @@ namespace {
             ::args::ValueFlag<int> debug_python_port(ui_group, "port", "Port for debugpy listener (default: 5678)", {"debug-python-port"});
 
             // =============================================================================
+            // PERF / PROFILING
+            // =============================================================================
+            ::args::Group perf_sep(parser, " ");
+            ::args::Group perf_group(parser, "PERF / PROFILING:");
+            ::args::Flag perf_bench(perf_group, "perf_bench",
+                                    "Enable in-process perf bench collector (writes output/perf_bench.json)",
+                                    {"perf-bench"});
+            ::args::ValueFlag<int> perf_bench_warmup(perf_group, "N",
+                                                     "Warmup iterations excluded from steady-state metrics (default: 200)",
+                                                     {"perf-bench-warmup"});
+            ::args::ValueFlag<std::string> profile_window(perf_group, "START:STOP",
+                                                          "cudaProfilerStart/Stop window [START, STOP); enables per-iter NVTX ranges",
+                                                          {"profile-window"});
+
+            // =============================================================================
             // LOGGING
             // =============================================================================
             ::args::Group logging_sep(parser, " ");
@@ -561,6 +576,30 @@ namespace {
             // Check if explicitly displaying help
             if (help) {
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
+            }
+
+            // Validate --profile-window early (START:STOP integers, START < STOP).
+            std::optional<int> parsed_profile_start;
+            std::optional<int> parsed_profile_stop;
+            if (profile_window) {
+                const auto win = ::args::get(profile_window);
+                const auto colon = win.find(':');
+                if (colon == std::string::npos) {
+                    return std::unexpected(
+                        "--profile-window expects START:STOP (e.g. 200:500)");
+                }
+                try {
+                    parsed_profile_start = std::stoi(win.substr(0, colon));
+                    parsed_profile_stop = std::stoi(win.substr(colon + 1));
+                } catch (const std::exception&) {
+                    return std::unexpected(
+                        "--profile-window expects integer START:STOP (e.g. 200:500)");
+                }
+                if (*parsed_profile_start < 0 || *parsed_profile_stop < 0 ||
+                    *parsed_profile_stop <= *parsed_profile_start) {
+                    return std::unexpected(
+                        "--profile-window requires 0 <= START < STOP");
+                }
             }
 
             // NO ARGUMENTS = VIEWER MODE (empty)
@@ -906,6 +945,11 @@ namespace {
                                         sparsify_steps_val = cli_option_present({"--sparsify-steps"}) ? std::optional<int>(::args::get(sparsify_steps)) : std::optional<int>(),
                                         init_rho_val = cli_option_present({"--init-rho"}) ? std::optional<float>(::args::get(init_rho)) : std::optional<float>(),
                                         prune_ratio_val = cli_option_present({"--prune-ratio"}) ? std::optional<float>(::args::get(prune_ratio)) : std::optional<float>(),
+                                        // Perf / profiling
+                                        perf_bench_flag = bool(perf_bench),
+                                        perf_bench_warmup_val = cli_option_present({"--perf-bench-warmup"}) ? std::optional<int>(::args::get(perf_bench_warmup)) : std::optional<int>(),
+                                        profile_start_val = parsed_profile_start,
+                                        profile_stop_val = parsed_profile_stop,
                                         // Mask parameters
                                         mask_mode_val = cli_option_present({"--mask-mode"}) ? std::optional<lfs::core::param::MaskMode>(::args::get(mask_mode)) : std::optional<lfs::core::param::MaskMode>(),
                                         depth_loss_weight_val = cli_option_present({"--depth-loss-weight"}) ? std::optional<float>(::args::get(depth_loss_weight)) : std::optional<float>(),
@@ -999,6 +1043,12 @@ namespace {
                 setVal(sparsify_steps_val, opt.sparsify_steps);
                 setVal(init_rho_val, opt.init_rho);
                 setVal(prune_ratio_val, opt.prune_ratio);
+
+                // Perf / profiling
+                setFlag(perf_bench_flag, opt.perf_bench);
+                setVal(perf_bench_warmup_val, opt.perf_bench_warmup);
+                setVal(profile_start_val, opt.profile_start_iter);
+                setVal(profile_stop_val, opt.profile_stop_iter);
 
                 setFlag(enable_mip_flag, opt.mip_filter);
                 setFlag(use_bilateral_grid_flag, opt.use_bilateral_grid);

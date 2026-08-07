@@ -113,7 +113,7 @@ TEST(PeakExCacheLedger, Wave2BaselineAndGtCacheOwner) {
               static_cast<std::size_t>(938.3 * 1024.0 * 1024.0));
 
     // Synthesize a peak ledger via the collector API surface.
-    // (Collector only records when LFS_PERF_BENCH is set; test the pure
+    // (Collector only records when --perf-bench is set; test the pure
     // arithmetic + owner table through peak_ex_cache_ledger after manual fill
     // is not possible without started_ — so assert constants and the helper
     // math that finalize uses.)

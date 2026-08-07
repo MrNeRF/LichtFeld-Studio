@@ -467,36 +467,7 @@ namespace {
             EXPECT_LT(max_abs, 0.15) << "shN q16/canonical round-trip error too high";
         }
 
-        // Legacy codec path: force legacy, re-save from a fresh init, load under legacy.
-        joint_adam::set_joint_codec_enabled_for_testing(false);
-        {
-            const auto legacy_dir = temp_dir / "legacy";
-            std::filesystem::create_directories(legacy_dir / "checkpoints");
-            lfs::core::param::TrainingParameters legacy_params = params;
-            legacy_params.dataset.output_path = legacy_dir;
-
-            auto legacy_model = make_checkpoint_test_splat(count, lfs::core::Device::CUDA, sh_degree);
-            lfs::training::MCMC legacy_source(*legacy_model);
-            legacy_source.initialize(legacy_params.optimization);
-            auto* st = legacy_source.get_optimizer().get_state_mutable(lfs::training::ParamType::Means);
-            ASSERT_NE(st, nullptr);
-            EXPECT_FALSE(st->is_joint());
-            st->step_count = 7;
-            ASSERT_TRUE(lfs::training::save_checkpoint(legacy_dir, 9, legacy_source, legacy_params).has_value());
-
-            auto legacy_target_model = make_checkpoint_test_splat(1, lfs::core::Device::CUDA, sh_degree);
-            lfs::training::MCMC legacy_target(*legacy_target_model);
-            legacy_target.initialize(legacy_params.optimization);
-            auto loaded = legacy_params;
-            const auto lr = lfs::training::load_checkpoint(
-                lfs::training::checkpoint_output_path(legacy_dir),
-                legacy_target, loaded, nullptr, nullptr, nullptr);
-            ASSERT_TRUE(lr.has_value()) << lr.error();
-            const auto* rst = legacy_target.get_optimizer().get_state(lfs::training::ParamType::Means);
-            ASSERT_NE(rst, nullptr);
-            EXPECT_FALSE(rst->is_joint());
-            EXPECT_EQ(rst->step_count, 7);
-        }
+        // Legacy Adam codec checkpoint path removed (joint is the only codec).
 
         joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
         sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);

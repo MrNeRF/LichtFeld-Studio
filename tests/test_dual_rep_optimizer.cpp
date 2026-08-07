@@ -5,7 +5,7 @@
  * Dual-representation optimizer-state cluster (adversarial BL-1/2, MJ-1..4, MN-5/6).
  *
  * Both strategy suites historically forced joint+q16 OFF — these paths were untested.
- * All cases here run with the codecs ON (or the documented legacy+q16 combo for BL-1).
+ * All cases here run with the codecs ON (joint + SH value quant permanently ON).
  */
 
 #include "core/cuda/sh_layout.cuh"
@@ -43,17 +43,6 @@ namespace {
             sh_value::set_sh_value_quant_enabled_for_testing(true);
         }
         ~CodecsOnGuard() {
-            sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
-            joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
-        }
-    };
-
-    struct LegacyPlusQuantGuard {
-        LegacyPlusQuantGuard() {
-            joint_adam::set_joint_codec_enabled_for_testing(false);
-            sh_value::set_sh_value_quant_enabled_for_testing(true);
-        }
-        ~LegacyPlusQuantGuard() {
             sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
             joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
         }
@@ -204,32 +193,7 @@ TEST(DualRepOptimizer, BL2_CheckpointRoundtripAfterFusedPrepareWithQuantOn) {
     std::filesystem::remove_all(temp_dir, ec);
 }
 
-// ---------------------------------------------------------------------------
-// BL-1: legacy codec + q16 must dequant (not set sh_value_bits=16)
-// ---------------------------------------------------------------------------
-TEST(DualRepOptimizer, BL1_LegacyCodecDequantsQ16BeforeFusedPrepare) {
-    LegacyPlusQuantGuard guard;
-    constexpr size_t n = 16;
-    auto splat = make_sh_splat(n, 3);
-    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
-    ASSERT_TRUE(splat.shN_value_quantized());
-
-    AdamOptimizer opt(splat, make_cfg(32));
-    opt.allocate_gradients(32);
-    const auto* st = opt.get_state(ParamType::ShN);
-    ASSERT_NE(st, nullptr);
-    EXPECT_FALSE(st->is_joint());
-
-    auto fused = opt.prepare_fastgs_fused_adam(1001);
-    // After prepare: either shN disabled (warmup/active) or q16 stripped.
-    EXPECT_EQ(fused.shN.sh_value_bits, 0)
-        << "legacy path must refuse q16 (dequant) — never index u16 as float4";
-    EXPECT_EQ(fused.shN.sh_value_bounds, nullptr);
-    // Dequant should have restored fp32 storage.
-    EXPECT_FALSE(splat.shN_value_quantized())
-        << "prepare must dequant shN for legacy codec";
-    EXPECT_EQ(splat.shN_raw().dtype(), DataType::Float32);
-}
+// BL-1 legacy+q16 refusal test removed — legacy Adam codec deleted.
 
 // ---------------------------------------------------------------------------
 // MJ-2: zero-encode under bounds that exclude 0 must still decode to ~0

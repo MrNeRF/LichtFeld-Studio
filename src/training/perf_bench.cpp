@@ -4,14 +4,13 @@
 #include "lfs/training/perf_bench.hpp"
 
 #include "core/alloc_counter.hpp"
-#include "core/environment.hpp"
 #include "core/logger.hpp"
 
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -19,23 +18,13 @@
 namespace lfs::training {
     namespace {
 
+        std::atomic<bool> g_perf_bench_enabled{false};
+        std::atomic<int> g_perf_bench_warmup{200};
+
         [[nodiscard]] std::int64_t now_ns() {
             return std::chrono::duration_cast<std::chrono::nanoseconds>(
                        std::chrono::steady_clock::now().time_since_epoch())
                 .count();
-        }
-
-        [[nodiscard]] bool env_truthy(const char* name) {
-            const char* v = std::getenv(name);
-            if (v == nullptr || v[0] == '\0' || v[0] == '0') {
-                return false;
-            }
-            // Treat "false" / "off" / "no" as disabled.
-            if ((v[0] == 'f' || v[0] == 'F' || v[0] == 'n' || v[0] == 'N') ||
-                (v[0] == 'o' && (v[1] == 'f' || v[1] == 'F'))) {
-                return false;
-            }
-            return true;
         }
 
         void sample_cuda_used(std::size_t& used, std::size_t& total) {
@@ -54,17 +43,19 @@ namespace lfs::training {
         return collector;
     }
 
+    void PerfBenchCollector::configure(const bool enable, const int warmup) {
+        g_perf_bench_enabled.store(enable, std::memory_order_relaxed);
+        if (warmup > 0) {
+            g_perf_bench_warmup.store(warmup, std::memory_order_relaxed);
+        }
+    }
+
     bool PerfBenchCollector::enabled() {
-        return env_truthy("LFS_PERF_BENCH");
+        return g_perf_bench_enabled.load(std::memory_order_relaxed);
     }
 
     int PerfBenchCollector::warmup_iters() {
-        if (const auto v = lfs::core::environment::unsigned_integer<unsigned long long>(
-                "LFS_PERF_BENCH_WARMUP");
-            v && *v > 0) {
-            return static_cast<int>(*v);
-        }
-        return 200;
+        return g_perf_bench_warmup.load(std::memory_order_relaxed);
     }
 
     void PerfBenchCollector::on_training_start(const int total_iters) {

@@ -7,10 +7,10 @@
  * @file perf_bench.hpp
  * @brief Phase 0.3 training-loop measurement harness.
  *
- * Activated when the environment variable LFS_PERF_BENCH is set to a non-empty
- * non-"0" value. Collects per-iteration wall time, real device allocs
- * (alloc_counter), peak CUDA VRAM, last loss, and the training-state ledger.
- * Writes a JSON report at finalize().
+ * Activated via CLI `--perf-bench` (and optional `--perf-bench-warmup=N`).
+ * Collects per-iteration wall time, real device allocs (alloc_counter), peak
+ * CUDA VRAM, last loss, and the training-state ledger. Writes a JSON report
+ * at finalize().
  */
 
 #include "diagnostics/vram_profiler.hpp"
@@ -25,11 +25,13 @@ namespace lfs::training {
     public:
         static PerfBenchCollector& instance();
 
-        /// True when LFS_PERF_BENCH is enabled for this process.
+        /// Configure from CLI (`--perf-bench` / `--perf-bench-warmup=N`). Call before training.
+        static void configure(bool enable, int warmup_iters = 200);
+
+        /// True when `--perf-bench` was configured for this process.
         [[nodiscard]] static bool enabled();
 
-        /// Warmup length for steady-state metrics (default 200; overridable via
-        /// LFS_PERF_BENCH_WARMUP).
+        /// Warmup length for steady-state metrics (default 200).
         [[nodiscard]] static int warmup_iters();
 
         void on_training_start(int total_iters);

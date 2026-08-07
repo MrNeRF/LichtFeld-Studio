@@ -1,4 +1,4 @@
-# BWD-A T_eff histogram — bonsai images_4, iter 1700, LFS_BWD_TEFF_HIST=1
+# BWD-A T_eff histogram — bonsai images_4, iter 1700, (purged-env:BWD_TEFF_HIST)=1
 # Captured 2026-08-07 on RTX 4080
 [BWD-A T_eff hist] tiles=1617  mean_tile_n=351.8  mean_T_eff=337.3  mean_waste_frac=0.041  (skipped_tail = tile_n - T_eff)
 [BWD-A T_eff hist] tile_n bins: <=16=0 <=32=0 <=64=66 <=128=484 <=256=537 <=512=181 <=1024=224 >1024=125

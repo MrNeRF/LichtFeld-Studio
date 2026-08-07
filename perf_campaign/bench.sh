@@ -25,12 +25,13 @@ else
 fi
 
 ITERS="${LFS_BENCH_ITERS:-2000}"
-WARMUP="${LFS_PERF_BENCH_WARMUP:-200}"
+WARMUP="${LFS_BENCH_WARMUP:-200}"
 MAX_CAP="${LFS_BENCH_MAX_CAP:-500000}"
 STRATEGY="${LFS_BENCH_STRATEGY:-mrnf}"
 IMAGES="${LFS_BENCH_IMAGES:-images_4}"
 RUNS=1
 OUT_ROOT="${LFS_BENCH_OUT:-$ROOT/perf_campaign/runs}"
+SKIP_BUILD="${LFS_BENCH_SKIP_BUILD:-0}"
 
 # Dataset discovery (non-interactive). Override with LFS_BENCH_DATASET.
 DATASET="${LFS_BENCH_DATASET:-}"
@@ -88,8 +89,12 @@ echo "iters:    $ITERS  warmup: $WARMUP  max_cap: $MAX_CAP  strategy: $STRATEGY"
 echo "runs:     $RUNS"
 echo
 
-echo "[1/3] Building..."
-cmake --build "$BUILD_DIR" -j"$(nproc)"
+if [[ "$SKIP_BUILD" == "1" ]]; then
+  echo "[1/3] Skipping build (LFS_BENCH_SKIP_BUILD=1) — binary must already be current"
+else
+  echo "[1/3] Building via bounded ./perf_campaign/build.sh (never unbounded -j)..."
+  ./perf_campaign/build.sh "$BUILD_DIR"
+fi
 if [[ ! -x "$BIN" ]]; then
   echo "ERROR: binary not found at $BIN after build" >&2
   exit 1
@@ -107,10 +112,7 @@ for ((r=1; r<=RUNS; r++)); do
   mkdir -p "$RUN_DIR"
   echo
   echo "[2/3] Run $r/$RUNS → $RUN_DIR"
-  # LFS_PERF_BENCH activates the in-process collector (writes perf_bench.json).
-  export LFS_PERF_BENCH=1
-  export LFS_PERF_BENCH_WARMUP="$WARMUP"
-
+  # --perf-bench activates the in-process collector (writes perf_bench.json).
   # shellcheck disable=SC2086
   /usr/bin/time -f 'elapsed_sec=%e' -o "$RUN_DIR/time.txt" \
     "$BIN" \
@@ -121,10 +123,12 @@ for ((r=1; r<=RUNS; r++)); do
       --iter "$ITERS" \
       --max-cap "$MAX_CAP" \
       --strategy "$STRATEGY" \
+      --perf-bench \
+      --perf-bench-warmup="$WARMUP" \
       2>&1 | tee "$RUN_DIR/train.log"
 
   if [[ ! -f "$RUN_DIR/perf_bench.json" ]]; then
-    echo "ERROR: perf_bench.json missing after run $r — is LFS_PERF_BENCH wired?" >&2
+    echo "ERROR: perf_bench.json missing after run $r — is --perf-bench wired?" >&2
     exit 1
   fi
   # Annotate with machine/commit metadata for BASELINE.md assembly.

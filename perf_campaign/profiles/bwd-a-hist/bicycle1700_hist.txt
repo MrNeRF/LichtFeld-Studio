@@ -1,4 +1,4 @@
-# BWD-A T_eff histogram — bicycle images_4, iter 1700, LFS_BWD_TEFF_HIST=1
+# BWD-A T_eff histogram — bicycle images_4, iter 1700, (purged-env:BWD_TEFF_HIST)=1
 # Captured 2026-08-07 on RTX 4080
 [BWD-A T_eff hist] tiles=4056  mean_tile_n=75.0  mean_T_eff=75.0  mean_waste_frac=0.001  (skipped_tail = tile_n - T_eff)
 [BWD-A T_eff hist] tile_n bins: <=16=2 <=32=168 <=64=2511 <=128=878 <=256=373 <=512=124 <=1024=0 >1024=0

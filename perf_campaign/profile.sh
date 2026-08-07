@@ -6,13 +6,11 @@
 #
 # Subcommands:
 #   ./perf_campaign/profile.sh timeline <label>
-#       nsys timeline of a steady-state training slice. The trainer is built
-#       with env-gated hooks (see src/training/trainer.cpp StepProfilingHooks):
-#       LFS_PROFILE_START_ITER / LFS_PROFILE_STOP_ITER call cudaProfilerStart/
-#       Stop, and nsys --capture-range=cudaProfilerApi records exactly the
-#       slice [START, STOP) — default iters 200..500 (300 steady iterations
-#       after warmup). LFS_NVTX=1 wraps each iteration in an NVTX range
-#       "train_step:<iter>" for per-iteration attribution.
+#       nsys timeline of a steady-state training slice. The trainer takes
+#       --profile-window=START:STOP (cudaProfilerStart/Stop) and enables
+#       per-iter NVTX ranges "train_step:<iter>" inside that window.
+#       nsys --capture-range=cudaProfilerApi records exactly [START, STOP) —
+#       default iters 200..500 (300 steady iterations after warmup).
 #       Output: perf_campaign/profiles/<label>/timeline.nsys-rep (+ meta.json)
 #
 #   ./perf_campaign/profile.sh kernels <label>
@@ -70,14 +68,8 @@ LABEL="${1:-}"; shift || true
 [[ -n "$LABEL" ]] || usage
 DIR="$PROFILES_ROOT/$LABEL"
 
-train_env() {
-  # Env for the profiled training run: NVTX per-iteration ranges + the
-  # cudaProfilerStart/Stop slice hooks.
-  echo "LFS_NVTX=1 LFS_PROFILE_START_ITER=$START LFS_PROFILE_STOP_ITER=$STOP"
-}
-
 train_args() {
-  echo "-d $DATASET -o $DIR/train_out --images $IMAGES --headless --iter $ITERS --max-cap $MAX_CAP --strategy $STRATEGY"
+  echo "-d $DATASET -o $DIR/train_out --images $IMAGES --headless --iter $ITERS --max-cap $MAX_CAP --strategy $STRATEGY --profile-window=$START:$STOP"
 }
 
 write_meta() {
@@ -107,7 +99,6 @@ case "$CMD" in
     echo "[timeline] acquiring bench lock ($BENCH_LOCK)..."
     # shellcheck disable=SC2046
     flock "$BENCH_LOCK" \
-      env $(train_env) \
       nsys profile \
         --trace=cuda,nvtx \
         --sample=none --cpuctxsw=none \
@@ -154,8 +145,7 @@ case "$CMD" in
       --section WarpStateStats --section MemoryWorkloadAnalysis
       --section SpeedOfLight --section SpeedOfLight_RooflineChart
       --force-overwrite -o "$OUT")
-    FULL=(env LFS_NVTX=1 LFS_PROFILE_START_ITER="$START" LFS_PROFILE_STOP_ITER="$STOP"
-      "${NCU_CMD[@]}" "$BIN")
+    FULL=("${NCU_CMD[@]}" "$BIN")
     # shellcheck disable=SC2046
     FULL+=($(train_args))
     if sudo -n true 2>/dev/null; then

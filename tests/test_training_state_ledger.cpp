@@ -11,13 +11,11 @@
  *   densify:   densification_info [2,N] fp32 = 8 B/splat
  *   grads:     0 (fused FastGS path; allocate_gradients leaves grad empty)
  *
- * Optimizer (Phase 2.2 joint codec, default ON):
+ * Optimizer (joint (u,log_s) codec — only path):
  *   non-SH: 14 cells × 4 B = 56 + 5 × ceil(N/256) × 16 bounds
  *   SH:     48 cells × 2 B = 96 + 1 × ceil(N/256) × 16 bounds
  *   At N=32: bounds = 6 × 16 = 96 total → optim = (56+96)*32 + 96 = 4960 (155 B/splat)
  *   Large-N limit ≈ 152 B/splat (swizzled SH pad); unpadded K×3=45 cells → ~146.
- *
- * Legacy (LFS_ADAM_LEGACY_CODEC=1): 172 B/splat → total 428.
  */
 
 #include "core/splat_data.hpp"
@@ -61,9 +59,6 @@ namespace {
         const size_t sh_bounds = nb * sizeof(float) * 4;
         return non_sh_packed + non_sh_bounds + sh_packed + sh_bounds;
     }
-
-    constexpr size_t kOptimBpsLegacy = 172;
-    constexpr size_t kTotalBpsLegacy = 428;
 
     SplatData make_sh3_splat(const size_t n) {
         auto means = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
@@ -138,24 +133,11 @@ TEST(TrainingStateLedgerTest, SyntheticSh3MatchesFootprintTable) {
     EXPECT_DOUBLE_EQ(ledger.bytes_per_splat,
                      static_cast<double>(expected_total) / static_cast<double>(kN));
 
-    // Must be strictly leaner than legacy 172 B/splat optimizer.
-    EXPECT_LT(ledger.optimizer_bytes, kOptimBpsLegacy * kN);
     joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(TrainingStateLedgerTest, LegacyCodecStillReports172) {
-    joint_adam::set_joint_codec_enabled_for_testing(false);
-    sh_value::set_sh_value_quant_enabled_for_testing(false);
-    auto splat = make_sh3_splat(kN);
-    AdamOptimizer optimizer(splat, AdamConfig{});
-    optimizer.allocate_gradients();
-    const auto ledger = compute_training_state_ledger(splat, &optimizer);
-    EXPECT_EQ(ledger.optimizer_bytes, kOptimBpsLegacy * kN);
-    EXPECT_EQ(ledger.total_bytes, kTotalBpsLegacy * kN);
-    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
-    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
-}
+// Legacy codec path removed (joint is the only Adam codec).
 
 TEST(TrainingStateLedgerTest, PublishesIntoVramProfiler) {
     joint_adam::set_joint_codec_enabled_for_testing(true);

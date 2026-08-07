@@ -154,7 +154,7 @@
   4. Bounds/codes must allocate with **capacity = means.capacity()** (max_cap), not exact-N.
 - **Heal-vs-rebuild:** always **rebuild** codes+bounds from float after densify (block min/max must match post-growth N). Adam moments **heal** when capacity covers float_layout(N); extend/rebuild only when capacity short. Moments never resize to u16 cell count.
 - **Gate (passed):** B/splat bonsai 304.3 / bicycle 306.8; bicycle 7k loss ON [0.10–0.14] vs OFF [0.10–0.16]; late-window ON 3.74 ms ≤ OFF 3.88 ms; full suite delta only ISS-016/017/019 pre-existing reds; tensor_hardening 89/89.
-- **Force off:** `LFS_SH_VALUE_QUANT=0` or `LFS_SH_VALUE_FP32=1`.
+- **Force off:** removed — SH value quant is permanently ON (flag purge).
 
 
 ## ISS-020 — post-suite teardown SIGSEGV (static destruction order)
