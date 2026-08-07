@@ -2352,10 +2352,14 @@
     "click_3rd": "点击第 3 个点",
     "points_count": "点: {}/3",
     "up": "上",
-    "hint_picking": "点击：放置点。Backspace：删除上一个。Esc：取消。",
-    "hint_review": "Enter：应用。Backspace：删除上一个点。Esc：取消。",
+    "hint_picking": "点击：放置/选择。拖动标记：移动。Del：删除所选。Backspace：删除上一个。Esc：取消。",
+    "hint_review": "Enter/应用：对齐。拖动标记调整。Del：删除所选。Esc：取消。",
     "status_colinear": "这些点几乎共线。请移动一个点。",
     "status_no_surface": "光标下没有表面。",
-    "status_no_target": "没有可对齐的可变换目标。"
+    "status_no_target": "没有可对齐的可变换目标。",
+    "snapped": "已吸附",
+    "apply": "应用",
+    "clear": "清除",
+    "snap": "轴向吸附"
   }
 }

@@ -47,6 +47,8 @@ namespace lfs::vis {
             has_editable_transform_selection_ = false;
             has_splat_selection_ = false;
             has_editable_splat_selection_ = false;
+            has_editable_align_selection_ = false;
+            has_locked_align_selection_ = false;
             transform_selection_error_.clear();
             selected_node_type_ = core::NodeType::SPLAT;
             return;
@@ -85,6 +87,8 @@ namespace lfs::vis {
         has_editable_transform_selection_ = false;
         has_splat_selection_ = false;
         has_editable_splat_selection_ = false;
+        has_editable_align_selection_ = false;
+        has_locked_align_selection_ = false;
         transform_selection_error_.clear();
         selected_node_type_ = core::NodeType::SPLAT;
 
@@ -119,6 +123,14 @@ namespace lfs::vis {
                     has_splat_selection_ = true;
                     if (!locked)
                         has_editable_splat_selection_ = true;
+                }
+
+                if (cap::isAlignTransformTargetType(node->type)) {
+                    if (locked) {
+                        has_locked_align_selection_ = true;
+                    } else {
+                        has_editable_align_selection_ = true;
+                    }
                 }
             }
 
@@ -164,7 +176,7 @@ namespace lfs::vis {
         case ToolType::Scale:
             return canTransformSelectedNode();
         case ToolType::Align:
-            return has_editable_splat_selection_;
+            return has_editable_align_selection_;
         }
         return false;
     }
@@ -195,11 +207,11 @@ namespace lfs::vis {
                 return nullptr;
             return transform_selection_error_.empty() ? "select parent node" : transform_selection_error_.c_str();
         case ToolType::Align:
-            if (has_editable_splat_selection_)
+            if (has_editable_align_selection_)
                 return nullptr;
-            if (has_splat_selection_)
+            if (has_locked_align_selection_)
                 return "selection is locked";
-            return "select PLY node";
+            return "select transformable node";
         }
         return nullptr;
     }

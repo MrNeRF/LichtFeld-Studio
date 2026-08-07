@@ -2345,10 +2345,14 @@
     "click_3rd": "Kliknij 3. punkt",
     "points_count": "Punkty: {}/3",
     "up": "GÓRA",
-    "hint_picking": "Klik: ustaw punkt. Backspace: usuń ostatni. Esc: anuluj.",
-    "hint_review": "Enter: zastosuj. Backspace: usuń ostatni punkt. Esc: anuluj.",
+    "hint_picking": "Klik: ustaw/wybierz. Przeciągnij marker: przesuń. Del: usuń wybrany. Backspace: ostatni. Esc: anuluj.",
+    "hint_review": "Enter/Zastosuj: wyrównaj. Przeciągnij markery. Del: usuń wybrany. Esc: anuluj.",
     "status_colinear": "Punkty są prawie w linii. Przesuń punkt.",
     "status_no_surface": "Brak powierzchni pod kursorem.",
-    "status_no_target": "Brak obiektu do wyrównania."
+    "status_no_target": "Brak obiektu do wyrównania.",
+    "snapped": "przyciągnięto",
+    "apply": "Zastosuj",
+    "clear": "Wyczyść",
+    "snap": "Przyciąganie osi"
   }
 }

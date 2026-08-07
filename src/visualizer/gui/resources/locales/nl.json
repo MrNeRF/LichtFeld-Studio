@@ -2345,10 +2345,14 @@
     "click_3rd": "Klik 3e punt",
     "points_count": "Punten: {}/3",
     "up": "OMHOOG",
-    "hint_picking": "Klik: punt plaatsen. Backspace: laatste verwijderen. Esc: annuleren.",
-    "hint_review": "Enter: toepassen. Backspace: laatste punt verwijderen. Esc: annuleren.",
+    "hint_picking": "Klik: plaatsen/selecteren. Marker slepen: verplaatsen. Del: geselecteerde. Backspace: laatste. Esc: annuleren.",
+    "hint_review": "Enter/Toepassen: uitlijnen. Markers slepen. Del: geselecteerde. Esc: annuleren.",
     "status_colinear": "Punten liggen bijna op een lijn. Verplaats een punt.",
     "status_no_surface": "Geen oppervlak onder de cursor.",
-    "status_no_target": "Geen transformeerbaar doel om uit te lijnen."
+    "status_no_target": "Geen transformeerbaar doel om uit te lijnen.",
+    "snapped": "vastgeklikt",
+    "apply": "Toepassen",
+    "clear": "Wissen",
+    "snap": "Assnap"
   }
 }

@@ -37,6 +37,20 @@ namespace lfs::vis::cap {
                type == core::NodeType::MESH;
     }
 
+    bool isAlignTransformTargetType(const core::NodeType type) {
+        switch (type) {
+        case core::NodeType::SPLAT:
+        case core::NodeType::POINTCLOUD:
+        case core::NodeType::GROUP:
+        case core::NodeType::PLY_SEQUENCE:
+        case core::NodeType::DATASET:
+        case core::NodeType::MESH:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     namespace {
 
         struct TransformTargetSelection {

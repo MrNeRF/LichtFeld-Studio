@@ -2345,10 +2345,14 @@
     "click_3rd": "3. Punkt klicken",
     "points_count": "Punkte: {}/3",
     "up": "OBEN",
-    "hint_picking": "Klick: Punkt setzen. Rücktaste: letzten entfernen. Esc: abbrechen.",
-    "hint_review": "Enter: anwenden. Rücktaste: letzten Punkt entfernen. Esc: abbrechen.",
+    "hint_picking": "Klick: setzen/auswählen. Marker ziehen: bewegen. Entf: Auswahl. Rücktaste: letzter. Esc: abbrechen.",
+    "hint_review": "Enter/Anwenden: ausrichten. Marker ziehen. Entf: Auswahl. Esc: abbrechen.",
     "status_colinear": "Punkte liegen fast auf einer Linie. Punkt verschieben.",
     "status_no_surface": "Keine Oberfläche unter dem Cursor.",
-    "status_no_target": "Kein transformierbares Ziel zum Ausrichten."
+    "status_no_target": "Kein transformierbares Ziel zum Ausrichten.",
+    "snapped": "eingerastet",
+    "apply": "Anwenden",
+    "clear": "Löschen",
+    "snap": "Achsen-Snap"
   }
 }

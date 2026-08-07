@@ -249,8 +249,9 @@ class _GizmoToolbarController:
 
     _TRANSFORM_TOOL_IDS = {"builtin.translate", "builtin.rotate", "builtin.scale"}
     _MIRROR_TOOL_ID = "builtin.mirror"
+    _ALIGN_TOOL_ID = "builtin.align"
     _CROP_TOOL_ID = "builtin.cropbox"
-    _HORIZONTAL_TOOL_IDS = {"builtin.select", _MIRROR_TOOL_ID, _CROP_TOOL_ID, *_TRANSFORM_TOOL_IDS}
+    _HORIZONTAL_TOOL_IDS = {"builtin.select", _MIRROR_TOOL_ID, _ALIGN_TOOL_ID, _CROP_TOOL_ID, *_TRANSFORM_TOOL_IDS}
     _TRANSFORM_SPACE_IDS = {"local": 0, "world": 1}
     _MULTI_TRANSFORM_MODE_IDS = {"selection": 0, "individual": 1}
     _PIVOT_IDS = {"origin": 0, "bounds": 1}
@@ -296,6 +297,7 @@ class _GizmoToolbarController:
             return {
                 "show_transform_toolbar": False,
                 "show_mirror_toolbar": False,
+                "show_align_toolbar": False,
                 "show_crop_toolbar": bool(crop_enable_buttons),
                 "show_crop_edit_controls": False,
                 "show_crop_enable_separator": False,
@@ -314,6 +316,7 @@ class _GizmoToolbarController:
                 "crop_object_buttons": [],
                 "crop_transform_buttons": [],
                 "crop_action_buttons": [],
+                "align_action_buttons": [],
                 "gizmo_buttons": [],
                 "submode_buttons": [],
                 "pivot_buttons": [],
@@ -381,6 +384,8 @@ class _GizmoToolbarController:
         crop_object_buttons = self._build_crop_object_records(active_tool_id) if crop_tool_active else []
         crop_transform_buttons = self._build_crop_transform_records(active_tool_id) if crop_tool_active else []
         crop_action_buttons = self._build_crop_action_records(active_tool_id) if crop_tool_active else []
+        align_tool_active = active_tool_id == self._ALIGN_TOOL_ID
+        align_action_buttons = self._build_align_action_records(active_tool_id) if align_tool_active else []
         selection_volume_gizmo_buttons = self._build_selection_volume_gizmo_records(active_tool_id)
         multi_transform_selection = active_tool_id in self._TRANSFORM_TOOL_IDS and len(selected_nodes) > 1
         submode_buttons = self._build_submode_records(active_tool_id, tool_def, multi_transform_selection)
@@ -394,6 +399,7 @@ class _GizmoToolbarController:
                 bool(transform_tool_buttons)
             ),
             "show_mirror_toolbar": active_tool_id == self._MIRROR_TOOL_ID and bool(submode_buttons),
+            "show_align_toolbar": align_tool_active and bool(align_action_buttons),
             "show_crop_toolbar": bool(crop_enable_buttons) or (crop_tool_active and bool(crop_object_buttons)),
             "show_crop_edit_controls": crop_tool_active and bool(crop_object_buttons),
             "show_crop_enable_separator": bool(crop_enable_buttons) and crop_tool_active,
@@ -412,6 +418,7 @@ class _GizmoToolbarController:
             "crop_object_buttons": crop_object_buttons,
             "crop_transform_buttons": crop_transform_buttons,
             "crop_action_buttons": crop_action_buttons,
+            "align_action_buttons": align_action_buttons,
             "gizmo_buttons": gizmo_buttons,
             "submode_buttons": submode_buttons,
             "pivot_buttons": pivot_buttons,
@@ -700,6 +707,56 @@ class _GizmoToolbarController:
                 tooltip_text="Crop ROI Settings",
                 selected=bool(settings_open),
             )
+        ]
+
+    def _build_align_action_records(self, active_tool_id):
+        import lichtfeld as lf
+
+        active = active_tool_id == self._ALIGN_TOOL_ID
+        can_apply = False
+        snap_on = True
+        if active:
+            can_apply_fn = getattr(lf.ui, "can_apply_align", None)
+            if callable(can_apply_fn):
+                try:
+                    can_apply = bool(can_apply_fn())
+                except Exception:
+                    can_apply = False
+            snap_fn = getattr(lf.ui, "get_align_axis_snap", None)
+            if callable(snap_fn):
+                try:
+                    snap_on = bool(snap_fn())
+                except Exception:
+                    snap_on = True
+        return [
+            _button_record(
+                "align-apply",
+                "align_apply",
+                "",
+                _icon_src("check"),
+                tooltip_key="align.apply",
+                tooltip_text="Apply",
+                enabled=active and can_apply,
+            ),
+            _button_record(
+                "align-clear",
+                "align_clear",
+                "",
+                _icon_src("reset"),
+                tooltip_key="align.clear",
+                tooltip_text="Clear",
+                enabled=active,
+            ),
+            _button_record(
+                "align-snap",
+                "align_toggle_snap",
+                "",
+                _icon_src("world"),
+                tooltip_key="align.snap",
+                tooltip_text="Axis snap",
+                selected=snap_on,
+                enabled=active,
+            ),
         ]
 
     def _build_crop_action_records(self, active_tool_id):
@@ -1011,6 +1068,28 @@ class _GizmoToolbarController:
                 apply_crop_tool()
             return
 
+        if action == "align_apply":
+            apply_align = getattr(lf.ui, "apply_align", None)
+            if callable(apply_align):
+                apply_align()
+            return
+
+        if action == "align_clear":
+            clear_align = getattr(lf.ui, "clear_align_points", None)
+            if callable(clear_align):
+                clear_align()
+            return
+
+        if action == "align_toggle_snap":
+            get_snap = getattr(lf.ui, "get_align_axis_snap", None)
+            set_snap = getattr(lf.ui, "set_align_axis_snap", None)
+            if callable(get_snap) and callable(set_snap):
+                try:
+                    set_snap(not bool(get_snap()))
+                except Exception:
+                    pass
+            return
+
         if action == "crop_delete":
             delete_crop_tool = getattr(lf.ui, "delete_crop_tool_volume", None)
             if callable(delete_crop_tool):
@@ -1254,6 +1333,7 @@ class _ViewportToolbarController:
     _BOOLEAN_FIELDS = (
         "show_transform_toolbar",
         "show_mirror_toolbar",
+        "show_align_toolbar",
         "show_crop_toolbar",
         "show_crop_edit_controls",
         "show_crop_enable_separator",
@@ -1280,6 +1360,7 @@ class _ViewportToolbarController:
         "crop_object_buttons",
         "crop_transform_buttons",
         "crop_action_buttons",
+        "align_action_buttons",
         "gizmo_buttons",
         "submode_buttons",
         "pivot_buttons",
@@ -1306,6 +1387,7 @@ class _ViewportToolbarController:
         self._last_toolbar_signature = None
         self._show_transform_toolbar = False
         self._show_mirror_toolbar = False
+        self._show_align_toolbar = False
         self._show_crop_toolbar = False
         self._show_crop_edit_controls = False
         self._show_crop_enable_separator = False
@@ -1495,6 +1577,7 @@ class _ViewportToolbarController:
         dirty |= self._sync_crop_roi_params(cropbox_toolbar_signature)
         dirty |= self._sync_flag("show_transform_toolbar", gizmo_state["show_transform_toolbar"])
         dirty |= self._sync_flag("show_mirror_toolbar", gizmo_state["show_mirror_toolbar"])
+        dirty |= self._sync_flag("show_align_toolbar", gizmo_state["show_align_toolbar"])
         dirty |= self._sync_flag("show_crop_toolbar", gizmo_state["show_crop_toolbar"])
         dirty |= self._sync_flag("show_crop_edit_controls", gizmo_state["show_crop_edit_controls"])
         dirty |= self._sync_flag("show_crop_enable_separator", gizmo_state["show_crop_enable_separator"])
@@ -1518,6 +1601,7 @@ class _ViewportToolbarController:
         dirty |= self._sync_records("crop_object_buttons", gizmo_state["crop_object_buttons"])
         dirty |= self._sync_records("crop_transform_buttons", gizmo_state["crop_transform_buttons"])
         dirty |= self._sync_records("crop_action_buttons", gizmo_state["crop_action_buttons"])
+        dirty |= self._sync_records("align_action_buttons", gizmo_state["align_action_buttons"])
         dirty |= self._sync_records("gizmo_buttons", gizmo_state["gizmo_buttons"])
         dirty |= self._sync_records("submode_buttons", gizmo_state["submode_buttons"])
         dirty |= self._sync_records("pivot_buttons", gizmo_state["pivot_buttons"])

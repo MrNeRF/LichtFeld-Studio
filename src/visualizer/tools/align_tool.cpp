@@ -7,17 +7,23 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/string_keys.hpp"
 #include "internal/viewport.hpp"
+#include "operator/ops/align_ops.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
+#include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
+#include "visualizer/gui_capabilities.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace lfs::vis::tools {
 
@@ -29,11 +35,72 @@ namespace lfs::vis::tools {
     }
 
     void AlignTool::shutdown() {
+        restoreGridIfNeeded();
         tool_context_ = nullptr;
         services().clearAlignPickedPoints();
     }
 
-    void AlignTool::update([[maybe_unused]] const ToolContext& ctx) {}
+    void AlignTool::forceGridOn() {
+        if (!tool_context_) {
+            return;
+        }
+        auto* const rm = tool_context_->getRenderingManager();
+        if (!rm) {
+            return;
+        }
+        auto settings = rm->getSettings();
+        saved_show_grid_ = settings.show_grid;
+        user_changed_grid_ = false;
+        if (!settings.show_grid) {
+            settings.show_grid = true;
+            rm->updateSettings(settings);
+            rm->markDirty(DirtyFlag::OVERLAY);
+        }
+        last_written_show_grid_ = true;
+        grid_override_active_ = true;
+    }
+
+    void AlignTool::restoreGridIfNeeded() {
+        if (!grid_override_active_) {
+            return;
+        }
+        grid_override_active_ = false;
+        if (user_changed_grid_ || !tool_context_) {
+            return;
+        }
+        auto* const rm = tool_context_->getRenderingManager();
+        if (!rm) {
+            return;
+        }
+        auto settings = rm->getSettings();
+        if (settings.show_grid != saved_show_grid_) {
+            settings.show_grid = saved_show_grid_;
+            rm->updateSettings(settings);
+            rm->markDirty(DirtyFlag::OVERLAY);
+        }
+    }
+
+    void AlignTool::update([[maybe_unused]] const ToolContext& ctx) {
+        if (!isEnabled() || !grid_override_active_ || user_changed_grid_) {
+            return;
+        }
+        auto* const rm = ctx.getRenderingManager();
+        if (!rm) {
+            return;
+        }
+        const auto settings = rm->getSettings();
+        if (settings.show_grid != last_written_show_grid_) {
+            user_changed_grid_ = true;
+            return;
+        }
+        if (!settings.show_grid) {
+            auto next = settings;
+            next.show_grid = true;
+            rm->updateSettings(next);
+            rm->markDirty(DirtyFlag::OVERLAY);
+            last_written_show_grid_ = true;
+        }
+    }
 
     namespace {
 
@@ -111,7 +178,13 @@ namespace lfs::vis::tools {
                     proj.info.y + render_point.y * proj.screen_scale_y};
         }
 
-        [[nodiscard]] glm::vec2 projectToScreen(const PanelProjection& proj, const glm::vec3& world_pos) {
+        struct ProjectedScreen {
+            glm::vec2 pos{-1000.0f, -1000.0f};
+            bool valid = false;
+        };
+
+        [[nodiscard]] ProjectedScreen projectToScreenChecked(const PanelProjection& proj,
+                                                             const glm::vec3& world_pos) {
             const auto projected = lfs::rendering::projectWorldPoint(
                 proj.viewport.camera.R,
                 proj.viewport.camera.t,
@@ -121,15 +194,95 @@ namespace lfs::vis::tools {
                 proj.orthographic,
                 proj.ortho_scale);
             if (!projected) {
-                return {-1000.0f, -1000.0f};
+                return {};
             }
+            return {renderToScreen(proj, glm::vec2(projected->x, projected->y)), true};
+        }
 
-            return renderToScreen(proj, glm::vec2(projected->x, projected->y));
+        [[nodiscard]] glm::vec2 projectToScreen(const PanelProjection& proj, const glm::vec3& world_pos) {
+            return projectToScreenChecked(proj, world_pos).pos;
         }
 
         void faceNormalTowardCamera(glm::vec3& normal, const glm::vec3& center, const glm::vec3& camera_pos) {
             if (glm::dot(normal, camera_pos - center) < 0.0f) {
                 normal = -normal;
+            }
+        }
+
+        [[nodiscard]] std::optional<glm::mat4> resolvePrimaryAlignTargetWorld(const ToolContext& ctx) {
+            auto* const sm = ctx.getSceneManager();
+            if (!sm) {
+                return std::nullopt;
+            }
+            const auto& scene = sm->getScene();
+            for (const auto& name : sm->getSelectedNodeNames()) {
+                const auto* const node = scene.getNode(name);
+                if (!node || !cap::isAlignTransformTargetType(node->type)) {
+                    continue;
+                }
+                if (static_cast<bool>(node->locked)) {
+                    continue;
+                }
+                return vis::scene_coords::nodeVisualizerWorldTransform(scene, node->id);
+            }
+            return std::nullopt;
+        }
+
+        void drawEdgeLengthLabels(lfs::rendering::ScreenOverlayRenderer& overlay,
+                                  const PanelProjection& panel_proj,
+                                  const std::vector<glm::vec3>& points,
+                                  const lfs::rendering::OverlayColor& text_color,
+                                  const lfs::rendering::OverlayColor& shadow_color,
+                                  const float label_size) {
+            if (points.size() < 2) {
+                return;
+            }
+
+            std::vector<ProjectedScreen> screens;
+            screens.reserve(points.size());
+            for (const auto& p : points) {
+                screens.push_back(projectToScreenChecked(panel_proj, p));
+            }
+
+            glm::vec2 centroid_screen(0.0f);
+            int valid_count = 0;
+            for (const auto& s : screens) {
+                if (s.valid) {
+                    centroid_screen += s.pos;
+                    ++valid_count;
+                }
+            }
+            if (valid_count > 0) {
+                centroid_screen /= static_cast<float>(valid_count);
+            }
+
+            const size_t n = points.size();
+            for (size_t i = 0; i < n; ++i) {
+                const size_t j = (i + 1) % n;
+                if (n == 2 && j == 0) {
+                    // With only two fixed points there is a single edge.
+                    // Loop with n==2 would draw both directions; only one edge exists.
+                }
+                if (!screens[i].valid || !screens[j].valid) {
+                    continue;
+                }
+                if (n == 2 && i > 0) {
+                    break;
+                }
+
+                const glm::vec2 mid = (screens[i].pos + screens[j].pos) * 0.5f;
+                glm::vec2 outward = mid - centroid_screen;
+                const float outward_len = glm::length(outward);
+                if (outward_len > 1e-3f) {
+                    outward = outward / outward_len * 10.0f;
+                } else {
+                    outward = glm::vec2(0.0f, -10.0f);
+                }
+                const glm::vec2 label_pos = mid + outward;
+                const float len = glm::length(points[j] - points[i]);
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(len));
+                overlay.addTextWithShadow(label_pos, buf, text_color, shadow_color, label_size);
             }
         }
 
@@ -140,7 +293,9 @@ namespace lfs::vis::tools {
                                  const glm::vec3& p2,
                                  const glm::vec3& camera_pos,
                                  const float label_size,
-                                 const bool filled) {
+                                 const bool filled,
+                                 const bool show_edge_labels,
+                                 const std::optional<glm::mat4>& snap_target_world) {
             const glm::vec3 v01 = p1 - p0;
             const glm::vec3 v02 = p2 - p0;
             const glm::vec3 cross_v = glm::cross(v01, v02);
@@ -152,6 +307,11 @@ namespace lfs::vis::tools {
             glm::vec3 normal = cross_v / cross_len;
             const glm::vec3 center = (p0 + p1 + p2) / 3.0f;
             faceNormalTowardCamera(normal, center, camera_pos);
+
+            bool snapped = false;
+            if (services().getAlignAxisSnapEnabled() && snap_target_world) {
+                snapped = op::snapAlignNormalToNodeAxes(normal, *snap_target_world, 3.0f);
+            }
 
             const float line_length = glm::max(glm::length(v01) * 0.5f, 0.1f);
             const glm::vec3 normal_end = center + normal * line_length;
@@ -167,19 +327,31 @@ namespace lfs::vis::tools {
             constexpr lfs::rendering::OverlayColor TRI_GREEN{0.0f, 1.0f, 0.0f, 200.0f / 255.0f};
             constexpr lfs::rendering::OverlayColor TRI_BLUE{0.0f, 0.0f, 1.0f, 200.0f / 255.0f};
 
+            const auto& t = theme();
+            const auto up_color = snapped ? toOverlay(t.palette.primary) : YELLOW;
+
             if (filled) {
-                const auto& t = theme();
                 overlay.addTriangleFilled(p0_screen, p1_screen, p2_screen, toOverlay(t.palette.info, 0.15f));
             }
 
-            overlay.addLine(center_screen, normal_screen, YELLOW, 4.0f);
-            overlay.addCircleFilled(normal_screen, 10.0f, YELLOW);
+            overlay.addLine(center_screen, normal_screen, up_color, 4.0f);
+            overlay.addCircleFilled(normal_screen, 10.0f, up_color);
             overlay.addText({normal_screen.x + 12.0f, normal_screen.y - 8.0f},
-                            LOC(lichtfeld::Strings::Align::UP), YELLOW, label_size);
+                            LOC(lichtfeld::Strings::Align::UP), up_color, label_size);
+            if (snapped) {
+                overlay.addText({normal_screen.x + 12.0f, normal_screen.y + label_size + 2.0f},
+                                LOC(lichtfeld::Strings::Align::SNAPPED), up_color, label_size);
+            }
 
             overlay.addLine(p0_screen, p1_screen, TRI_RED, 2.0f);
             overlay.addLine(p1_screen, p2_screen, TRI_GREEN, 2.0f);
             overlay.addLine(p2_screen, p0_screen, TRI_BLUE, 2.0f);
+
+            if (show_edge_labels) {
+                constexpr lfs::rendering::OverlayColor kShadow{0.0f, 0.0f, 0.0f, 180.0f / 255.0f};
+                drawEdgeLengthLabels(overlay, panel_proj, {p0, p1, p2},
+                                     toOverlay(t.overlay.text), kShadow, label_size);
+            }
         }
     } // namespace
 
@@ -272,13 +444,16 @@ namespace lfs::vis::tools {
         const auto& t = theme();
         const auto SPHERE_COLOR = toOverlay(t.palette.error);
         const auto SPHERE_OUTLINE = toOverlay(t.overlay.text);
+        const auto SELECTED_OUTLINE = toOverlay(t.palette.primary);
         const auto PREVIEW_COLOR = toOverlay(t.palette.error, 0.6f);
         const auto CROSSHAIR_COLOR = toOverlay(t.palette.error, 0.8f);
         const float label_size = t.fonts.base_size;
 
         const auto& picked_points = services().getAlignPickedPoints();
+        const auto selected_point = services().getAlignSelectedPoint();
         const bool in_review = picked_points.size() == 3;
         const glm::vec3 camera_pos = panel_proj.viewport.camera.t;
+        const auto snap_target_world = resolvePrimaryAlignTargetWorld(*tool_context_);
 
         for (size_t i = 0; i < picked_points.size(); ++i) {
             const glm::vec2 screen_pos = projectToScreen(panel_proj, picked_points[i]);
@@ -287,8 +462,11 @@ namespace lfs::vis::tools {
             const float screen_radius =
                 glm::clamp(radius_render * glm::min(panel_proj.screen_scale_x, panel_proj.screen_scale_y), 5.0f, 50.0f);
 
+            const bool is_selected = selected_point && *selected_point == static_cast<int>(i);
             overlay->addCircleFilled(screen_pos, screen_radius, SPHERE_COLOR, 32);
-            overlay->addCircle(screen_pos, screen_radius, SPHERE_OUTLINE, 32, 1.5f);
+            overlay->addCircle(screen_pos, screen_radius,
+                               is_selected ? SELECTED_OUTLINE : SPHERE_OUTLINE,
+                               32, is_selected ? 2.5f : 1.5f);
 
             const char label[2] = {static_cast<char>('1' + static_cast<char>(i)), '\0'};
             overlay->addText({screen_pos.x - 4.0f, screen_pos.y - 6.0f},
@@ -298,7 +476,7 @@ namespace lfs::vis::tools {
         if (in_review) {
             drawTrianglePreview(*overlay, panel_proj,
                                 picked_points[0], picked_points[1], picked_points[2],
-                                camera_pos, label_size, true);
+                                camera_pos, label_size, true, true, snap_target_world);
         }
 
         if (over_gui)
@@ -306,6 +484,7 @@ namespace lfs::vis::tools {
 
         overlay->addCircle(mouse_pos, 5.0f, CROSSHAIR_COLOR, 16, 2.0f);
 
+        // Single depth sample per frame for hover preview + live triangle (B7).
         std::optional<float> hover_depth;
         if (!in_review && rendering_manager) {
             const glm::vec2 render_point = screenToRender(panel_proj, mouse_pos);
@@ -320,6 +499,7 @@ namespace lfs::vis::tools {
             }
         }
 
+        bool drew_live_triangle = false;
         if (hover_depth && picked_points.size() < 3) {
             const glm::vec2 render_point = screenToRender(panel_proj, mouse_pos);
             const glm::vec3 preview_point = panel_proj.viewport.unprojectPixel(
@@ -346,9 +526,16 @@ namespace lfs::vis::tools {
                 if (picked_points.size() == 2) {
                     drawTrianglePreview(*overlay, panel_proj,
                                         picked_points[0], picked_points[1], preview_point,
-                                        camera_pos, label_size, false);
+                                        camera_pos, label_size, false, true, snap_target_world);
+                    drew_live_triangle = true;
                 }
             }
+        }
+
+        if (!in_review && !drew_live_triangle && picked_points.size() == 2) {
+            drawEdgeLengthLabels(*overlay, panel_proj,
+                                 {picked_points[0], picked_points[1]},
+                                 toOverlay(t.overlay.text), kShadow, label_size);
         }
 
         const char* instruction_key = nullptr;
@@ -383,7 +570,10 @@ namespace lfs::vis::tools {
     }
 
     void AlignTool::onEnabledChanged(bool enabled) {
-        if (!enabled) {
+        if (enabled) {
+            forceGridOn();
+        } else {
+            restoreGridIfNeeded();
             services().clearAlignPickedPoints();
         }
         if (tool_context_) {

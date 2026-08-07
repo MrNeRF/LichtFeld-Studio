@@ -253,10 +253,12 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "crop_object_buttons" in model.bound_record_lists
     assert "crop_transform_buttons" in model.bound_record_lists
     assert "crop_action_buttons" in model.bound_record_lists
+    assert "align_action_buttons" in model.bound_record_lists
     assert "utility_primary_buttons" in model.bound_record_lists
     assert "camera_mode_buttons" in model.bound_record_lists
     assert "show_transform_space_controls" in model.bound_funcs
     assert "show_transform_pivot_controls" in model.bound_funcs
+    assert "show_align_toolbar" in model.bound_funcs
     assert "show_crop_toolbar" in model.bound_funcs
     assert "show_crop_edit_controls" in model.bound_funcs
     assert "show_crop_enable_separator" in model.bound_funcs
@@ -1281,6 +1283,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert rml.count('data-for="button : crop_object_buttons"') == 2
     assert rml.count('data-for="button : crop_transform_buttons"') == 2
     assert rml.count('data-for="button : crop_action_buttons"') == 2
+    assert rml.count('data-for="button : align_action_buttons"') == 2
     assert rml.count('data-for="button : selection_volume_gizmo_buttons"') == 1
     assert 'class="toolbar-flyout-divider hidden"' not in rml
     assert "toolbar-flyout" not in rml
@@ -1302,7 +1305,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     for toolbar_markup in (primary_left, secondary_left):
         assert 'data-for="button : camera_mode_buttons"' not in toolbar_markup
         assert 'data-for="button : utility_primary_buttons"' not in toolbar_markup
-    assert rml.count('data-attr-data-shortcut="button.shortcut_text"') == 29
+    assert rml.count('data-attr-data-shortcut="button.shortcut_text"') == 31
     assert "data-attr-data-tooltip" not in rml
     assert 'data-attr-title="button.tooltip_text"' in rml
     assert rml.count('data-for="button : selection_mode_buttons"') == 1

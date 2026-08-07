@@ -38,6 +38,7 @@
 #include "rendering/screen_overlay_renderer.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
+#include "visualizer/core/services.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/operation/undo_history.hpp"
@@ -3040,7 +3041,8 @@ namespace lfs::python {
                     self.image_uv(tex.texture_id(), size, {0.0f, 0.0f}, tex.uv1(), std::move(tint));
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& self, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& self, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -4034,6 +4036,73 @@ namespace lfs::python {
                 }
             },
             "Apply the active crop tool primitive through the node-backed crop command path");
+
+        m.def(
+            "get_align_point_count",
+            []() -> int {
+                return static_cast<int>(lfs::vis::services().getAlignPickedPoints().size());
+            },
+            "Number of points currently picked by the 3-point align tool");
+
+        m.def(
+            "can_apply_align",
+            []() -> bool {
+                const auto& points = lfs::vis::services().getAlignPickedPoints();
+                if (points.size() != 3) {
+                    return false;
+                }
+                const glm::vec3 cross_v = glm::cross(points[1] - points[0], points[2] - points[0]);
+                return glm::length(cross_v) > 1e-6f;
+            },
+            "True when the align tool has 3 non-degenerate points ready to apply");
+
+        m.def(
+            "apply_align",
+            []() {
+                lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Apply);
+                lfs::vis::op::ModalEvent evt{};
+                evt.type = lfs::vis::op::ModalEvent::Type::KEY;
+                evt.data = lfs::vis::KeyEvent{
+                    .key = lfs::vis::input::KEY_ENTER,
+                    .scancode = 0,
+                    .action = lfs::vis::input::ACTION_PRESS,
+                    .mods = 0,
+                };
+                lfs::vis::op::operators().dispatchModalEvent(evt);
+            },
+            "Request the running align modal to apply the current triangle");
+
+        m.def(
+            "clear_align_points",
+            []() {
+                lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Clear);
+                lfs::vis::op::ModalEvent evt{};
+                evt.type = lfs::vis::op::ModalEvent::Type::KEY;
+                evt.data = lfs::vis::KeyEvent{
+                    .key = lfs::vis::input::KEY_BACKSPACE,
+                    .scancode = 0,
+                    .action = lfs::vis::input::ACTION_PRESS,
+                    .mods = 0,
+                };
+                lfs::vis::op::operators().dispatchModalEvent(evt);
+            },
+            "Request the running align modal to clear all picked points");
+
+        m.def(
+            "get_align_axis_snap",
+            []() -> bool { return lfs::vis::services().getAlignAxisSnapEnabled(); },
+            "Whether align plane-normal axis snap is enabled");
+
+        m.def(
+            "set_align_axis_snap",
+            [](const bool enabled) {
+                lfs::vis::services().setAlignAxisSnapEnabled(enabled);
+                if (auto* const rm = lfs::vis::services().renderingOrNull()) {
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                }
+            },
+            nb::arg("enabled"),
+            "Enable or disable align plane-normal axis snap (session lifetime)");
 
         m.def(
             "fit_crop_tool",

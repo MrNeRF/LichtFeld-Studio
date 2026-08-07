@@ -25,7 +25,14 @@ namespace lfs::vis::tools {
         void onEnabledChanged(bool enabled) override;
 
     private:
+        void forceGridOn();
+        void restoreGridIfNeeded();
+
         const ToolContext* tool_context_ = nullptr;
+        bool saved_show_grid_ = true;
+        bool grid_override_active_ = false;
+        bool user_changed_grid_ = false;
+        bool last_written_show_grid_ = true;
     };
 
 } // namespace lfs::vis::tools

@@ -2345,10 +2345,14 @@
     "click_3rd": "3点目をクリック",
     "points_count": "点: {}/3",
     "up": "上",
-    "hint_picking": "クリック: 点を配置。Backspace: 最後を削除。Esc: キャンセル。",
-    "hint_review": "Enter: 適用。Backspace: 最後の点を削除。Esc: キャンセル。",
+    "hint_picking": "クリック: 配置/選択。マーカーをドラッグ: 移動。Del: 選択削除。Backspace: 最後を削除。Esc: キャンセル。",
+    "hint_review": "Enter/適用: 整列。マーカーをドラッグして調整。Del: 選択削除。Esc: キャンセル。",
     "status_colinear": "点がほぼ一直線です。点を移動してください。",
     "status_no_surface": "カーソル下にサーフェスがありません。",
-    "status_no_target": "整列できる対象がありません。"
+    "status_no_target": "整列できる対象がありません。",
+    "snapped": "スナップ",
+    "apply": "適用",
+    "clear": "クリア",
+    "snap": "軸スナップ"
   }
 }

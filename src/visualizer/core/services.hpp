@@ -7,7 +7,9 @@
 #include "core/export.hpp"
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <glm/glm.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -90,11 +92,49 @@ namespace lfs::vis {
         }
 
         // Align tool state
-        void setAlignPickedPoints(std::vector<glm::vec3> points) { align_picked_points_ = std::move(points); }
+        enum class AlignUiAction : uint8_t {
+            None = 0,
+            Apply,
+            Clear,
+        };
+
+        void setAlignPickedPoints(std::vector<glm::vec3> points) {
+            align_picked_points_ = std::move(points);
+            if (!align_selected_point_ ||
+                *align_selected_point_ < 0 ||
+                static_cast<size_t>(*align_selected_point_) >= align_picked_points_.size()) {
+                align_selected_point_.reset();
+            }
+        }
         [[nodiscard]] const std::vector<glm::vec3>& getAlignPickedPoints() const { return align_picked_points_; }
         void clearAlignPickedPoints() {
             align_picked_points_.clear();
+            align_selected_point_.reset();
             clearAlignStatusMessage();
+        }
+
+        void setAlignSelectedPoint(std::optional<int> index) {
+            if (!index || *index < 0 ||
+                static_cast<size_t>(*index) >= align_picked_points_.size()) {
+                align_selected_point_.reset();
+                return;
+            }
+            align_selected_point_ = index;
+        }
+        [[nodiscard]] std::optional<int> getAlignSelectedPoint() const { return align_selected_point_; }
+        void clearAlignSelectedPoint() { align_selected_point_.reset(); }
+
+        void setAlignAxisSnapEnabled(const bool enabled) { align_axis_snap_enabled_ = enabled; }
+        [[nodiscard]] bool getAlignAxisSnapEnabled() const { return align_axis_snap_enabled_; }
+
+        void requestAlignUiAction(const AlignUiAction action) { align_ui_action_ = action; }
+        [[nodiscard]] AlignUiAction takeAlignUiAction() {
+            const AlignUiAction action = align_ui_action_;
+            align_ui_action_ = AlignUiAction::None;
+            return action;
+        }
+        [[nodiscard]] bool hasAlignUiAction() const {
+            return align_ui_action_ != AlignUiAction::None;
         }
 
         void setAlignStatusMessage(std::string message, const double duration_seconds = 1.5) {
@@ -128,6 +168,8 @@ namespace lfs::vis {
             parameter_manager_ = nullptr;
             editor_context_ = nullptr;
             align_picked_points_.clear();
+            align_selected_point_.reset();
+            align_ui_action_ = AlignUiAction::None;
             clearAlignStatusMessage();
         }
 
@@ -147,6 +189,9 @@ namespace lfs::vis {
 
         // Tool state
         std::vector<glm::vec3> align_picked_points_;
+        std::optional<int> align_selected_point_;
+        bool align_axis_snap_enabled_ = true;
+        AlignUiAction align_ui_action_ = AlignUiAction::None;
         std::string align_status_message_;
         std::chrono::steady_clock::time_point align_status_until_{};
     };

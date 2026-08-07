@@ -141,6 +141,21 @@
                     <img data-attr-src="button.icon_src" />
                 </div>
             </div>
+            <div id="primary-align-toolbar" class="toolbar-container hidden"
+                 data-class-hidden="!show_align_toolbar">
+                <div class="icon-btn"
+                     data-for="button : align_action_buttons"
+                     data-attr-id="button.button_id"
+                     data-class-selected="button.selected"
+                     data-attr-data-action="button.action_id"
+                     data-attr-data-shortcut="button.shortcut_text"
+                     data-attr-title="button.tooltip_text"
+                     data-attrif-disabled="!button.enabled"
+                     data-class-disabled="!button.enabled"
+                     data-event-click="toolbar_action(button.action, button.value)">
+                    <img data-attr-src="button.icon_src" />
+                </div>
+            </div>
             <div id="primary-crop-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_crop_toolbar">
                 <div class="icon-btn"
@@ -374,6 +389,21 @@
                  data-class-hidden="!show_mirror_toolbar">
                 <div class="icon-btn"
                      data-for="button : submode_buttons"
+                     data-attr-id="button.button_id"
+                     data-class-selected="button.selected"
+                     data-attr-data-action="button.action_id"
+                     data-attr-data-shortcut="button.shortcut_text"
+                     data-attr-title="button.tooltip_text"
+                     data-attrif-disabled="!button.enabled"
+                     data-class-disabled="!button.enabled"
+                     data-event-click="toolbar_action(button.action, button.value)">
+                    <img data-attr-src="button.icon_src" />
+                </div>
+            </div>
+            <div id="secondary-align-toolbar" class="toolbar-container hidden"
+                 data-class-hidden="!show_align_toolbar">
+                <div class="icon-btn"
+                     data-for="button : align_action_buttons"
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"

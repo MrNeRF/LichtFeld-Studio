@@ -144,6 +144,8 @@ namespace lfs::vis {
         bool has_editable_transform_selection_ = false;
         bool has_splat_selection_ = false;
         bool has_editable_splat_selection_ = false;
+        bool has_editable_align_selection_ = false;
+        bool has_locked_align_selection_ = false;
         std::string transform_selection_error_;
 
         // String-based operator system

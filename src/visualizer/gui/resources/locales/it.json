@@ -2345,10 +2345,14 @@
     "click_3rd": "Clicca il 3° punto",
     "points_count": "Punti: {}/3",
     "up": "SU",
-    "hint_picking": "Clic: posiziona punto. Backspace: rimuovi ultimo. Esc: annulla.",
-    "hint_review": "Invio: applica. Backspace: rimuovi ultimo punto. Esc: annulla.",
+    "hint_picking": "Clic: posiziona/seleziona. Trascina marcatore: sposta. Canc: rimuovi selezionato. Backspace: ultimo. Esc: annulla.",
+    "hint_review": "Invio/Applica: allinea. Trascina marcatori. Canc: rimuovi selezionato. Esc: annulla.",
     "status_colinear": "I punti sono quasi in linea. Sposta un punto.",
     "status_no_surface": "Nessuna superficie sotto il cursore.",
-    "status_no_target": "Nessun obiettivo trasformabile da allineare."
+    "status_no_target": "Nessun obiettivo trasformabile da allineare.",
+    "snapped": "agganciato",
+    "apply": "Applica",
+    "clear": "Cancella",
+    "snap": "Snap assi"
   }
 }

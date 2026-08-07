@@ -2345,10 +2345,14 @@
     "click_3rd": "세 번째 점 클릭",
     "points_count": "점: {}/3",
     "up": "위",
-    "hint_picking": "클릭: 점 배치. Backspace: 마지막 제거. Esc: 취소.",
-    "hint_review": "Enter: 적용. Backspace: 마지막 점 제거. Esc: 취소.",
+    "hint_picking": "클릭: 배치/선택. 마커 드래그: 이동. Del: 선택 삭제. Backspace: 마지막 삭제. Esc: 취소.",
+    "hint_review": "Enter/적용: 정렬. 마커 드래그로 조정. Del: 선택 삭제. Esc: 취소.",
     "status_colinear": "점이 거의 일직선입니다. 점을 이동하세요.",
     "status_no_surface": "커서 아래에 표면이 없습니다.",
-    "status_no_target": "정렬할 변환 가능한 대상이 없습니다."
+    "status_no_target": "정렬할 변환 가능한 대상이 없습니다.",
+    "snapped": "스냅됨",
+    "apply": "적용",
+    "clear": "지우기",
+    "snap": "축 스냅"
   }
 }

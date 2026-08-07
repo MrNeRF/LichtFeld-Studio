@@ -79,6 +79,8 @@ namespace lfs::vis::cap {
     };
 
     [[nodiscard]] LFS_VIS_API bool isTransformableNodeType(core::NodeType type);
+    // Node types the 3-point align operator can transform (not the broader transformable set).
+    [[nodiscard]] LFS_VIS_API bool isAlignTransformTargetType(core::NodeType type);
     [[nodiscard]] LFS_VIS_API TransformComponents decomposeTransform(const glm::mat4& matrix);
     [[nodiscard]] LFS_VIS_API glm::mat4 composeTransform(const TransformComponents& components);
 
