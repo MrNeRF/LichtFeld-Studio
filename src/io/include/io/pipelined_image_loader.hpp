@@ -69,15 +69,28 @@ namespace lfs::io {
     };
 
     /// Default free-VRAM headroom reserved above the GT-cache footprint so
-    /// training peak still has room (Directive-3 / WO-HP1).
+    /// headless/CLI training peak still has room (Directive-3 / WO-HP1).
     constexpr size_t GT_CACHE_DEFAULT_HEADROOM_BYTES = 2ULL * 1024 * 1024 * 1024;
+
+    /// Interactive (GUI/viewer) device-tier policy: never take more than this
+    /// fraction of currently free VRAM. Remainder stays for densify, the
+    /// viewport, and other apps. Owner evidence: full-res bonsai est≈5.4 GiB
+    /// under the free−2 GiB rule is hostile in a GUI session.
+    constexpr float GT_CACHE_INTERACTIVE_FREE_FRACTION = 0.25f;
+
+    /// Hard ceiling on interactive device-tier GT cache (1 GiB). Combined with
+    /// the free-fraction rule: device_budget = min(25% free, ceiling).
+    constexpr size_t GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES = 1024ULL * 1024 * 1024;
 
     /**
      * @brief Pure budget gate for the decoded-GT device cache.
      *
-     * Enable device tier only when n_images * bytes_per_image fits under
-     * min(free_vram - headroom, optional LFS_GT_CACHE_CAP). Pinned-host is the
-     * middle tier when device is denied; both off falls back to today's decode.
+     * Headless/CLI: enable device tier only when n_images * bytes_per_image
+     * fits under min(free_vram - headroom, optional programmatic cap).
+     * Interactive (GUI/viewer): cap device tier at
+     * min(25% free VRAM, hard ceiling [, cap]); partial device fill is allowed
+     * with pinned-host as the middle tier for the remainder.
+     * Both off falls back to decode.
      */
     struct GtCacheBudgetDecision {
         bool enable_device = false;
@@ -85,8 +98,9 @@ namespace lfs::io {
         size_t estimated_bytes = 0;
         size_t free_vram_bytes = 0;
         size_t headroom_bytes = GT_CACHE_DEFAULT_HEADROOM_BYTES;
-        size_t cap_bytes = 0; // 0 = no explicit cap
+        size_t cap_bytes = 0; // 0 = no explicit cap; interactive sets effective
         size_t device_budget_bytes = 0;
+        bool interactive = false;
         const char* reason = "uninitialized";
     };
 
@@ -97,20 +111,54 @@ namespace lfs::io {
         const size_t headroom_bytes = GT_CACHE_DEFAULT_HEADROOM_BYTES,
         const size_t cap_bytes = 0,
         const bool force_disable = false,
-        const bool allow_pinned_fallback = true) {
+        const bool allow_pinned_fallback = true,
+        const bool interactive = false) {
         GtCacheBudgetDecision d;
         d.estimated_bytes = n_images * bytes_per_image;
         d.free_vram_bytes = free_vram_bytes;
         d.headroom_bytes = headroom_bytes;
         d.cap_bytes = cap_bytes;
+        d.interactive = interactive;
         if (force_disable) {
-            d.reason = "disabled_by_env_or_config";
+            d.reason = "disabled_by_config";
             return d;
         }
         if (n_images == 0 || bytes_per_image == 0) {
             d.reason = "unknown_footprint";
             return d;
         }
+
+        if (interactive) {
+            // Strict interactive budget: min(25% free, hard ceiling [, cap]).
+            // No free−headroom greed; pinned absorbs the remainder when the
+            // full dataset exceeds the device tier.
+            const size_t fraction_budget = static_cast<size_t>(
+                static_cast<double>(free_vram_bytes) * static_cast<double>(GT_CACHE_INTERACTIVE_FREE_FRACTION));
+            size_t budget = std::min(fraction_budget, GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES);
+            if (cap_bytes > 0) {
+                budget = std::min(budget, cap_bytes);
+            }
+            d.device_budget_bytes = budget;
+            d.cap_bytes = budget; // log effective interactive cap
+            if (budget < bytes_per_image) {
+                d.enable_pinned_host = allow_pinned_fallback;
+                d.reason = d.enable_pinned_host ? "interactive_below_one_image_use_pinned"
+                                                : "interactive_below_one_image_no_cache";
+                return d;
+            }
+            if (d.estimated_bytes <= budget) {
+                d.enable_device = true;
+                d.reason = "device_within_budget";
+                return d;
+            }
+            d.enable_device = true;
+            d.enable_pinned_host = allow_pinned_fallback;
+            d.reason = d.enable_pinned_host ? "device_partial_interactive_use_pinned"
+                                            : "device_partial_interactive";
+            return d;
+        }
+
+        // Headless / CLI training: free − headroom all-or-nothing (bench stable).
         if (free_vram_bytes <= headroom_bytes) {
             d.enable_pinned_host = allow_pinned_fallback;
             d.reason = d.enable_pinned_host ? "vram_below_headroom_use_pinned"
@@ -153,9 +201,12 @@ namespace lfs::io {
         bool enable_gt_cache = true;
         bool enable_gt_pinned_fallback = true;
         size_t gt_cache_headroom_bytes = GT_CACHE_DEFAULT_HEADROOM_BYTES;
-        size_t gt_cache_cap_bytes = 0; // 0 = no override; env LFS_GT_CACHE_CAP wins when set
+        size_t gt_cache_cap_bytes = 0; // 0 = no override (tests may set a tight cap)
         size_t gt_cache_expected_images = 0;
         size_t gt_cache_bytes_per_image = 0;
+        // True when the GUI/viewer is active (stricter VRAM policy). Set from
+        // the rendering/visualizer session path — never from env knobs.
+        bool interactive_session = false;
 
         // Default preserves today's unconditional "skip and continue" behavior
         // for every optional sidecar. Required fails the whole camera
@@ -317,13 +368,23 @@ namespace lfs::io {
         /// Evaluate VRAM budget and enable device / pinned GT tiers.
         /// Call once the dataset size and (optionally) per-image decoded size
         /// are known. Safe to call multiple times; later calls re-evaluate.
-        void configure_gt_cache(size_t expected_images, size_t bytes_per_image = 0);
+        /// @param interactive when true (GUI/viewer active), apply the strict
+        ///        interactive device cap; headless/CLI leave this false.
+        void configure_gt_cache(size_t expected_images,
+                                size_t bytes_per_image = 0,
+                                bool interactive = false);
 
         /// Drop all decoded-GT device / pinned entries (VRAM reclaim).
-        void clear_gt_cache();
+        /// Returns the number of entries evicted (device + pinned).
+        size_t clear_gt_cache();
+
+        /// Evict device-tier entries under VRAM pressure (pinned kept).
+        /// Returns bytes released. Safe from the pressure coordinator.
+        size_t reclaim_gt_device_cache_for_pressure();
 
         [[nodiscard]] GtCacheBudgetDecision gt_cache_budget() const { return gt_budget_; }
         [[nodiscard]] size_t gt_device_cache_bytes() const;
+        [[nodiscard]] size_t gt_pinned_cache_bytes() const;
 
         size_t ready_count() const;
         size_t in_flight_count() const;
@@ -577,8 +638,10 @@ namespace lfs::io {
         void reset_pipeline_gpu_bytes();
 
         // Decoded-GT device / pinned cache helpers (primary RGB only).
-        void maybe_init_gt_cache_from_env();
         void evaluate_and_apply_gt_budget();
+        [[nodiscard]] bool detect_interactive_session() const;
+        void register_gt_pressure_client_once();
+        void publish_gt_cache_vram_gauge() const;
         [[nodiscard]] std::optional<lfs::core::Tensor> try_gt_device_hit(const std::string& key);
         [[nodiscard]] std::optional<lfs::core::Tensor> try_gt_pinned_hit(const std::string& key,
                                                                          cudaStream_t stream);

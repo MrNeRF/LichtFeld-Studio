@@ -4,11 +4,12 @@
 #include "io/pipelined_image_loader.hpp"
 #include "core/alloc_counter.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/cuda/undistort/undistort.hpp"
-#include "core/environment.hpp"
 #include "core/error_reporter.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -26,14 +27,74 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <mutex>
 #include <semaphore>
 #include <sstream>
+#include <vector>
 
 namespace lfs::io {
 
     namespace {
 
         constexpr int DEFAULT_DECODER_POOL_SIZE = 8;
+
+        // Live loaders for MJ-13 pressure reclaim (device-tier GT cache).
+        std::mutex& gt_loader_registry_mutex() {
+            static std::mutex mu;
+            return mu;
+        }
+        std::vector<PipelinedImageLoader*>& gt_loader_registry() {
+            static std::vector<PipelinedImageLoader*> loaders;
+            return loaders;
+        }
+
+        void register_gt_loader(PipelinedImageLoader* loader) {
+            if (!loader) {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(gt_loader_registry_mutex());
+            auto& reg = gt_loader_registry();
+            if (std::find(reg.begin(), reg.end(), loader) == reg.end()) {
+                reg.push_back(loader);
+            }
+        }
+
+        void unregister_gt_loader(PipelinedImageLoader* loader) {
+            if (!loader) {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(gt_loader_registry_mutex());
+            auto& reg = gt_loader_registry();
+            reg.erase(std::remove(reg.begin(), reg.end(), loader), reg.end());
+        }
+
+        size_t total_gt_device_bytes_registered() {
+            std::lock_guard<std::mutex> lock(gt_loader_registry_mutex());
+            size_t total = 0;
+            for (auto* l : gt_loader_registry()) {
+                if (l) {
+                    total += l->gt_device_cache_bytes();
+                }
+            }
+            return total;
+        }
+
+        size_t reclaim_all_gt_device_caches() {
+            // Snapshot pointers under the registry lock, then reclaim outside so
+            // we never nest gt_cache_mutex_ under the registry mutex.
+            std::vector<PipelinedImageLoader*> snap;
+            {
+                std::lock_guard<std::mutex> lock(gt_loader_registry_mutex());
+                snap = gt_loader_registry();
+            }
+            size_t released = 0;
+            for (auto* l : snap) {
+                if (l) {
+                    released += l->reclaim_gt_device_cache_for_pressure();
+                }
+            }
+            return released;
+        }
 
         // Cold workers scale with sidecar decode demand, but their nvimagecodec
         // decodes run GPU work on the default stream, which serializes with the
@@ -365,7 +426,8 @@ namespace lfs::io {
             retain_nvcodec_loader_cache(config_.decoder_pool_size);
         }
 
-        maybe_init_gt_cache_from_env();
+        register_gt_loader(this);
+        register_gt_pressure_client_once();
         if (config_.gt_cache_expected_images > 0 && config_.gt_cache_bytes_per_image > 0) {
             evaluate_and_apply_gt_budget();
         }
@@ -376,6 +438,7 @@ namespace lfs::io {
 
     PipelinedImageLoader::~PipelinedImageLoader() {
         shutdown();
+        unregister_gt_loader(this);
     }
 
     void PipelinedImageLoader::shutdown() {
@@ -611,27 +674,47 @@ namespace lfs::io {
         // Keep GT cache across clear() — it is keyed by path+params, not sequence.
     }
 
-    void PipelinedImageLoader::maybe_init_gt_cache_from_env() {
-        // LFS_GT_CACHE=0/false/off disables both tiers.
-        if (const char* v = std::getenv("LFS_GT_CACHE");
-            v != nullptr && v[0] != '\0') {
-            if (v[0] == '0' || v[0] == 'f' || v[0] == 'F' || v[0] == 'n' || v[0] == 'N' ||
-                (v[0] == 'o' && (v[1] == 'f' || v[1] == 'F'))) {
-                config_.enable_gt_cache = false;
-            }
+    bool PipelinedImageLoader::detect_interactive_session() const {
+        // Prefer explicit config from the visualizer/training session; also
+        // treat an installed viewer shared-scratch arena as interactive so a
+        // mis-wired headless flag cannot re-enable the greedy device policy
+        // while the GUI rasterizer is live. No env knobs.
+        if (config_.interactive_session) {
+            return true;
         }
-        if (const char* v = std::getenv("LFS_GT_PINNED_CACHE");
-            v != nullptr && v[0] != '\0') {
-            if (v[0] == '0' || v[0] == 'f' || v[0] == 'F' || v[0] == 'n' || v[0] == 'N' ||
-                (v[0] == 'o' && (v[1] == 'f' || v[1] == 'F'))) {
-                config_.enable_gt_pinned_fallback = false;
-            }
+        if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
+            return arena->using_external_backing();
         }
-        if (const auto cap = lfs::core::environment::unsigned_integer<unsigned long long>(
-                "LFS_GT_CACHE_CAP");
-            cap && *cap > 0) {
-            config_.gt_cache_cap_bytes = static_cast<size_t>(*cap);
-        }
+        return false;
+    }
+
+    void PipelinedImageLoader::register_gt_pressure_client_once() {
+        static std::once_flag once;
+        std::call_once(once, [] {
+            lfs::core::MemoryPressureCoordinator::instance().register_client(
+                lfs::core::PressureClient{
+                    .name = "gt-device-cache",
+                    .priority = 5, // before pool/pinned trim (10): discardable first
+                    .domain = lfs::core::MemoryDomain::CudaDevice,
+                    .affinity = lfs::core::PressureAffinity::ImmediateThreadSafe,
+                    .estimate = [](const lfs::core::PressureRequest&) -> size_t {
+                        return total_gt_device_bytes_registered();
+                    },
+                    .shrink = [](const lfs::core::PressureRequest&) {
+                        const size_t released = reclaim_all_gt_device_caches();
+                        return lfs::core::ReclaimResult{.logical_bytes_released = released}; },
+                });
+        });
+    }
+
+    void PipelinedImageLoader::publish_gt_cache_vram_gauge() const {
+        // HUD / VRAM ledger: live device-tier GT cache footprint.
+        lfs::diagnostics::VramProfiler::instance().setGauge(
+            "vram.audit.gt_cache.bytes",
+            static_cast<double>(gt_device_cache_bytes_.load(std::memory_order_relaxed)));
+        lfs::diagnostics::VramProfiler::instance().setGauge(
+            "vram.audit.gt_cache.pinned_bytes",
+            static_cast<double>(gt_pinned_cache_bytes_.load(std::memory_order_relaxed)));
     }
 
     void PipelinedImageLoader::evaluate_and_apply_gt_budget() {
@@ -642,6 +725,8 @@ namespace lfs::io {
             total_b = 0;
         }
         const bool force_off = !config_.enable_gt_cache;
+        const bool interactive = detect_interactive_session();
+        config_.interactive_session = interactive;
         gt_budget_ = evaluate_gt_cache_budget(
             config_.gt_cache_expected_images,
             config_.gt_cache_bytes_per_image,
@@ -649,20 +734,28 @@ namespace lfs::io {
             config_.gt_cache_headroom_bytes,
             config_.gt_cache_cap_bytes,
             force_off,
-            config_.enable_gt_pinned_fallback && config_.enable_gt_cache);
+            config_.enable_gt_pinned_fallback && config_.enable_gt_cache,
+            interactive);
         gt_device_enabled_.store(gt_budget_.enable_device, std::memory_order_release);
         gt_pinned_enabled_.store(gt_budget_.enable_pinned_host, std::memory_order_release);
         gt_budget_evaluated_ = true;
+        // Keep the historical line format; cap reports the effective device budget
+        // (interactive hard/fractional cap, or an explicit programmatic cap).
+        const double cap_mib = gt_budget_.device_budget_bytes > 0
+                                   ? gt_budget_.device_budget_bytes / (1024.0 * 1024.0)
+                                   : (gt_budget_.cap_bytes > 0
+                                          ? gt_budget_.cap_bytes / (1024.0 * 1024.0)
+                                          : 0.0);
         LOG_INFO("[PipelinedImageLoader] GT cache budget: device={} pinned={} "
                  "est={:.1f} MiB free_vram={:.1f} MiB headroom={:.1f} MiB cap={:.1f} MiB reason={}",
                  gt_budget_.enable_device,
                  gt_budget_.enable_pinned_host,
                  gt_budget_.estimated_bytes / (1024.0 * 1024.0),
                  free_b / (1024.0 * 1024.0),
-                 config_.gt_cache_headroom_bytes / (1024.0 * 1024.0),
-                 config_.gt_cache_cap_bytes > 0
-                     ? config_.gt_cache_cap_bytes / (1024.0 * 1024.0)
-                     : 0.0,
+                 interactive
+                     ? (GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES / (1024.0 * 1024.0))
+                     : (config_.gt_cache_headroom_bytes / (1024.0 * 1024.0)),
+                 cap_mib,
                  gt_budget_.reason);
         if (!gt_budget_.enable_device) {
             // Drop any partial device entries if we re-evaluate and lose device tier.
@@ -671,22 +764,30 @@ namespace lfs::io {
                 gt_device_cache_.clear();
                 gt_device_cache_bytes_.store(0, std::memory_order_release);
             }
+        } else if (gt_budget_.device_budget_bytes > 0) {
+            // Shrink to the new interactive/headless budget if over-full.
+            std::lock_guard<std::mutex> lock(gt_cache_mutex_);
+            evict_gt_device_if_needed(0);
         }
+        publish_gt_cache_vram_gauge();
     }
 
     void PipelinedImageLoader::configure_gt_cache(const size_t expected_images,
-                                                  const size_t bytes_per_image) {
+                                                  const size_t bytes_per_image,
+                                                  const bool interactive) {
         config_.gt_cache_expected_images = expected_images;
         if (bytes_per_image > 0) {
             config_.gt_cache_bytes_per_image = bytes_per_image;
         }
-        maybe_init_gt_cache_from_env();
+        // Explicit session flag from trainer/visualizer; detect_interactive_session
+        // may still upgrade headless→interactive if the viewer arena is live.
+        config_.interactive_session = interactive;
         if (config_.gt_cache_expected_images > 0 && config_.gt_cache_bytes_per_image > 0) {
             evaluate_and_apply_gt_budget();
         }
     }
 
-    void PipelinedImageLoader::clear_gt_cache() {
+    size_t PipelinedImageLoader::clear_gt_cache() {
         size_t n_dev = 0;
         size_t n_pin = 0;
         {
@@ -702,10 +803,37 @@ namespace lfs::io {
             std::lock_guard<std::mutex> stats_lock(stats_mutex_);
             stats_.gt_cache_evictions += n_dev + n_pin;
         }
+        publish_gt_cache_vram_gauge();
+        return n_dev + n_pin;
+    }
+
+    size_t PipelinedImageLoader::reclaim_gt_device_cache_for_pressure() {
+        size_t n_dev = 0;
+        size_t bytes = 0;
+        {
+            std::lock_guard<std::mutex> lock(gt_cache_mutex_);
+            n_dev = gt_device_cache_.size();
+            bytes = gt_device_cache_bytes_.load(std::memory_order_relaxed);
+            if (n_dev == 0) {
+                return 0;
+            }
+            gt_device_cache_.clear();
+            gt_device_cache_bytes_.store(0, std::memory_order_release);
+        }
+        {
+            std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+            stats_.gt_cache_evictions += n_dev;
+        }
+        publish_gt_cache_vram_gauge();
+        return bytes;
     }
 
     size_t PipelinedImageLoader::gt_device_cache_bytes() const {
         return gt_device_cache_bytes_.load(std::memory_order_acquire);
+    }
+
+    size_t PipelinedImageLoader::gt_pinned_cache_bytes() const {
+        return gt_pinned_cache_bytes_.load(std::memory_order_acquire);
     }
 
     std::optional<lfs::core::Tensor> PipelinedImageLoader::try_gt_device_hit(
@@ -771,10 +899,10 @@ namespace lfs::io {
 
     void PipelinedImageLoader::evict_gt_device_if_needed(const size_t required_bytes) {
         // Caller holds gt_cache_mutex_. Do not take stats_mutex_ here.
+        // Returns via side-effect on cache; caller records stats_.gt_cache_evictions.
         const size_t budget = gt_budget_.device_budget_bytes > 0
                                   ? gt_budget_.device_budget_bytes
                                   : std::numeric_limits<size_t>::max();
-        size_t evicted = 0;
         while (gt_device_cache_bytes_.load(std::memory_order_relaxed) + required_bytes > budget &&
                !gt_device_cache_.empty()) {
             auto oldest = gt_device_cache_.begin();
@@ -783,16 +911,10 @@ namespace lfs::io {
                     oldest = it;
                 }
             }
-            gt_device_cache_bytes_ -= oldest->second.size_bytes;
+            const size_t sz = oldest->second.size_bytes;
+            const size_t cur = gt_device_cache_bytes_.load(std::memory_order_relaxed);
+            gt_device_cache_bytes_.store(cur > sz ? cur - sz : 0, std::memory_order_relaxed);
             gt_device_cache_.erase(oldest);
-            ++evicted;
-        }
-        if (evicted > 0) {
-            // Deferred: caller must bump stats after releasing gt lock, or we
-            // use a side counter. Store pending in required_bytes high bit is
-            // ugly — return via reference would be cleaner; for now atomic-ish
-            // bump after unlock is done by maybe_store.
-            (void)evicted;
         }
     }
 
@@ -818,7 +940,8 @@ namespace lfs::io {
         }
 
         const size_t nbytes = tensor.bytes();
-        bool inserted = false;
+        bool inserted_device = false;
+        bool try_pinned = false;
         size_t evicted = 0;
         if (gt_device_enabled_.load(std::memory_order_acquire)) {
             {
@@ -826,39 +949,62 @@ namespace lfs::io {
                 if (gt_device_cache_.contains(key)) {
                     return;
                 }
-                const size_t before = gt_device_cache_.size();
-                evict_gt_device_if_needed(nbytes);
-                evicted = before > gt_device_cache_.size() ? before - gt_device_cache_.size() : 0;
-                if (gt_budget_.device_budget_bytes > 0 &&
-                    gt_device_cache_bytes_.load(std::memory_order_relaxed) + nbytes >
-                        gt_budget_.device_budget_bytes) {
-                    // fall through to stats update only
+                const size_t budget = gt_budget_.device_budget_bytes > 0
+                                          ? gt_budget_.device_budget_bytes
+                                          : std::numeric_limits<size_t>::max();
+                const size_t used = gt_device_cache_bytes_.load(std::memory_order_relaxed);
+                // Partial + pinned policy: once the device tier is full, send new
+                // keys to pinned instead of thrashing device LRU (GUI evidence:
+                // 55 device / 0 pinned with 1626 device-only evictions).
+                const bool pinned_available =
+                    gt_pinned_enabled_.load(std::memory_order_relaxed);
+                if (used + nbytes > budget && pinned_available && !gt_device_cache_.empty()) {
+                    try_pinned = true;
+                } else if (used + nbytes > budget && nbytes > budget) {
+                    // Single image larger than budget — cannot device-cache.
+                    try_pinned = pinned_available;
                 } else {
-                    GtDeviceEntry entry;
-                    entry.tensor = tensor; // retain ref
-                    entry.size_bytes = nbytes;
-                    entry.last_access = std::chrono::steady_clock::now();
-                    gt_device_cache_.emplace(key, std::move(entry));
-                    gt_device_cache_bytes_ += nbytes;
-                    inserted = true;
+                    const size_t before = gt_device_cache_.size();
+                    evict_gt_device_if_needed(nbytes);
+                    evicted = before > gt_device_cache_.size() ? before - gt_device_cache_.size() : 0;
+                    if (gt_device_cache_bytes_.load(std::memory_order_relaxed) + nbytes > budget) {
+                        try_pinned = pinned_available;
+                    } else {
+                        GtDeviceEntry entry;
+                        entry.tensor = tensor; // retain ref
+                        entry.size_bytes = nbytes;
+                        entry.last_access = std::chrono::steady_clock::now();
+                        gt_device_cache_.emplace(key, std::move(entry));
+                        gt_device_cache_bytes_ += nbytes;
+                        inserted_device = true;
+                    }
                 }
             }
-            if (inserted || evicted > 0) {
+            if (inserted_device || evicted > 0) {
                 std::lock_guard<std::mutex> stats_lock(stats_mutex_);
-                if (inserted) {
+                if (inserted_device) {
                     ++stats_.gt_cache_inserts;
                 }
                 stats_.gt_cache_evictions += evicted;
             }
-            return;
+            if (inserted_device) {
+                publish_gt_cache_vram_gauge();
+                return;
+            }
+            if (!try_pinned) {
+                return;
+            }
+        } else {
+            try_pinned = gt_pinned_enabled_.load(std::memory_order_acquire);
         }
 
-        if (gt_pinned_enabled_.load(std::memory_order_acquire)) {
+        if (try_pinned) {
             try {
                 auto host = tensor.cpu();
+                bool inserted_pin = false;
                 {
                     std::lock_guard<std::mutex> lock(gt_cache_mutex_);
-                    if (gt_pinned_cache_.contains(key)) {
+                    if (gt_pinned_cache_.contains(key) || gt_device_cache_.contains(key)) {
                         return;
                     }
                     GtPinnedEntry entry;
@@ -867,12 +1013,13 @@ namespace lfs::io {
                     entry.last_access = std::chrono::steady_clock::now();
                     gt_pinned_cache_.emplace(key, std::move(entry));
                     gt_pinned_cache_bytes_ += nbytes;
-                    inserted = true;
+                    inserted_pin = true;
                 }
-                if (inserted) {
+                if (inserted_pin) {
                     std::lock_guard<std::mutex> stats_lock(stats_mutex_);
                     ++stats_.gt_cache_inserts;
                 }
+                publish_gt_cache_vram_gauge();
             } catch (const std::exception& e) {
                 LOG_WARN("[PipelinedImageLoader] GT pinned store failed for {}: {}", key, e.what());
             }

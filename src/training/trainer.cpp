@@ -3696,6 +3696,16 @@ namespace lfs::training {
         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
         lfs::core::Tensor::trim_memory_pool();
 
+        // MJ-13: GT device cache is optional and invisible to densify/viewer peak
+        // unless reclaimed here. Pressure client also covers the allocator path;
+        // this is the training-safe explicit drop.
+        if (auto loader = getActiveImageLoader()) {
+            const size_t evicted = loader->clear_gt_cache();
+            if (evicted > 0) {
+                LOG_WARN("OOM recovery: evicted {} GT cache entries", evicted);
+            }
+        }
+
         const cudaError_t final_status = synchronize();
         if (final_status != cudaSuccess) {
             return lfs::Status::failure(cuda_recovery_error(
@@ -5982,7 +5992,14 @@ namespace lfs::training {
                         }
                     }
                 }
-                train_dataloader->get_loader()->configure_gt_cache(n_images, bytes_per);
+                // Interactive (GUI/viewer) gets the strict GT device cap; headless
+                // bench keeps free−headroom so dl_wait_ms / steady numbers hold.
+                // Detection is session context (not env): !headless is the
+                // visualizer path; loader also upgrades if external shared-scratch
+                // is already installed.
+                const bool interactive_session = !params_.optimization.headless;
+                train_dataloader->get_loader()->configure_gt_cache(
+                    n_images, bytes_per, interactive_session);
                 // WO-X: fill decoded-GT device cache before the timed loop so
                 // first-epoch inserts do not pollute steady_allocs/iter.
                 train_dataloader->warm_gt_device_cache();

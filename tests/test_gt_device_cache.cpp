@@ -1,10 +1,13 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/memory_pressure.hpp"
+#include "core/tensor.hpp"
 #include "io/pipelined_image_loader.hpp"
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -148,22 +151,112 @@ TEST(GtCacheBudgetGate, ForceDisableAndNoPinned) {
         /*allow_pinned=*/false);
     EXPECT_FALSE(d.enable_device);
     EXPECT_FALSE(d.enable_pinned_host);
-    EXPECT_STREQ(d.reason, "disabled_by_env_or_config");
+    EXPECT_STREQ(d.reason, "disabled_by_config");
 }
 
 TEST(GtCacheBudgetGate, LeavesTwoGigHeadroom) {
-    // estimated == free - headroom → still fits ( <= ).
+    // estimated == free - headroom → still fits ( <= ). Headless policy.
     const size_t free_v = 4ULL * 1024 * 1024 * 1024;
     const size_t head = 2ULL * 1024 * 1024 * 1024;
     const size_t est = free_v - head;
-    const auto d = evaluate_gt_cache_budget(1, est, free_v, head, 0, false, true);
+    const auto d = evaluate_gt_cache_budget(1, est, free_v, head, 0, false, true,
+                                            /*interactive=*/false);
     EXPECT_TRUE(d.enable_device);
     EXPECT_EQ(d.device_budget_bytes, est);
 
     // One byte over → denied.
-    const auto d2 = evaluate_gt_cache_budget(1, est + 1, free_v, head, 0, false, true);
+    const auto d2 = evaluate_gt_cache_budget(1, est + 1, free_v, head, 0, false, true,
+                                             /*interactive=*/false);
     EXPECT_FALSE(d2.enable_device);
     EXPECT_TRUE(d2.enable_pinned_host);
+}
+
+// ---------------------------------------------------------------------------
+// Interactive (GUI/viewer) budget: min(25% free, hard ceiling) + partial device
+// with pinned remainder. Headless must remain free-headroom all-or-nothing.
+// ---------------------------------------------------------------------------
+
+TEST(GtCacheBudgetGate, InteractiveCapsDeviceToMinFractionAndCeiling) {
+    // Owner evidence: free≈13.5 GiB, full-res GT est≈5.4 GiB would fit under the
+    // headless free-2GiB rule — interactive must reject that greed.
+    const size_t free_v = 13840ULL * 1024 * 1024;
+    const size_t bytes_per = 5412ULL * 1024 * 1024 / 292; // ~18.5 MiB/image
+    const size_t n_images = 292;
+    const auto d = evaluate_gt_cache_budget(
+        n_images, bytes_per, free_v,
+        GT_CACHE_DEFAULT_HEADROOM_BYTES,
+        /*cap=*/0,
+        /*force_disable=*/false,
+        /*allow_pinned=*/true,
+        /*interactive=*/true);
+
+    const size_t fraction_budget =
+        static_cast<size_t>(static_cast<double>(free_v) * GT_CACHE_INTERACTIVE_FREE_FRACTION);
+    const size_t expected_budget =
+        std::min(fraction_budget, GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES);
+
+    EXPECT_TRUE(d.interactive);
+    EXPECT_EQ(d.device_budget_bytes, expected_budget);
+    EXPECT_LE(d.device_budget_bytes, GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES);
+    EXPECT_LE(d.device_budget_bytes, free_v / 4 + 1); // 25% free
+    // Full-res footprint exceeds interactive budget → partial device + pinned.
+    EXPECT_GT(d.estimated_bytes, d.device_budget_bytes);
+    EXPECT_TRUE(d.enable_device);
+    EXPECT_TRUE(d.enable_pinned_host);
+    EXPECT_STREQ(d.reason, "device_partial_interactive_use_pinned");
+}
+
+TEST(GtCacheBudgetGate, HeadlessStillAllowsLargeDeviceWhenUnderHeadroom) {
+    // Same free/est as interactive evidence case: headless keeps free-2GiB policy
+    // so bench scenes (and this synthetic fit) stay device-tier.
+    const size_t free_v = 13840ULL * 1024 * 1024;
+    const size_t est = 5412ULL * 1024 * 1024;
+    const auto d = evaluate_gt_cache_budget(
+        1, est, free_v,
+        GT_CACHE_DEFAULT_HEADROOM_BYTES,
+        0, false, true,
+        /*interactive=*/false);
+    EXPECT_FALSE(d.interactive);
+    EXPECT_TRUE(d.enable_device);
+    EXPECT_FALSE(d.enable_pinned_host);
+    EXPECT_STREQ(d.reason, "device_within_budget");
+    EXPECT_EQ(d.device_budget_bytes, free_v - GT_CACHE_DEFAULT_HEADROOM_BYTES);
+}
+
+TEST(GtCacheBudgetGate, InteractiveHardCeilingDominatesLargeFree) {
+    // 16 GiB free → 25% is 4 GiB, but hard ceiling must win.
+    const size_t free_v = 16ULL * 1024 * 1024 * 1024;
+    const auto d = evaluate_gt_cache_budget(
+        10, 64ULL * 1024 * 1024, free_v,
+        GT_CACHE_DEFAULT_HEADROOM_BYTES, 0, false, true,
+        /*interactive=*/true);
+    EXPECT_EQ(d.device_budget_bytes, GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES);
+}
+
+TEST(GtCacheBudgetGate, InteractiveFractionDominatesWhenFreeIsSmall) {
+    // 2 GiB free → 25% = 512 MiB < 1 GiB ceiling.
+    const size_t free_v = 2ULL * 1024 * 1024 * 1024;
+    const auto d = evaluate_gt_cache_budget(
+        4, 32ULL * 1024 * 1024, free_v,
+        GT_CACHE_DEFAULT_HEADROOM_BYTES, 0, false, true,
+        /*interactive=*/true);
+    const size_t expected =
+        static_cast<size_t>(static_cast<double>(free_v) * GT_CACHE_INTERACTIVE_FREE_FRACTION);
+    EXPECT_EQ(d.device_budget_bytes, expected);
+    EXPECT_LT(d.device_budget_bytes, GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES);
+}
+
+TEST(GtCacheBudgetGate, InteractiveFitsEntirelyWhenUnderCap) {
+    const size_t free_v = 8ULL * 1024 * 1024 * 1024;
+    const size_t bytes_per = 4ULL * 1024 * 1024;
+    const size_t n = 10; // 40 MiB total << 1 GiB ceiling
+    const auto d = evaluate_gt_cache_budget(
+        n, bytes_per, free_v,
+        GT_CACHE_DEFAULT_HEADROOM_BYTES, 0, false, true,
+        /*interactive=*/true);
+    EXPECT_TRUE(d.enable_device);
+    EXPECT_FALSE(d.enable_pinned_host);
+    EXPECT_STREQ(d.reason, "device_within_budget");
 }
 
 // ---------------------------------------------------------------------------
@@ -287,4 +380,100 @@ TEST_F(GtDeviceCacheTest, CapOverrideForcesPinnedOrOff) {
     EXPECT_EQ(stats.gt_device_cache_entries, 0u);
     // Pinned middle tier should have served the second request.
     EXPECT_GE(stats.gt_pinned_cache_hits + stats.gt_cache_inserts, 1u);
+}
+
+TEST_F(GtDeviceCacheTest, InteractiveConfigureAppliesStrictCap) {
+    auto cfg = base_config();
+    cfg.gt_cache_headroom_bytes = GT_CACHE_DEFAULT_HEADROOM_BYTES;
+    cfg.gt_cache_cap_bytes = 0;
+    PipelinedImageLoader loader(cfg);
+    // Large synthetic footprint + interactive → partial or capped device budget.
+    const size_t bytes_per = 20ULL * 1024 * 1024;
+    const size_t n = 300; // ~6 GiB est
+    loader.configure_gt_cache(n, bytes_per, /*interactive=*/true);
+    const auto d = loader.gt_cache_budget();
+    EXPECT_TRUE(d.interactive);
+    EXPECT_LE(d.device_budget_bytes, GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES);
+    if (d.enable_device && d.estimated_bytes > d.device_budget_bytes) {
+        EXPECT_TRUE(d.enable_pinned_host);
+        EXPECT_STREQ(d.reason, "device_partial_interactive_use_pinned");
+    }
+}
+
+// MJ-13: under VRAM pressure, device GT entries must yield so a subsequent
+// allocation can retry successfully; eviction stats must be non-zero.
+TEST_F(GtDeviceCacheTest, EvictionUnderPressureReclaimsAndRetries) {
+    auto cfg = base_config();
+    PipelinedImageLoader loader(cfg);
+    loader.configure_gt_cache(/*expected_images=*/8, /*bytes_per_image=*/128 * 128 * 3,
+                              /*interactive=*/false);
+    ASSERT_TRUE(loader.gt_cache_budget().enable_device) << loader.gt_cache_budget().reason;
+
+    loader.prefetch({make_request(1)});
+    const auto first = loader.get();
+    ASSERT_TRUE(first.tensor.is_valid());
+    ASSERT_GE(loader.get_stats().gt_device_cache_entries, 1u);
+    const size_t bytes_before = loader.gt_device_cache_bytes();
+    ASSERT_GT(bytes_before, 0u);
+    const size_t evictions_before = loader.get_stats().gt_cache_evictions;
+
+    // Direct reclaim path (same code the pressure client invokes).
+    const size_t released = loader.reclaim_gt_device_cache_for_pressure();
+    EXPECT_EQ(released, bytes_before);
+    EXPECT_EQ(loader.gt_device_cache_bytes(), 0u);
+    EXPECT_EQ(loader.get_stats().gt_device_cache_entries, 0u);
+    EXPECT_GT(loader.get_stats().gt_cache_evictions, evictions_before);
+
+    // Pressure-coordinator path: register a client that reclaims this loader and
+    // force an episode. Free probe starts below target then rises after shrink.
+    auto& pressure = lfs::core::MemoryPressureCoordinator::instance();
+    pressure.reset_for_testing();
+    // Re-fill cache after reset (pressure registry cleared; loader still valid).
+    loader.prefetch({make_request(2)});
+    const auto second = loader.get();
+    ASSERT_TRUE(second.tensor.is_valid());
+    ASSERT_GT(loader.gt_device_cache_bytes(), 0u);
+
+    std::atomic<size_t> fake_free{0};
+    pressure.set_free_memory_probe([&fake_free](lfs::core::MemoryDomain) {
+        return fake_free.load();
+    });
+    pressure.register_client(lfs::core::PressureClient{
+        .name = "test-gt-device-cache",
+        .priority = 5,
+        .domain = lfs::core::MemoryDomain::CudaDevice,
+        .affinity = lfs::core::PressureAffinity::ImmediateThreadSafe,
+        .estimate = [&loader](const lfs::core::PressureRequest&) { return loader.gt_device_cache_bytes(); },
+        .shrink = [&loader, &fake_free](const lfs::core::PressureRequest&) {
+            const size_t released_bytes = loader.reclaim_gt_device_cache_for_pressure();
+            fake_free.store(8ULL * 1024 * 1024 * 1024); // room for retry
+            return lfs::core::ReclaimResult{.logical_bytes_released = released_bytes}; },
+    });
+
+    lfs::core::AllocationFailure failure{
+        .domain = lfs::core::MemoryDomain::CudaDevice,
+        .requested_bytes = 64ULL * 1024 * 1024,
+        .alignment = 0,
+        .device = 0,
+        .stream = 0,
+        .label = "test.gt_pressure",
+        .operation = "test.alloc",
+        .native_error = 0,
+    };
+    ASSERT_TRUE(pressure.relieve_and_should_retry(failure));
+    EXPECT_EQ(loader.gt_device_cache_bytes(), 0u);
+
+    // Cache-hit degradation: next load decodes again (miss) but must not crash;
+    // then re-populates and a follow-up hit works.
+    loader.prefetch({make_request(3)});
+    const auto third = loader.get();
+    ASSERT_TRUE(third.tensor.is_valid());
+    EXPECT_EQ(third.tensor.device(), Device::CUDA);
+    loader.prefetch({make_request(4)});
+    const auto fourth = loader.get();
+    ASSERT_TRUE(fourth.tensor.is_valid());
+    EXPECT_EQ(hash_tensor(third.tensor), hash_tensor(fourth.tensor));
+    EXPECT_GE(loader.get_stats().gt_device_cache_hits, 1u);
+
+    pressure.reset_for_testing();
 }
