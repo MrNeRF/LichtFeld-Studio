@@ -367,14 +367,20 @@ namespace lfs::vis {
         using XSetErrorHandlerFn = XErrorHandlerFn (*)(XErrorHandlerFn);
         using XSetIOErrorHandlerFn = XIOErrorHandlerFn (*)(XIOErrorHandlerFn);
 
+        bool g_x11_handlers_installed = false;
+        XErrorHandlerFn g_x11_previous_error_handler = nullptr;
+        XIOErrorHandlerFn g_x11_previous_io_error_handler = nullptr;
+
         int x11ErrorHandler(Display* /*display*/, XErrorEvent* event) {
             if (!event) {
                 return 0;
             }
 
             const unsigned long resource_id = static_cast<unsigned long>(event->resourceid);
-            const bool main_window_unknown = g_x11_main_window_id == 0;
-            const bool is_main_window = main_window_unknown || resource_id == g_x11_main_window_id;
+            // Unknown main-window id must not force-exit on unrelated errors;
+            // those errors take the swallow branch instead.
+            const bool is_main_window =
+                g_x11_main_window_id != 0 && resource_id == g_x11_main_window_id;
 
             if (is_main_window) {
                 ++g_x11_error_main_count;
@@ -448,6 +454,23 @@ namespace lfs::vis {
             SDL_DestroyWindow(window_);
         }
         SDL_Quit();
+#if defined(__linux__)
+        // Restore after SDL teardown so our swallow handler covers Xlib calls against an
+        // externally destroyed window; XSetErrorHandler is display-independent.
+        if (g_x11_handlers_installed) {
+            const auto set_error_handler =
+                reinterpret_cast<XSetErrorHandlerFn>(::dlsym(RTLD_DEFAULT, "XSetErrorHandler"));
+            const auto set_io_error_handler =
+                reinterpret_cast<XSetIOErrorHandlerFn>(::dlsym(RTLD_DEFAULT, "XSetIOErrorHandler"));
+            if (set_error_handler) {
+                set_error_handler(g_x11_previous_error_handler);
+            }
+            if (set_io_error_handler) {
+                set_io_error_handler(g_x11_previous_io_error_handler);
+            }
+            g_x11_handlers_installed = false;
+        }
+#endif
     }
 
     void WindowManager::installX11ErrorHandlers() {
@@ -468,14 +491,20 @@ namespace lfs::vis {
 
         g_x11_error_owner = this;
         g_x11_main_window_id = 0;
+        g_x11_error_main_count = 0;
+        g_x11_error_other_count = 0;
+        g_x11_io_error_logged = false;
         Display* display = nullptr;
         ::Window xwindow = 0;
         if (getX11WindowHandle(window_, display, xwindow)) {
             g_x11_main_window_id = static_cast<unsigned long>(xwindow);
+        } else {
+            LOG_WARN("X11 main window id unresolved; X errors will be swallowed, not escalated");
         }
 
-        set_error_handler(x11ErrorHandler);
-        set_io_error_handler(x11IOErrorHandler);
+        g_x11_previous_error_handler = set_error_handler(x11ErrorHandler);
+        g_x11_previous_io_error_handler = set_io_error_handler(x11IOErrorHandler);
+        g_x11_handlers_installed = true;
         LOG_DEBUG("Installed X11 error handlers (main window id=0x{:x})", g_x11_main_window_id);
 #endif
     }

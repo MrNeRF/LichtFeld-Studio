@@ -114,6 +114,20 @@ TEST(OutputSlotRing, NonReadyWaitLeavesWatermarkIntact) {
     EXPECT_EQ(ring.ringCompletionValue(2), 99u);
 }
 
+TEST(OutputSlotRing, ThrowingWaitFnBecomesFailureAndLeavesWatermark) {
+    OutputSlotRing ring;
+    ring.publishCompletion(1, 42);
+
+    auto status = ring.waitUntilReusable(
+        1,
+        "render",
+        [](std::uint64_t) { return false; },
+        [](std::uint64_t) -> lfs::Status { throw std::runtime_error("device lost"); });
+    EXPECT_FALSE(status);
+    EXPECT_NE(status.error().user_message().find("device lost"), std::string::npos);
+    EXPECT_EQ(ring.ringCompletionValue(1), 42u);
+}
+
 TEST(OutputSlotRing, WaitClearsWatermarkOnReadyWaitFn) {
     OutputSlotRing ring;
     ring.publishCompletion(0, 7);

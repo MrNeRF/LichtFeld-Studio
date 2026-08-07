@@ -77,9 +77,20 @@ namespace lfs::vis {
 
         // Non-Ready leaves ring_completion_values_[slot] unchanged
         // (no manufactured free slot).
-        auto wait_status = wait_fn(value);
-        if (!wait_status) {
-            return wait_status;
+        try {
+            auto wait_status = wait_fn(value);
+            if (!wait_status) {
+                return wait_status;
+            }
+        } catch (const std::exception& e) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::Rendering,
+                .user_message = std::format("VkSplat {} ring-slot wait failed: {}",
+                                            reason,
+                                            e.what()),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
         ring_completion_values_[ring_slot] = 0;
         return {};
