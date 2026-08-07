@@ -715,6 +715,7 @@ class _GizmoToolbarController:
         active = active_tool_id == self._ALIGN_TOOL_ID
         can_apply = False
         snap_on = True
+        edge_to_axis_on = False
         if active:
             can_apply_fn = getattr(lf.ui, "can_apply_align", None)
             if callable(can_apply_fn):
@@ -728,6 +729,12 @@ class _GizmoToolbarController:
                     snap_on = bool(snap_fn())
                 except Exception:
                     snap_on = True
+            edge_fn = getattr(lf.ui, "get_align_edge_to_axis", None)
+            if callable(edge_fn):
+                try:
+                    edge_to_axis_on = bool(edge_fn())
+                except Exception:
+                    edge_to_axis_on = False
         return [
             _button_record(
                 "align-apply",
@@ -755,6 +762,16 @@ class _GizmoToolbarController:
                 tooltip_key="align.snap",
                 tooltip_text="Axis snap",
                 selected=snap_on,
+                enabled=active,
+            ),
+            _button_record(
+                "align-edge-to-axis",
+                "align_toggle_edge_to_axis",
+                "",
+                _icon_src("local"),
+                tooltip_key="align.edge_to_axis",
+                tooltip_text="Align edge to axis",
+                selected=edge_to_axis_on,
                 enabled=active,
             ),
         ]
@@ -1086,6 +1103,16 @@ class _GizmoToolbarController:
             if callable(get_snap) and callable(set_snap):
                 try:
                     set_snap(not bool(get_snap()))
+                except Exception:
+                    pass
+            return
+
+        if action == "align_toggle_edge_to_axis":
+            get_edge = getattr(lf.ui, "get_align_edge_to_axis", None)
+            set_edge = getattr(lf.ui, "set_align_edge_to_axis", None)
+            if callable(get_edge) and callable(set_edge):
+                try:
+                    set_edge(not bool(get_edge()))
                 except Exception:
                     pass
             return

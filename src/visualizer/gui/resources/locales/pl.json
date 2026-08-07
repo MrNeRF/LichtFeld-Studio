@@ -2353,6 +2353,7 @@
     "snapped": "przyciągnięto",
     "apply": "Zastosuj",
     "clear": "Wyczyść",
-    "snap": "Przyciąganie osi"
+    "snap": "Przyciąganie osi",
+    "edge_to_axis": "Wyrównaj krawędź do osi"
   }
 }

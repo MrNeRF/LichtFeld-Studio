@@ -2353,6 +2353,7 @@
     "snapped": "agganciato",
     "apply": "Applica",
     "clear": "Cancella",
-    "snap": "Snap assi"
+    "snap": "Snap assi",
+    "edge_to_axis": "Allinea spigolo all'asse"
   }
 }

@@ -4,6 +4,7 @@
 
 #include "align_ops.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/logger.hpp"
 #include "core/services.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/string_keys.hpp"
@@ -118,6 +119,24 @@ namespace lfs::vis::op {
             }
 
             const std::unordered_set<core::NodeId> target_set(target_ids.begin(), target_ids.end());
+
+            // Prefer renderer-order sizing from the scene visibility mask (consolidated slots).
+            // Indices must match transform_indices / model_transforms for VkSplat node culling.
+            const auto scene_mask = scene.getNodeVisibilityMask();
+            if (!scene_mask.empty()) {
+                std::vector<bool> mask(scene_mask.size(), false);
+                for (const auto* const node : scene.getNodes()) {
+                    if (!node || !node->model || !isTargetOrDescendant(scene, node->id, target_set)) {
+                        continue;
+                    }
+                    const int index = scene.getVisibleNodeIndex(node->id);
+                    if (index >= 0 && static_cast<size_t>(index) < mask.size()) {
+                        mask[static_cast<size_t>(index)] = true;
+                    }
+                }
+                return mask;
+            }
+
             std::vector<bool> mask;
             for (const auto* const node : scene.getNodes()) {
                 if (node && node->model && scene.isNodeEffectivelyVisible(node->id)) {
@@ -172,6 +191,7 @@ namespace lfs::vis::op {
         press_point_index_.reset();
         drag_active_ = false;
         drag_point_index_ = -1;
+        logged_masked_depth_fallback_ = false;
         pick_button_ = props.get_or<int>("button", static_cast<int>(lfs::vis::input::AppMouseButton::LEFT));
 
         // First press enters the modal; the point is placed on release if the
@@ -425,6 +445,7 @@ namespace lfs::vis::op {
         clearAllPoints();
         press_active_ = false;
         drag_active_ = false;
+        logged_masked_depth_fallback_ = false;
         if (services().renderingOrNull()) {
             services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
         }
@@ -652,6 +673,11 @@ namespace lfs::vis::op {
                 depth_y,
                 target_mask);
             if (depth <= 0.0f) {
+                if (!logged_masked_depth_fallback_) {
+                    LOG_INFO(
+                        "Align pick: masked node depth failed; falling back to full-scene depth for this session");
+                    logged_masked_depth_fallback_ = true;
+                }
                 depth = rm->getDepthAtPixel(depth_x, depth_y, panel_info->panel);
             }
         } else {
@@ -729,6 +755,10 @@ namespace lfs::vis::op {
             rotation = glm::rotate(glm::mat4(1.0f), angle, glm::normalize(axis));
         }
 
+        if (services().getAlignEdgeToAxisEnabled()) {
+            rotation = alignEdgeToWorldXRotation(rotation, p0, p1) * rotation;
+        }
+
         const glm::mat4 to_origin = glm::translate(glm::mat4(1.0f), -center);
         const glm::mat4 from_origin =
             glm::translate(glm::mat4(1.0f), center - glm::dot(center, kTargetUp) * kTargetUp);
@@ -792,6 +822,21 @@ namespace lfs::vis::op {
 
         normal = best_axis * static_cast<float>(best_sign);
         return true;
+    }
+
+    glm::mat4 alignEdgeToWorldXRotation(const glm::mat4& up_rotation,
+                                        const glm::vec3& p0,
+                                        const glm::vec3& p1) {
+        const glm::vec3 rotated_edge = glm::mat3(up_rotation) * (p1 - p0);
+        const glm::vec2 xz(rotated_edge.x, rotated_edge.z);
+        const float len = glm::length(xz);
+        if (len <= 1e-6f) {
+            return glm::mat4(1.0f);
+        }
+        // glm::rotate around +Y: x' = x cos θ + z sin θ, z' = -x sin θ + z cos θ.
+        // θ = atan2(z, x) maps (x, z) onto (+len, 0).
+        const float yaw = std::atan2(xz.y, xz.x);
+        return glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f));
     }
 
     void registerAlignOperators() {

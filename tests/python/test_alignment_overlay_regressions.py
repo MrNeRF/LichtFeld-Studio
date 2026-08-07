@@ -81,8 +81,59 @@ def test_alignment_toolbar_rml_and_locale_keys():
     assert 'data-for="button : align_action_buttons"' in rml
 
     en = _read("src/visualizer/gui/resources/locales/en.json")
-    for key in ('"snapped"', '"apply"', '"clear"', '"snap"'):
+    for key in ('"snapped"', '"apply"', '"clear"', '"snap"', '"edge_to_axis"'):
         assert key in en
     keys = _read("src/visualizer/gui/string_keys.hpp")
     assert "SNAPPED" in keys
     assert 'align.snapped' in keys
+    assert "EDGE_TO_AXIS" in keys
+    assert 'align.edge_to_axis' in keys
+
+
+def test_masked_gaussian_depth_pick_is_implemented():
+    viewport = _read("src/visualizer/rendering/rendering_manager_viewport.cpp")
+    assert "Masked Gaussian depth render skipped" not in viewport
+    assert "renderDepthCaptureToPreviewSlotWithState" in viewport
+    assert "readPreviewDepth" in viewport
+    # Gaussian branch must apply the node filter, not only the point-cloud path.
+    fn = viewport[
+        viewport.index("renderDepthAtPixelForNodeMask") :
+        viewport.index("} // namespace lfs::vis")
+    ]
+    assert "node_visibility_mask" in fn
+    assert "sampleDepthTensorAt" in fn
+
+    align_ops = _read("src/visualizer/operator/ops/align_ops.cpp")
+    assert "logged_masked_depth_fallback_" in align_ops or "logged_masked_depth_fallback_" in _read(
+        "src/visualizer/operator/ops/align_ops.hpp"
+    )
+    assert "falling back to full-scene depth" in align_ops
+    assert "getNodeVisibilityMask" in align_ops
+    assert "getVisibleNodeIndex" in align_ops
+
+
+def test_align_edge_to_axis_is_wired():
+    services = _read("src/visualizer/core/services.hpp")
+    assert "align_edge_to_axis_enabled_" in services
+    assert "getAlignEdgeToAxisEnabled" in services
+
+    align_ops = _read("src/visualizer/operator/ops/align_ops.cpp")
+    assert "alignEdgeToWorldXRotation" in align_ops
+    assert "getAlignEdgeToAxisEnabled" in align_ops
+
+    align_tool = _read("src/visualizer/tools/align_tool.cpp")
+    assert "getAlignEdgeToAxisEnabled" in align_tool
+    assert '"X"' in align_tool or "'X'" in align_tool
+
+    py_ui = _read("src/python/lfs/py_ui.cpp")
+    assert "get_align_edge_to_axis" in py_ui
+    assert "set_align_edge_to_axis" in py_ui
+
+    toolbar = _read("src/python/lfs_plugins/toolbar.py")
+    assert "align_toggle_edge_to_axis" in toolbar
+    assert "align.edge_to_axis" in toolbar
+
+    locale_dir = PROJECT_ROOT / "src/visualizer/gui/resources/locales"
+    for path in locale_dir.glob("*.json"):
+        text = path.read_text(encoding="utf-8")
+        assert '"edge_to_axis"' in text, path.name

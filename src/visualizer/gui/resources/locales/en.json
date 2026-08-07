@@ -2353,6 +2353,7 @@
     "snapped": "snapped",
     "apply": "Apply",
     "clear": "Clear",
-    "snap": "Axis snap"
+    "snap": "Axis snap",
+    "edge_to_axis": "Align edge to axis"
   }
 }

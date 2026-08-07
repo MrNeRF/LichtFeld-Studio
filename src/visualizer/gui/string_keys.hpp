@@ -554,6 +554,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* APPLY = "align.apply";
         inline constexpr const char* CLEAR = "align.clear";
         inline constexpr const char* SNAP = "align.snap";
+        inline constexpr const char* EDGE_TO_AXIS = "align.edge_to_axis";
         inline constexpr const char* HINT_PICKING = "align.hint_picking";
         inline constexpr const char* HINT_REVIEW = "align.hint_review";
         inline constexpr const char* STATUS_COLINEAR = "align.status_colinear";

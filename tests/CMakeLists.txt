@@ -260,6 +260,7 @@ set(TEST_FILES
     test_viewport_interop_decision.cpp
     test_mesh_data.cpp
     test_mesh_offscreen_renderer.cpp
+    test_align_edge_yaw.cpp
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp

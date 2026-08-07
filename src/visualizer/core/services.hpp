@@ -127,6 +127,9 @@ namespace lfs::vis {
         void setAlignAxisSnapEnabled(const bool enabled) { align_axis_snap_enabled_ = enabled; }
         [[nodiscard]] bool getAlignAxisSnapEnabled() const { return align_axis_snap_enabled_; }
 
+        void setAlignEdgeToAxisEnabled(const bool enabled) { align_edge_to_axis_enabled_ = enabled; }
+        [[nodiscard]] bool getAlignEdgeToAxisEnabled() const { return align_edge_to_axis_enabled_; }
+
         void requestAlignUiAction(const AlignUiAction action) { align_ui_action_ = action; }
         [[nodiscard]] AlignUiAction takeAlignUiAction() {
             const AlignUiAction action = align_ui_action_;
@@ -191,6 +194,7 @@ namespace lfs::vis {
         std::vector<glm::vec3> align_picked_points_;
         std::optional<int> align_selected_point_;
         bool align_axis_snap_enabled_ = true;
+        bool align_edge_to_axis_enabled_ = false;
         AlignUiAction align_ui_action_ = AlignUiAction::None;
         std::string align_status_message_;
         std::chrono::steady_clock::time_point align_status_until_{};

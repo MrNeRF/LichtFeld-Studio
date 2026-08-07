@@ -2353,6 +2353,7 @@
     "snapped": "vastgeklikt",
     "apply": "Toepassen",
     "clear": "Wissen",
-    "snap": "Assnap"
+    "snap": "Assnap",
+    "edge_to_axis": "Rand op as uitlijnen"
   }
 }

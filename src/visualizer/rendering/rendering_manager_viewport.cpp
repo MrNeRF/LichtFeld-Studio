@@ -1248,7 +1248,29 @@ namespace lfs::vis {
             .view_panels = {},
         };
 
-        lfs::rendering::FrameMetadata metadata{};
+        // Restrict the render to the caller mask. AND with the scene mask when sizes match so
+        // hidden slots stay hidden; size mismatch fails cleanly instead of silent wrong picks.
+        if (!frame_ctx.scene_state.node_visibility_mask.empty()) {
+            if (frame_ctx.scene_state.node_visibility_mask.size() != node_visibility_mask.size()) {
+                LOG_DEBUG(
+                    "Masked depth render skipped: node mask size mismatch (request={}, scene={})",
+                    node_visibility_mask.size(),
+                    frame_ctx.scene_state.node_visibility_mask.size());
+                return -1.0f;
+            }
+            for (size_t i = 0; i < node_visibility_mask.size(); ++i) {
+                frame_ctx.scene_state.node_visibility_mask[i] =
+                    frame_ctx.scene_state.node_visibility_mask[i] && node_visibility_mask[i];
+            }
+        } else {
+            frame_ctx.scene_state.node_visibility_mask = node_visibility_mask;
+        }
+        if (!std::any_of(frame_ctx.scene_state.node_visibility_mask.begin(),
+                         frame_ctx.scene_state.node_visibility_mask.end(),
+                         [](const bool enabled) { return enabled; })) {
+            return -1.0f;
+        }
+
         if (settings_.point_cloud_mode) {
             auto* const engine = getRenderingEngine();
             if (!engine) {
@@ -1258,22 +1280,51 @@ namespace lfs::vis {
                 frame_ctx,
                 render_size,
                 frame_ctx.scene_state.model_transforms);
-            request.scene.node_visibility_mask = node_visibility_mask;
+            request.scene.node_visibility_mask = frame_ctx.scene_state.node_visibility_mask;
             auto result = engine->renderPointCloudImage(*model, request);
             if (!result) {
                 LOG_DEBUG("Masked point-cloud depth render failed: {}", result.error());
                 return -1.0f;
             }
-            metadata = std::move(result->metadata);
-        } else {
-            LOG_TRACE("Masked Gaussian depth render skipped: no Vulkan masked-depth path is available");
+            render_lock.reset();
+
+            ViewportArtifactService artifacts;
+            artifacts.updateFromImageOutput({}, std::move(result->metadata), render_size, true);
+            return artifacts.sampleLinearDepthAt(x, y, render_size, std::nullopt);
+        }
+
+        // Gaussian path: reuse the existing depth-capture preview render with the node filter.
+        // VkSplat already hard-culls via request.scene.node_visibility_mask + transform_indices.
+        auto rendered = renderDepthCaptureToPreviewSlotWithState(
+            const_cast<SceneManager*>(scene_manager),
+            *model,
+            std::move(frame_ctx.scene_state),
+            viewport.camera.R,
+            viewport.camera.t,
+            settings_.focal_length_mm,
+            render_size.x,
+            render_size.y,
+            render_lock.has_value(),
+            /*expected_depth=*/false,
+            std::nullopt,
+            settings_.orthographic,
+            settings_.ortho_scale);
+        render_lock.reset();
+        if (!rendered) {
+            LOG_DEBUG("Masked Gaussian depth render failed: {}", rendered.error());
             return -1.0f;
         }
-        render_lock.reset();
-
-        ViewportArtifactService artifacts;
-        artifacts.updateFromImageOutput({}, metadata, render_size, true);
-        return artifacts.sampleLinearDepthAt(x, y, render_size, std::nullopt);
+        if (!vksplat_viewport_renderer_ || !last_vulkan_context_) {
+            return -1.0f;
+        }
+        auto depth = vksplat_viewport_renderer_->readPreviewDepth(
+            *last_vulkan_context_,
+            VksplatViewportRenderer::OutputSlot::Preview);
+        if (!depth) {
+            LOG_DEBUG("Masked Gaussian depth readback failed: {}", depth.error());
+            return -1.0f;
+        }
+        return sampleDepthTensorAt(**depth, {x, y}).value_or(-1.0f);
     }
 
 } // namespace lfs::vis

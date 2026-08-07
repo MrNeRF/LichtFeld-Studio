@@ -33,6 +33,7 @@ namespace lfs::vis::op {
         int drag_point_index_ = -1;
         std::optional<int> selected_point_;
         std::optional<SplitViewPanelId> pick_panel_;
+        mutable bool logged_masked_depth_fallback_ = false;
 
         [[nodiscard]] glm::vec3 unprojectScreenPoint(const OperatorContext& ctx, double x, double y,
                                                      SplitViewPanelId* out_panel = nullptr) const;
@@ -55,5 +56,11 @@ namespace lfs::vis::op {
     [[nodiscard]] bool snapAlignNormalToNodeAxes(glm::vec3& normal,
                                                  const glm::mat4& node_world,
                                                  float max_degrees = 3.0f);
+
+    // Optional in-plane yaw after normal→up: aligns projected (p1-p0) with world +X.
+    // Returns the yaw rotation to left-multiply onto the up-alignment rotation (identity if skipped).
+    [[nodiscard]] glm::mat4 alignEdgeToWorldXRotation(const glm::mat4& up_rotation,
+                                                      const glm::vec3& p0,
+                                                      const glm::vec3& p1);
 
 } // namespace lfs::vis::op

@@ -2353,6 +2353,7 @@
     "snapped": "ajustado",
     "apply": "Aplicar",
     "clear": "Borrar",
-    "snap": "Ajuste a ejes"
+    "snap": "Ajuste a ejes",
+    "edge_to_axis": "Alinear arista al eje"
   }
 }

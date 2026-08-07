@@ -2353,6 +2353,7 @@
     "snapped": "accroché",
     "apply": "Appliquer",
     "clear": "Effacer",
-    "snap": "Accrochage d'axes"
+    "snap": "Accrochage d'axes",
+    "edge_to_axis": "Aligner l'arête sur l'axe"
   }
 }

@@ -2360,6 +2360,7 @@
     "snapped": "已吸附",
     "apply": "应用",
     "clear": "清除",
-    "snap": "轴向吸附"
+    "snap": "轴向吸附",
+    "edge_to_axis": "边对齐到轴"
   }
 }

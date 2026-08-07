@@ -343,6 +343,17 @@ namespace lfs::vis::tools {
                                 LOC(lichtfeld::Strings::Align::SNAPPED), up_color, label_size);
             }
 
+            if (services().getAlignEdgeToAxisEnabled()) {
+                // Target direction for the first edge after apply: world +X from centroid.
+                const float tick_len = glm::max(line_length * 0.75f, 0.08f);
+                const glm::vec3 x_end = center + glm::vec3(tick_len, 0.0f, 0.0f);
+                const glm::vec2 x_screen = projectToScreen(panel_proj, x_end);
+                constexpr lfs::rendering::OverlayColor X_COLOR{1.0f, 0.35f, 0.35f, 1.0f};
+                overlay.addLine(center_screen, x_screen, X_COLOR, 3.0f);
+                overlay.addCircleFilled(x_screen, 7.0f, X_COLOR);
+                overlay.addText({x_screen.x + 10.0f, x_screen.y - 6.0f}, "X", X_COLOR, label_size);
+            }
+
             overlay.addLine(p0_screen, p1_screen, TRI_RED, 2.0f);
             overlay.addLine(p1_screen, p2_screen, TRI_GREEN, 2.0f);
             overlay.addLine(p2_screen, p0_screen, TRI_BLUE, 2.0f);
