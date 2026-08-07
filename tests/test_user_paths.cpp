@@ -132,6 +132,20 @@ namespace {
             EXPECT_EQ(entry.path().filename().string().find("preferences.json.tmp-"), std::string::npos);
     }
 
+    TEST_F(UserPathsContractTest, AtomicPreferenceWriteReplacesPreviousContents) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+
+        ASSERT_TRUE(paths.writePreferencesAtomically(R"({"theme":"dark"})").has_value());
+        ASSERT_TRUE(paths.writePreferencesAtomically(R"({"theme":"light"})").has_value());
+
+        std::ifstream file(paths.preferencesFile());
+        const auto json = nlohmann::json::parse(file);
+        EXPECT_EQ(json.at("theme"), "light");
+        EXPECT_EQ(json.size(), 1U);
+    }
+
     TEST_F(UserPathsContractTest, AtomicWindowWriteCreatesParentDirectory) {
         const auto resolved = resolvePaths();
         ASSERT_TRUE(resolved.has_value()) << resolved.error();
