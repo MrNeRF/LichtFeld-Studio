@@ -28,7 +28,6 @@ namespace lfs::vis::op {
     namespace {
         constexpr double kClickDragThresholdPx = 4.0;
         constexpr double kMarkerHitRadiusPx = 8.0;
-        constexpr float kAxisSnapDegrees = 3.0f;
 
         [[nodiscard]] bool isAlignTransformTarget(const core::SceneNode& node) {
             return cap::isAlignTransformTargetType(node.type);
@@ -151,20 +150,6 @@ namespace lfs::vis::op {
                 return enabled;
             });
         }
-
-        void faceNormalTowardCamera(glm::vec3& normal, const glm::vec3& center, const glm::vec3& camera_pos) {
-            if (glm::dot(normal, camera_pos - center) < 0.0f) {
-                normal = -normal;
-            }
-        }
-
-        [[nodiscard]] bool pointsAreNonDegenerate(const std::vector<glm::vec3>& points) {
-            if (points.size() != 3) {
-                return false;
-            }
-            const glm::vec3 cross_v = glm::cross(points[1] - points[0], points[2] - points[0]);
-            return glm::length(cross_v) > 1e-6f;
-        }
     } // namespace
 
     const OperatorDescriptor AlignPickPointOperator::DESCRIPTOR = {
@@ -202,11 +187,6 @@ namespace lfs::vis::op {
             props.get_or<double>("x", 0.0),
             props.get_or<double>("y", 0.0),
         };
-        press_point_index_ = hitTestPoint(press_pos_.x, press_pos_.y);
-        if (press_point_index_) {
-            selected_point_ = press_point_index_;
-            services().setAlignSelectedPoint(selected_point_);
-        }
 
         if (services().renderingOrNull()) {
             services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
@@ -743,7 +723,7 @@ namespace lfs::vis::op {
         if (services().getAlignAxisSnapEnabled()) {
             const glm::mat4 primary_world =
                 vis::scene_coords::nodeVisualizerWorldTransform(scene, target_ids.front());
-            (void)snapAlignNormalToNodeAxes(normal, primary_world, kAxisSnapDegrees);
+            (void)snapAlignNormalToNodeAxes(normal, primary_world);
         }
 
         const glm::vec3 axis = glm::cross(normal, kTargetUp);
@@ -788,6 +768,20 @@ namespace lfs::vis::op {
             services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
         }
         return true;
+    }
+
+    void faceNormalTowardCamera(glm::vec3& normal, const glm::vec3& center, const glm::vec3& camera_pos) {
+        if (glm::dot(normal, camera_pos - center) < 0.0f) {
+            normal = -normal;
+        }
+    }
+
+    bool pointsAreNonDegenerate(const std::vector<glm::vec3>& points) {
+        if (points.size() != 3) {
+            return false;
+        }
+        const glm::vec3 cross_v = glm::cross(points[1] - points[0], points[2] - points[0]);
+        return glm::length(cross_v) > 1e-6f;
     }
 
     bool snapAlignNormalToNodeAxes(glm::vec3& normal,

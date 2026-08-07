@@ -2285,6 +2285,27 @@ def apply_crop_tool() -> None:
     Apply the active crop tool primitive through the node-backed crop command path
     """
 
+def can_apply_align() -> bool:
+    """True when the align tool has 3 non-degenerate points ready to apply"""
+
+def apply_align() -> None:
+    """Request the running align modal to apply the current triangle"""
+
+def clear_align_points() -> None:
+    """Request the running align modal to clear all picked points"""
+
+def get_align_axis_snap() -> bool:
+    """Whether align plane-normal axis snap is enabled"""
+
+def set_align_axis_snap(enabled: bool) -> None:
+    """Enable or disable align plane-normal axis snap (session lifetime)"""
+
+def get_align_edge_to_axis() -> bool:
+    """Whether align edge-to-+X in-plane yaw is enabled"""
+
+def set_align_edge_to_axis(enabled: bool) -> None:
+    """Enable or disable align edge-to-+X in-plane yaw (session lifetime)"""
+
 def fit_crop_tool(use_percentile: bool = False) -> None:
     """
     Fit the active crop tool primitive through the node-backed crop command path

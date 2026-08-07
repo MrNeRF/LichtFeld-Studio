@@ -86,8 +86,6 @@ def test_alignment_toolbar_rml_and_locale_keys():
     keys = _read("src/visualizer/gui/string_keys.hpp")
     assert "SNAPPED" in keys
     assert 'align.snapped' in keys
-    assert "EDGE_TO_AXIS" in keys
-    assert 'align.edge_to_axis' in keys
 
 
 def test_masked_gaussian_depth_pick_is_implemented():

@@ -53,9 +53,16 @@ namespace lfs::vis::op {
     void unregisterAlignOperators();
 
     // Shared by apply path and overlay preview. Returns true if normal was snapped.
+    inline constexpr float kAlignAxisSnapDegrees = 3.0f;
     [[nodiscard]] bool snapAlignNormalToNodeAxes(glm::vec3& normal,
                                                  const glm::mat4& node_world,
-                                                 float max_degrees = 3.0f);
+                                                 float max_degrees = kAlignAxisSnapDegrees);
+
+    // Flip face normal so it points toward the camera (shared by apply + overlay preview).
+    void faceNormalTowardCamera(glm::vec3& normal, const glm::vec3& center, const glm::vec3& camera_pos);
+
+    // True when exactly 3 points define a non-degenerate triangle (cross length > 1e-6).
+    [[nodiscard]] bool pointsAreNonDegenerate(const std::vector<glm::vec3>& points);
 
     // Optional in-plane yaw after normal→up: aligns projected (p1-p0) with world +X.
     // Returns the yaw rotation to left-multiply onto the up-alignment rotation (identity if skipped).

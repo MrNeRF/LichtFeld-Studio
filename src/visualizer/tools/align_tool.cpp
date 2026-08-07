@@ -22,7 +22,6 @@
 #include <cstdio>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace lfs::vis::tools {
@@ -56,7 +55,6 @@ namespace lfs::vis::tools {
             rm->updateSettings(settings);
             rm->markDirty(DirtyFlag::OVERLAY);
         }
-        last_written_show_grid_ = true;
         grid_override_active_ = true;
     }
 
@@ -80,7 +78,7 @@ namespace lfs::vis::tools {
         }
     }
 
-    void AlignTool::update([[maybe_unused]] const ToolContext& ctx) {
+    void AlignTool::update(const ToolContext& ctx) {
         if (!isEnabled() || !grid_override_active_ || user_changed_grid_) {
             return;
         }
@@ -88,17 +86,8 @@ namespace lfs::vis::tools {
         if (!rm) {
             return;
         }
-        const auto settings = rm->getSettings();
-        if (settings.show_grid != last_written_show_grid_) {
+        if (!rm->getSettings().show_grid) {
             user_changed_grid_ = true;
-            return;
-        }
-        if (!settings.show_grid) {
-            auto next = settings;
-            next.show_grid = true;
-            rm->updateSettings(next);
-            rm->markDirty(DirtyFlag::OVERLAY);
-            last_written_show_grid_ = true;
         }
     }
 
@@ -203,12 +192,6 @@ namespace lfs::vis::tools {
             return projectToScreenChecked(proj, world_pos).pos;
         }
 
-        void faceNormalTowardCamera(glm::vec3& normal, const glm::vec3& center, const glm::vec3& camera_pos) {
-            if (glm::dot(normal, camera_pos - center) < 0.0f) {
-                normal = -normal;
-            }
-        }
-
         [[nodiscard]] std::optional<glm::mat4> resolvePrimaryAlignTargetWorld(const ToolContext& ctx) {
             auto* const sm = ctx.getSceneManager();
             if (!sm) {
@@ -259,10 +242,6 @@ namespace lfs::vis::tools {
             const size_t n = points.size();
             for (size_t i = 0; i < n; ++i) {
                 const size_t j = (i + 1) % n;
-                if (n == 2 && j == 0) {
-                    // With only two fixed points there is a single edge.
-                    // Loop with n==2 would draw both directions; only one edge exists.
-                }
                 if (!screens[i].valid || !screens[j].valid) {
                     continue;
                 }
@@ -294,7 +273,6 @@ namespace lfs::vis::tools {
                                  const glm::vec3& camera_pos,
                                  const float label_size,
                                  const bool filled,
-                                 const bool show_edge_labels,
                                  const std::optional<glm::mat4>& snap_target_world) {
             const glm::vec3 v01 = p1 - p0;
             const glm::vec3 v02 = p2 - p0;
@@ -306,11 +284,11 @@ namespace lfs::vis::tools {
 
             glm::vec3 normal = cross_v / cross_len;
             const glm::vec3 center = (p0 + p1 + p2) / 3.0f;
-            faceNormalTowardCamera(normal, center, camera_pos);
+            op::faceNormalTowardCamera(normal, center, camera_pos);
 
             bool snapped = false;
             if (services().getAlignAxisSnapEnabled() && snap_target_world) {
-                snapped = op::snapAlignNormalToNodeAxes(normal, *snap_target_world, 3.0f);
+                snapped = op::snapAlignNormalToNodeAxes(normal, *snap_target_world);
             }
 
             const float line_length = glm::max(glm::length(v01) * 0.5f, 0.1f);
@@ -358,11 +336,9 @@ namespace lfs::vis::tools {
             overlay.addLine(p1_screen, p2_screen, TRI_GREEN, 2.0f);
             overlay.addLine(p2_screen, p0_screen, TRI_BLUE, 2.0f);
 
-            if (show_edge_labels) {
-                constexpr lfs::rendering::OverlayColor kShadow{0.0f, 0.0f, 0.0f, 180.0f / 255.0f};
-                drawEdgeLengthLabels(overlay, panel_proj, {p0, p1, p2},
-                                     toOverlay(t.overlay.text), kShadow, label_size);
-            }
+            constexpr lfs::rendering::OverlayColor kShadow{0.0f, 0.0f, 0.0f, 180.0f / 255.0f};
+            drawEdgeLengthLabels(overlay, panel_proj, {p0, p1, p2},
+                                 toOverlay(t.overlay.text), kShadow, label_size);
         }
     } // namespace
 
@@ -487,7 +463,7 @@ namespace lfs::vis::tools {
         if (in_review) {
             drawTrianglePreview(*overlay, panel_proj,
                                 picked_points[0], picked_points[1], picked_points[2],
-                                camera_pos, label_size, true, true, snap_target_world);
+                                camera_pos, label_size, true, snap_target_world);
         }
 
         if (over_gui)
@@ -537,7 +513,7 @@ namespace lfs::vis::tools {
                 if (picked_points.size() == 2) {
                     drawTrianglePreview(*overlay, panel_proj,
                                         picked_points[0], picked_points[1], preview_point,
-                                        camera_pos, label_size, false, true, snap_target_world);
+                                        camera_pos, label_size, false, snap_target_world);
                     drew_live_triangle = true;
                 }
             }

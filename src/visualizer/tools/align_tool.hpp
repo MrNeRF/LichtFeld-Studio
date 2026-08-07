@@ -32,7 +32,6 @@ namespace lfs::vis::tools {
         bool saved_show_grid_ = true;
         bool grid_override_active_ = false;
         bool user_changed_grid_ = false;
-        bool last_written_show_grid_ = true;
     };
 
 } // namespace lfs::vis::tools

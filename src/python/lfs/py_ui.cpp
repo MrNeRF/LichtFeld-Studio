@@ -44,6 +44,7 @@
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
+#include "visualizer/operator/ops/align_ops.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/theme/theme.hpp"
@@ -4038,21 +4039,9 @@ namespace lfs::python {
             "Apply the active crop tool primitive through the node-backed crop command path");
 
         m.def(
-            "get_align_point_count",
-            []() -> int {
-                return static_cast<int>(lfs::vis::services().getAlignPickedPoints().size());
-            },
-            "Number of points currently picked by the 3-point align tool");
-
-        m.def(
             "can_apply_align",
             []() -> bool {
-                const auto& points = lfs::vis::services().getAlignPickedPoints();
-                if (points.size() != 3) {
-                    return false;
-                }
-                const glm::vec3 cross_v = glm::cross(points[1] - points[0], points[2] - points[0]);
-                return glm::length(cross_v) > 1e-6f;
+                return lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().getAlignPickedPoints());
             },
             "True when the align tool has 3 non-degenerate points ready to apply");
 
