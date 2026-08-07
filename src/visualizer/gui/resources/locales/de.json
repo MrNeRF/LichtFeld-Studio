@@ -8,8 +8,7 @@
     "file.save_project": "Projekt speichern",
     "file.save_project_as": "Projekt speichern unter...",
     "file.compact_project": "Projekt komprimieren",
-    "file.reopen_last_project": "Letztes Projekt erneut öffnen",
-    "file.auto_save_on_close": "Beim Schließen automatisch speichern",
+    "file.auto_save_on_close": "Beim Schließen speichern ohne Nachfrage",
     "file.no_recent_projects": "Keine zuletzt geöffneten Projekte",
     "file.import_dataset": "Datensatz importieren",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USD importieren",
@@ -90,9 +89,10 @@
     "signed_out.description": "Verbinde LichtFeld Studio mit deiner Portal-Mitgliedschaft.",
     "sign_in": "Anmelden",
     "linking.title": "Dieses Gerät verknüpfen",
-    "linking.description": "Öffne das Portal und bestätige den unten angezeigten Code.",
+    "linking.description": "Bestätige den unten stehenden Code auf der Link-Seite des Portals. Die Schaltfläche „Portal öffnen“ führt dich direkt dorthin.",
     "expires_in": "Läuft ab in",
     "open_portal": "Portal öffnen",
+    "copy_link": "Link kopieren",
     "copy_code": "Code kopieren",
     "cancel": "Abbrechen",
     "signed_in.title": "Angemeldet",
@@ -1051,7 +1051,11 @@
     "title": "Anwendung beenden?",
     "message": "Möchten Sie wirklich beenden?",
     "unsaved_warning": "Alle nicht gespeicherten Änderungen gehen verloren.",
-    "discard": "Verwerfen"
+    "discard": "Verwerfen",
+    "training_title": "Training stoppen und beenden?",
+    "training_message": "Das Training läuft noch. „Stoppen & Speichern“ beendet das Training und speichert das Projekt. „Verwerfen & Beenden“ beendet das Training, ohne das Trainingsprojekt als aktuelles Projekt zu behalten.",
+    "stop_and_save": "Stoppen & Speichern",
+    "discard_and_exit": "Verwerfen & Beenden"
   },
   "load_dataset_popup": {
     "title": "Datensatz laden",
@@ -2061,5 +2065,20 @@
     "viewer_work_failed": "Viewer-Aufgabe fehlgeschlagen",
     "colmap_min_track_length": "min-track-length kann nicht mit --init verwendet werden; die COLMAP-Sparsepunktfilterung wird nicht angewendet, da die Initialisierung '{}' verwendet",
     "no_splat_node_named": "Kein Splat-Knoten namens '{}'"
+  },
+  "toast": {
+    "trainer_not_restored": {
+      "title": "Trainer nicht wiederhergestellt",
+      "message": "Das Projektmodell ist zum Anzeigen verfügbar, aber das Training konnte nicht fortgesetzt werden. Prüfen Sie den Dataset-Pfad und die Protokolle."
+    }
+  },
+  "startup_recent": {
+    "title": "Zuletzt verwendete Projekte",
+    "open": "Öffnen",
+    "open_other": "Öffnen…",
+    "start_blank": "Leer starten",
+    "recoverable_badge": "Wiederherstellbare Änderungen",
+    "crash_notice": "LichtFeld Studio wurde unerwartet beendet. Letzte Sitzung wiederherstellen?",
+    "last_opened": "Zuletzt geöffnet"
   }
 }

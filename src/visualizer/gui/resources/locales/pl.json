@@ -8,8 +8,7 @@
     "file.save_project": "Zapisz projekt",
     "file.save_project_as": "Zapisz projekt jako...",
     "file.compact_project": "Kompaktuj projekt",
-    "file.reopen_last_project": "Otwórz ponownie ostatni projekt",
-    "file.auto_save_on_close": "Automatycznie zapisuj przy zamykaniu",
+    "file.auto_save_on_close": "Zapisz przy zamykaniu bez pytania",
     "file.no_recent_projects": "Brak ostatnich projektów",
     "file.import_dataset": "Importuj Zbiór Danych",
     "file.import_ply": "Importuj PLY, SOG, SPZ, RAD, USD",
@@ -90,9 +89,10 @@
     "signed_out.description": "Połącz LichtFeld Studio ze swoim członkostwem w portalu.",
     "sign_in": "Zaloguj się",
     "linking.title": "Połącz to urządzenie",
-    "linking.description": "Otwórz portal i potwierdź kod wyświetlony poniżej.",
+    "linking.description": "Zatwierdź poniższy kod na stronie łączenia w portalu. Przycisk Otwórz portal przenosi Cię tam bezpośrednio.",
     "expires_in": "Wygasa za",
     "open_portal": "Otwórz portal",
+    "copy_link": "Kopiuj link",
     "copy_code": "Kopiuj kod",
     "cancel": "Anuluj",
     "signed_in.title": "Zalogowano",
@@ -1051,7 +1051,11 @@
     "title": "Zakończyć Aplikację?",
     "message": "Czy na pewno chcesz zakończyć?",
     "unsaved_warning": "Wszystkie niezapisane zmiany zostaną utracone.",
-    "discard": "Odrzuć"
+    "discard": "Odrzuć",
+    "training_title": "Zatrzymać trening i wyjść?",
+    "training_message": "Trening jest nadal w toku. Zatrzymaj i zapisz kończy trening i zapisuje projekt. Odrzuć i wyjdź kończy trening, nie zachowując projektu treningowego jako bieżącego.",
+    "stop_and_save": "Zatrzymaj i zapisz",
+    "discard_and_exit": "Odrzuć i wyjdź"
   },
   "load_dataset_popup": {
     "title": "Wczytaj Zbiór Danych",
@@ -2061,5 +2065,20 @@
     "viewer_work_failed": "Zadanie przeglądarki nie powiodło się",
     "colmap_min_track_length": "min-track-length nie może być użyte z --init; filtrowanie rzadkich punktów COLMAP nie zostanie zastosowane, ponieważ inicjalizacja używa '{}'",
     "no_splat_node_named": "Brak węzła splat o nazwie '{}'"
+  },
+  "toast": {
+    "trainer_not_restored": {
+      "title": "Nie przywrócono trenera",
+      "message": "Model projektu jest dostępny do podglądu, ale nie udało się wznowić treningu. Sprawdź ścieżkę zestawu danych i logi."
+    }
+  },
+  "startup_recent": {
+    "title": "Ostatnie projekty",
+    "open": "Otwórz",
+    "open_other": "Otwórz…",
+    "start_blank": "Zacznij od pustego",
+    "recoverable_badge": "Odzyskiwalne zmiany",
+    "crash_notice": "LichtFeld Studio zakończył działanie nieoczekiwanie. Odzyskać ostatnią sesję?",
+    "last_opened": "Ostatnio otwarto"
   }
 }

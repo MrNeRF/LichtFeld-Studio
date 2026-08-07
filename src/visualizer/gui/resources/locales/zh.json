@@ -8,8 +8,7 @@
     "file.save_project": "保存项目",
     "file.save_project_as": "项目另存为...",
     "file.compact_project": "压缩项目",
-    "file.reopen_last_project": "重新打开上次的项目",
-    "file.auto_save_on_close": "关闭时自动保存",
+    "file.auto_save_on_close": "关闭时直接保存（不询问）",
     "file.no_recent_projects": "没有最近项目",
     "file.import_dataset": "导入数据集",
     "file.import_ply": "导入PLY, SOG, SPZ, RAD, USD",
@@ -90,9 +89,10 @@
     "signed_out.description": "将 LichtFeld Studio 连接到你的门户会员账户。",
     "sign_in": "登录",
     "linking.title": "连接此设备",
-    "linking.description": "打开门户并确认下方显示的代码。",
+    "linking.description": "请在门户的关联页面上批准下方代码。「打开门户」按钮会直接带你到该页面。",
     "expires_in": "剩余有效时间",
     "open_portal": "打开门户",
+    "copy_link": "复制链接",
     "copy_code": "复制代码",
     "cancel": "取消",
     "signed_in.title": "已登录",
@@ -1070,7 +1070,11 @@
     "title": "退出应用程序？",
     "message": "确定要退出吗？",
     "unsaved_warning": "任何未保存的更改将丢失。",
-    "discard": "放弃"
+    "discard": "放弃",
+    "training_title": "停止训练并退出？",
+    "training_message": "训练仍在进行中。“停止并保存”会结束训练并保存项目。“丢弃并退出”会结束训练，但不会将训练项目保留为当前项目。",
+    "stop_and_save": "停止并保存",
+    "discard_and_exit": "丢弃并退出"
   },
   "load_dataset_popup": {
     "title": "加载数据集",
@@ -2068,5 +2072,20 @@
     "viewer_work_failed": "查看器操作失败",
     "colmap_min_track_length": "min-track-length 不能与 --init 一起使用；由于初始化使用 '{}'，不会应用 COLMAP 稀疏点过滤",
     "no_splat_node_named": "没有名为 '{}' 的 splat 节点"
+  },
+  "toast": {
+    "trainer_not_restored": {
+      "title": "未能恢复训练器",
+      "message": "项目模型可供查看，但无法恢复训练。请检查数据集路径和日志。"
+    }
+  },
+  "startup_recent": {
+    "title": "最近的项目",
+    "open": "打开",
+    "open_other": "打开…",
+    "start_blank": "从空白开始",
+    "recoverable_badge": "可恢复的更改",
+    "crash_notice": "LichtFeld Studio 意外关闭。是否恢复上次会话？",
+    "last_opened": "上次打开"
   }
 }

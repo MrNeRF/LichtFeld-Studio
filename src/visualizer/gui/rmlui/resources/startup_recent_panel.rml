@@ -1,0 +1,42 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="startup_recent_panel.rcss"/>
+</head>
+<body template="floating-window" data-model="startup_recent">
+
+  <span class="panel-title">@tr:startup_recent.title</span>
+  <div class="separator"></div>
+
+  <div id="startup-recent-crash" class="startup-recent-crash hidden" data-class-hidden="!show_crash_notice">
+    <span class="startup-recent-crash-text">{{ crash_notice }}</span>
+  </div>
+
+  <div id="startup-recent-list" class="startup-recent-list">
+    <div class="startup-recent-row"
+         data-for="project : projects">
+      <div class="startup-recent-row-main">
+        <span class="startup-recent-name">{{ project.display_name }}</span>
+        <span class="startup-recent-badge hidden" data-class-hidden="!project.show_recoverable">{{ recoverable_badge }}</span>
+      </div>
+      <span class="startup-recent-path">{{ project.path_display }}</span>
+      <div class="startup-recent-row-meta">
+        <span class="startup-recent-mtime"><span class="startup-recent-meta-label">{{ last_opened_label }}</span>: {{ project.last_opened }}</span>
+        <button type="button"
+                class="btn btn--primary startup-recent-open-btn"
+                data-attr-data-open-index="project.index">{{ open_label }}</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <div class="startup-recent-actions">
+    <button id="startup-recent-open-other" type="button" class="btn btn--secondary"
+            data-event-click="open_other">{{ open_other_label }}</button>
+    <button id="startup-recent-start-blank" type="button" class="btn btn--primary"
+            data-event-click="start_blank">{{ start_blank_label }}</button>
+  </div>
+
+</body>
+</rml>

@@ -8,8 +8,7 @@
     "file.save_project": "プロジェクトを保存",
     "file.save_project_as": "プロジェクトを別名で保存...",
     "file.compact_project": "プロジェクトを圧縮",
-    "file.reopen_last_project": "前回のプロジェクトを再度開く",
-    "file.auto_save_on_close": "終了時に自動保存",
+    "file.auto_save_on_close": "確認なしで終了時に保存",
     "file.no_recent_projects": "最近使ったプロジェクトはありません",
     "file.import_dataset": "データセットをインポート",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USDをインポート",
@@ -90,9 +89,10 @@
     "signed_out.description": "LichtFeld Studio をポータルのメンバーシップに接続します。",
     "sign_in": "サインイン",
     "linking.title": "このデバイスを連携",
-    "linking.description": "ポータルを開き、下に表示されたコードを確認してください。",
+    "linking.description": "ポータルの連携ページで下のコードを承認してください。「ポータルを開く」ボタンで直接移動できます。",
     "expires_in": "有効期限まで",
     "open_portal": "ポータルを開く",
+    "copy_link": "リンクをコピー",
     "copy_code": "コードをコピー",
     "cancel": "キャンセル",
     "signed_in.title": "サインイン済み",
@@ -1051,7 +1051,11 @@
     "title": "アプリケーションを終了しますか？",
     "message": "本当に終了しますか？",
     "unsaved_warning": "保存されていない変更は失われます。",
-    "discard": "破棄"
+    "discard": "破棄",
+    "training_title": "学習を停止して終了しますか？",
+    "training_message": "学習が進行中です。「停止して保存」は学習を終了してプロジェクトを保存します。「破棄して終了」は学習を終了しますが、学習プロジェクトを現在のプロジェクトとしては保持しません。",
+    "stop_and_save": "停止して保存",
+    "discard_and_exit": "破棄して終了"
   },
   "load_dataset_popup": {
     "title": "データセットを読み込む",
@@ -2061,5 +2065,20 @@
     "viewer_work_failed": "ビューアーの処理に失敗しました",
     "colmap_min_track_length": "min-track-length は --init と併用できません。初期化で '{}' を使用するため、COLMAP スパースポイントのフィルタリングは適用されません",
     "no_splat_node_named": "'{}' という名前のスプラットノードがありません"
+  },
+  "toast": {
+    "trainer_not_restored": {
+      "title": "トレーナーを復元できませんでした",
+      "message": "プロジェクトモデルは表示できますが、学習を再開できませんでした。データセットのパスとログを確認してください。"
+    }
+  },
+  "startup_recent": {
+    "title": "最近のプロジェクト",
+    "open": "開く",
+    "open_other": "開く…",
+    "start_blank": "空白で開始",
+    "recoverable_badge": "復旧可能な変更",
+    "crash_notice": "LichtFeld Studio が予期せず終了しました。前回のセッションを復元しますか？",
+    "last_opened": "最終オープン"
   }
 }

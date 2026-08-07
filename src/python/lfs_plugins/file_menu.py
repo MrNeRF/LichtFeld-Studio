@@ -200,8 +200,32 @@ class ExitOperator(Operator):
         return {"FINISHED"}
 
 
-def _show_exit_confirmation() -> None:
+def _show_exit_confirmation(training_in_progress: bool = False) -> None:
     tr = lf.ui.tr
+    cancel_label = tr("common.cancel")
+    lf.ui.set_exit_popup_open(True)
+
+    if training_in_progress:
+        stop_save_label = tr("exit_popup.stop_and_save")
+        discard_label = tr("exit_popup.discard_and_exit")
+
+        def _on_training_result(button):
+            lf.ui.set_exit_popup_open(False)
+            if button == stop_save_label:
+                lf.stop_save_and_exit()
+            elif button == discard_label:
+                lf.force_exit()
+            else:
+                lf.cancel_exit()
+
+        lf.ui.confirm_dialog(
+            tr("exit_popup.training_title"),
+            tr("exit_popup.training_message"),
+            [stop_save_label, discard_label, cancel_label],
+            _on_training_result,
+        )
+        return
+
     has_path = lf.project_has_path()
     save_label = (
         tr("common.save")
@@ -209,8 +233,6 @@ def _show_exit_confirmation() -> None:
         else tr("menu.file.save_project_as")
     )
     discard_label = tr("exit_popup.discard")
-    cancel_label = tr("common.cancel")
-    lf.ui.set_exit_popup_open(True)
 
     def _on_result(button):
         lf.ui.set_exit_popup_open(False)
@@ -296,13 +318,6 @@ class FileMenu:
             ),
             menu_operator(SaveProjectAsOperator),
             menu_operator(CompactProjectOperator),
-            menu_toggle(
-                lf.ui.tr("menu.file.reopen_last_project"),
-                lambda: lf.project_set_reopen_last(
-                    not lf.project_reopen_last_enabled()
-                ),
-                lf.project_reopen_last_enabled(),
-            ),
             menu_toggle(
                 lf.ui.tr("menu.file.auto_save_on_close"),
                 lambda: lf.project_set_auto_save_on_close(

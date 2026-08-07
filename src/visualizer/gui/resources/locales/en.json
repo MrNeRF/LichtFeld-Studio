@@ -8,8 +8,7 @@
     "file.save_project": "Save Project",
     "file.save_project_as": "Save Project As...",
     "file.compact_project": "Compact Project",
-    "file.reopen_last_project": "Reopen Last Project",
-    "file.auto_save_on_close": "Auto-save on Close",
+    "file.auto_save_on_close": "Save on Close Without Asking",
     "file.no_recent_projects": "No Recent Projects",
     "file.import_dataset": "Import Dataset",
     "file.import_ply": "Import PLY, SOG, SPZ, RAD, USD",
@@ -90,9 +89,10 @@
     "signed_out.description": "Connect LichtFeld Studio to your portal membership.",
     "sign_in": "Sign in",
     "linking.title": "Link this device",
-    "linking.description": "Open the portal and confirm the code shown below.",
+    "linking.description": "Approve the code below on the portal's Link page. The Open portal button takes you straight there.",
     "expires_in": "Expires in",
     "open_portal": "Open portal",
+    "copy_link": "Copy link",
     "copy_code": "Copy code",
     "cancel": "Cancel",
     "signed_in.title": "Signed in",
@@ -1063,7 +1063,11 @@
     "title": "Exit Application?",
     "message": "Are you sure you want to exit?",
     "unsaved_warning": "Any unsaved changes will be lost.",
-    "discard": "Discard"
+    "discard": "Discard",
+    "training_title": "Stop Training and Exit?",
+    "training_message": "Training is still in progress. Stop & Save ends training and saves the project. Discard & Exit ends training without keeping the training project as the current project.",
+    "stop_and_save": "Stop & Save",
+    "discard_and_exit": "Discard & Exit"
   },
   "load_dataset_popup": {
     "title": "Load Dataset",
@@ -2061,5 +2065,20 @@
     "viewer_work_failed": "Viewer work failed",
     "colmap_min_track_length": "min-track-length cannot be used with --init; COLMAP sparse point filtering will not be applied because initialization uses '{}'",
     "no_splat_node_named": "No splat node named '{}'"
+  },
+  "toast": {
+    "trainer_not_restored": {
+      "title": "Trainer not restored",
+      "message": "The project model is available for viewing, but training could not be resumed. Check the dataset path and logs."
+    }
+  },
+  "startup_recent": {
+    "title": "Recent Projects",
+    "open": "Open",
+    "open_other": "Open…",
+    "start_blank": "Start Blank",
+    "recoverable_badge": "Recoverable changes",
+    "crash_notice": "LichtFeld Studio closed unexpectedly. Recover last session?",
+    "last_opened": "Last opened"
   }
 }

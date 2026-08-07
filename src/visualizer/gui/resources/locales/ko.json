@@ -8,8 +8,7 @@
     "file.save_project": "프로젝트 저장",
     "file.save_project_as": "다른 이름으로 프로젝트 저장...",
     "file.compact_project": "프로젝트 압축",
-    "file.reopen_last_project": "마지막 프로젝트 다시 열기",
-    "file.auto_save_on_close": "닫을 때 자동 저장",
+    "file.auto_save_on_close": "닫을 때 묻지 않고 저장",
     "file.no_recent_projects": "최근 프로젝트 없음",
     "file.import_dataset": "데이터셋 가져오기",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USD 가져오기",
@@ -90,9 +89,10 @@
     "signed_out.description": "LichtFeld Studio를 포털 멤버십에 연결합니다.",
     "sign_in": "로그인",
     "linking.title": "이 기기 연결",
-    "linking.description": "포털을 열고 아래에 표시된 코드를 확인하세요.",
+    "linking.description": "포털의 연결 페이지에서 아래 코드를 승인하세요. 포털 열기 버튼을 누르면 바로 이동합니다.",
     "expires_in": "만료까지",
     "open_portal": "포털 열기",
+    "copy_link": "링크 복사",
     "copy_code": "코드 복사",
     "cancel": "취소",
     "signed_in.title": "로그인됨",
@@ -1051,7 +1051,11 @@
     "title": "애플리케이션을 종료하시겠습니까?",
     "message": "정말 종료하시겠습니까?",
     "unsaved_warning": "저장하지 않은 변경 사항은 손실됩니다.",
-    "discard": "버리기"
+    "discard": "버리기",
+    "training_title": "학습을 중지하고 종료할까요?",
+    "training_message": "학습이 아직 진행 중입니다. 중지 및 저장은 학습을 끝내고 프로젝트를 저장합니다. 폐기 후 종료는 학습을 끝내지만 학습 프로젝트를 현재 프로젝트로 유지하지 않습니다.",
+    "stop_and_save": "중지 및 저장",
+    "discard_and_exit": "폐기 후 종료"
   },
   "load_dataset_popup": {
     "title": "데이터셋 불러오기",
@@ -2061,5 +2065,20 @@
     "viewer_work_failed": "뷰어 작업에 실패했습니다",
     "colmap_min_track_length": "min-track-length는 --init과 함께 사용할 수 없습니다. 초기화에서 '{}'를 사용하므로 COLMAP 희소 점 필터링이 적용되지 않습니다",
     "no_splat_node_named": "'{}'이라는 이름의 스플랫 노드가 없습니다"
+  },
+  "toast": {
+    "trainer_not_restored": {
+      "title": "트레이너를 복원하지 못함",
+      "message": "프로젝트 모델은 볼 수 있지만 학습을 재개할 수 없습니다. 데이터세트 경로와 로그를 확인하세요."
+    }
+  },
+  "startup_recent": {
+    "title": "최근 프로젝트",
+    "open": "열기",
+    "open_other": "열기…",
+    "start_blank": "빈 세션으로 시작",
+    "recoverable_badge": "복구 가능한 변경 사항",
+    "crash_notice": "LichtFeld Studio가 예기치 않게 종료되었습니다. 마지막 세션을 복구할까요?",
+    "last_opened": "최근 열림"
   }
 }

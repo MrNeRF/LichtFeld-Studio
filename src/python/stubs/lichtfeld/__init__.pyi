@@ -281,6 +281,11 @@ def project_has_path() -> bool:
 def project_recent_files() -> list[str]:
     """Return the most-recently-used .licht project paths"""
 
+def project_autosave_recovery_disposition(path: str) -> str:
+    """
+    Return autosave recovery disposition for a .licht master path ("none", "offer", "stale_deleted", "invalid", "ambiguous")
+    """
+
 def project_reopen_last_enabled() -> bool:
     """Return whether the last project is reopened at startup"""
 
@@ -328,6 +333,9 @@ def save_as_and_exit() -> None:
     """
     Choose a project path, save explicitly, and exit after the save succeeds.
     """
+
+def stop_save_and_exit() -> None:
+    """Stop training if needed, save the project explicitly, then exit."""
 
 def cancel_exit() -> None:
     """Cancel the pending application exit."""

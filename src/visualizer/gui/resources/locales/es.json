@@ -8,8 +8,7 @@
     "file.save_project": "Guardar proyecto",
     "file.save_project_as": "Guardar proyecto como...",
     "file.compact_project": "Compactar proyecto",
-    "file.reopen_last_project": "Volver a abrir el último proyecto",
-    "file.auto_save_on_close": "Guardar automáticamente al cerrar",
+    "file.auto_save_on_close": "Guardar al cerrar sin preguntar",
     "file.no_recent_projects": "No hay proyectos recientes",
     "file.import_dataset": "Importar Dataset",
     "file.import_ply": "Importar PLY, SOG, SPZ, RAD, USD",
@@ -650,9 +649,10 @@
     "signed_out.description": "Conecta LichtFeld Studio con tu membresía del portal.",
     "sign_in": "Iniciar sesión",
     "linking.title": "Vincular este dispositivo",
-    "linking.description": "Abre el portal y confirma el código que aparece a continuación.",
+    "linking.description": "Aprueba el código de abajo en la página de enlace del portal. El botón Abrir el portal te lleva allí directamente.",
     "expires_in": "Caduca en",
     "open_portal": "Abrir el portal",
+    "copy_link": "Copiar enlace",
     "copy_code": "Copiar código",
     "cancel": "Cancelar",
     "signed_in.title": "Sesión iniciada",
@@ -1430,7 +1430,11 @@
     "title": "¿Salir de la Aplicación?",
     "message": "¿Seguro que quieres salir?",
     "unsaved_warning": "Se perderán todos los cambios no guardados.",
-    "discard": "Descartar"
+    "discard": "Descartar",
+    "training_title": "¿Detener el entrenamiento y salir?",
+    "training_message": "El entrenamiento sigue en curso. Detener y guardar finaliza el entrenamiento y guarda el proyecto. Descartar y salir finaliza el entrenamiento sin conservar el proyecto de entrenamiento como proyecto actual.",
+    "stop_and_save": "Detener y guardar",
+    "discard_and_exit": "Descartar y salir"
   },
   "load_dataset_popup": {
     "title": "Cargar Dataset",
@@ -2061,5 +2065,20 @@
     "viewer_work_failed": "El trabajo del visor falló",
     "colmap_min_track_length": "min-track-length no se puede usar con --init; no se aplicará el filtrado de puntos dispersos de COLMAP porque la inicialización usa '{}'",
     "no_splat_node_named": "No hay ningún nodo splat llamado '{}'"
+  },
+  "toast": {
+    "trainer_not_restored": {
+      "title": "Entrenador no restaurado",
+      "message": "El modelo del proyecto está disponible para visualización, pero no se pudo reanudar el entrenamiento. Compruebe la ruta del conjunto de datos y los registros."
+    }
+  },
+  "startup_recent": {
+    "title": "Proyectos recientes",
+    "open": "Abrir",
+    "open_other": "Abrir…",
+    "start_blank": "Empezar en blanco",
+    "recoverable_badge": "Cambios recuperables",
+    "crash_notice": "LichtFeld Studio se cerró de forma inesperada. ¿Recuperar la última sesión?",
+    "last_opened": "Última apertura"
   }
 }

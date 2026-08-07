@@ -8,8 +8,7 @@
     "file.save_project": "Enregistrer le projet",
     "file.save_project_as": "Enregistrer le projet sous...",
     "file.compact_project": "Compacter le projet",
-    "file.reopen_last_project": "Rouvrir le dernier projet",
-    "file.auto_save_on_close": "Enregistrer automatiquement à la fermeture",
+    "file.auto_save_on_close": "Enregistrer à la fermeture sans demander",
     "file.no_recent_projects": "Aucun projet récent",
     "file.import_dataset": "Importer un Dataset",
     "file.import_ply": "Importer un PLY, SOG, SPZ, RAD, USD",
@@ -90,9 +89,10 @@
     "signed_out.description": "Connectez LichtFeld Studio à votre adhésion au portail.",
     "sign_in": "Se connecter",
     "linking.title": "Associer cet appareil",
-    "linking.description": "Ouvrez le portail et confirmez le code affiché ci-dessous.",
+    "linking.description": "Approuvez le code ci-dessous sur la page de liaison du portail. Le bouton Ouvrir le portail vous y mène directement.",
     "expires_in": "Expire dans",
     "open_portal": "Ouvrir le portail",
+    "copy_link": "Copier le lien",
     "copy_code": "Copier le code",
     "cancel": "Annuler",
     "signed_in.title": "Connecté",
@@ -1051,7 +1051,11 @@
     "title": "Quitter l'Application ?",
     "message": "Êtes-vous sûr de vouloir quitter ?",
     "unsaved_warning": "Toutes les modifications non enregistrées seront perdues.",
-    "discard": "Ignorer"
+    "discard": "Ignorer",
+    "training_title": "Arrêter l'entraînement et quitter ?",
+    "training_message": "L'entraînement est toujours en cours. Arrêter et enregistrer termine l'entraînement et enregistre le projet. Ignorer et quitter termine l'entraînement sans conserver le projet d'entraînement comme projet actuel.",
+    "stop_and_save": "Arrêter et enregistrer",
+    "discard_and_exit": "Ignorer et quitter"
   },
   "load_dataset_popup": {
     "title": "Charger Dataset",
@@ -2061,5 +2065,20 @@
     "viewer_work_failed": "Échec d’une opération du visualiseur",
     "colmap_min_track_length": "min-track-length ne peut pas être utilisé avec --init ; le filtrage des points épars COLMAP ne sera pas appliqué car l’initialisation utilise '{}'",
     "no_splat_node_named": "Aucun nœud splat nommé '{}'"
+  },
+  "toast": {
+    "trainer_not_restored": {
+      "title": "Entraîneur non restauré",
+      "message": "Le modèle du projet est disponible pour la visualisation, mais l'entraînement n'a pas pu être repris. Vérifiez le chemin du jeu de données et les journaux."
+    }
+  },
+  "startup_recent": {
+    "title": "Projets récents",
+    "open": "Ouvrir",
+    "open_other": "Ouvrir…",
+    "start_blank": "Démarrer vide",
+    "recoverable_badge": "Modifications récupérables",
+    "crash_notice": "LichtFeld Studio s'est fermé de façon inattendue. Récupérer la dernière session ?",
+    "last_opened": "Dernière ouverture"
   }
 }

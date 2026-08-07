@@ -2161,7 +2161,9 @@ def on_show_resume_checkpoint_popup(callback: object) -> None:
     """Register callback for ShowResumeCheckpointPopup event"""
 
 def on_request_exit(callback: object) -> None:
-    """Register callback for the close-decision prompt"""
+    """
+    Register callback for the close-decision prompt (receives training_in_progress: bool)
+    """
 
 def on_project_switch_confirmation(callback: object) -> None:
     """Register callback for a dirty project-switch decision"""
