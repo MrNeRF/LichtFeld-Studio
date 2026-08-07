@@ -149,3 +149,11 @@
 - **Symptom:** bonsai steady 4.287 vs Wave-2 4.065; bicycle 3.215 vs 3.208 (flat).
 - **Action:** optional — restore 128 with cross-block atomic bounds, or accept for quality wave.
 
+
+## ISS-012 — Per-worker MemoryMax=10G OOM-killed 6 workers mid-build (2026-08-07)
+- U/R/T/V/M lost their sessions (work uncommitted); G3 lost after 3 real commits
+  (2h49m in, "10G memory peak, 7.4G swap peak"). Worker cgroups include their builds;
+  a solo -j12 build + grok runtime exceeds 10G.
+- Fix: per-worker MemoryHigh=12G/MemoryMax=14G, RuntimeMaxSec=8h (slice ceiling 18G still
+  protects the desktop). Recovery queue3 re-runs all six with resume semantics.
+- Lesson: fuses must be sized for the worst legitimate phase (build), not the average.
