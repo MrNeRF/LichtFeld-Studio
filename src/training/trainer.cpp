@@ -5476,7 +5476,9 @@ namespace lfs::training {
                             LOG_ERROR("Sparsity pruning: {}", result.error());
                         }
 
-                        if (static_cast<size_t>(model.size()) != model_size_before) {
+                        const bool topology_changed =
+                            static_cast<size_t>(model.size()) != model_size_before;
+                        if (topology_changed) {
                             syncTrainingSceneTopology(scene_, model);
                         }
                         if (auto result = ensureModelTensorAllocatorStorage(model, "strategy step"); !result) {
@@ -5489,6 +5491,15 @@ namespace lfs::training {
                                            .source = LFS_SOURCE_SITE_CURRENT(),
                                        })
                                 .error();
+                        }
+
+                        if (topology_changed && !params_.optimization.headless) {
+                            // Interactive sessions: densify/prune transients leave the
+                            // pool at a high-water mark it never revisits. Return the
+                            // slack to the driver at the commit boundary (device-sync
+                            // cost lands on an already-synchronizing phase) so the
+                            // viewer and other applications can use the VRAM.
+                            lfs::core::Tensor::trim_memory_pool();
                         }
 
                         // End-of-step: parameters are consistent until the next

@@ -1001,7 +1001,7 @@ namespace lfs::vis {
         }
 
         constexpr std::size_t kSharedScratchPageBytes = std::size_t{2} << 20;
-        constexpr std::size_t kSharedScratchMinBytes = std::size_t{384} << 20;
+        constexpr std::size_t kSharedScratchMinBytes = std::size_t{128} << 20;
 
         enum InputRegion : std::size_t {
             InputXyzWs = 0,
@@ -3236,8 +3236,13 @@ namespace lfs::vis {
             return std::unexpected("VkSplat shared scratch requires CUDA/Vulkan external-memory interop");
         }
 
+        // 12.5% headroom on the first allocation; 50% when growing an existing
+        // block so the lowered floor cannot cause per-frame regrow churn while
+        // instance demand ramps with N.
+        const std::size_t slack =
+            shared_scratch_.block ? required_bytes / 2 : required_bytes / 8;
         const std::size_t target_bytes = alignUp(
-            std::max(required_bytes + required_bytes / 8, kSharedScratchMinBytes),
+            std::max(required_bytes + slack, kSharedScratchMinBytes),
             kSharedScratchPageBytes);
         int device = 0;
         if (const cudaError_t err = cudaGetDevice(&device); err != cudaSuccess) {
