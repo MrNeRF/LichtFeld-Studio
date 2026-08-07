@@ -161,13 +161,21 @@ TEST(TensorKernels6CElem, Float16BinaryVectorized) {
     }
 }
 
-TEST(TensorKernels6CElem, Float16HostReduceFailsLoud) {
-    // 6D.5: until host reduce gate accepts Float16, fail loud (not silent wrong result).
+TEST(TensorKernels6CElem, Float16HostReduceIsCorrect) {
+    // MJ-14 triage: campaign commit 2645e679 added Float16HostReduceFailsLoud asserting
+    // f16 sum() throws. Contract later gained f16→f32→reduce→f16 support in
+    // tensor_unified_ops.cpp (Theme-B). The "fail loud" test became red because the
+    // implementation is intentional — not a silent wrong result.
+    // Provenance: test added on campaign branch (not on master); contract change is
+    // the correct resolution. Validate numerical correctness instead of throw.
     if (!has_cuda_device())
         GTEST_SKIP() << "CUDA required";
 
     auto t = f32_cuda({1.f, 2.f, 3.f, 4.f}, 4).to(DataType::Float16);
-    EXPECT_THROW({ (void)t.sum(); }, std::exception);
+    auto s = t.sum();
+    auto s_f32 = s.to(DataType::Float32).cpu();
+    ASSERT_EQ(s_f32.numel(), 1u);
+    EXPECT_NEAR(s_f32.ptr<float>()[0], 10.f, 1e-2f);
 }
 
 // Microbench: report GB/s for large elementwise (numbers for PROGRESS)
