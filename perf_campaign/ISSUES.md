@@ -150,3 +150,12 @@
 - **Gate (passed):** B/splat bonsai 304.3 / bicycle 306.8; bicycle 7k loss ON [0.10–0.14] vs OFF [0.10–0.16]; late-window ON 3.74 ms ≤ OFF 3.88 ms; full suite delta only ISS-016/017/019 pre-existing reds; tensor_hardening 89/89.
 - **Force off:** `LFS_SH_VALUE_QUANT=0` or `LFS_SH_VALUE_FP32=1`.
 
+
+## ISS-020 — post-suite teardown SIGSEGV (static destruction order)
+- All tests PASS, then exit 139 during process teardown AFTER "Shutting down CudaMemoryPool"
+  logs — a static/long-lived object (prime suspect: WO-X _densify_n_scratch pre-sized
+  tensors, or similar) destroys CUDA tensors after the pool is gone.
+- Repro: lichtfeld_tests --gtest_filter='...CheckpointStrategies...' (suite green, exit 139).
+- Fix class: release such buffers via an explicit shutdown hook ordered BEFORE pool
+  teardown (pattern exists from the slab/TLS release work), or make the deleter
+  pool-liveness-aware.
