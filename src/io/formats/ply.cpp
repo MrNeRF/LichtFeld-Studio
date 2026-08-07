@@ -2857,7 +2857,11 @@ namespace lfs::io {
                     return make_error(ErrorCode::WRITE_FAILURE,
                                       "Cannot open temporary file", temp_path);
                 }
-                // Own the FILE* even on early returns.
+                // MJ-6: declare the stdio buffer BEFORE FileCloser so destruction order
+                // is fclose (via guard) first, then buffer free. Declaring the guard
+                // first made early cancel/error returns destroy the buffer while
+                // fclose still flushed through it (heap use-after-free).
+                std::vector<char> io_buffer(ply_constants::PLY_WRITE_IO_BUFFER_BYTES);
                 struct FileCloser {
                     FILE* f = nullptr;
                     ~FileCloser() {
@@ -2865,9 +2869,6 @@ namespace lfs::io {
                             std::fclose(f);
                     }
                 } file_guard{file};
-
-                // Large stdio buffer — avoids tiny kernel writes after pack.
-                std::vector<char> io_buffer(ply_constants::PLY_WRITE_IO_BUFFER_BYTES);
                 std::setvbuf(file, io_buffer.data(), _IOFBF, io_buffer.size());
 
                 if (std::fwrite(header.data(), 1, header.size(), file) != header.size()) {

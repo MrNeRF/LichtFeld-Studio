@@ -12,6 +12,7 @@
 #include <gtest/gtest.h>
 #include <string>
 
+#include "core/error.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
@@ -183,6 +184,48 @@ TEST(PlyIoThroughput, OneMillionSplatSaveLoadRoundtrip) {
     EXPECT_GT(file_bytes, size_t{100} * 1024 * 1024);
     EXPECT_GT(save_mibs, 1.0);
     EXPECT_GT(load_mibs, 1.0);
+
+    fs::remove(ply_path, ec);
+    fs::remove_all(out_dir, ec);
+}
+
+// MJ-6: cancel during write must not UAF the stdio buffer (declaration order).
+// Callback returns false on first progress report → CANCELLED without crash.
+TEST(PlyExportCancel, CancelMidWriteDoesNotCrash) {
+    constexpr size_t kN = 50'000; // large enough to enter buffered write path
+    constexpr int kShDegree = 1;
+
+    const fs::path out_dir = fs::temp_directory_path() / "lfs_ply_cancel_mj6";
+    fs::create_directories(out_dir);
+    const fs::path ply_path = out_dir / "cancel.ply";
+    std::error_code ec;
+    fs::remove(ply_path, ec);
+
+    auto splat = make_synthetic_splat(kN, kShDegree);
+    PlySaveOptions opts;
+    opts.output_path = ply_path;
+    opts.binary = true;
+    int callbacks = 0;
+    opts.progress_callback = [&](float /*ratio*/, const std::string& /*stage*/) {
+        ++callbacks;
+        return false; // cancel immediately
+    };
+
+    auto result = save_ply(splat, opts);
+    ASSERT_FALSE(result.has_value()) << "cancel must yield an error result";
+    EXPECT_EQ(result.error().code, ErrorCode::CANCELLED)
+        << result.error().format();
+    EXPECT_GE(callbacks, 1);
+
+    // Process still healthy after cancel (no heap corruption from buffer UAF).
+    {
+        PlySaveOptions ok_opts;
+        ok_opts.output_path = out_dir / "ok.ply";
+        ok_opts.binary = true;
+        auto ok = save_ply(make_synthetic_splat(1024, 0), ok_opts);
+        EXPECT_TRUE(ok.has_value()) << ok.error().format();
+        fs::remove(ok_opts.output_path, ec);
+    }
 
     fs::remove(ply_path, ec);
     fs::remove_all(out_dir, ec);
