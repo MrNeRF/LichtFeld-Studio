@@ -1228,3 +1228,98 @@ Gate ≤4.065 still **PASS**.
 Default joint codec **stays ON**. Infrastructure left in place.
 
 - **Commit:** `993314d5`
+||||||| c44ad8ec
+
+## Task 6D.1 — Loss-workspace union (shared arena)
+
+- **Branch:** `lfs-elite-mem`
+- **Change:** `LossWorkspaceArena` in `ssim.cuh` / `ssim.cu` owns one grow-only UInt8
+  blob sized to `max(variant layout)` at the active resolution. Fused / pure-SSIM /
+  decoupled / masked-fused / masked-decoupled are mutually exclusive views rebuilt on
+  mode switch. `PhotometricLoss` owns the arena; Trainer masked/decoupled paths use
+  `photometric_loss_.arena()`. VRAM accounting reports arena capacity once (not the sum).
+  Independent stack workspaces still allocate separately for unit tests.
+- **Fail evidence (TDD):** pre-union, five independent `ensure_size` calls retain the sum:
+  ```
+  IndependentWorkspacesRetainSum: total >> max_variant  (EXPECTED_GT documents bug)
+  # example 64x96 NCHW: sum ≈ 5× single-variant; arena gate would fail under sum retention
+  ```
+  Before arena API, `LossWorkspaceArena` / `allocated_bytes()` did not exist
+  (compile fail for SequentialModesThroughArenaStayWithinMax).
+- **Pass evidence:**
+  ```
+  [  PASSED  ] LossWorkspaceUnionTest.IndependentWorkspacesRetainSum
+  [  PASSED  ] LossWorkspaceUnionTest.SequentialModesThroughArenaStayWithinMax
+  [  PASSED  ] LossWorkspaceUnionTest.ArenaFusedLossMatchesIndependent
+  [  PASSED  ] LossWorkspaceUnionTest.PhotometricLossExposesSharedArena
+  [  PASSED  ] FusedL1SSIMTest.* (15) + LossWorkspaceUnionTest.* (4) = 19/19
+  ```
+- **Also:** fixed `FusedL1SSIMTest.WorkspaceReuse` to snapshot loss/grad before workspace
+  scalar reuse (Phase 1.6 alias).
+- **Numbers (unit, 64×96):** arena capacity ≤ max(variant)+256KiB slack after touching
+  all 5 modes; independent path retains sum (documents pre-6D.1 peak risk up to ~650 MiB
+  @1080p).
+- **Commit:** `9fc40b0b`
+
+## Task 6D.2 — Delete zero_terms (HasSigmaPartials flag)
+
+- **Branch:** `lfs-elite-mem`
+- **Change:** Decoupled / masked-decoupled app-branch backward no longer allocates or
+  reads a full-image `zero_terms` buffer. `fusedL1SSIMBackwardCUDA` and
+  `maskedFusedL1SSIMBackwardCUDA` gain `HasSigmaPartials` template flag; app path
+  instantiates `false` and passes null sigma partials (compile-time zeros). Arena
+  layout and independent `ensure_size` drop one image-sized f32 buffer each.
+- **Fail evidence (TDD):** Pre-6D.2 layout retained `zero_terms` (full image f32). Unit
+  oracle: live decoupled bytes would be `map + 7*image + reduce` and fail
+  `EXPECT_LT(live, pre_6d2)` / `EXPECT_GE(pre_6d2 - live, image_f32 - 4096)` once
+  the field is gone. Kernel previously passed `workspace.zero_terms.ptr<float>()`
+  twice into app backward (`ssim.cu` decoupled + masked-decoupled).
+- **Pass evidence:**
+  ```
+  [  PASSED  ] LossWorkspaceUnionTest.ZeroTermsDeletedAndDecoupledGradsStable
+  [  PASSED  ] FusedL1SSIMTest.* (15) + MaskedFusedL1SSIMTest.* (13)
+               + LossWorkspaceUnionTest.* (5) = 33/33
+  ```
+  Alloc drop @48×48 NCHW: ≥1 full image (~27.6 KiB) vs pre-6D.2. Decoupled
+  corrected==raw combined grads match fused within 5e-4 abs.
+- **Commit:** `37aa467a`
+
+## Task 6D.3 — fp16 dm_* partials (decoupled / masked / pure-SSIM)
+
+- **Branch:** `lfs-elite-mem`
+- **Change:** Port fused-path Float16 partials to pure-SSIM, decoupled, masked-fused,
+  and masked-decoupled workspaces + kernels. `fusedssimCUDA` /
+  `fusedssim_backwardCUDA` / `maskedFusedL1SSIM{Forward,Backward}` /
+  `decoupledFusedL1SSIMForwardCUDA` template `PartialT=__half`. Arena layouts and
+  independent `ensure_size` allocate dm_* as Float16; grads stay fp32.
+- **Fail evidence (TDD):** Pre-6D.3, `dm_*.dtype() == Float32` and live bytes match
+  full-fp32 layouts; `Fp16PartialsWorkspaceBytesAndGradEquiv` would fail dtype +
+  `EXPECT_LT(live, pre_layout)` assertions.
+- **Pass evidence:**
+  ```
+  [  PASSED  ] LossWorkspaceUnionTest.Fp16PartialsWorkspaceBytesAndGradEquiv
+  [  PASSED  ] 55 tests (LossWorkspace×6 + FusedL1×15 + Masked×13 + MaskLoss)
+  ```
+  Unit: pure/decoupled/masked/mdec all Float16 dm_*; byte drop ≥ 3–4 × image_f16.
+  Grad: decoupled(corrected==raw) vs fused max abs < 2e-3; masked full-ones vs
+  fused(no pad) < 2e-3; pure SSIM deterministic.
+- **Bench dual gate (vs BASELINE / Wave-2):**
+
+  | metric | baseline | Wave-2 | after 6D.3 |
+  |---|---:|---:|---:|
+  | Bonsai wall_s (med) | 9.00 | 8.97ish | **8.88** |
+  | Bonsai steady_ms | 4.129 | 4.065 | **4.057** |
+  | Bonsai peak MiB | 1156 | 938 | **970** |
+  | Bonsai allocs/iter | 5.05 | 0.05 | **0.05** |
+  | Bicycle 7k steady_ms | 3.290 | 3.208 | **3.072** |
+  | Bicycle 7k peak MiB | 1038 | 1026 | **1026** |
+  | Bicycle final loss | 0.098–0.121 | 0.079–0.107 | **0.113–0.140** |
+
+  Default fused path already used fp16 partials — no ms regression (slight win /
+  noise). Bicycle loss curves healthy (monotonic densify, late loss ~0.08–0.16,
+  high variance as documented). Peak VRAM flat vs Wave-2; no quality stop.
+- **@1080p savings (when mode used):** decoupled/masked-dec ~47.5 MiB;
+  masked-fused/pure-SSIM ~35.6 MiB each (half of prior dm_* f32).
+- **Runs:** bonsai `20260806T210217Z_run{1,2,3}`; bicycle `20260806T210253Z_run{1,2,3}`
+- **Commit:** `d2204088`
+

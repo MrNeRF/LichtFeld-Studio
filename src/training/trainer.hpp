@@ -549,9 +549,8 @@ namespace lfs::training {
 
         // Pre-allocated SSIM-map workspace for densification error maps.
         lfs::training::kernels::SSIMMapWorkspace densification_ssim_workspace_;
-        lfs::training::kernels::MaskedFusedL1SSIMWorkspace masked_fused_workspace_;
-        lfs::training::kernels::DecoupledFusedL1SSIMWorkspace decoupled_fused_workspace_;
-        lfs::training::kernels::MaskedDecoupledFusedL1SSIMWorkspace masked_decoupled_fused_workspace_;
+        // Phase 6D.1: masked / decoupled / fused / pure-SSIM workspaces live in
+        // photometric_loss_.arena() (mutually exclusive, single grow-only region).
 
         // Pre-allocated error map buffer for densification (avoids per-iteration allocation)
         core::Tensor densification_error_map_;

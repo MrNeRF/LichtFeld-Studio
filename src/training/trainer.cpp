@@ -753,72 +753,9 @@ namespace lfs::training {
             return inputs;
         }
 
+        // Phase 6D.1: single arena capacity (not sum of exclusive variants).
         [[nodiscard]] size_t photometric_workspace_bytes(const losses::PhotometricLoss& photometric_loss) {
-            std::vector<std::pair<std::string, size_t>> entries;
-
-            const auto& fused = photometric_loss.fused_workspace();
-            add_tensor_entry(entries, "fused.ssim_map", fused.ssim_map);
-            add_tensor_entry(entries, "fused.dm_dmu1", fused.dm_dmu1);
-            add_tensor_entry(entries, "fused.dm_dsigma1_sq", fused.dm_dsigma1_sq);
-            add_tensor_entry(entries, "fused.dm_dsigma12", fused.dm_dsigma12);
-            add_tensor_entry(entries, "fused.grad_img", fused.grad_img);
-            add_tensor_entry(entries, "fused.reduction_temp", fused.reduction_temp);
-            add_tensor_entry(entries, "fused.reduction_result", fused.reduction_result);
-
-            const auto& ssim = photometric_loss.ssim_workspace();
-            add_tensor_entry(entries, "ssim.ssim_map", ssim.ssim_map);
-            add_tensor_entry(entries, "ssim.dm_dmu1", ssim.dm_dmu1);
-            add_tensor_entry(entries, "ssim.dm_dsigma1_sq", ssim.dm_dsigma1_sq);
-            add_tensor_entry(entries, "ssim.dm_dsigma12", ssim.dm_dsigma12);
-            add_tensor_entry(entries, "ssim.dL_dmap", ssim.dL_dmap);
-            add_tensor_entry(entries, "ssim.dL_dimg1", ssim.dL_dimg1);
-            add_tensor_entry(entries, "ssim.reduction_temp", ssim.reduction_temp);
-            add_tensor_entry(entries, "ssim.reduction_result", ssim.reduction_result);
-
-            return sum_entry_bytes(entries);
-        }
-
-        [[nodiscard]] size_t masked_fused_workspace_bytes(const kernels::MaskedFusedL1SSIMWorkspace& workspace) {
-            std::vector<std::pair<std::string, size_t>> entries;
-            add_tensor_entry(entries, "masked.ssim_map", workspace.ssim_map);
-            add_tensor_entry(entries, "masked.dm_dmu1", workspace.dm_dmu1);
-            add_tensor_entry(entries, "masked.dm_dsigma1_sq", workspace.dm_dsigma1_sq);
-            add_tensor_entry(entries, "masked.dm_dsigma12", workspace.dm_dsigma12);
-            add_tensor_entry(entries, "masked.grad_img", workspace.grad_img);
-            add_tensor_entry(entries, "masked.masked_loss", workspace.masked_loss);
-            add_tensor_entry(entries, "masked.mask_sum", workspace.mask_sum);
-            return sum_entry_bytes(entries);
-        }
-
-        [[nodiscard]] size_t decoupled_fused_workspace_bytes(const kernels::DecoupledFusedL1SSIMWorkspace& workspace) {
-            std::vector<std::pair<std::string, size_t>> entries;
-            add_tensor_entry(entries, "decoupled.ssim_map", workspace.ssim_map);
-            add_tensor_entry(entries, "decoupled.app_dm_dmu1", workspace.app_dm_dmu1);
-            add_tensor_entry(entries, "decoupled.raw_dm_dmu1", workspace.raw_dm_dmu1);
-            add_tensor_entry(entries, "decoupled.raw_dm_dsigma1_sq", workspace.raw_dm_dsigma1_sq);
-            add_tensor_entry(entries, "decoupled.raw_dm_dsigma12", workspace.raw_dm_dsigma12);
-            add_tensor_entry(entries, "decoupled.zero_terms", workspace.zero_terms);
-            add_tensor_entry(entries, "decoupled.grad_corrected", workspace.grad_corrected);
-            add_tensor_entry(entries, "decoupled.grad_raw", workspace.grad_raw);
-            add_tensor_entry(entries, "decoupled.reduction_temp", workspace.reduction_temp);
-            add_tensor_entry(entries, "decoupled.reduction_result", workspace.reduction_result);
-            return sum_entry_bytes(entries);
-        }
-
-        [[nodiscard]] size_t masked_decoupled_fused_workspace_bytes(const kernels::MaskedDecoupledFusedL1SSIMWorkspace& workspace) {
-            std::vector<std::pair<std::string, size_t>> entries;
-            add_tensor_entry(entries, "masked_decoupled.ssim_map", workspace.ssim_map);
-            add_tensor_entry(entries, "masked_decoupled.app_dm_dmu1", workspace.app_dm_dmu1);
-            add_tensor_entry(entries, "masked_decoupled.raw_dm_dmu1", workspace.raw_dm_dmu1);
-            add_tensor_entry(entries, "masked_decoupled.raw_dm_dsigma1_sq", workspace.raw_dm_dsigma1_sq);
-            add_tensor_entry(entries, "masked_decoupled.raw_dm_dsigma12", workspace.raw_dm_dsigma12);
-            add_tensor_entry(entries, "masked_decoupled.zero_terms", workspace.zero_terms);
-            add_tensor_entry(entries, "masked_decoupled.grad_corrected", workspace.grad_corrected);
-            add_tensor_entry(entries, "masked_decoupled.grad_raw", workspace.grad_raw);
-            add_tensor_entry(entries, "masked_decoupled.reduction_temp", workspace.reduction_temp);
-            add_tensor_entry(entries, "masked_decoupled.masked_loss", workspace.masked_loss);
-            add_tensor_entry(entries, "masked_decoupled.mask_sum", workspace.mask_sum);
-            return sum_entry_bytes(entries);
+            return photometric_loss.arena().allocated_bytes();
         }
 
         [[nodiscard]] size_t ssim_map_workspace_bytes(const kernels::SSIMMapWorkspace& workspace) {
@@ -1681,10 +1618,11 @@ namespace lfs::training {
             opt_params.lambda_dssim > 0.0f;
 
         if (use_decoupled_appearance_loss) {
+            auto& decoupled_ws = photometric_loss_.arena().decoupled();
             auto [loss_tensor, ctx] = lfs::training::kernels::decoupled_fused_l1_ssim_forward(
-                corrected, raw_rendered, gt_image, opt_params.lambda_dssim, decoupled_fused_workspace_,
+                corrected, raw_rendered, gt_image, opt_params.lambda_dssim, decoupled_ws,
                 /*apply_valid_padding=*/true);
-            auto grads = lfs::training::kernels::decoupled_fused_l1_ssim_backward(ctx, decoupled_fused_workspace_);
+            auto grads = lfs::training::kernels::decoupled_fused_l1_ssim_backward(ctx, decoupled_ws);
 
             if (corrected.ndim() == 3) {
                 grads.grad_corrected = grads.grad_corrected.squeeze(0);
@@ -1807,11 +1745,12 @@ namespace lfs::training {
 
         if (photometric_weight.is_valid()) {
             if (use_decoupled_appearance_loss) {
+                auto& masked_decoupled_ws = photometric_loss_.arena().masked_decoupled();
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
                     corrected, raw_rendered, gt_image, photometric_weight, opt_params.lambda_dssim,
-                    masked_decoupled_fused_workspace_);
+                    masked_decoupled_ws);
                 auto grads = lfs::training::kernels::masked_decoupled_fused_l1_ssim_backward(
-                    ctx, masked_decoupled_fused_workspace_);
+                    ctx, masked_decoupled_ws);
 
                 grad_corrected = grads.grad_corrected;
                 grad_raw = grads.grad_raw;
@@ -1824,10 +1763,11 @@ namespace lfs::training {
                     grad_raw = grad_raw.squeeze(0);
                 }
             } else {
+                auto& masked_ws = photometric_loss_.arena().masked_fused();
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
-                    corrected, gt_image, photometric_weight, opt_params.lambda_dssim, masked_fused_workspace_);
+                    corrected, gt_image, photometric_weight, opt_params.lambda_dssim, masked_ws);
 
-                grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_fused_workspace_);
+                grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_ws);
                 loss = loss_tensor;
 
                 if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
@@ -3325,9 +3265,6 @@ namespace lfs::training {
         normal_consistency_partials_ = {};
         normal_prior_depth_scalar_ = {};
         densification_ssim_workspace_ = {};
-        masked_fused_workspace_ = {};
-        decoupled_fused_workspace_ = {};
-        masked_decoupled_fused_workspace_ = {};
         densification_error_map_ = {};
         edge_map_buffer_ = {};
         strategy_.reset();
@@ -4491,14 +4428,8 @@ namespace lfs::training {
                             record_vram_tensor("train.losses", "controller.tile_loss", tile_loss);
                             record_vram_tensor("train.losses", "controller.tile_grad", tile_grad);
                             record_vram_tensor("train.appearance", "ppisp_controller.prediction", pred);
-                            record_vram_current("train.losses", "photometric.workspaces",
+                            record_vram_current("train.losses", "loss_workspace_arena",
                                                 photometric_workspace_bytes(photometric_loss_));
-                            record_vram_current("train.losses", "masked_fused.workspace",
-                                                masked_fused_workspace_bytes(masked_fused_workspace_));
-                            record_vram_current("train.losses", "decoupled_fused.workspace",
-                                                decoupled_fused_workspace_bytes(decoupled_fused_workspace_));
-                            record_vram_current("train.losses", "masked_decoupled_fused.workspace",
-                                                masked_decoupled_fused_workspace_bytes(masked_decoupled_fused_workspace_));
                         }
 
                         // ISP backward for controller params
@@ -5105,11 +5036,11 @@ namespace lfs::training {
                             if (use_ssim_error && params_.optimization.lambda_dssim > 0.0f) {
                                 lfs::core::Tensor ssim_map;
                                 if (used_masked_fused && raw_loss_input.is_valid()) {
-                                    ssim_map = masked_decoupled_fused_workspace_.ssim_map;
+                                    ssim_map = photometric_loss_.arena().masked_decoupled().ssim_map;
                                 } else if (used_masked_fused) {
-                                    ssim_map = masked_fused_workspace_.ssim_map;
+                                    ssim_map = photometric_loss_.arena().masked_fused().ssim_map;
                                 } else if (raw_loss_input.is_valid()) {
-                                    ssim_map = decoupled_fused_workspace_.ssim_map;
+                                    ssim_map = photometric_loss_.arena().decoupled().ssim_map;
                                 } else if (params_.optimization.lambda_dssim < 1.0f) {
                                     ssim_map = photometric_loss_.fused_workspace().ssim_map;
                                 } else {
@@ -5206,14 +5137,8 @@ namespace lfs::training {
                             record_vram_tensor("train.losses", "tile_grad_raw", tile_grad_raw);
                             record_vram_tensor("train.losses", "tile_grad_alpha", tile_grad_alpha);
                             record_vram_tensor("train.losses", "densification_error_map.live", tile_error_map);
-                            record_vram_current("train.losses", "photometric.workspaces",
+                            record_vram_current("train.losses", "loss_workspace_arena",
                                                 photometric_workspace_bytes(photometric_loss_));
-                            record_vram_current("train.losses", "masked_fused.workspace",
-                                                masked_fused_workspace_bytes(masked_fused_workspace_));
-                            record_vram_current("train.losses", "decoupled_fused.workspace",
-                                                decoupled_fused_workspace_bytes(decoupled_fused_workspace_));
-                            record_vram_current("train.losses", "masked_decoupled_fused.workspace",
-                                                masked_decoupled_fused_workspace_bytes(masked_decoupled_fused_workspace_));
                             record_vram_current("train.losses", "densification_ssim.workspace",
                                                 ssim_map_workspace_bytes(densification_ssim_workspace_));
                             record_vram_tensor("train.losses", "densification_error_map.buffer", densification_error_map_);

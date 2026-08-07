@@ -79,23 +79,25 @@ namespace lfs::training::losses {
 
             } else if (params.lambda_dssim == 1.0f) {
                 LFS_TRACE("loss.ssim.forward");
-                // Pure SSIM loss
+                // Pure SSIM loss (arena-backed workspace; mode switch rebinds views)
+                auto& ssim_ws = arena_.ensure_pure_ssim(rendered_4d.shape().dims());
                 auto [ssim_value_tensor, ssim_ctx] = lfs::training::kernels::ssim_forward(
-                    rendered_4d, gt_4d, ssim_workspace_, /*apply_valid_padding=*/true);
+                    rendered_4d, gt_4d, ssim_ws, /*apply_valid_padding=*/true);
 
                 // loss = 1 - ssim
                 loss_tensor_gpu = lfs::core::Tensor::full({1}, 1.0f, lfs::core::Device::CUDA) - ssim_value_tensor;
 
                 // Backward: d(loss)/d(ssim) = -1 (since loss = 1 - ssim)
-                grad_combined = lfs::training::kernels::ssim_backward(ssim_ctx, ssim_workspace_, -1.0f);
+                grad_combined = lfs::training::kernels::ssim_backward(ssim_ctx, ssim_ws, -1.0f);
 
             } else {
                 LFS_TRACE("loss.fused_l1_ssim");
-                // Combined L1+SSIM loss (fused kernel)
+                // Combined L1+SSIM loss (fused kernel, arena-backed)
+                auto& fused_ws = arena_.ensure_fused(rendered_4d.shape().dims());
                 auto [loss_tensor, fused_ctx] = lfs::training::kernels::fused_l1_ssim_forward(
-                    rendered_4d, gt_4d, params.lambda_dssim, fused_workspace_, /*apply_valid_padding=*/true);
+                    rendered_4d, gt_4d, params.lambda_dssim, fused_ws, /*apply_valid_padding=*/true);
 
-                grad_combined = lfs::training::kernels::fused_l1_ssim_backward(fused_ctx, fused_workspace_);
+                grad_combined = lfs::training::kernels::fused_l1_ssim_backward(fused_ctx, fused_ws);
                 loss_tensor_gpu = loss_tensor;
             }
 
