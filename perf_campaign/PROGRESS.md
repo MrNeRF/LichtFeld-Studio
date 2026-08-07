@@ -903,6 +903,7 @@ allocs/iter ≤ 0.11 (no regression of WO-X).
 `GpuTeardownOrderTest.*` 3/3 PASS.
 
 ### Commit
+**`0f6660cd`** perf(fastgs): warp-level sub-tile culling for blend_backward_cu (WO-WARP-BWD)
 **`8e65a0b5`** fix(ISS-020): ordered GPU release before pool teardown (exit 139→0)
 
 ---
@@ -1002,6 +1003,7 @@ Python SceneCamera) — **not** FastGS blend/grad. All FastGS numerical gradient
 - `tests/test_warp_cull_blend.cpp` — TDD pixel identity + microbench
 
 ### Commit
+**`0f6660cd`** perf(fastgs): warp-level sub-tile culling for blend_backward_cu (WO-WARP-BWD)
 **`35ca0e4a`** perf(fastgs): warp-level sub-tile culling for forward blend_cu (WO-WARP-FWD)
 
 
@@ -1112,3 +1114,4 @@ params update; not introduced by this change). All FastGS numerical gradients gr
 - `tests/CMakeLists.txt` — register test
 
 ### Commit
+**`0f6660cd`** perf(fastgs): warp-level sub-tile culling for blend_backward_cu (WO-WARP-BWD)
