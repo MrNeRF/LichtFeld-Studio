@@ -16,11 +16,13 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "training/components/ppisp_file.hpp"
 #include "training/trainer.hpp"
+#include "training/training_state.hpp"
 #include "visualizer/core/data_loading_service.hpp"
 #include "visualizer/include/visualizer/visualizer.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/visualizer_impl.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -1737,7 +1739,160 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
-           FileExitRoutesThroughCloseSaveStateMachine) {
+           FailedAutosaveSettlementAppliesBackoffBeforeRetry) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "backoff.licht";
+        const auto backup_path =
+            temporary / "backoff.backup";
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Dirty for failed autosave"),
+                lfs::core::NULL_NODE);
+
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            lifecycle->settings_
+                .autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosaved_dirty_epoch_ =
+                0;
+            lifecycle->last_autosaved_scene_serial_ =
+                0;
+            lifecycle->last_autosave_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
+
+            std::filesystem::rename(
+                project_path, backup_path);
+            lifecycle->updateMaintenance();
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_FALSE(
+                lifecycle->last_project_write_error_
+                    .empty());
+            EXPECT_EQ(
+                lifecycle
+                    ->autosave_failure_backoff_seconds_,
+                60u);
+            EXPECT_GE(
+                lifecycle->autosave_retry_not_before_,
+                std::chrono::steady_clock::now());
+
+            lifecycle->last_project_write_error_
+                .clear();
+            lifecycle->updateMaintenance();
+            EXPECT_TRUE(
+                lifecycle->last_project_write_error_
+                    .empty());
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_FALSE(
+                lifecycle->project_write_job_
+                    .has_value());
+            EXPECT_EQ(
+                lifecycle
+                    ->autosave_failure_backoff_seconds_,
+                60u);
+
+            std::filesystem::rename(
+                backup_path, project_path);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           PendingCloseSuppressesBackgroundAutosave) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "close-suppress.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Dirty before close"),
+                lfs::core::NULL_NODE);
+
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(
+                lifecycle->setAutoSaveOnClose(
+                    false));
+            lifecycle->settings_
+                .autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosaved_dirty_epoch_ =
+                0;
+            lifecycle->last_autosaved_scene_serial_ =
+                0;
+            lifecycle->last_autosave_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
+
+            EXPECT_EQ(
+                lifecycle->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::NeedsPrompt);
+            EXPECT_TRUE(
+                lifecycle->application_close_pending_);
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+
+            lifecycle->updateMaintenance();
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_FALSE(
+                lifecycle->project_write_job_
+                    .has_value());
+            EXPECT_FALSE(
+                std::filesystem::exists(sidecar));
+
+            lifecycle->resetCloseSaveAttempt();
+            EXPECT_FALSE(
+                lifecycle->application_close_pending_);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           FileExitWithDefaultSettingsNeedsPrompt) {
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "session.licht";
@@ -1768,6 +1923,169 @@ namespace lfs::vis {
                 viewer.projectGetInfo();
             ASSERT_TRUE(before);
             EXPECT_FALSE(before->dirty);
+            EXPECT_FALSE(before->auto_save_on_close);
+
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Unsaved before File Exit"),
+                lfs::core::NULL_NODE);
+            auto dirty = viewer.projectGetInfo();
+            ASSERT_TRUE(dirty);
+            ASSERT_TRUE(dirty->dirty);
+
+            const auto mtime_before =
+                std::filesystem::last_write_time(
+                    project_path);
+
+            lfs::core::events::cmd::
+                RequestExit{}
+                    .emit();
+            ASSERT_TRUE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+            ASSERT_FALSE(
+                viewer.getGuiManager()
+                    ->isForceExit());
+
+            EXPECT_FALSE(viewer.allowclose());
+            EXPECT_FALSE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+            EXPECT_EQ(
+                viewer.project_lifecycle_
+                    ->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::NeedsPrompt);
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_EQ(
+                std::filesystem::last_write_time(
+                    project_path),
+                mtime_before);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           CloseSavePendingActionSkipsPreviewRegen) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "close-save-exit.licht";
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            const auto opened =
+                viewer.projectOpen(project_path);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Unsaved before CloseSave exit"),
+                lfs::core::NULL_NODE);
+            auto dirty = viewer.projectGetInfo();
+            ASSERT_TRUE(dirty);
+            ASSERT_TRUE(dirty->dirty);
+
+            // Catches CloseSave exit failing to complete a save in a
+            // frame-less session (capture carries prior THMB forward).
+            // Explicit save with regenerate_preview=true must still succeed
+            // when capture is unavailable under the partial-hydration contract.
+            const auto with_preview =
+                viewer.projectSave(true);
+            ASSERT_TRUE(with_preview)
+                << lfs::format_for_developer(
+                       with_preview.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info && !info->dirty &&
+                           !viewer.jobs().anyRunning(
+                               JobType::ProjectWrite);
+                }));
+
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Unsaved again for CloseSave"),
+                lfs::core::NULL_NODE);
+            dirty = viewer.projectGetInfo();
+            ASSERT_TRUE(dirty);
+            ASSERT_TRUE(dirty->dirty);
+
+            viewer.pending_training_action_ =
+                VisualizerImpl::PendingTrainingAction::
+                    CloseSave;
+            viewer.performPendingTrainingAction();
+
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info && !info->dirty &&
+                           !viewer.jobs().anyRunning(
+                               JobType::ProjectWrite);
+                }));
+
+            const auto after =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(after);
+            EXPECT_FALSE(after->dirty);
+            EXPECT_TRUE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           FileExitRoutesThroughCloseSaveWhenAutoSaveOnCloseEnabled) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "session.licht";
+        constexpr float restored_focal_length =
+            73.0f;
+        write_empty_project(
+            project_path, restored_focal_length);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            const auto opened =
+                viewer.projectOpen(project_path);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            ASSERT_TRUE(
+                viewer
+                    .isProjectSessionRestorePending());
+            ASSERT_TRUE(
+                viewer.project_lifecycle_
+                    ->setAutoSaveOnClose(true));
+            const auto before =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(before);
+            EXPECT_FALSE(before->dirty);
+            EXPECT_TRUE(before->auto_save_on_close);
 
             ASSERT_NE(
                 viewer.getScene().addGroup(
@@ -1873,6 +2191,9 @@ namespace lfs::vis {
             ASSERT_TRUE(
                 std::filesystem::is_regular_file(
                     project_path));
+            ASSERT_TRUE(
+                viewer.project_lifecycle_
+                    ->setAutoSaveOnClose(true));
             std::filesystem::rename(
                 project_path, backup_path);
             std::filesystem::create_directory(
@@ -1931,6 +2252,730 @@ namespace lfs::vis {
                 project::ProjectLifecycle::
                     CloseSaveStatus::Succeeded);
             EXPECT_TRUE(viewer.allowclose());
+        }
+    }
+
+    // Catches background maintenance grabbing the master writer lock while a
+    // stopping trainer still owes its terminal append (lost training generation).
+    TEST_F(VisualizerImplResetTest,
+           StoppingTrainerBlocksIdleCompactionAndAutosave) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "stopping-window.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            ASSERT_TRUE(viewer.projectSave(false));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_FALSE(
+                lifecycle->hasDirtyProject());
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    viewer.getTrainerManager()
+                        ->getStateMachine());
+            if (state_machine.getState() ==
+                TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Running));
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Stopping));
+            ASSERT_FALSE(viewer.getTrainerManager()
+                             ->isTrainingActive());
+
+            const auto prime_maintenance =
+                [&] {
+                    lifecycle->next_storage_check_at_ =
+                        std::chrono::steady_clock::
+                            now() +
+                        std::chrono::hours(1);
+                    lifecycle->settings_
+                        .compaction_idle_seconds = 1;
+                    lifecycle->last_mutation_at_ =
+                        std::chrono::steady_clock::
+                            now() -
+                        std::chrono::hours(1);
+                    lifecycle->settings_
+                        .autosave_dirty_epoch_threshold =
+                        1;
+                    lifecycle
+                        ->last_autosaved_dirty_epoch_ =
+                        0;
+                    lifecycle
+                        ->last_autosaved_scene_serial_ =
+                        0;
+                    lifecycle->last_autosave_at_ =
+                        std::chrono::steady_clock::
+                            now() -
+                        std::chrono::hours(1);
+                };
+
+            // Idle compaction would take the master
+            // writer lock the terminal append needs.
+            lifecycle->compaction_suggested_ = true;
+            lifecycle->scene_dirty_.store(
+                false, std::memory_order_release);
+            lifecycle->payload_dirty_.store(
+                false, std::memory_order_release);
+            prime_maintenance();
+            lifecycle->updateMaintenance();
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_FALSE(
+                lifecycle->project_write_job_
+                    .has_value());
+
+            // Hard dirt blocks compaction, so this leg
+            // proves the autosave path stays parked too.
+            lifecycle->compaction_suggested_ = false;
+            ASSERT_NE(
+                scene.addGroup("Hard dirt"),
+                lfs::core::NULL_NODE);
+            ASSERT_TRUE(
+                lifecycle->hasDirtyProject());
+            prime_maintenance();
+            lifecycle->updateMaintenance();
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_FALSE(
+                lifecycle->project_write_job_
+                    .has_value());
+            EXPECT_FALSE(
+                std::filesystem::exists(sidecar));
+
+            viewer.getTrainerManager()
+                ->clearTrainer();
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           BaselineIdleCheckpointTrainerClosesWithoutTrainingPrompt) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "baseline-idle.licht";
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            const auto opened =
+                viewer.projectOpen(
+                    project_path,
+                    ProjectSwitchDisposition::
+                        DiscardChanges);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_NE(lifecycle->document_, nullptr);
+            (void)lifecycle->document_
+                ->edit_gui_layout();
+            (void)lifecycle->document_
+                ->edit_view();
+
+            // Soft-only dirt must not force a prompt;
+            // clear any hard dirt from scene edits.
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            ASSERT_TRUE(viewer.projectSave(false));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            (void)lifecycle->document_
+                ->edit_gui_layout();
+            (void)lifecycle->document_
+                ->edit_view();
+
+            auto* const trainer_manager =
+                viewer.getTrainerManager();
+            ASSERT_NE(trainer_manager, nullptr);
+            trainer_manager->setTrainerFromCheckpoint(
+                std::make_unique<
+                    lfs::training::Trainer>(scene),
+                0);
+            ASSERT_TRUE(
+                trainer_manager->isTrainingActive());
+            ASSERT_TRUE(
+                trainer_manager->isPaused());
+            ASSERT_TRUE(
+                trainer_manager
+                    ->isPausedAtCheckpointBaseline());
+            EXPECT_EQ(
+                trainer_manager
+                    ->getCurrentIteration(),
+                0);
+            ASSERT_TRUE(
+                trainer_manager
+                    ->checkpointBaselineIteration()
+                    .has_value());
+            EXPECT_EQ(
+                *trainer_manager
+                     ->checkpointBaselineIteration(),
+                0);
+
+            const auto info =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            EXPECT_FALSE(info->dirty);
+            EXPECT_TRUE(info->session_dirty);
+            EXPECT_NE(
+                std::find(
+                    info->dirty_chapters.begin(),
+                    info->dirty_chapters.end(),
+                    "GUIL"),
+                info->dirty_chapters.end());
+            EXPECT_NE(
+                std::find(
+                    info->dirty_chapters.begin(),
+                    info->dirty_chapters.end(),
+                    "VIEW"),
+                info->dirty_chapters.end());
+            EXPECT_FALSE(
+                lifecycle->hasDirtyProject());
+            EXPECT_EQ(
+                lifecycle->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::NotDirty);
+            lifecycle->resetCloseSaveAttempt();
+
+            viewer.getWindowManager()
+                ->requestClose();
+            EXPECT_TRUE(viewer.allowclose());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ProgressedPausedTrainerStillBlocksCleanClose) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "progressed-paused.licht";
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            const auto opened =
+                viewer.projectOpen(
+                    project_path,
+                    ProjectSwitchDisposition::
+                        DiscardChanges);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(
+                lifecycle->setAutoSaveOnClose(
+                    false));
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+
+            auto* const trainer_manager =
+                viewer.getTrainerManager();
+            ASSERT_NE(trainer_manager, nullptr);
+            // Baseline N with trainer still at 0
+            // models unsaved progress off the
+            // installed checkpoint iteration.
+            trainer_manager->setTrainerFromCheckpoint(
+                std::make_unique<
+                    lfs::training::Trainer>(scene),
+                42);
+            ASSERT_TRUE(
+                trainer_manager->isTrainingActive());
+            ASSERT_TRUE(
+                trainer_manager->isPaused());
+            ASSERT_FALSE(
+                trainer_manager
+                    ->isPausedAtCheckpointBaseline());
+            EXPECT_EQ(
+                trainer_manager
+                    ->getCurrentIteration(),
+                0);
+            ASSERT_TRUE(
+                trainer_manager
+                    ->checkpointBaselineIteration()
+                    .has_value());
+            EXPECT_EQ(
+                *trainer_manager
+                     ->checkpointBaselineIteration(),
+                42);
+
+            EXPECT_TRUE(
+                lifecycle->hasDirtyProject());
+            const auto info =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            EXPECT_TRUE(info->dirty);
+
+            viewer.getWindowManager()
+                ->requestClose();
+            EXPECT_FALSE(viewer.allowclose());
+            EXPECT_FALSE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+            // Soft-only session dirt never reaches
+            // the dirty prompt while training
+            // progress still owns the exit gate.
+            lifecycle->resetCloseSaveAttempt();
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           SessionSoftDirtyDoesNotPromptOrArmAutosave) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "session-soft.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            const auto opened =
+                viewer.projectOpen(
+                    project_path,
+                    ProjectSwitchDisposition::
+                        DiscardChanges);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_NE(lifecycle->document_, nullptr);
+            (void)lifecycle->document_
+                ->edit_gui_layout();
+            (void)lifecycle->document_
+                ->edit_view();
+
+            const auto info =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            EXPECT_FALSE(info->dirty);
+            EXPECT_TRUE(info->session_dirty);
+            EXPECT_NE(
+                std::find(
+                    info->dirty_chapters.begin(),
+                    info->dirty_chapters.end(),
+                    "GUIL"),
+                info->dirty_chapters.end());
+            EXPECT_NE(
+                std::find(
+                    info->dirty_chapters.begin(),
+                    info->dirty_chapters.end(),
+                    "VIEW"),
+                info->dirty_chapters.end());
+            EXPECT_FALSE(
+                lifecycle->hasDirtyProject());
+            EXPECT_EQ(
+                lifecycle->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::NotDirty);
+            lifecycle->resetCloseSaveAttempt();
+
+            ASSERT_TRUE(
+                lifecycle->setAutoSaveOnClose(
+                    false));
+            lifecycle->settings_
+                .autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosaved_dirty_epoch_ =
+                0;
+            lifecycle
+                ->last_autosaved_scene_serial_ = 0;
+            lifecycle->last_autosave_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
+            lifecycle->updateMaintenance();
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_FALSE(
+                lifecycle->project_write_job_
+                    .has_value());
+            EXPECT_FALSE(
+                std::filesystem::exists(sidecar));
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           SceneEditStillPromptsAndArmsAutosave) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "scene-hard.licht";
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            const auto opened =
+                viewer.projectOpen(
+                    project_path,
+                    ProjectSwitchDisposition::
+                        DiscardChanges);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Hard dirt scene edit"),
+                lfs::core::NULL_NODE);
+
+            const auto info =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            EXPECT_TRUE(info->dirty);
+
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(
+                lifecycle->setAutoSaveOnClose(
+                    false));
+            EXPECT_TRUE(
+                lifecycle->hasDirtyProject());
+            EXPECT_EQ(
+                lifecycle->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::NeedsPrompt);
+            lifecycle->resetCloseSaveAttempt();
+
+            lifecycle->settings_
+                .autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosaved_dirty_epoch_ =
+                0;
+            lifecycle
+                ->last_autosaved_scene_serial_ = 0;
+            lifecycle->last_autosave_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
+            lifecycle->updateMaintenance();
+            EXPECT_TRUE(
+                lifecycle->project_write_job_
+                    .has_value() ||
+                viewer.jobs().anyRunning(
+                    JobType::ProjectWrite));
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ParametersUnchangedRoundTripStaysClean) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "prms-clean.licht";
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            const auto opened =
+                viewer.projectOpen(
+                    project_path,
+                    ProjectSwitchDisposition::
+                        DiscardChanges);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+
+            const auto info =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            EXPECT_FALSE(info->dirty);
+            EXPECT_EQ(
+                std::find(
+                    info->dirty_chapters.begin(),
+                    info->dirty_chapters.end(),
+                    "PRMS"),
+                info->dirty_chapters.end());
+            EXPECT_FALSE(
+                viewer.project_lifecycle_
+                    ->hasDirtyProject());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ParametersValueChangeIsHardDirty) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "prms-dirty.licht";
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            const auto opened =
+                viewer.projectOpen(
+                    project_path,
+                    ProjectSwitchDisposition::
+                        DiscardChanges);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+
+            viewer.getParameterManager()
+                ->modifyActiveParams(
+                    [](lfs::core::param::
+                           OptimizationParameters&
+                               params) {
+                        params.iterations += 1;
+                    });
+
+            const auto info =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            EXPECT_TRUE(info->dirty);
+            EXPECT_NE(
+                std::find(
+                    info->dirty_chapters.begin(),
+                    info->dirty_chapters.end(),
+                    "PRMS"),
+                info->dirty_chapters.end());
+            EXPECT_TRUE(
+                viewer.project_lifecycle_
+                    ->hasDirtyProject());
+            EXPECT_EQ(
+                viewer.project_lifecycle_
+                    ->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::NeedsPrompt);
+            viewer.project_lifecycle_
+                ->resetCloseSaveAttempt();
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ProjectGetInfoSucceedsDuringUnboundTrainingWithoutCkpt) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "unbound_train.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addSplatPlaceholder(
+                    "Unbound training model");
+            ASSERT_NE(model, lfs::core::NULL_NODE);
+            scene.setTrainingModelNode(model);
+
+            // Negative: without active training the
+            // CKPT invariant still hard-fails sync.
+            auto blocked = viewer.projectGetInfo();
+            ASSERT_FALSE(blocked);
+            EXPECT_EQ(
+                blocked.error().code(),
+                lfs::ErrorCode::FailedPrecondition);
+
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            ASSERT_NE(viewer.getTrainer(), nullptr);
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    viewer.getTrainerManager()
+                        ->getStateMachine());
+            // setTrainer lands in Ready; Running is
+            // active for isTrainingActive().
+            if (state_machine.getState() ==
+                TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Running));
+            ASSERT_TRUE(viewer.getTrainerManager()
+                            ->isTrainingActive());
+
+            auto info = viewer.projectGetInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            EXPECT_TRUE(info->dirty);
+            ASSERT_TRUE(info->path.has_value());
+            EXPECT_EQ(*info->path, project_path);
+            EXPECT_FALSE(info->project_uuid.empty());
         }
     }
 

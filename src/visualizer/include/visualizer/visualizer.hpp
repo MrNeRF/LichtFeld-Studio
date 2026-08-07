@@ -58,12 +58,13 @@ namespace lfs::vis {
         std::string project_uuid;
         std::uint64_t generation = 0;
         bool dirty = false;
+        bool session_dirty = false;
         std::vector<std::string> dirty_chapters;
         std::string hydration_state = "empty";
         std::vector<ProjectPayloadInfo> payloads;
         bool contains_embedded_secrets = false;
         bool reopen_last_project = true;
-        bool auto_save_on_close = true;
+        bool auto_save_on_close = false;
         std::uint64_t autosave_interval_seconds =
             5 * 60;
         std::uint64_t autosave_dirty_epoch_threshold =

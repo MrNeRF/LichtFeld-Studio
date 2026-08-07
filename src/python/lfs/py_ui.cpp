@@ -3042,7 +3042,8 @@ namespace lfs::python {
                     self.image_uv(tex.texture_id(), size, {0.0f, 0.0f}, tex.uv1(), std::move(tint));
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& self, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& self, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -3609,19 +3610,29 @@ namespace lfs::python {
             "on_request_exit",
             [](nb::object callback) {
                 g_request_exit_callback = callback;
-                lfs::core::events::cmd::ShowExitConfirmation::when([](const auto&) {
-                    if (g_request_exit_callback && !g_request_exit_callback.is_none()) {
-                        nb::gil_scoped_acquire guard;
-                        try {
-                            g_request_exit_callback();
-                        } catch (const std::exception& ex) {
-                            LOG_ERROR("RequestExit callback error: {}", ex.what());
+                lfs::core::events::cmd::ShowExitConfirmation::when(
+                    [](const auto& event) {
+                        if (g_request_exit_callback &&
+                            !g_request_exit_callback
+                                 .is_none()) {
+                            nb::gil_scoped_acquire guard;
+                            try {
+                                g_request_exit_callback(
+                                    event
+                                        .training_in_progress);
+                            } catch (
+                                const std::exception&
+                                    ex) {
+                                LOG_ERROR(
+                                    "RequestExit callback error: {}",
+                                    ex.what());
+                            }
                         }
-                    }
-                });
+                    });
             },
             nb::arg("callback"),
-            "Register callback for the close-decision prompt");
+            "Register callback for the close-decision prompt "
+            "(receives training_in_progress: bool)");
 
         m.def(
             "on_project_switch_confirmation",

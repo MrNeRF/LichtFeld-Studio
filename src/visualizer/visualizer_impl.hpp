@@ -201,7 +201,9 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_ResetTrainingPreservesExplicitInitPath_Test;
         friend class VisualizerImplResetTest_DirtyProjectSwitchRequiresExplicitDiscardAuthorization_Test;
         friend class VisualizerImplResetTest_NewProjectDirtyGateRunsBelowEveryCommandEntry_Test;
-        friend class VisualizerImplResetTest_FileExitRoutesThroughCloseSaveStateMachine_Test;
+        friend class VisualizerImplResetTest_FileExitWithDefaultSettingsNeedsPrompt_Test;
+        friend class VisualizerImplResetTest_FileExitRoutesThroughCloseSaveWhenAutoSaveOnCloseEnabled_Test;
+        friend class VisualizerImplResetTest_CloseSavePendingActionSkipsPreviewRegen_Test;
         friend class VisualizerImplResetTest_CancelExitAndNextWindowAttemptRecoverFromFailedCloseSave_Test;
         friend class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
         friend class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -215,6 +217,15 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
         friend class VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
         friend class VisualizerImplResetTest_TrainingSnapshotCancelTerminalizesBeforeSettlement_Test;
+        friend class VisualizerImplResetTest_FailedAutosaveSettlementAppliesBackoffBeforeRetry_Test;
+        friend class VisualizerImplResetTest_PendingCloseSuppressesBackgroundAutosave_Test;
+        friend class VisualizerImplResetTest_StoppingTrainerBlocksIdleCompactionAndAutosave_Test;
+        friend class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
+        friend class VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
+        friend class VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
+        friend class VisualizerImplResetTest_ParametersValueChangeIsHardDirty_Test;
+        friend class VisualizerImplResetTest_BaselineIdleCheckpointTrainerClosesWithoutTrainingPrompt_Test;
+        friend class VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;
@@ -383,7 +394,8 @@ namespace lfs::vis {
             None,
             Reset,
             NewProject,
-            Close,
+            CloseSave,
+            CloseDiscard,
         };
         PendingTrainingAction pending_training_action_ = PendingTrainingAction::None;
         bool pending_training_action_posted_ = false;

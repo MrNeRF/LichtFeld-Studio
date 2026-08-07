@@ -35,6 +35,7 @@
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/model_renderability.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/builtin_tools.hpp"
@@ -874,6 +875,15 @@ namespace lfs::vis {
             if (!scene_manager_) {
                 return nullptr;
             }
+            if (!hasRenderableGaussians(scene_manager_->getModelForRendering())) {
+                return nullptr;
+            }
+            if (const auto* tm = scene_manager_->getTrainerManager()) {
+                if (tm->isCompletionPending() ||
+                    tm->getState() == TrainingState::Stopping) {
+                    return nullptr;
+                }
+            }
             auto* const selection_service = scene_manager_->getSelectionService();
             return selection_service ? selection_service->getScreenPositions() : nullptr;
         };
@@ -891,6 +901,11 @@ namespace lfs::vis {
         callback_cleanup_.add([] { vis::set_viewport_render_callback(nullptr); });
 
         vis::set_capture_viewport_render_callback([this, get_screen_positions]() -> std::optional<vis::ViewportRender> {
+            if (!isOnViewerThread()) {
+                LOG_ERROR(
+                    "Viewport capture requested off the viewer thread; returning empty");
+                return std::nullopt;
+            }
             if (!rendering_manager_)
                 return std::nullopt;
 
@@ -925,7 +940,47 @@ namespace lfs::vis {
         main_loop_->setRenderCallback([this]() { render(); });
         main_loop_->setShutdownCallback([this]() { shutdown(); });
         main_loop_->setShouldCloseCallback([this]() { return allowclose(); });
-        main_loop_->setInterruptCallback([this]() { requestApplicationClose(); });
+        main_loop_->setInterruptCallback([this]() {
+            const bool close_attempt_pending =
+                (window_manager_ &&
+                 window_manager_->shouldClose()) ||
+                (gui_manager_ &&
+                 (gui_manager_->isForceExit() ||
+                  gui_manager_
+                      ->isExitConfirmationPending())) ||
+                (project_lifecycle_ &&
+                 project_lifecycle_
+                     ->isApplicationClosePending()) ||
+                pending_training_action_ ==
+                    PendingTrainingAction::CloseSave ||
+                pending_training_action_ ==
+                    PendingTrainingAction::CloseDiscard;
+            if (close_attempt_pending) {
+                if (gui_manager_) {
+                    gui_manager_->setForceExit(true);
+                }
+                if (project_lifecycle_) {
+                    project_lifecycle_
+                        ->markApplicationClosePending();
+                    project_lifecycle_
+                        ->setSuppressTrainingAdoption(
+                            true);
+                }
+                if (trainer_manager_ &&
+                    (trainer_manager_
+                         ->isTrainingActive() ||
+                     trainer_manager_
+                         ->isCompletionPending())) {
+                    pending_training_action_ =
+                        PendingTrainingAction::
+                            CloseDiscard;
+                    if (trainer_manager_->canStop()) {
+                        trainer_manager_->stopTraining();
+                    }
+                }
+            }
+            requestApplicationClose();
+        });
         main_loop_->setFrameErrorCallback([this](std::exception_ptr eptr) {
             handleFrameException(std::move(eptr));
         });
@@ -1352,7 +1407,7 @@ namespace lfs::vis {
                         "The project has no path; use Save As.");
                     return;
                 }
-                if (auto saved = projectSave(true);
+                if (auto saved = projectSave(false);
                     !saved) {
                     publish_project_error(
                         "Save Project",
@@ -1378,7 +1433,7 @@ namespace lfs::vis {
                     return;
                 }
                 if (auto saved =
-                        projectSaveAs(path, true);
+                        projectSaveAs(path, false);
                     !saved) {
                     publish_project_error(
                         "Save Project As",
@@ -1390,6 +1445,16 @@ namespace lfs::vis {
             });
 
         cmd::CancelExit::when([this](const auto&) {
+            if (pending_training_action_ ==
+                    PendingTrainingAction::CloseSave ||
+                pending_training_action_ ==
+                    PendingTrainingAction::
+                        CloseDiscard) {
+                pending_training_action_ =
+                    PendingTrainingAction::None;
+                pending_training_action_posted_ =
+                    false;
+            }
             if (project_lifecycle_) {
                 project_lifecycle_
                     ->resetCloseSaveAttempt();
@@ -1407,7 +1472,54 @@ namespace lfs::vis {
             if (gui_manager_) {
                 gui_manager_->setForceExit(true);
             }
+            if (project_lifecycle_) {
+                project_lifecycle_
+                    ->markApplicationClosePending();
+                project_lifecycle_
+                    ->setSuppressTrainingAdoption(true);
+            }
+            if (trainer_manager_ &&
+                (trainer_manager_->isTrainingActive() ||
+                 trainer_manager_
+                     ->isCompletionPending())) {
+                pending_training_action_ =
+                    PendingTrainingAction::CloseDiscard;
+                if (trainer_manager_->canStop()) {
+                    trainer_manager_->stopTraining();
+                }
+            }
             requestApplicationClose();
+        });
+
+        cmd::StopSaveAndExit::when([this](const auto&) {
+            if (gui_manager_) {
+                gui_manager_->setForceExit(false);
+            }
+            if (project_lifecycle_) {
+                project_lifecycle_
+                    ->markApplicationClosePending();
+                project_lifecycle_
+                    ->setSuppressTrainingAdoption(false);
+            }
+            if (trainer_manager_ &&
+                (trainer_manager_->isTrainingActive() ||
+                 trainer_manager_
+                     ->isCompletionPending())) {
+                pending_training_action_ =
+                    PendingTrainingAction::CloseSave;
+                if (trainer_manager_->canStop()) {
+                    trainer_manager_->stopTraining();
+                }
+                return;
+            }
+            auto info = projectGetInfo();
+            if (info && info->path) {
+                lfs::core::events::cmd::SaveAndExit{}
+                    .emit();
+            } else {
+                lfs::core::events::cmd::SaveAsAndExit{}
+                    .emit();
+            }
         });
 
         cmd::SetReopenLastProject::when(
@@ -2228,22 +2340,18 @@ namespace lfs::vis {
             return false;
         }
 
-        const auto defer_close_for_training = [this] {
-            if (!trainer_manager_ ||
-                (!trainer_manager_->isTrainingActive() && !trainer_manager_->isCompletionPending())) {
+        const auto training_blocks_close = [this] {
+            if (!trainer_manager_) {
                 return false;
             }
-            pending_training_action_ = PendingTrainingAction::Close;
-            if (trainer_manager_->canStop()) {
-                trainer_manager_->stopTraining();
+            if (trainer_manager_->isCompletionPending()) {
+                return true;
             }
-            window_manager_->cancelClose();
-            return true;
+            if (!trainer_manager_->isTrainingActive()) {
+                return false;
+            }
+            return !trainer_manager_->isPausedAtCheckpointBaseline();
         };
-
-        if (defer_close_for_training()) {
-            return false;
-        }
 
         const auto finish_close = [this] {
             beginShutdown();
@@ -2260,12 +2368,54 @@ namespace lfs::vis {
             return true;
         };
 
-        // ForceExit is emitted only after the user confirms the
-        // fallback discard path. It deliberately bypasses another
-        // automatic-save attempt.
-        if (gui_manager_ &&
-            gui_manager_->isForceExit()) {
+        // ForceExit / Discard: skip save. If training is still
+        // running, stop and wait (terminal write may still run as
+        // crash insurance but is not adopted).
+        if (gui_manager_ && gui_manager_->isForceExit()) {
+            if (project_lifecycle_) {
+                project_lifecycle_
+                    ->markApplicationClosePending();
+                project_lifecycle_
+                    ->setSuppressTrainingAdoption(true);
+            }
+            if (training_blocks_close()) {
+                pending_training_action_ =
+                    PendingTrainingAction::CloseDiscard;
+                if (trainer_manager_->canStop()) {
+                    trainer_manager_->stopTraining();
+                }
+                window_manager_->cancelClose();
+                return false;
+            }
             return finish_close();
+        }
+
+        // Training Running/Paused/Stopping/completion-pending:
+        // prompt first; do not stop until the user chooses.
+        if (training_blocks_close()) {
+            if (project_lifecycle_) {
+                project_lifecycle_
+                    ->markApplicationClosePending();
+            }
+            if (pending_training_action_ ==
+                    PendingTrainingAction::CloseSave ||
+                pending_training_action_ ==
+                    PendingTrainingAction::CloseDiscard) {
+                window_manager_->cancelClose();
+                return false;
+            }
+            if (!gui_manager_) {
+                LOG_ERROR(
+                    "Training is active and no GUI prompt is available; refusing to close");
+                window_manager_->cancelClose();
+                return false;
+            }
+            if (!gui_manager_->isExitConfirmationPending()) {
+                gui_manager_->requestExitConfirmation(
+                    true);
+            }
+            window_manager_->cancelClose();
+            return false;
         }
 
         if (project_lifecycle_) {
@@ -2328,7 +2478,7 @@ namespace lfs::vis {
             return false;
         }
         if (!gui_manager_->isExitConfirmationPending()) {
-            gui_manager_->requestExitConfirmation();
+            gui_manager_->requestExitConfirmation(false);
         }
         window_manager_->cancelClose();
         return false;
@@ -2468,7 +2618,10 @@ namespace lfs::vis {
 
     void VisualizerImpl::handleNewProject(
         const ProjectSwitchDisposition disposition) {
-        if (pending_training_action_ == PendingTrainingAction::Close) {
+        if (pending_training_action_ ==
+                PendingTrainingAction::CloseSave ||
+            pending_training_action_ ==
+                PendingTrainingAction::CloseDiscard) {
             return;
         }
         if (!project_lifecycle_) {
@@ -2828,7 +2981,27 @@ namespace lfs::vis {
                 ProjectSwitchDisposition::
                     RequireClean;
             break;
-        case PendingTrainingAction::Close:
+        case PendingTrainingAction::CloseSave: {
+            auto info = projectGetInfo();
+            if (info && info->path) {
+                lfs::core::events::cmd::SaveAndExit{}
+                    .emit();
+            } else {
+                lfs::core::events::cmd::SaveAsAndExit{}
+                    .emit();
+            }
+            break;
+        }
+        case PendingTrainingAction::CloseDiscard:
+            if (gui_manager_) {
+                gui_manager_->setForceExit(true);
+            }
+            if (project_lifecycle_) {
+                project_lifecycle_
+                    ->markApplicationClosePending();
+                project_lifecycle_
+                    ->setSuppressTrainingAdoption(true);
+            }
             requestApplicationClose();
             break;
         case PendingTrainingAction::None:

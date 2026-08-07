@@ -212,6 +212,7 @@ namespace lfs::vis {
             // A new training run has no resumable elapsed-time authority.
             accumulated_training_time_ =
                 std::chrono::steady_clock::duration{0};
+            checkpoint_baseline_iteration_.reset();
 
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_ = std::move(trainer);
@@ -240,6 +241,7 @@ namespace lfs::vis {
             // METR chapter can replace this value before the first resume.
             accumulated_training_time_ =
                 std::chrono::steady_clock::duration{0};
+            checkpoint_baseline_iteration_ = checkpoint_iteration;
 
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_ = std::move(trainer);
@@ -290,6 +292,7 @@ namespace lfs::vis {
             // owner after scene teardown.
             splat_storage_.reset();
         }
+        checkpoint_baseline_iteration_.reset();
         // Trainer::shutdown() trims before Tensor-valued members are destroyed.
         // Trim again after destruction so those returned blocks do not survive clear.
         lfs::core::Tensor::trim_memory_pool();
@@ -302,6 +305,19 @@ namespace lfs::vis {
         python::update_trainer_loaded(false, 0);
         LOG_INFO("Trainer cleared");
         return true;
+    }
+
+    bool TrainerManager::isPausedAtCheckpointBaseline() const {
+        if (!trainer_ || !checkpoint_baseline_iteration_) {
+            return false;
+        }
+        if (isCompletionPending()) {
+            return false;
+        }
+        if (!isPaused()) {
+            return false;
+        }
+        return getCurrentIteration() == *checkpoint_baseline_iteration_;
     }
 
     bool TrainerManager::startTraining() {

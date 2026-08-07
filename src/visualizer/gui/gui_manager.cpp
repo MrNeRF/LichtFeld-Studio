@@ -6606,10 +6606,13 @@ namespace lfs::vis::gui {
         startup_overlay_.setPluginLoadState(started, active, progress, stage);
     }
 
-    void GuiManager::requestExitConfirmation() {
+    void GuiManager::requestExitConfirmation(
+        const bool training_in_progress) {
         startup_overlay_.dismiss();
         lfs::core::events::cmd::
-            ShowExitConfirmation{}
+            ShowExitConfirmation{
+                .training_in_progress =
+                    training_in_progress}
                 .emit();
     }
 

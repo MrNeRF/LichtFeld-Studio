@@ -35,6 +35,15 @@ namespace lfs::vis {
     class VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
     class VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
     class VisualizerImplResetTest_TrainingSnapshotCancelTerminalizesBeforeSettlement_Test;
+    class VisualizerImplResetTest_FailedAutosaveSettlementAppliesBackoffBeforeRetry_Test;
+    class VisualizerImplResetTest_PendingCloseSuppressesBackgroundAutosave_Test;
+    class VisualizerImplResetTest_StoppingTrainerBlocksIdleCompactionAndAutosave_Test;
+    class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
+    class VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
+    class VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
+    class VisualizerImplResetTest_ParametersValueChangeIsHardDirty_Test;
+    class VisualizerImplResetTest_BaselineIdleCheckpointTrainerClosesWithoutTrainingPrompt_Test;
+    class VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -49,7 +58,7 @@ namespace lfs::vis::project {
 
     struct ProjectLifecycleSettings {
         bool reopen_last_project = true;
-        bool auto_save_on_close = true;
+        bool auto_save_on_close = false;
         std::uint64_t autosave_interval_seconds = 5 * 60;
         std::uint64_t autosave_dirty_epoch_threshold = 20;
         std::uint64_t compaction_idle_seconds = 30;
@@ -128,6 +137,12 @@ namespace lfs::vis::project {
         void resetCloseSaveAttempt();
         [[nodiscard]] std::string
         closeSaveError() const;
+        void markApplicationClosePending();
+        [[nodiscard]] bool
+        isApplicationClosePending() const;
+        void setSuppressTrainingAdoption(bool suppress);
+        [[nodiscard]] bool
+        suppressTrainingAdoption() const;
 
     private:
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
@@ -141,6 +156,15 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotCancelTerminalizesBeforeSettlement_Test;
+        friend class lfs::vis::VisualizerImplResetTest_FailedAutosaveSettlementAppliesBackoffBeforeRetry_Test;
+        friend class lfs::vis::VisualizerImplResetTest_PendingCloseSuppressesBackgroundAutosave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StoppingTrainerBlocksIdleCompactionAndAutosave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ParametersValueChangeIsHardDirty_Test;
+        friend class lfs::vis::VisualizerImplResetTest_BaselineIdleCheckpointTrainerClosesWithoutTrainingPrompt_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
         enum class Hydration {
             Empty,
             ShellReady,
@@ -218,6 +242,13 @@ namespace lfs::vis::project {
         void settleProjectWrite();
         void refreshStorageStats();
         void resetMaintenanceClocks();
+        void clearAutosaveFailureBackoff();
+        void scheduleAutosaveFailureBackoff();
+        [[nodiscard]] bool
+        isBackgroundAutosaveSuppressed() const;
+        [[nodiscard]] bool
+        isTrainingWriteWindowOpen() const;
+        void cancelBackgroundAutosaveIfRunning();
         void cleanupRecoverySession();
         [[nodiscard]] lfs::Result<void>
         adoptCompletedTrainingSnapshot();
@@ -255,11 +286,17 @@ namespace lfs::vis::project {
             last_mutation_at_;
         std::chrono::steady_clock::time_point
             next_storage_check_at_;
+        std::chrono::steady_clock::time_point
+            autosave_retry_not_before_{};
+        std::uint64_t
+            autosave_failure_backoff_seconds_ = 0;
         std::uint64_t
             last_autosaved_dirty_epoch_ = 0;
         std::uint64_t
             last_autosaved_scene_serial_ = 0;
         std::uint64_t autosave_sequence_ = 0;
+        bool application_close_pending_ = false;
+        bool suppress_training_adoption_ = false;
         std::uint64_t
             project_write_autosave_sequence_ = 0;
         std::optional<JobHandle>

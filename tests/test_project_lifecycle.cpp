@@ -4,6 +4,8 @@
 #include "licht_test_support.hpp"
 #include "project/project_lifecycle.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -23,7 +25,7 @@ namespace {
         ASSERT_TRUE(loaded)
             << lfs::format_for_developer(loaded.error());
         EXPECT_TRUE(loaded->reopen_last_project);
-        EXPECT_TRUE(loaded->auto_save_on_close);
+        EXPECT_FALSE(loaded->auto_save_on_close);
         EXPECT_EQ(
             loaded->autosave_interval_seconds,
             5u * 60u);
@@ -88,13 +90,77 @@ namespace {
             temporary.path / "project_lifecycle.json";
         {
             std::ofstream stream(path);
-            stream << R"({"version":2,"reopen_last_project":false})";
+            stream << R"({"version":99,"reopen_last_project":false})";
         }
         auto loaded = loadProjectLifecycleSettings(path);
         ASSERT_FALSE(loaded);
         EXPECT_EQ(
             loaded.error().code(),
             lfs::ErrorCode::DataLoss);
+    }
+
+    TEST(ProjectLifecycleSettingsTest,
+         Version1MigratesAutoSaveOnCloseToFalse) {
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "project_lifecycle.json";
+        {
+            std::ofstream stream(path);
+            stream << R"({
+              "version": 1,
+              "reopen_last_project": true,
+              "auto_save_on_close": true,
+              "autosave_interval_seconds": 300,
+              "autosave_dirty_epoch_threshold": 20,
+              "compaction_idle_seconds": 30,
+              "mru": []
+            })";
+        }
+        auto loaded = loadProjectLifecycleSettings(path);
+        ASSERT_TRUE(loaded)
+            << lfs::format_for_developer(loaded.error());
+        EXPECT_FALSE(loaded->auto_save_on_close);
+
+        ASSERT_TRUE(saveProjectLifecycleSettings(
+            path, *loaded))
+            << "persist after migration";
+        {
+            std::ifstream stream(path);
+            const auto json =
+                nlohmann::json::parse(stream);
+            EXPECT_EQ(json.value("version", 0), 2);
+            EXPECT_FALSE(
+                json.value("auto_save_on_close", true));
+        }
+        auto reloaded =
+            loadProjectLifecycleSettings(path);
+        ASSERT_TRUE(reloaded)
+            << lfs::format_for_developer(
+                   reloaded.error());
+        EXPECT_FALSE(reloaded->auto_save_on_close);
+    }
+
+    TEST(ProjectLifecycleSettingsTest,
+         Version2PreservesExplicitAutoSaveOnCloseTrue) {
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "project_lifecycle.json";
+        {
+            std::ofstream stream(path);
+            stream << R"({
+              "version": 2,
+              "reopen_last_project": true,
+              "auto_save_on_close": true,
+              "autosave_interval_seconds": 300,
+              "autosave_dirty_epoch_threshold": 20,
+              "compaction_idle_seconds": 30,
+              "mru": []
+            })";
+        }
+        auto loaded = loadProjectLifecycleSettings(path);
+        ASSERT_TRUE(loaded)
+            << lfs::format_for_developer(loaded.error());
+        EXPECT_TRUE(loaded->auto_save_on_close);
     }
 
 } // namespace

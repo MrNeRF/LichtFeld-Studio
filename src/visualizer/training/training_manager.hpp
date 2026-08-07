@@ -102,6 +102,10 @@ namespace lfs::vis {
         [[nodiscard]] bool isCompletionPending() const {
             return completion_pending_.load(std::memory_order_acquire);
         }
+        [[nodiscard]] bool isPausedAtCheckpointBaseline() const;
+        [[nodiscard]] std::optional<int> checkpointBaselineIteration() const {
+            return checkpoint_baseline_iteration_;
+        }
 
         // Progress information - directly query trainer
         int getCurrentIteration() const;
@@ -262,6 +266,7 @@ namespace lfs::vis {
 
         lfs::core::param::OptimizationParameters pending_opt_params_;
         lfs::core::param::DatasetConfig pending_dataset_params_;
+        std::optional<int> checkpoint_baseline_iteration_;
     };
 
 } // namespace lfs::vis

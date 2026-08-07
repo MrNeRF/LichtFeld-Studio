@@ -132,7 +132,8 @@ namespace lfs::vis {
             [[nodiscard]] std::string scenePanelActiveTab() const;
             void setScenePanelActiveTab(std::string_view tab);
 
-            void requestExitConfirmation();
+            void requestExitConfirmation(
+                bool training_in_progress = false);
             bool isExitConfirmationPending() const;
 
             bool isCapturingInput() const;

@@ -155,6 +155,8 @@ namespace lfs::app {
                 {"project_uuid", info.project_uuid},
                 {"generation", info.generation},
                 {"dirty", info.dirty},
+                {"session_dirty",
+                 info.session_dirty},
                 {"dirty_chapters",
                  info.dirty_chapters},
                 {"hydration_state",
