@@ -35,7 +35,9 @@
 #include "io/filesystem_utils.hpp"
 #include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/perf_bench.hpp"
+#include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "losses/losses.hpp"
 #include "optimizer/adam_optimizer.hpp"
@@ -2660,6 +2662,28 @@ namespace lfs::training {
 
         try {
             params_ = params;
+
+            // BL-3: GUT/gsplat uses unfused Adam step(). Joint shN is fused-only and
+            // q16 shN desyncs param_size vs float-layout moment size. Auto-disable both
+            // codecs for the process with a loud log so gut trains under default flags.
+            if (params_.optimization.gut) {
+                if (lfs::training::sh_value::sh_value_quant_enabled()) {
+                    LOG_ERROR(
+                        "BL-3: GUT/gsplat training uses unfused Adam; SH value quant "
+                        "(default ON) is unsupported on this path (q16 size desync + "
+                        "no unfused re-encode). Disabling SH value quant for this "
+                        "process. Set LFS_SH_VALUE_QUANT=0 to silence.");
+                    lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(false);
+                }
+                if (lfs::training::joint_adam::joint_codec_enabled()) {
+                    LOG_ERROR(
+                        "BL-3: GUT/gsplat training uses unfused Adam; joint Adam codec "
+                        "shN step is fused-FastGS-only. Disabling joint Adam codec for "
+                        "this process. Set LFS_ADAM_LEGACY_CODEC=1 to silence.");
+                    lfs::training::joint_adam::set_joint_codec_enabled_for_testing(false);
+                }
+            }
+
             if (params_.optimization.enable_sparsity) {
                 const size_t stop_refine_limit = static_cast<size_t>(std::max(0, get_regular_iterations()));
                 if (params_.optimization.stop_refine > stop_refine_limit) {

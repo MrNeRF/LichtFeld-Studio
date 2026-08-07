@@ -520,7 +520,10 @@ namespace lfs::training {
             ctx.scales = scales;
             ctx.opacities = opacities;
             ctx.sh0 = sh0;
-            ctx.shN = shN;
+            // BL-3: backward calls ctx.shN.ptr<float>(). When resident shN is q16
+            // (Float16 bit-patterns), the forward dequant temp is the float4 buffer
+            // the kernels actually read — must save that, not the raw codes.
+            ctx.shN = shN_dequant_temp.is_valid() ? shN_dequant_temp : shN;
 
             // Store camera pointers
             ctx.viewmat_ptr = viewmat_ptr;

@@ -9,6 +9,9 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "lfs/training/sh_value_codec.hpp"
+#include "lfs/training/sh_value_storage.hpp"
+#include "optimizer/adam_optimizer.hpp"
 #include "training/rasterization/gsplat/Common.h"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
@@ -293,4 +296,67 @@ TEST_F(GsplatRasterizerTest, GutModeSmokeBench) {
     // Steady high-water: average allocs per forward should be ~0.
     EXPECT_LT(allocs_per, 0.5)
         << "gut steady-state should not touch the driver every forward";
+}
+
+// BL-3: gut/gsplat forward+backward with default quant ON + sh_degree>0.
+// Saves dequant temp in ctx so backward does not dtype-abort on q16 codes.
+TEST(GsplatRasterizerQuantTest, GutForwardBackwardWithDefaultQuantAndShDegree) {
+    // Default flags: quant ON (no force-off).
+    lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(true);
+
+    auto camera = make_camera(64, 64);
+    constexpr size_t n = 24;
+    constexpr int sh_degree = 3;
+    constexpr size_t rest = 15;
+
+    std::vector<float> means(n * 3, 0.0f);
+    std::vector<float> rots(n * 4, 0.0f);
+    for (size_t i = 0; i < n; ++i) {
+        means[i * 3 + 0] = (static_cast<float>(i % 5) * 0.3f) - 0.6f;
+        means[i * 3 + 1] = (static_cast<float>(i / 5) * 0.3f) - 0.6f;
+        means[i * 3 + 2] = 0.0f;
+        rots[i * 4] = 1.0f;
+    }
+    auto shN = Tensor::full({n, rest, size_t{3}}, 0.05f, Device::CUDA);
+    auto splat = SplatData(
+        sh_degree,
+        Tensor::from_vector(means, {n, size_t{3}}, Device::CUDA),
+        Tensor::full({n, size_t{1}, size_t{3}}, 0.5f, Device::CUDA),
+        std::move(shN),
+        Tensor::full({n, size_t{3}}, -2.0f, Device::CUDA),
+        Tensor::from_vector(rots, {n, size_t{4}}, Device::CUDA),
+        Tensor::full({n, size_t{1}}, 2.0f, Device::CUDA),
+        1.0f);
+    ASSERT_TRUE(lfs::training::sh_value::apply_shN_value_quant(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+
+    AdamConfig cfg;
+    cfg.lr = 1e-3f;
+    cfg.initial_capacity = n * 2;
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients(n * 2);
+
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+    auto result = gsplat_rasterize_forward(
+        camera, splat, bg, 0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB,
+        /*use_gut=*/true);
+    ASSERT_TRUE(result.has_value()) << result.error();
+    auto& [output, ctx] = *result;
+    // BL-3: ctx must hold float dequant, not raw Float16 codes.
+    ASSERT_TRUE(ctx.shN.is_valid());
+    EXPECT_EQ(ctx.shN.dtype(), DataType::Float32)
+        << "backward requires float dequant temp in ctx under q16";
+
+    auto grad_image = Tensor::ones_like(output.image);
+    auto grad_alpha = Tensor::zeros_like(output.alpha);
+    ASSERT_NO_THROW({
+        gsplat_rasterize_backward(ctx, grad_image, grad_alpha, splat, opt, Tensor{});
+    });
+
+    // Arena cleanup
+    ctx.isect_ids_ptr = nullptr;
+    ctx.flatten_ids_ptr = nullptr;
+    GlobalArenaManager::instance().get_arena().end_frame(ctx.frame_id, ctx.stream);
+
+    lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
