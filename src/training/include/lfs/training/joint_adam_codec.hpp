@@ -60,11 +60,15 @@ namespace lfs::training::joint_adam {
         static constexpr float kInvQMax = 1.0f / kQMax;
         static constexpr int kBytesPerCell = (BITS == 16) ? 4 : 2;
 
+        // Host mirror of device F3 fast-path thresholds (log1p/expm1 near 0;
+        // std::log/exp for the bulk). Keeps 0↔0 fixed point exact.
         static float forward_sqrt_g2(float sqrt_g2) {
-            return std::log1p(std::max(sqrt_g2, 0.0f) * (1.0f / kEps));
+            const float x = std::max(sqrt_g2, 0.0f) * (1.0f / kEps);
+            return (x > 0.125f) ? std::log(1.0f + x) : std::log1p(x);
         }
         static float inverse_sqrt_g2(float log_s) {
-            return kEps * std::expm1(log_s);
+            const float e1 = (log_s > 0.118f) ? (std::exp(log_s) - 1.0f) : std::expm1(log_s);
+            return kEps * e1;
         }
 
         /// (m, v) -> (u, log_s)
@@ -105,13 +109,14 @@ namespace lfs::training::joint_adam {
             us_to_g1g2(u, log_s, g1, g2);
         }
 
+        /// Host encode (mirrors device F3: inv-range mul, not per-cell fdiv).
         static void encode_us(std::uint8_t* packed, std::size_t idx,
                               float u_val, float log_s_val,
                               float umin, float umax, float smin, float smax) {
-            const float u_range = std::max(umax - umin, kEps);
-            const float s_range = std::max(smax - smin, kEps);
-            const float u_qf = std::min(std::max(std::round(kQMax * (u_val - umin) / u_range), 0.0f), kQMax);
-            const float s_qf = std::min(std::max(std::round(kQMax * (log_s_val - smin) / s_range), 0.0f), kQMax);
+            const float inv_u = 1.0f / std::max(umax - umin, kEps);
+            const float inv_s = 1.0f / std::max(smax - smin, kEps);
+            const float u_qf = std::min(std::max(std::round(kQMax * (u_val - umin) * inv_u), 0.0f), kQMax);
+            const float s_qf = std::min(std::max(std::round(kQMax * (log_s_val - smin) * inv_s), 0.0f), kQMax);
             if constexpr (BITS == 16) {
                 auto* p = reinterpret_cast<std::uint16_t*>(packed);
                 p[idx * 2 + 0] = static_cast<std::uint16_t>(u_qf);

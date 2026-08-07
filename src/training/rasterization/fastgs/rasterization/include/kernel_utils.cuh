@@ -274,11 +274,14 @@ namespace fast_lfs::rasterization::kernels {
         }
         __syncthreads();
         const float4 new_mm = sm_bounds;
+        // FIX-2.2 F3: hoist block-uniform inv ranges (2 fdiv → FMA per cell).
+        const float inv_u_range = 1.0f / fmaxf(new_mm.y - new_mm.x, lfs::training::joint_adam::kEpsDevice);
+        const float inv_s_range = 1.0f / fmaxf(new_mm.w - new_mm.z, lfs::training::joint_adam::kEpsDevice);
 
         if (touch) {
             for (uint i = 0; i < row; ++i) {
                 C::encode_us(param.joint_packed, static_cast<int64_t>(base + i),
-                             us_u[i], us_s[i], new_mm);
+                             us_u[i], us_s[i], new_mm.x, new_mm.z, inv_u_range, inv_s_range);
             }
         }
     }
@@ -551,6 +554,9 @@ namespace fast_lfs::rasterization::kernels {
         }
         __syncthreads();
         const float4 new_mm = sm_bounds;
+        // FIX-2.2 F3: hoist block-uniform inv ranges (2 fdiv → FMA per cell).
+        const float inv_u_range = 1.0f / fmaxf(new_mm.y - new_mm.x, lfs::training::joint_adam::kEpsDevice);
+        const float inv_s_range = 1.0f / fmaxf(new_mm.w - new_mm.z, lfs::training::joint_adam::kEpsDevice);
 
         if (touch) {
             int ci = 0;
@@ -562,7 +568,8 @@ namespace fast_lfs::rasterization::kernels {
 #pragma unroll
                 for (int c = 0; c < 4; ++c) {
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
-                    C::encode_us(p.joint_packed, cell, us_u[ci], us_s[ci], new_mm);
+                    C::encode_us(p.joint_packed, cell, us_u[ci], us_s[ci],
+                                 new_mm.x, new_mm.z, inv_u_range, inv_s_range);
                     ++ci;
                 }
             }

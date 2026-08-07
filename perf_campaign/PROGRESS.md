@@ -1181,3 +1181,50 @@ Runs: `perf_campaign/runs/fix22_f1_bonsai/`
 Gate ≤4.065 still **PASS**.
 
 - **Commit:** (this)
+
+## FIX-2.2 F3 — hoist inv ranges + fast log/exp transcode
+
+- **Branch:** `lfs-elite`
+- **Change:**
+  - Device `encode_us`: block-uniform `inv_u_range`/`inv_s_range` hoisted once
+    per section (2 fdiv → FMA per cell).
+  - Guarded fast path: `__logf(1+x)` when `x>0.125` else `log1pf`;
+    `__expf-1` when `log_s>0.118` else `expm1f` (0↔0 fixed point exact).
+  - Host `joint_adam_codec.hpp` mirrors thresholds + inv-range mul.
+  - JointAdamCodecTest **6/6 PASS**.
+
+### Kernel timing (bonsai late 1600–1900)
+
+| step | preprocess_backward avg µs | Δ vs prev |
+|---|---:|---:|
+| 63aa08c6 (codec regression) | 906.3 | — |
+| F1 | 622.0 | −284.3 (−31.4%) |
+| F2 | 603.8 | −18.2 (−2.9%) |
+| **F3** (`fix22-f3-bonsai-late`) | **580.6** | **−23.2 (−3.8%)** |
+| parent no-codec (487d5c2b) | 450.0 | residual +130.6 µs vs parent |
+
+**Net F1–F3:** 906.3 → 580.6 µs (**−35.9%**). F4 not needed (gate pass; ncu admin-locked).
+
+### Dual-workload gate after F1–F3 (joint codec ON)
+
+**Bonsai** med×3:
+
+| metric | Wave-2.2 | after F3 | gate |
+|---|---:|---:|:---|
+| wall_s | 9.67 | **7.49** | — |
+| steady_ms/iter | 4.287 | **3.168** | ≤4.065 **PASS** |
+| B/splat | 409.4 | **409.4** | flat **PASS** |
+| last_loss | 0.03–0.04 | 0.029–0.072 | ok |
+
+**Bicycle** med×3 (7000 iters):
+
+| metric | after F3 |
+|---|---:|
+| wall_s | **21.96** |
+| steady_ms/iter | **2.843** |
+| B/splat | **409.4** |
+| final loss range | 0.082–0.149 |
+
+Default joint codec **stays ON**. Infrastructure left in place.
+
+- **Commit:** (this)

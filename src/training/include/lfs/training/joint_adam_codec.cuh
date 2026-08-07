@@ -24,11 +24,16 @@ namespace lfs::training::joint_adam {
         static constexpr float kInvQMax = 1.0f / kQMax;
         static constexpr int kBytesPerCell = (BITS == 16) ? 4 : 2;
 
+        // FIX-2.2 F3: guarded fast transcode. __logf/__expf for the bulk of the
+        // range; log1pf/expm1f near zero so 0↔0 fixed point stays exact.
+        // Thresholds: x>0.125 → __logf(1+x); log_s>0.118 → __expf-1.
         __device__ static inline float forward_sqrt_g2(const float sqrt_g2) {
-            return log1pf(fmaxf(sqrt_g2, 0.0f) * (1.0f / kEpsDevice));
+            const float x = fmaxf(sqrt_g2, 0.0f) * (1.0f / kEpsDevice);
+            return (x > 0.125f) ? __logf(1.0f + x) : log1pf(x);
         }
         __device__ static inline float inverse_sqrt_g2(const float log_s) {
-            return kEpsDevice * expm1f(log_s);
+            const float e1 = (log_s > 0.118f) ? (__expf(log_s) - 1.0f) : expm1f(log_s);
+            return kEpsDevice * e1;
         }
 
         __device__ static inline float2 g1g2_to_us(const float g1, const float g2) {
@@ -60,15 +65,18 @@ namespace lfs::training::joint_adam {
             return make_float2(prim.x * (sqrt_g2 + kEpsDevice), sqrt_g2 * sqrt_g2);
         }
 
+        // Block-uniform ranges: caller hoists inv_u_range / inv_s_range once
+        // per encode pass (2 fdiv → FMA per cell).
         __device__ static inline void encode_us(uint8_t* __restrict__ packed,
                                                 const int64_t idx,
                                                 const float u_val,
                                                 const float log_s_val,
-                                                const float4 mm) {
-            const float u_range = fmaxf(mm.y - mm.x, kEpsDevice);
-            const float s_range = fmaxf(mm.w - mm.z, kEpsDevice);
-            const float u_qf = fminf(fmaxf(roundf(kQMax * (u_val - mm.x) / u_range), 0.0f), kQMax);
-            const float s_qf = fminf(fmaxf(roundf(kQMax * (log_s_val - mm.z) / s_range), 0.0f), kQMax);
+                                                const float umin,
+                                                const float smin,
+                                                const float inv_u_range,
+                                                const float inv_s_range) {
+            const float u_qf = fminf(fmaxf(roundf(kQMax * (u_val - umin) * inv_u_range), 0.0f), kQMax);
+            const float s_qf = fminf(fmaxf(roundf(kQMax * (log_s_val - smin) * inv_s_range), 0.0f), kQMax);
             if constexpr (BITS == 16) {
                 auto* p = reinterpret_cast<uint16_t*>(packed);
                 p[idx * 2 + 0] = static_cast<uint16_t>(u_qf);
@@ -77,6 +85,16 @@ namespace lfs::training::joint_adam {
                 packed[idx * 2 + 0] = static_cast<uint8_t>(u_qf);
                 packed[idx * 2 + 1] = static_cast<uint8_t>(s_qf);
             }
+        }
+
+        __device__ static inline void encode_us(uint8_t* __restrict__ packed,
+                                                const int64_t idx,
+                                                const float u_val,
+                                                const float log_s_val,
+                                                const float4 mm) {
+            const float inv_u = 1.0f / fmaxf(mm.y - mm.x, kEpsDevice);
+            const float inv_s = 1.0f / fmaxf(mm.w - mm.z, kEpsDevice);
+            encode_us(packed, idx, u_val, log_s_val, mm.x, mm.z, inv_u, inv_s);
         }
 
         __device__ static inline void encode_g1g2(uint8_t* __restrict__ packed,
