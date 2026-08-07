@@ -447,3 +447,38 @@ TEST(SplatExportableStorageTest, GrowKeepsStableVaWhileImportersHoldBlock) {
     ASSERT_EQ(cudaMalloc(&probe, 4096), cudaSuccess);
     ASSERT_EQ(cudaFree(probe), cudaSuccess);
 }
+
+// MJ-12 storage-layer contract: growExportableDeviceBlock must only run after
+// external importers (Vulkan VkDeviceMemory) are detached. Protocol mirror of
+// TrainerManager::growExportableForDensify / shared-scratch commit path —
+// drop the simulated import hold BEFORE grow, then grow keeps VA stable.
+TEST(ExportableStorageTest, GrowAfterImporterDetachKeepsStableVa) {
+    require_cuda();
+
+    auto block_result = allocateExportableDeviceBlock(1 << 20, 0, false, 8 << 20);
+    if (!block_result) {
+        FAIL() << block_result.error();
+    }
+    auto block = std::move(*block_result);
+    ASSERT_NE(block, nullptr);
+    const void* const va = block->device_ptr;
+    const std::size_t old_size = block->size;
+
+    // Simulated Vulkan import lifetime (extra_owner_ / imported_buffer).
+    std::shared_ptr<void> importer_hold = block;
+
+    // MJ-12 correct order: detach import BEFORE release_physical inside grow.
+    importer_hold.reset();
+    auto grew = growExportableDeviceBlock(block, old_size * 2);
+    if (!grew) {
+        FAIL() << grew.error();
+    }
+    ASSERT_TRUE(*grew);
+    EXPECT_EQ(block->device_ptr, va) << "VA must stay stable across grow";
+    EXPECT_GE(block->size, old_size * 2);
+
+    block.reset();
+    void* probe = nullptr;
+    ASSERT_EQ(cudaMalloc(&probe, 4096), cudaSuccess);
+    ASSERT_EQ(cudaFree(probe), cudaSuccess);
+}

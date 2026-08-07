@@ -3216,10 +3216,17 @@ namespace lfs::vis {
         // thread) to grow the exportable block in place under its stable base
         // address — contents preserved — and returns the new committed size. The
         // render re-imports the larger range into Vulkan on its next frame.
-        const auto make_grow_fn = [](std::shared_ptr<lfs::core::ExportableBlock> block) {
-            return [block = std::move(block)](std::size_t need) -> std::size_t {
+        // MJ-12: detach Vulkan import before release_physical inside the grow.
+        const auto make_grow_fn = [this](std::shared_ptr<lfs::core::ExportableBlock> block) {
+            return [this, block = std::move(block)](std::size_t need) -> std::size_t {
                 const std::size_t want =
                     need > (std::numeric_limits<std::size_t>::max() / 2) ? need : need + need / 2;
+                if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE &&
+                    shared_scratch_.block == block) {
+                    detachSharedScratchBuffers();
+                    retireSharedScratchBuffer(std::move(shared_scratch_.imported_buffer));
+                    shared_scratch_.imported_buffer = {};
+                }
                 auto grew = lfs::core::growExportableDeviceBlock(block, want);
                 if (!grew) {
                     return std::size_t{0};
@@ -3265,17 +3272,27 @@ namespace lfs::vis {
         // pointer never changes (no use-after-free), then re-import the larger
         // range into Vulkan. The arena drains all frames + the device before the
         // commit callback runs, so the unmap/recommit is race-free.
+        //
+        // MJ-12: detach/retire the Vulkan import BEFORE growExportableDeviceBlock
+        // (which calls release_physical: unmap + cuMemRelease + close fd). Holding
+        // a live VkBuffer/VkDeviceMemory across that is the NVRM "invalid mmap
+        // context" pattern — mirror TrainerManager::growExportableForDensify.
         if (shared_scratch_.block && shared_scratch_.installed_in_training_arena &&
             shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
             void* const device_ptr = shared_scratch_.block->device_ptr;
             std::string commit_error;
             const auto commit = [&](std::size_t new_size) -> bool {
+                if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
+                    detachSharedScratchBuffers();
+                    retireSharedScratchBuffer(std::move(shared_scratch_.imported_buffer));
+                    shared_scratch_.imported_buffer = {};
+                }
                 auto grew = lfs::core::growExportableDeviceBlock(shared_scratch_.block, new_size);
                 if (!grew) {
                     commit_error = grew.error();
                     return false;
                 }
-                if (*grew) {
+                if (*grew || shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE) {
                     VulkanContext::ExternalBuffer reimported{};
                     if (!context.importExternalBuffer(shared_scratch_.block->handle.native,
                                                       static_cast<VkDeviceSize>(shared_scratch_.block->size),
@@ -3287,8 +3304,6 @@ namespace lfs::vis {
                         commit_error = context.lastError();
                         return false;
                     }
-                    detachSharedScratchBuffers();
-                    retireSharedScratchBuffer(std::move(shared_scratch_.imported_buffer));
                     shared_scratch_.imported_buffer = reimported;
                     shared_scratch_.bytes = shared_scratch_.block->size;
                     ++shared_scratch_.generation;
