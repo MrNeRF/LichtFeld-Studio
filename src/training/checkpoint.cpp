@@ -392,7 +392,9 @@ namespace lfs::training {
                 throw std::runtime_error(
                     "Strategy does not support transactional checkpoint state adoption");
             }
-            loaded_strategy->get_optimizer().set_frozen_lr_scale(loaded_params.freeze_lr_scale);
+            if (checkpoint_adopter->has_checkpoint_runtime_state()) {
+                loaded_strategy->get_optimizer().set_frozen_lr_scale(loaded_params.freeze_lr_scale);
+            }
 
             std::unique_ptr<BilateralGrid> loaded_bilateral_grid;
             std::unique_ptr<PPISP> loaded_ppisp;
