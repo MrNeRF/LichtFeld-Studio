@@ -1710,17 +1710,6 @@ namespace lfs::training {
         const bool has_roi_weight = roi_weight.is_valid() && roi_weight.numel() > 0;
         const Tensor mask_2d =
             has_user_mask && mask.ndim() == 3 ? mask.squeeze(0) : mask;
-        Tensor mask_2d_th = mask_2d;
-        if (has_user_mask && mode == param::MaskMode::SegmentAndIgnore) {
-            mask_2d_th = mask_2d_th.masked_fill(mask_2d_th <= 250, 0);  // Set all Ignore and Segment to 0
-            mask_2d_th = mask_2d_th.masked_fill(mask_2d_th > 250, 255); // Keep everything > 250
-        }
-
-        const auto mask_as_float = [](const Tensor& t) -> Tensor {
-            return (t.dtype() == DataType::UInt8 || t.dtype() == DataType::Bool)
-                       ? t.gt(0).to(DataType::Float32)
-                       : t;
-        };
 
         if (has_roi_weight) {
             LFS_ASSERT_MSG(
@@ -1733,9 +1722,14 @@ namespace lfs::training {
             (mode == param::MaskMode::Segment ||
              mode == param::MaskMode::Ignore ||
              mode == param::MaskMode::SegmentAndIgnore);
-        const Tensor photometric_weight = losses::compose_pixel_loss_weights(
-            user_masks_photometric ? mask_2d_th : Tensor{},
-            roi_weight);
+
+        // Fused mask preprocess: SegmentAndIgnore band remap + optional ROI → one kernel.
+        // Steady state is allocation-free via mask_preprocess_workspace_ (grow-only).
+        const Tensor photometric_weight = losses::fuse_photometric_mask_weight(
+            mask_preprocess_workspace_,
+            user_masks_photometric ? mask_2d : Tensor{},
+            roi_weight,
+            mode == param::MaskMode::SegmentAndIgnore);
 
         Tensor loss, grad_corrected, grad_raw, grad_alpha;
         const bool use_decoupled_appearance_loss =
@@ -1778,24 +1772,16 @@ namespace lfs::training {
             if (has_user_mask &&
                 (mode == param::MaskMode::Segment || mode == param::MaskMode::SegmentAndIgnore) &&
                 alpha.is_valid()) {
-                Tensor mask_2d_th_segment = mask_2d;
-                if (mode == param::MaskMode::SegmentAndIgnore) {
-                    // Values used for ignore (<128) do not contribute to opacity penalty
-                    // Values in the range 128<=x<=250 contribute to the opacity penalty
-                    // Values > 250 are kept
-                    mask_2d_th_segment = mask_2d_th_segment.masked_fill(mask_2d_th_segment < 128, 255);
-                    mask_2d_th_segment = mask_2d_th_segment.masked_fill(mask_2d_th_segment >= 128 && mask_2d_th_segment <= 250, 0);
-                    mask_2d_th_segment = mask_2d_th_segment.masked_fill(mask_2d_th_segment > 250, 255);
-                }
-                const Tensor mask_2d_th_segment_f = mask_as_float(mask_2d_th_segment);
                 const Tensor alpha_2d = alpha.ndim() == 3 ? alpha.squeeze(0) : alpha;
-                const Tensor bg_mask = Tensor::full(mask_2d_th_segment_f.shape(), 1.0f, mask_2d_th_segment_f.device()) - mask_2d_th_segment_f;
-                const Tensor penalty_weights = bg_mask.pow(opt_params.mask_opacity_penalty_power);
-                const auto penalty = losses::compute_mask_opacity_penalty(
+                // Fused: band remap + (1-mask)^power + mean/grad (single kernel).
+                const auto penalty = losses::fuse_mask_opacity_penalty(
+                    mask_preprocess_workspace_,
                     alpha_2d,
-                    penalty_weights,
+                    mask_2d,
                     roi_weight,
-                    opt_params.mask_opacity_penalty_weight);
+                    opt_params.mask_opacity_penalty_power,
+                    opt_params.mask_opacity_penalty_weight,
+                    mode == param::MaskMode::SegmentAndIgnore);
                 grad_alpha = penalty.grad_alpha;
                 loss = loss + penalty.loss;
             }
@@ -1819,16 +1805,15 @@ namespace lfs::training {
 
         if (has_user_mask && mode == param::MaskMode::AlphaConsistent && alpha.is_valid()) {
             const Tensor alpha_2d = alpha.ndim() == 3 ? alpha.squeeze(0) : alpha;
-            const Tensor mask_f = mask_as_float(mask_2d_th);
-            Tensor alpha_error = (alpha_2d - mask_f).abs();
-            Tensor alpha_gradient = (alpha_2d - mask_f).sign();
-            if (has_roi_weight) {
-                alpha_error = alpha_error * roi_weight;
-                alpha_gradient = alpha_gradient * roi_weight;
-            }
-            loss = loss + alpha_error.mean() * ALPHA_CONSISTENCY_WEIGHT;
-            grad_alpha =
-                alpha_gradient * (ALPHA_CONSISTENCY_WEIGHT / static_cast<float>(alpha_2d.numel()));
+            // Fused: abs/sign + optional ROI + mean/grad (single kernel).
+            const auto alpha_term = losses::fuse_alpha_consistent(
+                mask_preprocess_workspace_,
+                alpha_2d,
+                mask_2d,
+                roi_weight,
+                ALPHA_CONSISTENCY_WEIGHT);
+            loss = loss + alpha_term.loss;
+            grad_alpha = alpha_term.grad_alpha;
         }
 
         return MaskLossResult{

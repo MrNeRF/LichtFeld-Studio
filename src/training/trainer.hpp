@@ -16,6 +16,7 @@
 #include "dataset.hpp"
 #include "kernels/depth_loss.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "losses/mask_loss.hpp"
 #include "losses/photometric_loss.hpp"
 #include "metrics/metrics.hpp"
 #include "optimizer/scheduler.hpp"
@@ -551,6 +552,10 @@ namespace lfs::training {
         lfs::training::kernels::SSIMMapWorkspace densification_ssim_workspace_;
         // Phase 6D.1: masked / decoupled / fused / pure-SSIM workspaces live in
         // photometric_loss_.arena() (mutually exclusive, single grow-only region).
+
+        // Mask preprocess workspace: photometric weight / opacity penalty / alpha-consistent
+        // (fused kernels; grow-only for allocation-free steady state when masks/ROI on).
+        lfs::training::losses::MaskPreprocessWorkspace mask_preprocess_workspace_;
 
         // Pre-allocated error map buffer for densification (avoids per-iteration allocation)
         core::Tensor densification_error_map_;
