@@ -12,11 +12,6 @@
 
 namespace fast_lfs::rasterization {
 
-    // BWD-A debug histogram (LFS_BWD_TEFF_HIST=1). Arm before a train step,
-    // flush after — prints tile_n vs T_eff waste once and disarms.
-    void bwd_teff_hist_arm();
-    void bwd_teff_hist_flush();
-
     void backward(
         const float* densification_error_map,
         const float* grad_image,

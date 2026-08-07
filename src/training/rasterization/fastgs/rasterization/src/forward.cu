@@ -733,20 +733,9 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         // Fall through to shared blend path below.
     }
 
-    // Fallback path still needs blend.
-    // Prefer explicit test hooks; else honor env for A/B profiling without rebuild.
-    int warp_cull_mode = g_warp_cull_mode.load(std::memory_order_relaxed);
-    int blend_batch_override = g_blend_batch_size_override.load(std::memory_order_relaxed);
-    if (const char* env_mode = std::getenv("LFS_WARP_CULL_MODE")) {
-        // Only apply env when test hook is still default-enabled (0) unless forced.
-        // Modes: 0=on, 1=off, 2=wrong.
-        warp_cull_mode = std::atoi(env_mode);
-    }
-    if (blend_batch_override == 0) {
-        if (const char* env_batch = std::getenv("LFS_BLEND_BATCH_SIZE")) {
-            blend_batch_override = std::atoi(env_batch);
-        }
-    }
+    // Production: warp cull ON (mode 0), blend_batch_size from config (or test hook).
+    const int warp_cull_mode = g_warp_cull_mode.load(std::memory_order_relaxed);
+    const int blend_batch_override = g_blend_batch_size_override.load(std::memory_order_relaxed);
     auto launch_blend = [&]<bool RENDER_NORMAL>() {
         kernels::forward::blend_cu<RENDER_NORMAL><<<grid, block, 0, stream>>>(
             per_tile_buffers.instance_ranges,

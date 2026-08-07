@@ -13,8 +13,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
 #include <optional>
 
 namespace lfs::core::sh_value_quant {
@@ -44,27 +42,8 @@ namespace lfs::core::sh_value_quant {
                static_cast<std::size_t>(n_value_cells_per_prim(coeffs_rest));
     }
 
-    // Runtime flag (mirrors training::sh_value::sh_value_quant_enabled).
-    // Default ON after ISS-2.1 densify re-encode fix (WO-G6). Force off:
-    // LFS_SH_VALUE_FP32=1 or LFS_SH_VALUE_QUANT=0.
-    [[nodiscard]] inline bool env_quant_enabled() {
-        const char* force_fp32 = std::getenv("LFS_SH_VALUE_FP32");
-        if (force_fp32 != nullptr && force_fp32[0] != '\0' &&
-            !(force_fp32[0] == '0' && force_fp32[1] == '\0') &&
-            std::strcmp(force_fp32, "false") != 0 &&
-            std::strcmp(force_fp32, "off") != 0) {
-            return false;
-        }
-        const char* opt = std::getenv("LFS_SH_VALUE_QUANT");
-        if (opt == nullptr || opt[0] == '\0')
-            return true; // default ON — densify re-encode + capacity heal (WO-G6)
-        if (opt[0] == '0' && opt[1] == '\0')
-            return false;
-        if (std::strcmp(opt, "false") == 0 || std::strcmp(opt, "off") == 0)
-            return false;
-        return true;
-    }
-
+    // Production: SH value quantization permanently ON.
+    // Tests may force off via set_enabled_for_testing (footprint tables, etc.).
     inline std::atomic<int>& override_flag() {
         static std::atomic<int> g{-1};
         return g;
@@ -82,7 +61,7 @@ namespace lfs::core::sh_value_quant {
         const int o = override_flag().load(std::memory_order_relaxed);
         if (o >= 0)
             return o != 0;
-        return env_quant_enabled();
+        return true; // production default: always ON
     }
 
 } // namespace lfs::core::sh_value_quant

@@ -14,62 +14,6 @@
 #include <cstring>
 #include <functional>
 
-void fast_lfs::rasterization::bwd_teff_hist_arm() {
-    using Hist = fast_lfs::rasterization::kernels::backward::BwdTeffHist;
-    Hist zero{};
-    zero.armed = 1;
-    cudaMemcpyToSymbol(fast_lfs::rasterization::kernels::backward::d_bwd_teff_hist,
-                       &zero, sizeof(zero));
-}
-
-void fast_lfs::rasterization::bwd_teff_hist_flush() {
-    using Hist = fast_lfs::rasterization::kernels::backward::BwdTeffHist;
-    Hist h{};
-    cudaMemcpyFromSymbol(&h, fast_lfs::rasterization::kernels::backward::d_bwd_teff_hist,
-                         sizeof(h));
-    // Disarm immediately so later steps are free.
-    Hist off{};
-    cudaMemcpyToSymbol(fast_lfs::rasterization::kernels::backward::d_bwd_teff_hist,
-                       &off, sizeof(off));
-
-    if (h.n_tiles == 0) {
-        std::fprintf(stderr,
-                     "[BWD-A T_eff hist] armed but collected 0 tiles "
-                     "(blend_backward not launched this step?)\n");
-        return;
-    }
-    const double mean_n = static_cast<double>(h.sum_n) / static_cast<double>(h.n_tiles);
-    const double mean_teff = static_cast<double>(h.sum_teff) / static_cast<double>(h.n_tiles);
-    const double mean_waste_frac =
-        (h.sum_n > 0) ? (1.0 - static_cast<double>(h.sum_teff) / static_cast<double>(h.sum_n)) : 0.0;
-    std::fprintf(stderr,
-                 "[BWD-A T_eff hist] tiles=%llu  mean_tile_n=%.1f  mean_T_eff=%.1f  "
-                 "mean_waste_frac=%.3f  (skipped_tail = tile_n - T_eff)\n",
-                 static_cast<unsigned long long>(h.n_tiles),
-                 mean_n,
-                 mean_teff,
-                 mean_waste_frac);
-    static const char* kLogLabels[8] = {
-        "<=16", "<=32", "<=64", "<=128", "<=256", "<=512", "<=1024", ">1024"};
-    std::fprintf(stderr, "[BWD-A T_eff hist] tile_n bins:");
-    for (int i = 0; i < 8; ++i) {
-        std::fprintf(stderr, " %s=%llu", kLogLabels[i],
-                     static_cast<unsigned long long>(h.n_bins[i]));
-    }
-    std::fprintf(stderr, "\n[BWD-A T_eff hist] T_eff  bins:");
-    for (int i = 0; i < 8; ++i) {
-        std::fprintf(stderr, " %s=%llu", kLogLabels[i],
-                     static_cast<unsigned long long>(h.teff_bins[i]));
-    }
-    std::fprintf(stderr, "\n[BWD-A T_eff hist] waste_pct bins (0=0-10%% .. 10=100%%):");
-    for (int i = 0; i <= 10; ++i) {
-        std::fprintf(stderr, " %d=%llu", i * 10,
-                     static_cast<unsigned long long>(h.waste_pct_bins[i]));
-    }
-    std::fprintf(stderr, "\n");
-    std::fflush(stderr);
-}
-
 void fast_lfs::rasterization::backward(
     const float* densification_error_map,
     const float* grad_image,
@@ -122,23 +66,11 @@ void fast_lfs::rasterization::backward(
     auto* fastgs_status = per_primitive_buffers.forward_status;
 
     if (n_instances > 0) {
-        // WO-WARP-BWD: cull mode + batch size (shared test hooks with forward; env overrides).
-        // Mode is read at backward launch so tests can set it after forward returns.
-        int warp_cull_mode = warp_cull_mode_for_testing();
-        int blend_batch_override = blend_batch_size_for_testing();
-        if (const char* env_mode = std::getenv("LFS_BWD_WARP_CULL_MODE")) {
-            warp_cull_mode = std::atoi(env_mode);
-        } else if (const char* env_mode = std::getenv("LFS_WARP_CULL_MODE")) {
-            // Fall back to shared env when bwd-specific is unset.
-            warp_cull_mode = std::atoi(env_mode);
-        }
-        if (blend_batch_override == 0) {
-            if (const char* env_batch = std::getenv("LFS_BWD_BLEND_BATCH_SIZE")) {
-                blend_batch_override = std::atoi(env_batch);
-            } else if (const char* env_batch = std::getenv("LFS_BLEND_BATCH_SIZE")) {
-                blend_batch_override = std::atoi(env_batch);
-            }
-        }
+        // WO-WARP-BWD: cull mode + batch size via shared test hooks (production: cull ON,
+        // config::blend_batch_size). Mode is read at backward launch so tests can set it
+        // after forward returns.
+        const int warp_cull_mode = warp_cull_mode_for_testing();
+        const int blend_batch_override = blend_batch_size_for_testing();
 
         // Backward blend (template dispatch eliminates densification branch from inner loop)
         auto launch_blend_backward_typed = [&]<DensificationType DENS_TYPE, bool NORMAL_CHANNEL>() {

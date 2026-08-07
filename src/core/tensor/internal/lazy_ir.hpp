@@ -44,7 +44,7 @@ namespace lfs::core {
         };
 
         // Full IR recording for eager ops (debug/introspection). Default OFF;
-        // enable via env LFS_LAZY_IR=1 or lazy_ir_set_active_for_testing(true).
+        // enable only via lazy_ir_set_active_for_testing(true) (tests).
         // Deferred tensors always receive fusion node ids regardless of this flag.
         LFS_CORE_API bool lazy_ir_active();
         LFS_CORE_API void lazy_ir_set_active_for_testing(std::optional<bool> enabled);

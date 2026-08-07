@@ -2788,15 +2788,8 @@ namespace lfs::io {
             ScopedTempOutputFile temp_file{temp_path};
 
             // Fast binary path: parallel SoA→AoS pack + large buffered fwrite.
-            // tinyply's write_binary_internal does one os.write per property per
-            // vertex (millions of 4-byte stream ops). Force legacy with
-            // LFS_PLY_LEGACY_WRITE=1 for A/B measurement.
-            const bool use_legacy_write = !binary || [&] {
-                const char* env = std::getenv("LFS_PLY_LEGACY_WRITE");
-                return env != nullptr && env[0] == '1' && env[1] == '\0';
-            }();
-
-            if (!use_legacy_write) {
+            // tinyply is retained only for ASCII writes (!binary).
+            if (binary) {
                 struct FloatPackBlock {
                     const float* data = nullptr;
                     size_t cols = 0;
@@ -3000,7 +2993,7 @@ namespace lfs::io {
                 return {};
             }
 
-            // Legacy tinyply path (ASCII always; binary when LFS_PLY_LEGACY_WRITE=1).
+            // ASCII path via tinyply (binary uses parallel-pack above).
             std::filebuf fb;
             // pubsetbuf before open — required for a portable large buffer.
             std::vector<char> legacy_io_buffer(ply_constants::PLY_WRITE_IO_BUFFER_BYTES);

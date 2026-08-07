@@ -226,7 +226,6 @@ namespace lfs::training {
         // reset rows only need their scale zeroed.
         void alloc_quantized_state(ParamType type, AdamParamState& state, const lfs::core::Tensor& param,
                                    size_t moment_capacity, size_t prim_capacity);
-        void quantize_float_moments(ParamType type, AdamParamState& state, lfs::core::Tensor&& exp_avg, lfs::core::Tensor&& exp_avg_sq);
         size_t scale_row_count(ParamType type) const;
         const bool* frozen_mask_ptr() const;
         int frozen_mask_size() const;

@@ -4,9 +4,6 @@
 #include "core/alloc_counter.hpp"
 
 #include <atomic>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
 
 namespace lfs::core::alloc_counter {
     namespace {
@@ -14,37 +11,10 @@ namespace lfs::core::alloc_counter {
         std::atomic<std::uint64_t> g_device_allocs{0};
         std::atomic<std::uint64_t> g_site_counts[static_cast<std::size_t>(Site::Count)]{};
         std::atomic<bool> g_steady{false};
-        std::atomic<int> g_trace_cached{-1}; // -1 unknown, 0 off, 1 on
 
         constexpr int kMaxLogicalDepth = 8;
         thread_local const char* t_logical_stack[kMaxLogicalDepth]{};
         thread_local int t_logical_depth = 0;
-
-        [[nodiscard]] bool env_truthy(const char* name) {
-            const char* v = std::getenv(name);
-            if (v == nullptr || v[0] == '\0' || v[0] == '0') {
-                return false;
-            }
-            if ((v[0] == 'f' || v[0] == 'F' || v[0] == 'n' || v[0] == 'N') ||
-                (v[0] == 'o' && (v[1] == 'f' || v[1] == 'F'))) {
-                return false;
-            }
-            return true;
-        }
-
-        void maybe_trace(Site site, std::uint64_t n) {
-            if (!trace_enabled() || !g_steady.load(std::memory_order_relaxed)) {
-                return;
-            }
-            const char* logical = current_logical_site();
-            std::fprintf(stderr,
-                         "[LFS_ALLOC_TRACE] site=%s logical=%s n=%llu total=%llu\n",
-                         site_name(site),
-                         (logical && logical[0]) ? logical : "-",
-                         static_cast<unsigned long long>(n),
-                         static_cast<unsigned long long>(g_device_allocs.load(
-                             std::memory_order_relaxed)));
-        }
     } // namespace
 
     Snapshot snapshot() noexcept {
@@ -72,7 +42,6 @@ namespace lfs::core::alloc_counter {
         if (idx < static_cast<std::size_t>(Site::Count)) {
             g_site_counts[idx].fetch_add(n, std::memory_order_relaxed);
         }
-        maybe_trace(site, n);
     }
 
     std::uint64_t site_count(const Site site) noexcept {
@@ -143,15 +112,6 @@ namespace lfs::core::alloc_counter {
 
     bool steady_state() noexcept {
         return g_steady.load(std::memory_order_relaxed);
-    }
-
-    bool trace_enabled() noexcept {
-        int cached = g_trace_cached.load(std::memory_order_relaxed);
-        if (cached < 0) {
-            cached = env_truthy("LFS_ALLOC_TRACE") ? 1 : 0;
-            g_trace_cached.store(cached, std::memory_order_relaxed);
-        }
-        return cached != 0;
     }
 
     ScopedSite::ScopedSite(const char* name) noexcept {

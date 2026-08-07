@@ -3,7 +3,6 @@
 
 #include "internal/lazy_ir.hpp"
 
-#include "core/environment.hpp"
 #include "internal/lazy_config.hpp"
 #include "internal/tensor_impl.hpp"
 #include <algorithm>
@@ -202,17 +201,11 @@ namespace lfs::core::internal {
     bool lazy_ir_active() {
         auto& state = lazy_ir_active_state();
         const int override_enabled = state.override_enabled.load(std::memory_order_acquire);
+        // Production default OFF. Only lazy_ir_set_active_for_testing() can enable.
         if (override_enabled >= 0) {
             return override_enabled != 0;
         }
-
-        int env = state.env_cached.load(std::memory_order_acquire);
-        if (env < 0) {
-            // Default OFF: eager IR recording is opt-in (tests/debug).
-            env = environment::flag("LFS_LAZY_IR", false) ? 1 : 0;
-            state.env_cached.store(env, std::memory_order_release);
-        }
-        return env != 0;
+        return false;
     }
 
     void lazy_ir_set_active_for_testing(const std::optional<bool> enabled) {
@@ -222,8 +215,6 @@ namespace lfs::core::internal {
             return;
         }
         state.override_enabled.store(-1, std::memory_order_release);
-        // Re-read env on next lazy_ir_active() call.
-        state.env_cached.store(-1, std::memory_order_release);
     }
 
     void clear_lazy_ir_for_testing() {

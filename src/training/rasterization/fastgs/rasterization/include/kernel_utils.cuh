@@ -323,11 +323,9 @@ namespace fast_lfs::rasterization::kernels {
         }
     }
 
-    // Two-pass quantised Adam step over a contiguous [n_attributes] row of one primitive
-    // (means / sh0 / scaling / rotation / opacity). Pass 1 derives the per-primitive scales
-    // from max|m| / max(v); pass 2 writes the param update and requantises. `grads` holds
-    // `row_elements` values; any resident attributes beyond that get pure momentum decay.
-    // Joint codec path uses block bounds (all threads must call when joint_bits != 0).
+    // Joint (u, log_s) Adam step over a contiguous [n_attributes] row of one primitive
+    // (means / sh0 / scaling / rotation / opacity). Block-bounded; all threads must call
+    // when joint_bits != 0. Legacy uint8+scales path removed.
     __device__ inline void adam_step_row(
         const float* grads,
         const FusedAdamParam& param,
@@ -344,66 +342,7 @@ namespace fast_lfs::rasterization::kernels {
             adam_step_row_joint<8>(grads, param, primitive_idx, row_elements, beta1, beta2, eps);
             return;
         }
-        if (!param.enabled || param.n_attributes <= 0)
-            return;
-        float row_step_size = param.step_size;
-        if (param.frozen_mask != nullptr &&
-            primitive_idx < static_cast<uint>(param.frozen_mask_size) &&
-            param.frozen_mask[primitive_idx]) {
-            if (param.frozen_lr_scale == 0.0f)
-                return;
-            row_step_size *= param.frozen_lr_scale;
-        }
-        if (param.crop_damping_mask != nullptr &&
-            primitive_idx < static_cast<uint>(param.crop_damping_mask_size) &&
-            param.crop_damping_mask[primitive_idx]) {
-            if (param.cropbox_lr_scale == 0.0f)
-                return;
-            row_step_size *= param.cropbox_lr_scale;
-        }
-        const uint n_attr = static_cast<uint>(param.n_attributes);
-        const uint base = primitive_idx * n_attr;
-        if (base >= static_cast<uint>(param.n_elements))
-            return;
-        const uint row = min(n_attr, static_cast<uint>(param.n_elements) - base);
-        const uint active = min(row_elements, row);
-
-        const float old_m_scale = param.exp_avg_scale[primitive_idx];
-        const float old_v_scale = param.exp_avg_sq_scale[primitive_idx];
-
-        float max_abs_m = 0.0f;
-        float max_v = 0.0f;
-        for (uint i = 0; i < row; ++i) {
-            const float old_m = dequant_m(param.exp_avg_q[base + i], old_m_scale);
-            const float sqrt_old_v = dequant_sqrt_v(param.exp_avg_sq_q[base + i], old_v_scale);
-            const float old_v = sqrt_old_v * sqrt_old_v;
-            const float grad = (i < active) ? grads[i] : 0.0f;
-            const float m = beta1 * old_m + (1.0f - beta1) * grad;
-            const float v = beta2 * old_v + (1.0f - beta2) * grad * grad;
-            max_abs_m = fmaxf(max_abs_m, fabsf(m));
-            max_v = fmaxf(max_v, v);
-        }
-
-        const float new_m_scale = max_abs_m > 0.0f ? max_abs_m / 127.0f : 0.0f;
-        const float new_v_scale = max_v > 0.0f ? sqrtf(max_v) / 255.0f : 0.0f;
-
-        for (uint i = 0; i < row; ++i) {
-            const float old_m = dequant_m(param.exp_avg_q[base + i], old_m_scale);
-            const float sqrt_old_v = dequant_sqrt_v(param.exp_avg_sq_q[base + i], old_v_scale);
-            const float old_v = sqrt_old_v * sqrt_old_v;
-            const float grad = (i < active) ? grads[i] : 0.0f;
-            const float m = beta1 * old_m + (1.0f - beta1) * grad;
-            const float v = beta2 * old_v + (1.0f - beta2) * grad * grad;
-            if (i < active) {
-                const float denom = sqrtf(v) * param.bias_correction2_sqrt_rcp + eps;
-                param.param[base + i] -= row_step_size * m / denom;
-            }
-            param.exp_avg_q[base + i] = quantize_m(m, new_m_scale);
-            param.exp_avg_sq_q[base + i] = quantize_sqrt_v(v, new_v_scale);
-        }
-
-        param.exp_avg_scale[primitive_idx] = new_m_scale;
-        param.exp_avg_sq_scale[primitive_idx] = new_v_scale;
+        // Non-joint state is unsupported (joint is the only codec).
     }
 
     __device__ inline float sigmoid(const float x) {
@@ -682,13 +621,9 @@ namespace fast_lfs::rasterization::kernels {
         }
     }
 
-    // Quantised two-pass Adam step over the swizzled shN moments of one primitive. moments are
-    // uchar4 at the same swizzled float4 slots as the fp32 param (32 warp lanes -> 32 consecutive
-    // uchar4 = coalesced 128B loads). Pass 1 derives the per-primitive scales over the active
-    // slots; pass 2 updates param and requantises. n_slots_to_update is derived from active SH:
-    //     active_sh_bases <= 1 : 0 slots (caller skips)   <= 4 : 3 slots
-    //     active_sh_bases <= 9 : 6 slots                   > 9 : 12 slots
-    // Joint path (joint_bits==8): block-bounded (u,log_s); all threads must call.
+    // Joint (u, log_s) Adam step over swizzled shN moments of one primitive.
+    // n_slots_to_update is derived from active SH bases. All threads must call
+    // when joint_bits==8 (block bounds). Legacy uint8+scales path removed.
     __device__ inline void apply_shN_grads_packed(
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
@@ -698,99 +633,8 @@ namespace fast_lfs::rasterization::kernels {
         const FusedAdamParam& p = fused_adam.shN;
         if (p.joint_bits == 8) {
             apply_shN_grads_packed_joint(fused_adam, primitive_idx, g, n_slots_to_update, sh_layout_slots);
-            return;
         }
-        if (!p.enabled || n_slots_to_update == 0u || sh_layout_slots == 0u)
-            return;
-        // BL-1: legacy path indexes float4 slots; refuse q16 (host must dequant first).
-        if (p.sh_value_bits != 0)
-            return;
-        // MJ-1 sibling: no primitive-range guard on legacy path either.
-        if (p.n_primitives > 0 && primitive_idx >= static_cast<uint>(p.n_primitives))
-            return;
-        float row_step_size = p.step_size;
-        if (p.frozen_mask != nullptr &&
-            primitive_idx < static_cast<uint>(p.frozen_mask_size) &&
-            p.frozen_mask[primitive_idx]) {
-            if (p.frozen_lr_scale == 0.0f)
-                return;
-            row_step_size *= p.frozen_lr_scale;
-        }
-        if (p.crop_damping_mask != nullptr &&
-            primitive_idx < static_cast<uint>(p.crop_damping_mask_size) &&
-            p.crop_damping_mask[primitive_idx]) {
-            if (p.cropbox_lr_scale == 0.0f)
-                return;
-            row_step_size *= p.cropbox_lr_scale;
-        }
-
-        float4* param4 = reinterpret_cast<float4*>(p.param);
-        uchar4* m4 = reinterpret_cast<uchar4*>(p.exp_avg_q);
-        uchar4* v4 = reinterpret_cast<uchar4*>(p.exp_avg_sq_q);
-        const float beta1 = fused_adam.beta1, beta2 = fused_adam.beta2, eps = fused_adam.eps;
-        const float old_m_scale = p.exp_avg_scale[primitive_idx];
-        const float old_v_scale = p.exp_avg_sq_scale[primitive_idx];
-
-        float max_abs_m = 0.0f;
-        float max_v = 0.0f;
-#pragma unroll
-        for (uint k = 0; k < 12u; ++k) {
-            if (k >= n_slots_to_update)
-                break;
-            const uint slot = shAt(primitive_idx, k, sh_layout_slots);
-            const float4 gk = shN_grad_for_slot(g, k);
-            const uchar4 qm = m4[slot];
-            const uchar4 qv = v4[slot];
-            const float gc[4] = {gk.x, gk.y, gk.z, gk.w};
-            const std::uint8_t mc[4] = {qm.x, qm.y, qm.z, qm.w};
-            const std::uint8_t vc[4] = {qv.x, qv.y, qv.z, qv.w};
-#pragma unroll
-            for (int c = 0; c < 4; ++c) {
-                const float sqrt_old_v = dequant_sqrt_v(vc[c], old_v_scale);
-                const float old_v = sqrt_old_v * sqrt_old_v;
-                const float m = beta1 * dequant_m(mc[c], old_m_scale) + (1.0f - beta1) * gc[c];
-                const float v = beta2 * old_v + (1.0f - beta2) * gc[c] * gc[c];
-                max_abs_m = fmaxf(max_abs_m, fabsf(m));
-                max_v = fmaxf(max_v, v);
-            }
-        }
-
-        const float new_m_scale = max_abs_m > 0.0f ? max_abs_m / 127.0f : 0.0f;
-        const float new_v_scale = max_v > 0.0f ? sqrtf(max_v) / 255.0f : 0.0f;
-
-#pragma unroll
-        for (uint k = 0; k < 12u; ++k) {
-            if (k >= n_slots_to_update)
-                break;
-            const uint slot = shAt(primitive_idx, k, sh_layout_slots);
-            const float4 gk = shN_grad_for_slot(g, k);
-            const uchar4 qm = m4[slot];
-            const uchar4 qv = v4[slot];
-            const float gc[4] = {gk.x, gk.y, gk.z, gk.w};
-            const std::uint8_t mc[4] = {qm.x, qm.y, qm.z, qm.w};
-            const std::uint8_t vc[4] = {qv.x, qv.y, qv.z, qv.w};
-            float4 pv = param4[slot];
-            float pc[4] = {pv.x, pv.y, pv.z, pv.w};
-            std::uint8_t nm[4];
-            std::uint8_t nv[4];
-#pragma unroll
-            for (int c = 0; c < 4; ++c) {
-                const float sqrt_old_v = dequant_sqrt_v(vc[c], old_v_scale);
-                const float old_v = sqrt_old_v * sqrt_old_v;
-                const float m = beta1 * dequant_m(mc[c], old_m_scale) + (1.0f - beta1) * gc[c];
-                const float v = beta2 * old_v + (1.0f - beta2) * gc[c] * gc[c];
-                const float denom = sqrtf(v) * p.bias_correction2_sqrt_rcp + eps;
-                pc[c] -= row_step_size * m / denom;
-                nm[c] = quantize_m(m, new_m_scale);
-                nv[c] = quantize_sqrt_v(v, new_v_scale);
-            }
-            param4[slot] = make_float4(pc[0], pc[1], pc[2], pc[3]);
-            m4[slot] = make_uchar4(nm[0], nm[1], nm[2], nm[3]);
-            v4[slot] = make_uchar4(nv[0], nv[1], nv[2], nv[3]);
-        }
-
-        p.exp_avg_scale[primitive_idx] = new_m_scale;
-        p.exp_avg_sq_scale[primitive_idx] = new_v_scale;
+        // Non-joint state is unsupported (joint is the only codec).
     }
 
     // SH backward: fills sh0_grads[3] and shN_grads[15]; does NOT apply Adam

@@ -14,7 +14,7 @@
  * Endpoint-exact; all-zero packed+bounds decode to (m,v)=(0,0).
  *
  * Bit depths: 16-bit non-SH (4 B/cell), 8-bit SH (2 B/cell).
- * Runtime fallback: LFS_ADAM_LEGACY_CODEC=1 forces the old uint8+scales path.
+ * Joint is the only Adam moment codec (legacy uint8+scales path removed).
  */
 
 #include <algorithm>
@@ -29,11 +29,10 @@ namespace lfs::training::joint_adam {
     inline constexpr int kBlockSize = 256;
     inline constexpr float kEps = 1e-15f;
 
-    /// True when the joint codec should be used (default ON).
-    /// Legacy path when env LFS_ADAM_LEGACY_CODEC is set (any value except 0/false/off).
+    /// Always true — joint (u, log_s) is the only Adam codec.
     [[nodiscard]] bool joint_codec_enabled();
 
-    /// Force joint/legacy for tests (overrides env for this process). Pass nullopt to clear.
+    /// Historical test hook; no-op (joint is permanent).
     void set_joint_codec_enabled_for_testing(std::optional<bool> enabled);
 
     [[nodiscard]] inline std::size_t n_bounds_for_prims(std::size_t n_prims) {

@@ -16,64 +16,6 @@ namespace cg = cooperative_groups;
 
 namespace fast_lfs::rasterization::kernels::backward {
 
-    // ---------------------------------------------------------------------------
-    // BWD-A debug: one-shot histogram of tile_n_primitives vs T_eff.
-    // Armed from host when LFS_BWD_TEFF_HIST=1 (default capture iter 1700).
-    // Zero-cost when armed==0 (single device load per block leader).
-    // ---------------------------------------------------------------------------
-    struct BwdTeffHist {
-        int armed = 0; // 0 = off, 1 = collecting
-        unsigned long long n_tiles = 0;
-        unsigned long long sum_n = 0;
-        unsigned long long sum_teff = 0;
-        // waste fraction bins: floor(10 * (n-T_eff)/n) → [0..10]
-        unsigned long long waste_pct_bins[11] = {};
-        // log-ish buckets for n and T_eff: <=16,32,64,128,256,512,1024,>1024
-        unsigned long long n_bins[8] = {};
-        unsigned long long teff_bins[8] = {};
-    };
-
-    // Device symbol lives here (kernels_backward.cuh is only included by backward.cu).
-    // Host arm/flush in backward.cu via cudaMemcpyTo/FromSymbol.
-    __device__ BwdTeffHist d_bwd_teff_hist;
-
-    __device__ __forceinline__ int bwd_teff_log_bin(const int v) {
-        if (v <= 16)
-            return 0;
-        if (v <= 32)
-            return 1;
-        if (v <= 64)
-            return 2;
-        if (v <= 128)
-            return 3;
-        if (v <= 256)
-            return 4;
-        if (v <= 512)
-            return 5;
-        if (v <= 1024)
-            return 6;
-        return 7;
-    }
-
-    __device__ __forceinline__ void bwd_teff_hist_record(const int tile_n, const int t_eff) {
-        // Single load; cheap when disabled.
-        if (d_bwd_teff_hist.armed == 0)
-            return;
-        atomicAdd(&d_bwd_teff_hist.n_tiles, 1ull);
-        atomicAdd(&d_bwd_teff_hist.sum_n, static_cast<unsigned long long>(tile_n));
-        atomicAdd(&d_bwd_teff_hist.sum_teff, static_cast<unsigned long long>(t_eff));
-        const int waste = tile_n - t_eff;
-        int waste_bin = 0;
-        if (tile_n > 0) {
-            waste_bin = (waste * 10) / tile_n;
-            if (waste_bin > 10)
-                waste_bin = 10;
-        }
-        atomicAdd(&d_bwd_teff_hist.waste_pct_bins[waste_bin], 1ull);
-        atomicAdd(&d_bwd_teff_hist.n_bins[bwd_teff_log_bin(tile_n)], 1ull);
-        atomicAdd(&d_bwd_teff_hist.teff_bins[bwd_teff_log_bin(t_eff)], 1ull);
-    }
-
     // Gradient clamping to prevent NaN from exploding gradients
     constexpr float GRAD_CLAMP_MAX = 1e4f;
 
@@ -701,7 +643,6 @@ namespace fast_lfs::rasterization::kernels::backward {
                 max_contrib = ::max(max_contrib, s_warp_max_contrib[w]);
             }
             s_T_eff = min(tile_n_primitives, static_cast<int>(max_contrib));
-            bwd_teff_hist_record(tile_n_primitives, s_T_eff);
         }
         block.sync();
         const int T_eff = s_T_eff;

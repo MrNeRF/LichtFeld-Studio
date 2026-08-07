@@ -2645,26 +2645,19 @@ namespace lfs::training {
         try {
             params_ = params;
 
-            // BL-3: GUT/gsplat uses unfused Adam step(). Joint shN is fused-only and
-            // q16 shN desyncs param_size vs float-layout moment size. Auto-disable both
-            // codecs for the process with a loud log so gut trains under default flags.
+            // BL-3: GUT/gsplat uses unfused Adam step(). Joint shN is fused-FastGS-only
+            // and q16 re-encode is fused-only — GUT with sh_degree > 0 will fail at the
+            // unfused shN step. Codecs are permanent; no env/fallback disable path.
             if (params_.optimization.gut) {
-                if (lfs::training::sh_value::sh_value_quant_enabled()) {
-                    LOG_ERROR(
-                        "BL-3: GUT/gsplat training uses unfused Adam; SH value quant "
-                        "(default ON) is unsupported on this path (q16 size desync + "
-                        "no unfused re-encode). Disabling SH value quant for this "
-                        "process. Set LFS_SH_VALUE_QUANT=0 to silence.");
-                    lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(false);
-                }
-                if (lfs::training::joint_adam::joint_codec_enabled()) {
-                    LOG_ERROR(
-                        "BL-3: GUT/gsplat training uses unfused Adam; joint Adam codec "
-                        "shN step is fused-FastGS-only. Disabling joint Adam codec for "
-                        "this process. Set LFS_ADAM_LEGACY_CODEC=1 to silence.");
-                    lfs::training::joint_adam::set_joint_codec_enabled_for_testing(false);
-                }
+                LOG_WARN(
+                    "BL-3: GUT/gsplat uses unfused Adam; joint codec shN requires fused "
+                    "FastGS backward. Prefer FastGS (default) for SH training.");
             }
+
+            // Wire CLI instruments (replaces former env flags).
+            PerfBenchCollector::configure(
+                params_.optimization.perf_bench,
+                params_.optimization.perf_bench_warmup);
 
             if (params_.optimization.enable_sparsity) {
                 const size_t stop_refine_limit = static_cast<size_t>(std::max(0, get_regular_iterations()));
@@ -3716,54 +3709,14 @@ namespace lfs::training {
     }
 
     namespace {
-        // Profiling hooks for perf_campaign/profile.sh. Zero-cost unless enabled
-        // via environment:
-        //   LFS_NVTX=1                 -> per-iteration NVTX range "train_step:<iter>"
-        //   LFS_PROFILE_START_ITER=N   -> cudaProfilerStart() at iteration N
-        //   LFS_PROFILE_STOP_ITER=M    -> cudaProfilerStop() at iteration M
-        // Together with `nsys profile --capture-range=cudaProfilerApi` this captures
-        // exactly the steady-state slice [N, M) with no warmup pollution.
-        //
-        // BWD-A debug (LFS_BWD_TEFF_HIST=1): one-shot tile_n vs T_eff histogram
-        // at LFS_BWD_TEFF_HIST_ITER (default 1700).
-        struct StepProfilingHooks {
-            bool nvtx = false;
-            int start_iter = -1;
-            int stop_iter = -1;
-            int bwd_teff_hist_iter = -1;
-            static const StepProfilingHooks& get() {
-                static const StepProfilingHooks hooks = [] {
-                    StepProfilingHooks h;
-                    if (const char* e = std::getenv("LFS_NVTX"))
-                        h.nvtx = (e[0] == '1');
-                    if (const char* e = std::getenv("LFS_PROFILE_START_ITER"))
-                        h.start_iter = std::atoi(e);
-                    if (const char* e = std::getenv("LFS_PROFILE_STOP_ITER"))
-                        h.stop_iter = std::atoi(e);
-                    if (const char* e = std::getenv("LFS_BWD_TEFF_HIST")) {
-                        if (e[0] == '1' || e[0] == 'y' || e[0] == 'Y') {
-                            h.bwd_teff_hist_iter = 1700;
-                            if (const char* it = std::getenv("LFS_BWD_TEFF_HIST_ITER"))
-                                h.bwd_teff_hist_iter = std::atoi(it);
-                        }
-                    }
-                    return h;
-                }();
-                return hooks;
-            }
-        };
+        // Profiling hooks for perf_campaign/profile.sh via CLI `--profile-window=START:STOP`.
+        // cudaProfilerStart/Stop at [START, STOP); NVTX per-iter ranges while the window
+        // is active (nvtxRange* are no-ops when NVTX is compiled out / unused by nsys).
         struct NvtxIterationGuard {
             bool active = false;
             ~NvtxIterationGuard() {
                 if (active)
                     nvtxRangePop();
-            }
-        };
-        struct BwdTeffHistGuard {
-            bool active = false;
-            ~BwdTeffHistGuard() {
-                if (active)
-                    fast_lfs::rasterization::bwd_teff_hist_flush();
             }
         };
     } // namespace
@@ -3776,22 +3729,20 @@ namespace lfs::training {
         std::stop_token stop_token) {
         StepPhase current_phase = StepPhase::Forward;
         bool persistent_commit = false;
-        const auto& prof_hooks = StepProfilingHooks::get();
-        if (iter == prof_hooks.start_iter)
+        const int prof_start = params_.optimization.profile_start_iter;
+        const int prof_stop = params_.optimization.profile_stop_iter;
+        const bool profile_window_active =
+            prof_start >= 0 && prof_stop > prof_start && iter >= prof_start && iter < prof_stop;
+        if (iter == prof_start)
             cudaProfilerStart();
-        if (iter == prof_hooks.stop_iter)
+        if (iter == prof_stop)
             cudaProfilerStop();
         NvtxIterationGuard nvtx_iter_guard;
-        if (prof_hooks.nvtx) {
+        if (profile_window_active) {
             char range_name[32];
             std::snprintf(range_name, sizeof(range_name), "train_step:%d", iter);
             nvtxRangePushA(range_name);
             nvtx_iter_guard.active = true;
-        }
-        BwdTeffHistGuard bwd_teff_hist_guard;
-        if (iter == prof_hooks.bwd_teff_hist_iter) {
-            fast_lfs::rasterization::bwd_teff_hist_arm();
-            bwd_teff_hist_guard.active = true;
         }
         auto result = [&]() -> lfs::Result<StepDisposition> {
             try {
