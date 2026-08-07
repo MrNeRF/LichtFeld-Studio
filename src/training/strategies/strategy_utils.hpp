@@ -108,4 +108,66 @@ namespace lfs::training {
     lfs::core::Tensor compute_near_zero_rotation_mask(
         const lfs::core::Tensor& rotations);
 
+    /**
+     * Phase 4.3 — reusable densify child-buffer workspace.
+     * Grow-only high-water for LAS second-child attribute buffers (K rows).
+     * Avoids per-refine empty() allocs for means/rot/scale/sh0/shN/opacity.
+     */
+    struct DensifyChildWorkspace {
+        lfs::core::Tensor means;     // [cap, 3]
+        lfs::core::Tensor rotations; // [cap, 4]
+        lfs::core::Tensor scales;    // [cap, 3]
+        lfs::core::Tensor sh0;       // [cap, 1, 3] (MRNF) or use sh0_flat
+        lfs::core::Tensor sh0_flat;  // [cap, 3] (IGS+)
+        lfs::core::Tensor shN;       // [cap, sh_rest, 3]
+        lfs::core::Tensor opacities; // [cap]
+        size_t capacity = 0;
+        size_t sh_rest = 0;
+        bool sh0_as_flat = false;
+
+        /// Ensure workspace holds at least K rows (×1.2 growth). Returns views of size K.
+        void ensure(size_t K, size_t sh_rest_in, bool use_shN, bool sh0_flat_layout,
+                    lfs::core::Device device);
+
+        [[nodiscard]] lfs::core::Tensor means_view(size_t K) const;
+        [[nodiscard]] lfs::core::Tensor rotations_view(size_t K) const;
+        [[nodiscard]] lfs::core::Tensor scales_view(size_t K) const;
+        [[nodiscard]] lfs::core::Tensor sh0_view(size_t K) const;
+        [[nodiscard]] lfs::core::Tensor shN_view(size_t K) const;
+        [[nodiscard]] lfs::core::Tensor opacities_view(size_t K) const;
+    };
+
+    /**
+     * Phase 4.3 — grow densification_info / 1D score buffers without full realloc
+     * when reserved capacity allows. densification_info is [2,N]: when n grows we
+     * must reallocate (row1 offset = N); when shape already matches, reuse + zero.
+     * For 1D scores: append_zeros into reserved capacity when possible.
+     */
+    void ensure_densification_info_shape_inplace(
+        lfs::core::Tensor& densification_info,
+        size_t n,
+        lfs::core::Device device,
+        size_t reserve_cols = 0);
+
+    void ensure_score_buffer_inplace(
+        lfs::core::Tensor& scores,
+        size_t n,
+        lfs::core::Device device,
+        size_t reserve_capacity = 0);
+
+    /// Collect non-null Adam per-primitive scale pointers (exp_avg_scale +
+    /// exp_avg_sq_scale for each of Means/Sh0/ShN/Scaling/Rotation/Opacity).
+    /// Returns count written into out_ptrs (max 12).
+    int collect_adam_scale_ptrs(
+        AdamOptimizer& optimizer,
+        float* out_ptrs[12]);
+
+    /// Zero fp32 Adam grad rows at indices (and ShN via swizzled zero when
+    /// layout_rest > 0). Scales/moments are left alone — pair with fused scale
+    /// zero. Required because strategy::step runs Adam after densify.
+    void zero_adam_grads_at_indices(
+        AdamOptimizer& optimizer,
+        const lfs::core::Tensor& indices,
+        uint32_t shN_layout_rest = 0);
+
 } // namespace lfs::training

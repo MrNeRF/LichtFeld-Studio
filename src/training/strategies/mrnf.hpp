@@ -10,6 +10,7 @@
 #include "kernels/mrnf_kernels.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
+#include "strategy_utils.hpp"
 #include <memory>
 
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
@@ -130,6 +131,12 @@ namespace lfs::training {
         int _edge_sample_count = 0;
         int _edge_last_sample_iter = -1;
         lfs::core::Tensor _free_mask;
+
+        // Phase 4.3 — reusable LAS child buffers (grow-only high-water).
+        DensifyChildWorkspace _densify_ws;
+        // Phase 4.5 — device buffer for packed refine counts (4× int64).
+        lfs::core::Tensor _refine_counts_dev;
+        lfs::core::Tensor _refine_counts_host; // pinned staging optional; use vector
 
         mrnf_strategy::MRNFBounds _bounds = {};
         bool _bounds_valid = false;

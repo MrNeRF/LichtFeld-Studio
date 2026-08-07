@@ -8,6 +8,7 @@
 
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
+#include "strategy_utils.hpp"
 #include "trainer.hpp"
 
 #include <vector>
@@ -155,5 +156,8 @@ namespace lfs::training {
         // Free slot tracking - bool tensor [capacity], true = slot is free for reuse
         lfs::core::Tensor _free_mask;
         PendingFailureSnapshot _pending_failure_snapshot;
+
+        // Phase 4.3 — reusable LAS child buffers.
+        DensifyChildWorkspace _densify_ws;
     };
 } // namespace lfs::training

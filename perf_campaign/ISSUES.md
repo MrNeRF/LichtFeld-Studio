@@ -182,3 +182,26 @@
 - **Workaround:** `half_unary_via_float` in `tensor_ops.cu` promotes to float before applying the float-oriented functor.
 - **Action:** Optional later: specialize functors for `__half` using `__h*` intrinsics / half2.
 - **Status:** mitigated for explicit half unary instantiations.
+||||||| eec4b87b
+
+## ISS-010 — MRNFStrategyTest.ShNReservationTracksMaxDegreeAndMaxCap expects 3× capacity
+- **Severity:** medium (test/API drift; not introduced by densify-event work)
+- **File:** `tests/test_mrnf_strategy.cpp:439` vs `initialize_gaussians` / shN reserve
+- **Symptom:** for max_cap=70, sh_degree∈{1,2,3}:
+  `splat_data.shN().capacity()` is **exactly 1/3** of
+  `sh_swizzled_float_count(max_cap, layout_rest)` (e.g. 384 vs 1152, 768 vs 2304).
+- **Repro:** `./build/tests/tests/lichtfeld_tests --gtest_filter=MRNFStrategyTest.ShNReservationTracksMaxDegreeAndMaxCap`
+- **Notes:** Fails on Wave-2 tip without densify-event changes (capacity path
+  untouched by 4.3–4.8). Likely test still assumes full max-degree float count while
+  production reserves compact / active-degree layout. Outside worker-J densify scope.
+- **Action:** align test expectation with current `shN` packing or fix reserve if the
+  test's full-layout contract is still intended for SH ramp-up.
+- **Status:** open (pre-existing)
+
+## ISS-011 — densification_info [2,N] cannot grow via append_zeros
+- **Severity:** info / design note (Phase 4.3 partial)
+- **Cause:** row-major `[2,N]` stores row1 at offset N; growing N invalidates layout.
+  `ensure_densification_info_shape_inplace` reuses when shape matches and reallocates
+  exact `[2,n]` on N change. Score buffers (1D) do use `append_zeros`.
+- **Action:** optional future stride-aware densify buffer if peak at grow events matters.
+- **Status:** accepted limitation of this task.
