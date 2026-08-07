@@ -16,6 +16,7 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <vector>
 
 namespace lfs::core {
 
@@ -23,6 +24,29 @@ namespace lfs::core {
 
         constexpr std::size_t kFloatBytes = sizeof(float);
         constexpr std::size_t kRegionAlignment = 256;
+
+        // True when `source` is a view into `block`'s VA range (CUDA-only or
+        // Vulkan-interop alias of the same ExportableBlock). In that case
+        // rebind must install views only — never copy_from the (possibly stale
+        // offset) source into the new layout (ISS-025).
+        [[nodiscard]] bool tensor_aliases_exportable_block(const Tensor& source,
+                                                           const ExportableBlock& block) {
+            if (!source.is_valid() || !source.is_external_storage()) {
+                return false;
+            }
+            if (!block.device_ptr || block.size == 0 || source.numel() == 0) {
+                return false;
+            }
+            const auto* base = static_cast<const char*>(block.device_ptr);
+            const auto* end = base + block.size;
+            // storage_ptr is the allocation base (non-materializing); for
+            // external views it equals the region start baked into the tensor.
+            const auto* ptr = static_cast<const char*>(source.storage_ptr());
+            if (!ptr) {
+                return false;
+            }
+            return ptr >= base && ptr < end;
+        }
 
         std::size_t align_up(std::size_t v, std::size_t a) {
             return ((v + a - 1) / a) * a;
@@ -184,8 +208,17 @@ namespace lfs::core {
                 reserved_capacity_));
         }
 
+        const std::size_t old_capacity = capacity_;
         const Layout prev_layout = compute_layout(capacity_, sh_degree_);
         const Layout grown_layout = compute_layout(new_capacity, sh_degree_);
+
+        // ISS-025 stream fence: relocation memcpys use the default stream; drain
+        // trainer/render work that may still be reading the block first.
+        if (const auto err = cudaDeviceSynchronize(); err != cudaSuccess) {
+            return std::unexpected(std::format(
+                "SplatExportableStorage::grow: pre-relocation synchronize failed: {}",
+                cudaGetErrorString(err)));
+        }
 
         // Grow physical under the stable VA when the packed layout needs more bytes.
         if (grown_layout.total > block->size) {
@@ -215,7 +248,8 @@ namespace lfs::core {
             }
         }
 
-        // Zero the full committed range so expanded slack rows read as zeros.
+        // Zero the full committed range so expanded slack starts clean, then
+        // relocate live rows and mark slack non-renderable (opacity/rotation).
         if (const auto err = cudaMemset(block->device_ptr, 0, grown_layout.total); err != cudaSuccess) {
             if (staging) {
                 cudaFree(staging);
@@ -242,6 +276,41 @@ namespace lfs::core {
                 }
             }
             cudaFree(staging);
+        }
+
+        // ISS-025 hardening (Analyst A): slack rows [old_capacity, new_capacity)
+        // must not render if ever exposed — opacity raw → −∞ (sigmoid≈0),
+        // identity quaternion (1,0,0,0). Zero-fill alone yields opacity=0.5 and
+        // zero quat → NaN extents (half-screen splat blast radius).
+        if (new_capacity > old_capacity) {
+            const std::size_t n_slack = new_capacity - old_capacity;
+            std::vector<float> opacity_host(n_slack, -std::numeric_limits<float>::infinity());
+            std::vector<float> rotation_host(n_slack * 4, 0.0f);
+            for (std::size_t i = 0; i < n_slack; ++i) {
+                rotation_host[i * 4 + 0] = 1.0f; // w
+            }
+            void* opacity_dst = static_cast<char*>(block->device_ptr) + grown_layout.offsets[Opacity] +
+                                old_capacity * kFloatBytes;
+            void* rotation_dst = static_cast<char*>(block->device_ptr) + grown_layout.offsets[Rotation] +
+                                 old_capacity * 4 * kFloatBytes;
+            if (const auto err = cudaMemcpy(opacity_dst,
+                                            opacity_host.data(),
+                                            opacity_host.size() * kFloatBytes,
+                                            cudaMemcpyHostToDevice);
+                err != cudaSuccess) {
+                return std::unexpected(std::format(
+                    "SplatExportableStorage::grow: slack opacity init failed: {}",
+                    cudaGetErrorString(err)));
+            }
+            if (const auto err = cudaMemcpy(rotation_dst,
+                                            rotation_host.data(),
+                                            rotation_host.size() * kFloatBytes,
+                                            cudaMemcpyHostToDevice);
+                err != cudaSuccess) {
+                return std::unexpected(std::format(
+                    "SplatExportableStorage::grow: slack rotation init failed: {}",
+                    cudaGetErrorString(err)));
+            }
         }
 
         if (const auto err = cudaDeviceSynchronize(); err != cudaSuccess) {
@@ -342,17 +411,31 @@ namespace lfs::core {
                     capacity_));
             }
 
-            const auto copy_param =
+            // ISS-025: same-block rebind (post-grow, pre-grow Vulkan drop) only
+            // installs views at current region offsets. grow() already relocated
+            // live rows; copying from stale pre-grow views destroys them.
+            // Cross-allocator migrations (cuda.direct → exportable) still copy.
+            const ExportableBlock& block_ref = *block;
+            const auto install_param =
                 [&](const Tensor& source, const TensorShape& shape, size_t cap,
                     std::string_view name) -> Tensor {
-                Tensor source_cuda =
-                    source.device() == Device::CUDA ? source : source.cuda();
-                if (!source_cuda.is_contiguous()) {
-                    source_cuda = source_cuda.contiguous();
+                const bool aliases = tensor_aliases_exportable_block(source, block_ref);
+                Tensor source_cuda;
+                DataType dtype = DataType::Float32;
+                if (source.is_valid()) {
+                    dtype = source.dtype();
+                    if (!aliases) {
+                        source_cuda =
+                            source.device() == Device::CUDA ? source : source.cuda();
+                        if (!source_cuda.is_contiguous()) {
+                            source_cuda = source_cuda.contiguous();
+                        }
+                        dtype = source_cuda.dtype();
+                    }
                 }
-                Tensor dst = allocator(shape, cap, source_cuda.dtype(), name);
+                Tensor dst = allocator(shape, cap, dtype, name);
                 dst.set_name(std::string{name});
-                if (source_cuda.numel() > 0) {
+                if (!aliases && source_cuda.is_valid() && source_cuda.numel() > 0) {
                     dst.copy_from(source_cuda);
                 }
                 return dst;
@@ -364,16 +447,19 @@ namespace lfs::core {
             auto frozen_ranges = model.frozen_ranges();
             Tensor deleted = model.has_deleted_mask() ? model.deleted() : Tensor{};
             Tensor densification_info = model._densification_info;
+            // Preserve layout generation across the SplatData rebuild so
+            // ensure_param_capacity's layout_changed signal stays monotonic.
+            const std::uint64_t layout_gen = model.param_layout_generation();
 
-            Tensor means =
-                copy_param(model.means_raw(), model.means_raw().shape(), capacity_, "SplatData.means");
-            Tensor sh0 =
-                copy_param(model.sh0_raw(), model.sh0_raw().shape(), capacity_, "SplatData.sh0");
-            Tensor scaling = copy_param(
+            Tensor means = install_param(
+                model.means_raw(), model.means_raw().shape(), capacity_, "SplatData.means");
+            Tensor sh0 = install_param(
+                model.sh0_raw(), model.sh0_raw().shape(), capacity_, "SplatData.sh0");
+            Tensor scaling = install_param(
                 model.scaling_raw(), model.scaling_raw().shape(), capacity_, "SplatData.scaling");
-            Tensor rotation = copy_param(
+            Tensor rotation = install_param(
                 model.rotation_raw(), model.rotation_raw().shape(), capacity_, "SplatData.rotation");
-            Tensor opacity = copy_param(
+            Tensor opacity = install_param(
                 model.opacity_raw(), model.opacity_raw().shape(), capacity_, "SplatData.opacity");
 
             Tensor shN;
@@ -381,7 +467,7 @@ namespace lfs::core {
                 const auto layout_rest =
                     static_cast<std::uint32_t>(model.max_sh_coeffs_rest());
                 const size_t shN_cap = sh_swizzled_float_count(capacity_, layout_rest);
-                shN = copy_param(
+                shN = install_param(
                     model.shN_raw(), model.shN_raw().shape(), shN_cap, "SplatData.shN");
             }
 
@@ -414,6 +500,11 @@ namespace lfs::core {
             // active std::function would destroy the running frame. Callers
             // reinstall after rebind returns (TrainerManager, tests).
             model = std::move(rebound);
+            // Restore + bump generation so densify re-fetch discipline sees the
+            // layout change (ISS-025 post-grow re-fetch signal).
+            while (model.param_layout_generation() <= layout_gen) {
+                model.note_param_layout_changed();
+            }
         } catch (const std::exception& e) {
             return std::unexpected(std::format(
                 "SplatExportableStorage::rebindSplatData failed: {}", e.what()));

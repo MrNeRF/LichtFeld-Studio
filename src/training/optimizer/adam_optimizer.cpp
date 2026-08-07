@@ -1610,7 +1610,21 @@ namespace lfs::training {
         }
         // Grow/rebind the shared exportable block once before any densify
         // mutation. Failure must leave row counts untouched (ISS-023 addendum 2).
-        return splat_data_.ensure_param_capacity(new_size);
+        // layout_changed is informational for densify callers that re-fetch;
+        // preflight itself only needs the capacity outcome.
+        bool layout_changed = false;
+        const bool ok = splat_data_.ensure_param_capacity(new_size, &layout_changed);
+#ifndef NDEBUG
+        if (ok && layout_changed) {
+            // Debug discipline: after a grow, means must be re-fetched via get_param.
+            auto& means_after = get_param(ParamType::Means);
+            LFS_ASSERT_MSG(means_after.is_valid() && means_after.capacity() >= new_size,
+                           "preflight_grow_capacity: layout changed but means not ready");
+        }
+#else
+        (void)layout_changed;
+#endif
+        return ok;
     }
 
     void AdamOptimizer::add_new_params(ParamType type, const lfs::core::Tensor& new_values, const bool validate) {
@@ -1637,12 +1651,13 @@ namespace lfs::training {
 
         const size_t old_size = param.shape()[0];
         const size_t new_size = old_size + n_new;
+        bool layout_changed = false;
         if (param.capacity() < new_size && param.is_external_storage()) {
             // Phase 5.1: grow exportable block (and rebind) instead of cat, which
             // would orphan the Vulkan zero-copy mapping. Prefer preflight_grow_capacity
             // at densify entry so this path is a last-resort safety net that still
             // throws BEFORE mutating this param (no partial append on failure).
-            if (!splat_data_.ensure_param_capacity(new_size)) {
+            if (!splat_data_.ensure_param_capacity(new_size, &layout_changed)) {
                 throw std::runtime_error(std::format(
                     "add_new_params: external storage capacity {} < needed {} and "
                     "capacity-ensure failed (exportable grow/rebind)",
@@ -1650,8 +1665,18 @@ namespace lfs::training {
                     new_size));
             }
         }
-        // Re-fetch after possible rebind.
+        // Re-fetch after possible rebind. ISS-025: in-flight Tensor& `param` is
+        // dangling if layout_changed; never use it past this point.
         auto& param_ref = get_param(type);
+#ifndef NDEBUG
+        if (layout_changed) {
+            // Generation advanced: any pre-ensure Tensor& / data_ptr is stale.
+            LFS_ASSERT_MSG(param_ref.is_valid() && param_ref.capacity() >= new_size,
+                           "add_new_params: layout changed but re-fetched param is not ready");
+        }
+#else
+        (void)layout_changed;
+#endif
         if (param_ref.capacity() >= new_size) {
             param_ref.append_zeros(n_new);
             auto appended = param_ref.slice(0, old_size, new_size);

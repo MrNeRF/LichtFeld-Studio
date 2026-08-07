@@ -223,8 +223,10 @@ namespace lfs::vis {
         // growExportableDeviceBlock() unmaps + cuMemRelease + closes the old
         // export fd. Vulkan's imported VkDeviceMemory must be destroyed BEFORE
         // that happens. Drop all VulkanExternalTensorStorage owners by rebinding
-        // to CUDA-only views that keep only ExportableBlock. Trainer may also
-        // hold the old interop allocator (shared parent) — clear it too.
+        // to CUDA-only views of the SAME ExportableBlock (not a separate pool —
+        // make_allocator hands out base+offset views into the packed SoA). The
+        // rebind is views-only when source already aliases the block (ISS-025).
+        // Trainer may also hold the old interop allocator — clear it too.
         //
         // Grow must run when the GPU is not reading the block (densify is on the
         // training thread between steps; the next viewer frame re-imports).
@@ -265,6 +267,9 @@ namespace lfs::vis {
             return false;
         }
 
+        // Post-grow rebind: grow() already relocated every region to the new
+        // offsets. rebindSplatData installs views at those offsets and does NOT
+        // copy_from the stale pre-grow tensors (ISS-025 Analyst B).
         lfs::core::SplatTensorAllocator alloc;
         VulkanContext* vk_ctx = nullptr;
         if (viewer_ && viewer_->getWindowManager()) {

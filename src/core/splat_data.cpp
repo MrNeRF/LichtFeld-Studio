@@ -593,6 +593,7 @@ namespace lfs::core {
           _deleted_mask_version(other._deleted_mask_version.load(std::memory_order_relaxed)),
           _tensor_allocator(std::move(other._tensor_allocator)),
           _capacity_ensure(std::move(other._capacity_ensure)),
+          _param_layout_generation(other._param_layout_generation),
           lod_tree(std::move(other.lod_tree)),
           _frozen_ranges(std::move(other._frozen_ranges)) {
         // Reset the moved-from object
@@ -601,6 +602,7 @@ namespace lfs::core {
         other._scene_scale = 0.0f;
         other._deleted_count.store(0, std::memory_order_relaxed);
         other._deleted_mask_version.store(0, std::memory_order_relaxed);
+        other._param_layout_generation = 0;
         other._frozen_ranges.clear();
     }
 
@@ -629,9 +631,11 @@ namespace lfs::core {
                                         std::memory_order_relaxed);
             _tensor_allocator = std::move(other._tensor_allocator);
             _capacity_ensure = std::move(other._capacity_ensure);
+            _param_layout_generation = other._param_layout_generation;
             _frozen_ranges = std::move(other._frozen_ranges);
             other._deleted_count.store(0, std::memory_order_relaxed);
             other._deleted_mask_version.store(0, std::memory_order_relaxed);
+            other._param_layout_generation = 0;
             other._frozen_ranges.clear();
         }
         return *this;

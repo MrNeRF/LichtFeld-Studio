@@ -386,14 +386,35 @@ namespace lfs::core {
         [[nodiscard]] CapacityEnsureFn release_capacity_ensure() {
             return std::move(_capacity_ensure);
         }
-        [[nodiscard]] bool ensure_param_capacity(std::size_t needed_rows) {
+        // Bumped by rebindSplatData / exportable grow so densify code that holds
+        // Tensor& locals across ensure_param_capacity can detect layout changes
+        // (ISS-025 hardening: in-flight refs are invalid after a grow).
+        [[nodiscard]] std::uint64_t param_layout_generation() const noexcept {
+            return _param_layout_generation;
+        }
+        void note_param_layout_changed() noexcept {
+            ++_param_layout_generation;
+        }
+        // needed_rows growth hook. When layout_changed is non-null, sets it true
+        // iff the hook rebased parameter tensors (generation advanced). Callers
+        // that held Tensor& across the call MUST re-fetch via get_param / means_raw.
+        [[nodiscard]] bool ensure_param_capacity(std::size_t needed_rows,
+                                                 bool* layout_changed = nullptr) {
+            if (layout_changed) {
+                *layout_changed = false;
+            }
             if (means_raw().is_valid() && means_raw().capacity() >= needed_rows) {
                 return true;
             }
             if (!_capacity_ensure) {
                 return false;
             }
-            return _capacity_ensure(needed_rows);
+            const std::uint64_t gen0 = _param_layout_generation;
+            const bool ok = _capacity_ensure(needed_rows);
+            if (layout_changed) {
+                *layout_changed = (_param_layout_generation != gen0);
+            }
+            return ok;
         }
 
     public:
@@ -433,6 +454,8 @@ namespace lfs::core {
         // Backing allocator for parameter tensors (see set_tensor_allocator).
         SplatTensorAllocator _tensor_allocator;
         CapacityEnsureFn _capacity_ensure;
+        // Monotonic; advanced when exportable rebind rewrites param tensor VAs.
+        std::uint64_t _param_layout_generation = 0;
         std::vector<FrozenRange> _frozen_ranges;
 
         // Allow free functions in splat_data_transform.cpp to access private members

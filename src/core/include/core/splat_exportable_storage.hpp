@@ -79,10 +79,14 @@ namespace lfs::core {
         [[nodiscard]] LFS_CORE_API SplatTensorAllocator make_allocator() const;
 
         // Rebuild SplatData parameter tensors as views into this storage at the
-        // current capacity, copying logical rows. Use after grow() so data
-        // pointers and capacity match the new layout. When `allocator` is empty,
-        // uses make_allocator(); pass the Vulkan interop allocator for GUI
-        // zero-copy rebind after growth.
+        // current capacity. When a source tensor already aliases this block
+        // (same ExportableBlock VA range — including CUDA-only and Vulkan-interop
+        // views), installs views WITHOUT copying. grow() has already relocated
+        // every region to the new offsets; a copy_from of the stale pre-grow
+        // views would overwrite correct data (ISS-025). Genuine cross-allocator
+        // migrations (cuda.direct / other blocks → this storage) still copy.
+        // When `allocator` is empty, uses make_allocator(); pass the Vulkan
+        // interop allocator for GUI zero-copy rebind after growth.
         [[nodiscard]] LFS_CORE_API std::expected<void, std::string>
         rebindSplatData(SplatData& model, SplatTensorAllocator allocator = {}) const;
 
