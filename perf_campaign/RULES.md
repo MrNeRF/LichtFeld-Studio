@@ -85,3 +85,8 @@ Targeted tests + bench are NOT a sufficient gate. Every implementation order's f
 MUST include the full lichtfeld_tests run (minus only the exclusions already documented in
 ISSUES.md) and report its pass/fail delta vs the branch point. A "healthy loss curve" does
 not prove gradients correct — the numerical-gradient suites exist for that.
+
+## Red-provenance clause (added after adversarial review MJ-14)
+A failing test may be classified "pre-existing" ONLY with proof: `git log` showing the
+test predates your branch point, or a run at the branch-point commit showing it red.
+Otherwise it is YOUR red. No exceptions.
