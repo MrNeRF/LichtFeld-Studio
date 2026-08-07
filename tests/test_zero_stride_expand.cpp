@@ -101,9 +101,9 @@ TEST(ZeroStrideExpand, ExpandIsViewWithZeroStrideNoAlloc) {
     ASSERT_EQ(exp.strides().size(), 2u);
     EXPECT_EQ(exp.strides()[0], 0u) << "broadcast dim stride must be 0";
     EXPECT_EQ(exp.strides()[1], 1u);
-    // Shares storage with base
-    EXPECT_EQ(static_cast<const char*>(exp.data_ptr()),
-              static_cast<const char*>(base.data_ptr()));
+    // Shares allocation with base. Use storage_ptr() — data_ptr()/ptr() are
+    // flat-buffer escapes that materialize zero-stride views (WO-W.1 raw-ptr fix).
+    EXPECT_EQ(exp.storage_ptr(), base.storage_ptr());
 }
 
 TEST(ZeroStrideExpand, BroadcastToIsViewWithZeroStride) {

@@ -1003,14 +1003,103 @@ namespace lfs::core {
         return result;
     }
 
+    void Tensor::materialize_zero_stride_for_raw_ptr_escape() {
+        // Only true expand/broadcast views need materialization here.
+        // Contiguous tensors with a zero-size dim (e.g. shN [N,0,3] at SH degree
+        // 0) get row-major leading stride 0 (product of a later 0-size dim) —
+        // those are NOT expand views and numel()==0 already. Skip them.
+        if (numel() == 0 || is_contiguous_ || !has_zero_stride()) {
+            return;
+        }
+
+        // Produce a dense owned tensor, then rebind *this. Do not assign:
+        // expand views are is_view_=true, so operator= would copy_from into the
+        // view and re-enter data_ptr() (stack overflow).
+        Tensor dense = contiguous();
+        LFS_ASSERT_MSG(dense.is_valid() && dense.is_contiguous() && !dense.has_zero_stride(),
+                       std::format(
+                           "zero-stride raw-ptr materialization failed: valid={} contig={} "
+                           "zero_stride={} shape={}",
+                           dense.is_valid(), dense.is_contiguous(), dense.has_zero_stride(),
+                           shape_.str()));
+
+        data_ = dense.data_;
+        data_owner_ = std::move(dense.data_owner_);
+        shape_ = dense.shape_;
+        strides_ = dense.strides_;
+        storage_offset_ = dense.storage_offset_;
+        is_contiguous_ = dense.is_contiguous_;
+        device_ = dense.device_;
+        dtype_ = dense.dtype_;
+        is_view_ = dense.is_view_;
+        storage_meta_ = dense.storage_meta_;
+#ifndef NDEBUG
+        view_generation_snapshot_ = dense.view_generation_snapshot_;
+#endif
+        if (dense.state_) {
+            state_ = dense.state_;
+        }
+        dense.data_ = nullptr;
+        dense.data_owner_.reset();
+        dense.storage_meta_.reset();
+        dense.state_.reset();
+        dense.is_view_ = false;
+    }
+
+    void Tensor::assert_device_storage_matches_tag() const {
+        // Empty / null storage: nothing to validate.
+        if (data_ == nullptr || numel() == 0) {
+            return;
+        }
+
+        cudaPointerAttributes attrs{};
+        const cudaError_t err = cudaPointerGetAttributes(&attrs, data_);
+        if (err != cudaSuccess) {
+            // Not a CUDA-visible pointer (ordinary host malloc, etc.).
+            // Clear sticky error; CPU tensors may legitimately live here.
+            (void)cudaGetLastError();
+            if (device_ == Device::CUDA) {
+                throw TensorError(
+                    "device-tag mismatch: CUDA-tagged tensor storage is not CUDA-addressable "
+                    "(cudaPointerGetAttributes failed) — refusing raw-pointer escape");
+            }
+            return;
+        }
+
+        // CUDA 11+: attrs.type distinguishes device / host / managed / unregistered.
+        const bool is_device_mem =
+            attrs.type == cudaMemoryTypeDevice || attrs.type == cudaMemoryTypeManaged;
+        // Pinned host (cudaHostAlloc) and ordinary host registered with CUDA.
+        const bool is_host_mem =
+            attrs.type == cudaMemoryTypeHost || attrs.type == cudaMemoryTypeUnregistered;
+
+        if (device_ == Device::CPU && is_device_mem) {
+            throw TensorError(
+                "device-tag mismatch: CPU-tagged tensor carries device (or managed) storage "
+                "— refusing raw-pointer escape (would break cudaMemcpy HostToDevice)");
+        }
+        if (device_ == Device::CUDA && is_host_mem &&
+            attrs.type == cudaMemoryTypeUnregistered) {
+            // Unregistered host pointer tagged CUDA is almost always a bug.
+            // Pinned host (cudaMemoryTypeHost) is allowed only for rare staging
+            // views; still reject pure pageable host tagged as CUDA.
+            throw TensorError(
+                "device-tag mismatch: CUDA-tagged tensor carries unregistered host storage "
+                "— refusing raw-pointer escape");
+        }
+        (void)is_host_mem;
+    }
+
     // ============= Contiguous (materializes non-contiguous tensors) =============
     Tensor Tensor::contiguous() const {
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid(),
                        "contiguous requires a valid tensor");
 
-        // Already contiguous? Just return shallow copy
-        if (is_contiguous_) {
+        // Already contiguous dense? Just return shallow copy.
+        // Zero-stride expand views must NEVER take this path even if a stale
+        // is_contiguous_ flag is set: logical numel can exceed physical storage.
+        if (is_contiguous_ && !has_zero_stride()) {
             return *this;
         }
 

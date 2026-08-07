@@ -716,3 +716,52 @@ vs WO-G5 medians (bonsai 7.23/3.148, bicycle 21.12/2.817): dual-workload **uncha
 - **Full suite:** only pre-existing ISS-016 VideoFrameExtractor×3, ISS-017 TensorReserve, ISS-019 Python×3 reds (not quant).
 - **tensor_hardening:** 89/89 PASS.
 - **Decision:** flag **default ON**.
+
+## WO-W.1 regression fix — raw-ptr escape on zero-stride expand (checkpoint resume)
+
+- **Branch:** `lfs-elite` (no checkout)
+- **Symptom:** `CheckpointStrategies/CheckpointResumeTest.TrainSaveLoadResume/{tiny,nightly}_mcmc_0` FAIL since W.1 merge (`a2bffd4f`) with `cudaMemcpy failed for scaling: invalid argument` (~119ms repro).
+- **Root cause (two legs):**
+  1. `expand` returns stride-0 views; `SplatData` init does `cudaMemcpy(..., scaling_cpu.ptr(), numel()*4, H2D)` — flat read of N×3 from a physical-N buffer.
+  2. W.1 op firewall does not cover raw-pointer escapes (`ptr()` / `data_ptr()`). Also: `has_zero_stride` falsely fired on contiguous empty tensors `[N,0,3]` (SH degree 0) because row-major leading stride is 0 when a later dim is size 0.
+
+### TDD fail → pass
+
+**FAIL (pre-fix):**
+```
+ExpandedTensorOps.RawPtrOnExpandViewMaterializesDense — flat read r=0 c=1 got 2 want 1
+CheckpointResumeTest.../tiny_mcmc_0 — cudaMemcpy failed for scaling: invalid argument
+  src (CPU): ptr=0x7f861573e800 numel=162825
+  dst (CUDA): ptr=0x7f8615a00000 numel=162825
+```
+
+**PASS (post-fix):**
+```
+ExpandedTensorOps.{RawPtrOnExpandViewMaterializesDense,DataPtrOnExpandViewMaterializesDense,
+  SplatDataScalingExpandPtrMaterializes,EmptyZeroDimTensorPtrIsSafe,CpuTaggedDeviceStorageRejectedOnPtr} all OK
+ZeroStrideExpand.* 15/15 OK
+CheckpointResumeTest.TrainSaveLoadResume/{tiny,nightly}_mcmc_0 both OK
+tensor_hardening 89/89 PASS
+```
+
+### Fix (boundary justification)
+
+Materialize-on-escape at `ptr()` / `data_ptr()` (not at expand creation — keeps W.1 zero-copy for allowlisted ops):
+- `materialize_zero_stride_for_raw_ptr_escape()` rebinds handle after `contiguous()` (must NOT use `*this = contiguous()` — view assignment deep-copies via `copy_from` → re-enters `data_ptr` → stack overflow).
+- `storage_ptr()` intentionally non-materializing (allocation base / sharing checks only).
+- `has_zero_stride()`: only size>1 with stride 0, and `numel()>0` (excludes empty `[N,0,3]`).
+- `contiguous()`: never early-return when zero-stride.
+- Device-mismatch canary: `assert_device_storage_matches_tag()` rejects CPU-tagged device storage on raw-ptr escape.
+
+### Dual-workload gate (3-run medians)
+
+| workload | steady_ms | B/splat | target | status |
+|---|---:|---:|---|---|
+| bonsai 2k | **3.153** | **304.3** | 3.182 / 304.3 | ✓ |
+| bicycle 7k | **2.741** | **306.8** | 2.733 / 306.8 | ✓ (noise) |
+
+Bonsai runs `20260807T093540Z_run{1,2,3}`; bicycle `20260807T093608Z_run{1,2,3}`.
+
+### Full suite
+
+3311 PASS; pre-existing reds only (ISS-016 VideoFrame×3, ISS-017 TensorReserve, ISS-019 Python, plus unrelated env: NaNInf InfDetection_Large, PipelinedLoader fixtures, SceneValidity migrate, Float16HostReduceFailsLoud). **MCMC resume was FAIL → PASS.**

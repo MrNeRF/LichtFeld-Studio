@@ -582,6 +582,36 @@ namespace lfs::core {
             }
         }
 
+        /// Materialize zero-stride expand/broadcast views before raw-pointer escape.
+        ///
+        /// Boundary choice (WO-W.1 regression, CheckpointResume / SplatData init):
+        /// - Op paths are firewalled via contiguous_read / dense_for_kernel / allowlist.
+        /// - That firewall does NOT cover raw-pointer escapes: callers hand
+        ///   ptr()+numel() or data_ptr()+bytes() to flat memcpy/kernels (e.g.
+        ///   cudaMemcpy HostToDevice of scaling [N,3] from an expand of [N,1]).
+        /// - Materializing at the escape boundary (not at expand creation) keeps
+        ///   W.1's zero-copy expand for allowlisted ops, while making every
+        ///   flat-buffer consumer safe. storage_ptr() stays non-materializing
+        ///   (allocation base for lifetime / sharing checks only).
+        ///
+        /// Implementation note: must NOT use `*this = contiguous()`. Expand views
+        /// set is_view_=true, so operator= takes the view deep-copy path (copy_from),
+        /// which re-enters data_ptr() → infinite recursion. Rebind fields like
+        /// materialize_deferred_slow instead (implemented in tensor.cpp).
+        void materialize_zero_stride_for_raw_ptr_escape();
+        void materialize_zero_stride_for_raw_ptr_escape() const {
+            // has_zero_stride is cheap; avoid a virtual-ish hop when dense.
+            if (has_zero_stride()) [[unlikely]] {
+                const_cast<Tensor*>(this)->materialize_zero_stride_for_raw_ptr_escape();
+            }
+        }
+
+        /// Reject CPU-tagged tensors whose storage is CUDA device memory (and
+        /// the inverse) when escaping via raw pointers. Mismatched tagging
+        /// produces cudaMemcpy "invalid argument" with src/dst in the same
+        /// address region — hard to diagnose without an explicit canary.
+        void assert_device_storage_matches_tag() const;
+
         static Tensor make_deferred_expr_tensor(TensorShape shape,
                                                 Device device,
                                                 DataType dtype,
@@ -1684,6 +1714,8 @@ namespace lfs::core {
         template <typename T>
         const T* ptr() const {
             materialize_if_deferred();
+            // WO-W.1: raw ptr() is a flat-buffer escape — materialize stride-0 views.
+            materialize_zero_stride_for_raw_ptr_escape();
             tensor_contract::require_valid(
                 *this, "ptr<T>", "tensor", LFS_SOURCE_SITE_CURRENT());
             using Value = std::remove_cv_t<T>;
@@ -1704,31 +1736,40 @@ namespace lfs::core {
             assert_view_not_stale();
             LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,
                            "ptr<T>() found null storage for a non-empty tensor");
+            assert_device_storage_matches_tag();
             const char* data_ptr = static_cast<const char*>(data_) + storage_offset_ * dtype_size(dtype_);
             return static_cast<const T*>(static_cast<const void*>(data_ptr));
         }
 
         void* data_ptr() {
             materialize_if_deferred();
+            // WO-W.1: raw data_ptr() is a flat-buffer escape — materialize stride-0 views.
+            materialize_zero_stride_for_raw_ptr_escape();
             preserve_lazy_snapshots_before_write();
             tensor_contract::require_valid(
                 *this, "data_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
             assert_view_not_stale();
             LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,
                            "data_ptr() found null storage for a non-empty tensor");
+            assert_device_storage_matches_tag();
             return static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
         }
         const void* data_ptr() const {
             materialize_if_deferred();
+            // WO-W.1: raw data_ptr() is a flat-buffer escape — materialize stride-0 views.
+            materialize_zero_stride_for_raw_ptr_escape();
             tensor_contract::require_valid(
                 *this, "data_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
             assert_view_not_stale();
             LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,
                            "data_ptr() found null storage for a non-empty tensor");
+            assert_device_storage_matches_tag();
             return static_cast<const char*>(data_) + storage_offset_ * dtype_size(dtype_);
         }
 
-        // Base of allocation (for memory management only)
+        // Base of allocation (for memory management / storage-identity only).
+        // Intentionally does NOT materialize zero-stride views: callers that need
+        // a dense flat buffer of numel() elements must use ptr()/data_ptr().
         void* storage_ptr() {
             materialize_if_deferred();
             preserve_lazy_snapshots_before_write();
@@ -1888,17 +1929,24 @@ namespace lfs::core {
         }
         size_t storage_offset() const { return storage_offset_; }
 
-        /// True if any dimension has stride 0 (expand / broadcast_to views).
+        /// True if any dimension with size > 1 has stride 0 (expand / broadcast_to).
         /// Such views share storage cells across logical indices; in-place mutation
         /// is rejected and non-allowlisted kernels must materialize first (WO-W.1).
-        /// Contiguous size-1 dims use non-zero row-major strides, so an explicit 0
-        /// only appears on expand/broadcast views (and rare as_strided constructions).
+        ///
+        /// Note: contiguous tensors with a *zero-size* dim get a row-major leading
+        /// stride of 0 (product of later dims includes 0), e.g. shN [N,0,3] →
+        /// strides [0,3,1]. That is NOT an expand view — only size>1 with stride 0
+        /// is a true broadcast. Size-1 dims with stride 0 are also expand-like but
+        /// do not change flat numel layout on their own.
         bool has_zero_stride() const {
-            if (!is_valid()) {
+            if (!is_valid() || numel() == 0) {
+                // Empty tensors (e.g. [N,0,3]) are never expand/broadcast views.
+                // Their row-major strides may still contain 0 from a zero-size dim.
                 return false;
             }
-            for (size_t s : strides_) {
-                if (s == 0) {
+            const size_t rank = strides_.size();
+            for (size_t i = 0; i < rank; ++i) {
+                if (strides_[i] == 0 && shape_[i] > 1) {
                     return true;
                 }
             }
