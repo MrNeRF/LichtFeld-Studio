@@ -627,23 +627,34 @@ namespace lfs::training {
             return;
         }
 
+        // BL-3: unfused path (GUT/gsplat) must not see q16 shN as float — dequant
+        // in-place so param_size matches float-layout state.size before the guard.
+        // Re-bind param after dequant (storage is replaced).
+        if (type == ParamType::ShN && splat_data_.shN_value_quantized()) {
+            LOG_ERROR("BL-3: unfused Adam step with q16 shN — dequantising to fp32 "
+                      "(gsplat/GUT path cannot step value codes; prefer FastGS or "
+                      "LFS_SH_VALUE_QUANT=0)");
+            (void)sh_value::ensure_shN_fp32_for_mutation(splat_data_);
+        }
+        auto& param_live = get_param(type);
+
         const double bias_correction1_rcp = 1.0 / (1.0 - std::pow(config_.beta1, state.step_count));
         const double bias_correction2_sqrt_rcp = 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, state.step_count));
         const float param_lr = static_cast<float>(get_param_lr(type));
 
-        const size_t param_size = param.shape()[0];
+        const size_t param_size = param_live.shape()[0];
         if (param_size != state.size) {
             throw std::runtime_error("Optimizer state desync: " + name);
         }
 
         cudaStream_t execution_stream = state.grad.stream();
         if (execution_stream == nullptr) {
-            execution_stream = param.stream();
+            execution_stream = param_live.stream();
         }
         if (execution_stream == nullptr) {
             execution_stream = state.exp_avg.stream();
         }
-        lfs::core::waitForCUDAStream(execution_stream, param.stream());
+        lfs::core::waitForCUDAStream(execution_stream, param_live.stream());
         lfs::core::waitForCUDAStream(execution_stream, state.exp_avg.stream());
         if (state.exp_avg_sq.is_valid())
             lfs::core::waitForCUDAStream(execution_stream, state.exp_avg_sq.stream());
@@ -667,14 +678,15 @@ namespace lfs::training {
             if (type == ParamType::ShN) {
                 throw std::runtime_error(
                     "AdamOptimizer::step_param: joint-codec shN requires fused FastGS "
-                    "backward (non-fused joint swizzle step not implemented)");
+                    "backward (non-fused joint swizzle step not implemented). "
+                    "GUT/gsplat sessions auto-disable joint Adam — see Trainer::initialize");
             }
             if (!state.joint_bounds.is_valid()) {
                 throw std::runtime_error("AdamOptimizer::step_param: joint state missing bounds");
             }
-            const size_t feature_dim = param.numel() / param_size;
+            const size_t feature_dim = param_live.numel() / param_size;
             fast_lfs::optimizer::adam_step_joint_contiguous_raw(
-                param.ptr<float>(),
+                param_live.ptr<float>(),
                 state.exp_avg.ptr<uint8_t>(),
                 state.joint_bounds.ptr<float>(),
                 state.grad.ptr<float>(),
@@ -694,7 +706,7 @@ namespace lfs::training {
                 static_cast<float>(bias_correction1_rcp),
                 static_cast<float>(bias_correction2_sqrt_rcp),
                 execution_stream);
-            param.set_stream(execution_stream);
+            param_live.set_stream(execution_stream);
             state.exp_avg.set_stream(execution_stream);
             state.joint_bounds.set_stream(execution_stream);
             state.grad.set_stream(execution_stream);
@@ -705,7 +717,7 @@ namespace lfs::training {
             const auto layout_rest = static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
             const int slots = static_cast<int>(lfs::core::sh_float4_slots_for_rest(layout_rest));
             fast_lfs::optimizer::adam_step_quantized_swizzled_raw(
-                param.ptr<float>(),
+                param_live.ptr<float>(),
                 state.exp_avg.ptr<uint8_t>(),
                 state.exp_avg_scale.ptr<float>(),
                 state.exp_avg_sq.ptr<uint8_t>(),
@@ -726,7 +738,7 @@ namespace lfs::training {
                 bias_correction1_rcp,
                 bias_correction2_sqrt_rcp,
                 execution_stream);
-            param.set_stream(execution_stream);
+            param_live.set_stream(execution_stream);
             state.exp_avg.set_stream(execution_stream);
             state.exp_avg_sq.set_stream(execution_stream);
             state.exp_avg_scale.set_stream(execution_stream);
@@ -735,9 +747,9 @@ namespace lfs::training {
             return;
         }
 
-        const size_t feature_dim = param.numel() / param_size;
+        const size_t feature_dim = param_live.numel() / param_size;
         fast_lfs::optimizer::adam_step_quantized_raw(
-            param.ptr<float>(),
+            param_live.ptr<float>(),
             state.exp_avg.ptr<uint8_t>(),
             state.exp_avg_scale.ptr<float>(),
             state.exp_avg_sq.ptr<uint8_t>(),
@@ -758,7 +770,7 @@ namespace lfs::training {
             bias_correction1_rcp,
             bias_correction2_sqrt_rcp,
             execution_stream);
-        param.set_stream(execution_stream);
+        param_live.set_stream(execution_stream);
         state.exp_avg.set_stream(execution_stream);
         state.exp_avg_sq.set_stream(execution_stream);
         state.exp_avg_scale.set_stream(execution_stream);
@@ -1005,10 +1017,19 @@ namespace lfs::training {
     }
 
     void AdamOptimizer::commit_fastgs_fused_adam(const int iteration) {
+        // MN-1: only bump step_count for params that prepare_fastgs_fused_adam
+        // actually enabled this iteration. During SH warmup prepare disables shN
+        // but the old commit still advanced its counter → first real shN update
+        // ran with t≈1001 bias correction instead of t=1.
+        const auto active_rest = splat_data_.active_sh_coeffs_rest();
         for (const auto type : all_param_types()) {
             auto& param = get_param(type);
             if (!param.is_valid() || param.numel() == 0)
                 continue;
+            if (type == ParamType::ShN &&
+                (iteration <= SH_WARMUP_ITERATIONS || active_rest == 0)) {
+                continue;
+            }
             const auto name = param_name(type);
             if (!states_.contains(name)) {
                 continue;
