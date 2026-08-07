@@ -1081,14 +1081,14 @@ namespace lfs::vis {
         void savePreferences(nlohmann::json preferences) {
             if (preferencesDisabled())
                 return;
-            const auto path = getThemePreferencesPath();
-            if (!path)
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths) {
+                LOG_WARN("Unable to resolve user settings path: {}; theme preferences are disabled", paths.error());
                 return;
-            std::filesystem::create_directories(path->parent_path());
+            }
             preferences["schema_version"] = 1;
-            std::ofstream file(*path);
-            if (file)
-                file << preferences.dump(2);
+            if (const auto result = paths->writePreferencesAtomically(preferences.dump(2) + '\n'); !result)
+                LOG_WARN("Unable to save theme preferences: {}", result.error());
         }
 
     } // namespace

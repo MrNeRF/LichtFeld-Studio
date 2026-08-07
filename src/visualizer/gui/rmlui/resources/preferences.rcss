@@ -75,40 +75,6 @@ body.floating-panel {
     margin-left: auto;
 }
 
-.legacy-empty,
-.legacy-entry {
-    display: block;
-    margin-top: 8dp;
-    padding: 8dp;
-    border-width: 1dp;
-    font-size: 11dp;
-}
-
-.legacy-entry-title,
-.legacy-entry-path,
-.legacy-entry-destination {
-    display: block;
-}
-
-.legacy-entry-title {
-    font-weight: bold;
-    margin-bottom: 3dp;
-}
-
-.legacy-entry-path,
-.legacy-entry-destination {
-    opacity: 0.8;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.legacy-actions {
-    display: flex;
-    gap: 6dp;
-    margin-top: 10dp;
-}
-
 .preferences-actions {
     flex: 0 0 auto;
     display: flex;

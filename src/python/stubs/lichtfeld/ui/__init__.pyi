@@ -375,19 +375,6 @@ def reset_layout() -> str:
     Reset the saved UI layout and apply the default dock arrangement immediately.
     """
 
-def get_legacy_gui_settings() -> list:
-    """Inspect recognized legacy GUI settings without modifying them."""
-
-def migrate_legacy_gui_settings() -> str:
-    """
-    Migrate recognized legacy GUI settings without overwriting current settings.
-    """
-
-def archive_legacy_gui_settings() -> str:
-    """
-    Archive recognized legacy GUI settings before removing their original files.
-    """
-
 def is_panel_enabled(panel_id: str) -> bool:
     """Check if a panel is enabled"""
 

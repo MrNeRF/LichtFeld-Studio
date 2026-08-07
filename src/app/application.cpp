@@ -635,17 +635,6 @@ namespace lfs::app {
                 reset_file(reset_preferences, "preferences", [&paths] { return paths->resetPreferences(); });
                 reset_file(reset_layout, "layout", [&paths] { return paths->resetLayout(); });
 
-                if (!params->safe_mode && !reset_layout && paths->allowsAutomaticLegacyMigration()) {
-                    const auto migration = paths->migrateLegacyGuiSettings();
-                    if (!migration) {
-                        LOG_WARN("Legacy GUI settings migration skipped: {}", migration.error());
-                    } else if (!migration->empty()) {
-                        LOG_INFO("Processed {} legacy GUI setting(s); migration record saved under {}",
-                                 migration->size(), lfs::core::path_to_utf8(paths->migrationDir()));
-                    }
-                } else if (reset_layout) {
-                    LOG_INFO("Legacy layout migration skipped because a layout reset was requested");
-                }
             } else {
                 LOG_WARN("Unable to resolve user settings path: {}", paths.error());
             }

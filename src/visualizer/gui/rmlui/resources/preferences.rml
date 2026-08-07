@@ -10,7 +10,6 @@
       <button class="btn preferences-nav-item" data-class-active="show_appearance" data-event-click="show_appearance">@tr:preferences.appearance</button>
       <button class="btn preferences-nav-item" data-class-active="show_input" data-event-click="show_input">@tr:preferences.input</button>
       <button class="btn preferences-nav-item" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
-      <button class="btn preferences-nav-item" data-class-active="show_legacy" data-event-click="show_legacy">@tr:preferences.legacy</button>
     </div>
 
     <div class="preferences-content">
@@ -94,26 +93,6 @@
         </div>
       </div>
 
-      <div class="preferences-section" data-if="show_legacy">
-        <div class="section-header text-accent" data-class-is-expanded="legacy_expanded" data-event-click="toggle_section('legacy')">
-          <span class="section-arrow text-accent" data-class-is-expanded="legacy_expanded">&#x25B6;</span>
-          <span class="text-accent">@tr:preferences.legacy</span>
-        </div>
-        <div class="section-content" data-if="legacy_expanded">
-          <span class="preferences-description">@tr:preferences.legacy_description</span>
-          <div class="legacy-empty" data-if="legacy_entries.size == 0">@tr:preferences.legacy_empty</div>
-          <div class="legacy-entry" data-for="entry : legacy_entries">
-            <span class="legacy-entry-title">{{ entry.kind }} · {{ entry.status }}</span>
-            <span class="legacy-entry-path">{{ entry.source }}</span>
-            <span class="legacy-entry-destination">{{ entry.destination }}</span>
-          </div>
-          <div class="legacy-actions">
-            <button class="btn" data-event-click="refresh_legacy">@tr:preferences.refresh_legacy</button>
-            <button class="btn" data-event-click="migrate_legacy" data-if="legacy_migratable">@tr:preferences.migrate_legacy</button>
-            <button class="btn" data-event-click="archive_legacy" data-if="legacy_archivable">@tr:preferences.archive_legacy</button>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 
