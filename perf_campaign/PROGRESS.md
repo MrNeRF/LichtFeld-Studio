@@ -1115,3 +1115,48 @@ params update; not introduced by this change). All FastGS numerical gradients gr
 
 ### Commit
 **`0f6660cd`** perf(fastgs): warp-level sub-tile culling for blend_backward_cu (WO-WARP-BWD)
+
+## WO-FIX-INTEG — integration surfaces (BL-3/4, MJ-5/6/12/14/15, MN-1/2/4) — 2026-08-07
+
+Builds on WO-FIX-CODEC (`2bf729c7`). Supervisor context: fixcodec worker OOM-killed
+after landing dual-rep; full suite + dual-workload already green on top of that
+commit via warpbwd. This order finishes the lost FIX-CODEC mid-run smoke + the
+integration-surface cluster.
+
+### 0. FIX-CODEC gate (quant-ON MCMC mid-run save/load/resume)
+- **Test:** `DualRepOptimizer.MCMC_QuantOn_MidRunSaveLoadResume`
+- prepare/commit 1→1200 with joint+q16 ON → save → load → resume to 2000
+- Also asserts MN-1: shN `step_count == mid_iter - 1000` (not inflated through warmup)
+- **PASS**
+
+### Findings
+
+| ID | Fix | Evidence |
+|---|---|---|
+| **BL-3** | gsplat `ctx.shN` saves dequant temp; gut Trainer::initialize auto-disables q16+joint (LOG_ERROR); unfused step dequants q16 before size guard | `GsplatRasterizerQuantTest.GutForwardBackwardWithDefaultQuantAndShDegree` PASS; gut smoke green |
+| **BL-4** | improved_gs_plus LAS_densify wraps `ensure_shN_fp32_for_mutation` + commit guard | `DualRepOptimizer.IGSPlus_QuantOnDensifyAndPrune` PASS |
+| **MJ-5** | improved_gs_plus remove(): joint branch via `reset_state_at_indices` (mirror MCMC) | same test |
+| **MJ-6** | ply.cpp: declare `io_buffer` before `FileCloser` | `PlyExportCancel.CancelMidWriteDoesNotCrash` PASS; pre-existing `PythonIOTest.PlySaveCancellationKeepsExistingTarget` still red **before and after** (progress never hits 1.0 on small files — not MJ-6) |
+| **MJ-12** | shared-scratch grow: detach/retire Vulkan import **before** `growExportableDeviceBlock` (arena grow_fn too) | `ExportableStorageTest.GrowAfterImporterDetachKeepsStableVa` PASS |
+| **MJ-14** | Float16HostReduceFailsLoud → Float16HostReduceIsCorrect: contract gained f16→f32→reduce→f16 in `tensor_unified_ops.cpp`; campaign test (2645e679) asserted throw. Provenance: not on master; not pre-existing env red — contract change is correct | PASS |
+| **MJ-15** | SogFormatTest re-run: 8 PASS + 6 SKIP (external fixtures). ISS-018 dispositioned fixed; PROGRESS WO-X "×12 red" was stale | evidence above |
+| **MN-1** | `commit_fastgs_fused_adam` skips ShN step_count bump during warmup / zero active rest | covered by mid-run resume test |
+| **MN-2** | short/missing bounds → LOG_ERROR + throw (no silent zero SH wipe) | `DualRepOptimizer.MN2_ShortBoundsFailsLoud` PASS |
+| **MN-4** | splat_data_mirror uses `shN_canonical` / `shN_set_from_canonical` | compile + suite |
+
+### Dual-workload gate (ref after WO-WARP-BWD: bonsai 2.616/304.3, bicycle 2.650/306.8;
+actual warpbwd PROGRESS B/splat was 307.4 for both)
+
+| workload | med steady_ms | B/splat | allocs/iter | vs ref |
+|---|---:|---:|---:|---|
+| bonsai ×3 | **2.615** | **307.4** | 0.11 | unchanged (ref 2.616 / 307.4 warpbwd) |
+| bicycle 7k ×3 | **2.661** | **307.4** | 0.10 | ~+0.4% vs 2.650 (within run noise 2.654–2.674) |
+
+### Full-suite delta
+Documented env reds only (Python SceneCamera, NaNInf InfDetection_Large, PipelinedLoader
+ledger fixture, PythonIOTest.PlySaveCancellationKeepsExistingTarget pre-existing).
+**No new reds.** Targeted FIX-INTEG suite 26 PASS / 6 SKIP (Sog external).
+
+### Commits
+(see git log; one commit per finding group)
+

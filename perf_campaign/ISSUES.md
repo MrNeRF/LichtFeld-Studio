@@ -118,9 +118,15 @@
 
 ## ISS-018 — SogFormatTest suite mass-red (loader/export path)
 - **Severity:** high (format I/O; related ISS-014 family)
-- **Attribution:** independent of ISS-015 gradient math. Present after WO-G5 fix.
+- **Status:** **FIXED / dispositioned (MJ-15, FIX-INTEG 2026-08-07).** Fix commit
+  `06e8830d` (dequant via `shN_canonical()` on export) is live. Re-run evidence:
+  `SogFormatTest.*` → **8 PASS + 6 SKIP** (skips = missing external fixtures only:
+  LoadSogBundle/Directory, CompareWithOriginalPly, LoadMetaJsonDirectly,
+  CompareWithSplatTransformDecompression, ExportRoundtrip). Synthetic export
+  roundtrip with shN and allocator routing green. PROGRESS WO-X residual "×12 red"
+  was stale docs, not a re-regression.
+- **Attribution:** independent of ISS-015 gradient math.
 - **Repro:** `lichtfeld_tests --gtest_filter='SogFormatTest.*'`
-- **Note:** may share SH/export root with ISS-014 checkpoint/export work.
 
 ## ISS-019 — PythonIntegrationTest visualizer pose/render reds
 - **Severity:** medium (Python API / visualizer)
