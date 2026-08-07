@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "lfs/core/warp_reduce.cuh"
 #include "lfs/training/joint_adam_codec.cuh"
 
 #include <cooperative_groups.h>
@@ -465,6 +466,126 @@ namespace fast_lfs::optimizer::kernels::adam {
         }
         if (scales != nullptr) {
             scales[row_idx] = 0.0f;
+        }
+    }
+
+    // Non-fused joint Adam step for contiguous [n_prims, n_attr] params.
+    // Grid = ceil(n_prims/256), block = 256 so blockIdx.x == bounds block index
+    // (matches fused preprocess_backward / joint_adam::kBlockSizeDevice).
+    // Frozen / crop-damped rows with zero lr skip the Adam update but still
+    // re-encode under the new block bounds (same as fused adam_step_row_joint).
+    template <int BITS>
+    __global__ void adam_step_joint_contiguous_cu(
+        float* param,
+        uint8_t* packed,
+        float* bounds, // float4 per 256-splat block
+        const float* param_grad,
+        const bool* frozen_mask,
+        const int frozen_mask_size,
+        const float frozen_lr_scale,
+        const bool* crop_damping_mask,
+        const int crop_damping_mask_size,
+        const float cropbox_lr_scale,
+        const int n_prims,
+        const int n_attr,
+        const float lr,
+        const float beta1,
+        const float beta2,
+        const float eps,
+        const float bias_correction1_rcp,
+        const float bias_correction2_sqrt_rcp) {
+        using C = lfs::training::joint_adam::DeviceCodec<BITS>;
+        constexpr float kInf = 1e30f;
+        constexpr int kBS = lfs::training::joint_adam::kBlockSizeDevice;
+
+        const int prim = static_cast<int>(blockIdx.x) * kBS + static_cast<int>(threadIdx.x);
+        const bool in_range = prim < n_prims && n_attr > 0;
+
+        float row_lr = lr;
+        bool apply_step = in_range;
+        if (in_range && frozen_mask != nullptr && prim < frozen_mask_size && frozen_mask[prim]) {
+            if (frozen_lr_scale == 0.0f)
+                apply_step = false;
+            else
+                row_lr *= frozen_lr_scale;
+        }
+        if (in_range && crop_damping_mask != nullptr && prim < crop_damping_mask_size &&
+            crop_damping_mask[prim]) {
+            if (cropbox_lr_scale == 0.0f)
+                apply_step = false;
+            else
+                row_lr *= cropbox_lr_scale;
+        }
+
+        const int bidx = static_cast<int>(blockIdx.x);
+        const float4 old_mm = (bounds != nullptr)
+                                  ? *reinterpret_cast<const float4*>(bounds + 4 * bidx)
+                                  : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+        // Means/scale/rot/opacity/sh0 attrs are small (≤4); sh0 is 3.
+        constexpr int kMaxAttr = 16;
+        float us_u[kMaxAttr];
+        float us_s[kMaxAttr];
+        float local_u_min = kInf, local_u_max = -kInf;
+        float local_s_min = kInf, local_s_max = -kInf;
+        const int row = in_range ? min(n_attr, kMaxAttr) : 0;
+        const float step_size = row_lr * bias_correction1_rcp;
+        const float beta1_comp = 1.0f - beta1;
+        const float beta2_comp = 1.0f - beta2;
+
+        if (in_range) {
+            for (int i = 0; i < row; ++i) {
+                const int64_t cell = static_cast<int64_t>(prim) * n_attr + i;
+                const float2 mv = C::decode_g1g2(packed, cell, old_mm);
+                float m = mv.x;
+                float v = mv.y;
+                if (apply_step) {
+                    const float grad = param_grad[static_cast<int64_t>(prim) * n_attr + i];
+                    m = beta1 * mv.x + beta1_comp * grad;
+                    v = beta2 * mv.y + beta2_comp * grad * grad;
+                    const float denom = sqrtf(v) * bias_correction2_sqrt_rcp + eps;
+                    param[static_cast<int64_t>(prim) * n_attr + i] -= step_size * m / denom;
+                }
+                const float2 prim_us = C::g1g2_to_us(m, v);
+                us_u[i] = prim_us.x;
+                us_s[i] = prim_us.y;
+                local_u_min = fminf(local_u_min, prim_us.x);
+                local_u_max = fmaxf(local_u_max, prim_us.x);
+                local_s_min = fminf(local_s_min, prim_us.y);
+                local_s_max = fmaxf(local_s_max, prim_us.y);
+            }
+        }
+
+        const float4 red = lfs::core::warp_ops::block_reduce_min4(
+            make_float4(local_u_min, -local_u_max, local_s_min, -local_s_max));
+        const float u_min = red.x;
+        const float u_max = -red.y;
+        const float s_min = red.z;
+        const float s_max = -red.w;
+
+        __shared__ float4 sm_bounds;
+        if (threadIdx.x == 0) {
+            float4 nb;
+            if (u_min > u_max) {
+                nb = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            } else {
+                nb = make_float4(u_min, u_max, s_min, s_max);
+            }
+            sm_bounds = nb;
+            if (bounds != nullptr) {
+                *reinterpret_cast<float4*>(bounds + 4 * bidx) = nb;
+            }
+        }
+        __syncthreads();
+        const float4 new_mm = sm_bounds;
+        const float inv_u = 1.0f / fmaxf(new_mm.y - new_mm.x, lfs::training::joint_adam::kEpsDevice);
+        const float inv_s = 1.0f / fmaxf(new_mm.w - new_mm.z, lfs::training::joint_adam::kEpsDevice);
+
+        if (in_range) {
+            for (int i = 0; i < row; ++i) {
+                C::encode_us(packed, static_cast<int64_t>(prim) * n_attr + i,
+                             us_u[i], us_s[i], new_mm.x, new_mm.z, inv_u, inv_s);
+            }
         }
     }
 

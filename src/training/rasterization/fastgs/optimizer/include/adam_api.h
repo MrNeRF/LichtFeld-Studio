@@ -114,6 +114,31 @@ namespace fast_lfs::optimizer {
         const std::uint8_t zero_point,
         cudaStream_t stream = nullptr);
 
+    // Non-fused joint (u,log_s) Adam step for contiguous [n_prims, n_attr] params.
+    // Grid is one 256-thread block per joint bounds block (blockIdx.x == bounds row).
+    // bits: 16 (non-SH) or 8 (rare contiguous 8-bit). shN uses the fused path.
+    void adam_step_joint_contiguous_raw(
+        float* param,
+        std::uint8_t* packed,
+        float* bounds,
+        const float* param_grad,
+        const bool* frozen_mask,
+        int frozen_mask_size,
+        float frozen_lr_scale,
+        const bool* crop_damping_mask,
+        int crop_damping_mask_size,
+        float cropbox_lr_scale,
+        int n_prims,
+        int n_attr,
+        int bits,
+        float lr,
+        float beta1,
+        float beta2,
+        float eps,
+        float bias_correction1_rcp,
+        float bias_correction2_sqrt_rcp,
+        cudaStream_t stream = nullptr);
+
     // Joint (u,log_s) densify reset: encode true (m,v)=(0,0) under each prim's
     // current block bounds (codes for u=0,log_s=0 — not raw zero bytes).
     // Contiguous params: n_attr cells/row, bits 8 or 16.

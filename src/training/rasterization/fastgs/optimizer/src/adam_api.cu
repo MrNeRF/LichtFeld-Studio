@@ -241,6 +241,56 @@ namespace fast_lfs::optimizer {
         LFS_CUDA_LAUNCH_CHECK(stream, "zero_quantized_rows_at_indices");
     }
 
+    void adam_step_joint_contiguous_raw(
+        float* param,
+        std::uint8_t* packed,
+        float* bounds,
+        const float* param_grad,
+        const bool* frozen_mask,
+        const int frozen_mask_size,
+        const float frozen_lr_scale,
+        const bool* crop_damping_mask,
+        const int crop_damping_mask_size,
+        const float cropbox_lr_scale,
+        const int n_prims,
+        const int n_attr,
+        const int bits,
+        const float lr,
+        const float beta1,
+        const float beta2,
+        const float eps,
+        const float bias_correction1_rcp,
+        const float bias_correction2_sqrt_rcp,
+        cudaStream_t stream) {
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(packed, "joint_packed");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(bounds, "joint_bounds");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param_grad, "param_grad");
+        if (n_prims <= 0 || n_attr <= 0) {
+            throw std::runtime_error("adam_step_joint_contiguous: n_prims and n_attr must be positive");
+        }
+        constexpr int kBS = 256;
+        const int n_blocks = (n_prims + kBS - 1) / kBS;
+        if (bits == 16) {
+            kernels::adam::adam_step_joint_contiguous_cu<16><<<n_blocks, kBS, 0, stream>>>(
+                param, packed, bounds, param_grad,
+                frozen_mask, frozen_mask_size, frozen_lr_scale,
+                crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
+                n_prims, n_attr, lr, beta1, beta2, eps,
+                bias_correction1_rcp, bias_correction2_sqrt_rcp);
+        } else if (bits == 8) {
+            kernels::adam::adam_step_joint_contiguous_cu<8><<<n_blocks, kBS, 0, stream>>>(
+                param, packed, bounds, param_grad,
+                frozen_mask, frozen_mask_size, frozen_lr_scale,
+                crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
+                n_prims, n_attr, lr, beta1, beta2, eps,
+                bias_correction1_rcp, bias_correction2_sqrt_rcp);
+        } else {
+            throw std::runtime_error("adam_step_joint_contiguous: bits must be 8 or 16");
+        }
+        LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_joint_contiguous_raw");
+    }
+
     void joint_encode_zero_rows_at_indices(
         std::uint8_t* packed,
         const float* bounds,

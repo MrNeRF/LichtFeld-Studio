@@ -548,3 +548,86 @@ FLAGS (honest):
    path; Wave-4 speed wins are provisional until gradients are proven correct.
 2. Ex-cache peak grew ~+256 MiB vs Wave 2 — audit which merged branch retains it (ledger).
 3. allocs/iter 0.05→0.18 — small, but the zero-alloc invariant must be restored.
+
+
+---
+
+## WO-G5 — ISS-015 FastGS gradient bisect + fix
+
+- **Branch:** `lfs-elite` @ start `b997fe5d`
+- **Oracle:** `lichtfeld_tests --gtest_filter='FastGSGradientTest.Numerical_Means'`
+- **Range:** `f06a8885` (good candidate) .. HEAD
+- **Preflight (HEAD, no rebuild):** FAIL — crash in `adam_moment` → `exp_avg_scale.to(CPU)` invalid under joint Adam codec (default ON). Message: `device transfer requires a valid tensor`.
+- **Preflight (HEAD, `LFS_ADAM_LEGACY_CODEC=1`):** ALL FastGSGradientTest + DenseTile **PASS** (Means cos_sim=0.9991). Implication: rasterizer gradient math (1.4 / BWD-A / reg-fold) is NOT the root; joint-codec moment recovery / fused-tail is the suspect.
+
+### Bisect log
+- **step0 HEAD b997fe5d:** BAD — joint default ON, adam_moment crash (exp_avg_scale invalid)
+- **step0b HEAD + LFS_ADAM_LEGACY_CODEC=1:** GOOD — 9/9 FastGS gradient tests pass
+- **step1 993314d5 (FIX-2.2 F3):** BAD — same adam_moment/exp_avg_scale crash
+- **step2 eec4b87b (build.sh only, pre-joint):** GOOD — Means cos_sim=0.9991
+- **step3 67a0fa34 (post 63aa codec pair profiles):** BAD — joint crash
+- **step4 12b0f583 (docs after 2.1/2.2):** BAD — joint crash
+- **step5 487d5c2b (pre-joint):** GOOD — Means cos_sim=0.9991
+- **step6 514b2a49 (2.1 SH value, after joint):** BAD — joint crash
+- **step7 63aa08c6 (joint Adam codec 2.2):** BAD — first bad; crash under default joint ON; LEGACY env GOOD cos_sim=0.9991
+
+### First bad commit
+**`63aa08c61c2447c83fc102c6832b8a5f84b9ec30`** — `perf(2.2): joint (u,log_s) Adam codec — B/splat 429→409.4`
+
+Bisect path (oracle = Numerical_Means, build via `./perf_campaign/build.sh build/tests`):
+| step | commit | verdict | note |
+|---|---|---|---|
+| 0 | b997fe5d HEAD | BAD | adam_moment → invalid exp_avg_scale |
+| 0b | HEAD + LFS_ADAM_LEGACY_CODEC=1 | GOOD | cos_sim Means 0.9991 |
+| 1 | 993314d5 FIX-2.2 F3 | BAD | joint crash |
+| 2 | eec4b87b pre-joint | GOOD | cos_sim 0.9991 |
+| 3 | 67a0fa34 post-codec | BAD | joint crash |
+| 4 | 12b0f583 docs | BAD | joint crash |
+| 5 | 487d5c2b pre-joint | GOOD | cos_sim 0.9991 |
+| 6 | 514b2a49 SH value 2.1 | BAD | joint crash |
+| 7 | **63aa08c6 joint 2.2** | **FIRST BAD** | LEGACY env GOOD |
+
+### Diagnosis (not BWD-A / 1.4)
+- **BWD-A / 1.4 / reg-fold:** NOT the root. Legacy codec on HEAD: all FastGS gradient tests green with cos_sim ≥ 0.999.
+- **Joint codec (63aa08c6):** fused path is mathematically correct (numerical match after decode). Two gaps:
+  1. **Test harness** `adam_moment()` only understood legacy u8+scale → crash on joint (ISS-015 oracle red).
+  2. **Unfused** `AdamOptimizer::step_param` still called legacy kernels → crash on joint for scheduler/crop-box tests.
+
+### Fix (perf win kept)
+1. `tests/test_fastgs_kernels.cpp`: joint decode of first moment m via Codec16/8 + joint_bounds; crop-damping uses `first_moment_l1`.
+2. `tests/test_fastgs_fuzz.cpp`: joint-aware `expect_adam_state_finite` + moment activity proxies.
+3. **Production:** `adam_step_joint_contiguous_cu` + `adam_step_joint_contiguous_raw`; `step_param` dispatches joint for non-shN contiguous params (shN remains fused-only).
+
+### Pass evidence (joint default ON)
+```
+FastGSGradientTest.* + DenseTile + CropDamping + Fuzz + JointAdam + scheduler + crop-box:
+[  PASSED  ] 60 tests. (1 skipped)
+Means cos_sim=0.9991, Opacity/Sh0 cos_sim=1.0000 under joint.
+```
+
+### Dual-workload gate (medians, 3 runs) — perf win SURVIVED
+| metric | Wave 4 (b997fe5d) | after WO-G5 fix | Δ |
+|---|---:|---:|---:|
+| Bonsai wall_s | 7.27 | **7.23** | −0.6% |
+| Bonsai steady_ms/iter | 3.168 | **3.148** | −0.6% |
+| Bonsai B/splat | 409.4 | **409.4** | 0 |
+| Bicycle wall_s | 20.95 | **21.12** | +0.8% (noise) |
+| Bicycle steady_ms/iter | 2.799 | **2.817** | +0.6% (noise) |
+| Bicycle loss band | 0.116–0.152 | **0.085–0.101** | **better** (correctness) |
+
+Runs: bonsai `20260807T065803Z_run{1,2,3}`; bicycle `20260807T065831Z_run{1,2,3}`.
+
+### Full-suite delta vs ISS-015 reds
+**Fixed (same joint root):** FastGSGradient*, FastGSDenseTile*, FastGSFuzz*, FastGSCropDamping*, TrainingCropBoxMask.DampedOptimizer*, LfsSchedulerTest.Integration*.
+
+**Independent remaining (NOT joint gradient math) — separate ISSUES:**
+- VideoFrameExtractorOutputNaming ×3
+- SogFormatTest ×12 (export/loader; ISS-014 family)
+- TensorReserveInplaceCat.OverflowFailurePreservesInstalledStorage
+- CheckpointInputValidationTest.RejectsLateStrategyCorruption…
+- PythonIntegrationTest ×3 (+ CaptureViewport may hang)
+- DeviceFaultTest.GraphCapture (ISS-013, excluded)
+- CheckpointAllocatorRegression (ISS-014, excluded — segfault)
+
+### Commits
+See git log for WO-G5 hashes.

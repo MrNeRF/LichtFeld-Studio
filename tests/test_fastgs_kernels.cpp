@@ -10,6 +10,7 @@
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/formats/ply.hpp"
+#include "lfs/training/joint_adam_codec.hpp"
 #include "rasterization/fastgs/utils/utils.h"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
@@ -23,6 +24,7 @@
 #include <random>
 #include <stdexcept>
 #include <torch/torch.h>
+#include <vector>
 
 using namespace lfs::training;
 using namespace lfs::core;
@@ -40,12 +42,112 @@ namespace {
         return *state;
     }
 
+    // Decode first-moment m from Adam state (float32 / joint (u,log_s) / legacy u8+scale).
+    // Used by numerical-gradient recovery: after one fused step from zero moments,
+    // m = (1-beta1)*g so g ≈ m/(1-beta1). Joint path was added in 63aa08c6 without
+    // updating this helper → ISS-015 crash on invalid exp_avg_scale.
     Tensor adam_moment(const AdamOptimizer& opt, ParamType type) {
         const auto& state = adam_state(opt, type);
         if (state.exp_avg.dtype() == DataType::Float32) {
             return state.exp_avg;
         }
 
+        // --- Joint (u, log_s) codec (default ON since 2.2) ---
+        if (state.is_joint()) {
+            if (!state.joint_bounds.is_valid()) {
+                throw std::runtime_error("Joint Adam state missing joint_bounds");
+            }
+            const int bits = state.joint_bits;
+            const int bpc = joint_adam::bytes_per_cell(bits);
+            if (bpc <= 0) {
+                throw std::runtime_error("Joint Adam: unsupported joint_bits");
+            }
+
+            auto packed_cpu = state.exp_avg.to(Device::CPU);
+            auto bounds_cpu = state.joint_bounds.to(Device::CPU);
+            const auto* packed = packed_cpu.ptr<std::uint8_t>();
+            const auto* bounds = bounds_cpu.ptr<float>();
+            const size_t n_bounds = bounds_cpu.shape()[0];
+
+            // Contiguous params: packed [N, n_attr * bpc] → dequant [N, n_attr] (or [N] if n_attr==1
+            // and original param was rank-1). Recover shape from packed layout.
+            if (state.exp_avg.ndim() >= 2) {
+                const size_t n_prim = state.exp_avg.shape()[0];
+                const size_t packed_row = state.exp_avg.shape()[1];
+                if (packed_row % static_cast<size_t>(bpc) != 0) {
+                    throw std::runtime_error("Joint packed row not divisible by bytes_per_cell");
+                }
+                const size_t n_attr = packed_row / static_cast<size_t>(bpc);
+                std::vector<float> dequant(n_prim * n_attr, 0.0f);
+
+                auto decode_cell = [&](std::size_t cell, float umin, float umax, float smin, float smax,
+                                       float& g1, float& g2) {
+                    if (bits == 16) {
+                        joint_adam::Codec16::decode_g1g2(packed, cell, umin, umax, smin, smax, g1, g2);
+                    } else {
+                        joint_adam::Codec8::decode_g1g2(packed, cell, umin, umax, smin, smax, g1, g2);
+                    }
+                };
+
+                for (size_t p = 0; p < n_prim; ++p) {
+                    const size_t bidx = p / static_cast<size_t>(joint_adam::kBlockSize);
+                    if (bidx >= n_bounds) {
+                        throw std::runtime_error("Joint bounds undersized for primitive index");
+                    }
+                    const float umin = bounds[bidx * 4 + 0];
+                    const float umax = bounds[bidx * 4 + 1];
+                    const float smin = bounds[bidx * 4 + 2];
+                    const float smax = bounds[bidx * 4 + 3];
+                    for (size_t a = 0; a < n_attr; ++a) {
+                        const size_t cell = p * n_attr + a;
+                        float g1 = 0.0f, g2 = 0.0f;
+                        decode_cell(cell, umin, umax, smin, smax, g1, g2);
+                        dequant[cell] = g1;
+                    }
+                }
+
+                // Match param layouts used by numerical grads: sh0 [N,1,3], opacity [N], else [N,C].
+                TensorShape out_shape;
+                if (type == ParamType::Sh0 && n_attr == 3) {
+                    out_shape = TensorShape({n_prim, size_t{1}, size_t{3}});
+                } else if (n_attr == 1) {
+                    out_shape = TensorShape({n_prim});
+                } else {
+                    out_shape = TensorShape({n_prim, n_attr});
+                }
+                return Tensor::from_blob(dequant.data(), out_shape, Device::CPU, DataType::Float32)
+                    .clone()
+                    .to(Device::CUDA);
+            }
+
+            // Swizzled shN: 1D packed cells (one cell per swizzled float).
+            // Bounds are per 256-primitive block. When only one bounds row exists (N<=256),
+            // every cell shares bounds[0] — sufficient for crop-damping N=1 and small fuzz.
+            const size_t n_cells = state.exp_avg.numel() / static_cast<size_t>(bpc);
+            if (n_bounds != 1) {
+                throw std::runtime_error(
+                    "adam_moment joint 1D (shN) multi-block decode needs swizzle→prim map");
+            }
+            std::vector<float> dequant(n_cells, 0.0f);
+            const float umin = bounds[0], umax = bounds[1], smin = bounds[2], smax = bounds[3];
+            for (size_t cell = 0; cell < n_cells; ++cell) {
+                float g1 = 0.0f, g2 = 0.0f;
+                if (bits == 16) {
+                    joint_adam::Codec16::decode_g1g2(packed, cell, umin, umax, smin, smax, g1, g2);
+                } else {
+                    joint_adam::Codec8::decode_g1g2(packed, cell, umin, umax, smin, smax, g1, g2);
+                }
+                dequant[cell] = g1;
+            }
+            return Tensor::from_blob(dequant.data(), TensorShape({n_cells}), Device::CPU, DataType::Float32)
+                .clone()
+                .to(Device::CUDA);
+        }
+
+        // --- Legacy uint8 m + per-primitive scale ---
+        if (!state.exp_avg_scale.is_valid()) {
+            throw std::runtime_error("Legacy Adam state missing exp_avg_scale");
+        }
         auto q_cpu = state.exp_avg.to(Device::CPU);
         auto scale_cpu = state.exp_avg_scale.to(Device::CPU);
         const auto& shape = state.exp_avg.shape();
@@ -66,6 +168,16 @@ namespace {
 
     void expect_adam_state_finite(const AdamOptimizer& opt, ParamType type) {
         const auto& state = adam_state(opt, type);
+        if (state.is_joint()) {
+            ASSERT_TRUE(state.joint_bounds.is_valid());
+            auto bounds = state.joint_bounds.to(Device::CPU);
+            auto* ptr = bounds.ptr<float>();
+            for (size_t i = 0; i < bounds.numel(); ++i) {
+                EXPECT_TRUE(std::isfinite(ptr[i]));
+            }
+            // Packed uint8 codes are always finite by construction.
+            return;
+        }
         if (state.exp_avg_scale.is_valid()) {
             auto scales = state.exp_avg_scale.to(Device::CPU);
             auto* ptr = scales.ptr<float>();
@@ -80,6 +192,12 @@ namespace {
                 EXPECT_TRUE(std::isfinite(ptr[i]));
             }
         }
+    }
+
+    // L1 of decoded first moment m (joint or legacy). Proxy for "moments moved".
+    float first_moment_l1(const AdamOptimizer& opt, ParamType type) {
+        auto m = adam_moment(opt, type);
+        return m.abs().sum().item<float>();
     }
 
     Tensor recovered_fused_grad(const AdamOptimizer& opt, ParamType type, float beta1 = 0.9f) {
@@ -1197,10 +1315,9 @@ TEST(FastGSCropDampingTest, FusedBackwardZeroScaleSkipsContiguousAndSwizzledWrit
         result.opacity_delta =
             (splat.opacity_raw() - opacity_before).abs().sum().item<float>();
         result.shn_delta = (splat.shN() - shn_before).abs().sum().item<float>();
-        result.opacity_moment_scale =
-            adam_state(optimizer, ParamType::Opacity).exp_avg_scale.abs().sum().item<float>();
-        result.shn_moment_scale =
-            adam_state(optimizer, ParamType::ShN).exp_avg_scale.abs().sum().item<float>();
+        // Joint codec has no exp_avg_scale — use decoded |m| L1 (ISS-015 / 63aa08c6).
+        result.opacity_moment_scale = first_moment_l1(optimizer, ParamType::Opacity);
+        result.shn_moment_scale = first_moment_l1(optimizer, ParamType::ShN);
         return result;
     };
 

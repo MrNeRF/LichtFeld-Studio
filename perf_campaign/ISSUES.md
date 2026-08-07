@@ -89,3 +89,40 @@
   the commit under test (own build dir). Worker gates bench only their own checkout and
   never bench while another process builds it. flock still serializes GPU timing.
 - **Status:** policy adopted; bench worktree created.
+
+
+## ISS-015 — FastGS numerical-gradient tests FAIL on campaign lfs-elite (QUALITY-CRITICAL)
+- **Status:** fixed (WO-G5) — first bad `63aa08c6` joint Adam codec; harness decode + unfused `step_param` joint path. Perf win kept (B/splat 409.4).
+- **Severity:** CRITICAL (analytical vs finite-difference gradients diverge: Means, Opacity,
+  Scaling, Sh0, DenseTile variants). Loss-curve gates were too coarse to catch this.
+- **Repro:** lichtfeld_tests --gtest_filter='FastGSGradientTest.*:FastGSDenseTileGradientTest.*'
+- **Suspect range:** f06a8885..lfs-elite hot gradient-path commits (1.3 reg-fold, 1.4 bg
+  fusion, BWD-A clamp, G2 joint codec tail, G3 SH decode). BWD-A claimed bit-identical
+  grads — verify that claim during bisect.
+- **Also red campaign-era (same sweep):** scheduler integration x2, crop-mask damping,
+  VideoFrameExtractor x3, loader sidecar x2, TensorReserveInplaceCat overflow edge.
+- **Process gap:** workers gated on targeted tests + bench, never the full suite → RULE UPDATED.
+
+
+## ISS-016 — VideoFrameExtractorOutputNaming ×3 red (independent of ISS-015)
+- **Severity:** medium (tests)
+- **Attribution:** NOT joint-codec / not FastGS gradients. Fail under HEAD after WO-G5 gradient fix.
+- **Repro:** `lichtfeld_tests --gtest_filter='VideoFrameExtractorOutputNaming.*'`
+- **Tests:** IntervalUsesSourceFrameNumbers, TrimmedRangeKeepsOriginalSourceFrameNumbers, RepeatedSourceFramesAreWrittenOnce.
+- **Action:** separate fix order (frame naming / extractor).
+
+## ISS-017 — TensorReserveInplaceCat.OverflowFailurePreservesInstalledStorage red
+- **Severity:** low/medium (edge-case contract)
+- **Attribution:** independent of ISS-015 (tensor reserve/cat overflow path).
+- **Repro:** `lichtfeld_tests --gtest_filter='TensorReserveInplaceCat.OverflowFailurePreservesInstalledStorage'`
+
+## ISS-018 — SogFormatTest suite mass-red (loader/export path)
+- **Severity:** high (format I/O; related ISS-014 family)
+- **Attribution:** independent of ISS-015 gradient math. Present after WO-G5 fix.
+- **Repro:** `lichtfeld_tests --gtest_filter='SogFormatTest.*'`
+- **Note:** may share SH/export root with ISS-014 checkpoint/export work.
+
+## ISS-019 — PythonIntegrationTest visualizer pose/render reds
+- **Severity:** medium (Python API / visualizer)
+- **Attribution:** independent of ISS-015. Device-contract failures in tensor load during pose/view helpers.
+- **Repro:** `lichtfeld_tests --gtest_filter='PythonIntegrationTest.LookAt*:PythonIntegrationTest.GetCurrentView*:PythonIntegrationTest.RenderView*'`

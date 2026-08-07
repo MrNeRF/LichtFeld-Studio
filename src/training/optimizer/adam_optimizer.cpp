@@ -565,15 +565,60 @@ namespace lfs::training {
         }
         lfs::core::waitForCUDAStream(execution_stream, param.stream());
         lfs::core::waitForCUDAStream(execution_stream, state.exp_avg.stream());
-        lfs::core::waitForCUDAStream(execution_stream, state.exp_avg_sq.stream());
-        lfs::core::waitForCUDAStream(execution_stream, state.exp_avg_scale.stream());
-        lfs::core::waitForCUDAStream(execution_stream, state.exp_avg_sq_scale.stream());
+        if (state.exp_avg_sq.is_valid())
+            lfs::core::waitForCUDAStream(execution_stream, state.exp_avg_sq.stream());
+        if (state.exp_avg_scale.is_valid())
+            lfs::core::waitForCUDAStream(execution_stream, state.exp_avg_scale.stream());
+        if (state.exp_avg_sq_scale.is_valid())
+            lfs::core::waitForCUDAStream(execution_stream, state.exp_avg_sq_scale.stream());
+        if (state.joint_bounds.is_valid())
+            lfs::core::waitForCUDAStream(execution_stream, state.joint_bounds.stream());
         lfs::core::waitForCUDAStream(execution_stream, state.grad.stream());
         if (frozen_mask_.is_valid()) {
             lfs::core::waitForCUDAStream(execution_stream, frozen_mask_.stream());
         }
         if (crop_damping_mask_.is_valid()) {
             crop_damping_mask_.sync_to_stream(execution_stream);
+        }
+
+        // Joint (u,log_s) codec (default ON since 63aa08c6): non-fused step for contiguous
+        // params. shN joint remains fused-only (swizzle + SH value quant single-writer).
+        if (state.is_joint()) {
+            if (type == ParamType::ShN) {
+                throw std::runtime_error(
+                    "AdamOptimizer::step_param: joint-codec shN requires fused FastGS "
+                    "backward (non-fused joint swizzle step not implemented)");
+            }
+            if (!state.joint_bounds.is_valid()) {
+                throw std::runtime_error("AdamOptimizer::step_param: joint state missing bounds");
+            }
+            const size_t feature_dim = param.numel() / param_size;
+            fast_lfs::optimizer::adam_step_joint_contiguous_raw(
+                param.ptr<float>(),
+                state.exp_avg.ptr<uint8_t>(),
+                state.joint_bounds.ptr<float>(),
+                state.grad.ptr<float>(),
+                frozen_mask_ptr(),
+                frozen_mask_size(),
+                frozen_lr_scale_,
+                crop_damping_mask_ptr(),
+                crop_damping_mask_size(),
+                cropbox_lr_scale_,
+                static_cast<int>(state.size),
+                static_cast<int>(feature_dim),
+                state.joint_bits,
+                param_lr,
+                static_cast<float>(config_.beta1),
+                static_cast<float>(config_.beta2),
+                static_cast<float>(config_.eps),
+                static_cast<float>(bias_correction1_rcp),
+                static_cast<float>(bias_correction2_sqrt_rcp),
+                execution_stream);
+            param.set_stream(execution_stream);
+            state.exp_avg.set_stream(execution_stream);
+            state.joint_bounds.set_stream(execution_stream);
+            state.grad.set_stream(execution_stream);
+            return;
         }
 
         if (type == ParamType::ShN) {
