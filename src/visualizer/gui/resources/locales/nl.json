@@ -806,8 +806,8 @@
     "reset_section_success": "Sectie onmiddellijk gereset.",
     "reset_section_failed": "Instellingen kunnen niet worden gereset.",
     "reset_all_settings": "Alle instellingen resetten",
-    "reset_all_settings_confirmation": "Taal, thema, UI-schaal, invoervoorkeuren en indeling naar de standaardwaarden herstellen? Dit wordt onmiddellijk toegepast. Projecten, datasets, exports, plugins en cache blijven ongewijzigd.",
-    "reset_all_settings_success": "Alle voorkeuren en de indeling zijn onmiddellijk gereset."
+    "reset_all_settings_confirmation": "Taal, thema, UI-schaal, invoervoorkeuren, indeling en vensterstatus naar de standaardwaarden herstellen? Dit wordt onmiddellijk toegepast. Projecten, datasets, exports, plugins en cache blijven ongewijzigd.",
+    "reset_all_settings_success": "Alle voorkeuren, de indeling en de vensterstatus zijn onmiddellijk gereset."
   },
   "main_panel": {
     "windows": "Vensters",

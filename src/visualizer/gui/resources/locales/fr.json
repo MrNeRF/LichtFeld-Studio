@@ -806,8 +806,8 @@
     "reset_section_success": "Section réinitialisée immédiatement.",
     "reset_section_failed": "Impossible de réinitialiser les paramètres.",
     "reset_all_settings": "Réinitialiser tous les paramètres",
-    "reset_all_settings_confirmation": "Rétablir la langue, le thème, l'échelle de l'interface, les préférences de saisie et la disposition à leurs valeurs par défaut ? Cela s'applique immédiatement. Les projets, jeux de données, exportations, plugins et cache ne sont pas affectés.",
-    "reset_all_settings_success": "Toutes les préférences et la disposition ont été réinitialisées immédiatement."
+    "reset_all_settings_confirmation": "Rétablir la langue, le thème, l'échelle de l'interface, les préférences de saisie, la disposition et l'état de la fenêtre à leurs valeurs par défaut ? Cela s'applique immédiatement. Les projets, jeux de données, exportations, plugins et cache ne sont pas affectés.",
+    "reset_all_settings_success": "Toutes les préférences, la disposition et l'état de la fenêtre ont été réinitialisés immédiatement."
   },
   "main_panel": {
     "windows": "Fenêtres",

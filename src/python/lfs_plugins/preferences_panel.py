@@ -314,6 +314,7 @@ class PreferencesPanel(Panel):
             if button != reset_label:
                 return
             errors = [self._reset_section(section) for section in ("general", "appearance", "input", "interface")]
+            errors.append(lf.ui.reset_window_state())
             error = next((item for item in errors if item), None)
             if error:
                 lf.ui.message_dialog(

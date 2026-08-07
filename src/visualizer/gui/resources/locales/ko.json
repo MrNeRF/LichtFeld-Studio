@@ -806,8 +806,8 @@
     "reset_section_success": "섹션을 즉시 재설정했습니다.",
     "reset_section_failed": "설정을 재설정할 수 없습니다.",
     "reset_all_settings": "모든 설정 재설정",
-    "reset_all_settings_confirmation": "언어, 테마, UI 배율, 입력 기본 설정 및 레이아웃을 기본값으로 복원할까요? 즉시 적용됩니다. 프로젝트, 데이터 세트, 내보내기, 플러그인 및 캐시는 영향을 받지 않습니다.",
-    "reset_all_settings_success": "모든 기본 설정과 레이아웃을 즉시 재설정했습니다."
+    "reset_all_settings_confirmation": "언어, 테마, UI 배율, 입력 기본 설정, 레이아웃 및 창 상태를 기본값으로 복원할까요? 즉시 적용됩니다. 프로젝트, 데이터 세트, 내보내기, 플러그인 및 캐시는 영향을 받지 않습니다.",
+    "reset_all_settings_success": "모든 기본 설정, 레이아웃 및 창 상태를 즉시 재설정했습니다."
   },
   "main_panel": {
     "windows": "창",

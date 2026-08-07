@@ -480,7 +480,7 @@ namespace {
             ::args::Flag safe_mode(ui_group, "safe_mode", "Start with user plugins disabled (recovery mode)", {"safe-mode"});
             ::args::Flag reset_preferences(ui_group, "reset_preferences", "Back up and reset application preferences", {"reset-preferences"});
             ::args::Flag reset_layout(ui_group, "reset_layout", "Back up and reset the UI layout", {"reset-layout"});
-            ::args::Flag reset_all_settings(ui_group, "reset_all_settings", "Back up and reset application preferences and UI layout", {"reset-all-settings"});
+            ::args::Flag reset_all_settings(ui_group, "reset_all_settings", "Back up and reset preferences, layout, and window state", {"reset-all-settings"});
 #ifndef LFS_BUILD_PORTABLE
             ::args::Flag no_splash(ui_group, "no_splash", "Skip splash screen on startup", {"no-splash"});
 #endif

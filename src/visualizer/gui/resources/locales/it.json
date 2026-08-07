@@ -806,8 +806,8 @@
     "reset_section_success": "Sezione reimpostata immediatamente.",
     "reset_section_failed": "Impossibile reimpostare le impostazioni.",
     "reset_all_settings": "Reimposta tutte le impostazioni",
-    "reset_all_settings_confirmation": "Ripristinare lingua, tema, scala dell'interfaccia, preferenze di input e layout ai valori predefiniti? L'azione viene applicata subito. Progetti, dataset, esportazioni, plugin e cache non vengono modificati.",
-    "reset_all_settings_success": "Tutte le preferenze e il layout sono stati reimpostati immediatamente."
+    "reset_all_settings_confirmation": "Ripristinare lingua, tema, scala dell'interfaccia, preferenze di input, layout e stato della finestra ai valori predefiniti? L'azione viene applicata subito. Progetti, dataset, esportazioni, plugin e cache non vengono modificati.",
+    "reset_all_settings_success": "Tutte le preferenze, il layout e lo stato della finestra sono stati reimpostati immediatamente."
   },
   "main_panel": {
     "windows": "Finestre",

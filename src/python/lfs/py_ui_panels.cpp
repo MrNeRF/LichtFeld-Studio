@@ -636,6 +636,16 @@ namespace lfs::python {
             "Reset the saved UI layout and apply the default dock arrangement immediately.");
 
         m.def(
+            "reset_window_state", []() -> std::string {
+                const auto paths = lfs::core::UserPaths::resolve();
+                if (!paths)
+                    return paths.error();
+                const auto result = paths->resetWindowState();
+                return result ? std::string{} : result.error();
+            },
+            "Reset persisted window geometry for the next launch.");
+
+        m.def(
             "is_panel_enabled", [](const std::string& panel_id) {
                 return gui::PanelRegistry::instance().is_panel_enabled(panel_id);
             },

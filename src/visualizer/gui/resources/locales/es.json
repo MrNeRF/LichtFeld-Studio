@@ -266,8 +266,8 @@
     "reset_section_success": "Sección restablecida inmediatamente.",
     "reset_section_failed": "No se pudieron restablecer los ajustes.",
     "reset_all_settings": "Restablecer todos los ajustes",
-    "reset_all_settings_confirmation": "¿Restablecer idioma, tema, escala de interfaz, preferencias de entrada y diseño a sus valores predeterminados? Se aplica inmediatamente. Proyectos, conjuntos de datos, exportaciones, plugins y caché no se verán afectados.",
-    "reset_all_settings_success": "Todas las preferencias y el diseño se restablecieron inmediatamente."
+    "reset_all_settings_confirmation": "¿Restablecer idioma, tema, escala de interfaz, preferencias de entrada, diseño y estado de la ventana a sus valores predeterminados? Se aplica inmediatamente. Proyectos, conjuntos de datos, exportaciones, plugins y caché no se verán afectados.",
+    "reset_all_settings_success": "Todas las preferencias, el diseño y el estado de la ventana se restablecieron inmediatamente."
   },
   "startup": {
     "supported_by": "Con el apoyo de",

@@ -58,7 +58,7 @@ The command-line reset flags are:
 | --- | --- |
 | `--reset-preferences` | Back up and restore application preferences to built-in defaults. |
 | `--reset-layout` | Back up and remove the transitional saved UI layout. |
-| `--reset-all-settings` | Perform both preference and layout reset using the same backup policy. |
+| `--reset-all-settings` | Reset preferences, the transitional layout file, and window state using the same backup policy. |
 
 The GUI and CLI should expose the same semantics and should report an explicit
 error when a reset is requested in a mode that cannot execute it. Resets do not

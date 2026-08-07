@@ -612,37 +612,46 @@ namespace lfs::app {
             });
         }
 
+        bool resetRequestedUserSettings(const lfs::core::param::TrainingParameters& params) {
+            if (!params.reset_preferences && !params.reset_layout && !params.reset_all_settings)
+                return true;
+
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths) {
+                LOG_ERROR("Unable to resolve user settings path: {}", paths.error());
+                return false;
+            }
+            const auto reset_file = [&]<typename Reset>(const bool requested,
+                                                        const char* const label,
+                                                        Reset&& reset) {
+                if (!requested)
+                    return true;
+                const auto result = reset();
+                if (!result) {
+                    LOG_ERROR("Unable to reset {}: {}", label, result.error());
+                    return false;
+                }
+                if (*result) {
+                    LOG_INFO("Reset {}. Backup saved to {}", label,
+                             lfs::core::path_to_utf8(**result));
+                } else {
+                    LOG_INFO("Reset {}. No existing settings file required a backup", label);
+                }
+                return true;
+            };
+            return reset_file(params.reset_preferences || params.reset_all_settings, "preferences",
+                              [&paths] { return paths->resetPreferences(); }) &&
+                   reset_file(params.reset_layout || params.reset_all_settings, "layout",
+                              [&paths] { return paths->resetLayout(); }) &&
+                   reset_file(params.reset_all_settings, "window",
+                              [&paths] { return paths->resetWindowState(); });
+        }
+
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             const bool safe_mode = params->safe_mode || lfs::core::environment::flag("LFS_SAFE_MODE", false);
             python::set_user_plugin_loading_enabled(!safe_mode);
             vis::gui::LayoutState::setPersistenceEnabled(!safe_mode);
             vis::input::InputBindings::setPersistenceEnabled(!safe_mode);
-            if (const auto paths = lfs::core::UserPaths::resolve()) {
-                const auto reset_file = [&paths](const bool requested, const char* const label,
-                                                 const auto& reset) {
-                    if (!requested)
-                        return;
-                    const auto result = reset();
-                    if (!result) {
-                        LOG_ERROR("Unable to reset {}: {}", label, result.error());
-                    } else if (*result) {
-                        LOG_INFO("Reset {}. Backup saved to {}", label,
-                                 lfs::core::path_to_utf8(**result));
-                    } else {
-                        LOG_INFO("Reset {}. No existing settings file required a backup", label);
-                    }
-                };
-                const bool reset_preferences = params->reset_preferences || params->reset_all_settings;
-                const bool reset_layout = params->reset_layout || params->reset_all_settings;
-                const bool reset_window = params->reset_all_settings;
-                reset_file(reset_preferences, "preferences", [&paths] { return paths->resetPreferences(); });
-                reset_file(reset_layout, "layout", [&paths] { return paths->resetLayout(); });
-                reset_file(reset_window, "window", [&paths] { return paths->resetWindowState(); });
-
-            } else {
-                LOG_WARN("Unable to resolve user settings path: {}", paths.error());
-            }
-
             if (safe_mode) {
                 LOG_WARN("Safe mode active: user plugin loading is disabled for this process");
             }
@@ -761,6 +770,9 @@ namespace lfs::app {
     } // namespace
 
     int Application::run(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+        if (!resetRequestedUserSettings(*params))
+            return 1;
+
         // Pre-initialize CacheLoader for the exe module.
         // On Windows, lfs_io (static lib) is linked into both the exe and
         // lfs_visualizer.dll, giving each its own CacheLoader singleton.

@@ -806,8 +806,8 @@
     "reset_section_success": "セクションを直ちにリセットしました。",
     "reset_section_failed": "設定をリセットできませんでした。",
     "reset_all_settings": "すべての設定をリセット",
-    "reset_all_settings_confirmation": "言語、テーマ、UI スケール、入力設定、レイアウトを既定値に戻しますか？直ちに適用されます。プロジェクト、データセット、エクスポート、プラグイン、キャッシュは影響を受けません。",
-    "reset_all_settings_success": "すべての設定とレイアウトを直ちにリセットしました。"
+    "reset_all_settings_confirmation": "言語、テーマ、UI スケール、入力設定、レイアウト、ウィンドウ状態を既定値に戻しますか？直ちに適用されます。プロジェクト、データセット、エクスポート、プラグイン、キャッシュは影響を受けません。",
+    "reset_all_settings_success": "すべての設定、レイアウト、ウィンドウ状態を直ちにリセットしました。"
   },
   "main_panel": {
     "windows": "ウィンドウ",

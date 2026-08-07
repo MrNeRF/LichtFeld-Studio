@@ -806,8 +806,8 @@
     "reset_section_success": "Sekcja została natychmiast zresetowana.",
     "reset_section_failed": "Nie można zresetować ustawień.",
     "reset_all_settings": "Resetuj wszystkie ustawienia",
-    "reset_all_settings_confirmation": "Przywrócić język, motyw, skalę interfejsu, preferencje wejścia i układ do wartości domyślnych? Zostanie to zastosowane natychmiast. Projekty, zestawy danych, eksporty, wtyczki i pamięć podręczna nie zostaną zmienione.",
-    "reset_all_settings_success": "Wszystkie preferencje i układ zostały natychmiast zresetowane."
+    "reset_all_settings_confirmation": "Przywrócić język, motyw, skalę interfejsu, preferencje wejścia, układ i stan okna do wartości domyślnych? Zostanie to zastosowane natychmiast. Projekty, zestawy danych, eksporty, wtyczki i pamięć podręczna nie zostaną zmienione.",
+    "reset_all_settings_success": "Wszystkie preferencje, układ i stan okna zostały natychmiast zresetowane."
   },
   "main_panel": {
     "windows": "Okna",
