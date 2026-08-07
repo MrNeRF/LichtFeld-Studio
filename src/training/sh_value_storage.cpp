@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cuda_runtime.h>
+#include <stdexcept>
 
 namespace lfs::training::sh_value {
 
@@ -136,13 +137,17 @@ namespace lfs::training::sh_value {
         auto& bounds = splat.shN_value_bounds();
         if (!bounds.is_valid() ||
             bounds.numel() < core::sh_value_quant::n_bounds_for_prims(n) * 2) {
-            LOG_WARN("SH value quant expand: bounds short for N={}", n);
-            // Rebuild empty bounds of correct size (decode will use zeros).
-            const auto n_bounds = core::sh_value_quant::n_bounds_for_prims(n);
-            const auto n_bounds_cap = core::sh_value_quant::n_bounds_for_prims(cap);
-            bounds = Tensor::zeros_direct(TensorShape({n_bounds * 2}),
-                                          std::max(n_bounds, n_bounds_cap) * 2, Device::CUDA);
-            bounds.set_name("splat.shN_value_bounds");
+            // MN-2: rebuilding empty/zero bounds makes decode emit all zeros — a silent
+            // SH wipe. Fail loud so densify/relocate never zero SH-rest by accident.
+            LOG_ERROR("MN-2: SH value quant expand refused — bounds short for N={} "
+                      "(have={} need={}). Refusing silent SH wipe; restore bounds or "
+                      "dequant via a known-good checkpoint.",
+                      n,
+                      bounds.is_valid() ? bounds.numel() : 0,
+                      core::sh_value_quant::n_bounds_for_prims(n) * 2);
+            throw std::runtime_error(
+                "ensure_shN_fp32_for_mutation: shN_value_bounds short/missing — "
+                "refusing silent SH wipe (MN-2)");
         }
         if (bounds.stream() != stream)
             bounds.set_stream(stream);
