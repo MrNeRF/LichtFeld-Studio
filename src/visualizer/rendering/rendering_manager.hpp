@@ -383,6 +383,15 @@ namespace lfs::vis {
         };
         // Renders a fresh expected-depth preview for precise picking on sparse or low-opacity splats.
         float renderExpectedDepthAtPixel(const ExpectedDepthSampleRequest& request);
+        // Exact single-frame median depth at a pixel (depth-capture path, not the interactive
+        // HiGS buffer). Used by align commit picks so unselected surfaces get the true
+        // transmittance-0.5 crossing rather than the leading-batch approximation.
+        float renderMedianDepthAtPixel(const SceneManager* scene_manager,
+                                       const Viewport& viewport,
+                                       const glm::ivec2& render_size,
+                                       int x,
+                                       int y,
+                                       std::optional<SplitViewPanelId> panel = std::nullopt);
         float renderDepthAtPixelForNodeMask(const SceneManager* scene_manager,
                                             const Viewport& viewport,
                                             const glm::ivec2& render_size,

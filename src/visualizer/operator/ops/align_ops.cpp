@@ -638,6 +638,9 @@ namespace lfs::vis::op {
         const int depth_x = static_cast<int>(render_x);
         const int depth_y = static_cast<int>(render_y);
 
+        // Commit picks (placement / drag re-pick) use the exact depth-capture path so HiGS
+        // interactive leading-batch depth cannot bias the surface. Hover preview stays on
+        // getDepthAtPixel in align_tool.cpp (cheap per-frame sample).
         float depth = -1.0f;
         if (ctx.hasSelection()) {
             const auto target_ids = resolveAlignmentTargets(ctx);
@@ -655,12 +658,32 @@ namespace lfs::vis::op {
             if (depth <= 0.0f) {
                 if (!logged_masked_depth_fallback_) {
                     LOG_INFO(
-                        "Align pick: masked node depth failed; falling back to full-scene depth for this session");
+                        "Align pick: masked node depth failed; falling back to full-scene exact depth for this session");
                     logged_masked_depth_fallback_ = true;
                 }
-                depth = rm->getDepthAtPixel(depth_x, depth_y, panel_info->panel);
+                depth = rm->renderMedianDepthAtPixel(
+                    &ctx.scene(),
+                    projection_viewport,
+                    {panel_info->render_width, panel_info->render_height},
+                    depth_x,
+                    depth_y,
+                    panel_info->panel);
             }
         } else {
+            depth = rm->renderMedianDepthAtPixel(
+                &ctx.scene(),
+                projection_viewport,
+                {panel_info->render_width, panel_info->render_height},
+                depth_x,
+                depth_y,
+                panel_info->panel);
+        }
+        if (depth <= 0.0f) {
+            if (!logged_exact_depth_fallback_) {
+                LOG_INFO(
+                    "Align pick: exact depth capture failed; falling back to interactive depth for this session");
+                logged_exact_depth_fallback_ = true;
+            }
             depth = rm->getDepthAtPixel(depth_x, depth_y, panel_info->panel);
         }
         if (depth <= 0.0f) {

@@ -34,6 +34,7 @@ namespace lfs::vis::op {
         std::optional<int> selected_point_;
         std::optional<SplitViewPanelId> pick_panel_;
         mutable bool logged_masked_depth_fallback_ = false;
+        mutable bool logged_exact_depth_fallback_ = false;
 
         [[nodiscard]] glm::vec3 unprojectScreenPoint(const OperatorContext& ctx, double x, double y,
                                                      SplitViewPanelId* out_panel = nullptr) const;

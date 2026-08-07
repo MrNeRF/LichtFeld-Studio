@@ -1214,6 +1214,63 @@ namespace lfs::vis {
         return sampleDepthTensorAt(**depth, request.pixel).value_or(-1.0f);
     }
 
+    float RenderingManager::renderMedianDepthAtPixel(const SceneManager* const scene_manager,
+                                                     const Viewport& viewport,
+                                                     const glm::ivec2& render_size,
+                                                     const int x,
+                                                     const int y,
+                                                     const std::optional<SplitViewPanelId> panel) {
+        if (!scene_manager || render_size.x <= 0 || render_size.y <= 0 ||
+            x < 0 || x >= render_size.x || y < 0 || y >= render_size.y) {
+            return -1.0f;
+        }
+
+        auto render_lock = acquireLiveModelRenderLock(scene_manager);
+        auto scene_state = scene_manager->buildRenderState();
+        const auto* const model = scene_state.combined_model;
+        if (!hasRenderableGaussians(model)) {
+            return -1.0f;
+        }
+
+        if (settings_.point_cloud_mode) {
+            // Point-cloud depth has no HiGS leading-batch approximation; the live buffer is fine.
+            render_lock.reset();
+            return getDepthAtPixel(x, y, panel);
+        }
+
+        // Full-scene Gaussian exact capture (same path as masked picks, without a node filter).
+        auto rendered = renderDepthCaptureToPreviewSlotWithState(
+            const_cast<SceneManager*>(scene_manager),
+            *model,
+            std::move(scene_state),
+            viewport.camera.R,
+            viewport.camera.t,
+            settings_.focal_length_mm,
+            render_size.x,
+            render_size.y,
+            render_lock.has_value(),
+            /*expected_depth=*/false,
+            std::nullopt,
+            settings_.orthographic,
+            settings_.ortho_scale);
+        render_lock.reset();
+        if (!rendered) {
+            LOG_DEBUG("Median Gaussian depth render failed: {}", rendered.error());
+            return -1.0f;
+        }
+        if (!vksplat_viewport_renderer_ || !last_vulkan_context_) {
+            return -1.0f;
+        }
+        auto depth = vksplat_viewport_renderer_->readPreviewDepth(
+            *last_vulkan_context_,
+            VksplatViewportRenderer::OutputSlot::Preview);
+        if (!depth) {
+            LOG_DEBUG("Median Gaussian depth readback failed: {}", depth.error());
+            return -1.0f;
+        }
+        return sampleDepthTensorAt(**depth, {x, y}).value_or(-1.0f);
+    }
+
     float RenderingManager::renderDepthAtPixelForNodeMask(const SceneManager* const scene_manager,
                                                           const Viewport& viewport,
                                                           const glm::ivec2& render_size,
