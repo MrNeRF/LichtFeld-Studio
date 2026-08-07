@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
 #include "core/exportable_storage.hpp"
 #include "core/parameters.hpp"
@@ -451,6 +452,180 @@ TEST(SplatExportableStorageTest, GrowKeepsStableVaWhileImportersHoldBlock) {
     void* probe = nullptr;
     ASSERT_EQ(cudaMalloc(&probe, 4096), cudaSuccess);
     ASSERT_EQ(cudaFree(probe), cudaSuccess);
+}
+
+// ISS-025 (Analyst B primary): post-grow rebind must NOT copy from stale pre-grow
+// views. Sequence mirrors TrainerManager::growExportableForDensify:
+//   rebind(make_allocator) -> grow -> rebind(make_allocator)
+// grow() relocates every region; a copying rebind overwrites correct new-offset
+// data with garbage from old offsets (means@0 survives; scaling/rot/opacity die).
+TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 128;
+    constexpr std::size_t kGrown = 256;
+    constexpr std::size_t kLiveN = 64;
+    constexpr std::size_t kReserve = 1024;
+    constexpr int kShDegree = 3; // include shN (analyst B mechanism 3 closure)
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    auto allocator = storage.make_allocator();
+
+    Tensor means = allocator(TensorShape({kLiveN, 3}), kInitial, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({kLiveN, 3}), kInitial, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({kLiveN, 4}), kInitial, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({kLiveN, 1}), kInitial, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({kLiveN, 1, 3}), kInitial, DataType::Float32, "SplatData.sh0");
+    const auto rest = static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(kShDegree));
+    const size_t shN_floats = sh_swizzled_float_count(kLiveN, rest);
+    const size_t shN_cap = sh_swizzled_float_count(kInitial, rest);
+    Tensor shN = allocator(TensorShape({shN_floats}), shN_cap, DataType::Float32, "SplatData.shN");
+
+    auto stamp = [](Tensor& t, float base) {
+        const size_t n = t.numel();
+        std::vector<float> host(n);
+        for (size_t i = 0; i < n; ++i) {
+            host[i] = base + static_cast<float>(i);
+        }
+        ASSERT_EQ(cudaMemcpy(t.ptr<float>(), host.data(), n * sizeof(float), cudaMemcpyHostToDevice),
+                  cudaSuccess);
+    };
+    auto expect_pattern = [](const Tensor& t, float base, const char* label) {
+        const size_t n = t.numel();
+        std::vector<float> host(n);
+        ASSERT_EQ(cudaMemcpy(host.data(), t.ptr<float>(), n * sizeof(float), cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        for (size_t i = 0; i < n; ++i) {
+            EXPECT_FLOAT_EQ(host[i], base + static_cast<float>(i))
+                << label << " index " << i << " (ISS-025 post-grow rebind integrity)";
+        }
+    };
+
+    stamp(means, 10.0f);
+    stamp(scaling, 100.0f);
+    stamp(rotation, 200.0f);
+    stamp(opacity, 300.0f);
+    stamp(sh0, 400.0f);
+    stamp(shN, 500.0f);
+
+    SplatData model(kShDegree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    /*scene_scale=*/1.0f,
+                    SplatData::ShNLayout::Swizzled);
+    model.set_tensor_allocator(storage.make_allocator());
+
+    // Step 1: pre-grow rebind (GUI drops Vulkan import → CUDA-only views).
+    // Self-alias into the same block at current offsets — must preserve patterns.
+    {
+        auto ok = storage.rebindSplatData(model, storage.make_allocator());
+        ASSERT_TRUE(ok.has_value()) << ok.error();
+    }
+    expect_pattern(model.means_raw(), 10.0f, "means after pre-grow rebind");
+    expect_pattern(model.scaling_raw(), 100.0f, "scaling after pre-grow rebind");
+    expect_pattern(model.rotation_raw(), 200.0f, "rotation after pre-grow rebind");
+    expect_pattern(model.opacity_raw(), 300.0f, "opacity after pre-grow rebind");
+    expect_pattern(model.sh0_raw(), 400.0f, "sh0 after pre-grow rebind");
+    expect_pattern(model.shN_raw(), 500.0f, "shN after pre-grow rebind");
+
+    const auto gen_before = storage.generation();
+    const std::size_t scaling_off_before = storage.region_offsets[SplatExportableStorage::Scaling];
+
+    // Step 2: grow relocates non-means regions to new offsets.
+    auto grew = storage.grow(kGrown);
+    ASSERT_TRUE(grew.has_value()) << grew.error();
+    ASSERT_TRUE(*grew);
+    EXPECT_GT(storage.generation(), gen_before);
+    EXPECT_NE(storage.region_offsets[SplatExportableStorage::Scaling], scaling_off_before)
+        << "grow must relocate scaling (capacity-dependent pack)";
+
+    // Patterns intact at NEW offsets inside the block (grow did its job).
+    expect_device_pattern(
+        static_cast<const char*>(storage.block->device_ptr) +
+            storage.region_offsets[SplatExportableStorage::Means],
+        kLiveN * 3, 10.0f);
+    expect_device_pattern(
+        static_cast<const char*>(storage.block->device_ptr) +
+            storage.region_offsets[SplatExportableStorage::Scaling],
+        kLiveN * 3, 100.0f);
+    expect_device_pattern(
+        static_cast<const char*>(storage.block->device_ptr) +
+            storage.region_offsets[SplatExportableStorage::Rotation],
+        kLiveN * 4, 200.0f);
+    expect_device_pattern(
+        static_cast<const char*>(storage.block->device_ptr) +
+            storage.region_offsets[SplatExportableStorage::Opacity],
+        kLiveN * 1, 300.0f);
+
+    // Step 3: post-grow rebind — THE BUG. Must install views at new offsets
+    // without copy_from(stale pre-grow views).
+    {
+        auto ok = storage.rebindSplatData(model, storage.make_allocator());
+        ASSERT_TRUE(ok.has_value()) << ok.error();
+    }
+
+    EXPECT_EQ(model.means_raw().capacity(), kGrown);
+    EXPECT_EQ(model.scaling_raw().capacity(), kGrown);
+    EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+
+    // All attributes must survive at new offsets through the model tensors.
+    expect_pattern(model.means_raw(), 10.0f, "means after post-grow rebind");
+    expect_pattern(model.scaling_raw(), 100.0f, "scaling after post-grow rebind");
+    expect_pattern(model.rotation_raw(), 200.0f, "rotation after post-grow rebind");
+    expect_pattern(model.opacity_raw(), 300.0f, "opacity after post-grow rebind");
+    expect_pattern(model.sh0_raw(), 400.0f, "sh0 after post-grow rebind");
+    expect_pattern(model.shN_raw(), 500.0f, "shN after post-grow rebind");
+}
+
+// ISS-025 hardening (Analyst A): grown slack rows must be non-renderable
+// (opacity → sigmoid(−∞)≈0, identity quat) so a future stale-row leak is dark.
+TEST(SplatExportableStorageTest, GrowSlackRowsAreNonRenderable) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 64;
+    constexpr std::size_t kGrown = 128;
+    constexpr int kShDegree = 0;
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kGrown * 2);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    ASSERT_TRUE(storage.grow(kGrown).value_or(false));
+
+    // Slack rows [kInitial, kGrown): opacity raw must be −inf (or ≤ −20),
+    // rotation identity (1,0,0,0).
+    std::vector<float> opacity(kGrown - kInitial);
+    std::vector<float> rotation((kGrown - kInitial) * 4);
+    void* op_ptr = static_cast<char*>(storage.block->device_ptr) +
+                   storage.region_offsets[SplatExportableStorage::Opacity] +
+                   kInitial * sizeof(float);
+    void* rot_ptr = static_cast<char*>(storage.block->device_ptr) +
+                    storage.region_offsets[SplatExportableStorage::Rotation] +
+                    kInitial * 4 * sizeof(float);
+    ASSERT_EQ(cudaMemcpy(opacity.data(), op_ptr, opacity.size() * sizeof(float),
+                         cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(rotation.data(), rot_ptr, rotation.size() * sizeof(float),
+                         cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    for (size_t i = 0; i < opacity.size(); ++i) {
+        EXPECT_LE(opacity[i], -20.0f) << "slack opacity[" << i << "] must be non-renderable";
+    }
+    for (size_t i = 0; i < kGrown - kInitial; ++i) {
+        EXPECT_FLOAT_EQ(rotation[i * 4 + 0], 1.0f) << "slack quat w row " << i;
+        EXPECT_FLOAT_EQ(rotation[i * 4 + 1], 0.0f) << "slack quat x row " << i;
+        EXPECT_FLOAT_EQ(rotation[i * 4 + 2], 0.0f) << "slack quat y row " << i;
+        EXPECT_FLOAT_EQ(rotation[i * 4 + 3], 0.0f) << "slack quat z row " << i;
+    }
 }
 
 // ISS-023: densify past the initial live-N commit must grow the exportable
