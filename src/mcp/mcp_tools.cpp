@@ -210,11 +210,6 @@ namespace lfs::mcp {
         resources_[uri] = RegisteredResource{std::move(resource), handler};
     }
 
-    void ResourceRegistry::unregister_resource(const std::string& uri) {
-        std::lock_guard lock(mutex_);
-        resources_.erase(uri);
-    }
-
     void ResourceRegistry::register_resource_prefix(std::string uri_prefix, ResourceHandler handler) {
         std::lock_guard lock(mutex_);
         const std::string prefix = uri_prefix;

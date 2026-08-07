@@ -358,7 +358,6 @@ namespace lfs::vis {
         void clearLatestCameraMetrics();
 
         // FPS monitoring
-        float getCurrentFPS() const { return framerate_controller_.getCurrentFPS(); }
         float getAverageFPS() const { return framerate_controller_.getAverageFPS(); }
 
         // Access to the auxiliary rendering engine used by point-cloud, mesh, and readback paths.
@@ -568,8 +567,6 @@ namespace lfs::vis {
         [[nodiscard]] double secondsUntilViewportResizeSettleReady() const {
             return frame_lifecycle_service_.secondsUntilResizeSettleReady();
         }
-        bool consumeResizeCompleted() { return frame_lifecycle_service_.consumeResizeCompleted(); }
-
         // LOD management
         void setLodAvailable(bool available);
         void setLodEnabled(bool enabled);

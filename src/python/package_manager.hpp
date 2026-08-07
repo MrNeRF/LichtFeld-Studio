@@ -39,8 +39,6 @@ namespace lfs::python {
         std::filesystem::path venv_python() const;
         std::filesystem::path site_packages_dir() const;
         bool ensure_venv();
-        bool is_venv_ready() const;
-
         // Synchronous operations (blocking)
         InstallResult install(const std::string& package);
         InstallResult uninstall(const std::string& package);

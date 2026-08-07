@@ -214,15 +214,6 @@ namespace lfs::training {
         LOG_DEBUG("Allocated gradients for {} parameter groups", states_.size());
     }
 
-    bool AdamOptimizer::has_gradients() const {
-        for (const auto& [_, state] : states_) {
-            if (state.grad.is_valid() && state.grad.numel() > 0) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     void AdamOptimizer::zero_grad(int /*iteration*/) {
         if (last_step_zeroed_gradients_) {
             last_step_zeroed_gradients_ = false;
@@ -963,19 +954,6 @@ namespace lfs::training {
         return (it != states_.end()) ? it->second.step_count : 0;
     }
 
-    void AdamOptimizer::set_state(ParamType type, const AdamParamState& state) {
-        // Accept legacy fp32 moments by quantising on the way in.
-        if (state.exp_avg.is_valid() && state.exp_avg.dtype() == lfs::core::DataType::Float32) {
-            AdamParamState converted = state;
-            quantize_float_moments(type, converted, state.exp_avg.clone(), state.exp_avg_sq.clone());
-            converted.size = state.size;
-            converted.capacity = state.size;
-            states_[param_name(type)] = std::move(converted);
-            return;
-        }
-        states_[param_name(type)] = state;
-    }
-
     void AdamOptimizer::add_new_params(ParamType type, const lfs::core::Tensor& new_values, const bool validate) {
         auto& param = get_param(type);
 
@@ -1145,26 +1123,6 @@ namespace lfs::training {
         const size_t n_new = indices.numel();
         param.append_gather(indices);
         extend_state_for_new_params(type, n_new);
-    }
-
-    void AdamOptimizer::relocate_params_at_indices(ParamType type, const std::vector<int64_t>& indices) {
-        if (indices.empty())
-            return;
-
-        const auto& param = get_param(type);
-        for (const auto idx : indices) {
-            if (idx < 0 || static_cast<size_t>(idx) >= param.shape()[0]) {
-                throw std::runtime_error("relocate_params_at_indices: index out of bounds");
-            }
-        }
-
-        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-        const size_t idx_bytes = indices.size() * sizeof(int64_t);
-        int64_t* d_indices = nullptr;
-        LFS_CUDA_CHECK(cudaMallocAsync(&d_indices, idx_bytes, stream));
-        LFS_CUDA_CHECK(cudaMemcpyAsync(d_indices, indices.data(), idx_bytes, cudaMemcpyHostToDevice, stream));
-        relocate_params_at_indices_gpu(type, d_indices, indices.size());
-        LFS_CUDA_CHECK(cudaFreeAsync(d_indices, stream));
     }
 
     void AdamOptimizer::relocate_params_at_indices_gpu(ParamType type, const int64_t* indices_device, const size_t n_indices) {
@@ -1496,23 +1454,6 @@ namespace lfs::training {
         if (state->exp_avg_sq_scale.is_valid())
             state->exp_avg_sq_scale.zero_();
         state->step_count = 0;
-    }
-
-    void AdamOptimizer::invalidate_state(const ParamType type) {
-        const auto name = param_name(type);
-        auto it = states_.find(name);
-        if (it == states_.end()) {
-            return;
-        }
-
-        it->second.exp_avg = {};
-        it->second.exp_avg_sq = {};
-        it->second.exp_avg_scale = {};
-        it->second.exp_avg_sq_scale = {};
-        it->second.grad = {};
-        it->second.size = 0;
-        it->second.capacity = 0;
-        it->second.step_count = 0;
     }
 
 } // namespace lfs::training

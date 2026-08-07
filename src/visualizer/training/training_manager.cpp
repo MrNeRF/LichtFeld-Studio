@@ -991,7 +991,6 @@ namespace lfs::vis {
 
     void TrainerManager::updateEvaluationMetrics(int iteration, float psnr, float ssim) {
         updatePSNR(psnr);
-        setLastPSNR(psnr);
         std::lock_guard<std::mutex> lock(eval_metrics_mutex_);
         last_eval_metrics_ = EvaluationMetricsSnapshot{
             .iteration = iteration,
@@ -1013,7 +1012,6 @@ namespace lfs::vis {
             std::lock_guard<std::mutex> lock(eval_metrics_mutex_);
             last_eval_metrics_.reset();
         }
-        last_psnr_.store(0.0f);
     }
 
     void TrainerManager::trainingThreadFunc(std::stop_token stop_token) {
@@ -1142,14 +1140,6 @@ namespace lfs::vis {
         }
         LOG_ERROR("getCamById called but scene is not set");
         return nullptr;
-    }
-
-    std::vector<std::shared_ptr<lfs::core::Camera>> TrainerManager::getCamList() const {
-        if (scene_) {
-            return scene_->getActiveCameras();
-        }
-        LOG_ERROR("getCamList called but scene is not set");
-        return {};
     }
 
     std::vector<std::shared_ptr<lfs::core::Camera>> TrainerManager::getAllCamList() const {

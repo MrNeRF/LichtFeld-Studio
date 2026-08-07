@@ -1059,32 +1059,6 @@ namespace lfs::python {
         g_bridge.draw_menus(location);
     }
 
-    bool has_python_menu_items(MenuLocation location) {
-        if (g_ensure_initialized_callback)
-            g_ensure_initialized_callback();
-
-        if (!g_bridge.has_menus)
-            return false;
-
-        if (!can_acquire_gil())
-            return false;
-        const GilAcquire gil;
-        return g_bridge.has_menus(location);
-    }
-
-    bool has_menu_bar_entries() {
-        if (g_ensure_initialized_callback)
-            g_ensure_initialized_callback();
-
-        if (!g_bridge.has_menu_bar_entries)
-            return false;
-
-        if (!can_acquire_gil())
-            return false;
-        const GilAcquire gil;
-        return g_bridge.has_menu_bar_entries();
-    }
-
     std::vector<MenuBarEntry> get_menu_bar_entries() {
         if (g_ensure_initialized_callback)
             g_ensure_initialized_callback();
@@ -1222,16 +1196,6 @@ namespace lfs::python {
                           static_cast<int>(names_ptrs.size()), sh_degree,
                           rad_flip_y,
                           rad_streamable);
-    }
-
-    bool has_python_toolbar() {
-        if (!g_bridge.has_toolbar)
-            return false;
-
-        if (!can_acquire_gil())
-            return false;
-        const GilAcquire gil;
-        return g_bridge.has_toolbar();
     }
 
     void cancel_active_operator() {

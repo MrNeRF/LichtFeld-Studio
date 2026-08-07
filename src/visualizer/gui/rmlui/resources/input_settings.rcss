@@ -64,13 +64,6 @@
     font-size: 12dp;
     flex-shrink: 0;
 }
-
-.is-binding-desc {
-    flex: 1;
-    font-size: 12dp;
-    min-width: 0;
-}
-
 .is-rebind-btn {
     flex-shrink: 0;
     min-width: 60dp;

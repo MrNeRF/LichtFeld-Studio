@@ -907,30 +907,6 @@ namespace lfs::vis::gui {
         return "translate";
     }
 
-    void GizmoManager::fitActiveCropTool(const bool use_percentile) {
-        if (!isVolumeGizmoToolActive())
-            return;
-
-        if (!ensureCropToolState())
-            return;
-
-        glm::vec3 bounds_min(0.0f);
-        glm::vec3 bounds_max(0.0f);
-        if (!computeCropToolTargetBounds(crop_tool_target_node_id_, use_percentile, bounds_min, bounds_max)) {
-            crop_tool_initialized_ = false;
-            crop_tool_target_node_id_ = core::NULL_NODE;
-            crop_tool_volume_node_id_ = core::NULL_NODE;
-            clearCropToolOverlayState();
-            LOG_WARN("Cannot compute bounds for active crop tool target");
-            return;
-        }
-
-        setCropToolBounds(crop_tool_target_node_id_, bounds_min, bounds_max);
-        if (isCropToolActive())
-            (void)persistActiveCropToolToNode(false);
-        updateCropToolOverlayState();
-    }
-
     void GizmoManager::applyActiveCropTool() {
         using namespace lfs::core::events;
 

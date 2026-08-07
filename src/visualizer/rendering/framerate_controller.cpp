@@ -25,7 +25,6 @@ namespace lfs::vis {
         cleanupOldFrames();
 
         updateFPSStats();
-        updatePerformanceState();
 
         last_frame_time_ = frame_start_time_;
     }
@@ -73,8 +72,4 @@ namespace lfs::vis {
         }
     }
 
-    void FramerateController::updatePerformanceState() {
-        // Consider performance critical if average FPS is below threshold
-        is_performance_critical_ = (average_fps_ < settings_.min_fps_threshold && average_fps_ > 0.0f);
-    }
 } // namespace lfs::vis

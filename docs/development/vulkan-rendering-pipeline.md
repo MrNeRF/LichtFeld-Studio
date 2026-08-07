@@ -12,9 +12,9 @@ trainer (CUDA)            VulkanContext               viewport pass            R
      │                         │                           │                       │                        │
      │       VksplatViewportRenderer (per frame_slot)      │                       │                        │
      │                         │                           │                       │                        │
-     │  ring_inputs[slot] ◄────┤  packDeviceInputs +       │                       │                        │
+     │  ring_inputs[slot] ◄────┤  prepareInputs /       │                       │                        │
      │  CUDA → VkBuffer        │  cudaMemcpyAsync +        │                       │                        │
-     │  (external memory)      │  cudaStreamSynchronize    │                       │                        │
+     │  (external memory)      │  timeline wait    │                       │                        │
      │                         │                           │                       │                        │
      │                         │  Vulkan rasterizer pipeline (12 dispatches)        │                        │
      │                         │  → output_image_ (VkImage, R8G8B8A8_UNORM,        │                        │
@@ -43,7 +43,7 @@ Per-frame timeline:
 
 1. CPU side at frame start: `vkWaitForFences(in_flight_[currentFrameSlot()])` — guarantees the prior use of slot N is done before reuse
 2. CUDA work for this frame is enqueued (Vulkan→CUDA wait happens implicitly via the CPU-side fence wait — when the CPU reaches this point, slot N's prior Vulkan reads are done, so CUDA can safely overwrite the slot)
-3. After CUDA's `cudaMemcpyAsync` packs the inputs, CUDA signals a per-ring-slot **timeline semaphore** (Vulkan-exportable, imported into CUDA) on the same stream. The Vulkan submit registers `addFrameTimelineWait(timeline, value)` so the compute submit blocks on that signal at `VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT`. **No CPU stall** — the prior `cudaStreamSynchronize` is gone (see `vksplat_viewport_renderer.cpp::uploadInputs`).
+3. After CUDA's `cudaMemcpyAsync` packs the inputs, CUDA signals a per-ring-slot **timeline semaphore** (Vulkan-exportable, imported into CUDA) on the same stream. The Vulkan submit registers `addFrameTimelineWait(timeline, value)` so the compute submit blocks on that signal at `VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT`. **No CPU stall** — CUDA→Vulkan handoff is a timeline wait on the ring submit (see `vksplat_viewport_renderer.cpp::prepareInputs`).
 4. Vulkan submit consumes the slot's CUDA-imported buffers, signals `in_flight_[slot]` on completion
 5. `vkQueuePresentKHR` blocks on the render-finished semaphore
 
@@ -53,7 +53,7 @@ Three rings to be aware of, all keyed by `currentFrameSlot() % framesInFlight()`
 |---|---|---|
 | Vulkan command pool / cmd buffer / semaphores / fence | `VulkanContext` | `vulkan_context.{cpp,hpp}` |
 | Per-frame viewport-pass resources (overlay buffers, descriptors) | `VulkanViewportPass::FrameResources` | `vulkan_viewport_pass.cpp` |
-| CUDA-imported splat input buffers (xyz/rot/scales+opacs/sh) | `VksplatViewportRenderer::cuda_inputs_` | `vksplat_viewport_renderer.{cpp,hpp}` |
+| CUDA-imported splat input buffers (xyz/rot/scales+opacs/sh) | `VksplatViewportRenderer ring uploaded storages` | `vksplat_viewport_renderer.{cpp,hpp}` |
 
 Rule of thumb: anything written by CUDA and read by Vulkan within a frame must be ring-buffered to the same depth as `framesInFlight()`, or the cross-API ordering breaks under multi-frame-in-flight.
 
@@ -115,7 +115,7 @@ External images created via `VulkanContext::createExternalImage` must be registe
 2. If the pass writes to a new external image, allocate via `VulkanContext::createExternalImage()` and register with `context.imageBarriers().registerImage(...)` immediately.
 3. Wherever you change image layouts, call `context.imageBarriers().transitionImage(cmd, image, aspect, new_layout)` — never call `vkCmdPipelineBarrier`/`vkCmdPipelineBarrier2` inline for image transitions.
 4. For buffer barriers within a pass, use `vkCmdPipelineBarrier2` with `VkBufferMemoryBarrier2` and explicit stage/access masks; the tracker doesn't manage buffers.
-5. If the pass adds CUDA work, ring-buffer any cross-API state to `framesInFlight()` depth — see `VksplatViewportRenderer::cuda_inputs_` for the pattern.
+5. If the pass adds CUDA work, ring-buffer any cross-API state to `framesInFlight()` depth — see `VksplatViewportRenderer ring uploaded storages` for the pattern.
 
 ## What got removed
 

@@ -79,7 +79,6 @@ namespace lfs::vis {
             [[nodiscard]] LFS_VIS_API std::string cropToolShape() const;
             LFS_VIS_API void setCropToolOperation(const std::string& operation);
             [[nodiscard]] LFS_VIS_API std::string cropToolOperation() const;
-            LFS_VIS_API void fitActiveCropTool(bool use_percentile);
             LFS_VIS_API void applyActiveCropTool();
             LFS_VIS_API void deleteActiveCropToolVolume();
             [[nodiscard]] bool isViewportGizmoDragging() const { return viewport_gizmo_dragging_; }

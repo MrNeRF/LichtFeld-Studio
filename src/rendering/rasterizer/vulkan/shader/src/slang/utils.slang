@@ -81,16 +81,7 @@ float4 read_t4_float4(uint32_t idx, StructuredBuffer<float> t4) {
     return float4(t4[4*idx+0], t4[4*idx+1], t4[4*idx+2], t4[4*idx+3]);
 }
 
-[ForceInline]
-void write_t1_float(float val, uint32_t idx, RWStructuredBuffer<float> t1) {
-    t1[idx] = val;
-}
 
-[ForceInline]
-void write_t2_float2(float2 val, uint32_t idx, RWStructuredBuffer<float> t2) {
-    t2[2*idx+0] = val.x;
-    t2[2*idx+1] = val.y;
-}
 
 [ForceInline]
 void write_t3_float3(float3 val, uint32_t idx, RWStructuredBuffer<float> t3) {
@@ -106,13 +97,6 @@ void write_t3_float3(half3 val, uint32_t idx, RWStructuredBuffer<half> t3) {
     t3[3*idx+2] = val.z;
 }
 
-[ForceInline]
-void write_t4_float4(float4 val, uint32_t idx, RWStructuredBuffer<float> t4) {
-    t4[4*idx+0] = val.x;
-    t4[4*idx+1] = val.y;
-    t4[4*idx+2] = val.z;
-    t4[4*idx+3] = val.w;
-}
 
 [ForceInline]
 [Differentiable]
@@ -385,24 +369,6 @@ float3 project_point_fisheye(float3 point, Camera cam) {
     };
 }
 
-[Differentiable]
-float3x3 compute_jacobian_opencv(float3 xyz_ws, Camera cam) {
-    float3 view_point = geom_transform_points(xyz_ws, cam.world_view_transform);
-    float x = view_point.x, y = view_point.y, z = view_point.z;
-    float fx = cam.fx, fy = cam.fy, cx = cam.cx, cy = cam.cy;
-
-    DifferentialPair<float2> dx = fwd_diff(_project_point_opencv)
-        (diffPair(x, 1.0), diffPair(y, 0.0), diffPair(z, 0.0), cam.dist_coeffs);
-    DifferentialPair<float2> dy = fwd_diff(_project_point_opencv)
-        (diffPair(x, 0.0), diffPair(y, 1.0), diffPair(z, 0.0), cam.dist_coeffs);
-    DifferentialPair<float2> dz = fwd_diff(_project_point_opencv)
-        (diffPair(x, 0.0), diffPair(y, 0.0), diffPair(z, 1.0), cam.dist_coeffs);
-
-    return float3x3(
-        fx * dx.d.x, fx * dy.d.x, fx * dz.d.x,
-        fy * dx.d.y, fy * dy.d.y, fy * dz.d.y,
-        0.0, 0.0, 0.0);
-}
 
 [Differentiable]
 float3x3 compute_jacobian_fisheye(float3 xyz_ws, Camera cam) {
@@ -444,7 +410,6 @@ float3x3 compute_jacobian(float3 xyz_ws, Camera cam) {
     if (cam.model == int(CameraModel::FISHEYE))
         return compute_jacobian_fisheye(xyz_ws, cam);
     else if (cam.model == int(CameraModel::OPENCV))
-        // return compute_jacobian_opencv(xyz_ws, cam);
         return compute_jacobian_pinhole(xyz_ws, cam);  // TODO
     else if (cam.model == int(CameraModel::ORTHO))
         return compute_jacobian_ortho(xyz_ws, cam);
@@ -752,67 +717,8 @@ Splat_3D_GUT_AlphaBlend load_splat_gut_alphablend(
     return { g_xyz_ws, iscl_rot, g_opacity, g_rgb };
 }
 
-[ForceInline]
-[Differentiable]
-float3x3 rotation_scale_to_iscl_rot(float4 g_rotation, float3 g_scale) {
-    float3x3 R = quat_to_rotmat(normalize(g_rotation));
-    float3x3 S = float3x3(
-        1.0f/g_scale.x, 0.f, 0.f,
-        0.f, 1.0f/g_scale.y, 0.f,
-        0.f, 0.f, 1.0f/g_scale.z
-    );
-    return mul(S, transpose(R));
-}
 
 
-[Differentiable]
-[ForceInline]
-[ForwardDerivative(normalCdfDiffFwd)]
-[BackwardDerivative(normalCdfDiffBwd)]
-float normalCdf(float x) {
-    // return 0.5+0.5*tanh(x*(0.8+0.035*x*x));
-    return 0.5+0.5*tanh(clamp(x*(0.8+0.035*x*x),-7.0,7.0));
-}
-
-[ForceInline]
-DifferentialPair<float> normalCdfDiffFwd(DifferentialPair<float> vx) {
-    float x = vx.p;
-    float y = 0.5+0.5*tanh(x*(0.8+0.035*x*x));
-    float dydx = sqrt(0.5/M_PI) * exp(-0.5*x*x);
-    return DifferentialPair<float>(y, dydx*vx.d);
-}
-
-[ForceInline]
-void normalCdfDiffBwd(inout DifferentialPair<float> vx, float.Differential v) {
-    float x = vx.p;
-    float dx = sqrt(0.5/M_PI) * exp(-0.5*x*x);
-    vx = DifferentialPair<float>(x, v * dx);
-}
-
-[Differentiable]
-[ForceInline]
-[ForwardDerivative(erfDiffFwd)]
-[BackwardDerivative(erfDiffBwd)]
-float erf(float x) {
-    float t = abs(x);
-    float d = (((0.078108*t+0.000972)*t+0.230389)*t+0.278393)*t+1.0;
-    return sign(x) * (1.0 - 1.0/(d*d*d*d));
-}
-
-[ForceInline]
-DifferentialPair<float> erfDiffFwd(DifferentialPair<float> vx) {
-    float x = vx.p;
-    float y = erf(x);
-    float dydx = sqrt(4.0/M_PI) * exp(-x*x);
-    return DifferentialPair<float>(y, dydx*vx.d);
-}
-
-[ForceInline]
-void erfDiffBwd(inout DifferentialPair<float> vx, float.Differential v) {
-    float x = vx.p;
-    float dx = sqrt(4.0/M_PI) * exp(-x*x);
-    vx = DifferentialPair<float>(x, v * dx);
-}
 
 [ForceInline]
 [Differentiable]

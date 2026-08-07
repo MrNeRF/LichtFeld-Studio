@@ -98,11 +98,6 @@ namespace lfs::training {
             bool used_mask = false;
         };
 
-        // Legacy constructor - takes ownership of strategy and shares datasets
-        Trainer(std::shared_ptr<CameraDataset> dataset,
-                std::unique_ptr<IStrategy> strategy,
-                std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits);
-
         /**
          * @brief Constructor - takes Scene reference (Scene owns all data)
          *

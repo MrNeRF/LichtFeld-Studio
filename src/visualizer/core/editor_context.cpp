@@ -211,13 +211,6 @@ namespace lfs::vis {
         }
     }
 
-    void EditorContext::validateActiveTool() {
-        if (!isToolAvailable(active_tool_)) {
-            active_tool_ = ToolType::None;
-            app_store().active_tool.set(std::string{});
-        }
-    }
-
     void EditorContext::setActiveOperator(const std::string& id, const std::string& gizmo_type) {
         LOG_DEBUG("EditorContext::setActiveOperator: id='{}', gizmo_type='{}'", id, gizmo_type);
         active_operator_id_ = id;

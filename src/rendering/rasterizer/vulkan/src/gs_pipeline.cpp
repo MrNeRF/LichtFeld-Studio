@@ -205,10 +205,6 @@ void VulkanGSPipeline::setVulkanDispatch(lfs::rendering::VulkanDispatch dispatch
     vulkan_dispatch_ = std::move(dispatch);
 }
 
-const lfs::rendering::VulkanDispatch& VulkanGSPipeline::vulkanDispatch() const noexcept {
-    return vulkan_dispatch_;
-}
-
 const lfs::rendering::SubmissionState& VulkanGSPipeline::lastSubmissionState() const noexcept {
     return last_submission_state_;
 }
@@ -632,9 +628,6 @@ void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_dev
         limits.maxComputeWorkGroupCount[0],
         limits.maxComputeWorkGroupCount[1],
         limits.maxComputeWorkGroupCount[2],
-        limits.maxComputeWorkGroupSize[0],
-        limits.maxComputeWorkGroupSize[1],
-        limits.maxComputeWorkGroupSize[2],
     };
 }
 
@@ -1871,12 +1864,7 @@ void VulkanGSPipeline::createComputeDescriptorSetLayout(_ComputePipeline& pipeli
     }
 }
 
-void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const std::string& spirv_path, uint32_t min_shared_memory, bool compatible_subgroup_size) {
-
-    if (min_shared_memory > this->deviceInfo.sharedSize) {
-        pipeline.shader = VK_NULL_HANDLE;
-        return;
-    }
+void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const std::string& spirv_path, bool compatible_subgroup_size) {
 
     pipeline.diagnostic_name = spirvDiagnosticName(spirv_path);
     const auto spirv_code = loadSpirv(spirv_path);
@@ -1946,13 +1934,12 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const s
             pipeline_result,
             "vkCreateComputePipelines",
             std::format(
-                "VkSplat compute pipeline creation failed (pipeline='{}', layout={:#x}, shader={:#x}, required_subgroup={}, device_subgroup={}, min_shared_bytes={}, device_shared_bytes={}, result={}({}))",
+                "VkSplat compute pipeline creation failed (pipeline='{}', layout={:#x}, shader={:#x}, required_subgroup={}, device_subgroup={}, device_shared_bytes={}, result={}({}))",
                 pipeline.diagnostic_name,
                 lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
                 lfs::rendering::vkHandleValue(pipeline.shader),
                 compatible_subgroup_size ? SUBGROUP_SIZE : 0,
                 deviceInfo.subgroupSize,
-                min_shared_memory,
                 deviceInfo.sharedSize,
                 lfs::rendering::vkResultToString(pipeline_result),
                 static_cast<int>(pipeline_result)),

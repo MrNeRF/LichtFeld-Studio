@@ -60,10 +60,6 @@
     color: @{text};
 }
 
-.viewport-transform-meta__target {
-    color: @{text_dim};
-}
-
 .viewport-transform-axis--split {
     border-color: @{alpha(border,0.30)};
 }
@@ -164,28 +160,27 @@
 }
 
 .vram-hud-iteration,
+
 .vram-hud-throughput,
+
 .vram-hud-summary-label,
+
 .vram-hud-device,
+
 .vram-hud-counter-label,
-.vram-hud-topn-header,
-.vram-hud-topn-pct,
+
 .vram-hud-row-header span,
+
 .vram-hud-tree-row em,
+
 .vram-hud-empty,
+
 .vram-hud-expand-toggle {
     color: @{text_dim};
 }
 
-.vram-hud-counter-value,
-.vram-hud-topn-name,
-.vram-hud-topn-bytes {
+.vram-hud-counter-value {
     color: @{text};
-}
-
-.vram-hud-topn-row {
-    background-color: @{viewport.metrics_bg};
-    border-radius: 3dp;
 }
 
 .vram-hud-tree-row.has-children:hover {

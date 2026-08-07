@@ -56,7 +56,6 @@ namespace lfs::io {
     [[nodiscard]] LFS_IO_API Result<void> save_ply(const SplatData& splat_data, const PlySaveOptions& options);
     [[nodiscard]] LFS_IO_API Result<void> save_ply(const PointCloud& point_cloud, const PlySaveOptions& options);
 
-    LFS_IO_API PointCloud to_point_cloud(const SplatData& splat_data);
     LFS_IO_API std::vector<std::string> get_ply_attribute_names(const SplatData& splat_data);
 
     // ============================================================================

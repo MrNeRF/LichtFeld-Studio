@@ -1972,24 +1972,6 @@ namespace lfs::training {
         optimizer.set_crop_damping_mask(std::move(*crop_mask));
     }
 
-    Trainer::Trainer(std::shared_ptr<CameraDataset> dataset,
-                     std::unique_ptr<IStrategy> strategy,
-                     std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits)
-        : base_dataset_(std::move(dataset)),
-          strategy_(std::move(strategy)),
-          provided_splits_(std::move(provided_splits)) {
-        LFS_ASSERT_MSG(base_dataset_ != nullptr, "Trainer requires a camera dataset");
-        LFS_ASSERT_MSG(strategy_ != nullptr, "Trainer requires a training strategy");
-
-        // Check CUDA availability
-        int device_count = 0;
-        LFS_CUDA_TRY(cudaGetDeviceCount(&device_count), nullptr, "CUDA device discovery");
-        LFS_ASSERT_MSG(device_count > 0, "CUDA is not available - aborting");
-        createCudaResources();
-
-        LOG_DEBUG("Trainer constructed with {} cameras", base_dataset_->get_cameras().size());
-    }
-
     Trainer::Trainer(lfs::core::Scene& scene)
         : scene_(&scene) {
         LFS_ASSERT_MSG(scene.hasTrainingData(), "Scene has no cameras");

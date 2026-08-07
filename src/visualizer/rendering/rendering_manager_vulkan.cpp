@@ -41,7 +41,6 @@
 namespace lfs::vis {
 
     namespace {
-        constexpr bool kEnableLodTransitionWeights = true;
         constexpr double kGpuLodRenderCapacityOverhead = 1.20;
         constexpr float kInteractiveResizeRenderScale = 0.33f;
         constexpr auto kTrainingOutputResizeStableDelay = std::chrono::milliseconds(500);
@@ -2075,9 +2074,7 @@ namespace lfs::vis {
                                            : lod_controller_->fullQualityIndices();
                 if (!selected.empty()) {
                     request.lod_indices = selected.data();
-                    if (kEnableLodTransitionWeights &&
-                        frame_settings.lod_enabled &&
-                        lod_transition_active) {
+                    if (frame_settings.lod_enabled && lod_transition_active) {
                         const auto& weights = lod_controller_->selectedWeights();
                         if (weights.size() == selected.size()) {
                             request.lod_weights = weights.data();
@@ -3074,7 +3071,6 @@ namespace lfs::vis {
                     render_result->size);
 
                 if (resize_result.completed) {
-                    frame_lifecycle_service_.noteResizeCompleted();
                     lfs::core::Tensor::trim_memory_pool();
                 }
                 queueCameraMetricsRefreshIfStale(scene_manager);
@@ -3285,9 +3281,7 @@ namespace lfs::vis {
                                            : lod_controller_->fullQualityIndices();
                 if (!selected.empty()) {
                     request.lod_indices = selected.data();
-                    if (kEnableLodTransitionWeights &&
-                        frame_settings.lod_enabled &&
-                        lod_transition_active) {
+                    if (frame_settings.lod_enabled && lod_transition_active) {
                         const auto& weights = lod_controller_->selectedWeights();
                         if (weights.size() == selected.size()) {
                             request.lod_weights = weights.data();
@@ -3347,7 +3341,6 @@ namespace lfs::vis {
                         lfs::rendering::FrameMetadata metadata{};
                         metadata.valid = true;
                         metadata.flip_y = render_result.flip_y;
-                        metadata.color_has_alpha = transparent_viewer_compositing;
 
                         const auto publish_mesh_frame_for_vksplat = [&]() {
                             // VkSplat returns before the shared mesh-frame setup below.
@@ -3481,7 +3474,6 @@ namespace lfs::vis {
                                     }
 
                                     if (resize_result.completed) {
-                                        frame_lifecycle_service_.noteResizeCompleted();
                                         lfs::core::Tensor::trim_memory_pool();
                                     }
                                     queueCameraMetricsRefreshIfStale(scene_manager);
@@ -3559,7 +3551,6 @@ namespace lfs::vis {
                             render_result.size);
 
                         if (resize_result.completed) {
-                            frame_lifecycle_service_.noteResizeCompleted();
                             lfs::core::Tensor::trim_memory_pool();
                         }
                         queueCameraMetricsRefreshIfStale(scene_manager);
@@ -3905,7 +3896,6 @@ namespace lfs::vis {
         release_inactive_split_outputs();
 
         if (resize_result.completed) {
-            frame_lifecycle_service_.noteResizeCompleted();
             lfs::core::Tensor::trim_memory_pool();
         }
 

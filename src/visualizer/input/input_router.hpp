@@ -45,7 +45,6 @@ namespace lfs::vis::input {
         [[nodiscard]] PointerTargets pointerTargets(double x, double y) const;
         [[nodiscard]] InputTarget keyboardFocus() const;
         [[nodiscard]] bool isViewportKeyboardFocused() const;
-        [[nodiscard]] bool isGuiKeyboardFocused() const;
         [[nodiscard]] bool isTextInputActive() const;
         [[nodiscard]] bool isModalOpen() const;
         [[nodiscard]] const InputState& state() const { return state_; }

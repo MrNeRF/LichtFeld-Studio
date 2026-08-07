@@ -362,9 +362,6 @@ namespace {
             deviceInfo.maxGroupsX = 65535;
             deviceInfo.maxGroupsY = 65535;
             deviceInfo.maxGroupsZ = 65535;
-            deviceInfo.maxThreadsX = 1024;
-            deviceInfo.maxThreadsY = 1024;
-            deviceInfo.maxThreadsZ = 64;
 
             // Injectable no-op push-descriptor proc (spec §3.3).
             vk_cmd_push_descriptor_set_ = &DispatchScript::push_descriptor_set;
@@ -949,9 +946,6 @@ namespace {
             deviceInfo.maxGroupsX = 65535;
             deviceInfo.maxGroupsY = 65535;
             deviceInfo.maxGroupsZ = 65535;
-            deviceInfo.maxThreadsX = 1024;
-            deviceInfo.maxThreadsY = 1024;
-            deviceInfo.maxThreadsZ = 64;
 
             vk_cmd_push_descriptor_set_ = &DispatchScript::push_descriptor_set;
 

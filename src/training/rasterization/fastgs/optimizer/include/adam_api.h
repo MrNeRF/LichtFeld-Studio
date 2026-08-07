@@ -72,7 +72,7 @@ namespace fast_lfs::optimizer {
         const float bias_correction2_sqrt_rcp,
         cudaStream_t stream = nullptr);
 
-    // Quantise existing float moments into uint8 (legacy checkpoint load / set_state).
+    // Quantise existing float moments into uint8 (legacy checkpoint load / legacy checkpoint load).
     void quantize_adam_moments_raw(
         const float* exp_avg,
         const float* exp_avg_sq,

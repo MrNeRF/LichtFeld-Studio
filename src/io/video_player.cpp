@@ -779,42 +779,6 @@ namespace lfs::io {
         [[nodiscard]] int64_t totalFrames() const { return total_frames_; }
         [[nodiscard]] double fps() const { return fps_; }
 
-        std::vector<uint8_t> getThumbnail(const double time, const int max_width) {
-            if (!is_open_) {
-                return {};
-            }
-
-            seek(time);
-
-            if (display_buffer_.empty()) {
-                return {};
-            }
-
-            if (max_width > 0 && display_width_ > max_width) {
-                const int thumb_height = display_height_ * max_width / display_width_;
-                std::vector<uint8_t> thumb(static_cast<size_t>(max_width) * thumb_height * 3);
-
-                const AVPixelFormat preview_format =
-                    display_channels_ == 4 ? AV_PIX_FMT_RGBA : AV_PIX_FMT_RGB24;
-                SwsContext* const thumb_sws =
-                    sws_getContext(display_width_, display_height_, preview_format, max_width, thumb_height,
-                                   AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
-
-                if (thumb_sws) {
-                    uint8_t* src_data[1] = {display_buffer_.data()};
-                    int src_linesize[1] = {display_width_ * display_channels_};
-                    uint8_t* dst_data[1] = {thumb.data()};
-                    int dst_linesize[1] = {max_width * 3};
-
-                    sws_scale(thumb_sws, src_data, src_linesize, 0, display_height_, dst_data, dst_linesize);
-                    sws_freeContext(thumb_sws);
-                }
-                return thumb;
-            }
-
-            return display_buffer_;
-        }
-
     private:
         void displayFrame(DecodedFrame&& frame) {
             display_buffer_ = std::move(frame.data);
@@ -1199,13 +1163,10 @@ namespace lfs::io {
     void VideoPlayer::close() { impl_->close(); }
     bool VideoPlayer::isOpen() const { return impl_->isOpen(); }
 
-    void VideoPlayer::play() { impl_->play(); }
-    void VideoPlayer::pause() { impl_->pause(); }
     void VideoPlayer::togglePlayPause() { impl_->togglePlayPause(); }
     bool VideoPlayer::isPlaying() const { return impl_->isPlaying(); }
 
     void VideoPlayer::seek(const double seconds) { impl_->seek(seconds); }
-    void VideoPlayer::seekFrame(const int64_t frame_number) { impl_->seekFrame(frame_number); }
     bool VideoPlayer::rerenderCurrentFrame() { return impl_->rerenderCurrentFrame(); }
     void VideoPlayer::stepForward() { impl_->stepForward(); }
     void VideoPlayer::stepBackward() { impl_->stepBackward(); }
@@ -1229,12 +1190,6 @@ namespace lfs::io {
 
     double VideoPlayer::currentTime() const { return impl_->currentTime(); }
     double VideoPlayer::duration() const { return impl_->duration(); }
-    int64_t VideoPlayer::currentFrameNumber() const { return impl_->currentFrameNumber(); }
-    int64_t VideoPlayer::totalFrames() const { return impl_->totalFrames(); }
     double VideoPlayer::fps() const { return impl_->fps(); }
-
-    std::vector<uint8_t> VideoPlayer::getThumbnail(const double time, const int max_width) {
-        return impl_->getThumbnail(time, max_width);
-    }
 
 } // namespace lfs::io

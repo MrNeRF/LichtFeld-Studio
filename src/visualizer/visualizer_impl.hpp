@@ -96,10 +96,6 @@ namespace lfs::vis {
         Viewport& getViewport() { return viewport_; }
 
         // FPS monitoring
-        [[nodiscard]] float getCurrentFPS() const {
-            return rendering_manager_ ? rendering_manager_->getCurrentFPS() : 0.0f;
-        }
-
         [[nodiscard]] float getAverageFPS() const {
             return rendering_manager_ ? rendering_manager_->getAverageFPS() : 0.0f;
         }

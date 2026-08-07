@@ -21,17 +21,6 @@
     font-weight: bold;
     margin-bottom: 4dp;
 }
-
-.m2s-label {
-    display: block;
-    font-size: 12dp;
-    margin-bottom: 3dp;
-}
-
-.m2s-label--spaced {
-    margin-top: 6dp;
-}
-
 .m2s-help {
     display: block;
     font-size: 12dp;

@@ -427,17 +427,6 @@ progress fill {
     margin-left: 4dp;
     flex-shrink: 0;
 }
-
-/* ── Structured Setting Grid ───────────────────────────── */
-
-.setting-group {
-    margin-bottom: 10dp;
-}
-
-.setting-group:last-child {
-    margin-bottom: 0;
-}
-
 .setting-row--aligned {
     min-width: 0;
 }

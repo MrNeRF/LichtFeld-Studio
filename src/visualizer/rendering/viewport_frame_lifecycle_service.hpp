@@ -9,7 +9,6 @@
 #include "rendering_types.hpp"
 #include <atomic>
 #include <chrono>
-#include <utility>
 
 namespace lfs::vis {
 
@@ -43,9 +42,6 @@ namespace lfs::vis {
         [[nodiscard]] bool isResizeDeferring() const {
             return resize_active_.load(std::memory_order_relaxed) || resize_settle_pending_;
         }
-        bool consumeResizeCompleted() { return std::exchange(resize_completed_, false); }
-        void noteResizeCompleted() { resize_completed_ = true; }
-        void resetViewportSize() { last_viewport_size_ = glm::ivec2(0, 0); }
         void resetModelTracking() { last_model_ptr_ = 0; }
         [[nodiscard]] glm::ivec2 lastViewportSize() const { return last_viewport_size_; }
 
@@ -56,7 +52,6 @@ namespace lfs::vis {
         std::chrono::steady_clock::time_point last_resize_change_{};
         std::atomic<bool> resize_active_{false};
         bool resize_settle_pending_ = false;
-        bool resize_completed_ = false;
     };
 
 } // namespace lfs::vis

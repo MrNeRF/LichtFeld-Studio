@@ -167,7 +167,6 @@ namespace lfs::diagnostics {
         std::size_t accounted_unknown_live_bytes = 0;
         std::size_t accounted_peak_bytes = 0;
         std::size_t sampled_live_bytes = 0;
-        std::vector<std::size_t> accounted_live_history;
         VramProcessSnapshot process;
         std::vector<VramMetricSnapshot> rows;
         std::vector<VramTreeNodeSnapshot> tree;
@@ -250,8 +249,6 @@ namespace lfs::diagnostics {
         [[nodiscard]] bool enabled() const;
 
         void beginIteration(int iteration);
-        void setIteration(int iteration);
-
         void pushScope(std::string_view scope);
         void popScope();
         void pushTimerScope(std::string_view scope);
@@ -270,10 +267,6 @@ namespace lfs::diagnostics {
                               std::string_view label);
         void recordDeallocation(void* ptr);
         void relabelAllocation(void* ptr, std::string_view label);
-        void recordBytes(std::string_view scope,
-                         std::string_view label,
-                         std::size_t bytes,
-                         VramAllocationMethod method = VramAllocationMethod::External);
         void recordCurrentBytes(std::string_view scope,
                                 std::string_view label,
                                 std::size_t bytes,
@@ -284,7 +277,6 @@ namespace lfs::diagnostics {
                                VramAllocationMethod method = VramAllocationMethod::External);
         void clearStaticScope(std::string_view scope);
         void recordTimerSample(std::string_view scope, double elapsed_ms);
-        void recordGpuTimerSample(std::string_view scope, double elapsed_ms);
         void clearScope(std::string_view scope);
 
         std::int32_t acquireGpuEventPair(std::string_view scope, void* stream);
@@ -303,7 +295,6 @@ namespace lfs::diagnostics {
         void setCudaPoolBucketCacheBytes(std::size_t bytes);
         void setCudaSlabReservedBytes(std::size_t bytes);
         void setExportableSplatBytes(std::size_t bytes);
-        void captureCudaContextBaseline();
         void captureCudaDeviceBaseline();
         void captureCudaWarmupDelta();
         void recordCudaPhaseBytes(std::string_view phase, std::size_t bytes);

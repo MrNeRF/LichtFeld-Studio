@@ -42,8 +42,6 @@ namespace lfs::training {
         // IStrategy interface - optimizer access
         AdamOptimizer& get_optimizer() override { return *_optimizer; }
         const AdamOptimizer& get_optimizer() const override { return *_optimizer; }
-        ExponentialLR* get_scheduler() { return _scheduler.get(); }
-        const ExponentialLR* get_scheduler() const { return _scheduler.get(); }
 
         // Serialization for checkpoints
         void serialize(std::ostream& os) const override;

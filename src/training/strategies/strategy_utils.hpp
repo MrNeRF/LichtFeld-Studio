@@ -75,20 +75,6 @@ namespace lfs::training {
         const lfs::core::Tensor& kept_old_indices,
         size_t old_size);
 
-    // Function types for parameter and optimizer state updates
-    using ParamUpdateFn = std::function<lfs::core::Tensor(const int, const lfs::core::Tensor&)>;
-    using OptimizerUpdateFn = std::function<void(
-        AdamParamState& state,
-        const lfs::core::Tensor& new_param)>;
-
-    // Update parameter with optimizer state synchronization
-    void update_param_with_optimizer(
-        const ParamUpdateFn& param_fn,
-        const OptimizerUpdateFn& optimizer_fn,
-        std::unique_ptr<AdamOptimizer>& optimizer,
-        lfs::core::SplatData& splat_data,
-        std::vector<size_t> param_idxs = {0, 1, 2, 3, 4, 5});
-
     // Returns the fused MCMC-style dead mask:
     // opacity <= min_opacity OR ||rotation||^2 < 1e-8.
     lfs::core::Tensor compute_dead_mask_from_opacity_and_rotation(

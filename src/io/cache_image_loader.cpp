@@ -111,16 +111,6 @@ namespace lfs::io {
         return 1.0 - (static_cast<double>(available) / static_cast<double>(total));
     }
 
-    std::string CacheLoader::to_string(CacheMode mode) {
-        switch (mode) {
-        case CacheMode::Undetermined: return "Undetermined";
-        case CacheMode::NoCache: return "NoCache";
-        case CacheMode::CPU_memory: return "CPU_memory";
-        case CacheMode::FileSystem: return "FileSystem";
-        }
-        return "Unknown";
-    }
-
     void CacheLoader::update_cache_params(bool use_cpu_memory, bool use_fs_cache, int num_expected_images,
                                           float min_cpu_free_GB, float min_cpu_free_memory_ratio,
                                           bool print_cache_status, int print_status_freq_num) {

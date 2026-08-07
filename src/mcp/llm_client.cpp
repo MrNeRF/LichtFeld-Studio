@@ -237,39 +237,11 @@ namespace lfs::mcp {
 
     LLMClient::~LLMClient() = default;
 
-    void LLMClient::set_provider(LLMProvider provider) {
-        impl_->provider = provider;
-        if (provider == LLMProvider::Anthropic && impl_->model.find("gpt") != std::string::npos) {
-            impl_->model = "claude-sonnet-4-20250514";
-        } else if (provider == LLMProvider::OpenAI && impl_->model.find("claude") != std::string::npos) {
-            impl_->model = "gpt-4o";
-        }
-    }
-
     void LLMClient::set_api_key(const std::string& key) { impl_->api_key = key; }
-
-    void LLMClient::set_model(const std::string& model) { impl_->model = model; }
-
-    void LLMClient::set_base_url(const std::string& url) { impl_->base_url = url; }
 
     std::expected<LLMResponse, std::string> LLMClient::complete(const LLMRequest& request) {
         return impl_->do_request(request);
     }
-
-    std::future<LLMResponse> LLMClient::complete_async(const LLMRequest& request) {
-        return std::async(std::launch::async, [this, request]() {
-            auto result = impl_->do_request(request);
-            if (result) {
-                return *result;
-            }
-            LLMResponse error_resp;
-            error_resp.success = false;
-            error_resp.error = result.error();
-            return error_resp;
-        });
-    }
-
-    bool LLMClient::is_configured() const { return !impl_->api_key.empty(); }
 
     std::expected<std::string, std::string> LLMClient::load_api_key_from_env() {
         if (const char* key = std::getenv("ANTHROPIC_API_KEY")) {

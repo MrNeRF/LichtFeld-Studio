@@ -919,10 +919,6 @@ namespace lfs::core {
         CudaMemoryPool::instance().set_iteration(iteration);
     }
 
-    void Tensor::print_memory_pool_stats() {
-        CudaMemoryPool::instance().print_stats();
-    }
-
     // ============= Destructor =============
     Tensor::~Tensor() {
         if (data_owner_ && profiling_enabled_) {
@@ -2593,36 +2589,6 @@ namespace lfs::core {
 
     // ============= Debug Functions =============
 
-    void Tensor::log_info() const {
-        log_info({});
-    }
-
-    void Tensor::log_info(const std::string& name) const {
-        const std::string& prefix = name.empty() ? "Tensor" : name;
-
-        if (!is_valid()) {
-            LOG_INFO("{}: {}", prefix, str());
-            return;
-        }
-
-        auto values = debug_values(10);
-
-        std::ostringstream oss;
-        oss << str() << "\n  Values: [";
-
-        for (size_t i = 0; i < values.size(); ++i) {
-            if (i > 0)
-                oss << ", ";
-            oss << std::fixed << std::setprecision(4) << values[i];
-            if (i == 9 && numel() > 10) {
-                oss << ", ... (" << numel() - 10 << " more)";
-            }
-        }
-        oss << "]";
-
-        LOG_INFO("{}: {}", prefix, oss.str());
-    }
-
     void Tensor::print_formatted() const {
         print_formatted({}, 10);
     }
@@ -3080,34 +3046,6 @@ namespace lfs::core {
 
         LFS_ASSERT_MSG(false,
                        "to_vector_uint8 reached an unsupported dtype");
-    }
-
-    void Tensor::dump_diagnostic(const std::string& filename) const {
-        std::ofstream file;
-        if (!lfs::core::open_file_for_write(lfs::core::utf8_to_path(filename), file)) {
-            LOG_ERROR("Failed to open diagnostic dump file: {}", filename);
-            return;
-        }
-        file << "=== Tensor Diagnostic Dump ===\n";
-        file << std::format("Info: {}\n", str());
-        file << std::format("Memory address: {}\n", data_);
-
-        if (is_valid()) {
-            file << std::format("Bytes: {}\n", bytes());
-
-            if (device_ == Device::CPU || numel() < 10000) {
-                auto values = to_vector();
-                file << std::format("Values ({} total):\n", values.size());
-                for (size_t i = 0; i < std::min(size_t(1000), values.size()); ++i) {
-                    file << std::format("[{}]: {}\n", i, values[i]);
-                }
-            }
-        } else {
-            file << "Tensor is invalid\n";
-        }
-
-        file.close();
-        LOG_INFO("Diagnostic dump saved to {}", filename);
     }
 
     // ============= Validation & Assertions =============

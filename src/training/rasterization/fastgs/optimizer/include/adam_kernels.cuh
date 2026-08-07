@@ -223,7 +223,7 @@ namespace fast_lfs::optimizer::kernels::adam {
     }
 
     // Quantise existing float moments (exp_avg, exp_avg_sq) into the uint8 representation.
-    // Used on legacy (v1) checkpoint load and set_state. Contiguous [n_rows, row_size].
+    // Used on legacy (v1) checkpoint load and legacy checkpoint load. Contiguous [n_rows, row_size].
     __global__ void quantize_adam_moments_cu(
         const float* exp_avg,
         const float* exp_avg_sq,
@@ -375,7 +375,7 @@ namespace fast_lfs::optimizer::kernels::adam {
     }
 
     // Quantise existing swizzled float shN moments into the uint8 swizzled representation
-    // (v1 checkpoint load / set_state for shN). 1 thread per primitive.
+    // (v1 checkpoint load / legacy checkpoint load for shN). 1 thread per primitive.
     __global__ void quantize_adam_moments_swizzled_cu(
         const float* exp_avg,
         const float* exp_avg_sq,

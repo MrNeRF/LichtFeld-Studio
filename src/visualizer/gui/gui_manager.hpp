@@ -139,7 +139,6 @@ namespace lfs::vis {
             [[nodiscard]] bool isStartupBlockingInput() const {
                 return startup_overlay_.blocksUnderlayInput();
             }
-            void dismissStartupOverlay();
             void setStartupPluginLoadState(bool started, bool active, float progress,
                                            const std::string& stage);
             // Rebuild static @tr: RML content after a runtime language switch.

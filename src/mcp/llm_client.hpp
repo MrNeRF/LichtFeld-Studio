@@ -52,16 +52,8 @@ namespace lfs::mcp {
         LLMClient();
         ~LLMClient();
 
-        void set_provider(LLMProvider provider);
         void set_api_key(const std::string& key);
-        void set_model(const std::string& model);
-        void set_base_url(const std::string& url);
-
         std::expected<LLMResponse, std::string> complete(const LLMRequest& request);
-
-        std::future<LLMResponse> complete_async(const LLMRequest& request);
-
-        bool is_configured() const;
 
         static std::expected<std::string, std::string> load_api_key_from_env();
 

@@ -6323,9 +6323,7 @@ namespace lfs::vis {
         if (&context != context_) {
             return std::unexpected("VkSplat depth readback received a different Vulkan context");
         }
-        // S02: waitForPendingBatch removed. Produce ordering is the timeline wait on
-        // the readback submit; batch-slot cmdbuf reuse is protected by the pipeline's
-        // waitForPendingBatchSlot at beginCommandBatch.
+        // Produce ordering is the timeline wait on the readback submit.
 
         const auto& output = ring_.latestSlot(outputSlotIndex(output_slot));
         const std::uint64_t completion_value =
@@ -6471,8 +6469,7 @@ namespace lfs::vis {
         if (&context != context_) {
             return std::unexpected("VkSplat output depth readback received a different Vulkan context");
         }
-        // S02: waitForPendingBatch removed — produce ordering is the timeline wait
-        // on the readback submit; batch-slot reuse is at beginCommandBatch.
+        // Produce ordering is the timeline wait on the readback submit.
 
         const auto& output = ring_.latestSlot(outputSlotIndex(output_slot));
         if (output.depth_image.image == VK_NULL_HANDLE ||
@@ -6673,8 +6670,7 @@ namespace lfs::vis {
         if (&context != context_) {
             return std::unexpected("VkSplat output readback received a different Vulkan context");
         }
-        // S02: waitForPendingBatch removed — produce ordering is the timeline wait
-        // on the readback submit; batch-slot reuse is at beginCommandBatch.
+        // Produce ordering is the timeline wait on the readback submit.
 
         const auto& output = ring_.latestSlot(outputSlotIndex(output_slot));
         if (output.image.image == VK_NULL_HANDLE ||
@@ -6847,8 +6843,7 @@ namespace lfs::vis {
         if (&context != context_) {
             return std::unexpected("VkSplat depth sample received a different Vulkan context");
         }
-        // S02: waitForPendingBatch removed — produce ordering is the timeline wait
-        // on the readback submit; batch-slot reuse is at beginCommandBatch.
+        // Produce ordering is the timeline wait on the readback submit.
 
         const auto& output = ring_.latestSlot(outputSlotIndex(request.output_slot));
         if (output.depth_image.image == VK_NULL_HANDLE ||

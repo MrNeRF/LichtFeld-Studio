@@ -6621,10 +6621,6 @@ namespace lfs::vis::gui {
         return async_tasks_.isExporting() || async_tasks_.isExportingVideo();
     }
 
-    void GuiManager::dismissStartupOverlay() {
-        startup_overlay_.dismiss();
-    }
-
     void GuiManager::setStartupPluginLoadState(const bool started,
                                                const bool active,
                                                const float progress,

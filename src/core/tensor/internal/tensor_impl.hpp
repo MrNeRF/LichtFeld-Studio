@@ -404,8 +404,6 @@ namespace lfs::core {
             size_t logical_size = 0;
 
             // Cached alignment flags (computed once on allocation)
-            bool is_aligned_16 = false;  // 16-byte alignment for float4 vectorization
-            bool is_aligned_128 = false; // 128-byte alignment for cache line optimization
 
             // Home stream: the stream the tensor's most recent enqueued write is
             // ordered on. Atomic so cross-thread readers see untorn values;
@@ -484,17 +482,8 @@ namespace lfs::core {
                                                 std::function<Tensor()> materializer,
                                                 std::vector<uint64_t> lazy_input_ids);
 
-        // Compute alignment flags for vectorization
-        void compute_alignment() {
-            if (data_ != nullptr) {
-                auto addr = reinterpret_cast<uintptr_t>(data_);
-                state_->is_aligned_16 = (addr % 16) == 0;
-                state_->is_aligned_128 = (addr % 128) == 0;
-            } else {
-                state_->is_aligned_16 = false;
-                state_->is_aligned_128 = false;
-            }
-        }
+        // Alignment bookkeeping was write-only and removed; keep the hook for call sites.
+        void compute_alignment() {}
 
         void init_storage_meta() {
             storage_meta_ = std::make_shared<StorageMeta>();
@@ -1296,7 +1285,6 @@ namespace lfs::core {
         static void trim_memory_pool();
         static void shutdown_memory_pool();
         static void set_memory_pool_iteration(int iteration);
-        static void print_memory_pool_stats();
 
         void set_bool(std::initializer_list<size_t> indices, bool value);
         bool get_bool(std::initializer_list<size_t> indices) const;
@@ -1320,12 +1308,10 @@ namespace lfs::core {
                     (std::is_same_v<Value, float> && dtype_ == DataType::Float32) ||
                     (std::is_same_v<Value, __half> && dtype_ == DataType::Float16) ||
                     ((std::is_same_v<Value, int> || std::is_same_v<Value, int32_t> ||
-                      std::is_same_v<Value, uint32_t>) &&
-                     dtype_ == DataType::Int32) ||
+                      std::is_same_v<Value, uint32_t>)&&dtype_ == DataType::Int32) ||
                     (std::is_same_v<Value, int64_t> && dtype_ == DataType::Int64) ||
                     ((std::is_same_v<Value, bool> || std::is_same_v<Value, unsigned char> ||
-                      std::is_same_v<Value, uint8_t>) &&
-                     (dtype_ == DataType::Bool || dtype_ == DataType::UInt8));
+                      std::is_same_v<Value, uint8_t>)&&(dtype_ == DataType::Bool || dtype_ == DataType::UInt8));
                 LFS_ASSERT_MSG(dtype_matches,
                                "ptr<T>() type does not match tensor dtype");
             }
@@ -1410,8 +1396,6 @@ namespace lfs::core {
         }
 
         // Alignment accessors (cached flags computed on allocation)
-        bool is_aligned_16() const { return state_->is_aligned_16; }
-        bool is_aligned_128() const { return state_->is_aligned_128; }
 
         // Home stream: where this tensor's pending writes are ordered. Frees route
         // here; reads from other streams must be recorded (record_stream) or
@@ -2370,9 +2354,7 @@ namespace lfs::core {
 
         // Fused operations for performance
         // Conv1x1 + bias + ReLU in single pass (avoids intermediate allocations)
-        Tensor conv1x1_bias_relu(const Tensor& weight, const Tensor& bias) const;
         // Linear + bias + ReLU in single pass
-        Tensor linear_bias_relu(const Tensor& weight, const Tensor& bias) const;
 
         // _out variants that write into pre-allocated output tensors (zero allocation)
         void conv1x1_bias_out(const Tensor& weight, const Tensor& bias, Tensor& output) const;
@@ -2496,7 +2478,6 @@ namespace lfs::core {
 
         // Scalar boolean reductions
         bool any_scalar() const;
-        bool all_scalar() const;
 
         // ============= OPERATOR OVERLOADS (Template-based) =============
 
@@ -2611,9 +2592,6 @@ namespace lfs::core {
         std::vector<bool> to_vector_bool() const;
         std::vector<float> debug_values(size_t max_values = 100) const;
 
-        void dump_diagnostic(const std::string& filename) const;
-        void log_info() const;
-        void log_info(const std::string& name) const;
         void print_formatted() const;
         void print_formatted(const std::string& name, size_t max_per_dim = 10) const;
 

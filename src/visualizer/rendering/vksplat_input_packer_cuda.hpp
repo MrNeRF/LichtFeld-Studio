@@ -9,19 +9,6 @@
 
 namespace lfs::vis::vksplat::detail {
 
-    [[nodiscard]] cudaError_t launchPackActivatedRotations(
-        const float* rotation_raw,
-        float* rotations_dst,
-        std::size_t num_splats,
-        cudaStream_t stream);
-
-    [[nodiscard]] cudaError_t launchPackScalesOpacs(
-        const float* scaling_raw,
-        const float* opacity_raw,
-        float* scales_opacs_dst,
-        std::size_t num_splats,
-        cudaStream_t stream);
-
     // Copy opacity_raw → opacity_dst, but force soft-deleted entries to a
     // strongly-negative raw value so sigmoid(raw) ≈ 0 in the rasterizer. Used
     // to honor SplatData::deleted() through the VkSplat path without modifying

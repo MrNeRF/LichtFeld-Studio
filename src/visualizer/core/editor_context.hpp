@@ -77,13 +77,7 @@ namespace lfs::vis {
         void update(const SceneManager* scene_manager, const TrainerManager* trainer_manager);
 
         // Mode queries
-        [[nodiscard]] EditorMode getMode() const { return mode_; }
-        [[nodiscard]] bool isPreTraining() const { return mode_ == EditorMode::PRE_TRAINING; }
         [[nodiscard]] bool isTraining() const { return mode_ == EditorMode::TRAINING; }
-        [[nodiscard]] bool isTrainingOrPaused() const {
-            return mode_ == EditorMode::TRAINING || mode_ == EditorMode::PAUSED;
-        }
-        [[nodiscard]] bool isFinished() const { return mode_ == EditorMode::FINISHED; }
         [[nodiscard]] bool isToolsDisabled() const {
             return mode_ == EditorMode::TRAINING || mode_ == EditorMode::PAUSED || mode_ == EditorMode::FINISHED;
         }
@@ -100,13 +94,11 @@ namespace lfs::vis {
         // Capability queries
         [[nodiscard]] bool canTransformSelectedNode() const;
         [[nodiscard]] bool canSelectGaussians() const;
-        [[nodiscard]] bool hasGaussians() const { return has_gaussians_; }
         [[nodiscard]] bool forcePointCloudMode() const { return mode_ == EditorMode::PRE_TRAINING; }
 
         // Active tool management (legacy - will be removed)
         void setActiveTool(ToolType tool);
         [[nodiscard]] ToolType getActiveTool() const { return active_tool_; }
-        void validateActiveTool();
 
         // String-based operator system (Blender-style)
         void setActiveOperator(const std::string& id, const std::string& gizmo_type);

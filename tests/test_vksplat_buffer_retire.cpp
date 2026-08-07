@@ -164,9 +164,6 @@ namespace {
             deviceInfo.maxGroupsX = 65535;
             deviceInfo.maxGroupsY = 65535;
             deviceInfo.maxGroupsZ = 65535;
-            deviceInfo.maxThreadsX = 1024;
-            deviceInfo.maxThreadsY = 1024;
-            deviceInfo.maxThreadsZ = 64;
         }
 
         void disarm_for_destruction() {

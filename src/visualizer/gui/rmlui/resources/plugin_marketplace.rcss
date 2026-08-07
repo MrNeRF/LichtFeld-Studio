@@ -170,25 +170,6 @@
     justify-content: center;
     gap: 12dp;
 }
-
-/* ── Plugin card ──────────────────────────────────────── */
-
-.plugin-card {
-    width: 220dp;
-    flex-shrink: 0;
-    height: 220dp;
-    border-width: 1dp;
-    padding: 8dp;
-    display: flex;
-    flex-direction: column;
-    transition: background-color 0.18s quadratic-out;
-}
-
-.plugin-card--placeholder {
-    visibility: hidden;
-    pointer-events: none;
-}
-
 #status-bar {
     display: flex;
     align-items: center;
@@ -323,117 +304,12 @@
 .plugin-list-row:first-child {
     border-top-width: 0;
 }
-
-.plugin-list-summary {
-    display: flex;
-    align-items: center;
-    gap: 6dp;
-    min-width: 0;
-    min-height: 24dp;
-    padding: 3dp 8dp 3dp 8dp;
-}
-
-.plugin-list-disclosure {
-    width: 14dp;
-    min-width: 14dp;
-    padding: 0;
-    border-width: 0;
-    background-color: transparent;
-    text-align: center;
-    line-height: 14dp;
-    flex-shrink: 0;
-}
-
-.plugin-list-name-btn {
-    display: flex;
-    align-items: center;
-    gap: 6dp;
-    flex: 1;
-    min-width: 0;
-    padding: 0;
-    border-width: 0;
-    background-color: transparent;
-    text-align: left;
-}
-
-.plugin-list-name {
-    font-size: 12dp;
-    font-weight: bold;
-    min-width: 0;
-}
-
-.plugin-list-version {
-    font-size: 12dp;
-    flex-shrink: 0;
-}
-
-.plugin-list-summary-right {
-    display: flex;
-    align-items: center;
-    gap: 10dp;
-    margin-left: auto;
-    flex-shrink: 0;
-}
-
-.plugin-list-summary-status {
-    min-width: 112dp;
-    font-size: 12dp;
-    text-align: right;
-}
-
-.plugin-list-marker {
-    width: 10dp;
-    min-width: 10dp;
-    font-size: 12dp;
-    text-align: center;
-}
-
-.plugin-list-details {
-    display: flex;
-    flex-direction: column;
-    gap: 6dp;
-    padding: 0 10dp 8dp 34dp;
-}
-
-.plugin-list-details.hidden {
-    display: none;
-}
-
 .plugin-list-detail-meta {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
     gap: 8dp;
 }
-
-.plugin-list-meta-item {
-    font-size: 12dp;
-}
-
-.plugin-list-link {
-    padding: 0 4dp;
-    border-width: 0;
-    background-color: transparent;
-    font-size: 12dp;
-}
-
-.plugin-list-description,
-.plugin-list-error {
-    display: block;
-    font-size: 12dp;
-}
-
-.plugin-list-feedback {
-    margin-top: 0;
-}
-
-.plugin-list-options {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8dp;
-}
-
 .plugin-list-option-row {
     min-height: 18dp;
 }
@@ -451,18 +327,6 @@
 .plugin-list-option-label {
     font-size: 12dp;
 }
-
-.plugin-list-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4dp;
-}
-
-.plugin-list-buttons .btn {
-    min-width: 64dp;
-    padding: 2dp 6dp;
-}
-
 /* ── Confirm overlay ──────────────────────────────────── */
 
 .confirm-overlay {

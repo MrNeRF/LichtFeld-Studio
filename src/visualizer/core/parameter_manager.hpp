@@ -36,7 +36,6 @@ namespace lfs::vis {
         void setSessionDefaults(const lfs::core::param::TrainingParameters& params);
 
         // Set current params (e.g., from loaded checkpoint)
-        void setCurrentParams(const lfs::core::param::OptimizationParameters& params);
 
         // Import params: overwrites both session and current for active strategy
         void importParams(const lfs::core::param::OptimizationParameters& params);

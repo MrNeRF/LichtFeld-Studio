@@ -355,33 +355,7 @@ namespace lfs::training::kernels {
         }
     }
 
-    __global__ void ppisp_reg_loss_kernel(const float* params, float* loss_out, int num_elements) {
-        int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        float local_sum = 0.0f;
-
-        if (idx < num_elements) {
-            float val = params[idx];
-            local_sum = val * val;
-        }
-
-        typedef cub::BlockReduce<float, PPISP_BLOCK_SIZE> BlockReduce;
-        __shared__ typename BlockReduce::TempStorage temp;
-        float sum = BlockReduce(temp).Sum(local_sum);
-
-        if (threadIdx.x == 0) {
-            atomicAdd(loss_out, sum);
-        }
-    }
-
     // Regularization backward kernel
-    __global__ void ppisp_reg_backward_kernel(const float* params, float* grad, float weight, int num_elements) {
-        int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= num_elements)
-            return;
-
-        grad[idx] += 2.0f * weight * params[idx];
-    }
-
     // Launch functions
     void launch_ppisp_forward_chw_region(const float* exposure_params, const float* vignetting_params,
                                          const float* color_params, const float* crf_params, const float* rgb_in,
@@ -464,27 +438,6 @@ namespace lfs::training::kernels {
                                                                    num_frames);
 
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP init kernel launch failed");
-    }
-
-    void launch_ppisp_reg_loss(const float* params, float* loss_out, int num_elements, cudaStream_t stream) {
-        stream = resolve_stream(stream);
-        int threads = PPISP_BLOCK_SIZE;
-        int blocks = divUp(num_elements, threads);
-
-        ppisp_reg_loss_kernel<<<blocks, threads, 0, stream>>>(params, loss_out, num_elements);
-
-        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP reg loss kernel launch failed");
-    }
-
-    void launch_ppisp_reg_backward(const float* params, float* grad, float weight, int num_elements,
-                                   cudaStream_t stream) {
-        stream = resolve_stream(stream);
-        int threads = PPISP_BLOCK_SIZE;
-        int blocks = divUp(num_elements, threads);
-
-        ppisp_reg_backward_kernel<<<blocks, threads, 0, stream>>>(params, grad, weight, num_elements);
-
-        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP reg backward kernel launch failed");
     }
 
 } // namespace lfs::training::kernels
