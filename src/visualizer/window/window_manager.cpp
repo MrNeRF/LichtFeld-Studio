@@ -32,6 +32,8 @@ namespace lfs::vis {
         constexpr int kResizeBorder = 6;
         constexpr int kMinWindowWidth = 640;
         constexpr int kMinWindowHeight = 360;
+        constexpr int kMinimumVisibleWindowWidth = 96;
+        constexpr int kMinimumVisibleWindowHeight = 64;
 #if defined(_WIN32)
         constexpr bool kUseManualBorderlessResize = true;
 #else
@@ -41,6 +43,40 @@ namespace lfs::vis {
         constexpr unsigned kResizeRight = 1u << 1;
         constexpr unsigned kResizeTop = 1u << 2;
         constexpr unsigned kResizeBottom = 1u << 3;
+
+        bool windowRectangleVisibleOnAnyDisplay(const WindowManager::PersistentWindowState& state) {
+            const int display_count = SDL_GetNumVideoDisplays();
+            for (int display = 0; display < display_count; ++display) {
+                SDL_Rect bounds{};
+                if (!SDL_GetDisplayBounds(display, &bounds))
+                    continue;
+
+                const int left = std::max(state.x, bounds.x);
+                const int top = std::max(state.y, bounds.y);
+                const int right = std::min(state.x + state.width, bounds.x + bounds.w);
+                const int bottom = std::min(state.y + state.height, bounds.y + bounds.h);
+                if (right - left >= kMinimumVisibleWindowWidth &&
+                    bottom - top >= kMinimumVisibleWindowHeight)
+                    return true;
+            }
+            return false;
+        }
+
+        void sanitizeInitialWindowState(WindowManager::PersistentWindowState& state) {
+            if (windowRectangleVisibleOnAnyDisplay(state))
+                return;
+
+            SDL_Rect fallback{};
+            if (SDL_GetDisplayBounds(0, &fallback)) {
+                state.x = fallback.x + (fallback.w - state.width) / 2;
+                state.y = fallback.y + (fallback.h - state.height) / 2;
+                LOG_WARN("Saved window geometry is outside all displays; centering it on the primary display");
+            } else {
+                state.x = SDL_WINDOWPOS_CENTERED;
+                state.y = SDL_WINDOWPOS_CENTERED;
+                LOG_WARN("Saved window geometry is outside all displays; using SDL default positioning");
+            }
+        }
 
         void configureValidationLayerSearchPath() {
 #ifdef LFS_VULKAN_VALIDATION_LAYER_DIR
@@ -605,7 +641,8 @@ namespace lfs::vis {
         }
 
         if (initial_window_state_) {
-            const auto& state = *initial_window_state_;
+            auto state = *initial_window_state_;
+            sanitizeInitialWindowState(state);
             const bool position_set = SDL_SetWindowPosition(window_, state.x, state.y);
             const bool size_set = SDL_SetWindowSize(window_, state.width, state.height);
             if (!position_set || !size_set) {
