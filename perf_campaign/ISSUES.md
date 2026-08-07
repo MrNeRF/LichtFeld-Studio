@@ -162,3 +162,12 @@
 - Fix: per-worker MemoryHigh=12G/MemoryMax=14G, RuntimeMaxSec=8h (slice ceiling 18G still
   protects the desktop). Recovery queue3 re-runs all six with resume semantics.
 - Lesson: fuses must be sized for the worst legitimate phase (build), not the average.
+
+## ISS-013 — DeviceFaultTest.GraphCaptureYieldsUnsupported segfaults (PRE-EXISTING)
+- **Severity:** medium (crashes the whole test binary, masking every test after it)
+- **Repro:** `lichtfeld_tests --gtest_filter='DeviceFaultTest.GraphCaptureYieldsUnsupported'`
+  → SIGSEGV on BOTH pre-merge lfs-elite and the integration tree (verified in isolation).
+- **Suspected area:** device-fault handling under CUDA graph capture (cudaStreamBeginCapture
+  + fault-check interaction), possibly CUDA 13.3-specific.
+- **Action:** schedule a fix order; until then exclude from gate runs (documented here, not
+  silently skipped).
