@@ -223,3 +223,12 @@
   means, compact always reconcile, random_choose gather, exportable rebind); (2) packer
   soft-skips a stale mask for one frame (no permanent degraded latch); (3) point-cloud
   request uses `deleted_mask_version()` not positions revision.
+
+## ISS-023 — GUI densify abort: exportable storage capacity-ensure failed (Phase 5.1)
+- **Status:** OPEN — fix worker dispatched (WO-FIX-CAPENSURE). Found by ISS-022 worker's GUI repro.
+- Repro: GUI training past densification start; abort with
+  `add_new_params: external storage capacity ... capacity-ensure failed`.
+- Context: Phase 5.1 zero-copy viewer interop (training tensors in one CUDA-VMM exportable
+  block imported into Vulkan; live-N growth, reserve=5M). Suspects: composition of master
+  fa81f3eb resize-churn removal with campaign grow path, and/or MJ-12 detach-before-grow
+  ordering during in-place VMM commit growth. Likely the user-reported dataset-load crash.
