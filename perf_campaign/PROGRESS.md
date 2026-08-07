@@ -1280,4 +1280,73 @@ Pre-change behavior: expand/broadcast_to always `Tensor::empty` + copy (or `clon
 
 Gate: dual-workload **neutral** (no quality anomaly; ms within noise). Expand itself no longer allocates.
 
-- **Commit:** `b140792c`
+- **Commit:** `78f9277c`
+
+## WO-W.2 — Strided reduce that beats transpose+copy
+
+- **Branch:** `lfs-elite-fW`
+- **Change:**
+  - New `launch_strided_reduce_fast` (outer×reduce×inner layout): coalesced inner-dim access,
+    8×-unrolled sum, multi-Y SM-capped partitions with atomics, Mean/Max/Min.
+  - Host heuristic `should_prefer_strided_over_transpose` = **argmin of measured microbench**
+    (strided default; transpose only for short-reduce ≤64 / wide-output ≥8192 / numel≤1M edge).
+  - Transpose path kept behind heuristic + test override (`ReducePathForTesting`).
+  - Float16 reduce supported via f32 convert + cast-back at reduce entry.
+  - Column reduce path still preferred for rank-2 dim0 Float32 (fastest for that class).
+  - Tests: `tests/test_strided_reduce_w2.cpp` (11 cases).
+
+### Fail evidence (TDD)
+
+Compile-first fail (path-selection API missing before impl):
+```
+.lfs-cache-source/tests/test_strided_reduce_w2.cpp:176: error: ‘reduce_last_path_for_testing’ is not a member of ‘lfs::core::tensor_ops’
+.lfs-cache-source/tests/test_strided_reduce_w2.cpp:177: error: ‘lfs::core::tensor_ops::ReducePathForTesting’ has not been declared
+.lfs-cache-source/tests/test_strided_reduce_w2.cpp:227: error: ‘set_reduce_path_override_for_testing’ is not a member of …
+… (microbench / path-assert tests)
+```
+
+### Pass evidence
+```
+[==========] Running 11 tests from 1 test suite.
+[  PASSED  ] 11 tests.  (StridedReduceW2.*)
+[==========] 112 tests from 4 test suites (ZeroStrideExpand + TensorBroadcast + StridedReduceW2 + …)
+[  PASSED  ] 112 tests.
+```
+
+### Microbench table (µs, mean of 20 after 5 warmup, RTX 4080)
+
+| shape | default | force_strided | force_transpose | winner |
+|---|---:|---:|---:|---|
+| [1024,1024] dim0 | **7.4** (column) | 18.4 | 20.7 | column |
+| [64,512,512] dim0 | **108.9** | 108.8 | 576.8 | strided (~5× vs transpose) |
+| [32,128,512] dim1 | **17.1** | 17.1 | 23.1 | strided |
+| [8,64,1024] dim1 | **8.0** | 9.5 | 8.1 | transpose (edge) |
+| [16,16,256] dim0 | **3.9** | 3.9 | 6.4 | strided |
+| [4,2048,256] dim1 | **18.5** | 18.4 | 37.8 | strided (~2×) |
+| [1,4096,512] dim1 | **18.1** | 18.1 | 51.8 | strided (~3×) |
+
+Heuristic picks argmin on every class above (default == winner).
+
+### Dual-workload gate (LFS_SH_VALUE_FP32=1)
+
+**Bonsai** med×3 (vs W.1):
+
+| metric | after W.1 | after W.2 | gate |
+|---|---:|---:|:---|
+| wall_s | 7.41 | **7.65** | neutral |
+| steady_ms/iter | 3.244 | **3.274** | neutral (noise) |
+| B/splat | 409.4 | **409.4** | flat **PASS** |
+| last_loss | 0.03–0.04 | 0.028–0.039 | ok |
+
+**Bicycle** med×3 7000 iters (vs W.1):
+
+| metric | after W.1 | after W.2 |
+|---|---:|---:|
+| wall_s | 22.46 | **22.42** |
+| steady_ms/iter | 2.974 | **2.954** |
+| B/splat | 409.4 | **409.4** |
+| final loss range | 0.086–0.115 | 0.087–0.140 |
+
+Gate: dual-workload **neutral+** (bicycle slightly better; no quality anomaly).
+
+- **Commit:** `0810e13e`
