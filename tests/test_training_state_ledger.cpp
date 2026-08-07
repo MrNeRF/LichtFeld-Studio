@@ -24,6 +24,8 @@
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/sh_value_codec.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 
@@ -172,5 +174,36 @@ TEST(TrainingStateLedgerTest, PublishesIntoVramProfiler) {
     EXPECT_EQ(snap.training_state.total_bytes, expected_total);
 
     profiler.setEnabled(false);
+    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
+}
+
+// Phase 2.1 / WO-G3: after apply_shN_value_quant, params drop shN 192→90 B/splat.
+TEST(TrainingStateLedgerTest, ShValueQuantDropsParamsTo146) {
+    joint_adam::set_joint_codec_enabled_for_testing(true);
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+
+    auto splat = make_sh3_splat(kN);
+    // Pre-quant: 248 params
+    {
+        const auto before = compute_training_state_ledger(splat, nullptr);
+        EXPECT_EQ(before.params_bytes, kParamsBps * kN);
+    }
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+
+    AdamOptimizer optimizer(splat, AdamConfig{});
+    optimizer.allocate_gradients();
+    const auto ledger = compute_training_state_ledger(splat, &optimizer);
+
+    // 56 non-SH + 90 shN + bounds (~0) = 146; joint optim ~152; densify 8 → ~306
+    constexpr size_t kParamsQ16 = 146;                     // 56 + 90 pad-dropped
+    EXPECT_LE(ledger.params_bytes, (kParamsQ16 + 1) * kN); // allow tiny bounds
+    EXPECT_GE(ledger.params_bytes, kParamsQ16 * kN);
+    EXPECT_LT(ledger.params_bytes, kParamsBps * kN);
+    // Total large-N ≈ 306; at N=32 bounds inflate optim a bit.
+    EXPECT_LT(ledger.bytes_per_splat, 320.0);
+    EXPECT_GT(ledger.bytes_per_splat, 280.0);
+
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
     joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
 }

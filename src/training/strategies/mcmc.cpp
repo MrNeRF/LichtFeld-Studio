@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "kernels/mcmc_kernels.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 #include <algorithm>
 #include <chrono>
@@ -199,6 +200,15 @@ namespace lfs::training {
     int MCMC::relocate_gs() {
         LOG_TIMER("MCMC::relocate_gs");
         LFS_TRACE("kernel.mcmc.relocate");
+        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        struct ShNCommitGuard {
+            lfs::core::SplatData* splat;
+            bool expanded;
+            ~ShNCommitGuard() {
+                if (expanded && splat)
+                    lfs::training::sh_value::commit_shN_after_mutation(*splat);
+            }
+        } shn_guard{_splat_data, shN_expanded};
         using namespace lfs::core;
 
         // Get opacities (handle both [N] and [N, 1] shapes)

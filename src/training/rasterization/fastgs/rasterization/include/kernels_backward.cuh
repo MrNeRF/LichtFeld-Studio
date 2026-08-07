@@ -197,10 +197,17 @@ namespace fast_lfs::rasterization::kernels::backward {
                 primitive_idx,
                 sh_layout_slots,
                 sh0_grads,
-                shN_grads);
+                shN_grads,
+                fused_adam.shN.sh_value_bits == 16
+                    ? reinterpret_cast<const float2*>(fused_adam.shN.sh_value_bounds)
+                    : nullptr,
+                fused_adam.shN.sh_value_bits == 16
+                    ? static_cast<uint>(fused_adam.shN.sh_value_n_cells)
+                    : 0u);
         } // close visible — SH Adam next kills shN live range before geometry
 
         // ---- Phase B: SH Adam (ALL threads — joint block-bounds reduction) ----
+        // Also the single re-encode site for SH value quant (Phase 2.1).
         adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         if constexpr (ACTIVE_SH_BASES > 1) {
             constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u

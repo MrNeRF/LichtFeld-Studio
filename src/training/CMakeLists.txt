@@ -27,6 +27,7 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/mcmc_kernels.cu
     kernels/mrnf_kernels.cu
     kernels/densification_kernels.cu
+    kernels/sh_value_quant_kernels.cu
     kernels/grad_alpha.cu
     kernels/depth_loss.cu
     kernels/normal_loss.cu
@@ -83,6 +84,7 @@ set(TRAINING_NEW_SOURCES
     optimizer/adam_optimizer.cpp
     joint_adam_codec.cpp
     sh_value_codec.cpp
+    sh_value_storage.cpp
     optimizer/scheduler.cpp
     losses/regularization.cpp
     losses/photometric_loss.cpp

@@ -78,6 +78,10 @@ namespace lfs::training {
         uint8_t* joint_packed = nullptr;
         float* joint_bounds = nullptr;
         int joint_bits = 0;
+        // Phase 2.1 SH value quant (shN only)
+        float* sh_value_bounds = nullptr;
+        int sh_value_bits = 0;
+        int sh_value_n_cells = 0;
         int n_primitives = 0;
         const bool* frozen_mask = nullptr;
         int frozen_mask_size = 0;

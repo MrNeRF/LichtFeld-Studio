@@ -8,6 +8,7 @@
 #include "helper_math.h"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/training/joint_adam_codec.cuh"
+#include "lfs/training/sh_value_codec.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
 
@@ -49,12 +50,18 @@ namespace fast_lfs::rasterization::kernels {
     // Up to ACTIVE_BASES selects which slots to read; remaining coeffs are left as float3(0).
     // Cost (SH3): 12 coalesced float4 loads per warp vs the old 15 misaligned float3 loads
     // (= 45 4-byte sectors per warp).
+    //
+    // Phase 2.1 q16: when sh_value_bounds != nullptr, `sh_f4` is actually a bitcast of
+    // uint16 cell-linear storage (pad-dropped: n_cells = coeffs_rest*3). Decode in registers
+    // at the use site — do NOT materialise a float workspace (FIX-2.2 live-range lesson).
     __device__ inline void load_shN_coeffs(
         const float4* __restrict__ sh_f4,
         const uint primitive_idx,
         const uint active_sh_bases,
         const uint sh_layout_slots,
-        float3 (&c)[15]) {
+        float3 (&c)[15],
+        const float2* __restrict__ sh_value_bounds = nullptr,
+        const uint sh_value_n_cells = 0u) {
 #pragma unroll
         for (int i = 0; i < 15; ++i)
             c[i] = make_float3(0.0f, 0.0f, 0.0f);
@@ -62,6 +69,40 @@ namespace fast_lfs::rasterization::kernels {
         if (active_sh_bases <= 1)
             return;
 
+        // ---- q16 decode-in-registers path (pad-dropped cell-linear) ----
+        // Explicit args win; else fall back to host-bound device constants (forward path).
+        {
+            const auto bind = lfs::training::sh_value::device_quant_binding();
+            const float2* bounds =
+                sh_value_bounds != nullptr ? sh_value_bounds : bind.bounds;
+            const uint n_cells =
+                sh_value_n_cells > 0u ? sh_value_n_cells : bind.n_cells;
+            if (bounds != nullptr && n_cells > 0u) {
+                using DC = lfs::training::sh_value::DeviceCodec16;
+                const uint16_t* sh_u16 = reinterpret_cast<const uint16_t*>(sh_f4);
+                const float2 mm = bounds[primitive_idx / 256u];
+#pragma unroll
+                for (int i = 0; i < 15; ++i) {
+                    const uint base = static_cast<uint>(i) * 3u;
+                    if (base + 2u >= n_cells)
+                        break;
+                    if (i >= 3 && active_sh_bases <= 4)
+                        break;
+                    if (i >= 8 && active_sh_bases <= 9)
+                        break;
+                    c[i] = make_float3(
+                        DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 0, n_cells)],
+                                   mm.x, mm.y),
+                        DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 1, n_cells)],
+                                   mm.x, mm.y),
+                        DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 2, n_cells)],
+                                   mm.x, mm.y));
+                }
+                return;
+            } // quant path
+        }
+
+        // ---- fp32 float4 path ----
         const uint slots_per_primitive = sh_layout_slots;
         if (slots_per_primitive == 0u)
             return;
@@ -112,7 +153,9 @@ namespace fast_lfs::rasterization::kernels {
         const float3& cam_position,
         const uint primitive_idx,
         const uint active_sh_bases,
-        const uint sh_layout_slots) {
+        const uint sh_layout_slots,
+        const float2* __restrict__ sh_value_bounds = nullptr,
+        const uint sh_value_n_cells = 0u) {
         // computation adapted from https://github.com/NVlabs/tiny-cuda-nn/blob/212104156403bd87616c1a4f73a1c5f2c2e172a9/include/tiny-cuda-nn/common_device.h#L340
         float3 result = 0.5f + 0.28209479177387814f * sh_coefficients_0[primitive_idx];
         if (active_sh_bases > 1) {
@@ -121,7 +164,8 @@ namespace fast_lfs::rasterization::kernels {
             const float y = direction.y;
             const float z = direction.z;
             float3 c[15];
-            load_shN_coeffs(sh_coefficients_rest, primitive_idx, active_sh_bases, sh_layout_slots, c);
+            load_shN_coeffs(sh_coefficients_rest, primitive_idx, active_sh_bases, sh_layout_slots, c,
+                            sh_value_bounds, sh_value_n_cells);
             result = result + (-0.48860251190291987f * y) * c[0] + (0.48860251190291987f * z) * c[1] + (-0.48860251190291987f * x) * c[2];
             if (active_sh_bases > 4) {
                 const float xx = x * x, yy = y * y, zz = z * z;
@@ -450,6 +494,10 @@ namespace fast_lfs::rasterization::kernels {
     // Joint 8-bit shN Adam (swizzled float cells × 2 B). ALL threads must call when joint.
     // Walks ALL layout slots (not only active SH) so inactive bands re-encode under new
     // bounds and stay true-zero when their codes represent (u,log_s)=(0,0).
+    //
+    // Phase 2.1: when p.sh_value_bits==16, param is pad-dropped uint16 codes; decode in
+    // registers, Adam-update, then single re-encode after value bounds reduce. Moments still
+    // use the float4-slot cell indexing (48 cells). Value re-encode is the single writer.
     __device__ inline void apply_shN_grads_packed_joint(
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
@@ -457,8 +505,12 @@ namespace fast_lfs::rasterization::kernels {
         const uint n_slots_to_update,
         const uint sh_layout_slots) {
         using C = lfs::training::joint_adam::DeviceCodec<8>;
+        using VC = lfs::training::sh_value::DeviceCodec16;
         constexpr float kInf = 1e30f;
         const FusedAdamParam& p = fused_adam.shN;
+        const bool value_q16 = p.sh_value_bits == 16 && p.sh_value_bounds != nullptr &&
+                               p.sh_value_n_cells > 0;
+        const uint n_value_cells = value_q16 ? static_cast<uint>(p.sh_value_n_cells) : 0u;
 
         float row_step_size = p.step_size;
         bool apply_step = true;
@@ -485,13 +537,20 @@ namespace fast_lfs::rasterization::kernels {
         const float4 old_mm = touch
                                   ? *reinterpret_cast<const float4*>(p.joint_bounds + 4 * bidx)
                                   : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        const float2 old_vmm = value_q16
+                                   ? *reinterpret_cast<const float2*>(p.sh_value_bounds + 2 * bidx)
+                                   : make_float2(0.0f, 0.0f);
         const float beta1 = fused_adam.beta1, beta2 = fused_adam.beta2, eps = fused_adam.eps;
-        float4* param4 = touch ? reinterpret_cast<float4*>(p.param) : nullptr;
+        float4* param4 = (!value_q16 && touch) ? reinterpret_cast<float4*>(p.param) : nullptr;
+        uint16_t* param_u16 = (value_q16 && touch) ? reinterpret_cast<uint16_t*>(p.param) : nullptr;
 
         float local_u_min = kInf, local_u_max = -kInf;
         float local_s_min = kInf, local_s_max = -kInf;
+        float local_v_min = kInf, local_v_max = -kInf;
         // Up to 12 slots × 4 cells; store (u,log_s) for encode after bounds reduce.
         float us_u[48], us_s[48];
+        // Updated param values (q16 path holds them until value bounds reduce).
+        float pval[48];
 
         if (touch) {
             int n_cells_local = 0;
@@ -504,8 +563,27 @@ namespace fast_lfs::rasterization::kernels {
                 const float4 gk = active_slot ? shN_grad_for_slot(g, k)
                                               : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
                 const float gc[4] = {gk.x, gk.y, gk.z, gk.w};
-                float4 pv = param4[slot];
-                float pc[4] = {pv.x, pv.y, pv.z, pv.w};
+                float pc[4];
+                if (value_q16) {
+#pragma unroll
+                    for (int c = 0; c < 4; ++c) {
+                        const uint cell_lin = k * 4u + static_cast<uint>(c);
+                        if (cell_lin < n_value_cells) {
+                            pc[c] = VC::decode(
+                                param_u16[lfs::training::sh_value::shAtU16(
+                                    primitive_idx, cell_lin, n_value_cells)],
+                                old_vmm.x, old_vmm.y);
+                        } else {
+                            pc[c] = 0.0f;
+                        }
+                    }
+                } else {
+                    float4 pv = param4[slot];
+                    pc[0] = pv.x;
+                    pc[1] = pv.y;
+                    pc[2] = pv.z;
+                    pc[3] = pv.w;
+                }
 #pragma unroll
                 for (int c = 0; c < 4; ++c) {
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
@@ -523,27 +601,39 @@ namespace fast_lfs::rasterization::kernels {
                     const float2 prim = C::g1g2_to_us(m, v);
                     us_u[n_cells_local] = prim.x;
                     us_s[n_cells_local] = prim.y;
+                    pval[n_cells_local] = pc[c];
+                    if (value_q16) {
+                        const uint cell_lin = k * 4u + static_cast<uint>(c);
+                        if (cell_lin < n_value_cells) {
+                            local_v_min = fminf(local_v_min, pc[c]);
+                            local_v_max = fmaxf(local_v_max, pc[c]);
+                        }
+                    }
                     ++n_cells_local;
                     local_u_min = fminf(local_u_min, prim.x);
                     local_u_max = fmaxf(local_u_max, prim.x);
                     local_s_min = fminf(local_s_min, prim.y);
                     local_s_max = fmaxf(local_s_max, prim.y);
                 }
-                if (apply_step && active_slot)
+                if (!value_q16 && apply_step && active_slot)
                     param4[slot] = make_float4(pc[0], pc[1], pc[2], pc[3]);
             }
             (void)n_cells_local;
         }
 
-        // FIX-2.2 F2: fused min4 bounds reduce (see adam_step_row_joint).
+        // FIX-2.2 F2: fused min4 bounds reduce for Adam moment (u,log_s).
         const float4 red = lfs::core::warp_ops::block_reduce_min4(
             make_float4(local_u_min, -local_u_max, local_s_min, -local_s_max));
         const float u_min = red.x;
         const float u_max = -red.y;
         const float s_min = red.z;
         const float s_max = -red.w;
+        // Phase 2.1 value bounds (separate from moment bounds).
+        const float v_min = value_q16 ? lfs::core::warp_ops::block_reduce_min(local_v_min) : 0.0f;
+        const float v_max = value_q16 ? lfs::core::warp_ops::block_reduce_max(local_v_max) : 0.0f;
 
         __shared__ float4 sm_bounds;
+        __shared__ float2 sm_vbounds;
         if (threadIdx.x == 0) {
             float4 nb = (u_min > u_max) ? make_float4(0.0f, 0.0f, 0.0f, 0.0f)
                                         : make_float4(u_min, u_max, s_min, s_max);
@@ -551,9 +641,16 @@ namespace fast_lfs::rasterization::kernels {
             if (p.enabled && p.joint_bounds != nullptr) {
                 *reinterpret_cast<float4*>(p.joint_bounds + 4 * bidx) = nb;
             }
+            if (value_q16) {
+                float2 vb = (v_min > v_max) ? make_float2(0.0f, 0.0f)
+                                            : make_float2(v_min, v_max);
+                sm_vbounds = vb;
+                *reinterpret_cast<float2*>(p.sh_value_bounds + 2 * bidx) = vb;
+            }
         }
         __syncthreads();
         const float4 new_mm = sm_bounds;
+        const float2 new_vmm = value_q16 ? sm_vbounds : make_float2(0.0f, 0.0f);
         // FIX-2.2 F3: hoist block-uniform inv ranges (2 fdiv → FMA per cell).
         const float inv_u_range = 1.0f / fmaxf(new_mm.y - new_mm.x, lfs::training::joint_adam::kEpsDevice);
         const float inv_s_range = 1.0f / fmaxf(new_mm.w - new_mm.z, lfs::training::joint_adam::kEpsDevice);
@@ -570,6 +667,14 @@ namespace fast_lfs::rasterization::kernels {
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
                     C::encode_us(p.joint_packed, cell, us_u[ci], us_s[ci],
                                  new_mm.x, new_mm.z, inv_u_range, inv_s_range);
+                    if (value_q16 && apply_step) {
+                        const uint cell_lin = k * 4u + static_cast<uint>(c);
+                        if (cell_lin < n_value_cells) {
+                            param_u16[lfs::training::sh_value::shAtU16(
+                                primitive_idx, cell_lin, n_value_cells)] =
+                                VC::encode(pval[ci], new_vmm.x, new_vmm.y);
+                        }
+                    }
                     ++ci;
                 }
             }
@@ -692,7 +797,9 @@ namespace fast_lfs::rasterization::kernels {
         const uint primitive_idx,
         const uint sh_layout_slots,
         float* __restrict__ sh0_grads_out,
-        float3* __restrict__ shN_grads_out) {
+        float3* __restrict__ shN_grads_out,
+        const float2* __restrict__ sh_value_bounds = nullptr,
+        const uint sh_value_n_cells = 0u) {
         const float3 grad_color = grad_color_helper[primitive_idx];
         const float3 dL_dsh0 = 0.28209479177387814f * grad_color;
         sh0_grads_out[0] = dL_dsh0.x;
@@ -714,7 +821,8 @@ namespace fast_lfs::rasterization::kernels {
             const float z = direction.z;
 
             float3 c[15];
-            load_shN_coeffs(sh_coefficients_rest, primitive_idx, ACTIVE_SH_BASES, sh_layout_slots, c);
+            load_shN_coeffs(sh_coefficients_rest, primitive_idx, ACTIVE_SH_BASES, sh_layout_slots, c,
+                            sh_value_bounds, sh_value_n_cells);
 
             float3* g = shN_grads_out;
             g[0] = (-0.48860251190291987f * y) * grad_color;

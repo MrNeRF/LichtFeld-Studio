@@ -9,6 +9,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -687,7 +688,8 @@ namespace lfs::training {
             const double bias_correction1_rcp = 1.0 / (1.0 - std::pow(config_.beta1, next_step));
             const double bias_correction2_sqrt_rcp = 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, next_step));
 
-            out.param = param.ptr<float>();
+            // SH value quant stores u16 codes as Float16 bit-patterns; use data_ptr.
+            out.param = static_cast<float*>(param.data_ptr());
             out.n_primitives = static_cast<int>(splat_data_.size());
             if (state.is_joint()) {
                 out.joint_packed = state.exp_avg.ptr<uint8_t>();
@@ -728,6 +730,14 @@ namespace lfs::training {
         fused.shN = prepare_param(ParamType::ShN,
                                   static_cast<int>(lfs::core::sh_float4_slots_for_rest(layout_rest) * 4u),
                                   active_rest > 0 && iteration > SH_WARMUP_ITERATIONS);
+        // Phase 2.1: wire SH value quant single-writer re-encode into fused Adam.
+        if (fused.shN.enabled && splat_data_.shN_value_quantized() &&
+            splat_data_.shN_value_bounds().is_valid()) {
+            fused.shN.sh_value_bounds = splat_data_.shN_value_bounds().ptr<float>();
+            fused.shN.sh_value_bits = 16;
+            fused.shN.sh_value_n_cells = static_cast<int>(
+                lfs::core::sh_value_quant::n_value_cells_per_prim(layout_rest));
+        }
         fused.scaling = prepare_param(ParamType::Scaling, 3, true);
         fused.rotation = prepare_param(ParamType::Rotation, 4, true);
         fused.opacity = prepare_param(ParamType::Opacity, 1, true);

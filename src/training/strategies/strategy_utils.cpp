@@ -6,6 +6,7 @@
 #include "core/assert.hpp"
 #include "core/logger.hpp"
 #include "kernels/pruning_kernels.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -85,6 +86,10 @@ namespace lfs::training {
 
             splat_data.reserve_capacity(capacity);
         }
+
+        // Phase 2.1: convert shN to pad-dropped u16 storage when flag ON (default).
+        // Must run after reserve so capacity is correct for the quant layout.
+        lfs::training::sh_value::apply_shN_value_quant(splat_data);
     }
 
     std::unique_ptr<AdamOptimizer> create_optimizer(

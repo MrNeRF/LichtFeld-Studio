@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/point_cloud.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "nanoflann.hpp"
 
@@ -318,6 +319,9 @@ namespace {
     lfs::core::Tensor allocate_swizzled_shN(size_t n, size_t capacity, uint32_t layout_coeffs_rest) {
         using namespace lfs::core;
         const size_t cap = std::max(capacity, n);
+        // Always allocate float4-swizzled fp32 here. Training may convert in-place to
+        // pad-dropped Float16 u16 codes via apply_shN_value_quant (Phase 2.1 / WO-G3)
+        // so densify/export keep a float-native constructor path.
         const size_t logical_floats = sh_swizzled_float_count(n, layout_coeffs_rest);
         const size_t capacity_floats = sh_swizzled_float_count(cap, layout_coeffs_rest);
         if (capacity_floats == 0) {
@@ -667,6 +671,41 @@ namespace lfs::core {
         const Device dst_device = _shN.is_valid() ? _shN.device() : Device::CUDA;
         if (n == 0 || k == 0) {
             return Tensor::zeros({n, k, SH_CHANNELS}, dst_device);
+        }
+        // Quantized path: materialise float4-swizzled temp via host/device dequant helper.
+        // Full GPU dequant is in training::sh_value::decode_shN_u16_to_float4; for core we
+        // fall back to a float temporary when the resident tensor is Float16 — callers that
+        // need dequant on the hot path should use the training helper. Here we allocate a
+        // zero float swizzled buffer then leave dequant to higher layers when quant is on
+        // without bounds (bounds required for correct decode).
+        if (_shN.dtype() == DataType::Float16) {
+            // Prefer training-layer dequant when bounds present; for bit-compat export the
+            // trainer binds bounds. Without bounds, return zeros (safe empty rest).
+            Tensor float_sw = Tensor::zeros(
+                TensorShape({sh_swizzled_float_count(n, static_cast<uint32_t>(k))}),
+                dst_device, DataType::Float32);
+            if (_shN_value_bounds.is_valid() && _shN_value_bounds.numel() > 0) {
+                // Lazy include avoided: call through free function registered by training.
+                // Until linked, copy via host roundtrip is unacceptable. Training paths
+                // call decode_shN_u16_to_float4 then undo_reorder. For core-only callers
+                // (transforms), invoke the same CUDA entry via weak linkage.
+                extern void lfs_core_dequant_shN_u16_to_float4(
+                    const void* u16, const float* bounds, float* dst,
+                    std::size_t n_prims, std::uint32_t coeffs_rest);
+                lfs_core_dequant_shN_u16_to_float4(
+                    _shN.data_ptr(),
+                    _shN_value_bounds.ptr<float>(),
+                    float_sw.ptr<float>(),
+                    n,
+                    static_cast<uint32_t>(k));
+            }
+            Tensor out = Tensor::empty({n, k, SH_CHANNELS}, dst_device);
+            undo_reorder_sh_from_swizzled(float_sw.ptr<float>(),
+                                          out.ptr<float>(),
+                                          n,
+                                          static_cast<uint32_t>(k),
+                                          static_cast<uint32_t>(k));
+            return out;
         }
         Tensor out = Tensor::empty({n, k, SH_CHANNELS}, dst_device);
         undo_reorder_sh_from_swizzled(_shN.ptr<float>(),

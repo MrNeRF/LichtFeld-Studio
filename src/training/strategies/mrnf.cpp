@@ -14,6 +14,7 @@
 #include "kernels/image_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 #include "training/dataset.hpp"
 #include <algorithm>
@@ -686,6 +687,8 @@ namespace lfs::training {
     void MRNF::refine(int iter) {
         LOG_TIMER("MRNF::refine");
         using namespace lfs::core;
+        // Phase 2.1: densify ops are float-native — expand q16 shN for the window.
+        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
 
         ++_refine_windows_since_bounds;
         if (!_bounds_valid || _refine_windows_since_bounds >= MRNF_BOUNDS_RECOMPUTE_INTERVAL_REFINES) {
@@ -769,6 +772,9 @@ namespace lfs::training {
         reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
         ensure_densification_info_shape();
         _splat_data->_densification_info.zero_();
+        if (shN_expanded) {
+            lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
+        }
     }
 
     void MRNF::grow_and_split(int iter, int pruned_count) {

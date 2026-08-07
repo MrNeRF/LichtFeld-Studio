@@ -67,9 +67,9 @@ TEST(ShValueCodecTest, BoundsReductionMatchesManual) {
 
 TEST(ShValueCodecTest, FootprintConstants) {
     EXPECT_EQ(kShNBpsFp32Sh3, 192u);
-    EXPECT_EQ(kShNBpsQ16Sh3, 96u);
+    EXPECT_EQ(kShNBpsQ16Sh3, 90u);
     EXPECT_EQ(kParamsBpsFp32Sh3, 248u);
-    EXPECT_EQ(kParamsBpsQ16Sh3, 152u); // 56 + 96
+    EXPECT_EQ(kParamsBpsQ16Sh3, 146u); // 56 + 90
     EXPECT_LT(kShNBpsQ16Sh3, kShNBpsFp32Sh3);
 }
 

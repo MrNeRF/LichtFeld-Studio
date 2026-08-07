@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include <cassert>
@@ -380,13 +381,18 @@ namespace lfs::training {
                 bg_image_ptr != nullptr
                     ? nullptr
                     : (bg_color.is_valid() && bg_color.numel() >= 3 ? bg_color.ptr<float>() : nullptr);
+            // Phase 2.1: bind q16 bounds for decode-in-registers in preprocess.
+            lfs::training::sh_value::bind_shN_quant_for_raster(gaussian_model);
+            const float* shN_ptr = gaussian_model.shN_value_quantized()
+                                       ? static_cast<const float*>(shN.data_ptr())
+                                       : shN.ptr<float>();
             forward_ctx = fast_lfs::rasterization::forward_raw(
                 means.ptr<float>(),
                 raw_scales.ptr<float>(),
                 raw_rotations.ptr<float>(),
                 raw_opacities.ptr<float>(),
                 sh0.ptr<float>(),
-                shN.ptr<float>(),
+                shN_ptr,
                 w2c_ptr,
                 cam_position_ptr,
                 image.ptr<float>(),
@@ -688,6 +694,9 @@ namespace lfs::training {
             dst.joint_packed = src.joint_packed;
             dst.joint_bounds = src.joint_bounds;
             dst.joint_bits = src.joint_bits;
+            dst.sh_value_bounds = src.sh_value_bounds;
+            dst.sh_value_bits = src.sh_value_bits;
+            dst.sh_value_n_cells = src.sh_value_n_cells;
             dst.n_primitives = src.n_primitives;
             dst.frozen_mask = src.frozen_mask;
             dst.frozen_mask_size = src.frozen_mask_size;
@@ -740,7 +749,9 @@ namespace lfs::training {
             ctx.raw_scales.ptr<float>(),
             ctx.raw_rotations.ptr<float>(),
             ctx.raw_opacities.ptr<float>(),
-            ctx.shN.ptr<float>(),
+            ctx.shN.is_valid() && ctx.shN.dtype() == core::DataType::Float16
+                ? static_cast<const float*>(ctx.shN.data_ptr())
+                : ctx.shN.ptr<float>(),
             ctx.w2c_ptr,
             ctx.cam_position_ptr,
             ctx.forward_ctx,

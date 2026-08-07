@@ -268,8 +268,16 @@ namespace lfs::core {
         inline Tensor& shN_raw() { return _shN; }
         inline const Tensor& shN_raw() const { return _shN; }
 
+        // Phase 2.1: float2 bounds per 256-splat block when SH value quant is ON.
+        inline Tensor& shN_value_bounds() { return _shN_value_bounds; }
+        inline const Tensor& shN_value_bounds() const { return _shN_value_bounds; }
+        [[nodiscard]] bool shN_value_quantized() const {
+            return _shN.is_valid() && _shN.dtype() == DataType::Float16;
+        }
+
         // Materialise a deswizzled [N, K, 3] copy of resident shN storage where
         // K = sh_rest_coeffs of the max SH degree. Always allocates a new tensor — not a view.
+        // When quantized, dequants to fp32 first (PLY/checkpoint bit-compat).
         Tensor shN_canonical() const;
 
         // Host-side variant for export/checkpoint paths. Copies the resident swizzled buffer
@@ -378,7 +386,12 @@ namespace lfs::core {
         // Parameters
         Tensor _means;
         Tensor _sh0;
+        // When sh_value quant is ON (Phase 2.1): Float16 bit-pattern u16 codes,
+        // pad-dropped cell-linear layout (n_cells = coeffs_rest*3). When OFF: Float32
+        // float4-swizzled as before. Access via shN() / data_ptr(); do not assume dtype.
         Tensor _shN;
+        // float2 bounds per 256-splat block (only when quant ON); empty when fp32.
+        Tensor _shN_value_bounds;
         Tensor _scaling;
         Tensor _rotation;
         Tensor _opacity;

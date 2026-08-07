@@ -11,9 +11,14 @@
  * Bounds layout: one float2 per 256-splat block (FPBO / per-splat-block).
  * All SH cells of a splat share that splat-block's bound.
  *
- * Runtime: default OFF until densify/export fully wired (ISS-2.1).
- *   LFS_SH_VALUE_QUANT=1  → enable 16-bit SH value quant
- *   LFS_SH_VALUE_FP32=1   → force fp32 (overrides quant)
+ * Runtime: default ON after WO-G3 wiring (ISS-2.1 closed when gates pass).
+ *   LFS_SH_VALUE_FP32=1   → force fp32 (A/B / fallback)
+ *   LFS_SH_VALUE_QUANT=0  → force fp32
+ *   LFS_SH_VALUE_QUANT=1  → force quant (redundant when default ON)
+ *
+ * Storage (pad-dropped, Phase 2.4): n_cells = coeffs_rest * 3 per primitive
+ * (45 for SH3 — no float4 tail pad). Swizzle [ceil(N/R), n_cells, R] of uint16.
+ * Bounds: float2 per 256-splat block (FPBO). Params ≈ 56+90 = 146 B/splat SH3.
  */
 
 #include <algorithm>
@@ -72,13 +77,30 @@ namespace lfs::training::sh_value {
         }
     };
 
-    /// Hand-computed param B/splat for SH3 with q16 swizzled pad:
-    /// non-SH 56 + shN 48 cells × 2 B = 96 + bounds ≪1 → params 152 (vs fp32 248).
-    /// Optim unchanged by 2.1 (joint 152). Densify 8. Total ≈ 312 B/splat large-N.
-    /// (Spirulae 45 cells → shN 90 → params 146 → total ~300.)
+    /// Hand-computed param B/splat for SH3 with q16 pad-dropped (2.4):
+    /// non-SH 56 + shN 45 cells × 2 B = 90 + bounds ≪1 → params 146 (vs fp32 248).
+    /// Optim (joint, still 48-cell moments) ≈ 152. Densify 8. Total ≈ 306 large-N.
     inline constexpr std::size_t kParamsBpsFp32Sh3 = 248;
-    inline constexpr std::size_t kParamsBpsQ16Sh3 = 152; // 56 + 96
+    inline constexpr std::size_t kParamsBpsQ16Sh3 = 146; // 56 + 90
     inline constexpr std::size_t kShNBpsFp32Sh3 = 192;
-    inline constexpr std::size_t kShNBpsQ16Sh3 = 96;
+    inline constexpr std::size_t kShNBpsQ16Sh3 = 90; // 45 cells × 2 (pad-dropped)
+
+    /// Number of uint16 value cells per primitive (no float4 pad).
+    [[nodiscard]] inline constexpr std::uint32_t n_value_cells_per_prim(
+        std::uint32_t coeffs_rest) noexcept {
+        return coeffs_rest * 3u; // 0 / 9 / 24 / 45 for deg 0/1/2/3
+    }
+
+    /// Total uint16 cells in the cell-linear swizzled buffer for n primitives.
+    /// Layout: [ceil(N/R), n_cells, R] with R = 32 (same reorder as float4 path).
+    [[nodiscard]] inline constexpr std::size_t sh_value_u16_count(
+        std::size_t n_prims,
+        std::uint32_t coeffs_rest) noexcept {
+        if (n_prims == 0 || coeffs_rest == 0)
+            return 0;
+        constexpr std::size_t R = 32;
+        const std::size_t blocks = (n_prims + R - 1) / R;
+        return blocks * R * static_cast<std::size_t>(n_value_cells_per_prim(coeffs_rest));
+    }
 
 } // namespace lfs::training::sh_value
