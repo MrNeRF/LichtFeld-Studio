@@ -839,4 +839,4 @@ re-import; NVRM fix is densify/grow ordering for GUI.
   Gate: no FastGS ms/iter regression; G2 allocs held; bicycle quality canary
   clean (growth to max_cap, no NaN/collapse). Gsplat path itself: 0 steady
   driver allocs on fixed-size gut forward.
-- **Commit:** `0256de81`
+- **Commit:** `888bc839`
