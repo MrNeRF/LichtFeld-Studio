@@ -2338,5 +2338,17 @@
     "viewer_work_failed": "Operazione del visualizzatore non riuscita",
     "colmap_min_track_length": "min-track-length non può essere usato con --init; il filtraggio dei punti sparsi COLMAP non verrà applicato perché l’inizializzazione usa '{}'",
     "no_splat_node_named": "Nessun nodo splat denominato '{}'"
+  },
+  "align": {
+    "click_1st": "Clicca il 1° punto",
+    "click_2nd": "Clicca il 2° punto",
+    "click_3rd": "Clicca il 3° punto",
+    "points_count": "Punti: {}/3",
+    "up": "SU",
+    "hint_picking": "Clic: posiziona punto. Backspace: rimuovi ultimo. Esc: annulla.",
+    "hint_review": "Invio: applica. Backspace: rimuovi ultimo punto. Esc: annulla.",
+    "status_colinear": "I punti sono quasi in linea. Sposta un punto.",
+    "status_no_surface": "Nessuna superficie sotto il cursore.",
+    "status_no_target": "Nessun obiettivo trasformabile da allineare."
   }
 }

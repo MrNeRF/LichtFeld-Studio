@@ -5,7 +5,9 @@
 #pragma once
 
 #include "operator/operator.hpp"
+#include "rendering/rendering_types.hpp"
 #include <glm/glm.hpp>
+#include <optional>
 #include <vector>
 
 namespace lfs::vis::op {
@@ -23,9 +25,20 @@ namespace lfs::vis::op {
     private:
         std::vector<glm::vec3> picked_points_;
         int pick_button_ = 0;
+        bool press_active_ = false;
+        int press_button_ = -1;
+        glm::dvec2 press_pos_{0.0, 0.0};
+        std::optional<SplitViewPanelId> pick_panel_;
 
-        glm::vec3 unprojectScreenPoint(const OperatorContext& ctx, double x, double y) const;
-        void applyAlignment(OperatorContext& ctx);
+        [[nodiscard]] glm::vec3 unprojectScreenPoint(const OperatorContext& ctx, double x, double y,
+                                                     SplitViewPanelId* out_panel = nullptr) const;
+        [[nodiscard]] bool isNearExistingPoint(double x, double y) const;
+        [[nodiscard]] glm::vec3 resolvePickPanelCameraPosition() const;
+        void syncPickedPointsToServices();
+        void removeLastPoint();
+        [[nodiscard]] bool tryPlacePoint(OperatorContext& ctx, double x, double y);
+        [[nodiscard]] bool applyAlignment(OperatorContext& ctx);
+        void setStatus(const char* locale_key, double duration_seconds = 1.5) const;
     };
 
     void registerAlignOperators();

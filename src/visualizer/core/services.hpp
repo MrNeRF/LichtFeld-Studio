@@ -6,7 +6,9 @@
 
 #include "core/export.hpp"
 #include <cassert>
+#include <chrono>
 #include <glm/glm.hpp>
+#include <string>
 #include <vector>
 
 namespace lfs::vis {
@@ -90,7 +92,32 @@ namespace lfs::vis {
         // Align tool state
         void setAlignPickedPoints(std::vector<glm::vec3> points) { align_picked_points_ = std::move(points); }
         [[nodiscard]] const std::vector<glm::vec3>& getAlignPickedPoints() const { return align_picked_points_; }
-        void clearAlignPickedPoints() { align_picked_points_.clear(); }
+        void clearAlignPickedPoints() {
+            align_picked_points_.clear();
+            clearAlignStatusMessage();
+        }
+
+        void setAlignStatusMessage(std::string message, const double duration_seconds = 1.5) {
+            align_status_message_ = std::move(message);
+            align_status_until_ = std::chrono::steady_clock::now() +
+                                  std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                      std::chrono::duration<double>(duration_seconds));
+        }
+
+        [[nodiscard]] const std::string* getAlignStatusMessage() const {
+            if (align_status_message_.empty()) {
+                return nullptr;
+            }
+            if (std::chrono::steady_clock::now() >= align_status_until_) {
+                return nullptr;
+            }
+            return &align_status_message_;
+        }
+
+        void clearAlignStatusMessage() {
+            align_status_message_.clear();
+            align_status_until_ = {};
+        }
 
         void clear() {
             scene_manager_ = nullptr;
@@ -101,6 +128,7 @@ namespace lfs::vis {
             parameter_manager_ = nullptr;
             editor_context_ = nullptr;
             align_picked_points_.clear();
+            clearAlignStatusMessage();
         }
 
     private:
@@ -119,6 +147,8 @@ namespace lfs::vis {
 
         // Tool state
         std::vector<glm::vec3> align_picked_points_;
+        std::string align_status_message_;
+        std::chrono::steady_clock::time_point align_status_until_{};
     };
 
     inline Services& services() { return Services::instance(); }

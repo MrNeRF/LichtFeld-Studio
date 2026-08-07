@@ -2338,5 +2338,17 @@
     "viewer_work_failed": "뷰어 작업에 실패했습니다",
     "colmap_min_track_length": "min-track-length는 --init과 함께 사용할 수 없습니다. 초기화에서 '{}'를 사용하므로 COLMAP 희소 점 필터링이 적용되지 않습니다",
     "no_splat_node_named": "'{}'이라는 이름의 스플랫 노드가 없습니다"
+  },
+  "align": {
+    "click_1st": "첫 번째 점 클릭",
+    "click_2nd": "두 번째 점 클릭",
+    "click_3rd": "세 번째 점 클릭",
+    "points_count": "점: {}/3",
+    "up": "위",
+    "hint_picking": "클릭: 점 배치. Backspace: 마지막 제거. Esc: 취소.",
+    "hint_review": "Enter: 적용. Backspace: 마지막 점 제거. Esc: 취소.",
+    "status_colinear": "점이 거의 일직선입니다. 점을 이동하세요.",
+    "status_no_surface": "커서 아래에 표면이 없습니다.",
+    "status_no_target": "정렬할 변환 가능한 대상이 없습니다."
   }
 }

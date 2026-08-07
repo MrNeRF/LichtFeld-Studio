@@ -2338,5 +2338,17 @@
     "viewer_work_failed": "Viewer work failed",
     "colmap_min_track_length": "min-track-length cannot be used with --init; COLMAP sparse point filtering will not be applied because initialization uses '{}'",
     "no_splat_node_named": "No splat node named '{}'"
+  },
+  "align": {
+    "click_1st": "Click 1st point",
+    "click_2nd": "Click 2nd point",
+    "click_3rd": "Click 3rd point",
+    "points_count": "Points: {}/3",
+    "up": "UP",
+    "hint_picking": "Click: place point. Backspace: remove last. Esc: cancel.",
+    "hint_review": "Enter: apply. Backspace: remove last point. Esc: cancel.",
+    "status_colinear": "Points are nearly in a line. Move a point.",
+    "status_no_surface": "No surface under the cursor.",
+    "status_no_target": "No transformable target to align."
   }
 }

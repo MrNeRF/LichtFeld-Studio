@@ -2338,5 +2338,17 @@
     "viewer_work_failed": "Viewer-Aufgabe fehlgeschlagen",
     "colmap_min_track_length": "min-track-length kann nicht mit --init verwendet werden; die COLMAP-Sparsepunktfilterung wird nicht angewendet, da die Initialisierung '{}' verwendet",
     "no_splat_node_named": "Kein Splat-Knoten namens '{}'"
+  },
+  "align": {
+    "click_1st": "1. Punkt klicken",
+    "click_2nd": "2. Punkt klicken",
+    "click_3rd": "3. Punkt klicken",
+    "points_count": "Punkte: {}/3",
+    "up": "OBEN",
+    "hint_picking": "Klick: Punkt setzen. Rücktaste: letzten entfernen. Esc: abbrechen.",
+    "hint_review": "Enter: anwenden. Rücktaste: letzten Punkt entfernen. Esc: abbrechen.",
+    "status_colinear": "Punkte liegen fast auf einer Linie. Punkt verschieben.",
+    "status_no_surface": "Keine Oberfläche unter dem Cursor.",
+    "status_no_target": "Kein transformierbares Ziel zum Ausrichten."
   }
 }

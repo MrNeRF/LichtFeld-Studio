@@ -2338,5 +2338,17 @@
     "viewer_work_failed": "Viewer-taak mislukt",
     "colmap_min_track_length": "min-track-length kan niet met --init worden gebruikt; COLMAP-sparsepuntfiltering wordt niet toegepast omdat de initialisatie '{}' gebruikt",
     "no_splat_node_named": "Geen splat-knooppunt met de naam '{}'"
+  },
+  "align": {
+    "click_1st": "Klik 1e punt",
+    "click_2nd": "Klik 2e punt",
+    "click_3rd": "Klik 3e punt",
+    "points_count": "Punten: {}/3",
+    "up": "OMHOOG",
+    "hint_picking": "Klik: punt plaatsen. Backspace: laatste verwijderen. Esc: annuleren.",
+    "hint_review": "Enter: toepassen. Backspace: laatste punt verwijderen. Esc: annuleren.",
+    "status_colinear": "Punten liggen bijna op een lijn. Verplaats een punt.",
+    "status_no_surface": "Geen oppervlak onder de cursor.",
+    "status_no_target": "Geen transformeerbaar doel om uit te lijnen."
   }
 }

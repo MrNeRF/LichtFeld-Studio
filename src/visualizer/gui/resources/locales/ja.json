@@ -2338,5 +2338,17 @@
     "viewer_work_failed": "ビューアーの処理に失敗しました",
     "colmap_min_track_length": "min-track-length は --init と併用できません。初期化で '{}' を使用するため、COLMAP スパースポイントのフィルタリングは適用されません",
     "no_splat_node_named": "'{}' という名前のスプラットノードがありません"
+  },
+  "align": {
+    "click_1st": "1点目をクリック",
+    "click_2nd": "2点目をクリック",
+    "click_3rd": "3点目をクリック",
+    "points_count": "点: {}/3",
+    "up": "上",
+    "hint_picking": "クリック: 点を配置。Backspace: 最後を削除。Esc: キャンセル。",
+    "hint_review": "Enter: 適用。Backspace: 最後の点を削除。Esc: キャンセル。",
+    "status_colinear": "点がほぼ一直線です。点を移動してください。",
+    "status_no_surface": "カーソル下にサーフェスがありません。",
+    "status_no_target": "整列できる対象がありません。"
   }
 }

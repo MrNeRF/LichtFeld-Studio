@@ -2345,5 +2345,17 @@
     "viewer_work_failed": "查看器操作失败",
     "colmap_min_track_length": "min-track-length 不能与 --init 一起使用；由于初始化使用 '{}'，不会应用 COLMAP 稀疏点过滤",
     "no_splat_node_named": "没有名为 '{}' 的 splat 节点"
+  },
+  "align": {
+    "click_1st": "点击第 1 个点",
+    "click_2nd": "点击第 2 个点",
+    "click_3rd": "点击第 3 个点",
+    "points_count": "点: {}/3",
+    "up": "上",
+    "hint_picking": "点击：放置点。Backspace：删除上一个。Esc：取消。",
+    "hint_review": "Enter：应用。Backspace：删除上一个点。Esc：取消。",
+    "status_colinear": "这些点几乎共线。请移动一个点。",
+    "status_no_surface": "光标下没有表面。",
+    "status_no_target": "没有可对齐的可变换目标。"
   }
 }

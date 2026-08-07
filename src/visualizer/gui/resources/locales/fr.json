@@ -2338,5 +2338,17 @@
     "viewer_work_failed": "Échec d’une opération du visualiseur",
     "colmap_min_track_length": "min-track-length ne peut pas être utilisé avec --init ; le filtrage des points épars COLMAP ne sera pas appliqué car l’initialisation utilise '{}'",
     "no_splat_node_named": "Aucun nœud splat nommé '{}'"
+  },
+  "align": {
+    "click_1st": "Cliquez le 1er point",
+    "click_2nd": "Cliquez le 2e point",
+    "click_3rd": "Cliquez le 3e point",
+    "points_count": "Points : {}/3",
+    "up": "HAUT",
+    "hint_picking": "Clic : placer un point. Retour arrière : retirer le dernier. Échap : annuler.",
+    "hint_review": "Entrée : appliquer. Retour arrière : retirer le dernier point. Échap : annuler.",
+    "status_colinear": "Les points sont presque alignés. Déplacez un point.",
+    "status_no_surface": "Aucune surface sous le curseur.",
+    "status_no_target": "Aucune cible transformable à aligner."
   }
 }

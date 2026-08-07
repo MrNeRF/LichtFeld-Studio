@@ -1023,14 +1023,15 @@ namespace lfs::vis {
                         if (result.status == op::OperatorResult::RUNNING_MODAL) {
                             // Operator is now modal, don't set drag mode - modal dispatch handles it
                         }
-                    } else if (align_tool_ && align_tool_->isEnabled()) {
+                    } else if (align_tool_ && align_tool_->isEnabled() &&
+                               !op::operators().hasModalOperator()) {
                         op::OperatorProperties props;
                         props.set("x", x);
                         props.set("y", y);
                         props.set("button", button);
                         props.set("modifiers", mods);
                         const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
-                        if (result.status != op::OperatorResult::CANCELLED) {
+                        if (result.status == op::OperatorResult::RUNNING_MODAL) {
                             return;
                         }
                     }
@@ -1047,14 +1048,15 @@ namespace lfs::vis {
 
             case input::Action::NONE:
             default:
-                if (align_tool_ && align_tool_->isEnabled() && tool_context_ && !over_gui) {
+                if (align_tool_ && align_tool_->isEnabled() && tool_context_ && !over_gui &&
+                    !op::operators().hasModalOperator()) {
                     op::OperatorProperties props;
                     props.set("x", x);
                     props.set("y", y);
                     props.set("button", button);
                     props.set("modifiers", mods);
                     const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
-                    if (result.status != op::OperatorResult::CANCELLED) {
+                    if (result.status == op::OperatorResult::RUNNING_MODAL) {
                         return;
                     }
                 }

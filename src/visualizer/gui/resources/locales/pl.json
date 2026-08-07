@@ -2338,5 +2338,17 @@
     "viewer_work_failed": "Zadanie przeglądarki nie powiodło się",
     "colmap_min_track_length": "min-track-length nie może być użyte z --init; filtrowanie rzadkich punktów COLMAP nie zostanie zastosowane, ponieważ inicjalizacja używa '{}'",
     "no_splat_node_named": "Brak węzła splat o nazwie '{}'"
+  },
+  "align": {
+    "click_1st": "Kliknij 1. punkt",
+    "click_2nd": "Kliknij 2. punkt",
+    "click_3rd": "Kliknij 3. punkt",
+    "points_count": "Punkty: {}/3",
+    "up": "GÓRA",
+    "hint_picking": "Klik: ustaw punkt. Backspace: usuń ostatni. Esc: anuluj.",
+    "hint_review": "Enter: zastosuj. Backspace: usuń ostatni punkt. Esc: anuluj.",
+    "status_colinear": "Punkty są prawie w linii. Przesuń punkt.",
+    "status_no_surface": "Brak powierzchni pod kursorem.",
+    "status_no_target": "Brak obiektu do wyrównania."
   }
 }
