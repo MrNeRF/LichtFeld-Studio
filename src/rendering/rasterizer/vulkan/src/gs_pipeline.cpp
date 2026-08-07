@@ -2148,60 +2148,6 @@ void VulkanGSPipeline::executeCompute(
     recordComputeDispatch(std::move(dims), uniformsPtr, uniformSize, pipeline, buffers);
 }
 
-void VulkanGSPipeline::executeComputeIndirect(
-    const _VulkanBuffer& indirect_buffer,
-    VkDeviceSize indirect_offset,
-    const void* uniformsPtr, size_t uniformSize,
-    _ComputePipeline& pipeline,
-    const std::vector<_VulkanBuffer>& buffers) {
-    if (uniformSize > MAX_UNIFORM_SIZE || (uniformSize > 0 && uniformsPtr == nullptr)) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "executeComputeIndirect push constants require a valid pointer within the VkSplat limit (pipeline='{}', pointer={:#x}, requested_bytes={}, max_bytes={})",
-                pipeline.diagnostic_name,
-                lfs::rendering::vkHandleValue(uniformsPtr),
-                uniformSize,
-                MAX_UNIFORM_SIZE),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-    if ((indirect_offset & 3u) != 0) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "executeComputeIndirect requires a four-byte-aligned VkDispatchIndirectCommand offset (pipeline='{}', buffer={:#x}, base_offset={}, relative_offset={}, relative_offset_mod4={})",
-                pipeline.diagnostic_name,
-                lfs::rendering::vkHandleValue(indirect_buffer.buffer),
-                indirect_buffer.offset,
-                indirect_offset,
-                indirect_offset & 3u),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-    validateBufferRange(indirect_buffer,
-                        indirect_offset,
-                        sizeof(VkDispatchIndirectCommand),
-                        "executeComputeIndirect dispatch arguments");
-    if (pipeline.pipeline == VK_NULL_HANDLE || pipeline.pipeline_layout == VK_NULL_HANDLE ||
-        vk_cmd_push_descriptor_set_ == nullptr) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "executeComputeIndirect requires a complete compute pipeline (pipeline='{}', pipeline_handle={:#x}, layout={:#x}, push_descriptor_proc={:#x})",
-                pipeline.diagnostic_name,
-                lfs::rendering::vkHandleValue(pipeline.pipeline),
-                lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
-                lfs::rendering::vkHandleValue(vk_cmd_push_descriptor_set_)),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-
-    // Epic #1496 §3.4: untagged path invalidates every bound buffer + indirect args.
-    for (const auto& buffer : buffers) {
-        barrier_planner_.invalidate(buffer.buffer);
-    }
-    barrier_planner_.invalidate(indirect_buffer.buffer);
-
-    DEVICE_GUARD;
-    recordComputeDispatchIndirect(
-        indirect_buffer, indirect_offset, uniformsPtr, uniformSize, pipeline, buffers);
-}
-
 void VulkanGSPipeline::executeCompute(
     std::vector<std::pair<size_t, size_t>> dims,
     const void* uniformsPtr, size_t uniformSize,

@@ -22,8 +22,8 @@ namespace lfs::vis {
         bool flip_y = false;
         float near_plane = 0.1f;
         float far_plane = 1000.0f;
-        // When set, the pass binds this VkImageView (a CUDA/Vulkan interop slot owned
-        // by gui_manager) and skips the staging upload path.
+        // When set, the pass binds this VkImageView (a CUDA/Vulkan interop depth view
+        // published by the viewport interop path) and skips the staging upload path.
         VkImageView external_image_view = VK_NULL_HANDLE;
         std::uint64_t external_image_generation = 0;
         // Valid-region UV for padded depth images (default identity).

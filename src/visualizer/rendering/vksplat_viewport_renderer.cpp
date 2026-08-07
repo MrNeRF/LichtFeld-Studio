@@ -966,14 +966,13 @@ namespace lfs::vis {
         };
 
         enum SelectionQueryRegion : std::size_t {
-            SelectionQueryOutput = 0,
-            SelectionQueryTransformIndices = 1,
-            SelectionQueryNodeMask = 2,
-            SelectionQueryPrimitives = 3,
-            SelectionQueryModelTransforms = 4,
-            SelectionQueryPolygonVertices = 5,
-            SelectionQueryPolygonMask = 6,
-            SelectionQueryRingPick = 7,
+            SelectionQueryTransformIndices = 0,
+            SelectionQueryNodeMask = 1,
+            SelectionQueryPrimitives = 2,
+            SelectionQueryModelTransforms = 3,
+            SelectionQueryPolygonVertices = 4,
+            SelectionQueryPolygonMask = 5,
+            SelectionQueryRingPick = 6,
         };
 
         [[nodiscard]] bool hasOverlayTensor(const Tensor* const tensor, const std::size_t num_splats) {
@@ -6563,14 +6562,12 @@ namespace lfs::vis {
         // The borrowed Vulkan-external model storage stays resident across selection calls.
         // Stale data is detected via the model snapshot and its CUDA producer stream is ordered
         // into the Vulkan batch by the per-ring upload timeline.
-        (void)input_binding;
 
         auto& slot = cuda_selection_query_;
         const bool transform_indices_enabled = hasTransformIndices(request.scene.transform_indices, num_splats);
         const bool node_visibility_enabled = !request.scene.node_visibility_mask.empty();
 
         const std::size_t output_tensor_region_bytes = alignUp(std::max<std::size_t>(num_splats, 1), 4);
-        const std::size_t unused_query_output_region_bytes = sizeof(std::uint32_t);
         const std::size_t transform_region_bytes =
             std::max<std::size_t>(transform_indices_enabled ? num_splats * sizeof(std::int32_t)
                                                             : sizeof(std::int32_t),
@@ -6591,7 +6588,6 @@ namespace lfs::vis {
             alignUp(std::max<std::size_t>(polygon_mask_pixels, 1u), 4u);
         const std::size_t ring_pick_region_bytes = 2u * sizeof(std::uint32_t);
         std::array<std::size_t, kSelectionQueryRegionCount> region_bytes{};
-        region_bytes[SelectionQueryOutput] = unused_query_output_region_bytes;
         region_bytes[SelectionQueryTransformIndices] = transform_region_bytes;
         region_bytes[SelectionQueryNodeMask] = node_mask_region_bytes;
         region_bytes[SelectionQueryPrimitives] = primitive_region_bytes;
@@ -6608,7 +6604,6 @@ namespace lfs::vis {
             region_capacity_bytes[region] =
                 growRegionCapacity(region_capacity_bytes[region], region_bytes[region], minimum);
         };
-        grow_fixed(SelectionQueryOutput);
         grow_fixed(SelectionQueryTransformIndices);
         grow_fixed(SelectionQueryNodeMask);
         grow_dynamic(SelectionQueryPrimitives, 4u * 256u * sizeof(float));
@@ -7644,8 +7639,6 @@ namespace lfs::vis {
         const bool gpu_lod_render_active = gpu_lod_render_capacity > 0;
         gpu_lod_selection_active_ = gpu_lod_render_active;
         gpu_lod_render_capacity_last_ = gpu_lod_render_capacity;
-        // Keep the per-ring snapshot alive so unchanged Vulkan-external inputs remain a fast path.
-        (void)input_binding;
 
         const std::size_t active_splat_count =
             gpu_lod_render_active

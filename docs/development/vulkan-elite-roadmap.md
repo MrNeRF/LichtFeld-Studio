@@ -36,10 +36,10 @@ Critical correctness + truth-in-docs. No new features.
 - `vkWaitForFences` with 2s timeout; on timeout, log a `LOG_ERROR` naming the leaked submission and continue teardown.
 - **Accept**: Inject a never-signaling fence in a debug build; shutdown completes within 3s.
 
-### 0.4 Surface format & colorspace logging + `hasHdr()` flag
+### 0.4 Surface format & colorspace logging + HDR detection
 - `vulkan_context.cpp::chooseSurfaceFormat`
 - `LOG_INFO` chosen format and colorspace at swapchain create.
-- Add `hasHdr()` accessor returning true when a non-`VK_COLOR_SPACE_SRGB_NONLINEAR_KHR` format was selected.
+- Internal `has_hdr_` tracks non-`VK_COLOR_SPACE_SRGB_NONLINEAR_KHR` selection for logging (public `hasHdr()` accessor removed as unused).
 - **Accept**: Manual log inspection on RTX (sRGB) and HDR display (BT.2020).
 
 ### 0.5 External-image tracker leak fix
@@ -193,7 +193,7 @@ Lean on Vulkan 1.3+ features that are probed but unused.
 - **Accept**: cold-start pipeline compile time drops ~3×; shader hot-reload (dev mode) ≤100 ms.
 
 ### 4.3 Push descriptor on the viewport pass
-- Already probed (`hasPushDescriptor()`). Use `vkCmdPushDescriptorSetKHR` for transient overlay descriptors so the pass stops touching descriptor sets at all.
+- Push-descriptor support is probed via `has_push_descriptor_` / PFN (public `hasPushDescriptor()` getter removed as unused). Use `vkCmdPushDescriptorSetKHR` for transient overlay descriptors so the pass stops touching descriptor sets at all.
 
 ### 4.4 Mutable descriptor type for RmlUi texture slots
 - `VK_EXT_mutable_descriptor_type` — probe + enable.
@@ -282,7 +282,7 @@ Pick at most one based on user demand.
 - 0.1 Per-image acquire semaphores. `image_available_` moved to swapchain lifecycle; `next_acquire_index_` rotation; submit waits on the same index passed to acquire. Eliminates the >2-image-swapchain reuse hazard.
 - 0.2 `vkQueueWaitIdle(present_queue_)` removed from swapchain recreate. `waitForFrameFences()` now waits on `in_flight_` ∪ `swapchain_images_in_flight_` with a 2 s bound.
 - 0.3 Immediate-submit drain bounded to 2 s per fence; logs and leaks on timeout instead of hanging shutdown.
-- 0.4 Surface format/colorspace logged at swapchain create. `hasHdr()` accessor added; flips true on any non-`SRGB_NONLINEAR` colorspace.
+- 0.4 Surface format/colorspace logged at swapchain create. Internal HDR flag tracks any non-`SRGB_NONLINEAR` colorspace (public accessor later removed as unused).
 - 0.5 `VulkanImageBarrierTracker` separates external images via `external_images_` set; `clearSwapchainOnly()` preserves them across swapchain recreate. `vksplat_viewport_renderer` registers `output_image_` with `external=true`.
 - 0.6 `vulkan_result.hpp` + `vkResultToString` helper. 46 sites converted across `vulkan_context.cpp`, `vulkan_loader_probe.cpp`, `vksplat_viewport_renderer.cpp` (the two with VkResult sites in scope).
 - 0.7 `vulkan-rendering-pipeline.md` updated — `cudaStreamSynchronize` claim removed; per-frame timeline-semaphore handoff is documented as already in place.

@@ -62,9 +62,7 @@ namespace lfs::vis {
         glm::ivec2 source_size{0, 0};
         bool flip_y = false;
         bool disabled = false;
-        VkImage published_image = VK_NULL_HANDLE;
         VkImageView published_image_view = VK_NULL_HANDLE;
-        VkImageLayout published_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         std::uint64_t published_image_generation = 0;
         glm::ivec2 published_valid_size{0, 0};
         glm::ivec2 published_alloc_size{0, 0};
@@ -146,9 +144,7 @@ namespace lfs::vis {
     }
 
     void ViewportInteropService::clearPublished(Channel& channel) {
-        channel.published_image = VK_NULL_HANDLE;
         channel.published_image_view = VK_NULL_HANDLE;
-        channel.published_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         channel.published_image_generation = 0;
         channel.published_valid_size = {0, 0};
         channel.published_alloc_size = {0, 0};
@@ -160,9 +156,7 @@ namespace lfs::vis {
             clearPublished(channel);
             return;
         }
-        channel.published_image = target.unit->image.image;
         channel.published_image_view = target.unit->image.view;
-        channel.published_image_layout = target.unit->layout;
         channel.published_image_generation = target.generation;
         channel.published_valid_size = target.valid_size;
         channel.published_alloc_size = target.alloc_size;

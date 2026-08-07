@@ -44,19 +44,6 @@ namespace lfs::vis {
         return gpu_frame_ && gpu_frame_->valid();
     }
 
-    bool ViewportArtifactService::hasViewportOutput() const {
-        return hasGpuFrame() || (captured_image_ && captured_image_->is_valid());
-    }
-
-    bool ViewportArtifactService::hasOutputArtifacts() const {
-        for (size_t i = 0; i < metadata_.depth_panel_count && i < metadata_.depth_panels.size(); ++i) {
-            if (metadata_.depth_panels[i].depth && metadata_.depth_panels[i].depth->is_valid()) {
-                return true;
-            }
-        }
-        return hasGpuFrame() || rendered_size_.x > 0 || rendered_size_.y > 0;
-    }
-
     std::shared_ptr<lfs::core::Tensor> ViewportArtifactService::getCapturedImageIfCurrent() const {
         if (captured_image_ && captured_artifact_generation_ == artifact_generation_) {
             return captured_image_;

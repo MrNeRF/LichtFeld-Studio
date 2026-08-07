@@ -63,7 +63,6 @@ TEST(ViewportInteropDecision, InvalidSourceSceneDoesNotClearPublished) {
     const auto d = decideViewportInteropEarly(in);
     EXPECT_EQ(d.action, ViewportInteropAction::InvalidReset);
     EXPECT_FALSE(d.clear_published);
-    EXPECT_TRUE(d.reset_targets_if_nonempty);
 }
 
 TEST(ViewportInteropDecision, InvalidSourceSplitClearsPublished) {
@@ -73,7 +72,6 @@ TEST(ViewportInteropDecision, InvalidSourceSplitClearsPublished) {
     const auto d = decideViewportInteropEarly(in);
     EXPECT_EQ(d.action, ViewportInteropAction::InvalidReset);
     EXPECT_TRUE(d.clear_published);
-    EXPECT_TRUE(d.reset_targets_if_nonempty);
 }
 
 TEST(ViewportInteropDecision, CacheHitSceneDoesNotPublish) {

@@ -50,7 +50,6 @@ namespace lfs::vis {
         void showWindow();
         void updateWindowSize(const char* reason = "manual",
                               ResizeIntent intent = ResizeIntent::Exact);
-        void swapBuffers();
         void pollEvents();
         void waitEvents(double timeout_seconds);
         bool shouldClose() const;

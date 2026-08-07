@@ -68,16 +68,14 @@ Rule of thumb: anything written by CUDA and read by Vulkan within a frame must b
 
 There is no CPU-staging fallback. CUDA + Vulkan interop is the only supported path.
 
-After init, `VulkanContext` exposes opportunistic feature flags via `has*()` accessors:
+After init, `VulkanContext` probes opportunistic features. Some remain as public `has*()` accessors; others are log/PFN-only internal state after deadcode cleanup:
 
-- `hasDescriptorIndexing()` — Vulkan 1.2 core; `descriptorIndexing` + `runtimeDescriptorArray` etc.
-- `hasPushDescriptor()` — `VK_KHR_push_descriptor`
-- `hasShaderObject()` — `VK_EXT_shader_object`
-- `hasExtendedDynamicState3()` — `VK_EXT_extended_dynamic_state3`
-- `hasCooperativeMatrix()` — `VK_KHR_cooperative_matrix`
-- `hasHostImageCopy()` — `VK_EXT_host_image_copy`
+- `hasHostImageCopy()` — `VK_EXT_host_image_copy` (public accessor)
+- Push descriptor — `VK_KHR_push_descriptor` (internal `has_push_descriptor_` + PFN; public getter removed)
+- Float16 storage — feature-chain enable only; runtime probe is `VulkanGSRenderer::supportsFloat16Storage()`
+- Descriptor indexing / shader object / extended dynamic state / cooperative matrix — enablement paths as available on the device
 
-Each gates a Phase 3/4 modernization path. All six are present on current NVIDIA desktop drivers.
+Live code gates on PFNs / feature enablement rather than unused public capability getters.
 
 ## Device-identity check
 

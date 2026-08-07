@@ -178,37 +178,22 @@ namespace lfs::vis {
         [[nodiscard]] VkInstance instance() const { return instance_; }
         [[nodiscard]] VkPhysicalDevice physicalDevice() const { return physical_device_; }
         [[nodiscard]] VkDevice device() const { return device_; }
-        [[nodiscard]] VkSurfaceKHR surface() const { return surface_; }
         [[nodiscard]] VkQueue graphicsQueue() const { return graphics_queue_; }
-        [[nodiscard]] VkQueue presentQueue() const { return present_queue_; }
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
-        [[nodiscard]] uint32_t presentQueueFamily() const { return present_queue_family_; }
         [[nodiscard]] VmaAllocator allocator() const { return allocator_; }
         [[nodiscard]] std::size_t queryVmaUsedBytes() const;
         [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
-        [[nodiscard]] VkColorSpaceKHR swapchainColorSpace() const { return swapchain_color_space_; }
-        [[nodiscard]] bool hasHdr() const noexcept { return has_hdr_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }
         [[nodiscard]] VkImageAspectFlags depthStencilAspectMask() const;
-        [[nodiscard]] VkImageView depthStencilImageView() const {
-            return active_frame_index_ < depth_stencil_resources_.size()
-                       ? depth_stencil_resources_[active_frame_index_].view
-                       : VK_NULL_HANDLE;
-        }
-        [[nodiscard]] VkExtent2D swapchainExtent() const { return swapchain_extent_; }
         [[nodiscard]] VkExtent2D framebufferExtent() const;
-        [[nodiscard]] uint32_t minImageCount() const { return min_image_count_; }
-        [[nodiscard]] uint32_t imageCount() const { return static_cast<uint32_t>(swapchain_images_.size()); }
         [[nodiscard]] std::size_t framesInFlight() const { return kFramesInFlight; }
         [[nodiscard]] std::size_t currentFrameSlot() const { return frame_index_; }
         [[nodiscard]] bool externalMemoryInteropEnabled() const { return external_memory_interop_enabled_; }
         [[nodiscard]] bool externalSemaphoreInteropEnabled() const { return external_semaphore_interop_enabled_; }
         [[nodiscard]] VulkanImageBarrierTracker& imageBarriers() { return image_barriers_; }
-        [[nodiscard]] bool hasPushDescriptor() const { return has_push_descriptor_; }
         [[nodiscard]] PFN_vkCmdPushDescriptorSetKHR vkCmdPushDescriptorSet() const { return vk_cmd_push_descriptor_set_; }
         [[nodiscard]] bool hasHostImageCopy() const { return has_host_image_copy_; }
-        [[nodiscard]] bool hasFloat16Storage() const { return has_float16_storage_; }
         [[nodiscard]] bool hasConditionalRendering() const { return has_conditional_rendering_; }
         [[nodiscard]] PFN_vkCmdBeginConditionalRenderingEXT vkCmdBeginConditionalRendering() const {
             return vk_cmd_begin_conditional_rendering_;
@@ -227,11 +212,6 @@ namespace lfs::vis {
         [[nodiscard]] uint32_t computeQueueFamily() const { return compute_queue_family_; }
         [[nodiscard]] bool hasDedicatedComputeQueue() const { return has_dedicated_compute_queue_; }
         [[nodiscard]] const std::array<std::uint8_t, VK_UUID_SIZE>& deviceUUID() const { return device_uuid_; }
-#ifdef _WIN32
-        [[nodiscard]] const std::array<std::uint8_t, VK_LUID_SIZE>& deviceLUID() const { return device_luid_; }
-        [[nodiscard]] bool deviceLUIDValid() const { return device_luid_valid_; }
-        [[nodiscard]] std::uint32_t deviceNodeMask() const { return device_node_mask_; }
-#endif
         [[nodiscard]] bool externalMemoryDedicatedAllocationEnabled() const {
             return external_memory_dedicated_allocation_enabled_;
         }
@@ -430,11 +410,6 @@ namespace lfs::vis {
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
         VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
         std::array<std::uint8_t, VK_UUID_SIZE> device_uuid_{};
-#ifdef _WIN32
-        std::array<std::uint8_t, VK_LUID_SIZE> device_luid_{};
-        bool device_luid_valid_ = false;
-        std::uint32_t device_node_mask_ = 0;
-#endif
         VkDevice device_ = VK_NULL_HANDLE;
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
@@ -448,7 +423,6 @@ namespace lfs::vis {
 
         VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
         VkFormat swapchain_format_ = VK_FORMAT_UNDEFINED;
-        VkColorSpaceKHR swapchain_color_space_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
         bool has_hdr_ = false;
         VkExtent2D swapchain_extent_{};
         VkImageUsageFlags swapchain_image_usage_ = 0;
@@ -535,7 +509,6 @@ namespace lfs::vis {
         bool swapchain_maintenance1_enabled_ = false;
         bool swapchain_present_scaling_enabled_ = false;
         bool has_push_descriptor_ = false;
-        bool has_float16_storage_ = false;
         bool has_conditional_rendering_ = false;
         bool has_host_image_copy_ = false;
         bool has_fill_mode_non_solid_ = false;

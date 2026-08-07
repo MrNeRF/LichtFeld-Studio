@@ -120,13 +120,6 @@ namespace lfs::vis {
                     error.find("capacity insufficient") != std::string_view::npos);
         }
 
-        [[nodiscard]] bool isRetryableVksplatOutputResizeWait(const std::string_view error) {
-            return error.find("VkSplat output resize wait failed") != std::string_view::npos &&
-                   error.find("VK_ERROR_DEVICE_LOST") == std::string_view::npos &&
-                   (error.find("VK_TIMEOUT") != std::string_view::npos ||
-                    error.find("vkWaitForFences") != std::string_view::npos);
-        }
-
         [[nodiscard]] DirtyMask vksplatOutputResizeRetryDirty(const DirtyMask frame_dirty) {
             return frame_dirty != 0 ? frame_dirty : DirtyFlag::VIEWPORT | DirtyFlag::CAMERA;
         }
@@ -1371,10 +1364,6 @@ namespace lfs::vis {
             return VksplatViewportRenderer::SelectionMaskShape::Brush;
         };
 
-        const bool is_training = scene_manager.hasDataset() &&
-                                 scene_manager.getTrainerManager() &&
-                                 scene_manager.getTrainerManager()->isRunning();
-
         VksplatViewportRenderer::SelectionMaskRequest request{
             .frame_view = frame_view,
             .scene =
@@ -1388,7 +1377,6 @@ namespace lfs::vis {
             .equirectangular = equirectangular,
             .mip_filter = settings.mip_filter,
             .ring_width = settings.ring_width,
-            .synchronize_input_upload = is_training,
             .picked_ring_id_out = picked_ring_id_out,
         };
 
@@ -3520,22 +3508,15 @@ namespace lfs::vis {
                     }
                     const bool shared_scratch_retryable =
                         isRetryableSharedScratchUnavailable(render_result.error());
-                    const bool output_resize_wait_retryable =
-                        isRetryableVksplatOutputResizeWait(render_result.error());
                     if (synchronize_vksplat_input_upload &&
                         has_cached_viewport_output &&
-                        (shared_scratch_retryable || output_resize_wait_retryable)) {
-                        const DirtyMask retry_dirty =
-                            output_resize_wait_retryable
-                                ? vksplatOutputResizeRetryDirty(frame_dirty)
-                                : vksplatSharedScratchRetryDirty(frame_dirty);
+                        shared_scratch_retryable) {
+                        const DirtyMask retry_dirty = vksplatSharedScratchRetryDirty(frame_dirty);
                         dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
                         const bool cached_size_matches = vulkan_viewport_image_size_ == render_size;
                         if (vksplat_viewport_resize || !cached_size_matches) {
                             LOG_DEBUG("{} ({}); skipping cached viewport image, retry_dirty=0x{:x}, vksplat_resize={}, cached_size={}x{}, render_size={}x{}",
-                                      output_resize_wait_retryable
-                                          ? "VkSplat output resize wait is still pending"
-                                          : "VkSplat shared scratch unavailable",
+                                      "VkSplat shared scratch unavailable",
                                       render_result.error(),
                                       retry_dirty,
                                       vksplat_viewport_resize,
@@ -3547,9 +3528,7 @@ namespace lfs::vis {
                             return {};
                         }
                         LOG_DEBUG("{} ({}); returning cached viewport image, retry_dirty=0x{:x}",
-                                  output_resize_wait_retryable
-                                      ? "VkSplat output resize wait is still pending"
-                                      : "VkSplat shared scratch unavailable",
+                                  "VkSplat shared scratch unavailable",
                                   render_result.error(),
                                   retry_dirty);
                         render_lock.reset();
@@ -3722,31 +3701,22 @@ namespace lfs::vis {
             const bool shared_scratch_retryable =
                 synchronize_vksplat_input_upload &&
                 isRetryableSharedScratchUnavailable(render_error);
-            const bool output_resize_wait_retryable =
-                isRetryableVksplatOutputResizeWait(render_error);
-            if (shared_scratch_retryable || output_resize_wait_retryable) {
-                const DirtyMask retry_dirty =
-                    output_resize_wait_retryable
-                        ? vksplatOutputResizeRetryDirty(frame_dirty)
-                        : vksplatSharedScratchRetryDirty(frame_dirty);
+            if (shared_scratch_retryable) {
+                const DirtyMask retry_dirty = vksplatSharedScratchRetryDirty(frame_dirty);
                 dirty_mask_.fetch_or(retry_dirty,
                                      std::memory_order_relaxed);
                 render_lock.reset();
                 const bool cached_size_matches = vulkan_viewport_image_size_ == render_size;
                 if (has_cached_viewport_output && !vksplat_viewport_resize && cached_size_matches) {
                     LOG_DEBUG("{} ({}); returning cached viewport image, retry_dirty=0x{:x}",
-                              output_resize_wait_retryable
-                                  ? "VkSplat output resize wait is still pending"
-                                  : "VkSplat shared scratch unavailable",
+                              "VkSplat shared scratch unavailable",
                               render_error,
                               retry_dirty);
                     return cached_frame_result();
                 }
 
                 LOG_DEBUG("{} ({}); skipping viewport frame, retry_dirty=0x{:x}, cached_output={}, vksplat_resize={}, cached_size={}x{}, render_size={}x{}",
-                          output_resize_wait_retryable
-                              ? "VkSplat output resize wait is still pending"
-                              : "VkSplat shared scratch unavailable",
+                          "VkSplat shared scratch unavailable",
                           render_error,
                           retry_dirty,
                           has_cached_viewport_output,

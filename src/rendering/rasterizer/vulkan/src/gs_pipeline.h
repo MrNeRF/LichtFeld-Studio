@@ -306,16 +306,9 @@ protected:
         _ComputePipeline& pipeline,
         const std::vector<_VulkanBuffer>& buffers);
 
-    // Indirect dispatch variant. The dispatch group counts come from a
-    // GPU-resident VkDispatchIndirectCommand at (indirect_buffer, offset).
-    void executeComputeIndirect(
-        const _VulkanBuffer& indirect_buffer,
-        VkDeviceSize indirect_offset,
-        const void* uniformsPtr, size_t uniformSize,
-        _ComputePipeline& pipeline,
-        const std::vector<_VulkanBuffer>& buffers);
-
     // Epic #1496 §3.1: planner-driven dispatch (plan once, emit ≤1 barrier2, shared bind path).
+    // Indirect dispatch: group counts come from a GPU-resident VkDispatchIndirectCommand
+    // at (indirect_buffer, offset).
     void executeCompute(
         std::vector<std::pair<size_t, size_t>> dims,
         const void* uniformsPtr, size_t uniformSize,

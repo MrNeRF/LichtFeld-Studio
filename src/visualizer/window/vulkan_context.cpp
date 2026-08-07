@@ -2338,11 +2338,6 @@ namespace lfs::vis {
         props2.pNext = &id_props;
         vkGetPhysicalDeviceProperties2(physical_device_, &props2);
         std::memcpy(device_uuid_.data(), id_props.deviceUUID, VK_UUID_SIZE);
-#ifdef _WIN32
-        std::memcpy(device_luid_.data(), id_props.deviceLUID, VK_LUID_SIZE);
-        device_luid_valid_ = id_props.deviceLUIDValid != VK_FALSE;
-        device_node_mask_ = id_props.deviceNodeMask;
-#endif
         return true;
     }
 
@@ -2590,8 +2585,8 @@ namespace lfs::vis {
         }
 
         // 16-bit storage for the fp16 splat raster path (half4 partials,
-        // half-packed staging). Mirrors device support; consumers must check
-        // hasFloat16Storage() and fall back to fp32 shader variants.
+        // half-packed staging). Features are enabled when the device supports them;
+        // runtime float16 capability is probed via VulkanGSRenderer::supportsFloat16Storage().
         VkPhysicalDeviceVulkan11Features features11{};
         features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
         features11.storageBuffer16BitAccess = supported_features11.storageBuffer16BitAccess;
@@ -2671,8 +2666,6 @@ namespace lfs::vis {
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
         swapchain_maintenance1_enabled_ = enable_swapchain_maintenance1;
         has_push_descriptor_ = enable_push_descriptor;
-        has_float16_storage_ = features12.shaderFloat16 == VK_TRUE &&
-                               features11.storageBuffer16BitAccess == VK_TRUE;
         has_conditional_rendering_ = enable_conditional_rendering;
         has_host_image_copy_ = enable_host_image_copy_feature;
         has_fill_mode_non_solid_ = features2.features.fillModeNonSolid == VK_TRUE;
@@ -4077,7 +4070,6 @@ namespace lfs::vis {
         recordCurrentVulkanBytes("vulkan.swapchain", "driver_owned_images_estimate", swapchain_estimated_bytes_);
         swapchain_images_in_flight_.assign(image_count, VK_NULL_HANDLE);
         swapchain_format_ = surface_format.format;
-        swapchain_color_space_ = surface_format.colorSpace;
         swapchain_extent_fixed_to_surface_ = extent_fixed_to_surface;
         swapchain_present_scaling_enabled_ = use_present_scaling;
         has_hdr_ = surface_format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;

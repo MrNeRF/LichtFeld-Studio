@@ -82,14 +82,6 @@ namespace lfs::vis::vksplat {
     LFS_VIS_API [[nodiscard]] std::expected<DeviceInputLayout, std::string> deviceInputLayout(
         const lfs::core::SplatData& splat_data);
 
-    LFS_VIS_API [[nodiscard]] std::expected<void, std::string> packDeviceInputsToBuffer(
-        const lfs::core::SplatData& splat_data,
-        void* xyz_dst,
-        void* rotations_dst,
-        void* scales_opacs_dst,
-        void* sh_coeffs_dst,
-        cudaStream_t stream);
-
     struct LFS_VIS_API RawDeviceInputLayout {
         std::size_t num_splats = 0;
         std::size_t xyz_bytes = 0;

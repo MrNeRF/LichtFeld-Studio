@@ -10,7 +10,6 @@ namespace lfs::vis {
         auto now = std::chrono::high_resolution_clock::now();
         frame_start_time_ = now;
         last_frame_time_ = now;
-        last_non_dropped_training_frame_time_ = now;
     }
 
     void FramerateController::beginFrame() {
@@ -29,50 +28,6 @@ namespace lfs::vis {
         updatePerformanceState();
 
         last_frame_time_ = frame_start_time_;
-    }
-
-    void FramerateController::endFrame() {
-        // This can be used for additional timing if needed in the future
-    }
-
-    bool FramerateController::shouldSkipSceneRender(bool is_training, bool scene_changed) {
-
-        // Don't skip if scene changed - user interaction requires immediate response
-        if (scene_changed) {
-            consecutive_skips_ = 0;
-            return false;
-        }
-
-        // when not training - skip if we're in static mode and scene hasn't changed
-        if (settings_.skip_when_static && !is_training) {
-            consecutive_skips_ = 0;
-            return true;
-        }
-
-        // Skip at most max_consecutive_skips_ frames, then force one render.
-        if (settings_.adaptive_quality && is_performance_critical_) {
-            if (consecutive_skips_ < max_consecutive_skips_) {
-                ++consecutive_skips_;
-                return true;
-            }
-            consecutive_skips_ = 0;
-        } else {
-            consecutive_skips_ = 0;
-        }
-        // if training - refresh rate should correspond to training_frame_refresh_time_sec_
-        if (is_training) {
-            using seconds_f = std::chrono::duration<float>;
-
-            auto now = std::chrono::high_resolution_clock::now();
-            float time_diff_sec = seconds_f(now - last_non_dropped_training_frame_time_).count();
-            if (time_diff_sec < settings_.training_frame_refresh_time_sec) {
-                return true;
-            }
-            last_non_dropped_training_frame_time_ = now;
-            return false;
-        }
-
-        return false;
     }
 
     void FramerateController::cleanupOldFrames() {
@@ -120,24 +75,6 @@ namespace lfs::vis {
 
     void FramerateController::updatePerformanceState() {
         // Consider performance critical if average FPS is below threshold
-        bool was_critical = is_performance_critical_;
         is_performance_critical_ = (average_fps_ < settings_.min_fps_threshold && average_fps_ > 0.0f);
-
-        // Reset skip counter if performance improved
-        if (was_critical && !is_performance_critical_) {
-            consecutive_skips_ = 0;
-        }
-    }
-
-    void FramerateController::reset() {
-        frame_times_.clear();
-        current_fps_ = 0.0f;
-        average_fps_ = 0.0f;
-        is_performance_critical_ = false;
-        consecutive_skips_ = 0;
-
-        auto now = std::chrono::high_resolution_clock::now();
-        frame_start_time_ = now;
-        last_frame_time_ = now;
     }
 } // namespace lfs::vis

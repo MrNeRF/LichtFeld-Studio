@@ -100,10 +100,6 @@ namespace lfs::vis {
             std::int32_t grid_index = 0;
         };
 
-        struct OverlayPush {
-            glm::vec4 padding{0.0f};
-        };
-
         struct PivotPush {
             glm::vec4 center_size{0.0f};
             glm::vec4 color_opacity{0.26f, 0.59f, 0.98f, 1.0f};

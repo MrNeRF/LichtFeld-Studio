@@ -122,7 +122,6 @@ namespace lfs::vis {
         bool isInitialized() const { return initialized_; }
 
         // Main render function
-        void renderFrame(const RenderContext& context);
         VulkanFrameResult renderVulkanFrame(const RenderContext& context);
         [[nodiscard]] std::expected<void, std::string> ensureVksplatTrainingSharedScratchReady(
             VulkanContext& context,
@@ -259,8 +258,6 @@ namespace lfs::vis {
         void setOrthographic(bool enabled, float viewport_height, float distance_to_pivot);
 
         float getFovDegrees() const;
-        float getScalingModifier() const;
-        void setScalingModifier(float s);
         float getFocalLengthMm() const;
         void setFocalLength(float focal_mm);
 
@@ -358,9 +355,7 @@ namespace lfs::vis {
             bool used_mask = false;
         };
 
-        void setLatestCameraMetrics(CameraMetricsOverlayState metrics);
         void clearLatestCameraMetrics();
-        [[nodiscard]] std::optional<CameraMetricsOverlayState> getLatestCameraMetrics() const;
 
         // FPS monitoring
         float getCurrentFPS() const { return framerate_controller_.getCurrentFPS(); }
@@ -368,9 +363,6 @@ namespace lfs::vis {
 
         // Access to the auxiliary rendering engine used by point-cloud, mesh, and readback paths.
         lfs::rendering::RenderingEngine* getRenderingEngine();
-        [[nodiscard]] lfs::rendering::RenderingEngine* getRenderingEngineIfInitialized() const {
-            return initialized_ ? engine_.get() : nullptr;
-        }
         [[nodiscard]] lfs::rendering::ScreenOverlayRenderer* getScreenOverlayRenderer() {
             return &screen_overlay_renderer_;
         }
@@ -412,9 +404,6 @@ namespace lfs::vis {
         };
         [[nodiscard]] FramebufferViewportRect framebufferViewportRect() const {
             return framebuffer_viewport_rect_;
-        }
-        [[nodiscard]] uint64_t getViewportArtifactGeneration() const {
-            return viewport_artifact_service_.artifactGeneration();
         }
         [[nodiscard]] uint64_t getViewportProjectionGeneration() const {
             return viewport_projection_generation_;
@@ -543,9 +532,6 @@ namespace lfs::vis {
         }
         [[nodiscard]] int getHoveredGaussianId() const { return viewport_overlay_service_.hoveredGaussianId(); }
 
-        // Sync selection group colors to GPU constant memory
-        void syncSelectionGroupColor(int group_id, const glm::vec3& color);
-
         // Gizmo state for wireframe sync during manipulation
         void setCropboxGizmoState(bool active, const glm::vec3& min, const glm::vec3& max,
                                   const glm::mat4& world_transform, bool affects_render,
@@ -587,7 +573,6 @@ namespace lfs::vis {
         // LOD management
         void setLodAvailable(bool available);
         void setLodEnabled(bool enabled);
-        [[nodiscard]] bool isLodEnabled() const;
         [[nodiscard]] SparkLodController::Stats getLodStats() const;
 
     private:
@@ -863,9 +848,6 @@ namespace lfs::vis {
         bool lod_available_ = false;
 
         ViewportInteractionContext viewport_interaction_context_;
-
-        // Debug tracking
-        uint64_t render_count_ = 0;
 
         ViewportOverlayService viewport_overlay_service_;
 

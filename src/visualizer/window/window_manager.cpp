@@ -539,14 +539,6 @@ namespace lfs::vis {
         return std::chrono::steady_clock::now() - last_window_size_change_time_ <= max_age;
     }
 
-    void WindowManager::swapBuffers() {
-        if (vulkan_context_) {
-            if (!vulkan_context_->presentBootstrapFrame(0.11f, 0.11f, 0.14f, 1.0f)) {
-                LOG_WARN("Vulkan bootstrap present failed: {}", vulkan_context_->lastError());
-            }
-        }
-    }
-
     void WindowManager::pollEvents() {
         frame_input_.beginFrame();
         const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;

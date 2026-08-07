@@ -96,7 +96,6 @@ namespace lfs::vis {
             const std::array<SplitViewPanelPlan, 2>& panels,
             const glm::ivec2 output_size,
             const glm::vec3& background_color,
-            const bool prefer_batched_gaussian_render,
             const bool letterbox = false,
             const glm::ivec2 content_size = {0, 0}) {
             return SplitViewCompositionPlan{
@@ -108,7 +107,6 @@ namespace lfs::vis {
                     {.divider_color = kSplitDividerColor,
                      .letterbox = letterbox,
                      .content_size = content_size},
-                .prefer_batched_gaussian_render = prefer_batched_gaussian_render,
             };
         }
 
@@ -170,7 +168,6 @@ namespace lfs::vis {
                                   .flip_y = std::nullopt}}}},
                 ctx.render_size,
                 ctx.settings.background_color,
-                false,
                 true,
                 res.gt_context->dimensions);
             plan.mode_label = LOC(lichtfeld::Strings::StatusBar::GT_COMPARE);
@@ -262,8 +259,7 @@ namespace lfs::vis {
                                   .texcoord_scale = glm::vec2(1.0f, 1.0f),
                                   .flip_y = std::nullopt}}}},
                 ctx.makeViewportData().size,
-                ctx.settings.background_color,
-                false);
+                ctx.settings.background_color);
             plan.mode_label = LOC(lichtfeld::Strings::StatusBar::SPLIT_VIEW);
             plan.detail_label = std::format("{} | {}", plan.panels[0].label, plan.panels[1].label);
             return plan;
@@ -320,32 +316,12 @@ namespace lfs::vis {
                                   .flip_y = std::nullopt,
                                   .normalize_x_to_panel = true}}}},
                 ctx.render_size,
-                ctx.settings.background_color,
-                true);
+                ctx.settings.background_color);
             plan.mode_label = LOC(lichtfeld::Strings::StatusBar::SPLIT_VIEW);
             plan.detail_label = std::format("{} | {}", plan.panels[0].label, plan.panels[1].label);
             return plan;
         }
     } // namespace
-
-    lfs::rendering::SplitViewRequest SplitViewCompositionPlan::toRequest() const {
-        return lfs::rendering::SplitViewRequest{
-            .panels = {panels[0].panel, panels[1].panel},
-            .composite = composite,
-            .presentation = presentation,
-            .prefer_batched_gaussian_render = prefer_batched_gaussian_render,
-        };
-    }
-
-    SplitViewInfo SplitViewCompositionPlan::toInfo() const {
-        return SplitViewInfo{
-            .enabled = true,
-            .mode_label = mode_label,
-            .detail_label = detail_label,
-            .left_name = panels[0].label,
-            .right_name = panels[1].label,
-        };
-    }
 
     std::optional<SplitViewCompositionPlan> buildSplitViewCompositionPlan(
         const FrameContext& ctx,

@@ -55,7 +55,6 @@ namespace lfs::vis {
         ViewportInteropAction action = ViewportInteropAction::SlowPath;
         bool clear_published = false;
         bool publish_from_target = false;
-        bool reset_targets_if_nonempty = false;
     };
 
     [[nodiscard]] inline ViewportInteropDecision
@@ -70,7 +69,6 @@ namespace lfs::vis {
             return {
                 .action = ViewportInteropAction::InvalidReset,
                 .clear_published = in.publishes_published,
-                .reset_targets_if_nonempty = true,
             };
         }
 

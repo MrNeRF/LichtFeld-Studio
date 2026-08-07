@@ -387,13 +387,6 @@ namespace lfs::rendering {
             const cudaStream_t stream);
     } // namespace detail
 
-    CudaVulkanInterop::CudaVulkanInterop(CudaVulkanExternalImageImport image,
-                                         CudaVulkanExternalSemaphoreImport semaphore) {
-        if (!init(std::move(image), std::move(semaphore))) {
-            throw std::runtime_error(last_error_);
-        }
-    }
-
     CudaVulkanInterop::~CudaVulkanInterop() {
         reset();
     }
@@ -943,12 +936,6 @@ namespace lfs::rendering {
 
     // ===== CudaVulkanBufferInterop ===============================================
 
-    CudaVulkanBufferInterop::CudaVulkanBufferInterop(CudaVulkanExternalBufferImport buffer) {
-        if (!init(std::move(buffer))) {
-            throw std::runtime_error(last_error_);
-        }
-    }
-
     CudaVulkanBufferInterop::~CudaVulkanBufferInterop() {
         reset();
     }
@@ -1048,12 +1035,6 @@ namespace lfs::rendering {
 
     bool CudaVulkanBufferInterop::valid() const {
         return cuda_mem_ != nullptr && device_ptr_ != nullptr && size_ > 0;
-    }
-
-    bool CudaVulkanBufferInterop::copyFromTensor(const lfs::core::Tensor& tensor,
-                                                 const std::size_t byte_count,
-                                                 const cudaStream_t stream) const {
-        return copyFromTensor(tensor, byte_count, 0, stream);
     }
 
     bool CudaVulkanBufferInterop::copyFromTensor(const lfs::core::Tensor& tensor,

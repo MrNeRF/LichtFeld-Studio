@@ -351,13 +351,6 @@ namespace lfs::rendering {
         glm::ivec2 content_size{0, 0};
     };
 
-    struct SplitViewRequest {
-        std::array<SplitViewPanel, 2> panels;
-        SplitViewCompositeState composite;
-        SplitViewPresentationState presentation;
-        bool prefer_batched_gaussian_render = false;
-    };
-
     // Render modes
     enum class RenderMode {
         RGB = 0,
