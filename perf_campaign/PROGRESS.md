@@ -1042,3 +1042,73 @@ written first; production fixes landed with all 10 cases green.
 New mandatory quant-ON strategy smoke:
 - `DualRepOptimizer.MCMC_InitializeWithBothCodecsOn`
 - `DualRepOptimizer.MRNF_InitializeWithBothCodecsOn`
+
+---
+
+## WO-WARP-BWD — Warp-level culling for FastGS blend_backward_cu
+
+- **Branch:** `lfs-elite` (never checkout)
+- **Citation (maintainer-approved):** Yang, Drettakis, Bernstein, "Warp-Level Culling
+  for Efficient Blending in 3D Gaussian Splatting", ACM CGIT 9(4):54, 2026,
+  doi:10.1145/3820019. Cited in kernel-head comment + landing commit message.
+- **Prior art:** ellipse-exact sub-tile test from `alphablend_shader.slang` (not paper AABB-only).
+
+### Change
+1. **Pixel-centric reverse walk** over `[0, T_eff)` (BWD-A clamp kept).
+2. **128 threads / 4 warps**; each thread owns **2 pixels** (warp covers two 8×4
+   sub-tiles) so all 8 sub-tiles are covered without a 256-wide block.
+3. **Ballot culling** 32-at-a-time: AABB prefilter (`PackedMeanBBox`) then
+   **ellipse-exact** `splat_overlaps_subtile_ellipse` (port of slang
+   `ellipse_box_overlap_test`).
+4. **Warp-reduce → one global atomic per splat per warp**; block fences only at
+   batch boundaries (zero `block.sync` inside `WARP_BWD_WALK_*`).
+5. Hooks: `LFS_BWD_WARP_CULL_MODE` / shared `set_warp_cull_mode_for_testing`
+   (0=on, 1=off, 2=wrong empty); batch via `blend_backward_batch_size=128`.
+
+### TDD
+- **FAIL-first (sync):** walk body must have zero block fences / no diagonal loop.
+- **FAIL-first (wrong mask):** mode=2 empty ballot vs mode=1 → post-step params differ.
+- **PASS:** mode=0 vs mode=1 within 1e-6 on synthetic + dense; determinism ≤1e-6.
+```
+[  PASSED  ] WarpCullBwdTest.ReverseWalkHasZeroBlockFences
+[  PASSED  ] WarpCullBwdTest.WrongMaskDiffersFromReference
+[  PASSED  ] WarpCullBwdTest.EnabledMatchesReference_Synthetic
+[  PASSED  ] WarpCullBwdTest.EnabledMatchesReference_Dense
+[  PASSED  ] WarpCullBwdTest.EnabledIsDeterministic
+FastGSGradientTest.* 5/5; FastGSDenseTileGradientTest.* 4/4
+```
+
+### Kernel-time LATE-WINDOW (profile.sh, [1600,1900))
+
+| scene | prior blend_backward avg µs | **WARP-BWD** avg | med | Δ avg |
+|---|---:|---:|---:|---:|
+| bonsai (warpcull/clamp baseline) | 2054.4 | **1527.1** | 1513.3 | **−25.7%** |
+| bicycle (warpcull baseline) | 976.5 | **891.2** | 885.1 | **−8.7%** |
+
+Target −25%+ beyond clamp: **met on bonsai** (the #1 saturated kernel). Bicycle also faster.
+
+Profiles: `perf_campaign/profiles/warpbwd-v4-{bonsai,bicycle}/` (+ earlier A/B dirs).
+
+### Dual-workload gate
+
+| workload | med steady_ms | B/splat | allocs/iter | vs WARP-FWD |
+|---|---:|---:|---:|---|
+| bonsai ×3 | **2.616** | 307.4 | 0.11 | was 3.113 → **improved** |
+| bicycle 7k ×3 | **2.650** | 307.4 | 0.10 | was 2.737 → **improved** |
+
+Loss ranges healthy (bonsai ~0.03–0.04; bicycle ~0.09–0.18). Curves overlap prior healthy band.
+
+### Full-suite delta
+3292 PASS / 48 SKIP; documented env reds only (incl. pre-existing
+`FastGSCropDampingTest` shN moment-scale joint-decode zero — `shn_delta>0` so
+params update; not introduced by this change). All FastGS numerical gradients green.
+
+### Files
+- `kernels_backward.cuh` — restructured `blend_backward_cu`
+- `kernel_utils.cuh` — `ellipse_box_overlap_test` + `splat_overlaps_subtile_ellipse`
+- `rasterization_config.h` — `block_size_blend_backward=128`, `blend_backward_batch_size=128`
+- `backward.cu` — cull mode / batch args
+- `tests/test_warp_cull_bwd.cpp` — TDD suite
+- `tests/CMakeLists.txt` — register test
+
+### Commit

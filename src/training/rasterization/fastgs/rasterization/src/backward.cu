@@ -4,11 +4,13 @@
 
 #include "backward.h"
 #include "buffer_utils.h"
+#include "forward.h"
 #include "helper_math.h"
 #include "kernels_backward.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 
@@ -120,6 +122,24 @@ void fast_lfs::rasterization::backward(
     auto* fastgs_status = per_primitive_buffers.forward_status;
 
     if (n_instances > 0) {
+        // WO-WARP-BWD: cull mode + batch size (shared test hooks with forward; env overrides).
+        // Mode is read at backward launch so tests can set it after forward returns.
+        int warp_cull_mode = warp_cull_mode_for_testing();
+        int blend_batch_override = blend_batch_size_for_testing();
+        if (const char* env_mode = std::getenv("LFS_BWD_WARP_CULL_MODE")) {
+            warp_cull_mode = std::atoi(env_mode);
+        } else if (const char* env_mode = std::getenv("LFS_WARP_CULL_MODE")) {
+            // Fall back to shared env when bwd-specific is unset.
+            warp_cull_mode = std::atoi(env_mode);
+        }
+        if (blend_batch_override == 0) {
+            if (const char* env_batch = std::getenv("LFS_BWD_BLEND_BATCH_SIZE")) {
+                blend_batch_override = std::atoi(env_batch);
+            } else if (const char* env_batch = std::getenv("LFS_BLEND_BATCH_SIZE")) {
+                blend_batch_override = std::atoi(env_batch);
+            }
+        }
+
         // Backward blend (template dispatch eliminates densification branch from inner loop)
         auto launch_blend_backward_typed = [&]<DensificationType DENS_TYPE, bool NORMAL_CHANNEL>() {
             kernels::backward::blend_backward_cu<DENS_TYPE, NORMAL_CHANNEL><<<n_tiles, config::block_size_blend_backward, 0, stream>>>(
@@ -151,7 +171,9 @@ void fast_lfs::rasterization::backward(
                 n_primitives,
                 width,
                 height,
-                grid.x);
+                grid.x,
+                warp_cull_mode,
+                blend_batch_override);
             LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.blend_backward");
         };
         auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {

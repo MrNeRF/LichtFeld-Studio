@@ -910,6 +910,74 @@ namespace fast_lfs::rasterization::kernels {
         return dcolor_dposition;
     }
 
+    // Ellipse–AABB overlap (exact). Port of alphablend_shader.slang / utils.slang
+    // ellipse_box_overlap_test. Ellipse centered at origin, defined by inv_cov with r=1:
+    //   form = a x^2 + 2 b x y + c y^2  (inv_cov.y is the half cross-term, same as conic.y).
+    // Box is axis-aligned [x0,x1] × [y0,y1] in the same frame.
+    // Used for warp sub-tile culling (WO-WARP-FWD/BWD): tighter than pixel AABB, still
+    // never drops a sample whose power is below the contribution threshold when inv_cov
+    // has been scaled by 1/(2 * power_threshold).
+    __device__ __forceinline__ bool ellipse_box_overlap_test(
+        const float3& inv_cov,
+        const float x0,
+        const float x1,
+        const float y0,
+        const float y1) {
+        const float a = inv_cov.x;
+        const float b0 = inv_cov.y;
+        const float c = inv_cov.z;
+
+        // Parabola vertices on the four edges (branchless clamp).
+        const float wx = -b0 / c;
+        const float wy = -b0 / a;
+        const float u0 = fminf(fmaxf(x0 * wx, y0), y1);
+        const float u1 = fminf(fmaxf(x1 * wx, y0), y1);
+        const float v0 = fminf(fmaxf(y0 * wy, x0), x1);
+        const float v1 = fminf(fmaxf(y1 * wy, x0), x1);
+        const float b = 2.0f * b0;
+        const float mx = fminf(
+            a * x0 * x0 + b * x0 * u0 + c * u0 * u0,
+            a * x1 * x1 + b * x1 * u1 + c * u1 * u1);
+        const float my = fminf(
+            a * v0 * v0 + b * v0 * y0 + c * y0 * y0,
+            a * v1 * v1 + b * v1 * y1 + c * y1 * y1);
+
+        // Center of ellipse inside box (negative if yes).
+        const float mc = fmaxf(fmaxf(x0, -x1), fmaxf(y0, -y1));
+        return fminf(mc, fminf(mx, my) - 1.0f) < 0.0f;
+    }
+
+    // True if the contribution ellipse of (mean2d, conic, opacity) overlaps the
+    // axis-aligned sub-tile whose absolute integer pixel corners are
+    // [sub_x0, sub_x0+sub_w) × [sub_y0, sub_y0+sub_h). Evaluation points are
+    // pixel centers (+0.5); the continuous box covers those centers.
+    __device__ __forceinline__ bool splat_overlaps_subtile_ellipse(
+        const float2 mean2d,
+        const float3 conic,
+        const float opacity,
+        const float sub_x0,
+        const float sub_y0,
+        const float sub_w,
+        const float sub_h) {
+        if (!(opacity >= config::min_alpha_threshold))
+            return false;
+        const float power_threshold = logf(opacity * config::min_alpha_threshold_rcp);
+        if (!(power_threshold > 0.0f))
+            return false;
+        // Normalize so contribution boundary is the unit ellipse of inv_cov.
+        const float inv_scale = 1.0f / (2.0f * power_threshold);
+        const float3 inv_cov = make_float3(
+            conic.x * inv_scale,
+            conic.y * inv_scale,
+            conic.z * inv_scale);
+        // Continuous box of pixel centers in mean-relative coordinates.
+        const float x0 = (sub_x0 + 0.5f) - mean2d.x;
+        const float x1 = (sub_x0 + sub_w - 0.5f) - mean2d.x;
+        const float y0 = (sub_y0 + 0.5f) - mean2d.y;
+        const float y1 = (sub_y0 + sub_h - 0.5f) - mean2d.y;
+        return ellipse_box_overlap_test(inv_cov, x0, x1, y0, y1);
+    }
+
     __device__ inline float2 ellipse_range_bound(
         const float3& conic,
         const float radius_sq,
