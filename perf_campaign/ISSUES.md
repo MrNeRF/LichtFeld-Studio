@@ -114,9 +114,14 @@
   work-order dual-gate + flock discipline.
 - **Status:** open (docs).
 
-## ISS-2.1 — SH-rest 16-bit value quant: codec landed, full wiring pending
-- **Severity:** high (blocks G1 B/splat 409→~301; Phase 2.1 incomplete)
-- **Status:** infrastructure only (2026-08-06). **Default OFF.**
+## ISS-2.1 — SH-rest 16-bit value quant: densify re-encode after N-growth
+- **Severity:** high (blocks G1 B/splat 409→~307; Phase 2.1 incomplete)
+- **Status:** WO-G3 wiring landed; **default OFF** (2026-08-07). Opt-in `LFS_SH_VALUE_QUANT=1`.
+- **Works:** codec, FastGS decode-in-registers + Adam re-encode (pre-densify), export dequant,
+  ledger 146 params, storage TDD, densify expand to float.
+- **Broken:** re-encode after densify N-growth → next FastGS preprocess illegal address.
+  Stay-float through densify avoids crash but B/splat stays ~406 until stop_refine re-encode.
+- **Default OFF** until dual-gate (bonsai late + bicycle 7k A/B) passes with re-encode ON.
 - **Landed:**
   - Host/device codec: `sh_value_codec.hpp` / `.cuh` / `.cpp` — endpoint-exact
     16-bit linear min-max, float2 bounds per 256-splat block (FPBO layout).

@@ -1228,3 +1228,22 @@ Gate ≤4.065 still **PASS**.
 Default joint codec **stays ON**. Infrastructure left in place.
 
 - **Commit:** `993314d5`
+
+
+## Task WO-G3 — SH-rest 16-bit quant wiring (VRAM prize)
+
+- **Branch:** `lfs-elite`
+- **Commits:** `7ac7e01e` WIP wiring; `d75c10c2` recover; `005ff67c` densify/export/gsplat TDD;
+  `17e1f630` densify expand; `4c632e99` SH-degree q16; densify/Adam follow-ups; **default OFF**.
+- **TDD:**
+  - ShValueCodecTest 6/6
+  - ShValueStorageTest 5/5 (GPU RT, densify expand/commit, export fp32, ledger ≤307 synthetic)
+  - TrainingStateLedgerTest.ShValueQuantDropsParamsTo146 PASS
+  - MRNF 19/19 + MCMC (fp32-forced guards) PASS
+- **Smoke (quant ON, densify re-encode):** illegal address after first densify growth
+  (FastGS preprocess). Stay-float densify completes 2k with B/splat ~406 (not ≤307).
+- **Smoke (quant OFF):** bonsai 2k B/splat **409.4**, steady ~3.27 ms, loss OK.
+- **Decision:** flag **stays OFF** (gate: densify re-encode + dual workload + B/splat ≤307).
+- **Remaining for ON:** fix post-densify re-encode (bounds/capacity/Adam size), then dual gate
+  bicycle 7k A/B loss curves + bonsai late-window steady_ms.
+
