@@ -35,10 +35,11 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Rendering
         rendering/camera_interaction_service.cpp
         rendering/output_image_pool.cpp
+        rendering/output_slot_ring.cpp
+        rendering/readback_ticket_ring.cpp
         rendering/mesh_offscreen_renderer.cpp
         rendering/rendering_manager.cpp
         rendering/rendering_manager_events.cpp
-        rendering/rendering_manager_frame.cpp
         rendering/rendering_manager_vulkan.cpp
         rendering/rendering_manager_viewport.cpp
         rendering/lod_page_cache.cpp

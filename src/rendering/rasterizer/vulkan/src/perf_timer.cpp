@@ -12,11 +12,6 @@ namespace PerfTimer {
         PERF_TIMER_TRAIN_STAGES};
 #undef _
 
-    static struct _TimerObject {
-        size_t count = 0;
-        double total_time = 0.0;
-    } stages[TrainStage::END];
-
     const char* diagnosticStageScope(const TrainStage stage) {
         switch (stage) {
         case ProjectionForward: return "vksplat.shaders.slang.spirv.projection_forward";
@@ -90,8 +85,6 @@ namespace PerfTimer {
 
     template <TrainStage stage>
     Timer<stage>::~Timer() {
-        PerfTimer::stages[int(stage)].count += 1;
-
         if (module->writeTimestampNoExcept(-1))
             marks.emplace_back(stage, -1);
     }
@@ -124,7 +117,6 @@ namespace PerfTimer {
         while (!pushedMarks.empty()) {
             auto stage = pushedMarks.back();
             pushedMarks.pop_back();
-            PerfTimer::stages[int(stage)].total_time += hostTimeDelta;
             module->writeTimestamp(1);
             marks.emplace_back(static_cast<int>(stage), 1);
         }
@@ -177,7 +169,6 @@ namespace PerfTimer {
                     stack.size(),
                     stack.empty() ? -1 : static_cast<int>(stack.back().first));
                 double dt = times[i] - stack.back().second;
-                PerfTimer::stages[int(stage)].total_time += dt;
                 stack.pop_back();
                 results[stage].first += 1;
                 results[stage].second += dt;

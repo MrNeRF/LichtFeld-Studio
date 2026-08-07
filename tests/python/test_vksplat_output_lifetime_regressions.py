@@ -12,7 +12,7 @@ def _read(rel_path: str) -> str:
     return (PROJECT_ROOT / rel_path).read_text(encoding="utf-8")
 
 
-def test_vksplat_output_resize_waits_before_destroying_gui_sampled_images():
+def test_vksplat_output_resize_retires_gui_sampled_images_into_pool():
     source = _read("src/visualizer/rendering/vksplat_viewport_renderer.cpp")
     function_start = source.index("VksplatViewportRenderer::ensureOutputImages")
     function_end = source.index(
@@ -21,13 +21,17 @@ def test_vksplat_output_resize_waits_before_destroying_gui_sampled_images():
     )
     body = source[function_start:function_end]
 
-    wait_pos = body.index("context.waitForSubmittedFrames()")
-    destroy_color_pos = body.index("context.destroyExternalImage(slot.image)")
-    destroy_depth_pos = body.index("context.destroyExternalImage(slot.depth_image)")
+    # Deferred pool retirement: no full graphics drain and no immediate destroy.
+    assert "waitForSubmittedFrames()" not in body
+    assert "destroyExternalImage" not in body
+    assert "const std::uint64_t producer = last_submitted_render_value_;" in body
+    assert "const std::uint64_t consumer = context.lastFrameSubmitSerial();" in body
+    assert "output_pool_.release(slot.color_pool_serial, producer, consumer)" in body
+    assert "output_pool_.release(slot.depth_pool_serial, producer, consumer)" in body
 
-    assert "replacing_existing_output" in body
-    assert wait_pos < destroy_color_pos
-    assert wait_pos < destroy_depth_pos
+    release_pos = body.index("output_pool_.release(")
+    acquire_pos = body.index("acquire_or_create")
+    assert release_pos < acquire_pos
 
 
 def test_point_cloud_vulkan_viewport_capture_uses_readback():
@@ -105,11 +109,26 @@ def test_vksplat_preview_export_releases_transient_resources():
     manager = _read("src/visualizer/rendering/rendering_manager_viewport.cpp")
 
     assert "releasePreviewResources" in header
-    assert "releaseOutputSlot(OutputSlot::Preview)" in source
+    assert "releaseOutputSlot(OutputSlot::Preview, /*evict=*/true)" in source
     assert "releasePrivateScratchBuffers()" in source
     assert "releaseSharedScratchArena()" in source
     assert "logVramBreakdownIfChanged(\"preview_release\")" in source
     assert "releasePreviewImageResources" in manager
+
+
+def test_vksplat_readbacks_use_consumer_watermark_not_full_drain():
+    source = _read("src/visualizer/rendering/vksplat_viewport_renderer.cpp")
+    header = _read("src/visualizer/window/vulkan_context.hpp")
+
+    # Definition + three image-readback call sites (depth image, color HWC, sample).
+    assert source.count("waitForOutputImageConsumers") >= 4
+
+    preview_start = source.index("VksplatViewportRenderer::readPreviewDepth")
+    preview_end = source.index("VksplatViewportRenderer::", preview_start + 1)
+    preview_body = source[preview_start:preview_end]
+    assert "waitForSubmittedFrames" not in preview_body
+
+    assert "waitForRetiredFrameSubmitSerial" in header
 
 
 def test_gaussian_video_export_uses_vulkan_preview_renderer():

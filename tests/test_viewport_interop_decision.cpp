@@ -17,7 +17,8 @@ namespace {
         in.source_ok = true;
         in.frame_slot_in_range = true;
         in.target_present = true;
-        in.target_size_matches = true;
+        in.target_size_matches = true;       // bucket match
+        in.target_valid_size_matches = true; // logical size match
         in.target_interop_valid = true;
         in.target_layout_read_only = true;
         in.source_generation = 7;
@@ -62,7 +63,6 @@ TEST(ViewportInteropDecision, InvalidSourceSceneDoesNotClearPublished) {
     const auto d = decideViewportInteropEarly(in);
     EXPECT_EQ(d.action, ViewportInteropAction::InvalidReset);
     EXPECT_FALSE(d.clear_published);
-    EXPECT_TRUE(d.reset_targets_if_nonempty);
 }
 
 TEST(ViewportInteropDecision, InvalidSourceSplitClearsPublished) {
@@ -72,7 +72,6 @@ TEST(ViewportInteropDecision, InvalidSourceSplitClearsPublished) {
     const auto d = decideViewportInteropEarly(in);
     EXPECT_EQ(d.action, ViewportInteropAction::InvalidReset);
     EXPECT_TRUE(d.clear_published);
-    EXPECT_TRUE(d.reset_targets_if_nonempty);
 }
 
 TEST(ViewportInteropDecision, CacheHitSceneDoesNotPublish) {
@@ -112,7 +111,7 @@ TEST(ViewportInteropDecision, CacheHitRequiresGenerationAndLayout) {
 TEST(ViewportInteropDecision, DeferBailClearsPublishedForSplit) {
     auto in = baseValidInputs();
     in.publishes_published = true;
-    in.target_size_matches = false; // recreate needed
+    in.target_size_matches = false; // bucket mismatch → recreate needed
     in.resize_deferring = true;
     const auto d = decideViewportInteropEarly(in);
     EXPECT_EQ(d.action, ViewportInteropAction::DeferBail);
@@ -151,5 +150,43 @@ TEST(ViewportInteropDecision, SlowPathWhenRecreateNeededAndNotDeferring) {
     auto in = baseValidInputs();
     in.target_present = false;
     in.resize_deferring = false;
+    EXPECT_EQ(decideViewportInteropEarly(in).action, ViewportInteropAction::SlowPath);
+}
+
+// #1566: within-bucket valid-size change is re-upload (SlowPath), not recreate/DeferBail.
+TEST(ViewportInteropDecision, WithinBucketValidSizeChangeIsSlowPathNotDeferBail) {
+    auto in = baseValidInputs();
+    in.target_size_matches = true;        // same 64-px bucket
+    in.target_valid_size_matches = false; // logical size changed
+    in.resize_deferring = true;
+    in.publishes_published = true;
+    // recreate_needed is false (bucket matches), so DeferBail does not apply.
+    const auto d = decideViewportInteropEarly(in);
+    EXPECT_EQ(d.action, ViewportInteropAction::SlowPath);
+    EXPECT_FALSE(d.clear_published);
+}
+
+TEST(ViewportInteropDecision, WithinBucketValidSizeChangeWithoutDeferIsSlowPath) {
+    auto in = baseValidInputs();
+    in.target_size_matches = true;
+    in.target_valid_size_matches = false;
+    in.resize_deferring = false;
+    EXPECT_EQ(decideViewportInteropEarly(in).action, ViewportInteropAction::SlowPath);
+}
+
+TEST(ViewportInteropDecision, CrossBucketMismatchWithDeferIsDeferBail) {
+    auto in = baseValidInputs();
+    in.target_size_matches = false; // crossed 64-px bucket
+    in.target_valid_size_matches = false;
+    in.resize_deferring = true;
+    in.publishes_published = true;
+    const auto d = decideViewportInteropEarly(in);
+    EXPECT_EQ(d.action, ViewportInteropAction::DeferBail);
+    EXPECT_TRUE(d.clear_published);
+}
+
+TEST(ViewportInteropDecision, CacheHitRequiresValidSizeMatch) {
+    auto in = baseValidInputs();
+    in.target_valid_size_matches = false;
     EXPECT_EQ(decideViewportInteropEarly(in).action, ViewportInteropAction::SlowPath);
 }

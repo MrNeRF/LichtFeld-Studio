@@ -91,9 +91,6 @@ namespace lfs::io {
                                  bool print_cache_status, int print_status_freq_num);
 
         [[nodiscard]] CacheMode get_cache_mode() const { return cache_mode_; }
-        void set_num_expected_images(int num_expected_images) { num_expected_images_ = num_expected_images; }
-
-        static std::string to_string(CacheMode mode);
 
     private:
         CacheLoader(bool use_cpu_memory, bool use_fs_cache);

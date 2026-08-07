@@ -3194,11 +3194,6 @@ namespace lfs::io {
 
     } // anonymous namespace
 
-    PointCloud to_point_cloud(const SplatData& splat_data) {
-        auto pc = to_point_cloud_with_progress(splat_data, nullptr, {});
-        return pc ? std::move(*pc) : PointCloud{};
-    }
-
     std::vector<std::string> get_ply_attribute_names(const SplatData& splat_data) {
         std::vector<std::string> attrs{"x", "y", "z", "nx", "ny", "nz"};
 

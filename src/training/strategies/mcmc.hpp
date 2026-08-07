@@ -9,6 +9,7 @@
 #include "istrategy.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
+#include <cassert>
 #include <memory>
 
 class CropDampingStrategyTest_McmcRejectedRowsAreNeverSampledAtZeroScale_Test;
@@ -40,10 +41,14 @@ namespace lfs::training {
         void remove_gaussians(const lfs::core::Tensor& mask) override;
 
         // IStrategy interface - optimizer access
-        AdamOptimizer& get_optimizer() override { return *_optimizer; }
-        const AdamOptimizer& get_optimizer() const override { return *_optimizer; }
-        ExponentialLR* get_scheduler() { return _scheduler.get(); }
-        const ExponentialLR* get_scheduler() const { return _scheduler.get(); }
+        AdamOptimizer& get_optimizer() override {
+            assert(_optimizer);
+            return *_optimizer;
+        }
+        const AdamOptimizer& get_optimizer() const override {
+            assert(_optimizer);
+            return *_optimizer;
+        }
 
         // Serialization for checkpoints
         void serialize(std::ostream& os) const override;

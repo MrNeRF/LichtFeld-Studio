@@ -328,63 +328,6 @@ namespace lfs::training {
                _params.optimization.eval_steps.cend();
     }
 
-    lfs::core::Tensor MetricsEvaluator::apply_depth_colormap(const lfs::core::Tensor& depth_normalized) const {
-        // depth_normalized should be [H, W] with values in [0, 1]
-        if (depth_normalized.ndim() != 2) {
-            throw std::runtime_error("Expected 2D tensor for depth_normalized");
-        }
-
-        const int H = depth_normalized.shape()[0];
-        const int W = depth_normalized.shape()[1];
-
-        // Create output tensor [3, H, W] for RGB
-        auto colormap = lfs::core::Tensor::zeros({static_cast<size_t>(3), static_cast<size_t>(H), static_cast<size_t>(W)}, depth_normalized.device());
-
-        // Get data pointers
-        const float* depth_data = depth_normalized.ptr<float>();
-        float* r_data = colormap.ptr<float>();
-        float* g_data = r_data + H * W;
-        float* b_data = g_data + H * W;
-
-        // Apply jet colormap (CPU implementation for simplicity)
-        auto depth_cpu = depth_normalized.to(lfs::core::Device::CPU);
-        const float* depth_cpu_data = depth_cpu.ptr<float>();
-
-        for (int i = 0; i < H * W; i++) {
-            float val = depth_cpu_data[i];
-
-            // Jet colormap
-            if (val < 0.25f) {
-                // Blue to Cyan
-                r_data[i] = 0.0f;
-                g_data[i] = 4.0f * val;
-                b_data[i] = 1.0f;
-            } else if (val < 0.5f) {
-                // Cyan to Green
-                r_data[i] = 0.0f;
-                g_data[i] = 1.0f;
-                b_data[i] = 1.0f - 4.0f * (val - 0.25f);
-            } else if (val < 0.75f) {
-                // Green to Yellow
-                r_data[i] = 4.0f * (val - 0.5f);
-                g_data[i] = 1.0f;
-                b_data[i] = 0.0f;
-            } else {
-                // Yellow to Red
-                r_data[i] = 1.0f;
-                g_data[i] = 1.0f - 4.0f * (val - 0.75f);
-                b_data[i] = 0.0f;
-            }
-
-            // Clamp
-            r_data[i] = std::clamp(r_data[i], 0.0f, 1.0f);
-            g_data[i] = std::clamp(g_data[i], 0.0f, 1.0f);
-            b_data[i] = std::clamp(b_data[i], 0.0f, 1.0f);
-        }
-
-        return colormap.to(depth_normalized.device());
-    }
-
     lfs::core::Tensor MetricsEvaluator::load_eval_mask(lfs::core::Camera* cam,
                                                        lfs::core::Tensor& gt_image,
                                                        const bool alpha_as_mask) const {

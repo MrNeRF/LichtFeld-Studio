@@ -81,7 +81,6 @@ namespace lfs::vis::gui {
 
         void processInput(const lfs::vis::PanelInputState& input);
         void render(int screen_w, int screen_h);
-        void compositeToScreen(int screen_w, int screen_h) const;
         void destroyGraphicsResources();
         void reloadResources();
 

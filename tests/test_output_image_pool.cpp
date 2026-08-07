@@ -72,8 +72,16 @@ namespace {
         }
     };
 
-    const auto always_done = [](std::uint64_t) { return true; };
-    const auto never_done = [](std::uint64_t) { return false; };
+    // Payload-aware producer predicates (GpuResourcePool API); value-only lambdas
+    // still work as FramePred for the consumer side.
+    const auto always_done = [](const VulkanContext::ExternalImage&, std::uint64_t) {
+        return true;
+    };
+    const auto never_done = [](const VulkanContext::ExternalImage&, std::uint64_t) {
+        return false;
+    };
+    const auto always_frame = [](std::uint64_t) { return true; };
+    const auto never_frame = [](std::uint64_t) { return false; };
 
 } // namespace
 
@@ -100,7 +108,7 @@ TEST(OutputImagePool, RegisterCreatedThenReleaseDrainBothPredicatesFreesForReuse
     EXPECT_EQ(pool.liveCount(), 0u);
     EXPECT_EQ(pool.retiredCount(), 1u);
 
-    pool.drain(/*force=*/false, always_done, always_done, cap.fn());
+    pool.drain(/*force=*/false, always_done, always_frame, cap.fn());
     EXPECT_EQ(pool.retiredCount(), 0u);
     EXPECT_EQ(pool.freeCount(), 1u);
     EXPECT_TRUE(cap.destroyed.empty());
@@ -119,7 +127,7 @@ TEST(OutputImagePool, DrainProducerIncompleteHolds) {
     auto acquired = pool.registerCreated(makeKey(), makeImage(0xB001));
     pool.release(acquired.acquisition_serial, 5, 6);
 
-    pool.drain(false, never_done, always_done, cap.fn());
+    pool.drain(false, never_done, always_frame, cap.fn());
     EXPECT_EQ(pool.retiredCount(), 1u);
     EXPECT_EQ(pool.freeCount(), 0u);
     EXPECT_TRUE(cap.destroyed.empty());
@@ -132,7 +140,7 @@ TEST(OutputImagePool, DrainConsumerIncompleteHolds) {
     auto acquired = pool.registerCreated(makeKey(), makeImage(0xB002));
     pool.release(acquired.acquisition_serial, 5, 6);
 
-    pool.drain(false, always_done, never_done, cap.fn());
+    pool.drain(false, always_done, never_frame, cap.fn());
     EXPECT_EQ(pool.retiredCount(), 1u);
     EXPECT_EQ(pool.freeCount(), 0u);
     EXPECT_TRUE(cap.destroyed.empty());
@@ -147,7 +155,7 @@ TEST(OutputImagePool, ExternalFlagPartitionsKeys) {
 
     auto a = pool.registerCreated(key_ext, makeImage(0xC001));
     pool.release(a.acquisition_serial, 1, 1);
-    pool.drain(false, always_done, always_done, cap.fn());
+    pool.drain(false, always_done, always_frame, cap.fn());
 
     EXPECT_FALSE(pool.acquire(key_int).has_value());
     auto hit = pool.acquire(key_ext);
@@ -163,7 +171,7 @@ TEST(OutputImagePool, FormatPartitionsKeys) {
 
     auto a = pool.registerCreated(key_rgba, makeImage(0xC010, VK_FORMAT_R8G8B8A8_UNORM));
     pool.release(a.acquisition_serial, 1, 1);
-    pool.drain(false, always_done, always_done, cap.fn());
+    pool.drain(false, always_done, always_frame, cap.fn());
 
     EXPECT_FALSE(pool.acquire(key_r32f).has_value());
     EXPECT_TRUE(pool.acquire(key_rgba).has_value());
@@ -177,7 +185,7 @@ TEST(OutputImagePool, ExtentPartitionsKeys) {
 
     auto a = pool.registerCreated(key_a, makeImage(0xC020, VK_FORMAT_R8G8B8A8_UNORM, 128, 64));
     pool.release(a.acquisition_serial, 1, 1);
-    pool.drain(false, always_done, always_done, cap.fn());
+    pool.drain(false, always_done, always_frame, cap.fn());
 
     EXPECT_FALSE(pool.acquire(key_b).has_value());
     EXPECT_TRUE(pool.acquire(key_a).has_value());
@@ -191,7 +199,7 @@ TEST(OutputImagePool, UsagePartitionsKeys) {
 
     auto a = pool.registerCreated(key_a, makeImage(0xC030));
     pool.release(a.acquisition_serial, 1, 1);
-    pool.drain(false, always_done, always_done, cap.fn());
+    pool.drain(false, always_done, always_frame, cap.fn());
 
     EXPECT_FALSE(pool.acquire(key_b).has_value());
     EXPECT_TRUE(pool.acquire(key_a).has_value());
@@ -208,7 +216,7 @@ TEST(OutputImagePool, AcquisitionSerialsMonotonicNeverReused) {
 
     pool.release(a.acquisition_serial, 1, 1);
     pool.release(b.acquisition_serial, 1, 1);
-    pool.drain(false, always_done, always_done, cap.fn());
+    pool.drain(false, always_done, always_frame, cap.fn());
 
     auto c = pool.acquire(key);
     auto d = pool.acquire(key);
@@ -247,7 +255,7 @@ TEST(OutputImagePool, DoubleReleaseFlaggedAndIgnored) {
     EXPECT_EQ(pool.retiredCount(), 1u);
     EXPECT_EQ(pool.liveCount(), 0u);
 
-    pool.drain(false, always_done, always_done, cap.fn());
+    pool.drain(false, always_done, always_frame, cap.fn());
     EXPECT_TRUE(cap.destroyed.empty());
     EXPECT_EQ(pool.freeCount(), 1u);
 #endif
@@ -265,6 +273,111 @@ TEST(OutputImagePool, ReleaseUnknownSerialFlagged) {
 #endif
 }
 
+TEST(OutputImagePool, EvictReleaseDestroysOnDrainWhenBothPredsPass) {
+    OutputImagePool pool;
+    DestroyCapture cap;
+    const auto key = makeKey();
+    const VkImage handle = fakeImage(0xE100);
+
+    auto acquired = pool.registerCreated(key, makeImage(0xE100));
+    pool.release(acquired.acquisition_serial, /*producer_value=*/10, /*consumer_serial=*/20,
+                 /*evict=*/true);
+    EXPECT_EQ(pool.liveCount(), 0u);
+    EXPECT_EQ(pool.retiredCount(), 1u);
+    EXPECT_EQ(pool.idleBytes(), 128u * 64u * 4u);
+
+    pool.drain(/*force=*/false, always_done, always_frame, cap.fn());
+    ASSERT_EQ(cap.destroyed.size(), 1u);
+    EXPECT_EQ(cap.destroyed[0], handle);
+    EXPECT_EQ(pool.retiredCount(), 0u);
+    EXPECT_EQ(pool.freeCount(), 0u);
+    EXPECT_EQ(pool.idleBytes(), 0u);
+    EXPECT_FALSE(pool.acquire(key).has_value());
+}
+
+TEST(OutputImagePool, EvictReleaseHoldsWhileEitherPredFails) {
+    OutputImagePool pool;
+    DestroyCapture cap;
+    const auto key = makeKey();
+
+    auto acquired = pool.registerCreated(key, makeImage(0xE101));
+    pool.release(acquired.acquisition_serial, 5, 6, /*evict=*/true);
+
+    pool.drain(false, never_done, always_frame, cap.fn());
+    EXPECT_EQ(pool.retiredCount(), 1u);
+    EXPECT_TRUE(cap.destroyed.empty());
+    EXPECT_FALSE(pool.acquire(key).has_value());
+
+    pool.drain(false, always_done, never_frame, cap.fn());
+    EXPECT_EQ(pool.retiredCount(), 1u);
+    EXPECT_TRUE(cap.destroyed.empty());
+    EXPECT_FALSE(pool.acquire(key).has_value());
+    EXPECT_EQ(pool.idleBytes(), 128u * 64u * 4u);
+}
+
+TEST(OutputImagePool, EvictEntriesNeverReappearViaAcquire) {
+    OutputImagePool pool;
+    DestroyCapture cap;
+    const auto key = makeKey();
+
+    auto acquired = pool.registerCreated(key, makeImage(0xE102));
+    pool.release(acquired.acquisition_serial, 1, 1, /*evict=*/true);
+    pool.drain(false, always_done, always_frame, cap.fn());
+
+    EXPECT_EQ(cap.destroyed.size(), 1u);
+    EXPECT_FALSE(pool.acquire(key).has_value());
+    EXPECT_EQ(pool.freeCount(), 0u);
+    EXPECT_EQ(pool.liveCount(), 0u);
+}
+
+TEST(OutputImagePool, NonEvictReleaseStillFreeLists) {
+    OutputImagePool pool;
+    DestroyCapture cap;
+    const auto key = makeKey();
+    const VkImage handle = fakeImage(0xE103);
+
+    auto acquired = pool.registerCreated(key, makeImage(0xE103));
+    pool.release(acquired.acquisition_serial, 1, 1, /*evict=*/false);
+    pool.drain(false, always_done, always_frame, cap.fn());
+    EXPECT_TRUE(cap.destroyed.empty());
+    EXPECT_EQ(pool.freeCount(), 1u);
+
+    auto reused = pool.acquire(key);
+    ASSERT_TRUE(reused.has_value());
+    EXPECT_EQ(reused->image.image, handle);
+}
+
+TEST(OutputImagePool, ForceDrainDestroysEvictedRetiredEntries) {
+    OutputImagePool pool;
+    DestroyCapture cap;
+    const auto key = makeKey();
+
+    auto live = pool.registerCreated(key, makeImage(0xE104));
+    auto free_src = pool.registerCreated(key, makeImage(0xE105));
+    pool.release(free_src.acquisition_serial, 1, 1, /*evict=*/false);
+    pool.drain(false, always_done, always_frame, cap.fn());
+
+    auto retired_evict = pool.registerCreated(key, makeImage(0xE106));
+    pool.release(retired_evict.acquisition_serial, 1, 1, /*evict=*/true);
+    pool.drain(false, never_done, never_frame, cap.fn());
+
+    auto retired_keep = pool.registerCreated(key, makeImage(0xE107));
+    pool.release(retired_keep.acquisition_serial, 1, 1, /*evict=*/false);
+    pool.drain(false, never_done, never_frame, cap.fn());
+
+    EXPECT_EQ(pool.freeCount(), 1u);
+    EXPECT_EQ(pool.retiredCount(), 2u);
+    EXPECT_EQ(pool.liveCount(), 1u);
+    cap.destroyed.clear();
+
+    pool.drain(/*force=*/true, always_done, always_frame, cap.fn());
+    EXPECT_EQ(cap.destroyed.size(), 3u);
+    EXPECT_EQ(pool.liveCount(), 1u);
+    EXPECT_EQ(pool.retiredCount(), 0u);
+    EXPECT_EQ(pool.freeCount(), 0u);
+    EXPECT_EQ(live.image.image, fakeImage(0xE104));
+}
+
 TEST(OutputImagePool, ForceDrainDestroysRetiredAndFreeNotLive) {
     OutputImagePool pool;
     DestroyCapture cap;
@@ -275,19 +388,19 @@ TEST(OutputImagePool, ForceDrainDestroysRetiredAndFreeNotLive) {
     // Free-list entry via release + successful drain.
     auto free_src = pool.registerCreated(key, makeImage(0xF002));
     pool.release(free_src.acquisition_serial, 1, 1);
-    pool.drain(false, always_done, always_done, cap.fn());
+    pool.drain(false, always_done, always_frame, cap.fn());
 
     // Retired entry held by incomplete predicates (not yet free).
     auto retired = pool.registerCreated(key, makeImage(0xF003));
     pool.release(retired.acquisition_serial, 1, 1);
-    pool.drain(false, never_done, never_done, cap.fn());
+    pool.drain(false, never_done, never_frame, cap.fn());
 
     EXPECT_EQ(pool.freeCount(), 1u);
     EXPECT_EQ(pool.retiredCount(), 1u);
     EXPECT_EQ(pool.liveCount(), 1u);
     cap.destroyed.clear();
 
-    pool.drain(/*force=*/true, always_done, always_done, cap.fn());
+    pool.drain(/*force=*/true, always_done, always_frame, cap.fn());
     EXPECT_EQ(cap.destroyed.size(), 2u);
     EXPECT_EQ(pool.liveCount(), 1u);
     EXPECT_EQ(pool.retiredCount(), 0u);
@@ -304,11 +417,11 @@ TEST(OutputImagePool, TrimIdleDestroysOnlyFree) {
 
     auto free_src = pool.registerCreated(key, makeImage(0xF012));
     pool.release(free_src.acquisition_serial, 1, 1);
-    pool.drain(false, always_done, always_done, cap.fn());
+    pool.drain(false, always_done, always_frame, cap.fn());
 
     auto retired = pool.registerCreated(key, makeImage(0xF011));
     pool.release(retired.acquisition_serial, 1, 1);
-    pool.drain(false, never_done, never_done, cap.fn());
+    pool.drain(false, never_done, never_frame, cap.fn());
     cap.destroyed.clear();
 
     pool.trimIdle(cap.fn());
@@ -327,20 +440,20 @@ TEST(OutputImagePool, TrimAgedDestroysOnlyStaleEntries) {
 
     auto stale = pool.registerCreated(key, makeImage(0xF020));
     pool.release(stale.acquisition_serial, 1, 1);
-    pool.drain(false, always_done, always_done, cap.fn());
+    pool.drain(false, always_done, always_frame, cap.fn());
 
     auto fresh = pool.registerCreated(key, makeImage(0xF021));
     pool.release(fresh.acquisition_serial, 1, 1);
 
     // Advance drain ticks without freeing the fresh retired entry.
     for (std::uint64_t i = 0; i < OutputImagePool::kIdleTrimTicks; ++i) {
-        pool.drain(false, never_done, never_done, cap.fn());
+        pool.drain(false, never_done, never_frame, cap.fn());
     }
     // One more tick so stale free age exceeds kIdleTrimTicks.
-    pool.drain(false, never_done, never_done, cap.fn());
+    pool.drain(false, never_done, never_frame, cap.fn());
 
     // Free the fresh one now — its free_since_tick is current.
-    pool.drain(false, always_done, always_done, cap.fn());
+    pool.drain(false, always_done, always_frame, cap.fn());
     EXPECT_EQ(pool.freeCount(), 2u);
     cap.destroyed.clear();
 
@@ -372,7 +485,7 @@ TEST(OutputImagePool, CountersConsistent) {
     EXPECT_EQ(pool.liveCount(), 1u);
     EXPECT_EQ(pool.retiredCount(), 1u);
 
-    pool.drain(false, always_done, always_done, cap.fn());
+    pool.drain(false, always_done, always_frame, cap.fn());
     EXPECT_EQ(pool.liveCount(), 1u);
     EXPECT_EQ(pool.retiredCount(), 0u);
     EXPECT_EQ(pool.freeCount(), 1u);
@@ -384,7 +497,7 @@ TEST(OutputImagePool, CountersConsistent) {
 
     pool.release(b.acquisition_serial, 1, 1);
     pool.release(reused->acquisition_serial, 1, 1);
-    pool.drain(true, always_done, always_done, cap.fn());
+    pool.drain(true, always_done, always_frame, cap.fn());
     EXPECT_EQ(pool.liveCount(), 0u);
     EXPECT_EQ(pool.retiredCount(), 0u);
     EXPECT_EQ(pool.freeCount(), 0u);
@@ -404,11 +517,11 @@ TEST(OutputImagePool, IdleBytesTracksRetiredAndFreeEntries) {
     pool.release(first.acquisition_serial, 1, 1);
     EXPECT_EQ(pool.idleBytes(), bytes_each);
 
-    pool.drain(false, always_done, always_done, cap.fn());
+    pool.drain(false, always_done, always_frame, cap.fn());
     EXPECT_EQ(pool.idleBytes(), bytes_each);
 
     pool.release(second.acquisition_serial, 1, 1);
-    pool.drain(false, never_done, never_done, cap.fn());
+    pool.drain(false, never_done, never_frame, cap.fn());
     EXPECT_EQ(pool.idleBytes(), 2u * bytes_each);
 
     auto reused = pool.acquire(key);
@@ -417,7 +530,7 @@ TEST(OutputImagePool, IdleBytesTracksRetiredAndFreeEntries) {
 
     pool.trimIdle(cap.fn());
     EXPECT_EQ(pool.idleBytes(), bytes_each);
-    pool.drain(true, always_done, always_done, cap.fn());
+    pool.drain(true, always_done, always_frame, cap.fn());
     EXPECT_EQ(pool.idleBytes(), 0u);
 }
 

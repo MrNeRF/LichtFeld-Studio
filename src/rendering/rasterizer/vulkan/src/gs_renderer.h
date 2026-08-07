@@ -492,4 +492,8 @@ protected:
     void destroyLodSelectionReadback();
     void recordLodSelectionReadback(VulkanGSPipelineBuffers& buffers,
                                     size_t rendered_capacity);
+
+    // Last logged private viewport-scratch bucket (alloc extent); debug only.
+    uint32_t scratch_bucket_alloc_w_ = 0;
+    uint32_t scratch_bucket_alloc_h_ = 0;
 };

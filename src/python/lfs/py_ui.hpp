@@ -856,7 +856,6 @@ namespace lfs::python {
         void draw_menu_items(MenuLocation location);
         bool has_items(MenuLocation location) const;
 
-        bool has_menu_bar_entries() const;
         std::vector<PyMenuClassInfo*> get_menu_bar_entries();
         void draw_menu_bar_entry(const std::string& idname);
 

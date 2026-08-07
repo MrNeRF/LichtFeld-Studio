@@ -162,90 +162,6 @@ namespace lfs::io {
 
     } // anonymous namespace
 
-    Tensor morton_encode(const Tensor& positions) {
-        using lfs::core::DataType;
-        using lfs::core::Device;
-
-        if (!validate_positions(positions, "morton_encode")) {
-            return Tensor();
-        }
-
-        const int n_positions = static_cast<int>(positions.size(0));
-        const MortonParams params = compute_morton_params(positions, n_positions);
-
-        auto morton_codes = Tensor::empty({static_cast<size_t>(n_positions)}, Device::CUDA, DataType::Int64);
-
-        constexpr int BLOCK_SIZE = 256;
-        const int grid_size = (n_positions + BLOCK_SIZE - 1) / BLOCK_SIZE;
-
-        morton_encode_kernel<int64_t><<<grid_size, BLOCK_SIZE>>>(
-            positions.ptr<float>(),
-            morton_codes.ptr<int64_t>(),
-            n_positions,
-            params.bbox.min_val.x, params.bbox.min_val.y, params.bbox.min_val.z,
-            params.xmul, params.ymul, params.zmul);
-
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            LOG_ERROR("CUDA error in morton_encode_kernel: {}", cudaGetErrorString(err));
-            return Tensor();
-        }
-
-        cudaDeviceSynchronize();
-        return morton_codes;
-    }
-
-    Tensor morton_sort_indices_inplace(Tensor& morton_codes) {
-        using lfs::core::DataType;
-        using lfs::core::Device;
-
-        if (!morton_codes.is_valid()) {
-            LOG_ERROR("morton_sort_indices_inplace: Invalid input tensor");
-            return Tensor();
-        }
-
-        if (morton_codes.ndim() != 1) {
-            LOG_ERROR("morton_sort_indices_inplace: Morton codes must be 1D tensor");
-            return Tensor();
-        }
-
-        if (morton_codes.dtype() != DataType::Int64) {
-            LOG_ERROR("morton_sort_indices_inplace: Morton codes must be Int64");
-            return Tensor();
-        }
-
-        if (morton_codes.device() != Device::CUDA) {
-            LOG_ERROR("morton_sort_indices_inplace: Morton codes must be on CUDA");
-            return Tensor();
-        }
-
-        const size_t n = morton_codes.numel();
-
-        auto indices = Tensor::empty({n}, Device::CUDA, DataType::Int64);
-
-        thrust::device_ptr<int64_t> indices_ptr(indices.ptr<int64_t>());
-        thrust::sequence(indices_ptr, indices_ptr + n, 0LL);
-
-        thrust::device_ptr<int64_t> keys_ptr(morton_codes.ptr<int64_t>());
-        thrust::device_ptr<int64_t> values_ptr(indices.ptr<int64_t>());
-
-        thrust::sort_by_key(keys_ptr, keys_ptr + n, values_ptr);
-
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            LOG_ERROR("CUDA error in morton_sort_indices: {}", cudaGetErrorString(err));
-            return Tensor();
-        }
-
-        cudaDeviceSynchronize();
-        return indices;
-    }
-
-    Tensor morton_sort_indices(const Tensor& morton_codes) {
-        auto morton_copy = morton_codes.clone();
-        return morton_sort_indices_inplace(morton_copy);
-    }
-
     Tensor morton_sort_indices_for_positions(const Tensor& positions) {
         using lfs::core::DataType;
         using lfs::core::Device;
@@ -286,7 +202,6 @@ namespace lfs::io {
 
         err = cudaGetLastError();
         if (err != cudaSuccess) {
-            LOG_ERROR("CUDA error in compact morton_sort_indices: {}", cudaGetErrorString(err));
             return Tensor();
         }
 

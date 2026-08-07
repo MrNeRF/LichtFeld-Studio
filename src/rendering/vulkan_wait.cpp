@@ -174,8 +174,6 @@ namespace lfs::rendering {
         d.cmd_fill_buffer = ::vkCmdFillBuffer;
         d.cmd_copy_buffer = ::vkCmdCopyBuffer;
         d.reset_fences = ::vkResetFences;
-        d.create_fence = ::vkCreateFence;
-        d.destroy_fence = ::vkDestroyFence;
         return d;
     }
 

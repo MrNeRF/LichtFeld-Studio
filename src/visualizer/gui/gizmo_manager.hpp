@@ -79,7 +79,6 @@ namespace lfs::vis {
             [[nodiscard]] LFS_VIS_API std::string cropToolShape() const;
             LFS_VIS_API void setCropToolOperation(const std::string& operation);
             [[nodiscard]] LFS_VIS_API std::string cropToolOperation() const;
-            LFS_VIS_API void fitActiveCropTool(bool use_percentile);
             LFS_VIS_API void applyActiveCropTool();
             LFS_VIS_API void deleteActiveCropToolVolume();
             [[nodiscard]] bool isViewportGizmoDragging() const { return viewport_gizmo_dragging_; }
@@ -221,13 +220,6 @@ namespace lfs::vis {
             [[nodiscard]] bool isVolumeGizmoToolActive() const;
             [[nodiscard]] std::optional<core::NodeId> selectedCropTargetNodeId() const;
             [[nodiscard]] bool ensureCropToolState();
-            [[nodiscard]] bool computeCropToolTargetBounds(core::NodeId target_id,
-                                                           bool use_percentile,
-                                                           glm::vec3& bounds_min,
-                                                           glm::vec3& bounds_max) const;
-            void setCropToolBounds(core::NodeId target_id,
-                                   const glm::vec3& bounds_min,
-                                   const glm::vec3& bounds_max);
             [[nodiscard]] bool syncCropToolStateFromNode(core::NodeId target_id, core::NodeId volume_node_id, bool* changed = nullptr);
             [[nodiscard]] bool persistActiveCropToolToNode(bool enable);
             void updateCropToolOverlayState();

@@ -13,7 +13,7 @@ layout(push_constant) uniform Push {
     // x = split_position (0..1 in viewport space)
     // y = left_flip_y (0/1)
     // z = right_flip_y (0/1)
-    // w = divider_color_rgb_packed (unused; split into two vec4 below)
+    // w = unused padding (divider color is hardcoded in the shader)
     vec4 split;
 
     // Viewport pixel rect (x, y, width, height) — letterboxed content extent.

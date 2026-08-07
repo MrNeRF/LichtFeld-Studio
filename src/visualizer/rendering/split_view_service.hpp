@@ -43,13 +43,11 @@ namespace lfs::vis {
         };
 
         [[nodiscard]] std::optional<glm::ivec2> gtContentDimensions() const;
-        [[nodiscard]] const std::optional<GTComparisonContext>& gtContext() const { return gt_context_; }
         [[nodiscard]] bool isActive(const RenderSettings& settings) const;
         [[nodiscard]] bool isGTComparisonActive(const RenderSettings& settings) const;
         [[nodiscard]] bool isIndependentDualActive(const RenderSettings& settings) const;
         [[nodiscard]] std::optional<std::array<SplitViewPanelLayout, 2>>
         panelLayouts(const RenderSettings& settings, int total_width) const;
-        [[nodiscard]] std::optional<int> dividerPixel(const RenderSettings& settings, int total_width) const;
 
         [[nodiscard]] ModeChangeResult toggleMode(RenderSettings& settings,
                                                   SplitViewMode target_mode,

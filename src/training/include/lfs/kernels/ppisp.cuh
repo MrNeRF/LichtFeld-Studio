@@ -38,11 +38,4 @@ namespace lfs::training::kernels {
     void launch_ppisp_init_identity(float* exposure, float* vignetting, float* color, float* crf, int num_cameras,
                                     int num_frames, cudaStream_t stream = nullptr);
 
-    // Regularization loss (L2 on all params)
-    void launch_ppisp_reg_loss(const float* params, float* loss_out, int num_elements, cudaStream_t stream = nullptr);
-
-    // Regularization backward
-    void launch_ppisp_reg_backward(const float* params, float* grad, float weight, int num_elements,
-                                   cudaStream_t stream = nullptr);
-
 } // namespace lfs::training::kernels

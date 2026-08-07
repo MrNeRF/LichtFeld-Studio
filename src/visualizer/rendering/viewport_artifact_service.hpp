@@ -21,10 +21,7 @@ namespace lfs::vis {
         ViewportArtifactService& operator=(const ViewportArtifactService&) = delete;
 
         [[nodiscard]] bool hasGpuFrame() const;
-        [[nodiscard]] bool hasViewportOutput() const;
-        [[nodiscard]] bool hasOutputArtifacts() const;
 
-        [[nodiscard]] const CachedRenderMetadata& cachedMetadata() const { return metadata_; }
         [[nodiscard]] const std::optional<lfs::rendering::GpuFrame>& gpuFrame() const { return gpu_frame_; }
         [[nodiscard]] glm::ivec2 renderedSize() const { return rendered_size_; }
         [[nodiscard]] uint64_t artifactGeneration() const { return artifact_generation_; }

@@ -163,8 +163,7 @@
 .asset-sort-button,
 .asset-view-button,
 .asset-card-button,
-.asset-info-button,
-.asset-action-button {
+.asset-info-button {
     background-color: #302d29;
     border-width: 1dp;
     border-color: #514a42;
@@ -178,8 +177,7 @@
 .asset-sort-button:hover,
 .asset-view-button:hover,
 .asset-card-button:hover,
-.asset-info-button:hover,
-.asset-action-button:hover {
+.asset-info-button:hover {
     background-color: #454038;
     border-color: #7fb9a5;
 }
@@ -420,11 +418,6 @@
     color: #9be0ca;
 }
 
-.asset-filter-hint {
-    font-size: 12dp;
-    color: #7a7268;
-    margin-bottom: 6dp;
-}
 
 .asset-filter-checkbox-row {
     display: flex;
@@ -674,14 +667,6 @@
     background-color: #3b3936;
 }
 
-.asset-thumb-label {
-    position: absolute;
-    left: 8dp;
-    bottom: 8dp;
-    font-size: 15dp;
-    font-weight: bold;
-    color: #f0ebe2;
-}
 
 .asset-card-overlay {
     position: absolute;
@@ -694,23 +679,6 @@
     align-items: flex-start;
 }
 
-.asset-checkbox {
-    width: 16dp;
-    height: 16dp;
-    background-color: rgba(0, 0, 0, 100);
-    border-width: 1dp;
-    border-color: #7fb9a5;
-    border-radius: 3dp;
-    color: #7fb9a5;
-    font-size: 12dp;
-    text-align: center;
-    line-height: 14dp;
-}
-
-.asset-checkbox.is-checked {
-    background-color: #7fb9a5;
-    color: #151412;
-}
 
 .asset-pill {
     font-size: 12dp;
@@ -761,16 +729,12 @@
     padding: 8dp;
 }
 
-.asset-card-context,
 .asset-card-subtitle,
 .asset-list-secondary {
     font-size: 12dp;
     color: #a9a093;
 }
 
-.asset-card-context {
-    margin-bottom: 4dp;
-}
 
 .asset-card-title-row {
     display: flex;
@@ -781,8 +745,7 @@
 }
 
 .asset-card-title,
-.asset-info-name,
-.asset-batch-title {
+.asset-info-name {
     font-size: 12dp;
     font-weight: 600;
     color: #f0ebe2;
@@ -792,8 +755,7 @@
 }
 
 .asset-card-title,
-.asset-card-subtitle,
-.asset-card-context {
+.asset-card-subtitle {
     min-width: 0;
 }
 
@@ -804,14 +766,8 @@
     text-overflow: ellipsis;
 }
 
-.asset-favorite,
-.asset-info-favorite {
-    font-size: 12dp;
-    color: #e9b56e;
-}
 
-.asset-card-meta,
-.asset-batch-subtitle {
+.asset-card-meta {
     display: flex;
     flex-direction: column;
     gap: 2dp;
@@ -867,23 +823,6 @@
     image-color: rgba(255, 255, 255, 255);
 }
 
-.asset-card-dropdown {
-    position: absolute;
-    top: 28dp;
-    right: 4dp;
-    background-color: #302d29;
-    border-width: 1dp;
-    border-color: #514a42;
-    border-radius: 4dp;
-    min-width: 140dp;
-    display: none;
-    z-index: 1000;
-    box-shadow: 0 2dp 8dp rgba(0, 0, 0, 0.5);
-}
-
-.asset-card-dropdown.is-visible {
-    display: block;
-}
 
 .asset-load-menu {
     position: absolute;
@@ -1101,7 +1040,6 @@
     overflow: hidden;
 }
 
-.asset-list-name,
 .asset-list-primary {
     font-weight: 600;
     color: #f0ebe2;
@@ -1131,10 +1069,6 @@
     flex-shrink: 0;
 }
 
-.asset-col-role {
-    width: 108dp;
-    flex-shrink: 0;
-}
 
 .asset-col-folder {
     width: 58dp;
@@ -1152,10 +1086,6 @@
     flex: 1 0 150dp;
 }
 
-.asset-col-status {
-    width: 70dp;
-    flex-shrink: 0;
-}
 
 #asset-info-panel {
     height: 220dp;
@@ -1269,31 +1199,6 @@
     text-overflow: ellipsis;
 }
 
-.asset-run-row {
-    display: flex;
-    flex-direction: column;
-    gap: 3dp;
-    padding: 7dp 0;
-    border-bottom-width: 1dp;
-    border-bottom-color: #3c3630;
-    cursor: pointer;
-}
-
-.asset-run-row:hover {
-    color: #9be0ca;
-}
-
-.asset-run-name {
-    color: #f0ebe2;
-    font-size: 12dp;
-    font-weight: 600;
-}
-
-.asset-run-status,
-.asset-run-summary {
-    color: #a9a093;
-    font-size: 12dp;
-}
 
 .asset-info-warning {
     padding: 8dp;
@@ -1307,23 +1212,6 @@
     width: auto;
 }
 
-
-.asset-info-button-primary {
-    background-color: #3a5f4a;
-    border-color: #4a7a5a;
-    color: #d8f0e3;
-}
-
-.asset-info-button-primary:hover {
-    background-color: #4a7a5a;
-    border-color: #5a9a6a;
-}
-
-.asset-info-actions {
-    display: flex;
-    flex-direction: row;
-    gap: 8dp;
-}
 
 .scene-asset-row {
     display: flex;
@@ -1374,28 +1262,4 @@
     min-height: 40dp;
 }
 
-.asset-batch-actions {
-    display: flex;
-    flex-direction: row;
-    gap: 8dp;
-}
 
-.asset-batch-summary {
-    display: flex;
-    flex-direction: column;
-}
-
-.asset-sidebar-actions {
-    display: flex;
-    gap: 8dp;
-    padding: 10dp 0 0 0;
-    margin-top: auto;
-    border-top-width: 1dp;
-    border-top-color: #3a3632;
-}
-
-.asset-action-button {
-    text-align: center;
-    flex: 0 0 auto;
-    min-width: 88dp;
-}

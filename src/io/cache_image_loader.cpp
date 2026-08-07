@@ -111,16 +111,6 @@ namespace lfs::io {
         return 1.0 - (static_cast<double>(available) / static_cast<double>(total));
     }
 
-    std::string CacheLoader::to_string(CacheMode mode) {
-        switch (mode) {
-        case CacheMode::Undetermined: return "Undetermined";
-        case CacheMode::NoCache: return "NoCache";
-        case CacheMode::CPU_memory: return "CPU_memory";
-        case CacheMode::FileSystem: return "FileSystem";
-        }
-        return "Unknown";
-    }
-
     void CacheLoader::update_cache_params(bool use_cpu_memory, bool use_fs_cache, int num_expected_images,
                                           float min_cpu_free_GB, float min_cpu_free_memory_ratio,
                                           bool print_cache_status, int print_status_freq_num) {
@@ -260,17 +250,15 @@ namespace lfs::io {
     bool CacheLoader::has_sufficient_memory(std::size_t required_bytes) const {
         const std::size_t available = get_available_physical_memory();
         const std::size_t total = get_total_physical_memory();
-        const std::size_t min_free_bytes = (std::max)(
-            static_cast<std::size_t>(total * min_cpu_free_memory_ratio_),
-            static_cast<std::size_t>(min_cpu_free_GB_ * BYTES_PER_GB));
+        const std::size_t min_free_bytes = (std::max)(static_cast<std::size_t>(total * min_cpu_free_memory_ratio_),
+                                                      static_cast<std::size_t>(min_cpu_free_GB_ * BYTES_PER_GB));
         return available > required_bytes + min_free_bytes;
     }
 
     void CacheLoader::evict_until_satisfied() {
         const std::size_t total = get_total_physical_memory();
-        const std::size_t min_free_bytes = (std::max)(
-            static_cast<std::size_t>(total * min_cpu_free_memory_ratio_),
-            static_cast<std::size_t>(min_cpu_free_GB_ * BYTES_PER_GB));
+        const std::size_t min_free_bytes = (std::max)(static_cast<std::size_t>(total * min_cpu_free_memory_ratio_),
+                                                      static_cast<std::size_t>(min_cpu_free_GB_ * BYTES_PER_GB));
 
         while (get_available_physical_memory() <= min_free_bytes) {
             std::lock_guard lock(cpu_cache_mutex_);

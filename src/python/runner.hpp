@@ -139,8 +139,6 @@ namespace lfs::python {
      * @brief Check if Python was used in this session.
      * @return true if Python scripts were executed.
      */
-    bool was_python_used();
-
     struct FormatResult {
         std::string code;
         std::string error;

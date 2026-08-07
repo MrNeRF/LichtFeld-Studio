@@ -678,14 +678,6 @@ namespace lfs::core {
         }
     }
 
-    void Logger::enable_module(const LogModule module, const bool enabled) {
-        module_enabled_[static_cast<size_t>(module)] = enabled;
-    }
-
-    void Logger::set_module_level(const LogModule module, const LogLevel level) {
-        module_level_[static_cast<size_t>(module)] = static_cast<uint8_t>(level);
-    }
-
     void Logger::set_level(const LogLevel level) {
         std::lock_guard lock(impl_->mutex);
         if (impl_->logger) {

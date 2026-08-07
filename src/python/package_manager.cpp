@@ -296,10 +296,6 @@ namespace lfs::python {
 #endif
     }
 
-    bool PackageManager::is_venv_ready() const {
-        return m_venv_ready && std::filesystem::exists(venv_python());
-    }
-
     bool PackageManager::ensure_venv() {
         std::lock_guard lock(m_mutex);
 

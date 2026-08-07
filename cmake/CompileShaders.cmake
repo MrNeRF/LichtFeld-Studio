@@ -4,16 +4,6 @@
 
 include_guard(GLOBAL)
 
-find_program(LFS_GLSLC_EXECUTABLE glslc)
-find_program(LFS_GLSLANG_VALIDATOR_EXECUTABLE glslangValidator)
-
-if(LFS_GLSLC_EXECUTABLE)
-    message(STATUS "Found glslc: ${LFS_GLSLC_EXECUTABLE}")
-elseif(LFS_GLSLANG_VALIDATOR_EXECUTABLE)
-    message(STATUS "Found glslangValidator: ${LFS_GLSLANG_VALIDATOR_EXECUTABLE}")
-else()
-    message(STATUS "glslc/glslangValidator not found; using the in-tree glslang shader compiler")
-endif()
 
 function(compile_shader target source output symbol)
     if(NOT TARGET "${target}")

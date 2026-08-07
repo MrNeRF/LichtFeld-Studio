@@ -1,8 +1,10 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "gs_renderer.h"
+#include <cassert>
 #include <limits>
 #include <map>
 #include <string>
+#include <utility>
 
 size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     size_t total = 0;
@@ -184,6 +186,31 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     buffer.size = size;
     buffer.offset = 0;
 
+    if (allocator == VK_NULL_HANDLE) {
+        // Scripted-test forge path (device without VMA). Mint unique non-null handles.
+        if (device == VK_NULL_HANDLE) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "createBuffer requires a VMA allocator or a forged test device (requested_bytes={}, label='{}')",
+                    size,
+                    buffer.label ? buffer.label : "<unlabeled>"),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        const std::uintptr_t id = test_buffer_handle_counter_++;
+        buffer.buffer = reinterpret_cast<VkBuffer>(id);
+        buffer.allocation = reinterpret_cast<VmaAllocation>(id + 0x8000);
+        buffer.created_with_extra_usage = buffer.extra_usage;
+        current_vram += size;
+        if (current_vram > peak_vram)
+            peak_vram = current_vram;
+        barrier_planner_.track(buffer.buffer);
+        if (buffer.label) {
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                std::string("vksplat.") + buffer.label, "device_buffer", size);
+        }
+        return;
+    }
+
     VkBufferCreateInfo buffer_info = {};
     buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     buffer_info.size = size;
@@ -242,11 +269,14 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     }
 }
 
-void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
+void VulkanGSPipeline::destroyBufferImpl(_VulkanBuffer& buffer,
+                                         bool wait_for_pending_batch,
+                                         const char* caller_name) {
     if (commandBatchInProgress) {
         lfs::rendering::throw_renderer_contract(
             std::format(
-                "destroyBuffer cannot destroy an allocation referenced by an active command batch (batch_active={}, buffer={:#x}, allocation={:#x}, bytes={}, label='{}')",
+                "{} cannot destroy an allocation referenced by an active command batch (batch_active={}, buffer={:#x}, allocation={:#x}, bytes={}, label='{}')",
+                caller_name,
                 commandBatchInProgress,
                 lfs::rendering::vkHandleValue(buffer.buffer),
                 lfs::rendering::vkHandleValue(buffer.allocation),
@@ -257,8 +287,13 @@ void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
     if (buffer.buffer != VK_NULL_HANDLE && buffer.allocation != VK_NULL_HANDLE) {
         // Epic #1496: drop planner state before handle reuse can reappear.
         barrier_planner_.forget(buffer.buffer);
-        waitForPendingBatch();
-        vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
+        if (wait_for_pending_batch) {
+            waitForPendingBatch();
+        }
+        // Scripted-test forge has a null allocator; skip VMA free for minted handles.
+        if (allocator != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
+        }
         if (current_vram < buffer.allocSize) {
             lfs::rendering::throw_renderer_contract(
                 std::format(
@@ -285,6 +320,129 @@ void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
     // Keep buffer.label intact so a subsequent resize re-establishes the recording.
 }
 
+void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
+    destroyBufferImpl(buffer, /*wait_for_pending_batch=*/true, "destroyBuffer");
+}
+
+void VulkanGSPipeline::destroyBufferRetired(_VulkanBuffer& buffer) {
+    // Caller must prove via timeline wait that no submitted batch still references the buffer.
+    destroyBufferImpl(buffer, /*wait_for_pending_batch=*/false, "destroyBufferRetired");
+}
+
+VulkanGSPipeline::GrowthBatchSplitGuard::GrowthBatchSplitGuard(VulkanGSPipeline* pipeline)
+    : pipeline_(pipeline),
+      uncaught_exceptions_(std::uncaught_exceptions()) {
+    was_active_ = pipeline_->isCommandBatchInProgress();
+    if (!was_active_) {
+        return;
+    }
+    if (pipeline_->buffer_retire_timeline_ == VK_NULL_HANDLE) {
+        lfs::rendering::throw_renderer_contract(
+            "GrowthBatchSplitGuard requires a buffer-retire timeline (mid-batch growth split)",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    const std::uint64_t signal_value = pipeline_->next_buffer_retire_value_++;
+    assert(signal_value != 0);
+    assert(signal_value < pipeline_->next_buffer_retire_value_);
+    pipeline_->endCommandBatch(/*use_fence=*/false,
+                               pipeline_->buffer_retire_timeline_,
+                               signal_value);
+}
+
+VulkanGSPipeline::GrowthBatchSplitGuard::~GrowthBatchSplitGuard() noexcept(false) {
+    if (std::uncaught_exceptions() > uncaught_exceptions_) {
+        pipeline_->cancelCommandBatch();
+        return;
+    }
+    if (was_active_) {
+        pipeline_->beginCommandBatch();
+    } else if (was_active_ != pipeline_->isCommandBatchInProgress()) {
+        pipeline_->cancelCommandBatch();
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "GrowthBatchSplitGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_paused_batch={})",
+                was_active_,
+                pipeline_->isCommandBatchInProgress(),
+                was_active_),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+}
+
+void VulkanGSPipeline::retireDeviceBufferForGrowth(_VulkanBuffer& deviceBuffer) {
+    if (deviceBuffer.buffer == VK_NULL_HANDLE && deviceBuffer.allocation == VK_NULL_HANDLE) {
+        deviceBuffer.allocSize = 0;
+        deviceBuffer.capacity = 0;
+        deviceBuffer.size = 0;
+        deviceBuffer.offset = 0;
+        deviceBuffer.created_with_extra_usage = 0;
+        return;
+    }
+
+    // Future batches never touch the old handle; VkBuffer bits cannot reuse until free.
+    if (deviceBuffer.buffer != VK_NULL_HANDLE) {
+        barrier_planner_.forget(deviceBuffer.buffer);
+    }
+
+    RetiredBufferShell entry;
+    entry.shell = deviceBuffer;
+    // Clear the live view exactly as destroyBufferImpl does (keep label).
+    deviceBuffer.buffer = VK_NULL_HANDLE;
+    deviceBuffer.allocation = VK_NULL_HANDLE;
+    deviceBuffer.allocSize = 0;
+    deviceBuffer.capacity = 0;
+    deviceBuffer.size = 0;
+    deviceBuffer.offset = 0;
+    deviceBuffer.created_with_extra_usage = 0;
+
+    // Fence-only submits are always host-waited inside endCommandBatch, so every
+    // in-flight GPU batch that could still reference this buffer has a timeline
+    // pending_signal on its command-batch slot (including a just-split growth batch).
+    entry.key_count = 0;
+    for (const CommandBatchSlot& slot : command_batch_slots_) {
+        if (slot.pending_signal != VK_NULL_HANDLE && slot.pending_signal_value != 0) {
+            assert(entry.key_count < kCommandBatchSlotCount);
+            entry.keys[entry.key_count++] =
+                BufferRetireKey{slot.pending_signal, slot.pending_signal_value};
+        }
+    }
+
+    if (entry.key_count == 0) {
+        // Immediate free: label policy depends on whether a live replacement with the
+        // same profiler label already exists (see call-site comments at resize*).
+        destroyBufferRetired(entry.shell);
+        return;
+    }
+
+    assert(entry.shell.buffer != VK_NULL_HANDLE || entry.shell.allocation != VK_NULL_HANDLE);
+    // Deferred free must not zero the live buffer's per-label recording.
+    entry.shell.label = nullptr;
+    retired_buffer_shells_.push_back(std::move(entry));
+}
+
+void VulkanGSPipeline::drainRetiredBufferShells(const bool force) {
+    if (retired_buffer_shells_.empty()) {
+        return;
+    }
+    for (auto it = retired_buffer_shells_.begin(); it != retired_buffer_shells_.end();) {
+        bool complete = force;
+        if (!complete) {
+            complete = true;
+            for (std::uint32_t i = 0; i < it->key_count; ++i) {
+                if (!timelineValueComplete(it->keys[i].semaphore, it->keys[i].value)) {
+                    complete = false;
+                    break;
+                }
+            }
+        }
+        if (complete) {
+            destroyBufferRetired(it->shell);
+            it = retired_buffer_shells_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t new_byte_size, bool no_shrink) {
     if (deviceBuffer.buffer != VK_NULL_HANDLE &&
         deviceBuffer.extra_usage != deviceBuffer.created_with_extra_usage) {
@@ -299,8 +457,10 @@ void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t ne
             LFS_SOURCE_SITE_CURRENT());
     }
     if (deviceBuffer.capacity < new_byte_size || (!no_shrink && deviceBuffer.capacity > new_byte_size)) {
-        HOST_GUARD;
-        destroyBuffer(deviceBuffer);
+        GrowthBatchSplitGuard split(this);
+        // Retire-before-create: immediate free may keep shell.label so destroy zeros the
+        // retiring allocation only; create then re-records the live label (F1).
+        retireDeviceBufferForGrowth(deviceBuffer);
         try {
             createBuffer(new_byte_size, deviceBuffer);
         } catch (const lfs::Exception& ex) {
@@ -413,7 +573,7 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
                 }
                 vulkan_dispatch_.cmd_fill_buffer(
                     command_buffer, deviceBuffer.buffer, deviceBuffer.offset + offset, size, 0u);
-                HOST_GUARD; // will apply fence
+                // Tail fill rides the open batch; no host-side read follows.
             }
         }
 
@@ -492,10 +652,17 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
         }
     }
 
-    HOST_GUARD;
-    destroyBuffer(deviceBuffer);
-    deviceBuffer = newBuffer;
-    deviceBuffer.size = new_byte_size;
+    {
+        GrowthBatchSplitGuard split(this);
+        // Create-before-retire (F1): newBuffer already recorded VramProfiler for
+        // deviceBuffer.label. Null the outgoing label before retire so both the
+        // immediate-free and deferred-free paths skip zeroing the live replacement.
+        // (resizeDeviceBuffer retires before create and intentionally keeps the label.)
+        deviceBuffer.label = nullptr;
+        retireDeviceBufferForGrowth(deviceBuffer);
+        deviceBuffer = newBuffer;
+        deviceBuffer.size = new_byte_size;
+    }
 
     return deviceBuffer;
 }

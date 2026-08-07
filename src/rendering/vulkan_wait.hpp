@@ -118,8 +118,6 @@ namespace lfs::rendering {
 
         // Fence lifecycle (reset/pre-wait row + post-submit fence path)
         PFN_vkResetFences reset_fences = nullptr;
-        PFN_vkCreateFence create_fence = nullptr;
-        PFN_vkDestroyFence destroy_fence = nullptr;
 
         // Production symbols. Safe to call once; returns a fully filled table.
         [[nodiscard]] static VulkanDispatch real() noexcept;

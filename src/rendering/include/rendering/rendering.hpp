@@ -271,13 +271,11 @@ namespace lfs::rendering {
         bool valid = false;
         // Depth conversion parameters (needed for proper depth buffer writing)
         bool depth_is_ndc = false; // True if depth is already normalized device depth (0-1).
-        glm::vec2 depth_texcoord_scale{1.0f, 1.0f};
         // Presentation orientation for the screen quad.
         bool flip_y = false;
         float near_plane = DEFAULT_NEAR_PLANE;
         float far_plane = DEFAULT_FAR_PLANE;
         bool orthographic = false;
-        bool color_has_alpha = false;
 
         [[nodiscard]] const std::shared_ptr<lfs::core::Tensor>& primaryDepth() const {
             return depth_panels[0].depth;
@@ -349,13 +347,6 @@ namespace lfs::rendering {
         glm::vec4 divider_color{0.29f, 0.33f, 0.42f, 1.0f};
         bool letterbox = false;
         glm::ivec2 content_size{0, 0};
-    };
-
-    struct SplitViewRequest {
-        std::array<SplitViewPanel, 2> panels;
-        SplitViewCompositeState composite;
-        SplitViewPresentationState presentation;
-        bool prefer_batched_gaussian_render = false;
     };
 
     // Render modes

@@ -342,13 +342,4 @@ namespace lfs::core {
         return count_nonzero() > 0;
     }
 
-    bool Tensor::all_scalar() const {
-        LFS_ASSERT_MSG(is_valid(),
-                       "all_scalar requires a valid tensor");
-        if (numel() == 0) {
-            return true;
-        }
-        return count_nonzero() == numel();
-    }
-
 } // namespace lfs::core

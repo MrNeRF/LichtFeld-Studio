@@ -4798,7 +4798,7 @@ namespace lfs::python {
             nb::arg("key"), "Translate a string key");
 
         // Menu bar UI functions (for Python-driven menus)
-        m.def("show_input_settings", &show_input_settings, "Show input settings window");
+        m.def("show_input_settings", &show_input_settings, "No-op stub; open input settings via lfs.input_settings panel");
         m.def("show_python_console", &show_python_console, "Show Python console");
         m.def(
             "get_time",
@@ -4815,7 +4815,6 @@ namespace lfs::python {
         bridge.prepare_ui = []() {};
         bridge.draw_menus = [](MenuLocation loc) { PyMenuRegistry::instance().draw_menu_items(loc); };
         bridge.has_menus = [](MenuLocation loc) { return PyMenuRegistry::instance().has_items(loc); };
-        bridge.has_menu_bar_entries = []() { return PyMenuRegistry::instance().has_menu_bar_entries(); };
         bridge.get_menu_bar_entries = [](MenuBarEntryVisitor visitor, void* ctx) {
             auto entries = PyMenuRegistry::instance().get_menu_bar_entries();
             for (auto* entry : entries) {
@@ -4851,7 +4850,6 @@ namespace lfs::python {
 
         if (const auto& enqueue_cb = get_modal_enqueue_callback())
             PyModalRegistry::instance().set_enqueue_callback(enqueue_cb);
-        bridge.has_toolbar = []() { return true; }; // Always true - Python ToolRegistry has builtin tools
         bridge.shutdown_ui_resources = []() { shutdown_dynamic_textures(); };
         bridge.cleanup = []() {
             PyPanelRegistry::instance().unregister_all();

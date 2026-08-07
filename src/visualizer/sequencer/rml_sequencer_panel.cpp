@@ -428,11 +428,6 @@ namespace lfs::vis {
         }
     }
 
-    void RmlSequencerPanel::compositeToScreen(const int screen_w, const int screen_h) {
-        (void)screen_w;
-        (void)screen_h;
-    }
-
     RmlSequencerPanel::RenderSignature RmlSequencerPanel::makeRenderSignature(
         const int width,
         const int height,

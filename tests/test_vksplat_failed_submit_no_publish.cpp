@@ -123,6 +123,9 @@ namespace {
             commandBatchInProgress = false;
             last_timeline_signal_values_.clear();
             pending_timeline_waits_.clear();
+            buffer_retire_timeline_ = fakeVkHandle<VkSemaphore>(0x5001);
+            next_buffer_retire_value_ = 1;
+            retired_buffer_shells_.clear();
         }
 
         void disarm_for_destruction() {
@@ -137,6 +140,9 @@ namespace {
                 slot.command_buffer = VK_NULL_HANDLE;
                 slot.timestamp_query_pool = VK_NULL_HANDLE;
             }
+            retired_buffer_shells_.clear();
+            buffer_retire_timeline_ = VK_NULL_HANDLE;
+            next_buffer_retire_value_ = 1;
             command_buffer = VK_NULL_HANDLE;
             timestamp_query_pool = VK_NULL_HANDLE;
             fence = VK_NULL_HANDLE;

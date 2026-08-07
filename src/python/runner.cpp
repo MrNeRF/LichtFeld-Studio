@@ -1498,10 +1498,6 @@ _add_dll_dirs()
         // Skip Py_FinalizeEx() - nanobind static destructors need Python alive
     }
 
-    bool was_python_used() {
-        return get_main_thread_state() != nullptr || Py_IsInitialized();
-    }
-
     void install_output_redirect() {
         call_once_redirect([] {
             const GilAcquire gil;

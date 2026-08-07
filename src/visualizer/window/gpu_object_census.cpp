@@ -47,9 +47,4 @@ namespace lfs::vis {
         return underflow_flagged_;
     }
 
-    void GpuObjectCensus::reset() {
-        counts_.clear();
-        underflow_flagged_ = false;
-    }
-
 } // namespace lfs::vis

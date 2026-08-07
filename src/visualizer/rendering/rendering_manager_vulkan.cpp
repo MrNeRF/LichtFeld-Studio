@@ -41,7 +41,6 @@
 namespace lfs::vis {
 
     namespace {
-        constexpr bool kEnableLodTransitionWeights = true;
         constexpr double kGpuLodRenderCapacityOverhead = 1.20;
         constexpr float kInteractiveResizeRenderScale = 0.33f;
         constexpr auto kTrainingOutputResizeStableDelay = std::chrono::milliseconds(500);
@@ -118,13 +117,6 @@ namespace lfs::vis {
             return error.find("shared scratch") != std::string_view::npos &&
                    (error.find("busy") != std::string_view::npos ||
                     error.find("capacity insufficient") != std::string_view::npos);
-        }
-
-        [[nodiscard]] bool isRetryableVksplatOutputResizeWait(const std::string_view error) {
-            return error.find("VkSplat output resize wait failed") != std::string_view::npos &&
-                   error.find("VK_ERROR_DEVICE_LOST") == std::string_view::npos &&
-                   (error.find("VK_TIMEOUT") != std::string_view::npos ||
-                    error.find("vkWaitForFences") != std::string_view::npos);
         }
 
         [[nodiscard]] DirtyMask vksplatOutputResizeRetryDirty(const DirtyMask frame_dirty) {
@@ -1371,10 +1363,6 @@ namespace lfs::vis {
             return VksplatViewportRenderer::SelectionMaskShape::Brush;
         };
 
-        const bool is_training = scene_manager.hasDataset() &&
-                                 scene_manager.getTrainerManager() &&
-                                 scene_manager.getTrainerManager()->isRunning();
-
         VksplatViewportRenderer::SelectionMaskRequest request{
             .frame_view = frame_view,
             .scene =
@@ -1388,7 +1376,6 @@ namespace lfs::vis {
             .equirectangular = equirectangular,
             .mip_filter = settings.mip_filter,
             .ring_width = settings.ring_width,
-            .synchronize_input_upload = is_training,
             .picked_ring_id_out = picked_ring_id_out,
         };
 
@@ -1622,6 +1609,16 @@ namespace lfs::vis {
                     // stale handle. Re-installed after the handshake re-init below.
                     frame_stream_guard.reset();
                     vksplat_viewport_renderer_->reset();
+                    // F3-4: clear GT async ticket host state after ring teardown.
+                    gt_async_depth_ticket_ = 0;
+                    gt_async_depth_dest_ = {};
+                    gt_async_ticket_mode_ = GTComparisonMode::RGB;
+                    gt_async_ticket_intrinsics_.reset();
+                    gt_async_ticket_flip_y_ = false;
+                    gt_async_ticket_metadata_ = {};
+                    gt_async_held_display_.reset();
+                    gt_async_held_flip_y_ = false;
+                    gt_async_held_metadata_ = {};
                 }
             }
             viewport_artifact_service_.clearViewportOutput();
@@ -2087,9 +2084,7 @@ namespace lfs::vis {
                                            : lod_controller_->fullQualityIndices();
                 if (!selected.empty()) {
                     request.lod_indices = selected.data();
-                    if (kEnableLodTransitionWeights &&
-                        frame_settings.lod_enabled &&
-                        lod_transition_active) {
+                    if (frame_settings.lod_enabled && lod_transition_active) {
                         const auto& weights = lod_controller_->selectedWeights();
                         if (weights.size() == selected.size()) {
                             request.lod_weights = weights.data();
@@ -2432,9 +2427,73 @@ namespace lfs::vis {
                             std::string compare_error;
 
                             if (gt_mode != GTComparisonMode::RGB) {
+                                // #1574 hold-then-swap: never host-wait the GT depth ticket on the
+                                // render thread. Poll any outstanding ticket; swap into the held
+                                // display when Ready; submit at most one new ticket when free. The
+                                // panel keeps the previous display until the new one is ready.
+                                const auto clear_gt_async_ticket = [this]() {
+                                    // F3-3: detach dest under the ring lock before freeing host
+                                    // storage; markFailed keeps pins until timeline reclaim (F3-2).
+                                    if (gt_async_depth_ticket_ != 0 && vksplat_viewport_renderer_) {
+                                        vksplat_viewport_renderer_->abandonReadbackTicket(
+                                            gt_async_depth_ticket_);
+                                    }
+                                    gt_async_depth_ticket_ = 0;
+                                    gt_async_depth_dest_ = {};
+                                    gt_async_ticket_mode_ = GTComparisonMode::RGB;
+                                    gt_async_ticket_intrinsics_.reset();
+                                    gt_async_ticket_flip_y_ = false;
+                                    gt_async_ticket_metadata_ = {};
+                                };
+                                const auto apply_gt_async_ready =
+                                    [this, &frame_settings, &clear_gt_async_ticket]()
+                                    -> std::expected<void, std::string> {
+                                    if (gt_async_depth_ticket_ == 0 || !vksplat_viewport_renderer_) {
+                                        return {};
+                                    }
+                                    const auto polled =
+                                        vksplat_viewport_renderer_->pollReadbackTicket(gt_async_depth_ticket_);
+                                    if (!polled) {
+                                        const std::string err = polled.error();
+                                        clear_gt_async_ticket();
+                                        return std::unexpected(err);
+                                    }
+                                    if (*polled == VksplatViewportRenderer::ReadbackTicketStatus::NotReady) {
+                                        return {};
+                                    }
+                                    if (*polled != VksplatViewportRenderer::ReadbackTicketStatus::Ready) {
+                                        clear_gt_async_ticket();
+                                        return std::unexpected("GT depth ticket finished without Ready delivery");
+                                    }
+                                    auto display = gt_async_ticket_mode_ == GTComparisonMode::Depth
+                                                       ? makeDepthDisplayTensor(gt_async_depth_dest_, frame_settings)
+                                                       : (gt_async_ticket_intrinsics_.has_value()
+                                                              ? makeNormalDisplayFromDepthTensor(
+                                                                    gt_async_depth_dest_,
+                                                                    *gt_async_ticket_intrinsics_)
+                                                              : std::shared_ptr<lfs::core::Tensor>{});
+                                    if (!display || !display->is_valid()) {
+                                        clear_gt_async_ticket();
+                                        return std::unexpected(
+                                            gt_async_ticket_mode_ == GTComparisonMode::Depth
+                                                ? "Depth GT comparison could not visualize rendered depth"
+                                                : "Normal GT comparison could not derive rendered normals");
+                                    }
+                                    gt_async_held_display_ = std::move(display);
+                                    gt_async_held_flip_y_ = gt_async_ticket_flip_y_;
+                                    gt_async_held_metadata_ = gt_async_ticket_metadata_;
+                                    clear_gt_async_ticket();
+                                    return {};
+                                };
+
                                 if (!has_visible_gaussian_model || frame_settings.point_cloud_mode) {
                                     compare_error =
                                         "Normal/depth GT comparison requires a visible Gaussian model in splat mode";
+                                    if (gt_async_depth_ticket_ != 0 && vksplat_viewport_renderer_) {
+                                        (void)vksplat_viewport_renderer_->waitReadbackTicket(gt_async_depth_ticket_);
+                                        clear_gt_async_ticket();
+                                    }
+                                    gt_async_held_display_.reset();
                                 } else if (!context.vulkan_context) {
                                     compare_error = "Normal/depth GT comparison requires an active Vulkan context";
                                 } else if (!render_camera) {
@@ -2443,59 +2502,131 @@ namespace lfs::vis {
                                            !request.frame_view.intrinsics_override.has_value()) {
                                     compare_error = "Normal GT comparison requires pinhole camera intrinsics";
                                 } else {
-                                    request.depth_view = false;
                                     if (!vksplat_viewport_renderer_) {
                                         vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
                                     }
-                                    vksplat_viewport_renderer_->setDepthCaptureMode(true, true);
-                                    struct DepthCaptureModeGuard {
-                                        VksplatViewportRenderer* renderer = nullptr;
-                                        ~DepthCaptureModeGuard() {
-                                            if (renderer) {
-                                                renderer->setDepthCaptureMode(false);
-                                            }
-                                        }
-                                    } depth_capture_guard{vksplat_viewport_renderer_.get()};
+                                    if (const auto ready = apply_gt_async_ready(); !ready) {
+                                        compare_error = ready.error();
+                                    }
 
-                                    auto rendered = render_panel_image(
-                                        context.viewport,
-                                        gt_size,
-                                        std::nullopt,
-                                        std::nullopt,
-                                        nullptr,
-                                        nullptr,
-                                        VksplatViewportRenderer::OutputSlot::Preview,
-                                        &request);
-                                    if (!rendered) {
-                                        compare_error = rendered.error();
-                                    } else {
-                                        auto raw_depth = vksplat_viewport_renderer_->readOutputDepthImage(
-                                            *context.vulkan_context,
-                                            VksplatViewportRenderer::OutputSlot::Preview);
-                                        if (!raw_depth || !*raw_depth) {
-                                            compare_error = raw_depth ? "VkSplat GT comparison depth readback returned no data"
-                                                                      : raw_depth.error();
+                                    // Size/mode change while a ticket is in flight: bounded-wait it
+                                    // (wait delivers into dest), then promote to held and re-submit.
+                                    if (compare_error.empty() && gt_async_depth_ticket_ != 0 &&
+                                        (gt_async_ticket_mode_ != gt_mode ||
+                                         !gt_async_depth_dest_.is_valid() ||
+                                         static_cast<int>(gt_async_depth_dest_.size(0)) != gt_size.y ||
+                                         static_cast<int>(gt_async_depth_dest_.size(1)) != gt_size.x)) {
+                                        if (const auto waited =
+                                                vksplat_viewport_renderer_->waitReadbackTicket(gt_async_depth_ticket_);
+                                            !waited) {
+                                            compare_error = waited.error();
+                                            clear_gt_async_ticket();
                                         } else {
-                                            auto display = gt_mode == GTComparisonMode::Depth
-                                                               ? makeDepthDisplayTensor(**raw_depth, frame_settings)
-                                                               : makeNormalDisplayFromDepthTensor(
-                                                                     **raw_depth,
-                                                                     *request.frame_view.intrinsics_override);
-                                            if (!display || !display->is_valid()) {
-                                                compare_error =
-                                                    gt_mode == GTComparisonMode::Depth
-                                                        ? "Depth GT comparison could not visualize rendered depth"
-                                                        : "Normal GT comparison could not derive rendered normals";
+                                            // waitReadbackTicket already delivered into dest.
+                                            const bool dest_matches_panel =
+                                                gt_async_depth_dest_.is_valid() &&
+                                                static_cast<int>(gt_async_depth_dest_.size(0)) == gt_size.y &&
+                                                static_cast<int>(gt_async_depth_dest_.size(1)) == gt_size.x;
+                                            if (dest_matches_panel) {
+                                                auto display =
+                                                    gt_async_ticket_mode_ == GTComparisonMode::Depth
+                                                        ? makeDepthDisplayTensor(gt_async_depth_dest_, frame_settings)
+                                                        : (gt_async_ticket_intrinsics_.has_value()
+                                                               ? makeNormalDisplayFromDepthTensor(
+                                                                     gt_async_depth_dest_,
+                                                                     *gt_async_ticket_intrinsics_)
+                                                               : std::shared_ptr<lfs::core::Tensor>{});
+                                                if (display && display->is_valid()) {
+                                                    gt_async_held_display_ = std::move(display);
+                                                    gt_async_held_flip_y_ = gt_async_ticket_flip_y_;
+                                                    gt_async_held_metadata_ = gt_async_ticket_metadata_;
+                                                }
                                             } else {
-                                                compare_panel = std::move(*rendered);
-                                                compare_panel.image = std::move(display);
-                                                compare_panel.external_image_view = VK_NULL_HANDLE;
-                                                compare_panel.external_image_generation = 0;
+                                                gt_async_held_display_.reset();
+                                            }
+                                            clear_gt_async_ticket();
+                                        }
+                                    }
+
+                                    if (compare_error.empty() && gt_async_depth_ticket_ == 0) {
+                                        request.depth_view = false;
+                                        vksplat_viewport_renderer_->setDepthCaptureMode(true, true);
+                                        struct DepthCaptureModeGuard {
+                                            VksplatViewportRenderer* renderer = nullptr;
+                                            ~DepthCaptureModeGuard() {
+                                                if (renderer) {
+                                                    renderer->setDepthCaptureMode(false);
+                                                }
+                                            }
+                                        } depth_capture_guard{vksplat_viewport_renderer_.get()};
+
+                                        auto rendered = render_panel_image(
+                                            context.viewport,
+                                            gt_size,
+                                            std::nullopt,
+                                            std::nullopt,
+                                            nullptr,
+                                            nullptr,
+                                            VksplatViewportRenderer::OutputSlot::Preview,
+                                            &request);
+                                        if (!rendered) {
+                                            compare_error = rendered.error();
+                                        } else {
+                                            gt_async_depth_dest_ = lfs::core::Tensor::empty(
+                                                {static_cast<std::size_t>(gt_size.y),
+                                                 static_cast<std::size_t>(gt_size.x)},
+                                                lfs::core::Device::CPU,
+                                                lfs::core::DataType::Float32);
+                                            if (!gt_async_depth_dest_.is_valid()) {
+                                                compare_error =
+                                                    "VkSplat GT comparison failed to allocate depth destination";
+                                            } else {
+                                                auto ticket =
+                                                    vksplat_viewport_renderer_->submitReadOutputDepthImageTicket(
+                                                        *context.vulkan_context,
+                                                        VksplatViewportRenderer::OutputSlot::Preview,
+                                                        gt_async_depth_dest_);
+                                                if (!ticket) {
+                                                    compare_error = ticket.error();
+                                                    gt_async_depth_dest_ = {};
+                                                } else {
+                                                    gt_async_depth_ticket_ = *ticket;
+                                                    gt_async_ticket_mode_ = gt_mode;
+                                                    gt_async_ticket_intrinsics_ =
+                                                        request.frame_view.intrinsics_override;
+                                                    gt_async_ticket_flip_y_ = rendered->flip_y;
+                                                    gt_async_ticket_metadata_ = rendered->metadata;
+                                                }
                                             }
                                         }
                                     }
+
+                                    if (gt_async_held_display_ && gt_async_held_display_->is_valid()) {
+                                        compare_panel.image = gt_async_held_display_;
+                                        compare_panel.metadata = gt_async_held_metadata_;
+                                        compare_panel.flip_y = gt_async_held_flip_y_;
+                                        compare_panel.external_image_view = VK_NULL_HANDLE;
+                                        compare_panel.external_image_generation = 0;
+                                        compare_panel.size = gt_size;
+                                    }
+
+                                    LOG_PERF(
+                                        "vksplat.readback.gt_compare outstanding_tickets={} "
+                                        "ring_full_waits={} cell_pin_waits={} has_held={}",
+                                        vksplat_viewport_renderer_->outstandingReadbackTickets(),
+                                        vksplat_viewport_renderer_->readbackRingFullWaitCount(),
+                                        vksplat_viewport_renderer_->readbackCellPinWaitCount(),
+                                        gt_async_held_display_ && gt_async_held_display_->is_valid());
                                 }
                             } else {
+                                // Leaving depth/normal: drain any outstanding async GT ticket.
+                                if (gt_async_depth_ticket_ != 0 && vksplat_viewport_renderer_) {
+                                    (void)vksplat_viewport_renderer_->waitReadbackTicket(gt_async_depth_ticket_);
+                                    vksplat_viewport_renderer_->abandonReadbackTicket(gt_async_depth_ticket_);
+                                    gt_async_depth_ticket_ = 0;
+                                    gt_async_depth_dest_ = {};
+                                }
+                                gt_async_held_display_.reset();
                                 const bool use_point_cloud_compare =
                                     frame_settings.point_cloud_mode || !has_visible_gaussian_model;
                                 if (use_point_cloud_compare && has_visible_gaussian_model) {
@@ -2957,7 +3088,6 @@ namespace lfs::vis {
                     render_result->size);
 
                 if (resize_result.completed) {
-                    frame_lifecycle_service_.noteResizeCompleted();
                     lfs::core::Tensor::trim_memory_pool();
                 }
                 queueCameraMetricsRefreshIfStale(scene_manager);
@@ -3168,9 +3298,7 @@ namespace lfs::vis {
                                            : lod_controller_->fullQualityIndices();
                 if (!selected.empty()) {
                     request.lod_indices = selected.data();
-                    if (kEnableLodTransitionWeights &&
-                        frame_settings.lod_enabled &&
-                        lod_transition_active) {
+                    if (frame_settings.lod_enabled && lod_transition_active) {
                         const auto& weights = lod_controller_->selectedWeights();
                         if (weights.size() == selected.size()) {
                             request.lod_weights = weights.data();
@@ -3230,7 +3358,6 @@ namespace lfs::vis {
                         lfs::rendering::FrameMetadata metadata{};
                         metadata.valid = true;
                         metadata.flip_y = render_result.flip_y;
-                        metadata.color_has_alpha = transparent_viewer_compositing;
 
                         const auto publish_mesh_frame_for_vksplat = [&]() {
                             // VkSplat returns before the shared mesh-frame setup below.
@@ -3364,7 +3491,6 @@ namespace lfs::vis {
                                     }
 
                                     if (resize_result.completed) {
-                                        frame_lifecycle_service_.noteResizeCompleted();
                                         lfs::core::Tensor::trim_memory_pool();
                                     }
                                     queueCameraMetricsRefreshIfStale(scene_manager);
@@ -3442,7 +3568,6 @@ namespace lfs::vis {
                             render_result.size);
 
                         if (resize_result.completed) {
-                            frame_lifecycle_service_.noteResizeCompleted();
                             lfs::core::Tensor::trim_memory_pool();
                         }
                         queueCameraMetricsRefreshIfStale(scene_manager);
@@ -3520,22 +3645,15 @@ namespace lfs::vis {
                     }
                     const bool shared_scratch_retryable =
                         isRetryableSharedScratchUnavailable(render_result.error());
-                    const bool output_resize_wait_retryable =
-                        isRetryableVksplatOutputResizeWait(render_result.error());
                     if (synchronize_vksplat_input_upload &&
                         has_cached_viewport_output &&
-                        (shared_scratch_retryable || output_resize_wait_retryable)) {
-                        const DirtyMask retry_dirty =
-                            output_resize_wait_retryable
-                                ? vksplatOutputResizeRetryDirty(frame_dirty)
-                                : vksplatSharedScratchRetryDirty(frame_dirty);
+                        shared_scratch_retryable) {
+                        const DirtyMask retry_dirty = vksplatSharedScratchRetryDirty(frame_dirty);
                         dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
                         const bool cached_size_matches = vulkan_viewport_image_size_ == render_size;
                         if (vksplat_viewport_resize || !cached_size_matches) {
                             LOG_DEBUG("{} ({}); skipping cached viewport image, retry_dirty=0x{:x}, vksplat_resize={}, cached_size={}x{}, render_size={}x{}",
-                                      output_resize_wait_retryable
-                                          ? "VkSplat output resize wait is still pending"
-                                          : "VkSplat shared scratch unavailable",
+                                      "VkSplat shared scratch unavailable",
                                       render_result.error(),
                                       retry_dirty,
                                       vksplat_viewport_resize,
@@ -3547,9 +3665,7 @@ namespace lfs::vis {
                             return {};
                         }
                         LOG_DEBUG("{} ({}); returning cached viewport image, retry_dirty=0x{:x}",
-                                  output_resize_wait_retryable
-                                      ? "VkSplat output resize wait is still pending"
-                                      : "VkSplat shared scratch unavailable",
+                                  "VkSplat shared scratch unavailable",
                                   render_result.error(),
                                   retry_dirty);
                         render_lock.reset();
@@ -3722,31 +3838,22 @@ namespace lfs::vis {
             const bool shared_scratch_retryable =
                 synchronize_vksplat_input_upload &&
                 isRetryableSharedScratchUnavailable(render_error);
-            const bool output_resize_wait_retryable =
-                isRetryableVksplatOutputResizeWait(render_error);
-            if (shared_scratch_retryable || output_resize_wait_retryable) {
-                const DirtyMask retry_dirty =
-                    output_resize_wait_retryable
-                        ? vksplatOutputResizeRetryDirty(frame_dirty)
-                        : vksplatSharedScratchRetryDirty(frame_dirty);
+            if (shared_scratch_retryable) {
+                const DirtyMask retry_dirty = vksplatSharedScratchRetryDirty(frame_dirty);
                 dirty_mask_.fetch_or(retry_dirty,
                                      std::memory_order_relaxed);
                 render_lock.reset();
                 const bool cached_size_matches = vulkan_viewport_image_size_ == render_size;
                 if (has_cached_viewport_output && !vksplat_viewport_resize && cached_size_matches) {
                     LOG_DEBUG("{} ({}); returning cached viewport image, retry_dirty=0x{:x}",
-                              output_resize_wait_retryable
-                                  ? "VkSplat output resize wait is still pending"
-                                  : "VkSplat shared scratch unavailable",
+                              "VkSplat shared scratch unavailable",
                               render_error,
                               retry_dirty);
                     return cached_frame_result();
                 }
 
                 LOG_DEBUG("{} ({}); skipping viewport frame, retry_dirty=0x{:x}, cached_output={}, vksplat_resize={}, cached_size={}x{}, render_size={}x{}",
-                          output_resize_wait_retryable
-                              ? "VkSplat output resize wait is still pending"
-                              : "VkSplat shared scratch unavailable",
+                          "VkSplat shared scratch unavailable",
                           render_error,
                           retry_dirty,
                           has_cached_viewport_output,
@@ -3806,7 +3913,6 @@ namespace lfs::vis {
         release_inactive_split_outputs();
 
         if (resize_result.completed) {
-            frame_lifecycle_service_.noteResizeCompleted();
             lfs::core::Tensor::trim_memory_pool();
         }
 

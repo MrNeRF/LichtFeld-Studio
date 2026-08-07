@@ -10,14 +10,13 @@
 
 namespace lfs::vis {
 
-    using ThemePackedColor = unsigned int;
-
     struct LFS_VIS_API ThemeVec2 {
         float x = 0.0f;
         float y = 0.0f;
 
         constexpr ThemeVec2() = default;
-        constexpr ThemeVec2(float x_, float y_) : x(x_), y(y_) {}
+        constexpr ThemeVec2(float x_, float y_) : x(x_),
+                                                  y(y_) {}
     };
 
     struct LFS_VIS_API ThemeColor {
@@ -28,7 +27,10 @@ namespace lfs::vis {
 
         constexpr ThemeColor() = default;
         constexpr ThemeColor(float x_, float y_, float z_, float w_ = 1.0f)
-            : x(x_), y(y_), z(z_), w(w_) {}
+            : x(x_),
+              y(y_),
+              z(z_),
+              w(w_) {}
     };
 
     // Base color palette
@@ -159,49 +161,6 @@ namespace lfs::vis {
         ThemeButton button;
         ThemeOverlay overlay;
 
-        // Packed RGBA colors for immediate/vector drawing backends.
-        [[nodiscard]] ThemePackedColor primary_u32() const;
-        [[nodiscard]] ThemePackedColor error_u32() const;
-        [[nodiscard]] ThemePackedColor success_u32() const;
-        [[nodiscard]] ThemePackedColor warning_u32() const;
-        [[nodiscard]] ThemePackedColor text_u32() const;
-        [[nodiscard]] ThemePackedColor text_dim_u32() const;
-        [[nodiscard]] ThemePackedColor border_u32() const;
-        [[nodiscard]] ThemePackedColor surface_u32() const;
-
-        // Selection colors
-        [[nodiscard]] ThemePackedColor selection_fill_u32() const;
-        [[nodiscard]] ThemePackedColor selection_border_u32() const;
-        [[nodiscard]] ThemePackedColor selection_line_u32() const;
-
-        // Polygon colors
-        [[nodiscard]] ThemePackedColor polygon_vertex_u32() const;
-        [[nodiscard]] ThemePackedColor polygon_vertex_hover_u32() const;
-        [[nodiscard]] ThemePackedColor polygon_close_hint_u32() const;
-
-        // Overlay colors
-        [[nodiscard]] ThemePackedColor overlay_background_u32() const;
-        [[nodiscard]] ThemePackedColor overlay_text_u32() const;
-        [[nodiscard]] ThemePackedColor overlay_shadow_u32() const;
-        [[nodiscard]] ThemePackedColor overlay_hint_u32() const;
-        [[nodiscard]] ThemePackedColor overlay_border_u32() const;
-        [[nodiscard]] ThemePackedColor overlay_icon_u32() const;
-        [[nodiscard]] ThemePackedColor overlay_highlight_u32() const;
-        [[nodiscard]] ThemePackedColor overlay_selection_u32() const;
-        [[nodiscard]] ThemePackedColor overlay_selection_flash_u32() const;
-
-        // Progress bar colors
-        [[nodiscard]] ThemePackedColor progress_bar_bg_u32() const;
-        [[nodiscard]] ThemePackedColor progress_bar_fill_u32() const;
-        [[nodiscard]] ThemePackedColor progress_marker_u32() const;
-
-        // Button states
-        [[nodiscard]] ThemeColor button_normal() const;
-        [[nodiscard]] ThemeColor button_hovered() const;
-        [[nodiscard]] ThemeColor button_active() const;
-        [[nodiscard]] ThemeColor button_selected() const;
-        [[nodiscard]] ThemeColor button_selected_hovered() const;
-
         // Toolbar
         [[nodiscard]] ThemeColor toolbar_background() const;
         [[nodiscard]] ThemeColor subtoolbar_background() const;
@@ -212,18 +171,6 @@ namespace lfs::vis {
         [[nodiscard]] ThemeColor menu_active() const;
         [[nodiscard]] ThemeColor menu_popup_background() const;
         [[nodiscard]] ThemeColor menu_border() const;
-        [[nodiscard]] ThemePackedColor menu_bottom_border_u32() const;
-
-        // Viewport
-        [[nodiscard]] ThemePackedColor viewport_border_u32() const;
-
-        // Scene graph row colors
-        [[nodiscard]] ThemePackedColor row_even_u32() const;
-        [[nodiscard]] ThemePackedColor row_odd_u32() const;
-
-        // Context menu helpers retained for plugin API compatibility.
-        void pushContextMenuStyle() const;
-        static void popContextMenuStyle();
 
         // Modal dialog helpers retained for plugin API compatibility.
         void pushModalStyle() const;
@@ -233,12 +180,6 @@ namespace lfs::vis {
             constexpr float BRIGHTNESS_THRESHOLD = 0.5f;
             const float brightness = (palette.background.x + palette.background.y + palette.background.z) / 3.0f;
             return brightness > BRIGHTNESS_THRESHOLD;
-        }
-
-        [[nodiscard]] float frameDarkenAmount() const {
-            constexpr float LIGHT_DARKEN = 0.15f;
-            constexpr float DARK_DARKEN = 0.05f;
-            return isLightTheme() ? LIGHT_DARKEN : DARK_DARKEN;
         }
     };
 
@@ -261,17 +202,11 @@ namespace lfs::vis {
     using ThemePresetInfoVisitor = std::function<void(const ThemePresetInfo& info)>;
     LFS_VIS_API void setThemeChangeCallback(ThemeChangeCallback cb);
     [[nodiscard]] LFS_VIS_API const std::string& currentThemeId();
-    [[nodiscard]] LFS_VIS_API std::string normalizeThemeId(std::string name);
     LFS_VIS_API void visitThemePresets(const ThemePresetVisitor& visitor);
     LFS_VIS_API void visitThemePresetInfos(const ThemePresetInfoVisitor& visitor);
 
     // Presets (loaded from JSON files with hot-reload support)
     [[nodiscard]] LFS_VIS_API const Theme& darkTheme();
-    [[nodiscard]] LFS_VIS_API const Theme& lightTheme();
-    [[nodiscard]] LFS_VIS_API const Theme& gruvboxTheme();
-    [[nodiscard]] LFS_VIS_API const Theme& catppuccinMochaTheme();
-    [[nodiscard]] LFS_VIS_API const Theme& catppuccinLatteTheme();
-    [[nodiscard]] LFS_VIS_API const Theme& nordTheme();
     LFS_VIS_API bool setThemeByName(const std::string& name);
     LFS_VIS_API bool checkThemeFileChanges(); // Call periodically to hot-reload; returns true when any preset changed
 
@@ -287,8 +222,6 @@ namespace lfs::vis {
     // Theme preference (for splash screen)
     LFS_VIS_API void saveThemePreferenceName(const std::string& theme_name);
     [[nodiscard]] LFS_VIS_API std::string loadThemePreferenceName(); // Returns a canonical theme id
-    LFS_VIS_API void saveThemePreference(bool is_dark);
-    [[nodiscard]] LFS_VIS_API bool loadThemePreference(); // Legacy: returns true for non-light themes
 
     // UI scale preference (0.0 = auto from OS)
     LFS_VIS_API void saveUiScalePreference(float scale);
@@ -298,7 +231,5 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API ThemeColor lighten(const ThemeColor& color, float amount);
     [[nodiscard]] LFS_VIS_API ThemeColor darken(const ThemeColor& color, float amount);
     [[nodiscard]] LFS_VIS_API ThemeColor withAlpha(const ThemeColor& color, float alpha);
-    [[nodiscard]] LFS_VIS_API ThemePackedColor toU32(const ThemeColor& color);
-    [[nodiscard]] LFS_VIS_API ThemePackedColor toU32WithAlpha(const ThemeColor& color, float alpha);
 
 } // namespace lfs::vis

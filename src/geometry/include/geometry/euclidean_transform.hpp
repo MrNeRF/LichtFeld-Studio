@@ -20,13 +20,6 @@ namespace lfs {
             // Default constructor - identity transformation
             EuclideanTransform();
 
-            // Constructor from Euler angles (in radians) and translation
-            EuclideanTransform(float x_rad, float y_rad, float z_rad,
-                               float x, float y, float z);
-
-            // Constructor from translation
-            explicit EuclideanTransform(const glm::vec3& trans);
-
             // Constructor from quaternion and translation vector
             EuclideanTransform(const glm::quat& rot, const glm::vec3& trans);
 
@@ -39,33 +32,12 @@ namespace lfs {
             // Composition operator - combines two transformations
             EuclideanTransform operator*(const EuclideanTransform& other) const;
 
-            // Compound assignment operator
-            EuclideanTransform& operator*=(const EuclideanTransform& other);
-
             // Inverse transformation
             EuclideanTransform inv() const;
-
-            // Check if transform is identity within epsilon tolerance
-            bool isIdentity(float eps = 1e-6f) const;
 
             // Getters
             const glm::quat& getRotation() const { return m_rotation; }
             const glm::vec3& getTranslation() const { return m_translation; }
-
-            // Setters
-            void setRotation(const glm::quat& rot) { m_rotation = rot; }
-            void setTranslation(const glm::vec3& trans) { m_translation = trans; }
-
-            // Get Euler angles (in radians) in ZYX order
-            glm::vec3 getEulerAngles() const { return glm::eulerAngles(m_rotation); }
-
-            // Apply transformation to a point
-            glm::vec3 transformPoint(const glm::vec3& point) const;
-
-            // Apply only rotation to a vector (no translation)
-            glm::vec3 transformVector(const glm::vec3& vector) const;
-
-            glm::mat3 getRotationMat() const;
 
         private:
             // Orthonormalize rotation matrix
