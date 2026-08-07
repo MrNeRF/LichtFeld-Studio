@@ -120,6 +120,7 @@ set(TEST_FILES
     test_tensor_memory.cpp
     test_allocator_policy.cpp
     test_alloc_counter.cpp
+    test_allocator_hygiene.cpp
     test_fastgs_sort_buffers.cpp
     test_fused_reg_loss.cpp
     test_fused_bg_blend.cpp

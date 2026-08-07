@@ -112,6 +112,122 @@ namespace lfs::core {
             }
         }
 
+        // Free slabs whose every block is currently free. Caller must have
+        // synchronized the device and preferably merged streams into virgin
+        // (see CudaMemoryPool::trim_cached_memory). Safe only when no live
+        // allocation holds a block from a reclaimed slab.
+        // Serialized with expand_slab via expand_mutex_ (lock order:
+        // expand → free_lists → slabs).
+        void reclaim_empty_slabs() {
+            LFS_CUDA_BREADCRUMB("tensor.slab.reclaim");
+            std::lock_guard<std::mutex> expand_lock(expand_mutex_);
+
+            size_t reclaimed_bytes = 0;
+            std::vector<Slab> survivors;
+            {
+                std::lock_guard<std::mutex> slabs_lock(slabs_mutex_);
+                if (slabs_.empty()) {
+                    return;
+                }
+                survivors.reserve(slabs_.size());
+
+                for (const auto& slab : slabs_) {
+                    const size_t size_class = slab.size_class;
+                    if (size_class >= NUM_SIZE_CLASSES) {
+                        survivors.push_back(slab);
+                        continue;
+                    }
+
+                    const size_t block_size = get_block_size(size_class);
+                    const size_t num_blocks = slab.size / block_size;
+                    FreeLists& lists = free_lists_[size_class];
+                    std::lock_guard<std::mutex> free_lock(lists.mutex);
+
+                    std::unordered_map<void*, size_t /*refcount*/> free_counts;
+                    free_counts.reserve(lists.virgin.size() + 64);
+                    auto bump = [&](void* p) {
+                        if (p)
+                            ++free_counts[p];
+                    };
+                    for (void* p : lists.virgin)
+                        bump(p);
+                    for (auto& entry : lists.per_stream) {
+                        for (void* p : entry.second)
+                            bump(p);
+                    }
+
+                    const uintptr_t slab_start = reinterpret_cast<uintptr_t>(slab.base);
+                    size_t free_in_slab = 0;
+                    for (size_t i = 0; i < num_blocks; ++i) {
+                        void* block = reinterpret_cast<void*>(slab_start + i * block_size);
+                        auto it = free_counts.find(block);
+                        if (it != free_counts.end() && it->second > 0) {
+                            ++free_in_slab;
+                        }
+                    }
+
+                    if (free_in_slab != num_blocks) {
+                        survivors.push_back(slab);
+                        continue;
+                    }
+
+                    // Fully empty: strip every block of this slab from free lists.
+                    auto strip = [&](std::vector<void*>& vec) {
+                        vec.erase(std::remove_if(vec.begin(), vec.end(),
+                                                 [&](void* p) {
+                                                     const uintptr_t addr =
+                                                         reinterpret_cast<uintptr_t>(p);
+                                                     return addr >= slab_start &&
+                                                            addr < slab_start + slab.size;
+                                                 }),
+                                  vec.end());
+                    };
+                    strip(lists.virgin);
+                    for (auto it = lists.per_stream.begin(); it != lists.per_stream.end();) {
+                        strip(it->second);
+                        if (it->second.empty()) {
+                            it = lists.per_stream.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                    const size_t prev = lists.count.load(std::memory_order_relaxed);
+                    lists.count.store(prev >= num_blocks ? prev - num_blocks : 0,
+                                      std::memory_order_release);
+
+                    const cudaError_t free_status = cudaFree(slab.base);
+                    if (free_status != cudaSuccess) {
+                        ensure_cuda_success(
+                            free_status, "cudaFree(GPU slab reclaim)",
+                            ::lfs::core::detail::format_cuda_safe(
+                                "ptr={}, bytes={}, size_class={}", slab.base, slab.size,
+                                slab.size_class),
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+                    }
+                    reclaimed_bytes += slab.size;
+                    if (stats_.blocks_per_class[size_class] >= num_blocks) {
+                        stats_.blocks_per_class[size_class] -= num_blocks;
+                    } else {
+                        stats_.blocks_per_class[size_class] = 0;
+                    }
+                }
+
+                slabs_ = std::move(survivors);
+            }
+
+            if (reclaimed_bytes > 0) {
+                if (stats_.total_slab_memory >= reclaimed_bytes) {
+                    stats_.total_slab_memory -= reclaimed_bytes;
+                } else {
+                    stats_.total_slab_memory = 0;
+                }
+                publish_reserved_bytes();
+                LOG_DEBUG("GPUSlabAllocator: reclaimed {} bytes of fully-empty slabs "
+                          "({:.2f} MB still reserved)",
+                          reclaimed_bytes, stats_.total_slab_memory / (1024.0 * 1024.0));
+            }
+        }
+
         // `stream` must be the stream the block's last use is ordered on
         // (the owner's home stream after any cross-stream edges were bridged).
         void deallocate(void* ptr, size_t bytes, cudaStream_t stream = nullptr) {
@@ -274,8 +390,7 @@ namespace lfs::core {
         }
 
         bool expand_slab(size_t size_class) {
-            static std::mutex expand_mutex;
-            std::lock_guard<std::mutex> lock(expand_mutex);
+            std::lock_guard<std::mutex> lock(expand_mutex_);
             if (free_lists_[size_class].count.load(std::memory_order_acquire) > 0) {
                 return true;
             }
@@ -284,6 +399,7 @@ namespace lfs::core {
 
         void cleanup() {
             LFS_CUDA_BREADCRUMB("tensor.slab.free");
+            std::lock_guard<std::mutex> expand_lock(expand_mutex_);
             std::lock_guard<std::mutex> lock(slabs_mutex_);
             for (const auto& slab : slabs_) {
                 const cudaError_t free_status = cudaFree(slab.base);
@@ -357,6 +473,8 @@ namespace lfs::core {
         std::array<FreeLists, NUM_SIZE_CLASSES> free_lists_;
         std::vector<Slab> slabs_;
         mutable std::mutex slabs_mutex_;
+        // Serializes expand_slab / reclaim_empty_slabs / cleanup growth-shrink.
+        std::mutex expand_mutex_;
         Stats stats_;
         std::atomic<bool> enabled_{false};
         std::atomic<bool> shutdown_{false};

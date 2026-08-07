@@ -3168,15 +3168,16 @@ namespace lfs::core::tensor_ops {
         }
 
         // FALLBACK PATH: For ndim > 16 (extremely rare!)
-        // Use device memory allocation only when absolutely necessary
+        // Route shape/stride metadata through the pool (no bare cudaMalloc).
 
-        // Copy shape and strides to device
-        size_t* d_shape;
-        size_t* d_strides;
-        LFS_CUDA_CHECK(cudaMalloc(&d_shape, ndim * sizeof(size_t)));
-        LFS_CUDA_CHECK(cudaMalloc(&d_strides, ndim * sizeof(size_t)));
-        LFS_CUDA_CHECK(cudaMemcpy(d_shape, shape.data(), ndim * sizeof(size_t), cudaMemcpyHostToDevice));
-        LFS_CUDA_CHECK(cudaMemcpy(d_strides, strides.data(), ndim * sizeof(size_t), cudaMemcpyHostToDevice));
+        const size_t metadata_bytes = ndim * sizeof(size_t);
+        auto& pool = CudaMemoryPool::instance();
+        size_t* d_shape = static_cast<size_t*>(pool.allocate(metadata_bytes, stream));
+        size_t* d_strides = static_cast<size_t*>(pool.allocate(metadata_bytes, stream));
+        LFS_CUDA_CHECK(cudaMemcpyAsync(d_shape, shape.data(), metadata_bytes,
+                                       cudaMemcpyHostToDevice, stream));
+        LFS_CUDA_CHECK(cudaMemcpyAsync(d_strides, strides.data(), metadata_bytes,
+                                       cudaMemcpyHostToDevice, stream));
 
         // Use 2D grid for large arrays to avoid exceeding grid dimension limits
         if (num_blocks <= max_blocks_x) {
@@ -3195,9 +3196,8 @@ namespace lfs::core::tensor_ops {
             LFS_CUDA_CHECK(cudaDeviceSynchronize());
         }
 
-        // Clean up device memory
-        LFS_CUDA_CHECK(cudaFree(d_shape));
-        LFS_CUDA_CHECK(cudaFree(d_strides));
+        pool.deallocate(d_shape, stream);
+        pool.deallocate(d_strides, stream);
     }
 
     // Explicit instantiations
@@ -3277,7 +3277,8 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    // Persistent buffers to avoid malloc/free overhead (thread-safe via thread_local)
+    // Persistent buffers to avoid malloc/free overhead (thread-safe via thread_local).
+    // Device flag routes through CudaMemoryPool (slab); host stays pinned for D2H.
     namespace {
         struct NaNCheckBuffers {
             int* d_result = nullptr;
@@ -3286,7 +3287,12 @@ namespace lfs::core::tensor_ops {
 
             void init() {
                 if (!initialized) {
-                    LFS_CUDA_CHECK(cudaMalloc(&d_result, sizeof(int)));
+                    d_result = static_cast<int*>(
+                        CudaMemoryPool::instance().allocate(sizeof(int), nullptr));
+                    if (!d_result) {
+                        LFS_CUDA_CHECK(cudaErrorMemoryAllocation);
+                        return;
+                    }
                     LFS_CUDA_CHECK(cudaMallocHost(&h_result_pinned, sizeof(int))); // Pinned memory
                     initialized = true;
                 }
@@ -3300,12 +3306,8 @@ namespace lfs::core::tensor_ops {
                 initialized = false;
 
                 if (device_result) {
-                    const cudaError_t device_status = cudaFree(device_result);
-                    if (device_status != cudaSuccess) {
-                        ensure_cuda_success(
-                            device_status, "cudaFree(NaN-check device buffer)", {},
-                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
-                    }
+                    // Pool free (slab return); stream nullptr matches allocate home.
+                    CudaMemoryPool::instance().deallocate(device_result, nullptr);
                 }
                 if (host_result) {
                     const cudaError_t host_status = cudaFreeHost(host_result);
