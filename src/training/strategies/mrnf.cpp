@@ -644,6 +644,13 @@ namespace lfs::training {
             _precomputed_edge_scores = Tensor();
             _edge_precompute_valid = false;
             reset_edge_accumulator();
+            // Phase 2.1: densify windows stay float-native; re-apply q16 once topology freezes
+            // so steady-state VRAM prize lands without mid-densify re-encode races.
+            if (lfs::core::sh_value_quant::enabled() &&
+                _splat_data->shN().is_valid() &&
+                _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
+                lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
+            }
         }
 
         if (iter >= static_cast<int>(_params->stop_refine)) {
@@ -693,14 +700,10 @@ namespace lfs::training {
     void MRNF::refine(int iter) {
         LOG_TIMER("MRNF::refine");
         using namespace lfs::core;
-        // Phase 2.1: densify ops are float-native — expand q16 shN for the window.
-        // Always re-commit when quant is on (even if already float from a nested expand)
-        // so bounds/codes match post-growth N. Nested grow_and_split skips re-commit when
-        // it did not expand.
+        // Phase 2.1: densify ops are float-native. Expand q16 once and KEEP float for the
+        // whole densify phase (re-encode at stop_refine). Mid-refine re-encode was racing
+        // capacity/bounds after N growth and poisoning the next forward.
         (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
-        const bool shN_need_commit = lfs::core::sh_value_quant::enabled() &&
-                                     _splat_data->shN().is_valid() &&
-                                     _splat_data->shN().dtype() == lfs::core::DataType::Float32;
 
         ++_refine_windows_since_bounds;
         if (!_bounds_valid || _refine_windows_since_bounds >= MRNF_BOUNDS_RECOMPUTE_INTERVAL_REFINES) {
@@ -799,7 +802,11 @@ namespace lfs::training {
         reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
         ensure_densification_info_shape();
         _splat_data->_densification_info.zero_();
-        if (shN_need_commit) {
+        // Re-encode after densify growth so B/splat prize is live before stop_refine.
+        // Adam prepare heals moment bookkeeping if sizes lag (free-slot densify).
+        if (lfs::core::sh_value_quant::enabled() &&
+            _splat_data->shN().is_valid() &&
+            _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
         }
 
@@ -810,17 +817,10 @@ namespace lfs::training {
     void MRNF::grow_and_split(int iter, int pruned_count) {
         LOG_TIMER("MRNF::grow_and_split");
         using namespace lfs::core;
-        // Safe when called outside refine() (tests / free-slot fill): expand q16 → float.
-        // refine() already expands first so this is a no-op there; commit only if we expanded.
-        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
-        struct ShNCommitGuard {
-            lfs::core::SplatData* splat;
-            bool expanded;
-            ~ShNCommitGuard() {
-                if (expanded && splat)
-                    lfs::training::sh_value::commit_shN_after_mutation(*splat);
-            }
-        } shn_guard{_splat_data, shN_expanded};
+        // Expand q16 → float if needed. Do NOT re-encode here: refine() owns the single
+        // post-growth commit so bounds/codes always match the final N. Tests that call
+        // grow_and_split alone must commit themselves or force quant OFF (Legacy guard).
+        (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
 
         const size_t n = static_cast<size_t>(_splat_data->size());
         const size_t current_active = active_count();
@@ -1098,16 +1098,8 @@ namespace lfs::training {
 
     void MRNF::compact_splats(const lfs::core::Tensor& keep_mask) {
         LOG_TIMER("MRNF::compact_splats");
-        // Float-native gather; expand q16 for this window and re-encode if we expanded.
-        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
-        struct ShNCommitGuard {
-            lfs::core::SplatData* splat;
-            bool expanded;
-            ~ShNCommitGuard() {
-                if (expanded && splat)
-                    lfs::training::sh_value::commit_shN_after_mutation(*splat);
-            }
-        } shn_guard{_splat_data, shN_expanded};
+        // Float-native gather. Expand q16 if needed; refine() (or remove_gaussians) owns re-encode.
+        (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
         using namespace lfs::core;
 
         const size_t old_size = static_cast<size_t>(_splat_data->size());
@@ -1671,6 +1663,12 @@ namespace lfs::training {
             return;
 
         compact_splats(keep_mask);
+        // compact expands q16 → float; re-encode when quant is on.
+        if (lfs::core::sh_value_quant::enabled() &&
+            _splat_data->shN().is_valid() &&
+            _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
+            lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
+        }
 
         if (_splat_data->size() == 0) {
             _bounds_valid = false;

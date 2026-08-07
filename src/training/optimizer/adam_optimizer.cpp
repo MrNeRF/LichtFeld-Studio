@@ -679,9 +679,47 @@ namespace lfs::training {
                 init_state(type, false);
             }
 
-            const size_t param_size = param.shape()[0];
-            if (param_size != state.size) {
-                throw std::runtime_error("Optimizer state desync before fused Adam: " + name);
+            // Moments track float4-swizzled cell count. SH value quant stores pad-dropped
+            // u16 (different numel). After densify, heal undersized SH moment bookkeeping.
+            if (type != ParamType::ShN) {
+                if (param.shape()[0] != state.size) {
+                    throw std::runtime_error("Optimizer state desync before fused Adam: " + name);
+                }
+            } else {
+                const auto layout_rest =
+                    static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
+                const size_t float_layout = lfs::core::sh_swizzled_float_count(
+                    static_cast<size_t>(splat_data_.size()), layout_rest);
+                if (state.size != float_layout && param.shape()[0] != state.size) {
+                    if (state.exp_avg.is_valid() && state.exp_avg.capacity() >= float_layout) {
+                        // Capacity reserved at max_cap: advance logical size (free slots
+                        // already zero-initialized under joint bounds).
+                        state.size = float_layout;
+                    } else if (state.size < float_layout) {
+                        const size_t n_live = static_cast<size_t>(splat_data_.size());
+                        const size_t floats_per =
+                            n_live > 0 ? float_layout / n_live : 0;
+                        const size_t n_prev =
+                            floats_per > 0 ? state.size / floats_per : 0;
+                        const size_t n_new = n_live > n_prev ? n_live - n_prev : 0;
+                        if (n_new > 0) {
+                            extend_state_for_new_params(type, n_new);
+                        }
+                        if (state.size != float_layout && param.shape()[0] != state.size) {
+                            throw std::runtime_error(
+                                "Optimizer state desync before fused Adam: " + name +
+                                " param_n=" + std::to_string(param.shape()[0]) +
+                                " state=" + std::to_string(state.size) +
+                                " float_layout=" + std::to_string(float_layout));
+                        }
+                    } else {
+                        throw std::runtime_error(
+                            "Optimizer state desync before fused Adam: " + name +
+                            " param_n=" + std::to_string(param.shape()[0]) +
+                            " state=" + std::to_string(state.size) +
+                            " float_layout=" + std::to_string(float_layout));
+                    }
+                }
             }
 
             const auto next_step = state.step_count + 1;

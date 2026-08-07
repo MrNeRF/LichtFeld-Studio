@@ -382,13 +382,20 @@ namespace lfs::training {
                 bg_image_ptr != nullptr
                     ? nullptr
                     : (bg_color.is_valid() && bg_color.numel() >= 3 ? bg_color.ptr<float>() : nullptr);
-            const bool shN_q16 = gaussian_model.shN_value_quantized();
-            const float* shN_ptr = shN_q16 ? static_cast<const float*>(shN.data_ptr())
-                                           : shN.ptr<float>();
+            // q16 path requires codes + bounds together. Float16 without bounds must not
+            // take the float4 load path (misaligned reinterpret → illegal address).
+            const bool shN_q16 =
+                gaussian_model.shN_value_quantized() &&
+                gaussian_model.shN_value_bounds().is_valid() &&
+                gaussian_model.shN_value_bounds().numel() > 0;
+            if (gaussian_model.shN_value_quantized() && !shN_q16) {
+                LOG_WARN("SH value quant codes without bounds — expanding to float for forward");
+                (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(gaussian_model);
+            }
+            const float* shN_ptr = shN_q16 ? static_cast<const float*>(gaussian_model.shN().data_ptr())
+                                           : gaussian_model.shN().ptr<float>();
             const float* shN_bounds_ptr =
-                shN_q16 && gaussian_model.shN_value_bounds().is_valid()
-                    ? gaussian_model.shN_value_bounds().ptr<float>()
-                    : nullptr;
+                shN_q16 ? gaussian_model.shN_value_bounds().ptr<float>() : nullptr;
             const unsigned shN_n_cells =
                 shN_q16 ? static_cast<unsigned>(
                               lfs::core::sh_value_quant::n_value_cells_per_prim(

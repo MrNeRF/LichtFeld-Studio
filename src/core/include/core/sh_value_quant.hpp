@@ -45,7 +45,8 @@ namespace lfs::core::sh_value_quant {
     }
 
     // Runtime flag (mirrors training::sh_value::sh_value_quant_enabled).
-    // Default ON; LFS_SH_VALUE_FP32=1 or LFS_SH_VALUE_QUANT=0 forces off.
+    // Default OFF until densify re-encode after N-growth is gate-green (ISS-2.1).
+    // Opt-in: LFS_SH_VALUE_QUANT=1. Force off: LFS_SH_VALUE_FP32=1 or QUANT=0.
     [[nodiscard]] inline bool env_quant_enabled() {
         const char* force_fp32 = std::getenv("LFS_SH_VALUE_FP32");
         if (force_fp32 != nullptr && force_fp32[0] != '\0' &&
@@ -56,7 +57,7 @@ namespace lfs::core::sh_value_quant {
         }
         const char* opt = std::getenv("LFS_SH_VALUE_QUANT");
         if (opt == nullptr || opt[0] == '\0')
-            return true; // default ON
+            return false; // default OFF — densify re-encode after growth still open
         if (opt[0] == '0' && opt[1] == '\0')
             return false;
         if (std::strcmp(opt, "false") == 0 || std::strcmp(opt, "off") == 0)

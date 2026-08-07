@@ -1,0 +1,6 @@
+Implementation engineer, LichtFeld-Studio. Dir: /home/gauss/projects/LichtFeld-Studio, branch lfs-elite (verify; NEVER checkout). Session under flock /home/gauss/lfs-campaign-out/main-checkout.lock. Reads: RULES.md, ISSUES.md ISS-015.
+TASK — QUALITY-CRITICAL gradient regression:
+1. git bisect f06a8885..HEAD with `lichtfeld_tests --gtest_filter='FastGSGradientTest.Numerical_Means'` as the oracle (build each step via ./perf_campaign/build.sh; expect ~4-6 steps; record every step in PROGRESS.md).
+2. Diagnose + fix the offending commit's gradient math (do NOT revert wholesale unless the fix is impossible — the perf win must survive with correct gradients). If BWD-A: re-verify its bit-identical claim; if codec: check the fused-tail read-modify-write ordering; if 1.4: bg grad_alpha accumulation.
+3. Make ALL FastGS gradient tests green + the other ISS-015 reds you can attribute to the same root; independent reds (video extractor, loader sidecar) → separate ISSUES entries with attribution evidence if not yours.
+GATE: FastGS gradient suites green; full suite delta vs branch point reported; dual-workload bench must show the perf wins SURVIVED the fix (if a win must be sacrificed for correctness, correctness wins — document the cost). Commit per step with evidence.

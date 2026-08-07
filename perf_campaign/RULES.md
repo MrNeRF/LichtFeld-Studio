@@ -79,3 +79,9 @@ Structural guarantees now in place (do not remove):
    so a killed worker can never wedge builds or benches.
 5. Fleet size policy: max 3 concurrent implementation workers, ever. Read-only analysts
    may burst higher but only WITHOUT builds and in bounded batches (<=8), inside lfs.slice.
+
+## Full-suite gate (added after ISS-015)
+Targeted tests + bench are NOT a sufficient gate. Every implementation order's final gate
+MUST include the full lichtfeld_tests run (minus only the exclusions already documented in
+ISSUES.md) and report its pass/fail delta vs the branch point. A "healthy loss curve" does
+not prove gradients correct — the numerical-gradient suites exist for that.
