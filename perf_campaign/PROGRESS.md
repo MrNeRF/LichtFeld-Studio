@@ -1002,5 +1002,5 @@ Python SceneCamera) — **not** FastGS blend/grad. All FastGS numerical gradient
 - `tests/test_warp_cull_blend.cpp` — TDD pixel identity + microbench
 
 ### Commit
-**`b24c43ec`** perf(fastgs): warp-level sub-tile culling for forward blend_cu (WO-WARP-FWD)
+**`35ca0e4a`** perf(fastgs): warp-level sub-tile culling for forward blend_cu (WO-WARP-FWD)
 
