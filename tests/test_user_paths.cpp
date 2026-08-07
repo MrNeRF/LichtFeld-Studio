@@ -10,6 +10,7 @@
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <nlohmann/json.hpp>
 #include <string>
 
 namespace {
@@ -36,6 +37,8 @@ namespace {
             };
             return lfs::core::UserPaths::resolve(options);
         }
+
+        fs::path portableExecutableDir() const { return root_ / "portable-app"; }
 
         fs::path root_;
     };
@@ -92,6 +95,51 @@ namespace {
         EXPECT_EQ(backup_contents, R"({"theme":"light","ui_scale":"150"})");
     }
 
+    TEST_F(UserPathsContractTest, PortableRootUsesExecutableDirectory) {
+        const lfs::core::UserPathOptions options{
+            .executable_dir = portableExecutableDir(),
+            .portable = true,
+        };
+        const auto resolved = lfs::core::UserPaths::resolve(options);
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        EXPECT_TRUE(resolved->usesUnifiedRoot());
+        EXPECT_EQ(resolved->configDir(), portableExecutableDir() / ".lichtfeld" / "config");
+        EXPECT_EQ(resolved->dataDir(), portableExecutableDir() / ".lichtfeld" / "data");
+    }
+
+    TEST_F(UserPathsContractTest, PortableRootRequiresExecutableDirectory) {
+        const lfs::core::UserPathOptions options{.portable = true};
+        const auto resolved = lfs::core::UserPaths::resolve(options);
+        ASSERT_FALSE(resolved.has_value());
+        EXPECT_NE(resolved.error().find("executable directory"), std::string::npos);
+    }
+
+    TEST_F(UserPathsContractTest, AtomicPreferenceWriteCreatesValidJsonAndNoTemporaryFiles) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+        ASSERT_TRUE(paths.ensureDirectories().has_value());
+
+        const auto write = paths.writePreferencesAtomically(R"({"theme":"light","ui_scale":"auto"})");
+        ASSERT_TRUE(write.has_value()) << write.error();
+        ASSERT_TRUE(fs::is_regular_file(paths.preferencesFile()));
+        std::ifstream file(paths.preferencesFile());
+        const auto json = nlohmann::json::parse(file);
+        EXPECT_EQ(json.at("theme"), "light");
+        EXPECT_EQ(json.at("ui_scale"), "auto");
+
+        for (const auto& entry : fs::directory_iterator(paths.configDir()))
+            EXPECT_EQ(entry.path().filename().string().find("preferences.json.tmp-"), std::string::npos);
+    }
+
+    TEST_F(UserPathsContractTest, AtomicWindowWriteCreatesParentDirectory) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+        ASSERT_TRUE(paths.writeWindowStateAtomically(R"({"width":1280,"height":720})").has_value());
+        EXPECT_TRUE(fs::is_regular_file(paths.windowStateFile()));
+    }
+
     TEST_F(UserPathsContractTest, ResetLayoutBacksUpExistingFile) {
         const auto resolved = resolvePaths();
         ASSERT_TRUE(resolved.has_value()) << resolved.error();
@@ -141,6 +189,10 @@ namespace {
         const auto layout_reset = paths.resetLayout();
         ASSERT_TRUE(layout_reset.has_value()) << layout_reset.error();
         EXPECT_FALSE(layout_reset->has_value());
+
+        const auto window_reset = paths.resetWindowState();
+        ASSERT_TRUE(window_reset.has_value()) << window_reset.error();
+        EXPECT_FALSE(window_reset->has_value());
     }
 
 } // namespace
