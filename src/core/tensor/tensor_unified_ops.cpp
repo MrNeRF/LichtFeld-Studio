@@ -359,6 +359,7 @@ namespace lfs::core {
             result.device_ = args.device;
             result.dtype_ = args.dtype;
             result.id_ = next_id_++;
+            result.ensure_state();
             result.state_->stream = getCurrentCUDAStream();
 
             LFS_ASSERT_MSG(result.shape_.elements() == 0 ||
@@ -592,6 +593,7 @@ namespace lfs::core {
             result.device_ = args.device;
             result.dtype_ = args.dtype;
             result.id_ = next_id_++;
+            result.ensure_state();
             result.state_->stream = getCurrentCUDAStream();
 
             size_t bytes = count * dtype_size(result.dtype_);

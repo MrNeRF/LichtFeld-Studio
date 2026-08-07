@@ -371,3 +371,183 @@ TEST(TensorDispatch6A, MicrobenchBinaryFastPathNsPerOp) {
         EXPECT_GT(mul_ns, 0.0);
     }
 }
+
+// ---------------------------------------------------------------------------
+// 6A.1 — Share TensorState on Tensor copy (stream/name/lazy/capacity on shared impl)
+// ---------------------------------------------------------------------------
+
+TEST(TensorHandle6A, CopySharesNameAndTrackedState) {
+    Dispatch6AGuard guard;
+
+    auto a = Tensor::ones({8}, Device::CPU, DataType::Float32);
+    a.set_name("alpha");
+    a.set_tracked(true);
+
+    auto b = a; // shallow copy — must share TensorState
+    EXPECT_EQ(b.name(), "alpha");
+    EXPECT_TRUE(b.is_tracked());
+
+    // Mutating metadata through either handle must be visible on both.
+    b.set_name("beta");
+    EXPECT_EQ(a.name(), "beta") << "6A.1: copy must share TensorState (name)";
+    a.set_tracked(false);
+    EXPECT_FALSE(b.is_tracked()) << "6A.1: copy must share TensorState (tracked)";
+}
+
+TEST(TensorHandle6A, CopySharesCapacityMetadata) {
+    Dispatch6AGuard guard;
+
+    auto a = Tensor::ones({4, 3}, Device::CPU, DataType::Float32);
+    // reserve grows capacity on dim0; shared state means both handles see it.
+    a.reserve(16);
+    ASSERT_GE(a.capacity(), 16u);
+
+    auto b = a;
+    EXPECT_EQ(b.capacity(), a.capacity());
+    EXPECT_EQ(b.logical_size(), a.logical_size());
+
+    b.reserve(32);
+    EXPECT_EQ(a.capacity(), b.capacity()) << "6A.1: capacity must live on shared TensorState";
+    EXPECT_GE(a.capacity(), 32u);
+}
+
+TEST(TensorHandle6A, EmptyDefaultTensorCopyIsSafe) {
+    Dispatch6AGuard guard;
+
+    Tensor empty;
+    EXPECT_FALSE(empty.is_valid());
+    EXPECT_EQ(empty.capacity(), 0u);
+    EXPECT_EQ(empty.stream(), nullptr);
+    EXPECT_TRUE(empty.name().empty());
+
+    Tensor copy = empty;
+    EXPECT_FALSE(copy.is_valid());
+    EXPECT_EQ(copy.capacity(), 0u);
+    EXPECT_EQ(copy.stream(), nullptr);
+
+    Tensor assigned;
+    assigned = empty;
+    EXPECT_FALSE(assigned.is_valid());
+}
+
+TEST(TensorHandle6A, DeferredCopyMaterializesIndependentlyOnHandle) {
+    Dispatch6AGuard guard;
+    internal::lazy_ir_set_active_for_testing(false);
+    internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+
+    auto x = Tensor::ones({16}, Device::CPU, DataType::Float32);
+    // Build a deferred fusion chain (unary→unary).
+    auto deferred = x.add(1.0f).mul(2.0f);
+    ASSERT_TRUE(deferred.is_deferred());
+
+    auto sibling = deferred; // shares lazy state after 6A.1
+    EXPECT_TRUE(sibling.is_deferred());
+
+    // Materialize through the original handle (16 elements — use to_vector, not item).
+    const auto vals0 = deferred.to_vector();
+    ASSERT_EQ(vals0.size(), 16u);
+    EXPECT_NEAR(vals0[0], 4.0f, 1e-5f); // (1+1)*2
+    EXPECT_FALSE(deferred.is_deferred());
+    EXPECT_TRUE(deferred.is_valid());
+
+    // Sibling must still be able to materialize (or already see published result).
+    const auto vals1 = sibling.to_vector();
+    ASSERT_EQ(vals1.size(), 16u);
+    EXPECT_NEAR(vals1[0], 4.0f, 1e-5f);
+    EXPECT_FALSE(sibling.is_deferred());
+    EXPECT_TRUE(sibling.is_valid());
+}
+
+// ---------------------------------------------------------------------------
+// 6A.4 — Inline small-vector shapes/strides (no heap for rank ≤ 8)
+// ---------------------------------------------------------------------------
+
+TEST(TensorHandle6A, ShapeStridesRankedNoHeapSemantics) {
+    Dispatch6AGuard guard;
+
+    const TensorShape shape({2, 3, 4});
+    EXPECT_EQ(shape.rank(), 3u);
+    EXPECT_EQ(shape.elements(), 24u);
+    EXPECT_EQ(shape[0], 2u);
+    EXPECT_EQ(shape[1], 3u);
+    EXPECT_EQ(shape[2], 4u);
+
+    const auto strides = shape.strides();
+    EXPECT_EQ(strides.size(), 3u);
+    EXPECT_EQ(strides[0], 12u);
+    EXPECT_EQ(strides[1], 4u);
+    EXPECT_EQ(strides[2], 1u);
+
+    // dims() must be usable as span (broadcast helpers).
+    EXPECT_TRUE(broadcast::can_broadcast(shape.dims(), shape.dims()));
+
+    auto t = Tensor::ones({2, 3, 4}, Device::CPU, DataType::Float32);
+    EXPECT_EQ(t.strides().size(), 3u);
+    EXPECT_EQ(t.strides()[0], 12u);
+    EXPECT_EQ(t.strides()[1], 4u);
+    EXPECT_EQ(t.strides()[2], 1u);
+
+    // Copy must keep shape/strides identical without depending on heap vectors.
+    auto c = t;
+    EXPECT_EQ(c.shape(), t.shape());
+    EXPECT_EQ(c.strides().size(), t.strides().size());
+    for (size_t i = 0; i < t.strides().size(); ++i) {
+        EXPECT_EQ(c.strides()[i], t.strides()[i]);
+    }
+}
+
+// Microbench: Tensor copy cost (6A.1) + small eager add host path (6A.1+6A.4).
+TEST(TensorHandle6A, MicrobenchTensorCopyAndPerOpNs) {
+    Dispatch6AGuard guard;
+    internal::lazy_ir_set_active_for_testing(false);
+
+    constexpr int kCopyIters = 200000;
+    constexpr int kOpIters = 50000;
+
+    auto measure_copy_ns = [&](const Tensor& src) -> double {
+        for (int i = 0; i < 1000; ++i) {
+            Tensor tmp = src;
+            (void)tmp;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < kCopyIters; ++i) {
+            Tensor tmp = src;
+            (void)tmp;
+        }
+        const auto t1 = std::chrono::steady_clock::now();
+        const double sec = std::chrono::duration<double>(t1 - t0).count();
+        return (sec * 1e9) / static_cast<double>(kCopyIters);
+    };
+
+    // CPU tensor copy (pure host path — isolates TensorState deep-copy cost).
+    auto cpu = Tensor::ones({64}, Device::CPU, DataType::Float32);
+    const double cpu_copy_ns = measure_copy_ns(cpu);
+    std::cout << "MICROBENCH 6A.1 Tensor_copy_cpu_ns=" << cpu_copy_ns << "\n";
+    EXPECT_GT(cpu_copy_ns, 0.0);
+
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for CUDA copy + per-op microbench";
+    }
+
+    auto cuda = Tensor::ones({64}, Device::CUDA, DataType::Float32);
+    const double cuda_copy_ns = measure_copy_ns(cuda);
+    std::cout << "MICROBENCH 6A.1 Tensor_copy_cuda_ns=" << cuda_copy_ns << "\n";
+    EXPECT_GT(cuda_copy_ns, 0.0);
+
+    auto a = Tensor::ones({16}, Device::CUDA, DataType::Float32);
+    auto b = Tensor::ones({16}, Device::CUDA, DataType::Float32);
+    for (int i = 0; i < 200; ++i) {
+        (void)a.add(b);
+    }
+    cudaDeviceSynchronize();
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < kOpIters; ++i) {
+        (void)a.add(b);
+    }
+    cudaDeviceSynchronize();
+    const auto t1 = std::chrono::steady_clock::now();
+    const double op_ns =
+        (std::chrono::duration<double>(t1 - t0).count() * 1e9) / static_cast<double>(kOpIters);
+    std::cout << "MICROBENCH 6A.1+6A.4 eager_add_16_ns_per_op=" << op_ns << "\n";
+    EXPECT_GT(op_ns, 0.0);
+}
