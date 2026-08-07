@@ -20,7 +20,7 @@
   [==========] Running 4 tests from 1 test suite.
   [  PASSED  ] 4 tests.  (AllocCounterTest.*)
   ```
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
 
 ## Task 0.2 — Bytes-per-splat training-state ledger
 
@@ -38,7 +38,7 @@
   [  PASSED  ] 2 tests.  (TrainingStateLedgerTest.*)
   Synthetic SH3 N=32: params=248*N, optim=172*N, densify=8*N, grads=0 → 428 B/splat
   ```
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
 
 ## Task 0.3 — Bench gate script + BASELINE
 
@@ -63,7 +63,7 @@
   | B/splat | **429.0** |
   | last_loss | ~0.039 |
 
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
 
 ## Task 1.1 — Persistent high-water sort buffers in FastGS forward
 
@@ -96,7 +96,7 @@
   Residual ~0.06 allocs/iter are non-sort (densify growth / rare paths).
   Peak VRAM +31 MiB is expected high-water residency of sort buffers.
 
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
   Runs: `perf_campaign/runs/20260806T173156Z_run{1,2,3}/`
 
 ## Task 1.2 — Remove the n_instances hard sync
@@ -133,7 +133,7 @@
   G3: zero mid-pipeline StreamSynchronize in steady state (fallback only at
   warmup/growth). G4: steady_ms improved vs 1.1 and baseline.
 
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
   Runs: `perf_campaign/runs/20260806T174524Z_run{1,2,3}/`
 
 ## Task 1.5 — Preflight checks debug-only
@@ -207,7 +207,7 @@
   | B/splat | 429.0 | 429.0 | 0 |
   | last_loss | ~0.039 | ~0.030 | ok |
 
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
 
 ## Task 4.2 — Capacity invariant guard
 
@@ -232,7 +232,7 @@
   (slow path counter=1 after first grow; second grow fast, alloc_delta≤2)
   ```
 - **Bench:** same gate table as 4.1 (measured together after both landed).
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
 
 ## Task 5.1 — Grow exportable splat block with live N
 
@@ -294,7 +294,7 @@
      (no fallback copy warning). Generation bumps; Vulkan re-imports new handle.
   4. Confirm viewport still renders live training splats without a full model copy.
 
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
 
 ---
 ## WAVE 1 COMBINED (post-merge, commit 0d652d45) — 3-run medians
@@ -335,7 +335,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   ```
 - **Note:** Bench gate deferred to after 1.4 (per work order). Wave 1 before:
   4.085 ms/iter, 0.05 allocs/iter.
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
 
 
 ## Task 1.4 — Fuse background blend; drop backward unblend
@@ -368,7 +368,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
 
   Runs: `perf_campaign/runs/20260806T183749Z_run{1,2,3}/`
   Dual-workload bicycle gate deferred to post-1.9 (RULES dual-gate added mid-campaign).
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
 
 
 ## Task 1.6 — Photometric hygiene
@@ -393,7 +393,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   # steady fused_l1_ssim_forward alloc delta=0; loss equal across steps;
   # bwd grads finite without prior zero_
   ```
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
 
 
 ## Task 1.7 — Persistent masks
@@ -420,7 +420,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   (frozen: 1 rebuild across 10 hits; +1 on N change; +1 on range change)
   (cropbox: 1 rebuild across 8 installs; +1 on scale; +1 on transform)
   ```
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
 
 
 ## Task 1.8 — Fuse noise injection
@@ -442,7 +442,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   ```
 - **Note:** Bit-identical trajectories not required (new RNG stream). Quality
   check via dual-workload bench after 1.9.
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
 
 
 ## Task 1.9 — Stop full [2,N] densification_info memset every iteration
@@ -473,7 +473,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   ```
   Multi-step accumulate into max/vis matches old max/add + `zero_()` path;
   densification_info fully zeroed after each fold.
-- **Commit:** `5c72bedf`
+- **Commit:** `b416b603`
   Runs (quiet dual gate):
   - bonsai: `perf_campaign/runs/20260806T195950Z_run{1,2,3}/`
   - bicycle: `perf_campaign/runs/20260806T200227Z_run{1,2,3}/`
@@ -630,7 +630,7 @@ Runs: bonsai `20260807T065803Z_run{1,2,3}`; bicycle `20260807T065831Z_run{1,2,3}
 - CheckpointAllocatorRegression (ISS-014, excluded — segfault)
 
 ### Commits
-**Commit:** `5c72bedf`
+**Commit:** `b416b603`
 
 ---
 
@@ -724,4 +724,4 @@ Same independent reds (not introduced by WO-X):
 Campaign unit tests: **19/19 PASS**.
 
 ### Commits
-**Commit:** `5c72bedf`
+**Commit:** `b416b603`
