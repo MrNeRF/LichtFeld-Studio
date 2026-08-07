@@ -1323,3 +1323,113 @@ Default joint codec **stays ON**. Infrastructure left in place.
 - **Runs:** bonsai `20260806T210217Z_run{1,2,3}`; bicycle `20260806T210253Z_run{1,2,3}`
 - **Commit:** `d2204088`
 
+||||||| c44ad8ec
+
+---
+
+## Task 6C.1 — Binary(+reduce) fusion
+
+- **Branch:** `lfs-elite-tkernels`
+- **Change:**
+  - `LazyPointwiseOpKind::{Add,Sub,Mul,Div}Tensor` (kinds 4–7) with optional
+    `std::shared_ptr<Tensor> rhs` on `LazyPointwiseOp`.
+  - Fused pointwise / transform-reduce kernels index `op.rhs[idx]` for tensor stages
+    (`tensor_fused_pointwise.cu`); float4 path keeps 16B-alignment check on all rhs.
+  - `binary_op_with_promotion` seeds/extends a deferred fusion chain for large
+    same-shape float32 add/sub/mul/div (or whenever LHS is already deferred). Uses
+    **raw size threshold** (not `lazy_size_heuristic_should_defer`) so the IR-test
+    "always-defer" override cannot regress 6A.3 small-eager binaries.
+  - Stream stamp on deferred binary results (D4 / cross-stream guards).
+  - Reduce full/last-dim consume materializes rhs tensors into fused transform-reduce.
+  - Launch counter: `tensor_ops::{reset,record,}_tensor_kernel_launch_count`.
+- **Fail evidence (TDD):**
+  ```
+  # Pre-change: a.mul(b).add(c) = 2 vectorized launches; no tensor-rhs chain stages.
+  # Conceptual: launches >= 2 for mul+add; mul→sum = mul + CUB (~3–4).
+  # With fusion gated off / missing: BinaryMulAddFusesToOneLaunch expects launches==1.
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] TensorKernels6C.BinaryMulAddFusesToOneLaunch   (launches==1)
+  [  PASSED  ] TensorKernels6C.BinaryMulSumFusesToOneOrTwoLaunches (1–2)
+  [  PASSED  ] TensorKernels6C.SingleBinaryKeepsFastPathWhenSmall
+  [  PASSED  ] TensorKernels6C.BinaryFusionNumericalSuite
+  Tensor* suite: 1147+ green (order-flake AllocCounter/NaNInf only); hardening 89/89
+  MICROBENCH 6C.1 mul+add N=1M: unfused ~0.009–0.012 ms/op; fused ~0.020–0.044 ms/op
+    (1M el host-bound; fusion wins on launch count / intermediate traffic)
+  ```
+- **Commit:** `fb271b35` (with 6C.4 where; broadcast commit follows)
+
+## Task 6C.4 — where host clones + generic broadcast same-shape
+
+- **Branch:** `lfs-elite-tkernels`
+- **Change:**
+  - `Tensor::where`: matched-shape operands are views (`*this` / `b` / `c`), not
+    `.clone()`; only true broadcast expands.
+  - Generic broadcast path: same-shape early-out with float4 vectorized kernel when
+    16B-aligned (`broadcast_binary_same_shape_*` in `tensor_broadcast_ops.cuh`).
+- **Fail evidence (TDD):**
+  ```
+  # Pre-change where always clone()'d three matched-shape operands → extra driver
+  # allocs on pool miss; WhereSameShapeZeroExtraAllocs expects delta==0.
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] TensorKernels6C.WhereSameShapeZeroExtraAllocs   (delta==0)
+  [  PASSED  ] TensorKernels6C.WhereSameShapePeakMemoryNoCloneBuffers
+  ```
+- **Commit:** where in `fb271b35`; same-shape broadcast in `e310ecaf`
+
+## Task 6C.2 — Wire Channel3D smem/coalesced kernels
+
+- **Branch:** `lfs-elite-tkernels`
+- **Change:** Launcher heuristic by C:
+  - `C <= 8` → original per-pixel kernel (float4 / RGB specials)
+  - `8 < C <= 3072` → smem channel vector kernel
+  - `C > 3072` → coalesced warp kernel
+  Both previously-dead kernels now selected; no truly-dead code left.
+- **Fail evidence (TDD):**
+  ```
+  # Pre-change: launcher only called broadcast_channel3d_kernel_float (:999–1001);
+  # smem/coalesced implementations unused (tl-kernels audit §2.2).
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] TensorKernels6C.Channel3DEquivalenceAcrossC  (C∈{1,3,4,16,64})
+  MICROBENCH 6C.2 Channel3D H=W=256:
+    C=1    ~0.0066 ms   ~79 GB/s   (per-pixel)
+    C=3    ~0.0067 ms  ~234 GB/s
+    C=4    ~0.0070 ms  ~300 GB/s
+    C=16   ~0.0089 ms  ~947 GB/s   (smem)
+    C=64   ~0.0463 ms  ~725 GB/s   (smem)
+  ```
+- **Commit:** `e310ecaf`
+
+## Dual-workload GATE (6C final)
+
+Quiet GPU, flock. vs Wave 2 (4.065 ms bonsai / 3.208 ms bicycle):
+
+### Bonsai (3×2000) — medians
+| metric | Wave 2 | after 6C | Δ |
+|---|---:|---:|---|
+| wall_s | 8.94 | **8.94** | 0 |
+| steady_ms/iter | 4.065 | **4.077** | +0.3% noise |
+| steady_allocs/iter | 0.05 | **0.05** | 0 |
+| peak VRAM MiB | 938.3 | **939.2** | flat |
+| B/splat | 429.0 | 429.0 | 0 |
+| last_loss | — | 0.030–0.048 | ok |
+
+Runs: `perf_campaign/runs/6c_bonsai/20260806T211632Z_run{1,2,3}/`
+
+### Bicycle canary (3×7000) — medians
+| metric | Wave 2 | after 6C | Δ |
+|---|---:|---:|---|
+| wall_s | — | **31.74** | — |
+| steady_ms/iter | 3.208 | **3.150** | **−1.8%** |
+| steady_allocs/iter | 0.04 | **0.04** | 0 |
+| peak VRAM MiB | 1026.3 | **995.2** | −31 |
+| last_loss range | 0.079–0.107 | **0.094–0.120** | within bicycle variance |
+
+Runs: `perf_campaign/runs/6c_bicycle/20260806T211742Z_run{1,2,3}/`
+
+**Gate status:** no ms/iter regression; G2 allocs held; bicycle quality OK.

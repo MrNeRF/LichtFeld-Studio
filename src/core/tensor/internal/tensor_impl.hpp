@@ -853,11 +853,28 @@ namespace lfs::core {
             }
         }
 
-        // Helper for binary operations with automatic type promotion
-        // Promotes types, converts operands if needed, and evaluates eagerly.
-        // Binary ops are always eager because our fusion system only handles
-        // unary/scalar chains — deferring binary ops provides no fusion benefit
-        // and creates dangerous reference chains when stored in member variables.
+        // Map add/sub/mul/div functors to LazyPointwiseOpKind tensor-binary stages.
+        // Returns nullopt for ops that are not fusable (pow, maximum, ...).
+        template <typename Op>
+        static std::optional<internal::LazyPointwiseOpKind> tensor_binary_fusion_kind() {
+            if constexpr (std::is_same_v<Op, ops::add_op>) {
+                return internal::LazyPointwiseOpKind::AddTensor;
+            } else if constexpr (std::is_same_v<Op, ops::sub_op>) {
+                return internal::LazyPointwiseOpKind::SubTensor;
+            } else if constexpr (std::is_same_v<Op, ops::mul_op>) {
+                return internal::LazyPointwiseOpKind::MulTensor;
+            } else if constexpr (std::is_same_v<Op, ops::div_op>) {
+                return internal::LazyPointwiseOpKind::DivTensor;
+            } else {
+                return std::nullopt;
+            }
+        }
+
+        // Helper for binary operations with automatic type promotion.
+        // 6A.3: single same-shape contiguous ops stay on the eager fast path.
+        // 6C.1: when a fusable chain can form (size heuristic / deferred LHS),
+        // seed or extend a pointwise fusion recipe with a tensor-binary stage so
+        // mul+add and mul→reduce collapse to one fused launch.
         template <typename Op>
         Tensor binary_op_with_promotion(const Tensor& other, Op op,
                                         bool true_division = false) const {
@@ -871,6 +888,88 @@ namespace lfs::core {
             }
             LFS_ASSERT_MSG(result_dtype != DataType::Bool,
                            "arithmetic on two Bool tensors is unsupported; use a logical operation");
+
+            const auto fusion_kind = tensor_binary_fusion_kind<Op>();
+            const bool same_shape_contig_f32 =
+                result_dtype == DataType::Float32 &&
+                dtype_ == DataType::Float32 && other.dtype() == DataType::Float32 &&
+                shape_ == other.shape() &&
+                is_contiguous() && other.is_contiguous() &&
+                device_ == other.device() &&
+                numel() > 0;
+
+            // 6C.1 binary fusion: seed/extend deferred chain for large same-shape
+            // float32 binaries (or whenever LHS is already a deferred fusion node).
+            // Single non-deferred ops below the size threshold keep the 6A.3 path.
+            //
+            // Important: use the raw byte threshold here, NOT
+            // lazy_size_heuristic_should_defer(). That helper treats the test
+            // override "size heuristic off" as "always defer" so small unaries
+            // still form chains in IR tests — applying it to binaries would
+            // regress 6A.3 (tiny a.add(b) would become deferred).
+            const bool lhs_deferred = is_deferred();
+            const size_t nbytes = numel() * sizeof(float);
+            const bool size_wants_defer =
+                nbytes >= internal::lazy_executor_size_heuristic_threshold();
+            if (fusion_kind.has_value() &&
+                same_shape_contig_f32 &&
+                internal::lazy_executor_pointwise_fusion_enabled() &&
+                (lhs_deferred || size_wants_defer)) {
+                Tensor lhs_source = *this;
+                Tensor rhs_operand = other;
+                // Materializer fallback: direct vectorized launch (no re-entry into fusion).
+                const Device dev = device_;
+                const TensorShape shp = shape_;
+                // Stamp stream hint like TensorExpr::operator Tensor so deferred
+                // large binaries keep cross-stream ordering (D4 / stream tests).
+                const cudaStream_t stream_hint =
+                    (dev == Device::CUDA) ? getCurrentCUDAStream() : nullptr;
+                Tensor result = make_deferred_expr_tensor(
+                    shp, dev, DataType::Float32,
+                    [lhs_source, rhs_operand, op, shp, dev, stream_hint]() mutable {
+                        lhs_source.materialize_if_deferred();
+                        rhs_operand.materialize_if_deferred();
+                        std::optional<CUDAStreamGuard> execution_guard;
+                        if (dev == Device::CUDA) {
+                            execution_guard.emplace(prepare_inputs_for_stream(
+                                {&lhs_source, &rhs_operand}, stream_hint));
+                        }
+                        Tensor out = Tensor::empty(shp, dev, DataType::Float32);
+                        if (dev == Device::CUDA) {
+                            pin_operands({&lhs_source, &rhs_operand});
+                            tensor_ops::launch_float_binary_with_numeric_policy(
+                                lhs_source.ptr<float>(), rhs_operand.ptr<float>(),
+                                out.ptr<float>(), out.numel(), op, out.stream());
+                            tensor_ops::record_tensor_kernel_launch(1);
+                        } else {
+                            apply_binary_cpu(lhs_source.ptr<float>(), rhs_operand.ptr<float>(),
+                                             out.ptr<float>(), out.numel(), op);
+                        }
+                        return out;
+                    },
+                    {lazy_expr_id(), other.lazy_expr_id()});
+                if (dev == Device::CUDA) {
+                    result.set_stream(stream_hint);
+                }
+
+                if (result.is_valid() && result.is_deferred() && result.state_ &&
+                    result.state_->lazy) {
+                    const uint64_t result_node_id = result.lazy_expr_id();
+                    if (result_node_id != 0) {
+                        internal::LazyPointwiseOp fusion_op;
+                        fusion_op.kind = *fusion_kind;
+                        fusion_op.scalar = 0.0f;
+                        fusion_op.rhs = internal::lazy_executor_snapshot_operand(rhs_operand);
+                        internal::lazy_executor_register_pointwise_fusion_op(
+                            result_node_id,
+                            lazy_expr_id(),
+                            lhs_source,
+                            std::move(fusion_op),
+                            result.state_->lazy);
+                    }
+                }
+                return result;
+            }
 
             // 6A.3 fast path: same shape/device/dtype, contiguous, non-deferred —
             // skip BinaryExpr + TensorLeaf heap cells and launch directly.
@@ -899,6 +998,7 @@ namespace lfs::core {
                             tensor_ops::launch_float_binary_with_numeric_policy(
                                 ptr<float>(), other.ptr<float>(), result.ptr<float>(),
                                 result.numel(), op, result.stream());
+                            tensor_ops::record_tensor_kernel_launch(1);
                             break;
                         case DataType::Float16:
                             tensor_ops::launch_binary_op_generic(
@@ -968,7 +1068,7 @@ namespace lfs::core {
             // Compute broadcast shape
             auto broadcast_shape = lhs.broadcast_shape(rhs.shape());
 
-            // Evaluate eagerly — binary ops can't be fused by the pointwise system
+            // Evaluate eagerly for non-fusable / broadcast / promotion cases
             auto expr = BinaryExpr<TensorLeaf, TensorLeaf, Op>(
                 TensorLeaf(lhs), TensorLeaf(rhs), op,
                 broadcast_shape, lhs.device(), result_dtype);

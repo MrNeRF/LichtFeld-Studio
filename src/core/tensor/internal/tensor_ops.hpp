@@ -566,14 +566,21 @@ namespace lfs::core::tensor_ops {
     static constexpr int FUSED_POINTWISE_MAX_OPS = 16;
 
     struct FusedPointwiseOp {
-        uint8_t kind;
-        float scalar;
+        uint8_t kind = 0;
+        float scalar = 0.0f;
+        // Device pointer for tensor-binary stages (kinds 4-7). Null for scalar/unary.
+        const float* rhs = nullptr;
     };
 
     struct FusedPointwiseOpChain {
         FusedPointwiseOp ops[FUSED_POINTWISE_MAX_OPS];
-        int num_ops;
+        int num_ops = 0;
     };
+
+    // Optional test/diagnostic counter of tensor-lib kernel launches (fused + binary).
+    LFS_CORE_API void reset_tensor_kernel_launch_count() noexcept;
+    LFS_CORE_API uint64_t tensor_kernel_launch_count() noexcept;
+    LFS_CORE_API void record_tensor_kernel_launch(uint64_t n = 1) noexcept;
 
     LFS_CORE_API void launch_fused_pointwise_chain(const float* input, float* output,
                                                    size_t n, const FusedPointwiseOpChain& chain,

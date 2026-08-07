@@ -24,7 +24,12 @@ namespace lfs::core {
             SubScalar = 1,
             MulScalar = 2,
             DivScalar = 3,
-            // 4-9 reserved for future scalar ops
+            // 4-7: same-shape tensor binary stages (second operand via LazyPointwiseOp::rhs)
+            AddTensor = 4,
+            SubTensor = 5,
+            MulTensor = 6,
+            DivTensor = 7,
+            // 8-9 reserved
             Abs = 10,
             Neg = 11,
             Exp = 12,
@@ -45,6 +50,9 @@ namespace lfs::core {
         struct LazyPointwiseOp {
             LazyPointwiseOpKind kind = LazyPointwiseOpKind::AddScalar;
             float scalar = 0.0f;
+            // Optional second operand for AddTensor/SubTensor/MulTensor/DivTensor.
+            // Held by shared_ptr so fusion recipes keep storage alive until launch.
+            std::shared_ptr<Tensor> rhs;
         };
 
         struct LazyPlanNodeDebug {
@@ -96,6 +104,9 @@ namespace lfs::core {
                                                                      const Tensor& source_tensor,
                                                                      LazyPointwiseOp op,
                                                                      std::weak_ptr<LazyExprState> owner);
+
+        // True when pointwise fusion is active (default on; overridable in tests).
+        LFS_CORE_API bool lazy_executor_pointwise_fusion_enabled();
         LFS_CORE_API void lazy_executor_unregister_deferred_materializer(uint64_t node_id);
         LFS_CORE_API size_t lazy_executor_registered_node_count_for_testing();
         LFS_CORE_API void lazy_executor_clear_registry_for_testing();
