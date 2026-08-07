@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "internal/cub_workspace.hpp"
@@ -3306,15 +3307,17 @@ namespace lfs::core::tensor_ops {
                 initialized = false;
 
                 if (device_result) {
-                    // Pool free (slab return); stream nullptr matches allocate home.
-                    CudaMemoryPool::instance().deallocate(device_result, nullptr);
+                    // ISS-020: pool-liveness-aware free (TLS dtor after pool teardown).
+                    safe_cuda_pool_deallocate(device_result, nullptr);
                 }
                 if (host_result) {
-                    const cudaError_t host_status = cudaFreeHost(host_result);
-                    if (host_status != cudaSuccess) {
-                        ensure_cuda_success(
-                            host_status, "cudaFreeHost(NaN-check pinned buffer)", {},
-                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+                    // Skip host free after ordered process teardown — CUDA/pinned
+                    // may already be unusable and a second free is a double-free.
+                    if (!lfs::core::gpu_process_teardown_started()) {
+                        const cudaError_t host_status = cudaFreeHost(host_result);
+                        if (host_status != cudaSuccess) {
+                            (void)cudaGetLastError();
+                        }
                     }
                 }
                 return !initialized && d_result == nullptr && h_result_pinned == nullptr;
@@ -3333,6 +3336,14 @@ namespace lfs::core::tensor_ops {
     }
 
     namespace {
+        // ISS-020: main-thread nan-check TLS buffers freed before pool shutdown.
+        const bool g_nan_check_tls_release_hook_registered = [] {
+            register_gpu_pre_shutdown_hook([]() noexcept {
+                (void)release_nan_check_thread_buffers();
+            });
+            return true;
+        }();
+
         bool has_special_value_gpu(const float* data, size_t n, cudaStream_t stream, bool check_nan) {
             if (n == 0)
                 return false;

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
@@ -384,8 +385,12 @@ namespace lfs::core {
             if (result.device_ == Device::CUDA) {
                 cudaStream_t s = result.stream();
                 void* ptr = allocate_cuda_storage(bytes, s);
+                // ISS-020: do not call CudaMemoryPool::instance() from the
+                // deleter — after ordered process teardown the Meyers singleton
+                // may already be destroyed. safe_cuda_pool_deallocate no-ops
+                // when the process-wide live pointer has been cleared.
                 result.adopt_storage(ptr, [s](void* p) {
-                    CudaMemoryPool::instance().deallocate(p, s);
+                    safe_cuda_pool_deallocate(p, s);
                 });
                 result.data_ = result.data_owner_.get();
                 result.compute_alignment(); // Compute alignment flags once
@@ -408,8 +413,13 @@ namespace lfs::core {
                             bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                     }
                     cudaStream_t s = result.stream();
+                    // ISS-020: after PinnedMemoryAllocator::shutdown() the
+                    // allocator still exists but re-freeing emptied cache
+                    // blocks from late statics is unsafe. Skip when process
+                    // teardown has started (hooks already drained long-lived
+                    // holders; OS reclaims the rest).
                     result.adopt_storage(ptr, [s](void* p) {
-                        if (p)
+                        if (p && !gpu_process_teardown_started())
                             PinnedMemoryAllocator::instance().deallocate(p, s);
                     });
                 } else {
@@ -601,8 +611,9 @@ namespace lfs::core {
             if (result.device_ == Device::CUDA) {
                 cudaStream_t s = result.stream();
                 void* ptr = allocate_cuda_storage(bytes, s);
+                // ISS-020: pool-liveness-aware deleter (see empty/ path above).
                 result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
-                    CudaMemoryPool::instance().deallocate(p, s);
+                    safe_cuda_pool_deallocate(p, s);
                 });
                 result.data_ = result.data_owner_.get();
 
@@ -637,8 +648,9 @@ namespace lfs::core {
                         bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                 }
                 cudaStream_t s = result.stream();
+                // ISS-020: pool/pinned teardown-safe free (see empty path above).
                 result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
-                    if (p)
+                    if (p && !gpu_process_teardown_started())
                         PinnedMemoryAllocator::instance().deallocate(p, s);
                 });
                 result.data_ = result.data_owner_.get();

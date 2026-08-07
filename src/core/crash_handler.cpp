@@ -12,6 +12,7 @@
 #include "core/tensor.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -34,6 +35,57 @@
 
 namespace lfs::core {
 
+    namespace {
+        constexpr int kMaxGpuPreShutdownHooks = 32;
+        std::array<GpuPreShutdownHook, kMaxGpuPreShutdownHooks> g_gpu_pre_shutdown_hooks{};
+        std::atomic<int> g_gpu_pre_shutdown_hook_count{0};
+        std::atomic<bool> g_gpu_pre_shutdown_hooks_ran{false};
+        std::atomic<bool> g_gpu_process_teardown_started{false};
+        std::atomic<bool> g_gpu_pre_shutdown_overflow_logged{false};
+
+        void run_gpu_pre_shutdown_hooks_once() noexcept {
+            bool expected = false;
+            if (!g_gpu_pre_shutdown_hooks_ran.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel)) {
+                return;
+            }
+            const int n = g_gpu_pre_shutdown_hook_count.load(std::memory_order_acquire);
+            for (int i = 0; i < n && i < kMaxGpuPreShutdownHooks; ++i) {
+                if (GpuPreShutdownHook hook = g_gpu_pre_shutdown_hooks[static_cast<size_t>(i)]) {
+                    try {
+                        hook();
+                    } catch (...) {
+                        // LFS-CENSUS-OK(empty-catch): hooks must not escape;
+                        // continue remaining holders so pool shutdown still runs.
+                    }
+                }
+            }
+        }
+    } // namespace
+
+    void register_gpu_pre_shutdown_hook(const GpuPreShutdownHook hook) noexcept {
+        if (!hook) {
+            return;
+        }
+        const int index = g_gpu_pre_shutdown_hook_count.fetch_add(1, std::memory_order_acq_rel);
+        if (index < 0 || index >= kMaxGpuPreShutdownHooks) {
+            if (!g_gpu_pre_shutdown_overflow_logged.exchange(true, std::memory_order_relaxed)) {
+                try {
+                    LOG_ERROR("register_gpu_pre_shutdown_hook: capacity {} exceeded; "
+                              "hook dropped (ISS-020 static/TLS release incomplete)",
+                              kMaxGpuPreShutdownHooks);
+                } catch (...) {
+                }
+            }
+            return;
+        }
+        g_gpu_pre_shutdown_hooks[static_cast<size_t>(index)] = hook;
+    }
+
+    bool gpu_process_teardown_started() noexcept {
+        return g_gpu_process_teardown_started.load(std::memory_order_acquire);
+    }
+
     void flush_diagnostics_noexcept() noexcept {
         try {
             Logger::get().flush();
@@ -43,6 +95,15 @@ namespace lfs::core {
 
     void teardown_gpu_before_exit() noexcept {
         try {
+            // ISS-020 step 0: release every registered long-lived CUDA holder
+            // (TLS FastGS sort workspaces, rasterizer image caches, PPISP shared
+            // statics, mirror mult cache, nan-check scratch, …) while the pool
+            // and CUDA context are still usable. After this returns, static/TLS
+            // dtors must find empty holders — otherwise they free after the
+            // Meyers-singleton pool is destroyed → SIGSEGV (exit 139).
+            run_gpu_pre_shutdown_hooks_once();
+            g_gpu_process_teardown_started.store(true, std::memory_order_release);
+
             // Phase 6C §9 Ruling 2: drain dedicated DeviceFaultRecord slots
             // (cudaMalloc-owned, never pool memory) BEFORE the tensor memory
             // pool shuts down. device_fault_registry_teardown is no-throw and
@@ -156,7 +217,7 @@ namespace lfs::core {
                 ::backtrace_symbols_fd(frames.data(), count, g_crash_log_fd);
             }
 
-            struct sigaction action {};
+            struct sigaction action{};
             action.sa_handler = SIG_DFL;
             sigemptyset(&action.sa_mask);
             action.sa_flags = 0;

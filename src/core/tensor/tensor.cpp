@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/checked_arithmetic.hpp"
+#include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -802,7 +803,26 @@ namespace lfs::core {
     }
 
     namespace {
+        // Published while the Meyers-singleton pool is live. Cleared by
+        // Tensor::shutdown_memory_pool() so late Tensor dtors never re-enter
+        // a destroyed function-local static (ISS-020).
         std::atomic<CudaMemoryPool*> g_cuda_memory_pool_instance{nullptr};
+    } // namespace
+
+    CudaMemoryPool* try_live_cuda_memory_pool() noexcept {
+        return g_cuda_memory_pool_instance.load(std::memory_order_acquire);
+    }
+
+    void safe_cuda_pool_deallocate(void* ptr, cudaStream_t stream) noexcept {
+        if (!ptr) {
+            return;
+        }
+        if (CudaMemoryPool* pool = try_live_cuda_memory_pool()) {
+            pool->deallocate(ptr, stream);
+        }
+        // else: pool already shut down / not yet constructed — abandon storage
+        // at process exit. Explicit pre-shutdown hooks (ISS-020) should have
+        // released long-lived holders before this path is needed.
     }
 
     CudaMemoryPool& CudaMemoryPool::instance() {
@@ -923,7 +943,13 @@ namespace lfs::core {
         // CPU-only commands must not initialize CUDA merely to tear it down.
         // A non-null pointer proves that an earlier CUDA allocation path
         // constructed the pool and all of its subordinate allocators.
-        if (CudaMemoryPool* pool = g_cuda_memory_pool_instance.load(std::memory_order_acquire)) {
+        //
+        // ISS-020: exchange to nullptr *before* shutdown so concurrent /
+        // subsequent Tensor deleters take the safe_cuda_pool_deallocate no-op
+        // path instead of calling into a pool mid-teardown or after the
+        // function-local static is destroyed.
+        if (CudaMemoryPool* pool =
+                g_cuda_memory_pool_instance.exchange(nullptr, std::memory_order_acq_rel)) {
             pool->shutdown();
         }
     }
@@ -3472,11 +3498,14 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             record_storage_allocation(StorageAccountingKind::CudaDirect, new_bytes);
             new_owner = std::shared_ptr<void>(new_data, [bytes = new_bytes](void* ptr) {
-                const cudaError_t status = cudaFree(ptr);
-                if (status != cudaSuccess) {
-                    ensure_cuda_success(
-                        status, "cudaFree(tensor reserve storage)", {},
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+                // ISS-020: skip cudaFree after ordered process teardown.
+                if (ptr && !gpu_process_teardown_started()) {
+                    const cudaError_t status = cudaFree(ptr);
+                    if (status != cudaSuccess) {
+                        ensure_cuda_success(
+                            status, "cudaFree(tensor reserve storage)", {},
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+                    }
                 }
                 Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
             });
@@ -3599,15 +3628,23 @@ namespace lfs::core {
         t.data_ = data_ptr;
         record_storage_allocation(StorageAccountingKind::CudaDirect, total_bytes);
         t.data_owner_ = std::shared_ptr<void>(data_ptr, [bytes = total_bytes](void* ptr) {
-            if (ptr) {
+            if (!ptr) {
+                return;
+            }
+            // ISS-020: densify N-scratch (and other zeros_direct holders) may be
+            // destroyed after ordered GPU teardown. Skipping cudaFree when the
+            // process has already begun teardown avoids cudaErrorContextIsDestroyed
+            // / SIGSEGV on a dead primary context. Pre-shutdown hooks should
+            // release long-lived holders while CUDA is still healthy.
+            if (!gpu_process_teardown_started()) {
                 const cudaError_t status = cudaFree(ptr);
                 if (status != cudaSuccess) {
                     ensure_cuda_success(
                         status, "cudaFree(zeros_direct storage)", {},
                         LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
-                Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
             }
+            Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
         });
         t.shape_ = shape;
         t.strides_ = shape.strides();

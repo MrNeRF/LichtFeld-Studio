@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gsplat_rasterizer.hpp"
+#include "core/crash_handler.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
@@ -910,5 +911,16 @@ namespace lfs::training {
                !gsplat_thread_caches.alpha_chw.is_valid() &&
                !gsplat_thread_caches.depth_chw.is_valid();
     }
+
+    namespace {
+        // ISS-020: main-thread TLS gsplat caches released before pool shutdown.
+        const bool g_gsplat_tls_release_hook_registered = [] {
+            lfs::core::register_gpu_pre_shutdown_hook([]() noexcept {
+                (void)release_gsplat_rasterizer_thread_local_caches();
+                (void)gsplat_lfs::release_intersect_thread_local_cache();
+            });
+            return true;
+        }();
+    } // namespace
 
 } // namespace lfs::training

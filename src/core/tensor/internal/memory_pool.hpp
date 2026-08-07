@@ -47,6 +47,18 @@ namespace lfs::core {
         const char* operation = "tensor.allocate");
 
     // Multi-tier CUDA memory pool: slab (≤256KB), bucketed (≤16GB), cudaMallocAsync.
+    class LFS_CORE_API CudaMemoryPool;
+
+    // ISS-020: pool-liveness-aware free for Tensor storage deleters.
+    // Returns the live pool pointer while CudaMemoryPool is constructed and
+    // has not yet published shutdown to the process-wide atomic; nullptr after
+    // Tensor::shutdown_memory_pool() clears that pointer. Prefer
+    // safe_cuda_pool_deallocate in shared_ptr deleters so static/TLS Tensor
+    // destruction after ordered teardown is a no-op instead of re-entering a
+    // destroyed Meyers singleton (SIGSEGV / exit 139).
+    [[nodiscard]] LFS_CORE_API CudaMemoryPool* try_live_cuda_memory_pool() noexcept;
+    LFS_CORE_API void safe_cuda_pool_deallocate(void* ptr, cudaStream_t stream = nullptr) noexcept;
+
     class LFS_CORE_API CudaMemoryPool {
     public:
         static CudaMemoryPool& instance();

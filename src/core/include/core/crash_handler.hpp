@@ -16,9 +16,38 @@ namespace lfs::core {
     // all exceptions; safe to call before the logger has been initialized.
     LFS_CORE_API void flush_diagnostics_noexcept() noexcept;
 
+    // ---------------------------------------------------------------------------
+    // ISS-020 — ordered GPU release hooks (TLS / static CUDA tensor holders)
+    //
+    // Why hooks (not only pool-liveness-aware deleters):
+    //   Static / thread_local Tensors that outlive CudaMemoryPool's function-
+    //   local static call into a destroyed Meyers singleton → SIGSEGV after a
+    //   green suite. Freeing them *before* pool/arena shutdown (while CUDA is
+    //   still healthy) is the primary fix; pool-liveness-aware deleters are the
+    //   belt-and-suspenders so late dtors become no-ops instead of crashes.
+    //
+    // Pattern matches training-thread TLS release (FastGS sort / rasterizer /
+    // nan-check buffers): explicit release, not relying on destruction order.
+    // Register from a TU static initializer; hooks must be noexcept and
+    // idempotent.
+    // ---------------------------------------------------------------------------
+    using GpuPreShutdownHook = void (*)() noexcept;
+
+    // Registers a hook to run once at the start of teardown_gpu_before_exit,
+    // before device_fault / arena / pool / pinned shutdown. Capacity is fixed;
+    // excess registrations are dropped (logged once).
+    LFS_CORE_API void register_gpu_pre_shutdown_hook(GpuPreShutdownHook hook) noexcept;
+
+    // True after pre-shutdown hooks have run and subsystem teardown has begun.
+    // Deleters / cudaFree paths that may run during static/TLS destruction
+    // should no-op when this is set (CUDA context may already be unusable).
+    [[nodiscard]] LFS_CORE_API bool gpu_process_teardown_started() noexcept;
+
     // Explicit, idempotent, ordered GPU teardown while CUDA and diagnostics are
     // still alive, so static destructors at process exit find nothing left to do
     // (the wedge scenario 6f3b93868 defended against). Ordering:
+    //   0. registered GpuPreShutdownHook list — TLS caches, static Tensor
+    //      holders (PPISP shared buffers, mirror mult cache, …)  [ISS-020]
     //   1. device_fault_registry_teardown()  — dedicated cudaMalloc fault slots
     //      (phase-6c §9 Ruling 2; must run before pool shutdown)
     //   2. GlobalArenaManager::instance().shutdown()
@@ -29,8 +58,7 @@ namespace lfs::core {
     // PinnedMemoryAllocator's constructor, neither of which touches CUDA unless
     // a prior allocation path already did. Call this before flush_and_exit, never
     // after: a teardown failure must have a chance to reach the flushed log.
-    // Safe to call multiple times (all four steps are idempotent no-ops on
-    // repeat).
+    // Safe to call multiple times (all steps are idempotent no-ops on repeat).
     LFS_CORE_API void teardown_gpu_before_exit() noexcept;
 
     // Flushes diagnostics, then terminates the process without running

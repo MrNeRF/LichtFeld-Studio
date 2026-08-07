@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "fast_rasterizer.hpp"
+#include "core/crash_handler.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
@@ -816,4 +817,20 @@ namespace lfs::training {
     void release_fastgs_sort_workspace_buffers() noexcept {
         fast_lfs::rasterization::release_sort_workspace_buffers();
     }
+
+    namespace {
+        // ISS-020: training-thread release is not enough for the test binary /
+        // process exit path — main-thread TLS FastGS sort + rasterizer caches
+        // survive until after CudaMemoryPool shutdown. Register the same
+        // release sequence as a process pre-shutdown hook.
+        void release_main_thread_fastgs_cuda_caches() noexcept {
+            (void)release_fast_rasterizer_thread_local_caches();
+            release_fastgs_sort_workspace_buffers();
+        }
+
+        const bool g_fastgs_tls_release_hook_registered = [] {
+            lfs::core::register_gpu_pre_shutdown_hook(release_main_thread_fastgs_cuda_caches);
+            return true;
+        }();
+    } // namespace
 } // namespace lfs::training

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/splat_data_mirror.hpp"
+#include "core/crash_handler.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
@@ -47,6 +48,22 @@ namespace lfs::core {
         std::mutex g_cache_mutex;
         MirrorCache g_cache;
 
+        void clear_mirror_cache() noexcept {
+            // ISS-020: g_cache is a non-local static constructed before the
+            // CudaMemoryPool singleton. Free CUDA mult tensors while the pool
+            // is still alive so static destruction finds empty holders.
+            std::lock_guard lock(g_cache_mutex);
+            for (int a = 0; a < 3; ++a) {
+                g_cache.pos_mult[a] = {};
+                g_cache.quat_mult[a] = {};
+                for (int d = 0; d < 3; ++d) {
+                    g_cache.sh_mult[a][d] = {};
+                }
+            }
+            g_cache.valid = false;
+            g_cache.device = Device::CPU;
+        }
+
         void ensure_cache(const Device device) {
             std::lock_guard lock(g_cache_mutex);
 
@@ -71,6 +88,11 @@ namespace lfs::core {
             g_cache.device = device;
             g_cache.valid = true;
         }
+
+        const bool g_mirror_cache_release_hook_registered = [] {
+            register_gpu_pre_shutdown_hook([]() noexcept { clear_mirror_cache(); });
+            return true;
+        }();
 
     } // namespace
 

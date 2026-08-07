@@ -4,6 +4,7 @@
 
 #include "buffer_utils.h"
 #include "core/alloc_counter.hpp"
+#include "core/crash_handler.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "forward.h"
 #include "helper_math.h"
@@ -74,25 +75,32 @@ namespace {
             if (!ptr_) {
                 return;
             }
-            lfs::diagnostics::VramProfiler::instance().recordDeallocation(ptr_);
-#if CUDART_VERSION >= 11020
-            // Free on the stream that used the buffer — a nullptr free would be
-            // unordered with the sort kernels once they run on a real stream.
-            const cudaError_t status = cudaFreeAsync(ptr_, stream_);
-#else
-            const cudaError_t status = cudaFree(ptr_);
-#endif
-            if (status != cudaSuccess) {
-                lfs::core::ensure_cuda_success(
-                    status, "FastGS sort-buffer free",
-                    lfs::core::detail::format_cuda_safe(
-                        "ptr={}, bytes={}, label={}", ptr_, size_,
-                        label_ ? label_ : "rasterizer.fastgs.scratch"),
-                    LFS_SOURCE_SITE_CURRENT(),
-                    lfs::core::CudaFailureDisposition::LogOnlyNoLatch);
-            }
+            // Drop ownership first so re-entrant / double reset is a no-op.
+            void* const p = ptr_;
             ptr_ = nullptr;
             size_ = 0;
+
+            // ISS-020: after ordered process teardown the primary context may
+            // already be unusable. Late TLS dtors must not touch the driver.
+            if (lfs::core::gpu_process_teardown_started()) {
+                return;
+            }
+
+            try {
+                lfs::diagnostics::VramProfiler::instance().recordDeallocation(p);
+            } catch (...) {
+            }
+
+            // Device-wide sync + cudaFree is valid for cudaMallocAsync storage
+            // and avoids cuMemFreeAsync SIGSEGVs observed at process exit when
+            // the buffer's home stream is already half-dead. Hot-path growth
+            // still uses cudaMallocAsync; only the release path is conservative.
+            // Never call ensure_cuda_success here (logging re-enters CUDA).
+            (void)cudaDeviceSynchronize();
+            const cudaError_t st = cudaFree(p);
+            if (st != cudaSuccess) {
+                (void)cudaGetLastError();
+            }
         }
 
         template <typename T>
@@ -182,6 +190,13 @@ namespace {
         }
 
         ~FastGSSortBufferCache() {
+            // ISS-020: pre-shutdown hook already released device + host state.
+            // After gpu_process_teardown_started(), never re-enter CUDA or free.
+            if (lfs::core::gpu_process_teardown_started()) {
+                n_instances_ready_event = nullptr;
+                h_n_instances_pinned = nullptr;
+                return;
+            }
             if (n_instances_ready_event) {
                 (void)cudaEventDestroy(n_instances_ready_event);
                 n_instances_ready_event = nullptr;
@@ -257,6 +272,10 @@ void fast_lfs::rasterization::release_sorted_primitive_indices(
 
 void fast_lfs::rasterization::release_sort_workspace_buffers() noexcept {
     auto& cache = sort_buffer_cache();
+    // Device high-water only. Host pinned slot + n_instances event stay alive
+    // for the TLS object's lifetime so mid-process release (training-thread
+    // shutdown, VRAM tests) does not break a later FastGS forward on the same
+    // thread. The TLS dtor frees host/event (or no-ops after process teardown).
     cache.keys_current.reset();
     cache.keys_alternate.reset();
     cache.primitive_indices_current.reset();

@@ -860,3 +860,47 @@ Campaign unit tests: **19/19 PASS**.
 
 ### Commits
 **Commit:** `b416b603`
+
+---
+
+## ISS-020 / WO-X2 — post-suite teardown SIGSEGV (static destruction order)
+
+- **Branch:** `lfs-elite` (never checkout)
+- **FAIL evidence:**  
+  `lichtfeld_tests --gtest_filter='PPISPControllerTest.*:DensifyEvents4x.*:FastGSGradientTest.Numerical_Means:CheckpointStrategies/*'`  
+  → 21 PASSED, then after `Shutting down CudaMemoryPool...` **exit 139** (SIGSEGV in  
+  `StreamOrderedDeviceBuffer::reset` / static Tensor free after pool Meyers singleton destroyed).
+- **PASS evidence:** same filter **exit 0**; clean full suite (documented reds excluded)  
+  **3277 PASS, process exit 1 only for suite-order VramProfilerMetricsTest.TopLiveSortedByLiveBytes**  
+  (no 139/134); no double-free after pool shutdown.
+- **Root cause:** class-static PPISP shared buffers + main-thread TLS FastGS sort/rasterizer  
+  caches + mirror mult cache free after `CudaMemoryPool` function-local static is destroyed;  
+  training-thread TLS release hooks never ran on the test process exit path.
+- **Fix:**
+  1. `register_gpu_pre_shutdown_hook` + step 0 of `teardown_gpu_before_exit` (hooks before  
+     device_fault / arena / pool / pinned) — same explicit-release pattern as training-thread TLS.
+  2. Hooks: PPISP `release_shared_buffers`, mirror cache clear, FastGS sort + fast/gsplat  
+     rasterizer TLS, nan-check TLS.
+  3. Belt-and-suspenders: `safe_cuda_pool_deallocate` / clear live-pool atomic on shutdown;  
+     `gpu_process_teardown_started()` guards cudaFree / sort-buffer free / pinned free.
+  4. `test_main`: `flush_and_exit` after teardown (no C++ static/TLS destruction into dead pool).
+- **Why hooks first (not only liveness-aware deleters):** free while CUDA is healthy so TLS  
+  never calls into a dead context; deleters only prevent residual late-dtor crashes.
+- **WO-X densify N-scratch:** not process-static (strategy member); `release()` added; free  
+  paths hardened (zeros_direct + pool empty).
+- **GT cache:** instance-owned, cleared on loader shutdown — no static holder change.
+
+### Dual-workload gate (unchanged vs target)
+
+| workload | med steady ms/iter | B/splat | allocs/iter |
+|---|---|---|---|
+| bonsai ×3 | **3.159** (~3.15) | **304.3** | **0.11** |
+| bicycle 7k ×3 | **2.745** (~2.75) | **306.8** | **0.10** |
+
+allocs/iter ≤ 0.11 (no regression of WO-X).
+
+### Unit tests
+`GpuTeardownOrderTest.*` 3/3 PASS.
+
+### Commit
+**`4a803a80`** fix(ISS-020): ordered GPU release before pool teardown (exit 139→0)

@@ -125,6 +125,20 @@ namespace lfs::training {
         void ensure_n(size_t n, lfs::core::Device device);
         void ensure_k(size_t k, lfs::core::Device device);
 
+        // Drop all storage. Not process-static (lives on the strategy), but
+        // zeros_direct f32/bool + pool-backed i64 free paths are teardown-safe
+        // (ISS-020). Call when the owning strategy is reset early.
+        void release() noexcept {
+            f32_a = {};
+            f32_b = {};
+            bool_a = {};
+            bool_b = {};
+            i64_a = {};
+            i64_b = {};
+            n_capacity = 0;
+            k_capacity = 0;
+        }
+
         [[nodiscard]] lfs::core::Tensor f32_a_view(size_t n) const;
         [[nodiscard]] lfs::core::Tensor f32_b_view(size_t n) const;
         [[nodiscard]] lfs::core::Tensor bool_a_view(size_t n) const;

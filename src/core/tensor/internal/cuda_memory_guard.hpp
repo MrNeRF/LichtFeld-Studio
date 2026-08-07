@@ -23,7 +23,8 @@ namespace lfs::core {
 
         void free_owned() {
             if (ptr_) {
-                CudaMemoryPool::instance().deallocate(ptr_, stream_);
+                // ISS-020: pool-liveness-aware free.
+                safe_cuda_pool_deallocate(ptr_, stream_);
                 ptr_ = nullptr;
                 size_ = 0;
             }

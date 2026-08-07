@@ -152,10 +152,34 @@
 
 
 ## ISS-020 — post-suite teardown SIGSEGV (static destruction order)
+- **Status:** fixed (WO-X2) — explicit pre-shutdown hooks + pool-liveness-aware deleters.
 - All tests PASS, then exit 139 during process teardown AFTER "Shutting down CudaMemoryPool"
-  logs — a static/long-lived object (prime suspect: WO-X _densify_n_scratch pre-sized
-  tensors, or similar) destroys CUDA tensors after the pool is gone.
-- Repro: lichtfeld_tests --gtest_filter='...CheckpointStrategies...' (suite green, exit 139).
-- Fix class: release such buffers via an explicit shutdown hook ordered BEFORE pool
-  teardown (pattern exists from the slab/TLS release work), or make the deleter
-  pool-liveness-aware.
+  logs — static/long-lived CUDA holders destroy after the pool Meyers singleton is gone.
+- **Repro (was):**
+  `lichtfeld_tests --gtest_filter='PPISPControllerTest.*:DensifyEvents4x.*:FastGSGradientTest.Numerical_Means:CheckpointStrategies/*'`
+  → 21 PASSED, then SIGSEGV (exit 139) after pool/pinned shutdown logs.
+- **Root cause (audit):**
+  1. **PPISPController shared_buf_*** class-static Tensors: default-constructed before
+     main / before CudaMemoryPool; reverse destruction frees pool storage after the
+     function-local pool static is destroyed → UB/SIGSEGV.
+  2. **Main-thread TLS** FastGS sort workspaces (`StreamOrderedDeviceBuffer` /
+     `cudaFreeAsync`) and rasterizer image caches: training-thread release hooks exist
+     but test binary / process exit never ran them before pool teardown →
+     `cudaErrorContextIsDestroyed` / crash on TLS dtor.
+  3. **Mirror mult cache** (`splat_data_mirror.cpp` g_cache): same static-order class
+     when CUDA device multipliers are populated.
+  4. **WO-X DensifyNScratch**: *not* process-static (lives on the strategy); free paths
+     still hardened (zeros_direct + pool empty) for late member destruction.
+  5. GT cache is instance-owned and cleared on loader shutdown — not a process-static
+     holder; no change required beyond pool-liveness deleters.
+- **Fix:**
+  - `register_gpu_pre_shutdown_hook` + step 0 of `teardown_gpu_before_exit` (hooks
+    before device_fault / arena / pool / pinned) — same explicit-release pattern as
+    training-thread TLS release.
+  - Hooks: PPISP shared, mirror cache, FastGS sort + fast/gsplat rasterizer TLS,
+    nan-check TLS.
+  - Belt-and-suspenders: `safe_cuda_pool_deallocate` / clear live-pool atomic on
+    shutdown; `gpu_process_teardown_started()` guards cudaFree / sort-buffer free.
+- **Why hooks first (not only liveness-aware deleters):** free while CUDA is healthy
+  so VRAM is returned and TLS never calls into a dead context; deleters only prevent
+  residual late-dtor crashes.
