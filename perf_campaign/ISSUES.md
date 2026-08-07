@@ -269,3 +269,13 @@ capacity-ensure abort. Tracked as ISS-024.
 - Severity: GUI training still cannot complete past densify on this machine; headless bench OK.
 - Do not re-open ISS-023: capacity-ensure grow path is proven (log line present, no
   capacity-ensure failed).
+
+## ISS-025 — GUI post-grow instance explosion: depth-wave budget + forward raster failure + loss regression
+- **Status:** OPEN — two Fable analysts dispatched (independent lenses), owner reproduces.
+- Repro (owner, 23:15 local): after successful densify grow (post-ISS-023), frame demands
+  72 depth-waves x 4,194,304 instances (~300M) -> VkSplat degraded; then
+  "FastGS forward rasterization failed" (CUDA Internal, async) kills training; loss regresses
+  before death. GUI-only (interop path). ISS-024's ~4GiB instance buffer likely same disease.
+- Analyst A lens: instance pipeline forward (parameter garbage in grown rows -> huge ellipses).
+- Analyst B lens: structural desync after in-place grow (capacity-vs-liveN iteration, stale
+  sizes/strides in packer/preprocess/Vulkan re-import).
