@@ -1,5 +1,5 @@
 Implementation engineer, LichtFeld-Studio. Dir: /home/gauss/projects/lfs-wt-densify (worktree), branch lfs-elite-mem (create it fresh from origin-less local: git switch -c lfs-elite-mem <tip of lfs-elite — run: git rev-parse lfs-elite>; verify with git branch --show-current).
-MANDATORY reads: perf_campaign/RULES.md (./perf_campaign/build.sh ONLY; dual gate), BASELINE.md, PROGRESS.md, plan §6D, docs/analysis/spirulae-comparison/tl-memaxis.md §5.
+MANDATORY reads: perf_campaign/RULES.md (./perf_campaign/build.sh ONLY; dual gate), BASELINE.md, PROGRESS.md, plan §6D, SPEED_VRAM_OPTIMIZATION_PLAN.md §6D.
 
 WORK ORDER — trainer workspace memory (Phase 6D.1-6D.3). Do NOT touch adam_optimizer/kernels_backward/shN paths (another worker owns them).
 

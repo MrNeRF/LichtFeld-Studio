@@ -2,7 +2,7 @@
 
 ## Task 0.1 — Per-iteration allocation counter
 
-- **Branch:** `perf/spirulae-parity`
+- **Branch:** `lfs-elite`
 - **API:** `lfs::core::alloc_counter::{snapshot(), delta_since(s), total(), record()}`
   in `src/core/include/core/alloc_counter.hpp` (impl in `alloc_counter.cpp`).
 - **Instrumented sites (real driver alloc success only):**
@@ -1352,3 +1352,48 @@ Post-fix:
 
 ### Status
 **ISS-023 CLOSED** (capacity-ensure densify abort). Residual scratch OOM tracked separately.
+
+
+
+---
+
+## Source/docs hygiene — neutral Canny constants + drop offline comparison corpus (2026-08-07)
+
+### Context
+- `origin/master` still at `43fdd3ff` (no new upstream commits).
+- Published mirror `origin/lfs-elite` carries owner commit `9b1ebb42` ("repair identifier scrub fallout") fixing damage from the publish-time sed rewrite: broken identifiers and a UI stub docstring.
+- Owner directive: local branch must no longer need publish-time content rewriting for those names.
+
+### Code (behavior-neutral cleanup)
+- `image_kernels.cu`: Canny filter constants renamed to `CANNY_GAUSSIAN_BLUR_5x5` / `CANNY_SOBEL_3x3`.
+- Attribution comment replaced with the owner's neutral one-liner style from `9b1ebb42` (keep Apache-2.0 Canny note; drop project name + URL).
+- UI stub docstring ported verbatim from `9b1ebb42`: `show_input_settings` → "No-op stub; open input settings via lfs.input_settings panel".
+- Comment-only scrubs: `vram_profiler.hpp`, `vram_ledger.hpp`, `forward.cu` slot comment, `test_training_state_ledger.cpp` (numbers kept), `joint_adam_codec.hpp` / `sh_value_codec.hpp` briefs.
+
+### Docs
+- Removed offline comparison corpus under `docs/analysis/` (directory deleted).
+- Neutral wording in `SPEED_VRAM_OPTIMIZATION_PLAN.md`, `perf_campaign/*.md`, work orders (numbers retained; compare against "the baseline").
+
+### Tooling
+- `push-clean.sh`: removed sed rewrites that rewrote identifiers at publish time (fallout source of `9b1ebb42`); removed removal entries for analysis dirs that no longer exist. Keeps stripping of `perf_campaign` / plan docs / HANDOFF and the Co-Authored-By message filter.
+
+### Acceptance
+- Tree-wide case-insensitive grep for the legacy project name token and the publish-time rewrite token family returns **empty**.
+
+### Gate
+- Build: `./perf_campaign/build.sh build` + `./perf_campaign/build.sh build/tests` (slot-gated; no unbounded rebuild).
+- ImageKernels / Canny: `ImageKernelsTest.*` **3/3 PASS**.
+- Full suite: **3408 PASS / 42 SKIP / 14 FAIL** (same 14 pre-existing reds as ISS-023; exit summary matched prior delta).
+- Bonsai single-run: `20260807T204227Z` → **steady 2.617 ms/iter**, 307.4 B/splat, loss 0.05241 (within ~2.60–2.62).
+
+### NOTE for next publish
+The next `push-clean.sh` force-push **supersedes mirror commit `9b1ebb42`**. Its semantics (neutral Canny comment style, UI stub docstring, compile-clean constants) are preserved on this branch under the neutral names above — no further content-level rewrite is required at publish time.
+
+### Commits
+- `4d29a0e2` — refactor: neutral Canny filter constants and simplify related comments
+- docs: remove offline comparison corpus and neutralise campaign wording
+- chore: simplify push-clean publish strip script
+  (see `git log -3 --oneline` on `lfs-elite` for the docs/tool tip SHAs)
+
+### Status
+**DONE.**

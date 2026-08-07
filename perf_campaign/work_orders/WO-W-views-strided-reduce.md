@@ -1,5 +1,5 @@
 Implementation engineer, LichtFeld-Studio. Dir: /home/gauss/projects/lfs-fleet/wt-L (worktree — reuse; create branch: git switch -c lfs-elite-fW $(git rev-parse lfs-elite); verify).
-Reads: perf_campaign/RULES.md (build.sh only, dual gate), TENSOR_LIB_FINDINGS.md (Theme A — THE hazard for this order), docs/analysis/spirulae-comparison/tl-memaxis.md §4/§6, tl-kernels.md reduce sections.
+Reads: perf_campaign/RULES.md (build.sh only, dual gate), TENSOR_LIB_FINDINGS.md (Theme A — THE hazard for this order), SPEED_VRAM_OPTIMIZATION_PLAN.md §4/§6, tl-kernels.md reduce sections.
 
 WORK ORDER — two structural tensor-lib memory/speed items, each behind its own gate:
 

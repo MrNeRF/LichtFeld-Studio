@@ -1,5 +1,5 @@
 Implementation engineer, LichtFeld-Studio. Dir: /home/gauss/projects/lfs-wt-gui (worktree), branch lfs-elite-tkernels (create fresh: git switch -c lfs-elite-tkernels $(git rev-parse lfs-elite); verify).
-MANDATORY reads: perf_campaign/RULES.md (./perf_campaign/build.sh ONLY; dual gate), BASELINE.md, PROGRESS.md, plan §6C, docs/analysis/spirulae-comparison/tl-kernels.md.
+MANDATORY reads: perf_campaign/RULES.md (./perf_campaign/build.sh ONLY; dual gate), BASELINE.md, PROGRESS.md, plan §6C, SPEED_VRAM_OPTIMIZATION_PLAN.md
 
 WORK ORDER — tensor-lib kernel upgrades (src/core/tensor only; do NOT touch src/training):
 

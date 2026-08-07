@@ -10,8 +10,8 @@ Atomics are already right (register-accum, ~11/contributing splat); stored final
 is correct — keep.
 - **BWD-A (P0, EXACT math, ~15 lines)**: block-reduce max(last_contributor) after :504-519;
   clamp walk to T_eff. Bit-identical grads. Expect −25-50% in saturated scenes. => WO-BWD-A.
-- BWD-B (P1): in-block survivor compaction over [0,T_eff) (spirulae surv[] pattern).
-- BWD-C (P1): 8x8 micro-tile + __syncwarp diagonal (spirulae port; grid x4, batch 32).
+- BWD-B (P1): in-block survivor compaction over [0,T_eff) (the baseline surv[] pattern).
+- BWD-C (P1): 8x8 micro-tile + __syncwarp diagonal (the baseline port; grid x4, batch 32).
 - BWD-D (P1 alt): pixel-centric lockstep rewrite (gsplat-style), warp-reduced grads, 1 atomic/warp.
   Prototype C vs D behind flags, ship ONE. Target: bwd ~2-2.5x fwd (~900-1000us bonsai-late).
 - BWD-E (P2): __expf (bwd only), launch_bounds sweep, batch thresholds, conic AoS float4.

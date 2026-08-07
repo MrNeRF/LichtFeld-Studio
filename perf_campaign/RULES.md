@@ -33,7 +33,7 @@ flock /tmp/lfs-build.lock cmake --build <dir> -j 8
 Configure with `-DLFS_CUDA_COMPILER_CACHE=ccache` (sccache races nvcc fatbinary).
 Bench GPU timing stays on `flock /tmp/lfs-bench.lock` (see dual-workload gate below).
 
-NOTE: the campaign branch was renamed from perf/spirulae-parity to **lfs-elite**. If any
+NOTE: the campaign branch was renamed to **lfs-elite**. If any
 work order references the old name, it means this branch — you are already on it. Never
 run `git checkout`; just verify with `git branch --show-current` (expect: lfs-elite).
 
