@@ -1617,3 +1617,54 @@ Trim still lowers the between-densify floor; peak needs the resident-SH work bel
 Full suite: 3419 PASS / same 14 pre-existing FAIL (incl. 3 new PinnedStreamTeardownTest green).
 Headless bench: bonsai 2.627 ms/iter / 307.4 B/splat / dl_wait 0.004 (band 2.60-2.66 held).
 GUI: exit 0, no FAILURE/degraded lines, scratch 166 MiB committed.
+
+## WO-VIEWER-SH-F16 — IEEE f16 exportable SH (2026-08-08)
+
+Owner: "GUI is ~1 GB over headless at 5M gaussians" — exportable-block fp32 SH
+(float4-swizzle) was ~192 B/splat deg3 ≈ 915 MiB @ 5M.
+
+### TDD (fail first → pass)
+- `VksplatInputPackerTest.RawDeviceLayoutHalvesShNBytesForIeeeF16`
+  - Expected: `shN_bytes == sh_swizzled_f16_byte_count` (half of fp32), `shN_f16=true`,
+    5M capacity → **96.0 B/splat** SH.
+  - PASS after packer + `shN_ieee_f16()` detection.
+- ISS-025 `RebindGrowRebindPreservesAllRegionPatterns` updated for f16 shN stamps.
+
+### Implementation (tier 1 landed)
+- **Exportable ShN**: IEEE f16 float4-swizzle (same topology as fp32, 2 B/elem).
+- **Viewer**: `LFS_SHN_F16` projection shaders (uint2 half slots → f16tof32); no need for
+  `storageBuffer16BitAccess` (uint packing, same as LOD sh0 path).
+- **Training FastGS/Adam**: half load/store when `sh_value_bits==16` without bounds
+  (distinct from pad-dropped q16 which requires bounds).
+- **Densify**: `ensure_shN_fp32` / `commit_shN_after_mutation` expand/requant for exportable.
+- **Headless**: unchanged (q16, no exportable) — dual-workload expected identical by design.
+
+### Viewer SH bytes (deg3 rest)
+| | B/splat SH | @ 5M capacity |
+|---|---:|---:|
+| **Before (fp32)** | **192.0** | **915.5 MiB** |
+| **After (f16)** | **96.0** | **457.8 MiB** |
+| Delta | −96.0 | **−457.8 MiB** |
+
+Full exportable layout @ 5M (other SoA still fp32): ~1183 → ~725 MiB (−458 MiB).
+
+### Tier 2 (q16 zero-copy)
+Timeboxed attempt **deferred**: exportable stays IEEE f16 (shared train+view). Full q16 on
+exportable needs bounds region + shader dequant + densify writeback into VA; larger surface
+than the f16 tier and only ~6 B/splat extra savings vs f16 float4-swizzle.
+
+### Gates
+- Full suite (filtered known-unrelated): **3274 PASS / 6 FAIL** — no new reds
+  (SceneValidity migrate, VramProfiler, TensorReserve overflow, PipelinedLoader ledger,
+  FastGS thread-local VRAM, VramLeak — all listed pre-existing in PROGRESS).
+- Headless smoke bonsai `-i 50`: **PASS** (q16 path; exit 0, 100k splats).
+- Dual-workload bench: **blocked** on `/tmp/lfs-bench.lock` (external ab-baseline bicycle 30k
+  held lock). Headless path not modified; re-run when free expecting ~2.60–2.66 ms/iter.
+- GUI train: not run this session (desktop lock / concurrent agents); f16 binds via
+  `buffers_.shN_f16` when model is exportable-backed.
+
+### Commit
+- `4e9dd1f4` feat(viewer-sh): IEEE f16 float4-swizzle SH in exportable GUI path
+
+### Status
+**TIER 1 DONE.** Tier 2 deferred with design note above.
