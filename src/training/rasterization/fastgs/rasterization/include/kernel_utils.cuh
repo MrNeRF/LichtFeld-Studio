@@ -12,6 +12,8 @@
 #include "rasterization_config.h"
 #include "utils.h"
 
+#include <cuda_fp16.h>
+
 namespace fast_lfs::rasterization::kernels {
 
     // SH swizzle index: swizzled layout is [ceil(N/R), K_F4, R] of float4 where
@@ -54,6 +56,9 @@ namespace fast_lfs::rasterization::kernels {
     // Phase 2.1 q16: when sh_value_bounds != nullptr, `sh_f4` is actually a bitcast of
     // uint16 cell-linear storage (pad-dropped: n_cells = coeffs_rest*3). Decode in registers
     // at the use site — do NOT materialise a float workspace (FIX-2.2 live-range lesson).
+    //
+    // IEEE f16 float4-swizzle (GUI exportable): sh_value_bits==16 with null bounds.
+    // Same slot topology as fp32; each float4 slot is stored as 4×__half (8 bytes).
     __device__ inline void load_shN_coeffs(
         const float4* __restrict__ sh_f4,
         const uint primitive_idx,
@@ -61,7 +66,8 @@ namespace fast_lfs::rasterization::kernels {
         const uint sh_layout_slots,
         float3 (&c)[15],
         const float2* __restrict__ sh_value_bounds = nullptr,
-        const uint sh_value_n_cells = 0u) {
+        const uint sh_value_n_cells = 0u,
+        const uint sh_value_bits = 0u) {
 #pragma unroll
         for (int i = 0; i < 15; ++i)
             c[i] = make_float3(0.0f, 0.0f, 0.0f);
@@ -95,10 +101,55 @@ namespace fast_lfs::rasterization::kernels {
             return;
         }
 
-        // ---- fp32 float4 path ----
         const uint slots_per_primitive = sh_layout_slots;
         if (slots_per_primitive == 0u)
             return;
+
+        // ---- IEEE f16 float4-swizzle (exportable GUI path) ----
+        if (sh_value_bits == 16u) {
+            const __half* sh_h = reinterpret_cast<const __half*>(sh_f4);
+            auto load_half4 = [&](const uint slot) -> float4 {
+                const uint base = shAt(primitive_idx, slot, slots_per_primitive) * 4u;
+                return make_float4(__half2float(sh_h[base + 0]),
+                                   __half2float(sh_h[base + 1]),
+                                   __half2float(sh_h[base + 2]),
+                                   __half2float(sh_h[base + 3]));
+            };
+            const float4 a0 = load_half4(0);
+            const float4 a1 = load_half4(1);
+            const float4 a2 = load_half4(2);
+            c[0] = make_float3(a0.x, a0.y, a0.z);
+            c[1] = make_float3(a0.w, a1.x, a1.y);
+            c[2] = make_float3(a1.z, a1.w, a2.x);
+            c[3] = make_float3(a2.y, a2.z, a2.w);
+            if (active_sh_bases <= 4)
+                return;
+            const float4 a3 = load_half4(3);
+            const float4 a4 = load_half4(4);
+            const float4 a5 = load_half4(5);
+            c[4] = make_float3(a3.x, a3.y, a3.z);
+            c[5] = make_float3(a3.w, a4.x, a4.y);
+            c[6] = make_float3(a4.z, a4.w, a5.x);
+            c[7] = make_float3(a5.y, a5.z, a5.w);
+            if (active_sh_bases <= 9)
+                return;
+            const float4 a6 = load_half4(6);
+            const float4 a7 = load_half4(7);
+            const float4 a8 = load_half4(8);
+            const float4 a9 = load_half4(9);
+            const float4 a10 = load_half4(10);
+            const float4 a11 = load_half4(11);
+            c[8] = make_float3(a6.x, a6.y, a6.z);
+            c[9] = make_float3(a6.w, a7.x, a7.y);
+            c[10] = make_float3(a7.z, a7.w, a8.x);
+            c[11] = make_float3(a8.y, a8.z, a8.w);
+            c[12] = make_float3(a9.x, a9.y, a9.z);
+            c[13] = make_float3(a9.w, a10.x, a10.y);
+            c[14] = make_float3(a10.z, a10.w, a11.x);
+            return;
+        }
+
+        // ---- fp32 float4 path ----
         const float4 a0 = sh_f4[shAt(primitive_idx, 0, slots_per_primitive)];
         const float4 a1 = sh_f4[shAt(primitive_idx, 1, slots_per_primitive)];
         const float4 a2 = sh_f4[shAt(primitive_idx, 2, slots_per_primitive)];
@@ -148,7 +199,8 @@ namespace fast_lfs::rasterization::kernels {
         const uint active_sh_bases,
         const uint sh_layout_slots,
         const float2* __restrict__ sh_value_bounds = nullptr,
-        const uint sh_value_n_cells = 0u) {
+        const uint sh_value_n_cells = 0u,
+        const uint sh_value_bits = 0u) {
         // computation adapted from https://github.com/NVlabs/tiny-cuda-nn/blob/212104156403bd87616c1a4f73a1c5f2c2e172a9/include/tiny-cuda-nn/common_device.h#L340
         float3 result = 0.5f + 0.28209479177387814f * sh_coefficients_0[primitive_idx];
         if (active_sh_bases > 1) {
@@ -158,7 +210,7 @@ namespace fast_lfs::rasterization::kernels {
             const float z = direction.z;
             float3 c[15];
             load_shN_coeffs(sh_coefficients_rest, primitive_idx, active_sh_bases, sh_layout_slots, c,
-                            sh_value_bounds, sh_value_n_cells);
+                            sh_value_bounds, sh_value_n_cells, sh_value_bits);
             result = result + (-0.48860251190291987f * y) * c[0] + (0.48860251190291987f * z) * c[1] + (-0.48860251190291987f * x) * c[2];
             if (active_sh_bases > 4) {
                 const float xx = x * x, yy = y * y, zz = z * z;
@@ -442,6 +494,8 @@ namespace fast_lfs::rasterization::kernels {
         const FusedAdamParam& p = fused_adam.shN;
         const bool value_q16 = p.sh_value_bits == 16 && p.sh_value_bounds != nullptr &&
                                p.sh_value_n_cells > 0;
+        // IEEE f16 float4-swizzle (exportable GUI): bits==16, no bounds.
+        const bool value_f16 = p.sh_value_bits == 16 && !value_q16;
         const uint n_value_cells = value_q16 ? static_cast<uint>(p.sh_value_n_cells) : 0u;
 
         float row_step_size = p.step_size;
@@ -479,8 +533,10 @@ namespace fast_lfs::rasterization::kernels {
                                    ? *reinterpret_cast<const float2*>(p.sh_value_bounds + 2 * bidx)
                                    : make_float2(0.0f, 0.0f);
         const float beta1 = fused_adam.beta1, beta2 = fused_adam.beta2, eps = fused_adam.eps;
-        float4* param4 = (!value_q16 && touch) ? reinterpret_cast<float4*>(p.param) : nullptr;
+        float4* param4 =
+            (!value_q16 && !value_f16 && touch) ? reinterpret_cast<float4*>(p.param) : nullptr;
         uint16_t* param_u16 = (value_q16 && touch) ? reinterpret_cast<uint16_t*>(p.param) : nullptr;
+        __half* param_h = (value_f16 && touch) ? reinterpret_cast<__half*>(p.param) : nullptr;
 
         float local_u_min = kInf, local_u_max = -kInf;
         float local_s_min = kInf, local_s_max = -kInf;
@@ -515,6 +571,12 @@ namespace fast_lfs::rasterization::kernels {
                             pc[c] = 0.0f;
                         }
                     }
+                } else if (value_f16) {
+                    const uint base = slot * 4u;
+                    pc[0] = __half2float(param_h[base + 0]);
+                    pc[1] = __half2float(param_h[base + 1]);
+                    pc[2] = __half2float(param_h[base + 2]);
+                    pc[3] = __half2float(param_h[base + 3]);
                 } else {
                     float4 pv = param4[slot];
                     pc[0] = pv.x;
@@ -553,8 +615,17 @@ namespace fast_lfs::rasterization::kernels {
                     local_s_min = fminf(local_s_min, prim.y);
                     local_s_max = fmaxf(local_s_max, prim.y);
                 }
-                if (!value_q16 && apply_step && active_slot)
-                    param4[slot] = make_float4(pc[0], pc[1], pc[2], pc[3]);
+                if (apply_step && active_slot) {
+                    if (value_f16) {
+                        const uint base = slot * 4u;
+                        param_h[base + 0] = __float2half(pc[0]);
+                        param_h[base + 1] = __float2half(pc[1]);
+                        param_h[base + 2] = __float2half(pc[2]);
+                        param_h[base + 3] = __float2half(pc[3]);
+                    } else if (!value_q16) {
+                        param4[slot] = make_float4(pc[0], pc[1], pc[2], pc[3]);
+                    }
+                }
             }
             (void)n_cells_local;
         }
@@ -650,7 +721,8 @@ namespace fast_lfs::rasterization::kernels {
         float* __restrict__ sh0_grads_out,
         float3* __restrict__ shN_grads_out,
         const float2* __restrict__ sh_value_bounds = nullptr,
-        const uint sh_value_n_cells = 0u) {
+        const uint sh_value_n_cells = 0u,
+        const uint sh_value_bits = 0u) {
         const float3 grad_color = grad_color_helper[primitive_idx];
         const float3 dL_dsh0 = 0.28209479177387814f * grad_color;
         sh0_grads_out[0] = dL_dsh0.x;
@@ -673,7 +745,7 @@ namespace fast_lfs::rasterization::kernels {
 
             float3 c[15];
             load_shN_coeffs(sh_coefficients_rest, primitive_idx, ACTIVE_SH_BASES, sh_layout_slots, c,
-                            sh_value_bounds, sh_value_n_cells);
+                            sh_value_bounds, sh_value_n_cells, sh_value_bits);
 
             float3* g = shN_grads_out;
             g[0] = (-0.48860251190291987f * y) * grad_color;

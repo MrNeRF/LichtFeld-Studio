@@ -801,6 +801,11 @@ namespace lfs::training {
             fused.shN.sh_value_bits = 16;
             fused.shN.sh_value_n_cells = static_cast<int>(
                 lfs::core::sh_value_quant::n_value_cells_per_prim(layout_rest));
+        } else if (fused.shN.enabled && splat_data_.shN_ieee_f16()) {
+            // IEEE f16 float4-swizzle (exportable GUI): half load/store, no bounds.
+            fused.shN.sh_value_bits = 16;
+            fused.shN.sh_value_bounds = nullptr;
+            fused.shN.sh_value_n_cells = 0;
         }
         fused.scaling = prepare_param(ParamType::Scaling, 3, true);
         fused.rotation = prepare_param(ParamType::Rotation, 4, true);

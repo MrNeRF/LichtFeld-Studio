@@ -92,12 +92,18 @@ namespace lfs::vis::vksplat {
         std::size_t opacity_bytes = 0;
         std::uint32_t shN_layout_rest = 0;
         bool omits_shN = false;
+        // True when resident shN is IEEE f16 float4-swizzle (2 B/component).
+        // False = fp32 float4-swizzle (or omit placeholder).
+        bool shN_f16 = false;
+        // Bytes per shN component element (4=fp32, 2=f16).
+        std::size_t shN_element_bytes = sizeof(float);
     };
 
     // Raw split SplatData layout for the live Vulkan viewer. Unlike the packed
     // path above, this keeps log-scale/logit opacity and split SH untouched so
     // shaders can consume the training tensors directly when they are Vulkan
-    // external buffers.
+    // external buffers. When splat_data.shN is IEEE f16 (exportable GUI path),
+    // shN_bytes is half the fp32 float4-swizzle size.
     LFS_VIS_API [[nodiscard]] std::expected<RawDeviceInputLayout, std::string> rawDeviceInputLayout(
         const lfs::core::SplatData& splat_data,
         int upload_sh_degree = -1);

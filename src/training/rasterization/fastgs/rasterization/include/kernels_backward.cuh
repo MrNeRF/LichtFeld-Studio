@@ -140,11 +140,15 @@ namespace fast_lfs::rasterization::kernels::backward {
                 sh_layout_slots,
                 sh0_grads,
                 shN_grads,
-                fused_adam.shN.sh_value_bits == 16
+                // q16: bits==16 + bounds. IEEE f16: bits==16 + null bounds.
+                fused_adam.shN.sh_value_bounds != nullptr
                     ? reinterpret_cast<const float2*>(fused_adam.shN.sh_value_bounds)
                     : nullptr,
-                fused_adam.shN.sh_value_bits == 16
+                fused_adam.shN.sh_value_bounds != nullptr
                     ? static_cast<uint>(fused_adam.shN.sh_value_n_cells)
+                    : 0u,
+                fused_adam.shN.sh_value_bits == 16
+                    ? 16u
                     : 0u);
         } // close visible — SH Adam next kills shN live range before geometry
 

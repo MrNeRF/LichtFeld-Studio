@@ -271,8 +271,17 @@ namespace lfs::core {
         // Phase 2.1: float2 bounds per 256-splat block when SH value quant is ON.
         inline Tensor& shN_value_bounds() { return _shN_value_bounds; }
         inline const Tensor& shN_value_bounds() const { return _shN_value_bounds; }
+        // q16 pad-dropped codes: Float16 bit-patterns + per-block bounds.
+        // IEEE f16 float4-swizzle (exportable viewer path) is also Float16 but has
+        // no bounds — do not treat it as q16.
         [[nodiscard]] bool shN_value_quantized() const {
-            return _shN.is_valid() && _shN.dtype() == DataType::Float16;
+            return _shN.is_valid() && _shN.dtype() == DataType::Float16 &&
+                   _shN_value_bounds.is_valid() && _shN_value_bounds.numel() > 0;
+        }
+        // IEEE half float4-swizzle (same topology as fp32, 2 B/component). Used by
+        // the GUI exportable block so the Vulkan viewer can zero-copy bind half SH.
+        [[nodiscard]] bool shN_ieee_f16() const {
+            return _shN.is_valid() && _shN.dtype() == DataType::Float16 && !shN_value_quantized();
         }
 
         // Materialise a deswizzled [N, K, 3] copy of resident shN storage where

@@ -383,18 +383,14 @@ namespace lfs::training {
                 bg_image_ptr != nullptr
                     ? nullptr
                     : (bg_color.is_valid() && bg_color.numel() >= 3 ? bg_color.ptr<float>() : nullptr);
-            // q16 path requires codes + bounds together. Float16 without bounds must not
-            // take the float4 load path (misaligned reinterpret → illegal address).
-            const bool shN_q16 =
-                gaussian_model.shN_value_quantized() &&
-                gaussian_model.shN_value_bounds().is_valid() &&
-                gaussian_model.shN_value_bounds().numel() > 0;
-            if (gaussian_model.shN_value_quantized() && !shN_q16) {
-                LOG_WARN("SH value quant codes without bounds — expanding to float for forward");
-                (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(gaussian_model);
-            }
-            const float* shN_ptr = shN_q16 ? static_cast<const float*>(gaussian_model.shN().data_ptr())
-                                           : gaussian_model.shN().ptr<float>();
+            // q16: Float16 codes + bounds. IEEE f16 float4-swizzle: Float16 without
+            // bounds (exportable GUI). fp32: Float32 float4-swizzle.
+            const bool shN_q16 = gaussian_model.shN_value_quantized();
+            const bool shN_f16 = gaussian_model.shN_ieee_f16();
+            const float* shN_ptr =
+                (shN_q16 || shN_f16)
+                    ? static_cast<const float*>(gaussian_model.shN().data_ptr())
+                    : gaussian_model.shN().ptr<float>();
             const float* shN_bounds_ptr =
                 shN_q16 ? gaussian_model.shN_value_bounds().ptr<float>() : nullptr;
             const unsigned shN_n_cells =
@@ -402,6 +398,7 @@ namespace lfs::training {
                               lfs::core::sh_value_quant::n_value_cells_per_prim(
                                   static_cast<uint32_t>(gaussian_model.max_sh_coeffs_rest())))
                         : 0u;
+            const unsigned shN_bits = (shN_q16 || shN_f16) ? 16u : 0u;
             forward_ctx = fast_lfs::rasterization::forward_raw(
                 means.ptr<float>(),
                 raw_scales.ptr<float>(),
@@ -431,7 +428,8 @@ namespace lfs::training {
                 mip_filter,
                 raster_stream,
                 shN_bounds_ptr,
-                shN_n_cells);
+                shN_n_cells,
+                shN_bits);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
             dump_crash_data(

@@ -1037,6 +1037,9 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     create_optional(pipeline_projection_forward_quant, "projection_forward_quant");
     create_optional(pipeline_projection_forward_quant_3dgut, "projection_forward_quant_3dgut");
     create_optional(pipeline_projection_forward_quant_survivors, "projection_forward_quant_survivors");
+    create_optional(pipeline_projection_forward_shn_f16, "projection_forward_shn_f16");
+    create_optional(pipeline_projection_forward_shn_f16_3dgut, "projection_forward_shn_f16_3dgut");
+    create_optional(pipeline_projection_forward_shn_f16_survivors, "projection_forward_shn_f16_survivors");
     create_optional(pipeline_prepare_visible_chain, "prepare_visible_chain");
     create_optional(pipeline_copy_visible_indices, "copy_visible_indices");
     create_optional(pipeline_cumsum_indirect.block_scan, "cumsum_block_scan_indirect");
@@ -1299,6 +1302,9 @@ void VulkanGSRenderer::executeProjectionForward(
     auto& pipeline = buffers.quant_pool
                          ? (use_gut_projection ? pipeline_projection_forward_quant_3dgut
                                                : pipeline_projection_forward_quant)
+                     : buffers.shN_f16
+                         ? (use_gut_projection ? pipeline_projection_forward_shn_f16_3dgut
+                                               : pipeline_projection_forward_shn_f16)
                          : (use_gut_projection ? pipeline_projection_forward_3dgut
                                                : pipeline_projection_forward);
     // Quant pipelines have 25 layouts; non-quant 24 — tagged size must match.
@@ -2623,6 +2629,7 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
         indirect::byteOffset(indirect::SurvivorState::kProjectionWordOffset),
         &survivor_uniforms, sizeof(survivor_uniforms),
         buffers.quant_pool ? pipeline_projection_forward_quant_survivors
+        : buffers.shN_f16  ? pipeline_projection_forward_shn_f16_survivors
                            : pipeline_projection_forward_survivors,
         tagged);
 }

@@ -400,10 +400,15 @@ namespace lfs::vis::vksplat {
             layout_rest,
             lfs::core::sh_rest_coefficients_for_degree(effective_upload_sh_degree));
         const bool omit_shN_upload = upload_layout_rest == 0;
+        // IEEE f16 float4-swizzle (exportable GUI path) stores the same component
+        // count as fp32 but 2 bytes each. q16 pad-dropped is a different layout and
+        // is not bound through this raw split path without a dequant pack step.
+        const bool shN_f16 = splat_data.shN_ieee_f16();
+        const std::size_t element_bytes = shN_f16 ? sizeof(std::uint16_t) : sizeof(float);
         const std::size_t resident_shN_bytes =
-            lfs::core::sh_swizzled_float_count(n, layout_rest) * sizeof(float);
+            lfs::core::sh_swizzled_byte_count_for_element(n, layout_rest, element_bytes);
         const std::size_t upload_shN_bytes =
-            lfs::core::sh_swizzled_float_count(n, upload_layout_rest) * sizeof(float);
+            lfs::core::sh_swizzled_byte_count_for_element(n, upload_layout_rest, element_bytes);
         const std::size_t shN_bytes = omit_shN_upload
                                           ? sizeof(float4)
                                           : upload_shN_bytes;
@@ -411,7 +416,9 @@ namespace lfs::vis::vksplat {
             if (shN_raw.ndim() != 1) {
                 return std::unexpected("VkSplat expected swizzled SH rest coefficients as a 1D tensor");
             }
-            if (static_cast<std::size_t>(shN_raw.numel()) * sizeof(float) < resident_shN_bytes) {
+            const std::size_t src_elem =
+                shN_raw.dtype() == DataType::Float16 ? sizeof(std::uint16_t) : sizeof(float);
+            if (static_cast<std::size_t>(shN_raw.numel()) * src_elem < resident_shN_bytes) {
                 return std::unexpected("VkSplat swizzled SH rest tensor is smaller than expected");
             }
         } else if (!omit_shN_upload && splat_data.max_sh_coeffs_rest() > 0) {
@@ -428,6 +435,8 @@ namespace lfs::vis::vksplat {
             .opacity_bytes = n * sizeof(float),
             .shN_layout_rest = upload_layout_rest,
             .omits_shN = omit_shN_upload,
+            .shN_f16 = shN_f16 && !omit_shN_upload,
+            .shN_element_bytes = omit_shN_upload ? sizeof(float) : element_bytes,
         };
     }
 

@@ -52,13 +52,19 @@ namespace lfs::training::sh_value {
             return false;
         if (shN.dtype() == DataType::Float16)
             return false; // already quantized
-        // Viewer/exportable interop is float4-layout sized; keep fp32 there.
-        if (shN.is_external_storage()) {
-            const auto kind = shN.external_storage_kind();
-            if (kind == "vulkan_external_buffer" || kind == "splat.exportable") {
-                LOG_DEBUG("SH value quant skipped: shN is exportable/viewer-backed ({})", kind);
+        // Exportable/viewer path uses IEEE f16 float4-swizzle in the packed block
+        // (half the fp32 bytes). Never apply pad-dropped q16 there — the Vulkan
+        // projection shader binds half slots, and quant would detach shN from the
+        // exportable VA range.
+        const auto is_exportable_kind = [](const Tensor& t) {
+            if (!t.is_valid() || !t.is_external_storage())
                 return false;
-            }
+            const auto kind = t.external_storage_kind();
+            return kind == "vulkan_external_buffer" || kind == "splat.exportable";
+        };
+        if (is_exportable_kind(shN) || is_exportable_kind(splat.means())) {
+            LOG_DEBUG("SH value quant skipped: exportable/viewer-backed model (IEEE f16 path)");
+            return false;
         }
 
         const auto n = static_cast<std::size_t>(splat.size());
@@ -110,8 +116,6 @@ namespace lfs::training::sh_value {
     }
 
     bool ensure_shN_fp32_for_mutation(core::SplatData& splat) {
-        if (!sh_value_quant_enabled())
-            return false;
         auto& shN = splat.shN();
         if (!shN.is_valid() || shN.dtype() != DataType::Float16)
             return false;
@@ -124,6 +128,32 @@ namespace lfs::training::sh_value {
         const auto cap = prim_capacity(splat);
         const auto logical_floats = core::sh_swizzled_float_count(n, rest);
         const auto capacity_floats = core::sh_swizzled_float_count(cap, rest);
+
+        // IEEE f16 float4-swizzle (exportable GUI): element-wise half→float cast.
+        // Same topology as fp32; densify float-native ops then commit back to f16.
+        if (splat.shN_ieee_f16()) {
+            Tensor fp32 = shN.to(DataType::Float32);
+            if (fp32.device() != Device::CUDA)
+                fp32 = fp32.cuda();
+            if (!fp32.is_contiguous())
+                fp32 = fp32.contiguous();
+            // Preserve capacity headroom when possible.
+            if (fp32.capacity() < capacity_floats) {
+                Tensor room = Tensor::zeros_direct(TensorShape({logical_floats}),
+                                                   capacity_floats, Device::CUDA);
+                room.set_name("splat.shN");
+                room.copy_from(fp32);
+                fp32 = std::move(room);
+            } else {
+                fp32.set_name("splat.shN");
+            }
+            shN = std::move(fp32);
+            return true;
+        }
+
+        if (!sh_value_quant_enabled())
+            return false;
+
         Tensor fp32 = Tensor::zeros_direct(TensorShape({logical_floats}),
                                            std::max(logical_floats, capacity_floats),
                                            Device::CUDA);
@@ -166,10 +196,33 @@ namespace lfs::training::sh_value {
     }
 
     bool commit_shN_after_mutation(core::SplatData& splat) {
-        if (!sh_value_quant_enabled())
-            return false;
         auto& shN = splat.shN();
         if (!shN.is_valid() || shN.dtype() != DataType::Float32)
+            return false;
+
+        // GUI exportable path: means live in the exportable block, so shN must
+        // stay IEEE f16 float4-swizzle (not pad-dropped q16). ensure_* may have
+        // expanded to a float temp; convert back to half. Densify grow rebind
+        // reinstalls the view into the packed block.
+        const auto is_exportable_kind = [](const Tensor& t) {
+            if (!t.is_valid() || !t.is_external_storage())
+                return false;
+            const auto kind = t.external_storage_kind();
+            return kind == "vulkan_external_buffer" || kind == "splat.exportable";
+        };
+        if (is_exportable_kind(splat.means_raw()) || is_exportable_kind(shN)) {
+            Tensor half = shN.to(DataType::Float16);
+            if (half.device() != Device::CUDA)
+                half = half.cuda();
+            if (!half.is_contiguous())
+                half = half.contiguous();
+            half.set_name("splat.shN");
+            shN = std::move(half);
+            splat.shN_value_bounds() = Tensor{};
+            return true;
+        }
+
+        if (!sh_value_quant_enabled())
             return false;
         // Rebuild codes+bounds from float after densify (heal-vs-rebuild: always rebuild
         // value storage so block min/max match post-growth N). Adam moments stay on the

@@ -150,6 +150,84 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs(uint32_t g_idx, IArray<float4> s
 
 #endif  // USE_FLOAT4_BATCH_READ
 
+// Unpack one IEEE f16 float4 slot packed as uint2 (4×half).
+[ForceInline]
+float4 unpack_shn_slot_f16(uint2 packed) {
+    return float4(f16tof32(packed.x & 0xFFFFu), f16tof32(packed.x >> 16),
+                  f16tof32(packed.y & 0xFFFFu), f16tof32(packed.y >> 16));
+}
+
+// IEEE f16 float4-swizzle rest SH (exportable GUI path). Same slot topology as
+// the fp32 path; each float4 slot is 8 bytes (uint2 of packed halfs).
+SpherHarmCoeffs read_spherical_harmonics_coeffs_split_f16(
+    uint32_t g_idx,
+    IArray<float> sh0,
+    IArray<uint2> shN,
+    uint32_t active_sh,
+    uint32_t shN_slots_per_primitive)
+{
+    float3 z = float3(0.0);
+    SpherHarmCoeffs g_sh_coeffs = { z, z,z,z, z,z,z,z,z, z,z,z,z,z,z,z };
+
+    g_sh_coeffs.coeff0 = float3(sh0[3*g_idx+0], sh0[3*g_idx+1], sh0[3*g_idx+2]);
+
+    if (active_sh == 0)
+        return g_sh_coeffs;
+
+    if (shN_slots_per_primitive == 0)
+        return g_sh_coeffs;
+
+  #if SH_REORDER_SIZE <= 1
+    uint32_t base = shN_slots_per_primitive*g_idx;
+    #define _SHN_F16_COEFF(idx) unpack_shn_slot_f16(shN[base+idx])
+  #else
+    uint32_t base = (g_idx/SH_REORDER_SIZE) * (shN_slots_per_primitive*SH_REORDER_SIZE);
+    uint32_t offset = g_idx%SH_REORDER_SIZE;
+    #define _SHN_F16_COEFF(idx) unpack_shn_slot_f16(shN[base+SH_REORDER_SIZE*idx+offset])
+  #endif
+
+    float4 temp0, temp1;
+
+    temp0 = _SHN_F16_COEFF(0);
+    g_sh_coeffs.coeff1 = temp0.xyz;
+    temp1 = _SHN_F16_COEFF(1);
+    g_sh_coeffs.coeff2 = float3(temp0.w, temp1.xy);
+    temp0 = _SHN_F16_COEFF(2);
+    g_sh_coeffs.coeff3 = float3(temp1.zw, temp0.x);
+    g_sh_coeffs.coeff4 = temp0.yzw;
+
+    if (active_sh > 1) {
+        temp0 = _SHN_F16_COEFF(3);
+        g_sh_coeffs.coeff5 = temp0.xyz;
+        temp1 = _SHN_F16_COEFF(4);
+        g_sh_coeffs.coeff6 = float3(temp0.w, temp1.xy);
+        temp0 = _SHN_F16_COEFF(5);
+        g_sh_coeffs.coeff7 = float3(temp1.zw, temp0.x);
+        g_sh_coeffs.coeff8 = temp0.yzw;
+    }
+
+    if (active_sh > 2) {
+        temp0 = _SHN_F16_COEFF(6);
+        g_sh_coeffs.coeff9 = temp0.xyz;
+        temp1 = _SHN_F16_COEFF(7);
+        g_sh_coeffs.coeff10 = float3(temp0.w, temp1.xy);
+        temp0 = _SHN_F16_COEFF(8);
+        g_sh_coeffs.coeff11 = float3(temp1.zw, temp0.x);
+        g_sh_coeffs.coeff12 = temp0.yzw;
+
+        temp0 = _SHN_F16_COEFF(9);
+        g_sh_coeffs.coeff13 = temp0.xyz;
+        temp1 = _SHN_F16_COEFF(10);
+        g_sh_coeffs.coeff14 = float3(temp0.w, temp1.xy);
+        temp0 = _SHN_F16_COEFF(11);
+        g_sh_coeffs.coeff15 = float3(temp1.zw, temp0.x);
+    }
+
+    #undef _SHN_F16_COEFF
+
+    return g_sh_coeffs;
+}
+
 SpherHarmCoeffs read_spherical_harmonics_coeffs_split(
     uint32_t g_idx,
     IArray<float> sh0,

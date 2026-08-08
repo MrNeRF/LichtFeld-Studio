@@ -24,6 +24,12 @@ import spherical_harmonics;
 #define LFS_QUANT_POOL 0
 #endif
 
+// Training-viewport exportable SH rest: IEEE f16 float4-swizzle (same topology
+// as fp32, half the bytes). Mutually exclusive with LFS_QUANT_POOL.
+#ifndef LFS_SHN_F16
+#define LFS_SHN_F16 0
+#endif
+
 
 struct Gaussian_3D : IDifferentiable
 {
@@ -58,7 +64,11 @@ Gaussian_3D load_gaussian_split(
     int32_t g_idx,
     StructuredBuffer<float> xyz_ws,
     StructuredBuffer<float> sh0,
+#if LFS_SHN_F16
+    StructuredBuffer<uint2> shN,
+#else
     StructuredBuffer<float4> shN,
+#endif
     StructuredBuffer<float4> rotations,
     StructuredBuffer<float> scaling_raw,
     StructuredBuffer<float> opacity_raw,
@@ -67,8 +77,13 @@ Gaussian_3D load_gaussian_split(
     uint shN_layout_slots
 ) {
     float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
+#if LFS_SHN_F16
+    SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split_f16(
+        g_idx, sh0, shN, active_sh, shN_layout_slots);
+#else
     SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split(
         g_idx, sh0, shN, active_sh, shN_layout_slots);
+#endif
     float4 g_rotations = rotations[g_idx];
     // Matches CUDA reference: clamp raw log-scale before activation so a
     // single broken splat cannot blow up into a screen-spanning haze floater
@@ -596,6 +611,12 @@ layout(binding=2) StructuredBuffer<uint> shN;  // s8x4 per swizzled slot
 layout(binding=3) StructuredBuffer<uint2> rotations;  // f16x4 (w,x,y,z)
 layout(binding=4) StructuredBuffer<uint2> scaling_raw;  // log f16x3 + pad
 layout(binding=5) StructuredBuffer<uint> opacity_raw;  // f16, 2 splats per uint
+#elif LFS_SHN_F16
+layout(binding=1) StructuredBuffer<float> sh0;  // 1*3 fp32 DC
+layout(binding=2) StructuredBuffer<uint2> shN;  // IEEE f16 float4-swizzle rest
+layout(binding=3) StructuredBuffer<float4> rotations;  // 4
+layout(binding=4) StructuredBuffer<float> scaling_raw;  // 3
+layout(binding=5) StructuredBuffer<float> opacity_raw;  // 1
 #else
 layout(binding=1) StructuredBuffer<float> sh0;  // 1*3
 layout(binding=2) StructuredBuffer<float4> shN;  // rest-only 15*3

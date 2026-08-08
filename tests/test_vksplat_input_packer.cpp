@@ -518,7 +518,45 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutUsesRequestedUploadShDegree) {
             << "upload_sh_degree=" << upload_sh_degree;
         EXPECT_EQ(raw_layout->omits_shN, upload_sh_degree == 0)
             << "upload_sh_degree=" << upload_sh_degree;
+        EXPECT_FALSE(raw_layout->shN_f16) << "upload_sh_degree=" << upload_sh_degree;
     }
+}
+
+TEST(VksplatInputPackerTest, RawDeviceLayoutHalvesShNBytesForIeeeF16) {
+    // TDD: IEEE f16 float4-swizzle (exportable GUI path) reports half the
+    // resident SH bytes of the historical fp32 layout.
+    constexpr std::size_t n = SH_REORDER_SIZE * 3 + 11;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/3, /*seed=*/0xF16u);
+    auto splat = buildSplatData(in);
+
+    // Convert resident shN to IEEE f16 (same topology, 2 B/component).
+    ASSERT_TRUE(splat->shN().is_valid());
+    ASSERT_EQ(splat->shN().dtype(), lfs::core::DataType::Float32);
+    splat->shN() = splat->shN().to(lfs::core::DataType::Float16);
+    ASSERT_TRUE(splat->shN_ieee_f16());
+    ASSERT_FALSE(splat->shN_value_quantized());
+
+    auto raw_layout = rawDeviceInputLayout(*splat);
+    ASSERT_TRUE(raw_layout.has_value()) << raw_layout.error();
+    const auto layout_rest = static_cast<std::uint32_t>(
+        lfs::core::sh_rest_coefficients_for_degree(3));
+    const std::size_t fp32_bytes =
+        lfs::core::sh_swizzled_float_count(n, layout_rest) * sizeof(float);
+    const std::size_t f16_bytes =
+        lfs::core::sh_swizzled_f16_byte_count(n, layout_rest);
+    EXPECT_EQ(f16_bytes * 2, fp32_bytes);
+    EXPECT_EQ(raw_layout->shN_bytes, f16_bytes);
+    EXPECT_TRUE(raw_layout->shN_f16);
+    EXPECT_EQ(raw_layout->shN_element_bytes, sizeof(std::uint16_t));
+
+    // 5M-capacity accounting for PROGRESS.md: deg3 rest → 96 B/splat f16 vs 192 fp32.
+    constexpr std::size_t kCap5M = 5'000'000;
+    const std::size_t at_5m_f16 = lfs::core::sh_swizzled_f16_byte_count(
+        kCap5M, layout_rest);
+    const std::size_t at_5m_fp32 = lfs::core::sh_swizzled_byte_count(
+        kCap5M, layout_rest);
+    EXPECT_EQ(at_5m_f16, at_5m_fp32 / 2);
+    EXPECT_NEAR(static_cast<double>(at_5m_f16) / static_cast<double>(kCap5M), 96.0, 0.01);
 }
 
 TEST(VksplatInputPackerTest, RawOpacityCopyBakesDeletedMaskOnlyIntoOpacity) {

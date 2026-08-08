@@ -23,6 +23,12 @@ namespace lfs::core {
     namespace {
 
         constexpr std::size_t kFloatBytes = sizeof(float);
+        // Exportable/viewer SH rest is IEEE f16 float4-swizzle (same topology as
+        // fp32, half the bytes). Training FastGS loads half→float in registers;
+        // the Vulkan projection shader does the same via f16tof32 on uint2 slots.
+        // Headless stays on pad-dropped q16 outside this block (quant skip removed
+        // only for non-exportable tensors).
+        constexpr std::size_t kShNElementBytes = sizeof(std::uint16_t);
         constexpr std::size_t kRegionAlignment = 256;
 
         // True when `source` is a view into `block`'s VA range (CUDA-only or
@@ -66,15 +72,15 @@ namespace lfs::core {
             using R = SplatExportableStorage;
             const auto rest_coeffs =
                 static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(sh_degree));
-            const std::size_t shN_capacity_floats = sh_swizzled_float_count(capacity, rest_coeffs);
+            const std::size_t shN_capacity_elems = sh_swizzled_float_count(capacity, rest_coeffs);
 
             const std::array<std::size_t, R::Count> raw_bytes{
-                region_bytes_for(capacity, 3),     // Means {N,3}
-                region_bytes_for(capacity, 3),     // Scaling {N,3}
-                region_bytes_for(capacity, 4),     // Rotation {N,4}
-                region_bytes_for(capacity, 1),     // Opacity {N,1}
-                region_bytes_for(capacity, 3),     // Sh0 {N,1,3}
-                shN_capacity_floats * kFloatBytes, // ShN
+                region_bytes_for(capacity, 3),         // Means {N,3}
+                region_bytes_for(capacity, 3),         // Scaling {N,3}
+                region_bytes_for(capacity, 4),         // Rotation {N,4}
+                region_bytes_for(capacity, 1),         // Opacity {N,1}
+                region_bytes_for(capacity, 3),         // Sh0 {N,1,3}
+                shN_capacity_elems * kShNElementBytes, // ShN (IEEE f16)
             };
 
             Layout layout{};
@@ -347,6 +353,10 @@ namespace lfs::core {
                 const Region region = region_from_name(name);
                 void* const data = static_cast<char*>(block->device_ptr) + offsets[region];
                 std::shared_ptr<void> owner = block;
+                // ShN region is IEEE f16 regardless of the caller's requested dtype.
+                if (region == ShN) {
+                    dtype = DataType::Float16;
+                }
                 const std::size_t clamped =
                     (region == ShN) ? capacity : std::min(capacity, cap > 0 ? cap : capacity);
                 return Tensor::from_external_owner(data,
@@ -372,9 +382,12 @@ namespace lfs::core {
             // cannot claim more rows than the packed regions hold.
             std::size_t clamped = capacity;
             if (region == ShN) {
-                const std::size_t max_floats =
-                    ctrl->region_bytes[ShN] / kFloatBytes;
-                clamped = std::min(capacity, max_floats);
+                // ShN is IEEE f16 float4-swizzle: capacity is in half-elements
+                // (same count as the historical "float count" topology).
+                dtype = DataType::Float16;
+                const std::size_t max_elems =
+                    ctrl->region_bytes[ShN] / kShNElementBytes;
+                clamped = std::min(capacity, max_elems);
             } else if (ctrl->capacity > 0) {
                 clamped = std::min(capacity, ctrl->capacity);
             }
@@ -467,8 +480,40 @@ namespace lfs::core {
                 const auto layout_rest =
                     static_cast<std::uint32_t>(model.max_sh_coeffs_rest());
                 const size_t shN_cap = sh_swizzled_float_count(capacity_, layout_rest);
-                shN = install_param(
-                    model.shN_raw(), model.shN_raw().shape(), shN_cap, "SplatData.shN");
+                const size_t shN_logical = sh_swizzled_float_count(
+                    static_cast<size_t>(model.size()), layout_rest);
+                // Exportable ShN is always IEEE f16 float4-swizzle (half bytes of
+                // the historical fp32 layout). Same-block rebind only re-views
+                // (ISS-025). Cross-allocator install converts fp32 → f16.
+                // q16 sources must be expanded to fp32 before rebind (training
+                // ensure_shN_fp32_for_mutation); we refuse silent bitcast of codes.
+                const Tensor& shN_src = model.shN_raw();
+                const bool aliases = tensor_aliases_exportable_block(shN_src, block_ref);
+                if (!aliases && model.shN_value_quantized()) {
+                    return std::unexpected(
+                        "SplatExportableStorage::rebindSplatData: shN is q16-quantized; "
+                        "expand to fp32 before exportable install (IEEE f16 path)");
+                }
+                Tensor dst = allocator(
+                    TensorShape({shN_logical}),
+                    shN_cap,
+                    DataType::Float16,
+                    "SplatData.shN");
+                dst.set_name("SplatData.shN");
+                if (!aliases && shN_src.is_valid() && shN_src.numel() > 0) {
+                    Tensor half_src = shN_src;
+                    if (half_src.dtype() != DataType::Float16) {
+                        half_src = half_src.to(DataType::Float16);
+                    }
+                    if (half_src.device() != Device::CUDA) {
+                        half_src = half_src.cuda();
+                    }
+                    if (!half_src.is_contiguous()) {
+                        half_src = half_src.contiguous();
+                    }
+                    dst.copy_from(half_src);
+                }
+                shN = std::move(dst);
             }
 
             SplatData rebound(max_sh,

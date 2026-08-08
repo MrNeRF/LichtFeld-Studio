@@ -135,6 +135,10 @@ struct VulkanGSPipelineBuffers {
     Buffer<float> page_frames; // (pages, 16) floats
     bool quant_pool = false;
     uint32_t pool_page_splats = 0;
+    // Training-viewport IEEE f16 float4-swizzle SH rest (exportable GUI). When
+    // set, shN holds half components (uint2 per float4 slot) and projection uses
+    // the *_shn_f16 pipeline. Mutually exclusive with quant_pool.
+    bool shN_f16 = false;
 
     // projection outputs
     Buffer<int32_t> tiles_touched;    // (N,)

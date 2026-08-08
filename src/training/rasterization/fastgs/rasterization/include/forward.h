@@ -55,8 +55,9 @@ namespace fast_lfs::rasterization {
         const float* opacities_raw,
         const float3* sh_coefficients_0,
         const float4* sh_coefficients_rest,
-        const float2* sh_value_bounds, // null = fp32 path
+        const float2* sh_value_bounds, // null = fp32 or IEEE f16
         unsigned int sh_value_n_cells,
+        unsigned int sh_value_bits, // 0=fp32, 16=q16 (with bounds) or IEEE f16 (no bounds)
         const float4* w2c,
         const float3* cam_position,
         float* image,

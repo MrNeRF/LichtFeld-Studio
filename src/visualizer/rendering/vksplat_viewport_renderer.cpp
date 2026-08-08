@@ -703,6 +703,10 @@ namespace lfs::vis {
                 {"projection_forward_quant", (root / "generated/projection_forward_quant.spv").string()},
                 {"projection_forward_quant_3dgut",
                  (root / "generated/projection_forward_quant_3dgut.spv").string()},
+                {"projection_forward_shn_f16",
+                 (root / "generated/projection_forward_shn_f16.spv").string()},
+                {"projection_forward_shn_f16_3dgut",
+                 (root / "generated/projection_forward_shn_f16_3dgut.spv").string()},
                 {"selection_mask", (root / "generated/selection_mask.spv").string()},
                 {"selection_polygon_rasterize",
                  (root / "generated/selection_polygon_rasterize.spv").string()},
@@ -752,6 +756,8 @@ namespace lfs::vis {
                  (root / "generated/projection_forward_survivors.spv").string()},
                 {"projection_forward_quant_survivors",
                  (root / "generated/projection_forward_quant_survivors.spv").string()},
+                {"projection_forward_shn_f16_survivors",
+                 (root / "generated/projection_forward_shn_f16_survivors.spv").string()},
                 {"prepare_visible_chain", (root / "generated/prepare_visible_chain.spv").string()},
                 {"copy_visible_indices", (root / "generated/copy_visible_indices.spv").string()},
                 {"cumsum_block_scan_indirect",
@@ -2909,6 +2915,7 @@ namespace lfs::vis {
         buffers_.opacity_raw.deviceBuffer = view(InputOpacityRaw);
         buffers_.page_frames.deviceBuffer = view(InputPageFrames);
         buffers_.quant_pool = true;
+        buffers_.shN_f16 = false;
         buffers_.pool_page_splats = static_cast<std::uint32_t>(LodPageCache::kChunkSplats);
         buffers_.scales_opacs.deviceBuffer = {};
         buffers_.sh_coeffs.deviceBuffer = {};
@@ -4947,6 +4954,7 @@ namespace lfs::vis {
                 buffers_.page_frames.deviceBuffer = {};
                 buffers_.quant_pool = false;
                 buffers_.pool_page_splats = 0;
+                buffers_.shN_f16 = layout->shN_f16;
                 update_input_metadata(input_snapshot_changed && !deleted_mask_only_change);
 
                 // Keep the borrowed storages alive until the frame that binds

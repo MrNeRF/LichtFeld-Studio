@@ -483,10 +483,28 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
     const auto rest = static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(kShDegree));
     const size_t shN_floats = sh_swizzled_float_count(kLiveN, rest);
     const size_t shN_cap = sh_swizzled_float_count(kInitial, rest);
-    Tensor shN = allocator(TensorShape({shN_floats}), shN_cap, DataType::Float32, "SplatData.shN");
+    // Exportable ShN is IEEE f16 (allocator forces Float16).
+    Tensor shN = allocator(TensorShape({shN_floats}), shN_cap, DataType::Float16, "SplatData.shN");
+    ASSERT_EQ(shN.dtype(), DataType::Float16);
 
-    auto stamp = [](Tensor& t, float base) {
+    // f16 pattern value in [0, 63] — exact in IEEE half regardless of element index.
+    auto f16_val = [](float base, size_t i) {
+        return base + static_cast<float>(i % 64u);
+    };
+    auto stamp = [&](Tensor& t, float base) {
         const size_t n = t.numel();
+        if (t.dtype() == DataType::Float16) {
+            Tensor host_f = Tensor::empty({n}, Device::CPU, DataType::Float32);
+            float* hp = host_f.ptr<float>();
+            for (size_t i = 0; i < n; ++i) {
+                hp[i] = f16_val(base, i);
+            }
+            Tensor half = host_f.to(DataType::Float16).cuda();
+            ASSERT_EQ(cudaMemcpy(t.data_ptr(), half.data_ptr(), n * sizeof(std::uint16_t),
+                                 cudaMemcpyDeviceToDevice),
+                      cudaSuccess);
+            return;
+        }
         std::vector<float> host(n);
         for (size_t i = 0; i < n; ++i) {
             host[i] = base + static_cast<float>(i);
@@ -494,8 +512,17 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
         ASSERT_EQ(cudaMemcpy(t.ptr<float>(), host.data(), n * sizeof(float), cudaMemcpyHostToDevice),
                   cudaSuccess);
     };
-    auto expect_pattern = [](const Tensor& t, float base, const char* label) {
+    auto expect_pattern = [&](const Tensor& t, float base, const char* label) {
         const size_t n = t.numel();
+        if (t.dtype() == DataType::Float16) {
+            Tensor fp32 = t.to(DataType::Float32).cpu();
+            const float* host = fp32.ptr<float>();
+            for (size_t i = 0; i < n; ++i) {
+                EXPECT_FLOAT_EQ(host[i], f16_val(base, i))
+                    << label << " index " << i << " (ISS-025 post-grow rebind integrity, f16)";
+            }
+            return;
+        }
         std::vector<float> host(n);
         ASSERT_EQ(cudaMemcpy(host.data(), t.ptr<float>(), n * sizeof(float), cudaMemcpyDeviceToHost),
                   cudaSuccess);
@@ -510,7 +537,9 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
     stamp(rotation, 200.0f);
     stamp(opacity, 300.0f);
     stamp(sh0, 400.0f);
-    stamp(shN, 500.0f);
+    // IEEE half loses integer precision above 2048; keep the pattern small so
+    // round-trip is exact (exportable shN is f16).
+    stamp(shN, 1.0f);
 
     SplatData model(kShDegree,
                     std::move(means),
@@ -534,7 +563,7 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
     expect_pattern(model.rotation_raw(), 200.0f, "rotation after pre-grow rebind");
     expect_pattern(model.opacity_raw(), 300.0f, "opacity after pre-grow rebind");
     expect_pattern(model.sh0_raw(), 400.0f, "sh0 after pre-grow rebind");
-    expect_pattern(model.shN_raw(), 500.0f, "shN after pre-grow rebind");
+    expect_pattern(model.shN_raw(), 1.0f, "shN after pre-grow rebind");
 
     const auto gen_before = storage.generation();
     const std::size_t scaling_off_before = storage.region_offsets[SplatExportableStorage::Scaling];
@@ -582,7 +611,7 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
     expect_pattern(model.rotation_raw(), 200.0f, "rotation after post-grow rebind");
     expect_pattern(model.opacity_raw(), 300.0f, "opacity after post-grow rebind");
     expect_pattern(model.sh0_raw(), 400.0f, "sh0 after post-grow rebind");
-    expect_pattern(model.shN_raw(), 500.0f, "shN after post-grow rebind");
+    expect_pattern(model.shN_raw(), 1.0f, "shN after post-grow rebind");
 }
 
 // ISS-025 hardening (Analyst A): grown slack rows must be non-renderable
