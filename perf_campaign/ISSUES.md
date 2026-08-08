@@ -319,18 +319,26 @@ capacity-ensure abort. Tracked as ISS-024.
   populated (237 entries / 4393 MiB): survived teardown window, exit 0, no failure reports.
 
 ## ISS-027 — GUI MRNF illegal address (700) on published tip 170aabdb; teardown std::terminate
-- **Status:** OPEN — fix worker dispatched. Found by OWNER's .100 verification GUI session
-  (09:12-09:13, strategy=mrnf, ~24s in). error.log: scratchpad gsc-error.log (59k lines).
-- Async cudaErrorIllegalAddress surfaces at densification_kernels.cu:541
-  (launch_normalize_by_positive_median D2H, MRNF::accumulate_edge_sample) and at
-  tensor_unified_ops.cpp:508 (Scene::rebuildModelCacheIfNeeded zeros) on ANOTHER thread —
-  both victims of an earlier async fault. Suspect: tier-2 zero-copy q16 exportable SH layout
-  (viewersh2, 134da8ff..) consumers on the GUI densify/growth path; its GUI gate ran -i 800
-  only (does NOT cross full densification — gate gap, same class as ISS-025's max-cap repro).
-- Secondary: RasterizerMemoryArena::full_reset() throws (cudaDeviceSynchronize,
-  memory_arena.cu:739) during ~Trainer unwind on poisoned context -> std::terminate.
+- **Status:** CLOSED — 69d7a619 (origin), e9ea45f4 (teardown). Found by OWNER's .100
+  verification GUI session (09:12-09:13, strategy=mrnf, ~24s in).
+- **Victims (not origin):** densification_kernels.cu:541 median D2H
+  (MRNF::accumulate_edge_sample); tensor_unified_ops.cpp:508 Scene::rebuildModelCacheIfNeeded
+  zeros; RasterizerMemoryArena::full_reset → std::terminate on poisoned context.
+- **Root cause:** After densify, float densify SH left the exportable block so
+  `migrateTrainingModelToAllocator` (via ensureModelTensorAllocatorStorage post_backward)
+  considered the model not-ready and remigrated, auto-applying q16 re-encode into the packed
+  SoA the zero-copy viewport still read. Concurrent CUDA rewrite + Vulkan projection of the
+  same VMM block → async cudaErrorIllegalAddress on the next FastGS forward. Headless had no
+  exportable reader so never hit it. Gate gap: viewersh2 GUI ran -i 800 only (no densify).
+- **Fix:** (1) Treat float densify SH as migrate-ready; skip remigrate re-encode.
+  (2) Exportable refine windows keep float SH until stop_refine (headless still re-encodes
+  each refine for B/splat). (3) Clear bounds after ensure_shN_fp32. (4) Viewport DC-only
+  zero-copy bind during densify float window (no degraded mode). (5) full_reset +
+  Trainer::shutdown log-and-continue on poisoned CUDA (no std::terminate).
+- **Gates:** GUI mrnf bonsai -i 6000 densify grows gen2–5, exit 0, 0 illegal/terminate/degraded.
+  SH degrees 0/1/2/3 densify-crossing clean. Dual bench med 2.602 / 2.652 ms/iter, 307.4 B/splat.
+  Full suite 3427 PASS / 13 FAIL (same pre-existing reds). Artifacts: ~/lfs-campaign-out/iss027/.
 
 ### ISS-027 acceptance addendum (owner): fix must survive ALL SH degrees.
 Supervisor pre-publish gate: GUI densify-crossing runs at sh-degree 0, 1, 2, 3 — each clean.
-(The float-during-refine window must be correct for every degree's layout, including degree 0
-where shN is empty and the re-encode path must no-op cleanly.)
+Verified: degree 0 (earlier session), 1/2 (-i 2000), 3 (-i 6000).

@@ -1844,3 +1844,52 @@ order, Python×2). No new reds from this work.
 
 ### Commits
 (see git log for this session)
+
+---
+
+## ISS-027 — GUI MRNF illegal address + teardown std::terminate (2026-08-08)
+
+- **Branch:** `lfs-elite` (never checkout)
+- **Repro:** GUI `--train --strategy mrnf` bonsai default reserve; dies ~18–24s after
+  migrate (~first densify cycles). Headless mrnf clean. GUI `--sh-degree 0` clean.
+
+### Root cause
+Post-densify float SH left the exportable packed SoA → `ensureModelTensorAllocatorStorage`
+remigrated every refine and auto-re-encoded pad-dropped q16 into the same VMM block the
+zero-copy viewport was projecting. Async illegal address on next FastGS forward.
+Victim sites (median D2H, Scene zeros, arena full_reset) were not the origin.
+Secondary: full_reset threw on poisoned context → std::terminate.
+
+### Fix (TDD)
+Fail: GUI gate pre-fix (repro1/gate-final): cudaErrorIllegalAddress @ FastGS forward
+status; remigrate storm after densify (`Migrated ... shN_q16=true` ×N).
+Pass:
+- `ExportableQ16DensifyThenFastGSForward`
+- `FullResetToleratesPoisonedCudaContext`
+- GUI mrnf bonsai `-i 6000`: Training completed, densify grows gen 2–5, 0 illegal
+- SH degrees 0/1/2/3 densify-crossing clean
+
+### Implementation
+- migrate readiness: float densify SH is ready (no remigrate)
+- exportable refine: keep float SH until stop_refine; headless re-encodes each refine
+- ensure_shN_fp32 clears bounds after expand
+- viewport: DC-only bind during densify float window
+- arena full_reset + Trainer::shutdown: log-and-continue on CUDA poison
+
+### Dual-workload bench (3-run medians)
+| | bonsai 2k | bicycle 7k |
+|---|---:|---:|
+| steady_ms/iter | **2.602** | **2.652** |
+| B/splat | **307.4** | **307.4** |
+| band 2.60–2.66 | ✓ | ✓ |
+
+### Full suite
+**3427 PASS / 13 FAIL / 46 SKIP** — same pre-existing reds as WO-EXCACHE/viewersh2
+(+5 new tests). No new reds.
+
+### Commits
+- `69d7a619` fix(iss027): exportable densify float SH; block remigrate re-encode
+- `e9ea45f4` fix(iss027): teardown must not std::terminate on poisoned CUDA
+
+### Status
+**ISS-027 CLOSED.**
