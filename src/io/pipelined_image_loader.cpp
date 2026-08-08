@@ -708,7 +708,7 @@ namespace lfs::io {
     }
 
     void PipelinedImageLoader::publish_gt_cache_vram_gauge() const {
-        // HUD / VRAM ledger: live device-tier GT cache footprint.
+        // HUD / VRAM ledger: live device-tier GT cache footprint (0 in interactive).
         lfs::diagnostics::VramProfiler::instance().setGauge(
             "vram.audit.gt_cache.bytes",
             static_cast<double>(gt_device_cache_bytes_.load(std::memory_order_relaxed)));
@@ -739,33 +739,34 @@ namespace lfs::io {
         gt_device_enabled_.store(gt_budget_.enable_device, std::memory_order_release);
         gt_pinned_enabled_.store(gt_budget_.enable_pinned_host, std::memory_order_release);
         gt_budget_evaluated_ = true;
-        // Keep the historical line format; cap reports the effective device budget
-        // (interactive hard/fractional cap, or an explicit programmatic cap).
+        // cap reports the effective device budget (0 interactive; headless free−headroom
+        // or an explicit programmatic cap used by tests).
         const double cap_mib = gt_budget_.device_budget_bytes > 0
                                    ? gt_budget_.device_budget_bytes / (1024.0 * 1024.0)
                                    : (gt_budget_.cap_bytes > 0
                                           ? gt_budget_.cap_bytes / (1024.0 * 1024.0)
                                           : 0.0);
         LOG_INFO("[PipelinedImageLoader] GT cache budget: device={} pinned={} "
-                 "est={:.1f} MiB free_vram={:.1f} MiB headroom={:.1f} MiB cap={:.1f} MiB reason={}",
+                 "est={:.1f} MiB free_vram={:.1f} MiB headroom={:.1f} MiB cap={:.1f} MiB "
+                 "staging_depth={} reason={}",
                  gt_budget_.enable_device,
                  gt_budget_.enable_pinned_host,
                  gt_budget_.estimated_bytes / (1024.0 * 1024.0),
                  free_b / (1024.0 * 1024.0),
-                 interactive
-                     ? (GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES / (1024.0 * 1024.0))
-                     : (config_.gt_cache_headroom_bytes / (1024.0 * 1024.0)),
+                 config_.gt_cache_headroom_bytes / (1024.0 * 1024.0),
                  cap_mib,
+                 interactive ? GT_H2D_STAGING_DEPTH : 0,
                  gt_budget_.reason);
         if (!gt_budget_.enable_device) {
-            // Drop any partial device entries if we re-evaluate and lose device tier.
+            // Drop any partial device entries if we re-evaluate and lose device tier
+            // (interactive always takes this path: device tier = 0).
             std::lock_guard<std::mutex> lock(gt_cache_mutex_);
             if (!gt_device_cache_.empty()) {
                 gt_device_cache_.clear();
                 gt_device_cache_bytes_.store(0, std::memory_order_release);
             }
         } else if (gt_budget_.device_budget_bytes > 0) {
-            // Shrink to the new interactive/headless budget if over-full.
+            // Shrink to the new headless budget if over-full.
             std::lock_guard<std::mutex> lock(gt_cache_mutex_);
             evict_gt_device_if_needed(0);
         }
@@ -865,6 +866,24 @@ namespace lfs::io {
         return hit;
     }
 
+    lfs::core::Tensor PipelinedImageLoader::h2d_from_pinned(
+        const lfs::core::Tensor& host,
+        cudaStream_t stream) {
+        // Freestanding device destination: never inserted into gt_device_cache_.
+        // The dataloader already prefetches the next camera requests (pipeline
+        // depth ≥ GT_H2D_STAGING_DEPTH), so this H2D runs ahead of training's
+        // get() and dl_wait stays near zero when the pipeline is warm.
+        if (stream) {
+            const lfs::core::CUDAStreamGuard guard(stream);
+            // Pass the stream so Tensor::to launches async H2D; we sync only this
+            // stream so the ReadyImage payload is materialized for the consumer.
+            auto device = host.to(lfs::core::Device::CUDA, stream);
+            cudaStreamSynchronize(stream);
+            return device;
+        }
+        return host.to(lfs::core::Device::CUDA);
+    }
+
     std::optional<lfs::core::Tensor> PipelinedImageLoader::try_gt_pinned_hit(
         const std::string& key,
         cudaStream_t stream) {
@@ -887,14 +906,7 @@ namespace lfs::io {
             std::lock_guard<std::mutex> stats_lock(stats_mutex_);
             ++stats_.gt_pinned_cache_hits;
         }
-        // Async H2D on the decode stream (materialize for consumer).
-        if (stream) {
-            const lfs::core::CUDAStreamGuard guard(stream);
-            auto device = host.to(lfs::core::Device::CUDA);
-            cudaStreamSynchronize(stream);
-            return device;
-        }
-        return host.to(lfs::core::Device::CUDA);
+        return h2d_from_pinned(host, stream);
     }
 
     void PipelinedImageLoader::evict_gt_device_if_needed(const size_t required_bytes) {

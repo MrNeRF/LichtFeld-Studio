@@ -743,9 +743,12 @@ namespace lfs::training {
             sequence_to_camera_.clear();
             next_sequence_id_ = 0;
             const auto stats = loader_->get_stats();
-            LOG_INFO("[PipelinedDataLoader] GT cache warm: {} device entries / {:.1f} MiB",
+            LOG_INFO("[PipelinedDataLoader] GT cache warm: {} device entries / {:.1f} MiB  "
+                     "{} pinned entries / {:.1f} MiB",
                      stats.gt_device_cache_entries,
-                     stats.gt_device_cache_bytes / (1024.0 * 1024.0));
+                     stats.gt_device_cache_bytes / (1024.0 * 1024.0),
+                     stats.gt_pinned_cache_entries,
+                     stats.gt_pinned_cache_bytes / (1024.0 * 1024.0));
         }
 
         void shutdown() {

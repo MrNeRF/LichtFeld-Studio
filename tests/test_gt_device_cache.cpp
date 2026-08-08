@@ -172,13 +172,15 @@ TEST(GtCacheBudgetGate, LeavesTwoGigHeadroom) {
 }
 
 // ---------------------------------------------------------------------------
-// Interactive (GUI/viewer) budget: min(25% free, hard ceiling) + partial device
-// with pinned remainder. Headless must remain free-headroom all-or-nothing.
+// Interactive (GUI/viewer) budget: device tier = 0 always; GT served from
+// pinned-host + async H2D staging (not a multi-image device cache).
+// Headless must remain free-headroom all-or-nothing (bench dl_wait ~0).
 // ---------------------------------------------------------------------------
 
-TEST(GtCacheBudgetGate, InteractiveCapsDeviceToMinFractionAndCeiling) {
-    // Owner evidence: free≈13.5 GiB, full-res GT est≈5.4 GiB would fit under the
-    // headless free-2GiB rule — interactive must reject that greed.
+TEST(GtCacheBudgetGate, InteractiveDeviceTierIsZeroUsePinned) {
+    // Owner binding: GUI device tier → 0 regardless of free VRAM / footprint.
+    // free≈13.5 GiB, full-res est≈5.4 GiB would fit headless free−2GiB — interactive
+    // must still keep device off and pin the host tier.
     const size_t free_v = 13840ULL * 1024 * 1024;
     const size_t bytes_per = 5412ULL * 1024 * 1024 / 292; // ~18.5 MiB/image
     const size_t n_images = 292;
@@ -190,20 +192,12 @@ TEST(GtCacheBudgetGate, InteractiveCapsDeviceToMinFractionAndCeiling) {
         /*allow_pinned=*/true,
         /*interactive=*/true);
 
-    const size_t fraction_budget =
-        static_cast<size_t>(static_cast<double>(free_v) * GT_CACHE_INTERACTIVE_FREE_FRACTION);
-    const size_t expected_budget =
-        std::min(fraction_budget, GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES);
-
     EXPECT_TRUE(d.interactive);
-    EXPECT_EQ(d.device_budget_bytes, expected_budget);
-    EXPECT_LE(d.device_budget_bytes, GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES);
-    EXPECT_LE(d.device_budget_bytes, free_v / 4 + 1); // 25% free
-    // Full-res footprint exceeds interactive budget → partial device + pinned.
-    EXPECT_GT(d.estimated_bytes, d.device_budget_bytes);
-    EXPECT_TRUE(d.enable_device);
+    EXPECT_EQ(d.device_budget_bytes, 0u);
+    EXPECT_FALSE(d.enable_device);
     EXPECT_TRUE(d.enable_pinned_host);
-    EXPECT_STREQ(d.reason, "device_partial_interactive_use_pinned");
+    EXPECT_STREQ(d.reason, "interactive_device_tier_zero_use_pinned");
+    EXPECT_EQ(d.estimated_bytes, n_images * bytes_per);
 }
 
 TEST(GtCacheBudgetGate, HeadlessStillAllowsLargeDeviceWhenUnderHeadroom) {
@@ -223,40 +217,43 @@ TEST(GtCacheBudgetGate, HeadlessStillAllowsLargeDeviceWhenUnderHeadroom) {
     EXPECT_EQ(d.device_budget_bytes, free_v - GT_CACHE_DEFAULT_HEADROOM_BYTES);
 }
 
-TEST(GtCacheBudgetGate, InteractiveHardCeilingDominatesLargeFree) {
-    // 16 GiB free → 25% is 4 GiB, but hard ceiling must win.
+TEST(GtCacheBudgetGate, InteractiveDeviceTierZeroEvenWhenTinyFootprint) {
+    // Even a few MiB of GT that would trivially fit device must stay pinned-only
+    // in interactive sessions (no residual mini device tier / knobs).
     const size_t free_v = 16ULL * 1024 * 1024 * 1024;
     const auto d = evaluate_gt_cache_budget(
         10, 64ULL * 1024 * 1024, free_v,
         GT_CACHE_DEFAULT_HEADROOM_BYTES, 0, false, true,
         /*interactive=*/true);
-    EXPECT_EQ(d.device_budget_bytes, GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES);
+    EXPECT_EQ(d.device_budget_bytes, 0u);
+    EXPECT_FALSE(d.enable_device);
+    EXPECT_TRUE(d.enable_pinned_host);
+    EXPECT_STREQ(d.reason, "interactive_device_tier_zero_use_pinned");
 }
 
-TEST(GtCacheBudgetGate, InteractiveFractionDominatesWhenFreeIsSmall) {
-    // 2 GiB free → 25% = 512 MiB < 1 GiB ceiling.
+TEST(GtCacheBudgetGate, InteractiveDeviceTierZeroIndependentOfFreeVram) {
+    // Policy is not free-fraction / ceiling based — free VRAM does not enable device.
     const size_t free_v = 2ULL * 1024 * 1024 * 1024;
     const auto d = evaluate_gt_cache_budget(
         4, 32ULL * 1024 * 1024, free_v,
         GT_CACHE_DEFAULT_HEADROOM_BYTES, 0, false, true,
         /*interactive=*/true);
-    const size_t expected =
-        static_cast<size_t>(static_cast<double>(free_v) * GT_CACHE_INTERACTIVE_FREE_FRACTION);
-    EXPECT_EQ(d.device_budget_bytes, expected);
-    EXPECT_LT(d.device_budget_bytes, GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES);
+    EXPECT_EQ(d.device_budget_bytes, 0u);
+    EXPECT_FALSE(d.enable_device);
+    EXPECT_TRUE(d.enable_pinned_host);
 }
 
-TEST(GtCacheBudgetGate, InteractiveFitsEntirelyWhenUnderCap) {
+TEST(GtCacheBudgetGate, InteractiveNoPinnedFallsBackToDecode) {
     const size_t free_v = 8ULL * 1024 * 1024 * 1024;
-    const size_t bytes_per = 4ULL * 1024 * 1024;
-    const size_t n = 10; // 40 MiB total << 1 GiB ceiling
     const auto d = evaluate_gt_cache_budget(
-        n, bytes_per, free_v,
-        GT_CACHE_DEFAULT_HEADROOM_BYTES, 0, false, true,
+        10, 4ULL * 1024 * 1024, free_v,
+        GT_CACHE_DEFAULT_HEADROOM_BYTES, 0, false,
+        /*allow_pinned=*/false,
         /*interactive=*/true);
-    EXPECT_TRUE(d.enable_device);
+    EXPECT_FALSE(d.enable_device);
     EXPECT_FALSE(d.enable_pinned_host);
-    EXPECT_STREQ(d.reason, "device_within_budget");
+    EXPECT_EQ(d.device_budget_bytes, 0u);
+    EXPECT_STREQ(d.reason, "interactive_device_tier_zero_no_cache");
 }
 
 // ---------------------------------------------------------------------------
@@ -382,22 +379,59 @@ TEST_F(GtDeviceCacheTest, CapOverrideForcesPinnedOrOff) {
     EXPECT_GE(stats.gt_pinned_cache_hits + stats.gt_cache_inserts, 1u);
 }
 
-TEST_F(GtDeviceCacheTest, InteractiveConfigureAppliesStrictCap) {
+TEST_F(GtDeviceCacheTest, InteractiveConfigureForcesDeviceTierZeroPinned) {
     auto cfg = base_config();
     cfg.gt_cache_headroom_bytes = GT_CACHE_DEFAULT_HEADROOM_BYTES;
     cfg.gt_cache_cap_bytes = 0;
     PipelinedImageLoader loader(cfg);
-    // Large synthetic footprint + interactive → partial or capped device budget.
+    // Large synthetic footprint + interactive → device tier 0, pinned host only.
     const size_t bytes_per = 20ULL * 1024 * 1024;
     const size_t n = 300; // ~6 GiB est
     loader.configure_gt_cache(n, bytes_per, /*interactive=*/true);
     const auto d = loader.gt_cache_budget();
     EXPECT_TRUE(d.interactive);
-    EXPECT_LE(d.device_budget_bytes, GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES);
-    if (d.enable_device && d.estimated_bytes > d.device_budget_bytes) {
-        EXPECT_TRUE(d.enable_pinned_host);
-        EXPECT_STREQ(d.reason, "device_partial_interactive_use_pinned");
-    }
+    EXPECT_EQ(d.device_budget_bytes, 0u);
+    EXPECT_FALSE(d.enable_device);
+    EXPECT_TRUE(d.enable_pinned_host);
+    EXPECT_STREQ(d.reason, "interactive_device_tier_zero_use_pinned");
+}
+
+// Interactive: warm/fill goes to pinned; device cache stays empty; repeated
+// loads are bit-identical via pinned hits + H2D staging (not a device cache).
+TEST_F(GtDeviceCacheTest, InteractivePinnedHitServesBitIdenticalNoDeviceCache) {
+    auto cfg = base_config();
+    PipelinedImageLoader loader(cfg);
+    loader.configure_gt_cache(/*expected_images=*/8, /*bytes_per_image=*/128 * 128 * 3,
+                              /*interactive=*/true);
+    ASSERT_FALSE(loader.gt_cache_budget().enable_device) << loader.gt_cache_budget().reason;
+    ASSERT_TRUE(loader.gt_cache_budget().enable_pinned_host);
+
+    loader.prefetch({make_request(1)});
+    const auto first = loader.get();
+    ASSERT_TRUE(first.error.empty()) << first.error;
+    ASSERT_TRUE(first.tensor.is_valid());
+    EXPECT_EQ(first.tensor.device(), Device::CUDA);
+    EXPECT_EQ(first.tensor.dtype(), DataType::UInt8);
+    const auto h1 = hash_tensor(first.tensor);
+
+    // Device tier must stay empty after the first decode (pinned-only policy).
+    EXPECT_EQ(loader.gt_device_cache_bytes(), 0u);
+    EXPECT_EQ(loader.get_stats().gt_device_cache_entries, 0u);
+    EXPECT_GE(loader.get_stats().gt_pinned_cache_entries, 1u);
+    EXPECT_GT(loader.gt_pinned_cache_bytes(), 0u);
+
+    loader.prefetch({make_request(2)});
+    const auto second = loader.get();
+    ASSERT_TRUE(second.error.empty()) << second.error;
+    ASSERT_TRUE(second.tensor.is_valid());
+    EXPECT_EQ(second.tensor.device(), Device::CUDA);
+    EXPECT_EQ(hash_tensor(second.tensor), h1);
+    EXPECT_GE(loader.get_stats().gt_pinned_cache_hits, 1u);
+    EXPECT_EQ(loader.gt_device_cache_bytes(), 0u);
+
+    // Pressure reclaim on device tier is a no-op (nothing to evict).
+    EXPECT_EQ(loader.reclaim_gt_device_cache_for_pressure(), 0u);
+    EXPECT_GT(loader.gt_pinned_cache_bytes(), 0u);
 }
 
 // MJ-13: under VRAM pressure, device GT entries must yield so a subsequent

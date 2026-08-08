@@ -72,25 +72,23 @@ namespace lfs::io {
     /// headless/CLI training peak still has room (Directive-3 / WO-HP1).
     constexpr size_t GT_CACHE_DEFAULT_HEADROOM_BYTES = 2ULL * 1024 * 1024 * 1024;
 
-    /// Interactive (GUI/viewer) device-tier policy: never take more than this
-    /// fraction of currently free VRAM. Remainder stays for densify, the
-    /// viewport, and other apps. Owner evidence: full-res bonsai est≈5.4 GiB
-    /// under the free−2 GiB rule is hostile in a GUI session.
-    constexpr float GT_CACHE_INTERACTIVE_FREE_FRACTION = 0.25f;
-
-    /// Hard ceiling on interactive device-tier GT cache (1 GiB). Combined with
-    /// the free-fraction rule: device_budget = min(25% free, ceiling).
-    constexpr size_t GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES = 1024ULL * 1024 * 1024;
+    /// Interactive H2D staging depth: rotating freestanding device buffers for
+    /// the next camera image(s). Not a keyed multi-image device cache — only
+    /// hides PCIe latency while the dataloader pipeline runs ahead. Depth is a
+    /// pipeline constant (runtime image size still sizes each slot).
+    constexpr size_t GT_H2D_STAGING_DEPTH = 2;
 
     /**
      * @brief Pure budget gate for the decoded-GT device cache.
      *
      * Headless/CLI: enable device tier only when n_images * bytes_per_image
      * fits under min(free_vram - headroom, optional programmatic cap).
-     * Interactive (GUI/viewer): cap device tier at
-     * min(25% free VRAM, hard ceiling [, cap]); partial device fill is allowed
-     * with pinned-host as the middle tier for the remainder.
-     * Both off falls back to decode.
+     * Interactive (GUI/viewer): device tier is always 0 — GT lives in the
+     * pinned-host tier and is served via async H2D into a small staging
+     * ring (depth GT_H2D_STAGING_DEPTH). Both off falls back to decode.
+     *
+     * Scaling-invariant: sizes come from n_images / bytes_per_image / free
+     * VRAM only — never from dataset name or resolution labels.
      */
     struct GtCacheBudgetDecision {
         bool enable_device = false;
@@ -98,7 +96,7 @@ namespace lfs::io {
         size_t estimated_bytes = 0;
         size_t free_vram_bytes = 0;
         size_t headroom_bytes = GT_CACHE_DEFAULT_HEADROOM_BYTES;
-        size_t cap_bytes = 0; // 0 = no explicit cap; interactive sets effective
+        size_t cap_bytes = 0; // 0 = no explicit cap; interactive device budget stays 0
         size_t device_budget_bytes = 0;
         bool interactive = false;
         const char* reason = "uninitialized";
@@ -129,32 +127,16 @@ namespace lfs::io {
         }
 
         if (interactive) {
-            // Strict interactive budget: min(25% free, hard ceiling [, cap]).
-            // No free−headroom greed; pinned absorbs the remainder when the
-            // full dataset exceeds the device tier.
-            const size_t fraction_budget = static_cast<size_t>(
-                static_cast<double>(free_vram_bytes) * static_cast<double>(GT_CACHE_INTERACTIVE_FREE_FRACTION));
-            size_t budget = std::min(fraction_budget, GT_CACHE_INTERACTIVE_HARD_CEILING_BYTES);
-            if (cap_bytes > 0) {
-                budget = std::min(budget, cap_bytes);
-            }
-            d.device_budget_bytes = budget;
-            d.cap_bytes = budget; // log effective interactive cap
-            if (budget < bytes_per_image) {
-                d.enable_pinned_host = allow_pinned_fallback;
-                d.reason = d.enable_pinned_host ? "interactive_below_one_image_use_pinned"
-                                                : "interactive_below_one_image_no_cache";
-                return d;
-            }
-            if (d.estimated_bytes <= budget) {
-                d.enable_device = true;
-                d.reason = "device_within_budget";
-                return d;
-            }
-            d.enable_device = true;
+            // Owner binding (bet #2): GUI device tier = 0 always. Pinned host
+            // holds the decoded set; H2D staging (not a device cache) hides
+            // upload latency. free_vram / cap do not re-enable device tier —
+            // no residual mini-tier knobs.
+            d.device_budget_bytes = 0;
+            d.cap_bytes = 0;
+            d.enable_device = false;
             d.enable_pinned_host = allow_pinned_fallback;
-            d.reason = d.enable_pinned_host ? "device_partial_interactive_use_pinned"
-                                            : "device_partial_interactive";
+            d.reason = d.enable_pinned_host ? "interactive_device_tier_zero_use_pinned"
+                                            : "interactive_device_tier_zero_no_cache";
             return d;
         }
 
@@ -645,6 +627,12 @@ namespace lfs::io {
         [[nodiscard]] std::optional<lfs::core::Tensor> try_gt_device_hit(const std::string& key);
         [[nodiscard]] std::optional<lfs::core::Tensor> try_gt_pinned_hit(const std::string& key,
                                                                          cudaStream_t stream);
+        /// Async H2D from pinned host into a freestanding device tensor (not inserted
+        /// into the keyed device cache). Pipeline prefetch keeps the next 1–2 camera
+        /// images ahead so PCIe latency is hidden from dl_wait; destinations are
+        /// transient ReadyImage payloads, not a multi-image device cache.
+        [[nodiscard]] lfs::core::Tensor h2d_from_pinned(const lfs::core::Tensor& host,
+                                                        cudaStream_t stream);
         void maybe_store_gt_tensor(const std::string& key, const lfs::core::Tensor& tensor);
         void evict_gt_device_if_needed(size_t required_bytes);
 
