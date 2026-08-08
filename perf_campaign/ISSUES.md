@@ -342,3 +342,9 @@ capacity-ensure abort. Tracked as ISS-024.
 ### ISS-027 acceptance addendum (owner): fix must survive ALL SH degrees.
 Supervisor pre-publish gate: GUI densify-crossing runs at sh-degree 0, 1, 2, 3 — each clean.
 Verified: degree 0 (earlier session), 1/2 (-i 2000), 3 (-i 6000).
+
+## ISS-028 — VRAM ledger double-counts loss arena (arena + scope alias)
+- **Status:** OPEN, minor. Found by budget-architect analysis (budget-3p8-architect.md).
+- The peak ledger reports the loss workspace twice (arena region + scoped alias). Acceptance
+  measurements are unaffected (nvidia-smi process sampling), but ledger consumers must dedupe.
+  Fix opportunistically in the next ledger-touching order.
