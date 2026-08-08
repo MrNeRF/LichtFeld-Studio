@@ -31,7 +31,8 @@ namespace lfs::vis::gui {
 
     void PanelLayoutManager::loadState() {
         LayoutState state;
-        state.load();
+        if (!state.load())
+            return;
         // right_panel_width_ intentionally not loaded — always start at default
         scene_panel_ratio_ = state.scene_panel_ratio;
         python_console_width_ = state.python_console_width;
@@ -42,7 +43,8 @@ namespace lfs::vis::gui {
 
     void PanelLayoutManager::saveState() const {
         LayoutState state;
-        state.load();
+        if (!state.load())
+            return;
         // right_panel_width not saved — always start at default
         state.scene_panel_ratio = scene_panel_ratio_;
         state.python_console_width = python_console_width_;

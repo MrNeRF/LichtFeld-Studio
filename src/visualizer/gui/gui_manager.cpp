@@ -3034,7 +3034,8 @@ namespace lfs::vis::gui {
         file_association_checked_ = true;
 
         LayoutState state;
-        state.load();
+        if (!state.load())
+            return;
         if (state.file_association == "declined")
             return;
         if (areFileAssociationsRegistered())
@@ -3052,7 +3053,8 @@ namespace lfs::vis::gui {
         };
         req.on_result = [](const lfs::core::ModalResult& result) {
             LayoutState ls;
-            ls.load();
+            if (!ls.load())
+                return;
 
             if (result.button_label == LOC(FileAssociation::YES)) {
                 registerFileAssociations();

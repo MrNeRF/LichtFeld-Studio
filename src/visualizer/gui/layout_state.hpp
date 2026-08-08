@@ -29,7 +29,9 @@ namespace lfs::vis::gui {
         std::vector<std::string> vram_hud_collapsed_paths;
 
         void save() const;
-        void load();
+        bool load();
+        bool saveTo(const std::filesystem::path& path) const;
+        bool loadFrom(const std::filesystem::path& path);
         static std::filesystem::path getConfigDir();
 
     private:
