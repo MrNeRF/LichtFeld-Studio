@@ -3292,9 +3292,24 @@ namespace lfs::training {
         }
 
         if (!exiting_headless) {
-            // Release GPU memory pools back to system
-            lfs::core::Tensor::trim_memory_pool();
-            lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
+            // Release GPU memory pools back to system. ISS-027: never let a
+            // poisoned CUDA context turn arena full_reset into std::terminate.
+            try {
+                lfs::core::Tensor::trim_memory_pool();
+            } catch (const std::exception& e) {
+                LOG_ERROR("Trainer::shutdown trim_memory_pool failed (continuing): {}",
+                          e.what());
+            } catch (...) {
+                LOG_ERROR("Trainer::shutdown trim_memory_pool failed (unknown; continuing)");
+            }
+            try {
+                lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
+            } catch (const std::exception& e) {
+                LOG_ERROR("Trainer::shutdown arena full_reset failed (continuing): {}",
+                          e.what());
+            } catch (...) {
+                LOG_ERROR("Trainer::shutdown arena full_reset failed (unknown; continuing)");
+            }
             LFS_CUDA_LOG_TEARDOWN(cudaDeviceSynchronize(), nullptr,
                                   "shutdown: post-trim device sync");
         }

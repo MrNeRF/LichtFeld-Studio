@@ -734,16 +734,42 @@ namespace lfs::core {
                 const auto device = entry.first;
                 auto& arena = entry.second;
                 if (arena) {
-                    LFS_CUDA_CHECK_MSG(cudaSetDevice(device),
-                                       "RasterizerMemoryArena reset device={}", device);
-                    LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
-                                       "RasterizerMemoryArena reset device={}", device);
+                    // ISS-027: a poisoned CUDA context (e.g. async illegal address during
+                    // training) must not escalate full_reset → std::terminate on the
+                    // ~Trainer shutdown path. Log and continue decommitting host state.
+                    {
+                        const cudaError_t set_status = cudaSetDevice(device);
+                        if (set_status != cudaSuccess) {
+                            ensure_cuda_success(
+                                set_status, "cudaSetDevice(arena full_reset)",
+                                detail::format_cuda_safe("device={}", device),
+                                LFS_SOURCE_SITE_CURRENT(),
+                                CudaFailureDisposition::LogOnlyNoLatch);
+                        }
+                        const cudaError_t sync_status = cudaDeviceSynchronize();
+                        if (sync_status != cudaSuccess) {
+                            ensure_cuda_success(
+                                sync_status, "cudaDeviceSynchronize(arena full_reset)",
+                                detail::format_cuda_safe("device={}", device),
+                                LFS_SOURCE_SITE_CURRENT(),
+                                CudaFailureDisposition::LogOnlyNoLatch);
+                        }
+                    }
 
                     // No frame can own the arena now. Publish the empty high-water
                     // before deciding which VMM chunks are unused, otherwise the old
                     // frame offset pins every chunk it crossed.
                     arena->offset.store(0, std::memory_order_release);
-                    decommit_unused_memory(*arena);
+                    try {
+                        decommit_unused_memory(*arena);
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("RasterizerMemoryArena full_reset decommit failed "
+                                  "(continuing teardown): {}",
+                                  e.what());
+                    } catch (...) {
+                        LOG_ERROR("RasterizerMemoryArena full_reset decommit failed "
+                                  "(unknown; continuing teardown)");
+                    }
                 }
             }
 
@@ -751,7 +777,16 @@ namespace lfs::core {
             pending_render_frames_ = 0;
             active_training_frames_ = 0;
 
-            empty_cuda_cache();
+            try {
+                empty_cuda_cache();
+            } catch (const std::exception& e) {
+                LOG_ERROR("RasterizerMemoryArena full_reset empty_cuda_cache failed "
+                          "(continuing teardown): {}",
+                          e.what());
+            } catch (...) {
+                LOG_ERROR("RasterizerMemoryArena full_reset empty_cuda_cache failed "
+                          "(unknown; continuing teardown)");
+            }
         }
 
         {
