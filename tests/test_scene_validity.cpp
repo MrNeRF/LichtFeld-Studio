@@ -812,7 +812,10 @@ namespace lfs::python {
         EXPECT_EQ(training_model->means_raw().capacity(), capacity);
         EXPECT_EQ(training_model->shN_raw().capacity(),
                   core::sh_swizzled_float_count(capacity, rest_coeffs));
-        EXPECT_FALSE(training_model->means_raw().is_external_storage());
+        // zeros_direct is still "external" (cuda.direct) — assert we left the
+        // Vulkan-external interop kind, not that storage is non-external.
+        EXPECT_NE(training_model->means_raw().external_storage_kind(),
+                  "vulkan_external_buffer");
     }
 
     TEST_F(SceneValidityTest, AdamAddNewParamsPreservesExportableStorage) {

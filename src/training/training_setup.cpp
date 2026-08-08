@@ -381,13 +381,17 @@ namespace lfs::training {
 
                 lfs::core::Tensor shN;
                 lfs::core::Tensor shN_bounds;
+                bool need_q16_encode = false;
                 if (layout_rest > 0 && model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
+                    const size_t float_cap =
+                        lfs::core::sh_swizzled_float_count(target_capacity, layout_rest);
+                    const size_t q16_cap =
+                        lfs::core::sh_value_quant::sh_value_u16_count(target_capacity, layout_rest);
+                    const size_t bounds_cap =
+                        lfs::core::sh_value_quant::n_bounds_for_prims(target_capacity) * 2u;
+
                     if (model.shN_value_quantized()) {
-                        // Pad-dropped q16: install codes + bounds into exportable.
-                        const size_t q16_cap =
-                            lfs::core::sh_value_quant::sh_value_u16_count(target_capacity, layout_rest);
-                        const size_t bounds_cap =
-                            lfs::core::sh_value_quant::n_bounds_for_prims(target_capacity) * 2u;
+                        // Pad-dropped q16 codes + bounds → exportable/view target.
                         shN = copy_param(
                             model.shN_raw(), model.shN_raw().shape(), q16_cap, "SplatData.shN");
                         if (model.shN_value_bounds().is_valid() &&
@@ -399,15 +403,26 @@ namespace lfs::training {
                                 "SplatData.shN_value_bounds");
                         }
                     } else {
-                        // Float/IEEE-f16 source: leave shN on the source allocator and
-                        // re-encode into exportable via apply_shN_value_quant after migrate
-                        // (exportable ShN region is q16-sized — float topology won't fit).
-                        shN = model.shN_raw();
-                        if (shN.device() != lfs::core::Device::CUDA) {
-                            shN = shN.cuda();
+                        // Try float topology install. Real SplatExportableStorage
+                        // forces Float16 and clamps capacity to q16 cells — detect
+                        // that and re-encode instead of bitcasting float into half.
+                        lfs::core::Tensor src_float = model.shN_raw();
+                        if (src_float.device() != lfs::core::Device::CUDA) {
+                            src_float = src_float.cuda();
                         }
-                        if (!shN.is_contiguous()) {
-                            shN = shN.contiguous();
+                        if (!src_float.is_contiguous()) {
+                            src_float = src_float.contiguous();
+                        }
+                        lfs::core::Tensor installed = copy_param(
+                            src_float, src_float.shape(), float_cap, "SplatData.shN");
+                        const bool landed_in_q16_exportable =
+                            installed.dtype() == lfs::core::DataType::Float16 ||
+                            installed.capacity() < float_cap;
+                        if (landed_in_q16_exportable) {
+                            shN = std::move(src_float);
+                            need_q16_encode = true;
+                        } else {
+                            shN = std::move(installed);
                         }
                     }
                 }
@@ -437,8 +452,10 @@ namespace lfs::training {
                 if (capacity_ensure) {
                     model.set_capacity_ensure(std::move(capacity_ensure));
                 }
-                // Encode float/f16 rest into exportable q16 when still not quantized.
-                if (layout_rest > 0 && model.shN_raw().is_valid() && !model.shN_value_quantized()) {
+                // Encode float/f16 rest into exportable q16 when the target block
+                // is pad-dropped (probe above detected Float16-clamped ShN).
+                if (need_q16_encode && model.shN_raw().is_valid() &&
+                    !model.shN_value_quantized()) {
                     (void)lfs::training::sh_value::apply_shN_value_quant(model);
                 }
                 lfs::core::Tensor::trim_memory_pool();
