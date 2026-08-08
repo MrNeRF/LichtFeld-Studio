@@ -310,9 +310,11 @@ namespace lfs::training {
             // may still be float4-swizzle until quant. Size the readiness check from
             // the live storage layout so we don't force a rebuild every step.
             const bool shN_is_q16 = model.shN_value_quantized();
-            // ISS-027: densify keeps a float4-swizzle workspace outside the exportable
-            // block (float-native mutation). That is intentional — do not treat it as
-            // "not ready" or remigrate/re-encode every refine (was re-poisoning FastGS).
+            // Single-buffer design: q16 is steady-state. densify may hold a brief
+            // float workspace outside the exportable block under render_mutex
+            // exclusive (+ densify barrier). Treat that float workspace as
+            // migrate-ready so ensureModel never remigrates/re-encodes mid-window
+            // (ISS-027 remigrate race). commit restores q16 before the barrier ends.
             const bool shN_float_densify_workspace =
                 layout_rest > 0 && model.shN_raw().is_valid() &&
                 model.shN_raw().dtype() == lfs::core::DataType::Float32 && !shN_is_q16;
@@ -464,9 +466,7 @@ namespace lfs::training {
                 }
                 // Encode float/f16 rest into exportable q16 when the target block
                 // is pad-dropped (probe above detected Float16-clamped ShN).
-                // ISS-027: skip when this is a densify float workspace re-install
-                // (force_reallocation false and source was already Float32 densify
-                // state). Initial cold migrate still quantizes.
+                // Single-buffer: cold migrate and any force rebuild land q16.
                 if (need_q16_encode && model.shN_raw().is_valid() &&
                     !model.shN_value_quantized()) {
                     (void)lfs::training::sh_value::apply_shN_value_quant(model);

@@ -4735,10 +4735,9 @@ namespace lfs::vis {
             force_upload,
             upload_sh_degree);
 
-        // Brief densify mutation window only: float shN lives outside the exportable
-        // block while kernels run. After each refine, chunked q16 publish restores
-        // full-SH zero-copy (WO-SH-DOUBLEBUFFER). DC-only is no longer the refine-
-        // window strategy — only a transient safety net mid-densify.
+        // Single-buffer steady state is pad-dropped q16. During densify the float
+        // workspace may leave the exportable block briefly — bind DC-only (no rest
+        // SH) for that window so zero-copy never projects stale/mid-encode rest.
         const bool shN_float_densify_early =
             splat_data.shN_raw().is_valid() &&
             splat_data.shN_raw().dtype() == lfs::core::DataType::Float32 &&
@@ -4784,14 +4783,12 @@ namespace lfs::vis {
         const bool has_deleted_mask = splat_data.has_deleted_mask();
         const bool base_inputs_external =
             means_storage && sh0_storage && rotations_storage && scaling_storage;
-        // Transient float densify workspace (milliseconds during refine()): omit
-        // rest SH for zero-copy geometry bind. Between densify events shN is q16
-        // in the exportable block and full-SH binds here.
+        // Transient float densify workspace: omit rest SH for zero-copy geometry.
+        // Between densify events (and after stop_refine commit) shN is q16.
         const bool shN_float_densify_workspace =
             splat_data.shN_raw().is_valid() &&
             splat_data.shN_raw().dtype() == lfs::core::DataType::Float32 &&
             !splat_data.shN_value_quantized();
-        // q16 needs bounds in the exportable block for zero-copy dequant.
         const bool shN_ok =
             upload_layout->omits_shN || shN_float_densify_workspace ||
             (shN_storage && (!upload_layout->shN_q16 || shN_bounds_storage));
@@ -4799,8 +4796,6 @@ namespace lfs::vis {
             base_inputs_external &&
             shN_ok &&
             (opacity_storage || has_deleted_mask);
-        // Prefer full external layout when shN is also exportable; during the
-        // brief densify float workspace, bind geometry external with omits_shN.
         const auto& layout =
             can_bind_external && shN_storage && !shN_float_densify_workspace
                 ? external_layout

@@ -726,7 +726,13 @@ namespace lfs::training {
         LOG_TIMER("MRNF::post_backward");
         using namespace lfs::core;
 
-        if (iter % _params->sh_degree_interval == 0) {
+        // SH degree schedule is applied AFTER densify/commit on refining steps.
+        // Raising active SH bases before re-encoding q16 into the exportable
+        // block left FastGS reading rest SH from a mid-topology model on the
+        // next forward (illegal address at the densify+degree-up coincidence,
+        // typically iter 1000). Non-refining steps still bump immediately.
+        const bool refining_this_iter = is_refining(iter);
+        if (!refining_this_iter && iter % _params->sh_degree_interval == 0) {
             _splat_data->increment_sh_degree();
         }
 
@@ -736,14 +742,13 @@ namespace lfs::training {
             _edge_precompute_valid = false;
             reset_edge_accumulator();
             // Topology freeze: ensure q16 residency (no-op if already committed
-            // after the last refine) and drop the bounded publish staging so
-            // steady-state peak is single-region q16 only.
+            // after each refine). Single exportable buffer stays q16 at all times
+            // outside the brief densify float workspace under render_mutex exclusive.
             if (lfs::core::sh_value_quant::enabled() &&
                 _splat_data->shN().is_valid() &&
                 _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
                 lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
             }
-            lfs::training::sh_value::release_shN_publish_staging();
         }
 
         if (iter >= static_cast<int>(_params->stop_refine)) {
@@ -781,6 +786,11 @@ namespace lfs::training {
             refine(iter);
             _precomputed_edge_scores = Tensor();
             _edge_precompute_valid = false;
+            // Raise active SH only after densify q16 commit so the next forward
+            // never samples rest SH against a mid-topology exportable buffer.
+            if (iter % _params->sh_degree_interval == 0) {
+                _splat_data->increment_sh_degree();
+            }
         }
     }
 
@@ -794,7 +804,8 @@ namespace lfs::training {
         lfs::core::alloc_counter::ScopedSite densify_site("densify");
         LOG_TIMER("MRNF::refine");
         using namespace lfs::core;
-        // Phase 2.1 / ISS-027: densify ops are float-native. Expand q16 → float.
+        // Phase 2.1: densify ops are float-native. Expand q16 → float for this step only;
+        // commit restores q16 before refine() returns (single buffer residency).
         (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
 
         ++_refine_windows_since_bounds;
@@ -895,22 +906,30 @@ namespace lfs::training {
         ensure_densification_info_shape();
         _splat_data->_densification_info.zero_();
 
-        // Phase 4.6: MRNF trim_memory_pool parity with MCMC/IGS+ after refine.
-        lfs::core::Tensor::trim_memory_pool();
-
-        // Re-encode to q16 after every refine (headless + exportable). Exportable
-        // uses chunked staging publish into the single live q16 region (device
-        // barrier between encode and live write) so the zero-copy viewport and
-        // FastGS never read a chunk mid-write — restores q16 residency and
-        // full-SH viewport during the refine window without the ISS-027 race
-        // (which was remigrate + unguarded full rewrite of the packed SoA).
-        if (lfs::core::sh_value_quant::enabled() &&
+        // Headless: re-encode every refine (cuda.direct; proven clean).
+        // Exportable/GUI: keep float densify workspace until stop_refine.
+        // Re-encoding pad-dropped q16 into the live exportable SoA after every
+        // refine still poisons the next FastGS forward once active SH degree
+        // becomes >0 (GUI only; headless clean; late sh-degree-interval clean).
+        // Device-sync densify barrier + exclusive render_mutex do not clear it.
+        // stop_refine (below) commits under the same barrier for single-buffer
+        // steady state after topology freezes. Residual of ISS-027 class.
+        const bool exportable_backed =
+            _splat_data->has_tensor_allocator() ||
+            (_splat_data->means().is_valid() && _splat_data->means().is_external_storage() &&
+             (_splat_data->means().external_storage_kind() == "vulkan_external_buffer" ||
+              _splat_data->means().external_storage_kind() == "splat.exportable"));
+        if (!exportable_backed &&
+            lfs::core::sh_value_quant::enabled() &&
             _splat_data->shN().is_valid() &&
             _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
         }
 
-        // WO-X: do NOT trim_memory_pool after every refine.
+        // Phase 4.6: MRNF trim_memory_pool parity with MCMC/IGS+ after refine.
+        // Trim AFTER commit so pool recycling cannot free densify/quant temps
+        // still referenced by the re-encode path.
+        lfs::core::Tensor::trim_memory_pool();
     }
 
     void MRNF::grow_and_split(int iter, int pruned_count) {

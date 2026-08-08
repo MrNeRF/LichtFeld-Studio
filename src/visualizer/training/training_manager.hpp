@@ -207,9 +207,20 @@ namespace lfs::vis {
 
         // Install densify-time grow/rebind hook on the training model (Phase 5.1).
         void installExportableCapacityEnsure(lfs::core::SplatData& model);
+        // Install WO-SH-SINGLE-LOCK densify barrier on the live trainer (no-op
+        // when there is no exportable block / no trainer).
+        void installExportableDensifyBarrier();
         // Body of the capacity-ensure hook (member so rebind cannot destroy the
         // running std::function target mid-call).
         [[nodiscard]] bool growExportableForDensify(std::size_t needed_rows);
+
+        // Drop Vulkan import of the exportable block (cuda-only views). Nested.
+        [[nodiscard]] bool beginExportableDensifyBarrier();
+        // Re-import exportable block into Vulkan after densify/commit. Nested.
+        [[nodiscard]] bool endExportableDensifyBarrier();
+        // Shared drop / re-import helpers used by grow and the densify barrier.
+        [[nodiscard]] bool rebindExportableCudaOnly();
+        [[nodiscard]] bool rebindExportableVulkanInterop();
 
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
@@ -221,6 +232,8 @@ namespace lfs::vis {
         VisualizerImpl* viewer_ = nullptr;
         core::Scene* scene_ = nullptr;
         std::optional<lfs::core::SplatExportableStorage> splat_storage_;
+        // Nesting depth for densify-window Vulkan exclusion (ISS-027 / WO-SH-SINGLE-LOCK).
+        int exportable_densify_barrier_depth_ = 0;
 
         // State machine (single source of truth for state)
         TrainingStateMachine state_machine_;

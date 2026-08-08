@@ -198,6 +198,21 @@ namespace lfs::training {
             splat_tensor_allocator_ = std::move(allocator);
         }
 
+        /// WO-SH-SINGLE-LOCK: densify re-encodes pad-dropped q16 into the live
+        /// exportable block. TrainerManager installs begin/end that drop the
+        /// Vulkan import for the exclusive densify window and re-import after
+        /// commit — same exclusion principle as growExportableForDensify.
+        /// Headless leaves both empty (no-op).
+        void setExportableDensifyBarrier(std::function<bool()> begin,
+                                         std::function<bool()> end) {
+            exportable_densify_barrier_begin_ = std::move(begin);
+            exportable_densify_barrier_end_ = std::move(end);
+        }
+
+        /// Begin densify-window Vulkan exclusion. Returns true if end must be called.
+        [[nodiscard]] bool beginExportableDensifyBarrier();
+        void endExportableDensifyBarrier();
+
         void setOnIterationStart(std::function<void()> cb) { on_iteration_start_ = std::move(cb); }
 
         lfs::core::Scene* getScene() const { return scene_; }
@@ -664,6 +679,9 @@ namespace lfs::training {
         std::vector<std::filesystem::path> python_scripts_;
 
         std::function<void()> on_iteration_start_;
+        std::function<bool()> exportable_densify_barrier_begin_;
+        std::function<bool()> exportable_densify_barrier_end_;
+        int exportable_densify_barrier_depth_ = 0;
         GTLoadConfigSnapshot gt_load_config_snapshot_;
     };
 

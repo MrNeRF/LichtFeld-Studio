@@ -2180,6 +2180,34 @@ namespace lfs::training {
         viewer_borrow_value_.store(0, std::memory_order_release);
     }
 
+    bool Trainer::beginExportableDensifyBarrier() {
+        if (exportable_densify_barrier_depth_ > 0) {
+            ++exportable_densify_barrier_depth_;
+            return true;
+        }
+        if (!exportable_densify_barrier_begin_) {
+            return false;
+        }
+        if (!exportable_densify_barrier_begin_()) {
+            return false;
+        }
+        exportable_densify_barrier_depth_ = 1;
+        return true;
+    }
+
+    void Trainer::endExportableDensifyBarrier() {
+        if (exportable_densify_barrier_depth_ <= 0) {
+            return;
+        }
+        --exportable_densify_barrier_depth_;
+        if (exportable_densify_barrier_depth_ > 0) {
+            return;
+        }
+        if (exportable_densify_barrier_end_) {
+            (void)exportable_densify_barrier_end_();
+        }
+    }
+
     void Trainer::publishViewerBorrow(uint64_t value) {
         // Monotonic: prompt per-submit publishes and the frame-scope publisher
         // may interleave; never regress to an older value.
@@ -3959,7 +3987,8 @@ namespace lfs::training {
                     // first step's output, which this write-lock — taken before that step —
                     // blocks. See trainer.cpp step() lock below; both must be gated.
                     std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
-                    if (strategy_->is_refining(iter)) {
+                    const bool refining = strategy_->is_refining(iter);
+                    if (refining) {
                         lock.lock();
                     }
                     // Drain in-flight reader events immediately before post_backward's
@@ -3968,6 +3997,24 @@ namespace lfs::training {
                     // reader↔writer overlap to a sub-microsecond CPU window. The
                     // exclusive lock (when refining) additionally bars new readers.
                     waitForModelReaders();
+                    // Single-buffer q16 commit into the live exportable block: drop
+                    // Vulkan import for the densify window (ISS-027 class exclusion).
+                    struct DensifyBarrierGuard {
+                        Trainer* self = nullptr;
+                        bool held = false;
+                        explicit DensifyBarrierGuard(Trainer* t, bool need) : self(t) {
+                            if (need && self) {
+                                held = self->beginExportableDensifyBarrier();
+                            }
+                        }
+                        ~DensifyBarrierGuard() {
+                            if (held && self) {
+                                self->endExportableDensifyBarrier();
+                            }
+                        }
+                        DensifyBarrierGuard(const DensifyBarrierGuard&) = delete;
+                        DensifyBarrierGuard& operator=(const DensifyBarrierGuard&) = delete;
+                    } densify_barrier(this, refining);
                     auto& model = strategy_->get_model();
                     const size_t model_size_before = static_cast<size_t>(model.size());
                     strategy_->post_backward(iter, r_output);
@@ -3997,6 +4044,7 @@ namespace lfs::training {
                     }
                     // Readers can re-acquire the shared lock the moment the
                     // exclusive lock drops — re-mark consistency before that.
+                    // densify_barrier dtor re-imports Vulkan before lock release.
                     if (lock.owns_lock()) {
                         current_phase = StepPhase::Publish;
                         recordParamsReady();
@@ -5419,7 +5467,8 @@ namespace lfs::training {
                         // reading), so the CPU write-lock is needed only for reallocation.
                         std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
                         std::unique_lock<std::shared_mutex> model_write_lock(model_access_mutex_, std::defer_lock);
-                        if (strategy_->is_refining(iter)) {
+                        const bool refining = strategy_->is_refining(iter);
+                        if (refining) {
                             lock.lock();
                         } else {
                             // Non-refining in-place writes: hold the model-access lock
@@ -5433,6 +5482,26 @@ namespace lfs::training {
                         // trainer stream is ordered after any read that began mid-step.
                         // The exclusive lock (when refining) additionally bars new readers.
                         waitForModelReaders();
+                        // Densify-window Vulkan drop/re-import for single-buffer q16
+                        // commit (only when this path owns post_backward densify).
+                        struct DensifyBarrierGuard {
+                            Trainer* self = nullptr;
+                            bool held = false;
+                            explicit DensifyBarrierGuard(Trainer* t, bool need) : self(t) {
+                                if (need && self) {
+                                    held = self->beginExportableDensifyBarrier();
+                                }
+                            }
+                            ~DensifyBarrierGuard() {
+                                if (held && self) {
+                                    self->endExportableDensifyBarrier();
+                                }
+                            }
+                            DensifyBarrierGuard(const DensifyBarrierGuard&) = delete;
+                            DensifyBarrierGuard& operator=(const DensifyBarrierGuard&) = delete;
+                        } densify_barrier(
+                            this,
+                            refining && !in_sparsification && !fastgs_strategy_hooks_at_start);
                         LFS_VRAM_SCOPE("train.optimizer.strategy_step");
                         LOG_VRAM_DIFF("train.optimizer.strategy_step");
                         auto& model = strategy_->get_model();
