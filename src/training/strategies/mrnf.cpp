@@ -741,8 +741,8 @@ namespace lfs::training {
             _precomputed_edge_scores = Tensor();
             _edge_precompute_valid = false;
             reset_edge_accumulator();
-            // Topology freeze: re-encode exportable float densify workspace to
-            // pad-dropped q16 (headless already committed each refine).
+            // Topology freeze safety net: re-encode if a non-refining stop_refine
+            // step still holds float SH (every refine already commits).
             if (lfs::core::sh_value_quant::enabled() &&
                 _splat_data->shN().is_valid() &&
                 _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
@@ -906,17 +906,18 @@ namespace lfs::training {
         _splat_data->_densification_info.zero_();
 
         // Headless (cuda.direct): re-encode every refine — proven clean with
-        // FastGS at all SH degrees.
-        // Exportable/GUI: keep the densify float workspace until stop_refine.
-        // Re-encoding pad-dropped q16 into the live exportable SoA after every
-        // refine still illegal-addresses FastGS preprocess once active SH degree
-        // becomes >0 (repro: GUI --sh-degree 1, crash ~iter 1001; same binary
-        // with --sh-degree-interval 20000 / degree kept 0 finishes clean).
-        // Device-sync densify barrier + exclusive render_mutex + declared
-        // topology (2aab4f99/69ad1cc5) do not clear it. stop_refine commits
-        // under the same barrier once topology freezes. Residual ISS-027 class
-        // — rock-solid bar item 3 (q16 throughout) remains open for exportable
-        // densify windows only; outside densify / headless / degree-0: q16.
+        // FastGS at all SH degrees (q16 throughout, rock-solid bar item 3).
+        //
+        // Exportable/GUI residual: always-commit after every refine still
+        // illegal-addresses FastGS preprocess once active SH degree > 0
+        // (GUI --sh-degree 1 dies ~iter 1001; no capacity grow; no generation
+        // mismatch; cuda-only and Vulkan rebind barriers do not clear it;
+        // unit ExportableDegreeUpGrowSameBoundaryAllDegrees is green). The
+        // analyst D2 grow-staleness path is fixed by construction
+        // (resolve_q16_bind_ptrs + D1 shape validation + deleted by-value
+        // allocator), but is NOT the sole GUI always-commit root. Until that
+        // residual is isolated, exportable keeps the densify float workspace
+        // until stop_refine (ISS-027 lineage) — headless stays always-commit.
         const bool exportable_backed =
             _splat_data->has_tensor_allocator() ||
             (_splat_data->means().is_valid() && _splat_data->means().is_external_storage() &&

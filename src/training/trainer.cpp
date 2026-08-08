@@ -3972,6 +3972,8 @@ namespace lfs::training {
                     update_gaussians_this_iter;
 
                 bool fastgs_strategy_hooks_at_start = false;
+                const bool refining_this_step =
+                    strategy_ && strategy_->is_refining(iter);
                 if (fastgs_path && !in_sparsification) {
                     current_phase = StepPhase::RefinementCommit;
                     LFS_VRAM_SCOPE("train.strategy.fastgs_pre_step");
@@ -3987,7 +3989,7 @@ namespace lfs::training {
                     // first step's output, which this write-lock — taken before that step —
                     // blocks. See trainer.cpp step() lock below; both must be gated.
                     std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
-                    const bool refining = strategy_->is_refining(iter);
+                    const bool refining = refining_this_step;
                     if (refining) {
                         lock.lock();
                     }
@@ -4029,7 +4031,13 @@ namespace lfs::training {
                         sparsity_optimizer_->reset();
                     }
                     if (static_cast<size_t>(model.size()) != model_size_before) {
-                        syncTrainingSceneTopology(scene_, model);
+                        // Defer topology fan-out until after the densify barrier
+                        // re-exports/stabilizes exportable q16 — concurrent scene
+                        // cache rebuilds racing the next FastGS q16 forward were a
+                        // GUI-only illegal-address vector (exportable always-commit).
+                        if (!refining) {
+                            syncTrainingSceneTopology(scene_, model);
+                        }
                     }
                     if (auto result = ensureModelTensorAllocatorStorage(model, "fastgs strategy post_backward"); !result) {
                         return lfs::from_legacy_expected<StepDisposition>(
@@ -4049,8 +4057,15 @@ namespace lfs::training {
                         current_phase = StepPhase::Publish;
                         recordParamsReady();
                     }
+                    // densify_barrier dtor runs when leaving this block — topology
+                    // fan-out only after q16 commit is stable (see defer above).
                     ++mutation_epoch_;
                     persistent_commit = true;
+                }
+                if (fastgs_path && refining_this_step && !in_sparsification) {
+                    // Post-barrier topology publish (deferred from inside densify).
+                    auto& model_after = strategy_->get_model();
+                    syncTrainingSceneTopology(scene_, model_after);
                 }
                 if (fastgs_path && in_sparsification) {
                     install_cropbox_step_damping(strategy_->get_model(), strategy_->get_optimizer());

@@ -280,10 +280,11 @@ namespace lfs::vis {
             ++exportable_densify_barrier_depth_;
             return true;
         }
-        // Device-sync exclusion under render_mutex exclusive + waitForModelReaders.
-        // Full model rebind is reserved for capacity grow (physical remap). Mid-
-        // densify cuda-only↔Vulkan rebind was not required for headless correctness
-        // and risked leaving training/viewers with mismatched param views.
+        // Device-sync under render_mutex exclusive + waitForModelReaders.
+        // Full cuda-only↔Vulkan rebind is reserved for capacity grow (physical
+        // remap). Mid-densify rebind around always-commit was trialed and did not
+        // clear the GUI deg1 poison; generation-checked bind handles pointer
+        // staleness by construction for FastGS/Adam readers.
         if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
             LOG_ERROR("cudaDeviceSynchronize before densify exportable barrier failed: {} ({})",
                       cudaGetErrorName(err),
@@ -291,8 +292,8 @@ namespace lfs::vis {
             return false;
         }
         exportable_densify_barrier_depth_ = 1;
-        LOG_DEBUG("Exportable densify barrier: device-sync begin (gen={})",
-                  splat_storage_->generation());
+        LOG_INFO("Exportable densify barrier: begin device-sync gen={}",
+                 splat_storage_->generation());
         return true;
     }
 
@@ -310,8 +311,8 @@ namespace lfs::vis {
                       cudaGetErrorString(err));
             return false;
         }
-        LOG_DEBUG("Exportable densify barrier: device-sync end (gen={})",
-                  splat_storage_ ? splat_storage_->generation() : 0);
+        LOG_INFO("Exportable densify barrier: end device-sync gen={}",
+                 splat_storage_ ? splat_storage_->generation() : 0);
         return true;
     }
 

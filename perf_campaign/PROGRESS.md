@@ -1893,3 +1893,61 @@ Pass:
 
 ### Status
 **ISS-027 CLOSED.**
+
+---
+
+## WO-FIX-Q16-POISON — generation-checked exportable access (2026-08-08)
+
+- **Branch:** `lfs-elite` (never checkout)
+- **Spec:** `~/lfs-campaign-out/analysis/q16-poison-rootcause.md`
+- **Artifacts:** `~/lfs-campaign-out/q16fix/`
+
+### Discriminating experiment (step 0)
+
+| check | result |
+|---|---|
+| Unit: hold Tensor across grow → `resolve_exportable_device_ptr` | **CONFIRMED D2**: logs `exportable generation mismatch bound_gen=1 live_gen=2`, returns live region base |
+| GUI always-commit deg1 + LFS_CUDA_SYNC_DEBUG | Fault at FastGS forward preprocess ~iter 1001 |
+| Capacity grow before fault? | **No** (`grew=0`) |
+| Generation mismatch at fault? | **No** (`gen_mismatch=0`) |
+| Headless always-commit deg1 | **Clean** (Training completed) |
+| Unit `ExportableDegreeUpGrowSameBoundaryAllDegrees` | **Green** (exportable always-commit + FastGS) |
+
+**Verdict:** Analyst primary mechanism (D2 stale pointer after grow) is real and fixed by construction for bind sites. It is **not** the sole root of the GUI always-commit deg1 poison (falsified: no grow, no mismatch). Residual is GUI-exportable always-commit specific (headless + unit green).
+
+### Landed (by construction)
+
+1. **Generation-checked fetch** — `resolve_exportable_device_ptr` / `resolve_q16_bind_ptrs` re-resolve through live `SplatExportableStorage::Control`. Used at FastGS forward bind, fused-Adam prepare, gsplat dequant, encode/decode.
+2. **D1** — exportable allocator validates shape/capacity bytes ≤ region bytes; throws on mismatch.
+3. **D2** — deleted by-value snapshot `make_allocator` flavor; missing control fails loud.
+4. **Interop allocator** — captures live `control` (not by-value offsets); stamps provenance; D1 checks.
+5. **Permanent suite tests** — shape overrun, no-control allocator, resolve-after-grow, q16 bind under held view + rebind.
+6. **Topology defer** — scene topology fan-out after densify barrier (not mid-window).
+
+### Residual (rock-solid bar item 3 — OPEN for exportable densify)
+
+Exportable/GUI keeps densify float workspace until `stop_refine` (ISS-027 lineage). Headless remains always-commit q16. DC-only viewport during float window retained.
+
+Always-commit GUI trials that still faulted after D2 fix:
+- cuda-only densify barrier drop/re-import
+- stay-cuda-only after densify
+- topology-defer alone
+- LFS_CUDA_SYNC_DEBUG=cuda-sync
+
+Follow-up must isolate GUI-only residual (concurrent viewer path / full training loop vs unit FastGS) without re-opening D2.
+
+### Gates (this session)
+
+| gate | result |
+|---|---|
+| Unit D1/D2/gen + ShDegreeCollision (12) | **12/12 PASS** |
+| GUI deg1 `-i 1500` (float residual) | **bad=0**, Training finished iter=1500 |
+| GUI deg3 `-i 2500` densify grow | **bad=0**, grew=1, finished iter=2500 |
+| Headless smoke bonsai 500 + perf-bench | exit 0, **307.4 B/splat** |
+| Dual-workload full 2.60–2.66 band | not re-run this session (headless path unchanged by design; structural bind only) |
+
+### Commits
+(see git log for this session)
+
+### Status
+**PARTIAL.** Structural D1/D2/generation-check **landed and gated**. Exportable always-commit residual remains open (honest vs owner bar item 3).

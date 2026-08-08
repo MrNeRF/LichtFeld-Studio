@@ -4735,9 +4735,9 @@ namespace lfs::vis {
             force_upload,
             upload_sh_degree);
 
-        // Single-buffer steady state is pad-dropped q16. During densify the float
-        // workspace may leave the exportable block briefly — bind DC-only (no rest
-        // SH) for that window so zero-copy never projects stale/mid-encode rest.
+        // Single-buffer steady state is pad-dropped q16. During the residual
+        // exportable densify float window (until always-commit residual is
+        // closed) bind DC-only so zero-copy never projects mid-encode rest.
         const bool shN_float_densify_early =
             splat_data.shN_raw().is_valid() &&
             splat_data.shN_raw().dtype() == lfs::core::DataType::Float32 &&

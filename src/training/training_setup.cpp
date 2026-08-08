@@ -310,11 +310,11 @@ namespace lfs::training {
             // may still be float4-swizzle until quant. Size the readiness check from
             // the live storage layout so we don't force a rebuild every step.
             const bool shN_is_q16 = model.shN_value_quantized();
-            // Single-buffer design: q16 is steady-state. densify may hold a brief
-            // float workspace outside the exportable block under render_mutex
-            // exclusive (+ densify barrier). Treat that float workspace as
-            // migrate-ready so ensureModel never remigrates/re-encodes mid-window
-            // (ISS-027 remigrate race). commit restores q16 before the barrier ends.
+            // Single-buffer design: q16 is steady-state (always-commit). Densify
+            // may hold a barrier-transient float workspace outside the exportable
+            // block under render_mutex exclusive. Treat that float as migrate-ready
+            // so ensureModel never remigrates/re-encodes mid-barrier (ISS-027).
+            // commit restores q16 before the barrier ends.
             const bool shN_float_densify_workspace =
                 layout_rest > 0 && model.shN_raw().is_valid() &&
                 model.shN_raw().dtype() == lfs::core::DataType::Float32 && !shN_is_q16;
