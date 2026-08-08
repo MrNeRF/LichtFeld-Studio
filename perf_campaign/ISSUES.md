@@ -348,3 +348,17 @@ Verified: degree 0 (earlier session), 1/2 (-i 2000), 3 (-i 6000).
 - The peak ledger reports the loss workspace twice (arena region + scoped alias). Acceptance
   measurements are unaffected (nvidia-smi process sampling), but ledger consumers must dedupe.
   Fix opportunistically in the next ledger-touching order.
+
+### Single-lock wave acceptance addendum (owner: "must be rock solid")
+Supervisor review bar for the shlock landing — reject if any point fails:
+1. Collision safety BY CONSTRUCTION: structural mutations (densify commit, capacity grow,
+   SH degree-up layout resize, q16 re-encode) serialized through one mutation path with the
+   exclusion barrier, regardless of iteration alignment. A fix that only reorders the DEFAULT
+   schedule is insufficient.
+2. Collision-forcing regression tests: degree-up + densify same iteration (the found bug),
+   degree-up + grow same iteration, and a misaligned-cadence sweep (varied
+   sh-degree-interval / steps-scaler) — all clean, all SH degrees.
+3. q16 resident THROUGHOUT (ledger-verified) — no fp32 window revival.
+4. compute-sanitizer memcheck clean on the collision scenarios, not just the happy path.
+If the landed fix is schedule-reordering only, a hardening follow-up order is mandatory before
+any publish.
