@@ -799,3 +799,59 @@ TEST(ShDegreeCollisionTest, MisalignedCadenceDensifyDegreeSweep) {
     }
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
+
+// Landmine gate: stop_refine crossing with always-commit. The deferred-commit
+// float window used to leave float shN until stop_refine (~15k+ iters); every
+// prior gate stopped short of that boundary. Simulate the refine schedule up
+// through stop_refine and assert q16 is resident on both sides of the freeze.
+TEST(ShDegreeCollisionTest, StopRefineCrossingAlwaysCommitQ16Throughout) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto splat = make_random_sh3(kN, /*seed=*/0x57A8);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    splat.set_active_sh_degree(0);
+
+    // Scaled-invariant schedule (DEFAULT ratios): start_refine=500, refine_every=100,
+    // stop_refine=1500 stand-in for 15000 under steps_scaler=0.1 semantics.
+    constexpr int kStartRefine = 500;
+    constexpr int kRefineEvery = 100;
+    constexpr int kStopRefine = 1500;
+    constexpr int kShInterval = 1000;
+
+    int densify_commits = 0;
+    for (int iter = 1; iter <= kStopRefine + kRefineEvery; ++iter) {
+        const bool refining =
+            iter < kStopRefine && iter > kStartRefine && (iter % kRefineEvery == 0);
+        if (refining) {
+            ASSERT_TRUE(sh_value::ensure_shN_fp32_for_mutation(splat));
+            EXPECT_FALSE(splat.shN_value_quantized()) << "iter=" << iter;
+            if (iter % kShInterval == 0) {
+                splat.increment_sh_degree();
+            }
+            // Always-commit (no multi-iter float window).
+            ASSERT_TRUE(sh_value::commit_shN_after_mutation(splat));
+            ASSERT_TRUE(splat.shN_value_quantized()) << "post-commit iter=" << iter;
+            ++densify_commits;
+        } else if (iter % kShInterval == 0) {
+            splat.increment_sh_degree();
+            ASSERT_TRUE(splat.shN_value_quantized()) << "degree-up iter=" << iter;
+        }
+
+        // Topology-freeze safety net (mirrors MRNF::post_backward stop_refine).
+        if (iter == kStopRefine) {
+            if (splat.shN().is_valid() && splat.shN().dtype() == DataType::Float32) {
+                ASSERT_TRUE(sh_value::commit_shN_after_mutation(splat));
+            }
+            ASSERT_TRUE(splat.shN_value_quantized())
+                << "q16 must be resident at stop_refine boundary";
+        }
+        if (iter > kStopRefine) {
+            ASSERT_TRUE(splat.shN_value_quantized())
+                << "q16 must remain after stop_refine iter=" << iter;
+        }
+    }
+    EXPECT_GT(densify_commits, 0);
+    // Cross stop_refine: no further densify windows leave float behind.
+    EXPECT_TRUE(splat.shN_value_quantized());
+    EXPECT_EQ(splat.shN().dtype(), DataType::Float16);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
