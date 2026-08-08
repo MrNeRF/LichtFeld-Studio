@@ -59,7 +59,13 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float cx,
         const float cy,
         const uint sh_layout_slots,
-        FusedAdamSettings fused_adam) {
+        FusedAdamSettings fused_adam,
+        // ISS-029: model-truth shN-rest decode binds. fused_adam.shN.sh_value_*
+        // is enablement-gated (null during SH warmup) and gates only the UPDATE
+        // path; reading sh_coefficients_rest must always use these.
+        const float2* __restrict__ shN_value_bounds,
+        const uint shN_value_n_cells,
+        const uint shN_value_bits) {
         auto primitive_idx = cg::this_grid().thread_rank();
         const bool in_range = primitive_idx < n_primitives;
 
@@ -141,15 +147,12 @@ namespace fast_lfs::rasterization::kernels::backward {
                 sh0_grads,
                 shN_grads,
                 // q16: bits==16 + bounds. IEEE f16: bits==16 + null bounds.
-                fused_adam.shN.sh_value_bounds != nullptr
-                    ? reinterpret_cast<const float2*>(fused_adam.shN.sh_value_bounds)
-                    : nullptr,
-                fused_adam.shN.sh_value_bounds != nullptr
-                    ? static_cast<uint>(fused_adam.shN.sh_value_n_cells)
-                    : 0u,
-                fused_adam.shN.sh_value_bits == 16
-                    ? 16u
-                    : 0u);
+                // ISS-029: decode from the model bind, NOT fused_adam.shN —
+                // the optimizer copy is null during SH warmup while the buffer
+                // is already q16 (first degree-up ≤ warmup misread → MMU fault).
+                shN_value_bounds,
+                shN_value_bounds != nullptr ? shN_value_n_cells : 0u,
+                shN_value_bits == 16u ? 16u : 0u);
         } // close visible — SH Adam next kills shN live range before geometry
 
         // ---- Phase B: SH Adam (ALL threads — joint block-bounds reduction) ----

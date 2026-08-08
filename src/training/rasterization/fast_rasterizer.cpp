@@ -771,6 +771,32 @@ namespace lfs::training {
             throw std::runtime_error("FastGS fused Adam state is not available");
         }
 
+        // ISS-029: the backward binds shN-rest exactly like the forward —
+        // generation-checked resolve plus EXPLICIT representation params
+        // (bounds / n_cells / bits). The fused Adam settings' sh_value_* copy is
+        // enablement-gated (null through SH warmup) and gates only the update
+        // path; the first ACTIVE_SH_BASES>1 backward lands on the degree-up
+        // iteration, which at default cadence (interval 1000 == warmup) decoded
+        // q16 u16 codes as fp32 float4-swizzle → ~3x region overread → Warp MMU
+        // fault on the exportable block's committed-page edge (GUI); silent
+        // garbage gradients on plain arenas (headless).
+        const float* bwd_shN_ptr = nullptr;
+        const float* bwd_shN_bounds_ptr = nullptr;
+        unsigned bwd_shN_n_cells = 0u;
+        unsigned bwd_shN_bits = 0u;
+        if (gaussian_model.shN_value_quantized()) {
+            const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
+            bwd_shN_ptr = q16.codes;
+            bwd_shN_bounds_ptr = q16.bounds;
+            bwd_shN_n_cells = q16.n_cells_per_prim;
+            bwd_shN_bits = 16u;
+        } else if (gaussian_model.shN_ieee_f16()) {
+            bwd_shN_ptr = static_cast<const float*>(
+                lfs::core::resolve_exportable_device_ptr(gaussian_model.shN()));
+            bwd_shN_bits = 16u;
+        } else if (ctx.shN.is_valid()) {
+            bwd_shN_ptr = ctx.shN.ptr<float>();
+        }
         auto backward_result = fast_lfs::rasterization::backward_raw(
             update_densification_info ? gaussian_model._densification_info.ptr<float>() : nullptr,
             use_pixel_error_densification ? error_map_2d.ptr<float>() : nullptr,
@@ -784,9 +810,7 @@ namespace lfs::training {
             ctx.raw_scales.ptr<float>(),
             ctx.raw_rotations.ptr<float>(),
             ctx.raw_opacities.ptr<float>(),
-            ctx.shN.is_valid() && ctx.shN.dtype() == core::DataType::Float16
-                ? static_cast<const float*>(ctx.shN.data_ptr())
-                : ctx.shN.ptr<float>(),
+            bwd_shN_ptr,
             ctx.w2c_ptr,
             ctx.cam_position_ptr,
             ctx.forward_ctx,
@@ -802,7 +826,10 @@ namespace lfs::training {
             ctx.center_y,
             ctx.mip_filter,
             densification_type,
-            &fused_adam);
+            &fused_adam,
+            bwd_shN_bounds_ptr,
+            bwd_shN_n_cells,
+            bwd_shN_bits);
 
         ctx.mark_forward_context_released();
 

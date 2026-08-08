@@ -54,6 +54,11 @@ void fast_lfs::rasterization::backward(
     bool mip_filter,
     DensificationType densification_type,
     FusedAdamSettings fused_adam,
+    // ISS-029: model-truth shN-rest decode binds (independent of fused Adam
+    // enablement, which is off during SH warmup while the buffer is already q16).
+    const float2* shN_value_bounds,
+    const uint shN_value_n_cells,
+    const uint shN_value_bits,
     cudaStream_t stream) {
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
@@ -156,7 +161,10 @@ void fast_lfs::rasterization::backward(
                 cx,
                 cy,
                 sh_layout_slots,
-                fused_adam);
+                fused_adam,
+                shN_value_bounds,
+                shN_value_n_cells,
+                shN_value_bits);
             LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.preprocess_backward");
         };
         auto launch_preprocess_backward_for_mip = [&]<int ACTIVE_SH_BASES>() {

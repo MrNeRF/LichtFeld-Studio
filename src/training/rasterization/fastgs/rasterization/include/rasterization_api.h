@@ -127,7 +127,15 @@ namespace fast_lfs::rasterization {
         float center_y,
         bool mip_filter,
         DensificationType densification_type,
-        const FusedAdamSettings* fused_adam);
+        const FusedAdamSettings* fused_adam,
+        // ISS-029: shN representation binds, mirroring forward_raw. The backward
+        // kernel decodes sh_coefficients_rest with THESE, never with the fused
+        // Adam settings' copy — optimizer enablement (SH warmup) must not change
+        // how the coefficient buffer is interpreted. bits==16 with bounds → q16
+        // codes; bits==16 without bounds → IEEE f16 swizzle; bits==0 → fp32.
+        const float* shN_value_bounds_ptr = nullptr,
+        unsigned shN_value_n_cells = 0u,
+        unsigned shN_value_bits = 0u);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();

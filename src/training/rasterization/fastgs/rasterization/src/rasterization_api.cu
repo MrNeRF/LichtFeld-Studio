@@ -479,7 +479,10 @@ namespace fast_lfs::rasterization {
         float center_y,
         bool mip_filter,
         DensificationType densification_type,
-        const FusedAdamSettings* fused_adam) {
+        const FusedAdamSettings* fused_adam,
+        const float* shN_value_bounds_ptr,
+        unsigned shN_value_n_cells,
+        unsigned shN_value_bits) {
 
         // The forward chose the stream and chained the arena frame on it; the
         // backward shares the same context/arena frame and must match.
@@ -656,6 +659,9 @@ namespace fast_lfs::rasterization {
                 mip_filter,
                 densification_type,
                 *fused_adam,
+                reinterpret_cast<const float2*>(shN_value_bounds_ptr),
+                shN_value_n_cells,
+                shN_value_bits,
                 stream);
 
             // Mark frame as complete
