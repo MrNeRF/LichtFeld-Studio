@@ -1668,3 +1668,14 @@ than the f16 tier and only ~6 B/splat extra savings vs f16 float4-swizzle.
 
 ### Status
 **TIER 1 DONE.** Tier 2 deferred with design note above.
+
+## FINAL GATE + QUALITY A/B (2026-08-08 ~04:40, supervisor)
+Tip 32fb55be. Full suite 3420 PASS / 0 FAIL / 42 SKIP (first fully green suite).
+Bench: steady 2.61 ms/iter, dl_wait 0.01, 0.1 allocs/iter, peak 1660 MiB, 307.4 B/splat.
+Quality A/B vs campaign-start baseline e5506f39 (30k iters, --eval, test-every 8, 5M GS):
+| scene | baseline PSNR/SSIM | tip PSNR/SSIM | verdict |
+|---|---|---|---|
+| bonsai | 33.0548 / 0.9460 | 32.6694 / 0.9452 | −0.39 dB, within variance (q16 SH) |
+| bicycle | 24.9237 / 0.7487 | 25.0003 / 0.7530 | tip BETTER |
+Ops: /tmp session quota exhaustion caused the earlier corrupted finale A/B numbers and
+three background-task kills; artifacts now under ~/lfs-campaign-out/ab-new/.
