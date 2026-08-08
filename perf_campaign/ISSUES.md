@@ -329,3 +329,8 @@ capacity-ensure abort. Tracked as ISS-024.
   only (does NOT cross full densification — gate gap, same class as ISS-025's max-cap repro).
 - Secondary: RasterizerMemoryArena::full_reset() throws (cudaDeviceSynchronize,
   memory_arena.cu:739) during ~Trainer unwind on poisoned context -> std::terminate.
+
+### ISS-027 acceptance addendum (owner): fix must survive ALL SH degrees.
+Supervisor pre-publish gate: GUI densify-crossing runs at sh-degree 0, 1, 2, 3 — each clean.
+(The float-during-refine window must be correct for every degree's layout, including degree 0
+where shN is empty and the re-encode path must no-op cleanly.)
