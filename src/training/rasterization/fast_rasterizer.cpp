@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/kernels/grad_alpha.hpp"
@@ -385,19 +386,24 @@ namespace lfs::training {
                     : (bg_color.is_valid() && bg_color.numel() >= 3 ? bg_color.ptr<float>() : nullptr);
             // q16: Float16 codes + bounds. IEEE f16 float4-swizzle: Float16 without
             // bounds (exportable GUI). fp32: Float32 float4-swizzle.
+            // Generation-checked fetch: never pass a baked exportable pointer that
+            // survived a capacity grow (q16 poison D2).
             const bool shN_q16 = gaussian_model.shN_value_quantized();
             const bool shN_f16 = gaussian_model.shN_ieee_f16();
-            const float* shN_ptr =
-                (shN_q16 || shN_f16)
-                    ? static_cast<const float*>(gaussian_model.shN().data_ptr())
-                    : gaussian_model.shN().ptr<float>();
-            const float* shN_bounds_ptr =
-                shN_q16 ? gaussian_model.shN_value_bounds().ptr<float>() : nullptr;
-            const unsigned shN_n_cells =
-                shN_q16 ? static_cast<unsigned>(
-                              lfs::core::sh_value_quant::n_value_cells_per_prim(
-                                  static_cast<uint32_t>(gaussian_model.max_sh_coeffs_rest())))
-                        : 0u;
+            const float* shN_ptr = nullptr;
+            const float* shN_bounds_ptr = nullptr;
+            unsigned shN_n_cells = 0u;
+            if (shN_q16) {
+                const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
+                shN_ptr = q16.codes;
+                shN_bounds_ptr = q16.bounds;
+                shN_n_cells = q16.n_cells_per_prim;
+            } else if (shN_f16) {
+                shN_ptr = static_cast<const float*>(
+                    lfs::core::resolve_exportable_device_ptr(gaussian_model.shN()));
+            } else {
+                shN_ptr = gaussian_model.shN().ptr<float>();
+            }
             const unsigned shN_bits = (shN_q16 || shN_f16) ? 16u : 0u;
             forward_ctx = fast_lfs::rasterization::forward_raw(
                 means.ptr<float>(),

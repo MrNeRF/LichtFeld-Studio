@@ -11,6 +11,7 @@
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -761,7 +762,10 @@ namespace lfs::training {
             const double bias_correction2_sqrt_rcp = 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, next_step));
 
             // SH value quant stores u16 codes as Float16 bit-patterns; use data_ptr.
-            out.param = static_cast<float*>(param.data_ptr());
+            // Generation-checked when exportable-backed so a pre-grow raw pointer
+            // cannot survive into the fused step (q16 poison D2 class).
+            out.param = static_cast<float*>(
+                lfs::core::resolve_exportable_device_ptr(param));
             out.n_primitives = static_cast<int>(splat_data_.size());
             out.joint_packed = state.exp_avg.ptr<uint8_t>();
             out.joint_bounds = state.joint_bounds.ptr<float>();
@@ -795,14 +799,18 @@ namespace lfs::training {
                                   static_cast<int>(lfs::core::sh_float4_slots_for_rest(layout_rest) * 4u),
                                   active_rest > 0 && iteration > SH_WARMUP_ITERATIONS);
         // Phase 2.1: wire SH value quant single-writer re-encode into fused Adam.
+        // Generation-checked q16 fetch — never bake a pre-grow exportable pointer.
         if (fused.shN.enabled && splat_data_.shN_value_quantized() &&
             splat_data_.shN_value_bounds().is_valid()) {
-            fused.shN.sh_value_bounds = splat_data_.shN_value_bounds().ptr<float>();
+            const auto q16 = lfs::core::resolve_q16_bind_ptrs(splat_data_);
+            fused.shN.param = const_cast<float*>(q16.codes);
+            fused.shN.sh_value_bounds = const_cast<float*>(q16.bounds);
             fused.shN.sh_value_bits = 16;
-            fused.shN.sh_value_n_cells = static_cast<int>(
-                lfs::core::sh_value_quant::n_value_cells_per_prim(layout_rest));
+            fused.shN.sh_value_n_cells = static_cast<int>(q16.n_cells_per_prim);
         } else if (fused.shN.enabled && splat_data_.shN_ieee_f16()) {
             // IEEE f16 float4-swizzle (exportable GUI): half load/store, no bounds.
+            fused.shN.param = static_cast<float*>(
+                lfs::core::resolve_exportable_device_ptr(splat_data_.shN()));
             fused.shN.sh_value_bits = 16;
             fused.shN.sh_value_bounds = nullptr;
             fused.shN.sh_value_n_cells = 0;

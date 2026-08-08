@@ -8,6 +8,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
 #include "core/logger.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "gsplat/Ops.h"
 #include "lfs/training/sh_value_quant_kernels.hpp"
@@ -155,9 +156,10 @@ namespace lfs::training {
                     const auto n_floats = core::sh_swizzled_float_count(n_prims, rest);
                     shN_dequant_temp = core::Tensor::zeros(
                         core::TensorShape({n_floats}), core::Device::CUDA, core::DataType::Float32);
+                    const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
                     lfs::training::sh_value::decode_shN_u16_to_float4(
-                        reinterpret_cast<const std::uint16_t*>(shN.data_ptr()),
-                        gaussian_model.shN_value_bounds().ptr<float>(),
+                        reinterpret_cast<const std::uint16_t*>(q16.codes),
+                        q16.bounds,
                         shN_dequant_temp.ptr<float>(),
                         n_prims,
                         rest,

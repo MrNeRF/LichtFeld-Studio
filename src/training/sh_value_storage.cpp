@@ -7,6 +7,7 @@
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_quant_kernels.hpp"
@@ -106,8 +107,9 @@ namespace lfs::training::sh_value {
 
         encode_shN_float4_to_u16(
             float_src.ptr<float>(),
-            reinterpret_cast<std::uint16_t*>(u16.data_ptr()),
-            bounds.ptr<float>(),
+            reinterpret_cast<std::uint16_t*>(
+                lfs::core::resolve_exportable_device_ptr(u16)),
+            static_cast<float*>(lfs::core::resolve_exportable_device_ptr(bounds)),
             n,
             rest,
             stream);
@@ -190,8 +192,10 @@ namespace lfs::training::sh_value {
             bounds.set_stream(stream);
 
         decode_shN_u16_to_float4(
-            reinterpret_cast<const std::uint16_t*>(shN.data_ptr()),
-            bounds.ptr<float>(),
+            reinterpret_cast<const std::uint16_t*>(
+                lfs::core::resolve_exportable_device_ptr(shN)),
+            static_cast<const float*>(
+                lfs::core::resolve_exportable_device_ptr(bounds)),
             fp32.ptr<float>(),
             n,
             rest,
