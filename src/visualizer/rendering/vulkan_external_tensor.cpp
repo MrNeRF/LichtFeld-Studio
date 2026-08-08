@@ -59,6 +59,20 @@ namespace lfs::vis {
           offset_(offset),
           bytes_(bytes) {}
 
+    VulkanExternalTensorStorage::VulkanExternalTensorStorage(
+        std::shared_ptr<VulkanExternalTensorStorage> parent,
+        std::shared_ptr<lfs::core::SplatExportableStorage::Control> control,
+        const lfs::core::SplatExportableStorage::Region region)
+        : parent_(std::move(parent)),
+          live_control_(std::move(control)),
+          live_region_(region) {
+        if (live_control_ &&
+            static_cast<std::size_t>(live_region_) < lfs::core::SplatExportableStorage::Count) {
+            offset_ = live_control_->region_offsets[live_region_];
+            bytes_ = live_control_->region_bytes[live_region_];
+        }
+    }
+
     VulkanExternalTensorStorage::~VulkanExternalTensorStorage() {
         // Sub-views don't own anything; their parent's destructor handles Vulkan/CUDA
         // teardown when the last sub-view's shared_ptr ref drops, then the parent's
@@ -87,9 +101,22 @@ namespace lfs::vis {
 
     VkDeviceSize VulkanExternalTensorStorage::vkOffset() const {
         if (parent_) {
-            return parent_->vkOffset() + static_cast<VkDeviceSize>(offset_);
+            std::size_t rel = offset_;
+            if (live_control_ &&
+                static_cast<std::size_t>(live_region_) < lfs::core::SplatExportableStorage::Count) {
+                rel = live_control_->region_offsets[live_region_];
+            }
+            return parent_->vkOffset() + static_cast<VkDeviceSize>(rel);
         }
         return 0;
+    }
+
+    std::size_t VulkanExternalTensorStorage::bytes() const {
+        if (live_control_ &&
+            static_cast<std::size_t>(live_region_) < lfs::core::SplatExportableStorage::Count) {
+            return live_control_->region_bytes[live_region_];
+        }
+        return bytes_;
     }
 
     std::expected<lfs::core::Tensor, std::string> makeVulkanExternalTensor(
@@ -312,16 +339,19 @@ namespace lfs::vis {
                 "interop snapshot allocator (D2)");
         }
 
-        // Build sub-views per region at the CURRENT layout. After grow the
-        // caller must rebuild this allocator (TrainerManager rebind path).
+        // Live-control sub-views: offset/bytes re-resolve on every vkOffset()/
+        // bytes() so a capacity grow cannot leave the viewer binding a pre-grow
+        // region while CUDA readers already use live control (M4 / D2 pair).
+        // Physical grow still rebuilds the interop parent (new Vk import);
+        // these sub-views cover same-block generation bumps and rebindSplatData.
         std::array<std::shared_ptr<VulkanExternalTensorStorage>,
                    lfs::core::SplatExportableStorage::Count>
             sub_views;
         for (std::size_t i = 0; i < lfs::core::SplatExportableStorage::Count; ++i) {
             sub_views[i] = std::make_shared<VulkanExternalTensorStorage>(
                 parent,
-                ctrl->region_offsets[i],
-                ctrl->region_bytes[i]);
+                ctrl,
+                static_cast<lfs::core::SplatExportableStorage::Region>(i));
         }
 
         // Resolve a name → region enum index.

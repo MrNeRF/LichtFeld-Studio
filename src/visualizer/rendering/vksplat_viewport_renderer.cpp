@@ -11,6 +11,7 @@
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -1475,7 +1476,15 @@ namespace lfs::vis {
         [[nodiscard]] VksplatViewportRenderer::ModelInputSnapshot makeModelInputSnapshot(
             const lfs::core::SplatData& splat_data) {
             const auto tensor_ptr = [](const Tensor& tensor) -> const void* {
-                return tensor.is_valid() ? tensor.data_ptr() : nullptr;
+                // Prefer generation-checked exportable base so a grow cannot
+                // leave a baked pointer in the snapshot (matches FastGS bind).
+                if (!tensor.is_valid()) {
+                    return nullptr;
+                }
+                if (tensor.has_exportable_provenance()) {
+                    return lfs::core::resolve_exportable_device_ptr(tensor);
+                }
+                return tensor.data_ptr();
             };
             const auto tensor_bytes = [](const Tensor& tensor) -> std::size_t {
                 return tensor.is_valid() ? tensor.bytes() : 0;
@@ -1487,26 +1496,45 @@ namespace lfs::vis {
             const Tensor& opacity = splat_data.opacity_raw();
             const Tensor& sh0 = splat_data.sh0_raw();
             const Tensor& shn = splat_data.shN_raw();
+            const Tensor& shn_bounds = splat_data.shN_value_bounds();
             const Tensor* deleted_ptr_src =
                 splat_data.has_deleted_mask() ? &splat_data.deleted() : nullptr;
+            const bool shn_q16 = splat_data.shN_value_quantized();
+            std::uint64_t exportable_generation = 0;
+            if (shn.is_valid() && shn.has_exportable_provenance()) {
+                exportable_generation = shn.exportable_bound_generation();
+                if (auto ctrl = shn.exportable_control()) {
+                    const auto* c =
+                        static_cast<const lfs::core::SplatExportableStorage::Control*>(
+                            ctrl.get());
+                    if (c) {
+                        exportable_generation = c->generation;
+                    }
+                }
+            }
             return VksplatViewportRenderer::ModelInputSnapshot{
                 .model = &splat_data,
                 .count = static_cast<std::size_t>(splat_data.size()),
                 .max_sh_degree = splat_data.get_max_sh_degree(),
+                .active_sh_degree = splat_data.get_active_sh_degree(),
                 .means = tensor_ptr(means),
                 .scaling = tensor_ptr(scaling),
                 .rotation = tensor_ptr(rotation),
                 .opacity = tensor_ptr(opacity),
                 .sh0 = tensor_ptr(sh0),
                 .shn = tensor_ptr(shn),
+                .shn_bounds = tensor_ptr(shn_bounds),
                 .deleted = deleted_ptr_src ? tensor_ptr(*deleted_ptr_src) : nullptr,
                 .deleted_version = splat_data.deleted_mask_version(),
+                .exportable_generation = exportable_generation,
+                .shn_q16 = shn_q16,
                 .means_bytes = tensor_bytes(means),
                 .scaling_bytes = tensor_bytes(scaling),
                 .rotation_bytes = tensor_bytes(rotation),
                 .opacity_bytes = tensor_bytes(opacity),
                 .sh0_bytes = tensor_bytes(sh0),
                 .shn_bytes = tensor_bytes(shn),
+                .shn_bounds_bytes = tensor_bytes(shn_bounds),
                 .deleted_bytes = deleted_ptr_src ? tensor_bytes(*deleted_ptr_src) : 0,
             };
         }
@@ -1518,18 +1546,23 @@ namespace lfs::vis {
                    a.model == b.model &&
                    a.count == b.count &&
                    a.max_sh_degree == b.max_sh_degree &&
+                   a.active_sh_degree == b.active_sh_degree &&
+                   a.exportable_generation == b.exportable_generation &&
+                   a.shn_q16 == b.shn_q16 &&
                    a.means == b.means &&
                    a.scaling == b.scaling &&
                    a.rotation == b.rotation &&
                    a.opacity == b.opacity &&
                    a.sh0 == b.sh0 &&
                    a.shn == b.shn &&
+                   a.shn_bounds == b.shn_bounds &&
                    a.means_bytes == b.means_bytes &&
                    a.scaling_bytes == b.scaling_bytes &&
                    a.rotation_bytes == b.rotation_bytes &&
                    a.opacity_bytes == b.opacity_bytes &&
                    a.sh0_bytes == b.sh0_bytes &&
-                   a.shn_bytes == b.shn_bytes;
+                   a.shn_bytes == b.shn_bytes &&
+                   a.shn_bounds_bytes == b.shn_bounds_bytes;
         }
 
         [[nodiscard]] std::shared_ptr<VulkanExternalTensorStorage> vulkanExternalStorage(
@@ -4739,6 +4772,12 @@ namespace lfs::vis {
         // expands a float workspace only under trainer render_mutex exclusive;
         // passive preview try-locks and retains the last frame across that window,
         // so the zero-copy path never projects mid-encode rest (no DC-only fallback).
+        //
+        // M4 (WO-FIX-Q16-GUARD1): active degree 0 never samples rest SH. Force the
+        // upload-degree-0 (omits_shN) layout so the q16 projection pipeline and
+        // codes+bounds descriptors are first installed on the 0→1 flip under the
+        // live shared model lock with generation-checked handles — never against a
+        // mid-mutation or degree-transition half-state.
         const int effective_upload_sh_degree =
             upload_sh_degree < 0
                 ? splat_data.get_max_sh_degree()
@@ -4759,6 +4798,12 @@ namespace lfs::vis {
             input_snapshot_changed &&
             matchesExceptDeletedMask(uploaded_input_snapshot, current_input_snapshot);
         const bool input_upload_requested = force_upload || input_snapshot_changed;
+        const bool first_q16_sh_enable =
+            input_snapshot_changed &&
+            uploaded_input_snapshot.valid() &&
+            uploaded_input_snapshot.active_sh_degree <= 0 &&
+            current_input_snapshot.active_sh_degree > 0 &&
+            current_input_snapshot.shn_q16;
 
         std::shared_ptr<VulkanExternalTensorStorage> means_storage, sh0_storage, shN_storage,
             shN_bounds_storage, rotations_storage, scaling_storage, opacity_storage;
@@ -4786,18 +4831,73 @@ namespace lfs::vis {
             splat_data.shN_raw().is_valid() &&
             splat_data.shN_raw().dtype() == lfs::core::DataType::Float32 &&
             !splat_data.shN_value_quantized();
+        // Generation-checked q16 pair (same machinery as FastGS bind). Required
+        // before the viewer installs zero-copy codes+bounds descriptors.
+        const lfs::core::Q16BindPtrs q16_bind =
+            (!upload_layout->omits_shN && splat_data.shN_value_quantized())
+                ? lfs::core::resolve_q16_bind_ptrs(splat_data)
+                : lfs::core::Q16BindPtrs{};
+        const bool q16_pair_ok =
+            !splat_data.shN_value_quantized() ||
+            upload_layout->omits_shN ||
+            (q16_bind.codes != nullptr && q16_bind.bounds != nullptr &&
+             q16_bind.n_cells_per_prim > 0u);
         const bool shN_ok =
             upload_layout->omits_shN ||
-            (shN_storage && (!upload_layout->shN_q16 || shN_bounds_storage));
+            (shN_storage &&
+             (!upload_layout->shN_q16 || (shN_bounds_storage && q16_pair_ok)));
         const bool can_bind_external =
             base_inputs_external &&
             shN_ok &&
             !shN_float_workspace &&
             (opacity_storage || has_deleted_mask);
+        // D3 counterfactual (M4): LFS_VIEWER_Q16=0 forces the viewport off the
+        // q16 zero-copy SH path (DC-only: upload_layout at degree 0) while
+        // training stays always-commit q16. Predicted clean if the poison is
+        // the viewer's first q16 SH read. Default ON (live-control bind).
+        static const bool kViewerQ16Enabled = [] {
+            if (const char* e = std::getenv("LFS_VIEWER_Q16")) {
+                return e[0] == '1' || e[0] == 'y' || e[0] == 'Y' || e[0] == 't' ||
+                       e[0] == 'T';
+            }
+            return true;
+        }();
+        // At active degree 0 OR viewer-q16 disabled: force omits_shN (upload
+        // layout at degree 0) so the q16 projection pipeline never arms.
+        // At degree ≥1 with exportable q16 and viewer-q16 on: max-layout external.
+        const bool force_viewer_omit_shN =
+            !kViewerQ16Enabled || effective_upload_sh_degree <= 0;
+        std::optional<decltype(upload_layout)> omit_layout_holder;
+        if (force_viewer_omit_shN && !upload_layout->omits_shN) {
+            omit_layout_holder = vksplat::rawDeviceInputLayout(splat_data, /*upload_sh_degree=*/0);
+            if (!omit_layout_holder || !*omit_layout_holder) {
+                return std::unexpected(
+                    omit_layout_holder ? omit_layout_holder->error()
+                                       : std::string("VkSplat omit-SH layout failed"));
+            }
+        }
+        const bool use_external_sh =
+            !force_viewer_omit_shN &&
+            can_bind_external && shN_storage &&
+            !upload_layout->omits_shN &&
+            effective_upload_sh_degree > 0;
         const auto& layout =
-            can_bind_external && shN_storage
+            use_external_sh
                 ? external_layout
-                : upload_layout;
+                : (omit_layout_holder ? **omit_layout_holder : upload_layout);
+        if (first_q16_sh_enable) {
+            LOG_INFO(
+                "VkSplat first q16 SH enable: active_sh={} max_sh={} N={} gen={} "
+                "n_cells={} codes={} bounds={} (generation_checked={})",
+                current_input_snapshot.active_sh_degree,
+                current_input_snapshot.max_sh_degree,
+                current_input_snapshot.count,
+                current_input_snapshot.exportable_generation,
+                q16_bind.n_cells_per_prim,
+                static_cast<const void*>(q16_bind.codes),
+                static_cast<const void*>(q16_bind.bounds),
+                q16_bind.generation_checked);
+        }
 
         std::vector<std::string> input_copy_reasons;
         const auto note_missing_storage =
@@ -4960,6 +5060,19 @@ namespace lfs::vis {
                     sh0_storage->bytes(),
                     layout->sh0_bytes,
                     sh0_storage->vkOffset());
+                // q16 codes/bounds: bind the FULL exportable region capacity as the
+                // descriptor range (not live-N only). Live-N sizing is correct for
+                // the encode footprint, but capacity padding covers the reorder
+                // tail the shader may touch near N; generation-checked storage
+                // already exposes the live region size via live-control sub-views.
+                const std::size_t shN_bind_capacity =
+                    layout->omits_shN
+                        ? rotations_storage->bytes()
+                        : std::max(shN_storage->bytes(), layout->shN_bytes);
+                const std::size_t shN_bind_active =
+                    layout->omits_shN
+                        ? layout->shN_bytes
+                        : (layout->shN_q16 ? shN_bind_capacity : layout->shN_bytes);
                 buffers_.shN.deviceBuffer = layout->omits_shN
                                                 ? makeBorrowedBufferView(
                                                       rotations_storage->vkBuffer(),
@@ -4970,8 +5083,8 @@ namespace lfs::vis {
                                                 : makeBorrowedBufferView(
                                                       shN_storage->vkBuffer(),
                                                       shN_storage->vkBufferSize(),
-                                                      shN_storage->bytes(),
-                                                      layout->shN_bytes,
+                                                      shN_bind_capacity,
+                                                      shN_bind_active,
                                                       shN_storage->vkOffset());
                 buffers_.rotations.deviceBuffer = makeBorrowedBufferView(
                     rotations_storage->vkBuffer(),
@@ -4995,24 +5108,35 @@ namespace lfs::vis {
                 // when the model is IEEE f16; q16 without feature support leaves
                 // both false so the host refuses / uses a non-q16 pipeline.
                 const bool q16_supported =
-                    layout->shN_q16 && renderer_.supportsFloat16Storage();
+                    layout->shN_q16 && renderer_.supportsFloat16Storage() && q16_pair_ok;
                 buffers_.shN_q16 = q16_supported;
                 buffers_.shN_f16 = layout->shN_f16 && !buffers_.shN_q16;
                 // Training zero-copies fp32 non-SH attrs; attrs_f16 is for lodq
                 // / future half-resident paths (layout detects tensor dtype).
                 buffers_.attrs_f16 = layout->attrs_f16 && !buffers_.quant_pool;
-                buffers_.shN_n_cells = buffers_.shN_q16 ? layout->shN_n_cells : 0u;
+                buffers_.shN_n_cells =
+                    buffers_.shN_q16
+                        ? (q16_bind.n_cells_per_prim > 0u ? q16_bind.n_cells_per_prim
+                                                          : layout->shN_n_cells)
+                        : 0u;
                 if (buffers_.shN_q16 && shN_bounds_storage) {
+                    const std::size_t bounds_capacity =
+                        std::max(shN_bounds_storage->bytes(), layout->shN_bounds_bytes);
                     buffers_.shN_bounds.deviceBuffer = makeBorrowedBufferView(
                         shN_bounds_storage->vkBuffer(),
                         shN_bounds_storage->vkBufferSize(),
-                        shN_bounds_storage->bytes(),
-                        layout->shN_bounds_bytes,
+                        bounds_capacity,
+                        bounds_capacity,
                         shN_bounds_storage->vkOffset());
                 } else {
                     buffers_.shN_bounds.deviceBuffer = {};
                 }
                 if (layout->shN_q16 && !q16_supported) {
+                    if (!q16_pair_ok) {
+                        return std::unexpected(
+                            "VkSplat q16 SH bind refused: generation-checked codes+bounds "
+                            "pair incomplete (M4 first-enable safety)");
+                    }
                     return std::unexpected(
                         "VkSplat q16 SH requires shaderFloat16+storageBuffer16BitAccess; "
                         "device lacks 16-bit storage (fp16 fallback is standalone-only)");
@@ -5072,8 +5196,12 @@ namespace lfs::vis {
                 LOG_TIMER("prepareInputs.snapshot");
                 ring_uploaded_[ring_slot] = current_input_snapshot;
             }
-            current_input_sh_degree_ = shN_storage ? splat_data.get_max_sh_degree()
-                                                   : effective_upload_sh_degree;
+            // Resident SH layout degree: omit path keeps the active/upload degree
+            // (0 until first enable); q16 external binds the max-layout codes.
+            current_input_sh_degree_ =
+                (buffers_.shN_q16 || (shN_storage && !layout->omits_shN))
+                    ? splat_data.get_max_sh_degree()
+                    : effective_upload_sh_degree;
             return InputBindingResult{
                 .model_snapshot_changed = input_snapshot_changed && !deleted_mask_only_change,
             };
