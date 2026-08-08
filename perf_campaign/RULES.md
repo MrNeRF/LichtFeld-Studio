@@ -90,3 +90,8 @@ not prove gradients correct — the numerical-gradient suites exist for that.
 A failing test may be classified "pre-existing" ONLY with proof: `git log` showing the
 test predates your branch point, or a run at the branch-point commit showing it red.
 Otherwise it is YOUR red. No exceptions.
+
+## Worker self-kill trap (two workers died to this on 2026-08-08)
+NEVER `pkill -f LichtFeld-Studio` — your own process cmdline contains that string via --cwd
+and you will SIGKILL yourself. Kill stuck app runs by PID (prefer `timeout` wrappers), or use
+the pattern `pkill -f 'build/LichtFeld-Studio'` which does not match worker cmdlines.
