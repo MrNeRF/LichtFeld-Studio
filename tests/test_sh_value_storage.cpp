@@ -593,13 +593,27 @@ TEST(ShDegreeCollisionTest, InconsistentQ16StorageFailsLoudNotSilentRepair) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShDegreeCollisionTest, MaxDegreeChangeOnQ16FailsLoud) {
+TEST(ShDegreeCollisionTest, MaxDegreeChangeOnQ16RelayoutsViaCanonical) {
+    // A max-degree change on resident q16 runs the safe sequence internally:
+    // decode -> fp32 relayout at the new topology -> leave unquantized for the
+    // codec to requantize. Values of the kept coefficients survive exactly
+    // (within codec tolerance); no byte-level guessing.
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
-    EXPECT_THROW(splat.set_max_sh_degree(kShDegree - 1), std::runtime_error);
-    // Documented path: dequantize first, then relayout succeeds.
-    ASSERT_TRUE(sh_value::ensure_shN_fp32_for_mutation(splat));
-    EXPECT_NO_THROW(splat.set_max_sh_degree(kShDegree - 1));
+    const auto ref = splat.shN_canonical().cpu().contiguous(); // [N, 15, 3] deg3
+
+    splat.set_max_sh_degree(kShDegree - 1); // 15 -> 8 rest coefficients
+    EXPECT_FALSE(splat.shN_value_quantized());
+    const auto down = splat.shN_canonical().cpu().contiguous();
+    ASSERT_EQ(down.shape()[1], 8u);
+    const auto ref_kept = ref.slice(1, 0, 8).contiguous();
+    EXPECT_LT(mse_tensors(ref_kept, down), 1e-6);
+
+    // Requantization after the relayout works and roundtrips.
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+    const auto requant = splat.shN_canonical().cpu().contiguous();
+    EXPECT_LT(mse_tensors(down, requant), 1e-6);
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }

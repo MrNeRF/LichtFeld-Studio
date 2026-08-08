@@ -487,11 +487,16 @@ namespace {
                shN.capacity() >= sh_swizzled_float_count(cap, layout_coeffs_rest);
     }
 
+    // src_rest_hint == 0: same-layout grow/verify (capacity-padded buffers are
+    // already complete — no-op). src_rest_hint > 0: forced relayout from the
+    // caller-KNOWN old topology; element-count inference is never used to pick
+    // a layout (rock-solid bar: representation and topology are declared).
     void resize_swizzled_storage_preserving(lfs::core::Tensor& shN,
                                             ShNRepr repr,
                                             size_t n,
                                             size_t capacity,
-                                            uint32_t layout_coeffs_rest) {
+                                            uint32_t layout_coeffs_rest,
+                                            uint32_t src_rest_hint = 0) {
         using namespace lfs::core;
         const size_t cap = std::max(capacity, n);
 
@@ -530,19 +535,22 @@ namespace {
             return;
         }
 
-        // F32Swizzle. A capacity-padded mutation workspace already carries the full
-        // layout for n at layout_coeffs_rest — nothing to resize; rebuilding through
-        // numel-based rest inference would misread the padding (rock-solid bar).
-        if (shN.is_valid() &&
+        // F32Swizzle. Same-layout mode: a capacity-padded mutation workspace already
+        // carries the full layout for n — nothing to resize; numel-based inference
+        // would misread the padding (rock-solid bar). Relayout mode (src_rest_hint
+        // set) skips this and rebuilds from the declared old topology.
+        if (src_rest_hint == 0 && shN.is_valid() &&
             static_cast<size_t>(shN.numel()) >= sh_swizzled_float_count(n, layout_coeffs_rest) &&
             shN.capacity() >= sh_swizzled_float_count(cap, layout_coeffs_rest)) {
             return;
         }
 
         const uint32_t old_layout_rest =
-            (shN.is_valid() && shN.ndim() == 1 && n > 0)
-                ? infer_swizzled_rest_coefficients(n, static_cast<size_t>(shN.numel()))
-                : 0u;
+            src_rest_hint != 0
+                ? src_rest_hint
+                : ((shN.is_valid() && shN.ndim() == 1 && n > 0)
+                       ? infer_swizzled_rest_coefficients(n, static_cast<size_t>(shN.numel()))
+                       : 0u);
 
         Tensor old_canonical;
         if (shN.is_valid() && shN.numel() > 0 && n > 0 && old_layout_rest > 0) {
@@ -1024,17 +1032,42 @@ namespace lfs::core {
             return;
         }
 
-        // Changing MAX degree changes the swizzled topology. q16 and IEEE f16 residents
-        // cannot be relayouted byte-wise; callers must dequantize first (documented path:
-        // shN_canonical -> set_max_sh_degree -> re-quantize). Fail loud, never guess.
+        // Changing MAX degree changes the swizzled topology. q16 / IEEE f16 residents
+        // cannot be relayouted byte-wise — run the documented safe sequence here:
+        // decode to canonical fp32 (old layout), drop the compact form, relayout as
+        // fp32 at the new topology. The model leaves this call UNQUANTIZED; the
+        // training codec re-applies q16 at the next quant entry point. Cold path
+        // (scene setup / degree change UI), so the host-side dequant is fine.
         if (shN_value_quantized() || shN_ieee_f16()) {
-            LOG_ERROR("set_max_sh_degree: {} -> {} with non-fp32 shN resident — dequantize "
-                      "before changing the max degree",
-                      _max_sh_degree, target_degree);
-            throw std::runtime_error(
-                "set_max_sh_degree: max-degree change requires fp32 shN (dequantize first)");
+            const size_t n_now = static_cast<size_t>(size());
+            Tensor canonical = shN_canonical(); // decodes q16 / casts ieee-f16, old max rest
+            _shN = Tensor{};
+            _shN_value_bounds = Tensor{};
+            _max_sh_degree = target_degree;
+            if (_active_sh_degree > _max_sh_degree) {
+                _active_sh_degree = _max_sh_degree;
+            }
+            const size_t cap_now = _means.is_valid() ? std::max<size_t>(_means.capacity(), n_now)
+                                                     : n_now;
+            const auto new_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
+            _shN = allocate_swizzled_shN(n_now, cap_now, new_rest);
+            if (canonical.is_valid() && canonical.numel() > 0 && n_now > 0 && new_rest > 0) {
+                if (canonical.device() != Device::CUDA) {
+                    canonical = canonical.cuda();
+                }
+                const auto src_rest = static_cast<uint32_t>(canonical.size(1));
+                const auto copy_rest = std::min(src_rest, new_rest);
+                if (copy_rest > 0) {
+                    reorder_canonical_into_swizzled(canonical, _shN, n_now, copy_rest, new_rest);
+                }
+            }
+            LOG_DEBUG("set_max_sh_degree: relayouted compact shN via canonical to degree {}; "
+                      "model left fp32 for codec requantization",
+                      target_degree);
+            return;
         }
 
+        const auto old_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
         _max_sh_degree = target_degree;
         if (_active_sh_degree > _max_sh_degree) {
             _active_sh_degree = _max_sh_degree;
@@ -1046,7 +1079,8 @@ namespace lfs::core {
                                            ShNRepr::F32Swizzle,
                                            n,
                                            cap,
-                                           static_cast<uint32_t>(max_sh_coeffs_rest()));
+                                           static_cast<uint32_t>(max_sh_coeffs_rest()),
+                                           /*src_rest_hint=*/old_rest);
     }
 
     bool SplatData::set_sh_degree(const int sh_degree) {
