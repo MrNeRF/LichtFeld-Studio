@@ -1951,3 +1951,79 @@ Follow-up must isolate GUI-only residual (concurrent viewer path / full training
 
 ### Status
 **PARTIAL.** Structural D1/D2/generation-check **landed and gated**. Exportable always-commit residual remains open (honest vs owner bar item 3).
+
+---
+
+## WO-GT-ZERO-GUI — interactive GT device tier → 0 (2026-08-08)
+
+### Owner target
+GUI training images_4 / 5M / sh3 / mrnf peak ≤ 4.0 GiB. Biggest lever: GUI GT
+device tier → 0 (bet #2 in budget-3p8-floor.md). Headless device cache untouched.
+
+### Before (PROGRESS 32e3bffd / WO-FIX-GTCACHE-GUI)
+- Interactive: `device_partial_interactive_use_pinned`, device cap **1.0 GiB**
+  (bonsai full-res: device≈1020 MiB + pinned≈4393 MiB).
+- Owner full-res bicycle-class total ≈ **5.1 GiB**.
+- Headless dual: bonsai ~2.61 / bicycle ~2.66 ms/iter, 307.4 B/splat, dl_wait ~0.005.
+
+### TDD
+Failing policy expectations (device_partial / 1 GiB ceiling) replaced with
+device-tier-0 contract first, then implement.
+
+Post-fix:
+```
+[  PASSED  ] 17 tests.   # GtCacheBudgetGate.* + GtDeviceCacheTest.*
+# includes InteractiveDeviceTierIsZeroUsePinned, InteractivePinnedHitServesBitIdenticalNoDeviceCache
+```
+
+### Implementation (policy only — no knobs)
+1. `evaluate_gt_cache_budget(..., interactive=true)`: always
+   `enable_device=false`, `device_budget_bytes=0`, pinned if allowed;
+   reason `interactive_device_tier_zero_use_pinned` (or `_no_cache`).
+2. Pinned path H2D via `h2d_from_pinned` (async on decode stream; freestanding
+   ReadyImage payload — not a keyed multi-image device cache). Pipeline
+   prefetch (depth constant `GT_H2D_STAGING_DEPTH=2`) hides PCIe latency.
+3. Pressure client: reclaim no-op when device empty; pinned accounting + HUD
+   gauges unchanged. Headless free−headroom path unmodified.
+4. Scaling-invariant: sizes from live n_images / bytes_per_image only.
+
+### Gate — GUI bicycle images_4 (DEFAULT reserve 5M, mrnf, ≥2 growth gens)
+```
+reason=interactive_device_tier_zero_use_pinned
+warm: 0 device / 194 pinned / 564.4 MiB
+final: device=0 hits=0  pinned=194 hits=2512
+Training finished: iter=2500  (exportable grow gen=2 observed)
+nvidia-smi peak (1 Hz): 2215 MiB   cuda peak: 2023.5 MiB
+dl_wait steady: 0.0045 ms/iter   gt_cache device: 0.0 MiB
+EXIT=0 clean (no illegal / FAILURE / degraded)
+```
+**After peak 2215 MiB << 4.0 GiB** (before device tier alone was ~1020 MiB;
+owner total ~5.1 GiB at full-res).
+
+### Gate — three-point scaling (monotonic)
+| resolution | GT est MiB | smi peak | cuda peak | dl_wait | device |
+|---|---:|---:|---:|---:|---:|
+| images_8 | 141.0 | 2028 | 1913 | 0.0047 | 0 |
+| images_4 | 564.4 | 2215 | 2024 | 0.0045 | 0 |
+| full (r=1) | 5437.1 | 3318 | 3339 | 0.0068 | 0 |
+
+### Gate — headless dual (unchanged)
+| workload | med steady_ms | dl_wait | gt_cache | B/splat |
+|---|---:|---:|---:|---:|
+| bonsai ×3 | **2.607** | **0.004** | 338.8 | **307.4** |
+| bicycle 7k ×3 | **2.663** | **0.004** | 564.4 | **307.4** |
+
+### Gate — full suite
+**3495 ran → 3436 PASS / 13 FAIL / 46 SKIP** — same 13 pre-existing env reds
+(ISS-016 VideoFrame×3, TensorReserve, NaNInf, PipelinedLoader fixtures×5,
+VramProfiler order, Python×2). Our 17 GT-cache tests green. No new reds.
+
+### Artifacts
+`~/lfs-campaign-out/gtzero/` (SUMMARY.md, gui-bicycle-*, bench-dual*, unit-gt-cache, full-suite.log)
+
+### Commits
+- `a7b66def` — fix(gt-cache): interactive device tier → 0 (pinned + H2D staging)
+- docs: PROGRESS for WO-GT-ZERO-GUI gate
+
+### Status
+**DONE.**
