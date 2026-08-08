@@ -741,8 +741,8 @@ namespace lfs::training {
             _precomputed_edge_scores = Tensor();
             _edge_precompute_valid = false;
             reset_edge_accumulator();
-            // Topology freeze: ensure q16 residency (no-op if every refine already
-            // committed). Safety net if stop_refine lands on a non-refining step.
+            // Topology freeze: re-encode exportable float densify workspace to
+            // pad-dropped q16 (headless already committed each refine).
             if (lfs::core::sh_value_quant::enabled() &&
                 _splat_data->shN().is_valid() &&
                 _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
@@ -905,15 +905,25 @@ namespace lfs::training {
         ensure_densification_info_shape();
         _splat_data->_densification_info.zero_();
 
-        // Single-buffer residency: re-encode to pad-dropped q16 after every refine
-        // for BOTH headless (cuda.direct) and exportable/GUI. The densify float
-        // workspace is transient under the trainer densify barrier + exclusive
-        // render_mutex only; there is no multi-iteration fp32 window until
-        // stop_refine (that residual ISS-027 class path is closed — rock-solid
-        // bar: q16 resident throughout, ledger-verified). Degree bump is deferred
-        // until after this commit (post_backward) so FastGS never samples rest SH
-        // against a mid-topology exportable buffer.
-        if (lfs::core::sh_value_quant::enabled() &&
+        // Headless (cuda.direct): re-encode every refine — proven clean with
+        // FastGS at all SH degrees.
+        // Exportable/GUI: keep the densify float workspace until stop_refine.
+        // Re-encoding pad-dropped q16 into the live exportable SoA after every
+        // refine still illegal-addresses FastGS preprocess once active SH degree
+        // becomes >0 (repro: GUI --sh-degree 1, crash ~iter 1001; same binary
+        // with --sh-degree-interval 20000 / degree kept 0 finishes clean).
+        // Device-sync densify barrier + exclusive render_mutex + declared
+        // topology (2aab4f99/69ad1cc5) do not clear it. stop_refine commits
+        // under the same barrier once topology freezes. Residual ISS-027 class
+        // — rock-solid bar item 3 (q16 throughout) remains open for exportable
+        // densify windows only; outside densify / headless / degree-0: q16.
+        const bool exportable_backed =
+            _splat_data->has_tensor_allocator() ||
+            (_splat_data->means().is_valid() && _splat_data->means().is_external_storage() &&
+             (_splat_data->means().external_storage_kind() == "vulkan_external_buffer" ||
+              _splat_data->means().external_storage_kind() == "splat.exportable"));
+        if (!exportable_backed &&
+            lfs::core::sh_value_quant::enabled() &&
             _splat_data->shN().is_valid() &&
             _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
