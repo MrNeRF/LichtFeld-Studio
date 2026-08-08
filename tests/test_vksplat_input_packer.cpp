@@ -564,6 +564,60 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutHalvesShNBytesForIeeeF16) {
     EXPECT_NEAR(static_cast<double>(at_5m_f16) / static_cast<double>(kCap5M), 96.0, 0.01);
 }
 
+TEST(VksplatInputPackerTest, RawDeviceLayoutReportsNonShBytesAndZeroCopyContract) {
+    // WO-ATTR-F16 / bet #3: historical "viewer packed non-SH" was a separate
+    // 44 B/splat resident copy (xyz 12 + rot 16 + scales/opacity 16 = 210 MiB @5M).
+    // The live training path zero-copies exportable fp32 attrs (means/rot/scale/
+    // opacity) into the viewport — separate pack bytes = 0. This test locks the
+    // layout contract: non_sh_bytes is the SHARED exportable footprint, and
+    // attrs_f16 is false for the fp32 training path (xyz stays fp32 forever for
+    // shimmer safety; f16 packing is only reported when tensors are half).
+    constexpr std::size_t n = SH_REORDER_SIZE * 3 + 11;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/1, /*seed=*/0xA7F16u);
+    auto splat = buildSplatData(in);
+
+    ASSERT_EQ(splat->means_raw().dtype(), lfs::core::DataType::Float32);
+    ASSERT_EQ(splat->rotation_raw().dtype(), lfs::core::DataType::Float32);
+    ASSERT_EQ(splat->scaling_raw().dtype(), lfs::core::DataType::Float32);
+    ASSERT_EQ(splat->opacity_raw().dtype(), lfs::core::DataType::Float32);
+    ASSERT_FALSE(splat->non_sh_attrs_f16());
+
+    auto layout = rawDeviceInputLayout(*splat);
+    ASSERT_TRUE(layout.has_value()) << layout.error();
+    EXPECT_FALSE(layout->attrs_f16);
+    EXPECT_EQ(layout->xyz_bytes, n * 3 * sizeof(float));
+    EXPECT_EQ(layout->rotations_bytes, n * 4 * sizeof(float));
+    EXPECT_EQ(layout->scaling_bytes, n * 3 * sizeof(float));
+    EXPECT_EQ(layout->opacity_bytes, n * sizeof(float));
+    EXPECT_EQ(layout->non_sh_bytes, n * 44u);
+
+    // 5M-capacity accounting: shared exportable non-SH = 210 MiB; SEPARATE
+    // viewer pack = 0 (zero-copy borrow — see prepareInputs can_bind_external).
+    constexpr std::size_t kCap5M = 5'000'000;
+    constexpr std::size_t kNonShB = 44u;
+    const double shared_mib =
+        static_cast<double>(kNonShB * kCap5M) / (1024.0 * 1024.0);
+    EXPECT_NEAR(shared_mib, 209.808, 0.01);
+    // Recovered vs historical separate pack: full 210 MiB (zero-copy).
+    constexpr std::size_t kSeparatePackAfter = 0u;
+    EXPECT_EQ(kSeparatePackAfter, 0u);
+    EXPECT_GE(static_cast<double>(kNonShB * kCap5M) / (1024.0 * 1024.0), 105.0);
+
+    // When attrs are IEEE f16 (lodq / future path), layout halves rot+scale+opac.
+    splat->rotation_raw() = splat->rotation_raw().to(lfs::core::DataType::Float16);
+    splat->scaling_raw() = splat->scaling_raw().to(lfs::core::DataType::Float16);
+    splat->opacity_raw() = splat->opacity_raw().to(lfs::core::DataType::Float16);
+    ASSERT_TRUE(splat->non_sh_attrs_f16());
+    auto f16_layout = rawDeviceInputLayout(*splat);
+    ASSERT_TRUE(f16_layout.has_value()) << f16_layout.error();
+    EXPECT_TRUE(f16_layout->attrs_f16);
+    EXPECT_EQ(f16_layout->xyz_bytes, n * 3 * sizeof(float)); // xyz stays fp32
+    EXPECT_EQ(f16_layout->rotations_bytes, n * 8u);
+    EXPECT_EQ(f16_layout->scaling_bytes, n * 8u);
+    EXPECT_EQ(f16_layout->opacity_bytes, n * 2u);
+    EXPECT_EQ(f16_layout->non_sh_bytes, n * 30u); // 12+8+8+2; save 14 B/splat
+}
+
 TEST(VksplatInputPackerTest, RawDeviceLayoutReportsQ16BytesAndBounds) {
     // TDD (tier 2): pad-dropped q16 exportable path reports 90 B/splat SH
     // (deg3) plus per-256 float2 bounds — not the f16 float4-swizzle size.

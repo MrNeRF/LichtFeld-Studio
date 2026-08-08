@@ -20,12 +20,14 @@
 
 namespace lfs::vis::vksplat {
 
-    // CPU-side reference packer for VkSplat forward inputs.
+    // CPU-side reference packer for VkSplat forward inputs (tests / offline).
     //
-    // Produces the four host buffers that the rasterizer consumes after a
-    // copyToDevice. The layouts are fixed contracts checked by
-    // tests/test_vksplat_input_packer.cpp:
+    // The LIVE training viewport does NOT use this packer: prepareInputs
+    // zero-copies exportable raw tensors (means/rot/scale/opacity/sh) via
+    // Vulkan-external borrow (WO-ATTR-F16 / bet #3 — eliminates the historical
+    // separate 44 B/splat packed non-SH residency ≈ 210 MiB @5M).
     //
+    // Host packer layouts (tests/test_vksplat_input_packer.cpp):
     //   xyz_ws       : (N*3)  contiguous float32 row-major copy of means_raw
     //   rotations    : (N*4)  unit-norm quaternions (rotation_raw / |rotation_raw|)
     //   scales_opacs : (N*4)  interleaved [exp(s0), exp(s1), exp(s2), sigmoid(o)]
@@ -105,6 +107,13 @@ namespace lfs::vis::vksplat {
         std::uint32_t shN_n_cells = 0;
         // q16 only: bytes of the per-256 float2 bounds buffer.
         std::size_t shN_bounds_bytes = 0;
+        // Non-SH display attrs (rotation + log-scale + logit opacity) stored as
+        // IEEE f16 for the exportable/viewer path. Means/xyz stay fp32 (large
+        // scenes shimmer under f16 positions). Matches lodq pool packing:
+        //   rotation f16x4 = 8 B, scaling f16x3+pad = 8 B, opacity f16 = 2 B.
+        bool attrs_f16 = false;
+        // Sum of xyz+rotations+scaling+opacity bytes (before/after f16 accounting).
+        std::size_t non_sh_bytes = 0;
     };
 
     // Raw split SplatData layout for the live Vulkan viewer. Unlike the packed

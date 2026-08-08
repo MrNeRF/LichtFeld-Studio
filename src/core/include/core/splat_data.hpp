@@ -284,6 +284,16 @@ namespace lfs::core {
             return _shN.is_valid() && _shN.dtype() == DataType::Float16 && !shN_value_quantized();
         }
 
+        // Non-SH display attrs (rotation / log-scale / logit opacity) as IEEE f16.
+        // Means stay Float32. Used by the viewer layout when a path stores half
+        // attrs (lodq pool / future exportable packing). Training exportable
+        // currently keeps these as Float32 and zero-copies them into the viewport.
+        [[nodiscard]] bool non_sh_attrs_f16() const {
+            return _rotation.is_valid() && _rotation.dtype() == DataType::Float16 &&
+                   _scaling.is_valid() && _scaling.dtype() == DataType::Float16 &&
+                   _opacity.is_valid() && _opacity.dtype() == DataType::Float16;
+        }
+
         // Materialise a deswizzled [N, K, 3] copy of resident shN storage where
         // K = sh_rest_coeffs of the max SH degree. Always allocates a new tensor — not a view.
         // When quantized, dequants to fp32 first (PLY/checkpoint bit-compat).

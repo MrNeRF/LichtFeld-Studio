@@ -5000,6 +5000,9 @@ namespace lfs::vis {
                     layout->shN_q16 && renderer_.supportsFloat16Storage();
                 buffers_.shN_q16 = q16_supported;
                 buffers_.shN_f16 = layout->shN_f16 && !buffers_.shN_q16;
+                // Training zero-copies fp32 non-SH attrs; attrs_f16 is for lodq
+                // / future half-resident paths (layout detects tensor dtype).
+                buffers_.attrs_f16 = layout->attrs_f16 && !buffers_.quant_pool;
                 buffers_.shN_n_cells = buffers_.shN_q16 ? layout->shN_n_cells : 0u;
                 if (buffers_.shN_q16 && shN_bounds_storage) {
                     buffers_.shN_bounds.deviceBuffer = makeBorrowedBufferView(

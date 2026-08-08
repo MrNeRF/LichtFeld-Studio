@@ -451,14 +451,26 @@ namespace lfs::vis::vksplat {
             return std::unexpected("VkSplat expected swizzled SH rest coefficients for max SH degree");
         }
 
+        // Non-SH display attrs: IEEE f16 when exportable/allocator forces half
+        // for rotation + scaling + opacity (means stay fp32). Byte sizes match
+        // lodq pool packing so projection can reuse the quant-style f16tof32
+        // loads (rot uint2, scale uint2 with pad, opacity packed halfs).
+        const bool attrs_f16 = splat_data.non_sh_attrs_f16();
+        const std::size_t rotations_bytes =
+            attrs_f16 ? n * 8u : n * 4u * sizeof(float);
+        const std::size_t scaling_bytes =
+            attrs_f16 ? n * 8u : n * 3u * sizeof(float);
+        const std::size_t opacity_bytes =
+            attrs_f16 ? n * 2u : n * sizeof(float);
+        const std::size_t xyz_bytes = n * 3u * sizeof(float);
         return RawDeviceInputLayout{
             .num_splats = n,
-            .xyz_bytes = n * 3 * sizeof(float),
+            .xyz_bytes = xyz_bytes,
             .sh0_bytes = n * 3 * sizeof(float),
             .shN_bytes = shN_bytes,
-            .rotations_bytes = n * 4 * sizeof(float),
-            .scaling_bytes = n * 3 * sizeof(float),
-            .opacity_bytes = n * sizeof(float),
+            .rotations_bytes = rotations_bytes,
+            .scaling_bytes = scaling_bytes,
+            .opacity_bytes = opacity_bytes,
             .shN_layout_rest = upload_layout_rest,
             .omits_shN = omit_shN_upload,
             .shN_f16 = shN_f16,
@@ -466,6 +478,8 @@ namespace lfs::vis::vksplat {
             .shN_element_bytes = omit_shN_upload ? sizeof(float) : element_bytes,
             .shN_n_cells = n_cells,
             .shN_bounds_bytes = bounds_bytes,
+            .attrs_f16 = attrs_f16,
+            .non_sh_bytes = xyz_bytes + rotations_bytes + scaling_bytes + opacity_bytes,
         };
     }
 
