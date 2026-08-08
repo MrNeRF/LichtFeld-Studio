@@ -48,6 +48,21 @@ body.floating-panel {
     opacity: 0.8;
 }
 
+.preferences-warning,
+.preferences-error {
+    margin: 4dp 0 8dp 0;
+}
+
+.preferences-value-selectable {
+    text-align: right;
+}
+
+.preferences-inline-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 8dp;
+}
+
 .preferences-row {
     display: flex;
     align-items: flex-start;

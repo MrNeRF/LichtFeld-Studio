@@ -189,6 +189,11 @@ namespace lfs::core {
                                                         {"language", "en"},
                                                         {"theme", "dark"},
                                                         {"ui_scale", "auto"},
+                                                        {"mcp", {
+                                                                    {"enabled", true},
+                                                                    {"expose_network", false},
+                                                                    {"port", 45677},
+                                                                }},
                                                     });
         }
 

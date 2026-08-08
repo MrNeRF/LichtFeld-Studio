@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <functional>
@@ -29,12 +30,23 @@ namespace lfs::vis {
         Vulkan,
     };
 
+    struct RuntimeServiceStatus {
+        bool enabled = false;
+        bool running = false;
+        bool network_exposed = false;
+        int port = 0;
+        std::uint64_t request_count = 0;
+        std::string error;
+    };
+
     struct LFS_VIS_API ViewerOptions {
         std::string title = "LichtFeld Studio";
         int width = 1280;
         int height = 720;
         bool antialiasing = false;
         bool show_startup_overlay = true;
+        bool safe_mode = false;
+        std::function<RuntimeServiceStatus()> mcp_status_provider;
         bool gut = false;
         GraphicsBackend graphics_backend = GraphicsBackend::Vulkan;
         int monitor_x = 0; // Monitor hint for window placement

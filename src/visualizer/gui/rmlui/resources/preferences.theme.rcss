@@ -37,6 +37,14 @@
     font-weight: bold;
 }
 
+.preferences-warning {
+    color: @{warning};
+}
+
+.preferences-error {
+    color: @{error};
+}
+
 .legacy-empty,
 .legacy-entry {
     border-color: @{border};

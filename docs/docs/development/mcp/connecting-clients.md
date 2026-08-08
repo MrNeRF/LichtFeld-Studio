@@ -10,7 +10,9 @@ LichtFeld Studio embeds its own MCP server. It starts automatically with the GUI
 http://127.0.0.1:45677/mcp
 ```
 
-The transport is plain HTTP JSON-RPC on localhost only. There is no TLS and no remote access; every connection method below is a different way to reach this one endpoint.
+The transport is plain HTTP JSON-RPC. By default it is restricted to localhost. Preferences > MCP can disable the server, change its port, or bind it to `0.0.0.0` for access from the local network. Network exposure has no authentication or TLS and should only be enabled on a trusted network.
+
+The bottom status bar reports whether MCP is off, listening locally, exposed to the network, or unable to bind. Click the indicator for the active endpoint and request count; its Edit link opens Preferences directly on the MCP page.
 
 ## Choose a Connection Path
 

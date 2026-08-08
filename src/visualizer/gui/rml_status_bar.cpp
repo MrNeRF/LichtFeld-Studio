@@ -9,6 +9,7 @@
 #include "core/services.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/gpu_memory_query.hpp"
+#include "gui/gui_manager.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
@@ -73,6 +74,19 @@ namespace lfs::vis::gui {
             void ProcessEvent(Rml::Event& /*event*/) override {
                 PanelRegistry::instance().set_panel_enabled("lfs.account", true);
             }
+        };
+
+        class CallbackListener final : public Rml::EventListener {
+        public:
+            explicit CallbackListener(std::function<void()> callback)
+                : callback_(std::move(callback)) {}
+            void ProcessEvent(Rml::Event& event) override {
+                event.StopPropagation();
+                callback_();
+            }
+
+        private:
+            std::function<void()> callback_;
         };
 
         std::string fmtCount(int64_t n) {
@@ -319,9 +333,12 @@ namespace lfs::vis::gui {
 
     // RmlStatusBar
 
-    void RmlStatusBar::init(RmlUIManager* mgr) {
+    void RmlStatusBar::init(RmlUIManager* mgr, const bool safe_mode,
+                            std::function<RuntimeServiceStatus()> mcp_status_provider) {
         assert(mgr);
         rml_manager_ = mgr;
+        mcp_status_provider_ = std::move(mcp_status_provider);
+        model_.safe_mode = safe_mode;
 
         const auto& palette = lfs::vis::theme().palette;
         model_.mode_color = colorToRml(palette.text_dim);
@@ -332,6 +349,7 @@ namespace lfs::vis::gui {
         model_.zoom_color = colorToRml(palette.info);
         model_.zoom_sep_color = colorToRml(palette.text_dim);
         model_.account_color = colorToRml(palette.text_dim);
+        model_.mcp_color = colorToRml(palette.text_dim);
         model_.lfs_mem_color = colorToRml(palette.info);
         model_.gpu_mem_color = colorToRml(palette.text);
         model_.fps_color = colorToRml(palette.success);
@@ -393,6 +411,14 @@ namespace lfs::vis::gui {
         ctor.Bind("fps_color", &model_.fps_color);
         ctor.Bind("fps_label", &model_.fps_label);
         ctor.Bind("git_commit", &model_.git_commit);
+        ctor.Bind("safe_mode", &model_.safe_mode);
+        ctor.Bind("safe_mode_text", &model_.safe_mode_text);
+        ctor.Bind("mcp_details_expanded", &model_.mcp_details_expanded);
+        ctor.Bind("mcp_summary", &model_.mcp_summary);
+        ctor.Bind("mcp_details", &model_.mcp_details);
+        ctor.Bind("mcp_tooltip", &model_.mcp_tooltip);
+        ctor.Bind("mcp_color", &model_.mcp_color);
+        ctor.Bind("mcp_preferences_label", &model_.mcp_preferences_label);
         ctor.Bind("show_status_message", &model_.show_status_message);
         ctor.Bind("status_message_text", &model_.status_message_text);
         ctor.Bind("status_message_color", &model_.status_message_color);
@@ -457,6 +483,10 @@ namespace lfs::vis::gui {
         gpu_icon_listener_ = nullptr;
         delete account_listener_;
         account_listener_ = nullptr;
+        delete mcp_toggle_listener_;
+        mcp_toggle_listener_ = nullptr;
+        delete mcp_preferences_listener_;
+        mcp_preferences_listener_ = nullptr;
     }
 
     void RmlStatusBar::reloadResources() {
@@ -691,6 +721,25 @@ namespace lfs::vis::gui {
             account_listener_ = new AccountPanelOpenListener();
         if (auto* el = document_->GetElementById("account-chip"))
             el->AddEventListener(Rml::EventId::Click, account_listener_);
+
+        if (!mcp_toggle_listener_) {
+            mcp_toggle_listener_ = new CallbackListener([this] {
+                model_.mcp_details_expanded = !model_.mcp_details_expanded;
+                model_handle_.DirtyVariable("mcp_details_expanded");
+                markModelDirty();
+            });
+        }
+        if (auto* el = document_->GetElementById("mcp-chip"))
+            el->AddEventListener(Rml::EventId::Click, mcp_toggle_listener_);
+
+        if (!mcp_preferences_listener_) {
+            mcp_preferences_listener_ = new CallbackListener([this] {
+                setModelBool("mcp_details_expanded", model_.mcp_details_expanded, false);
+                openPreferencesPanel("mcp");
+            });
+        }
+        if (auto* el = document_->GetElementById("mcp-preferences"))
+            el->AddEventListener(Rml::EventId::Click, mcp_preferences_listener_);
     }
 
     void RmlStatusBar::setModelString(const char* name, std::string& field, std::string value) {
@@ -927,6 +976,41 @@ namespace lfs::vis::gui {
         model_dirty_ = false;
 
         const auto& p = lfs::vis::theme().palette;
+
+        setModelString("safe_mode_text", model_.safe_mode_text, LOC("status_bar.safe_mode"));
+        setModelString("mcp_preferences_label", model_.mcp_preferences_label,
+                       LOC("status_bar.mcp_preferences"));
+        if (mcp_status_provider_) {
+            const auto status = mcp_status_provider_();
+            std::string summary;
+            std::string details;
+            std::string tooltip;
+            std::string color;
+            if (!status.enabled) {
+                summary = LOC("status_bar.mcp_off");
+                details = LOC("status_bar.mcp_disabled_detail");
+                tooltip = details;
+                color = colorToRml(p.text_dim);
+            } else if (!status.running) {
+                summary = LOC("status_bar.mcp_error");
+                details = status.error.empty() ? LOC("status_bar.mcp_error_detail") : status.error;
+                tooltip = details;
+                color = colorToRml(p.error);
+            } else {
+                summary = status.network_exposed ? LOC("status_bar.mcp_network") : LOC("status_bar.mcp_local");
+                const char* address = status.network_exposed ? "0.0.0.0" : "127.0.0.1";
+                details = std::format("{}:{} · {} {}", address, status.port,
+                                      status.request_count, LOC("status_bar.mcp_requests"));
+                tooltip = status.network_exposed
+                              ? LOC("status_bar.mcp_network_tooltip")
+                              : LOC("status_bar.mcp_local_tooltip");
+                color = colorToRml(status.network_exposed ? p.warning : p.success);
+            }
+            setModelString("mcp_summary", model_.mcp_summary, std::move(summary));
+            setModelString("mcp_details", model_.mcp_details, std::move(details));
+            setModelString("mcp_tooltip", model_.mcp_tooltip, std::move(tooltip));
+            setModelString("mcp_color", model_.mcp_color, std::move(color));
+        }
 
         // Get managers
         auto* viewer = ctx.ui ? ctx.ui->viewer : nullptr;
@@ -1259,10 +1343,11 @@ namespace lfs::vis::gui {
         if (!rml_context_ || !document_)
             return;
 
+        const float overlay_height = overlayHeight();
         const float local_x = input.mouse_x - bar_x;
-        const float local_y = input.mouse_y - bar_y;
+        const float local_y = input.mouse_y - (bar_y - overlay_height);
         const bool is_inside = local_x >= 0.0f && local_x < bar_w &&
-                               local_y >= 0.0f && local_y < bar_h;
+                               local_y >= 0.0f && local_y < bar_h + overlay_height;
         if (!is_inside && !input.mouse_released[0] && !input.mouse_released[1] &&
             !save_step_interaction_.dragging) {
             clearSaveStepHover();
@@ -1283,6 +1368,30 @@ namespace lfs::vis::gui {
             rml_context_->ProcessMouseButtonDown(1, mods);
         if (input.mouse_released[1])
             rml_context_->ProcessMouseButtonUp(1, mods);
+    }
+
+    float RmlStatusBar::overlayHeight() const {
+        if (!model_.mcp_details_expanded)
+            return 0.0f;
+        const float dp_ratio = rml_context_
+                                   ? rml_context_->GetDensityIndependentPixelRatio()
+                                   : 1.0f;
+        return 94.0f * dp_ratio;
+    }
+
+    bool RmlStatusBar::isOverlayPoint(const float local_x, const float local_y,
+                                      const float bar_w) const {
+        const float overlay_height = overlayHeight();
+        if (overlay_height <= 0.0f || !rml_context_)
+            return false;
+
+        const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
+        constexpr float popup_width_dp = 270.0f;
+        constexpr float popup_right_dp = 8.0f;
+        const float popup_right = bar_w - popup_right_dp * dp_ratio;
+        const float popup_left = std::max(0.0f, popup_right - popup_width_dp * dp_ratio);
+        return local_x >= popup_left && local_x < popup_right &&
+               local_y >= -overlay_height && local_y < 0.0f;
     }
 
     void RmlStatusBar::queueCachedVulkanContext(const float x, const float y,
@@ -1324,8 +1433,9 @@ namespace lfs::vis::gui {
         if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0)
             return;
 
+        const float overlay_height = overlayHeight();
         const int render_w = static_cast<int>(w_px);
-        const int render_h = static_cast<int>(h_px);
+        const int render_h = static_cast<int>(h_px + overlay_height);
         const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
         const bool dp_changed = dp_ratio != last_dp_ratio_;
         const bool theme_current =
@@ -1342,7 +1452,8 @@ namespace lfs::vis::gui {
             return;
         }
 
-        queueCachedVulkanContext(x, y, w_px, h_px, screen_w, screen_h,
+        queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
+                                 screen_w, screen_h,
                                  render_w, render_h, direct_cache_.texture == 0);
     }
 
@@ -1355,8 +1466,9 @@ namespace lfs::vis::gui {
         if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0)
             return;
 
+        const float overlay_height = overlayHeight();
         const int render_w = static_cast<int>(w_px);
-        const int render_h = static_cast<int>(h_px);
+        const int render_h = static_cast<int>(h_px + overlay_height);
         const bool size_changed = (render_w != last_render_w_ || render_h != last_render_h_);
         const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
         const bool dp_changed = dp_ratio != last_dp_ratio_;
@@ -1391,7 +1503,8 @@ namespace lfs::vis::gui {
             last_render_h_ = render_h;
         }
 
-        queueCachedVulkanContext(x, y, w_px, h_px, screen_w, screen_h,
+        queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
+                                 screen_w, screen_h,
                                  render_w, render_h, true);
     }
 

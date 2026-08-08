@@ -20,6 +20,7 @@
 #include "gui/vulkan_ui_texture.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
+#include "mcp/mcp_http_server.hpp"
 #include "py_command.hpp"
 #include "py_gizmo.hpp"
 #include "py_keymap.hpp"
@@ -4726,6 +4727,57 @@ namespace lfs::python {
             "get_ui_scale_preference",
             []() -> float { return vis::loadUiScalePreference(); },
             "Get saved UI scale preference (0.0 = auto)");
+
+        m.def(
+            "get_mcp_preferences",
+            [] {
+                const auto state = vis::loadMcpPreferences();
+                nb::dict result;
+                result["enabled"] = state.enabled;
+                result["expose_network"] = state.expose_network;
+                result["port"] = state.port;
+                return result;
+            },
+            "Get persisted MCP HTTP server preferences");
+
+        m.def(
+            "set_mcp_preferences",
+            [](const bool enabled, const bool expose_network, const int port) {
+                if (port < 1 || port > 65535)
+                    throw nb::value_error("MCP port must be between 1 and 65535");
+                vis::saveMcpPreferences({
+                    .enabled = enabled,
+                    .expose_network = expose_network,
+                    .port = port,
+                });
+                return mcp::applyActiveMcpHttpConfig({
+                    .enabled = enabled,
+                    .expose_network = expose_network,
+                    .port = port,
+                });
+            },
+            nb::arg("enabled"), nb::arg("expose_network"), nb::arg("port"),
+            "Persist and immediately apply MCP HTTP server preferences");
+
+        m.def(
+            "get_mcp_status",
+            [] {
+                const auto status = mcp::activeMcpHttpStatus();
+                nb::dict result;
+                result["enabled"] = status.enabled;
+                result["running"] = status.running;
+                result["expose_network"] = status.expose_network;
+                result["port"] = status.port;
+                result["request_count"] = status.request_count;
+                result["error"] = status.error;
+                return result;
+            },
+            "Get current MCP HTTP server runtime status");
+
+        m.def(
+            "take_preferences_section_request",
+            [] { return vis::gui::consumePreferencesSectionRequest(); },
+            "Consume a requested Preferences section name");
 
         m.def(
             "set_clipboard_text",

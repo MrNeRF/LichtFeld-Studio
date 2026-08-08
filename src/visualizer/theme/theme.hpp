@@ -242,6 +242,15 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API bool rememberCameraNavigationPreference();
     LFS_VIS_API void saveCameraViewSnapPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool loadCameraViewSnapPreference();
+
+    struct McpPreferenceState {
+        bool enabled = true;
+        bool expose_network = false;
+        int port = 45677;
+    };
+
+    LFS_VIS_API void saveMcpPreferences(const McpPreferenceState& state);
+    [[nodiscard]] LFS_VIS_API McpPreferenceState loadMcpPreferences();
     LFS_VIS_API void setRememberCameraViewSnapPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool rememberCameraViewSnapPreference();
 

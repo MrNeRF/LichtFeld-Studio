@@ -43,6 +43,7 @@
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include "visualizer/input/input_bindings.hpp"
+#include "visualizer/theme/theme.hpp"
 #include <cmath>
 #include <condition_variable>
 #include <cuda_runtime.h>
@@ -693,12 +694,27 @@ namespace lfs::app {
             });
 
             constexpr auto graphics_backend = lfs::vis::GraphicsBackend::Vulkan;
+            mcp::McpHttpServer mcp_http({.enable_resources = true});
+            mcp::setActiveMcpHttpServer(&mcp_http);
+            const auto mcp_preferences = vis::loadMcpPreferences();
             auto viewer = vis::Visualizer::create({
                 .title = window_title,
                 .width = 1280,
                 .height = 720,
                 .antialiasing = false,
                 .show_startup_overlay = !disable_splash,
+                .safe_mode = safe_mode,
+                .mcp_status_provider = [] {
+                    const auto status = mcp::activeMcpHttpStatus();
+                    return vis::RuntimeServiceStatus{
+                        .enabled = status.enabled,
+                        .running = status.running,
+                        .network_exposed = status.expose_network,
+                        .port = status.port,
+                        .request_count = status.request_count,
+                        .error = status.error,
+                    };
+                },
                 .gut = params->optimization.gut,
                 .graphics_backend = graphics_backend,
             });
@@ -737,15 +753,19 @@ namespace lfs::app {
             register_gui_scene_tools(viewer.get());
             register_gui_scene_resources(viewer.get());
 
-            mcp::McpHttpServer mcp_http({.enable_resources = true});
             viewer->setShutdownRequestedCallback([&mcp_http]() {
                 mcp_http.stop();
             });
-            if (!mcp_http.start())
+            if (!mcp_http.start({
+                    .enabled = mcp_preferences.enabled,
+                    .expose_network = mcp_preferences.expose_network,
+                    .port = mcp_preferences.port,
+                }))
                 LOG_ERROR("Failed to start MCP HTTP server");
 
             viewer->run();
 
+            mcp::setActiveMcpHttpServer(nullptr);
             mcp_http.stop();
 
             python::finalize();

@@ -38,6 +38,10 @@ namespace lfs::vis::gui {
             status_bar.fitToAvailableWidth(allow_expand);
             return status_bar.fit_level_;
         }
+
+        static void setMcpExpanded(RmlStatusBar& status_bar, const bool expanded) {
+            status_bar.model_.mcp_details_expanded = expanded;
+        }
     };
 
 } // namespace lfs::vis::gui
@@ -122,6 +126,14 @@ namespace {
         std::string fps_color = "#ffffff";
         std::string fps_label = " FPS";
         std::string git_commit = "abcdef12";
+        bool safe_mode = false;
+        std::string safe_mode_text = "Safe Mode";
+        bool mcp_details_expanded = false;
+        std::string mcp_summary = "MCP Local";
+        std::string mcp_details = "127.0.0.1:45677 - 0 requests";
+        std::string mcp_tooltip = "MCP is listening only on this computer";
+        std::string mcp_color = "#ffffff";
+        std::string mcp_preferences_label = "Edit";
         bool show_status_message = false;
         std::string status_message_text = "A long transient status message that must remain on one line";
         std::string status_message_color = "#ffffff";
@@ -235,6 +247,14 @@ namespace {
             bound &= constructor.Bind("fps_color", &model_.fps_color);
             bound &= constructor.Bind("fps_label", &model_.fps_label);
             bound &= constructor.Bind("git_commit", &model_.git_commit);
+            bound &= constructor.Bind("safe_mode", &model_.safe_mode);
+            bound &= constructor.Bind("safe_mode_text", &model_.safe_mode_text);
+            bound &= constructor.Bind("mcp_details_expanded", &model_.mcp_details_expanded);
+            bound &= constructor.Bind("mcp_summary", &model_.mcp_summary);
+            bound &= constructor.Bind("mcp_details", &model_.mcp_details);
+            bound &= constructor.Bind("mcp_tooltip", &model_.mcp_tooltip);
+            bound &= constructor.Bind("mcp_color", &model_.mcp_color);
+            bound &= constructor.Bind("mcp_preferences_label", &model_.mcp_preferences_label);
             bound &= constructor.Bind("show_status_message", &model_.show_status_message);
             bound &= constructor.Bind("status_message_text", &model_.status_message_text);
             bound &= constructor.Bind("status_message_color", &model_.status_message_color);
@@ -295,6 +315,19 @@ namespace {
         EXPECT_LT(expanded_fit_level, previous_fit_level);
         assertNoVerticalOverflow(document_);
         assertFlexSiblingsDoNotOverlap(document_);
+    }
+
+    TEST_F(StatusBarFitTest, McpDetailsReserveOverlayOnlyWhileExpanded) {
+        EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
+        EXPECT_FALSE(status_bar_.isOverlayPoint(2300.0f, -20.0f, 2400.0f));
+
+        lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, true);
+        EXPECT_GT(status_bar_.overlayHeight(), 0.0f);
+        EXPECT_TRUE(status_bar_.isOverlayPoint(2300.0f, -20.0f, 2400.0f));
+        EXPECT_FALSE(status_bar_.isOverlayPoint(100.0f, -20.0f, 2400.0f));
+
+        lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, false);
+        EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
     }
 
 } // namespace

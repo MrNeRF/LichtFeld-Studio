@@ -714,6 +714,23 @@ namespace lfs::mcp {
         server.stop();
     }
 
+    TEST(McpHttpServerTest, DisabledAndInvalidConfigurationsReportTruthfulStatus) {
+        McpHttpServer server;
+        EXPECT_TRUE(server.start(McpHttpConfig{.enabled = false, .expose_network = true, .port = 50001}));
+        auto status = server.status();
+        EXPECT_FALSE(status.enabled);
+        EXPECT_FALSE(status.running);
+        EXPECT_TRUE(status.expose_network);
+        EXPECT_EQ(status.port, 50001);
+        EXPECT_TRUE(status.error.empty());
+
+        EXPECT_FALSE(server.applyConfig(McpHttpConfig{.enabled = true, .port = 0}));
+        status = server.status();
+        EXPECT_TRUE(status.enabled);
+        EXPECT_FALSE(status.running);
+        EXPECT_FALSE(status.error.empty());
+    }
+
     TEST(McpHttpServerTest, ToolHandlerThrowRespondsWithInternalErrorAndEchoedIdNoLeak) {
         static constexpr const char* tool_name = "test.throwing_tool";
         static constexpr const char* leaked_detail = "sensitive internal detail";

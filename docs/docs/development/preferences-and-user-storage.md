@@ -18,11 +18,18 @@ The Preferences panel currently exposes:
 - camera navigation mode;
 - axis/view snap;
 - per-setting remember options;
+- MCP server enablement, bind scope, and port;
 - interface and layout reset actions.
 
 Preferences are stored in `config/preferences.json`. Writes must use the
 atomic JSON writer so an interrupted shutdown cannot leave a partially written
 file.
+
+The `mcp` object defaults to an enabled server bound to `127.0.0.1` on port
+`45677`. Changes made in Preferences are applied immediately. Binding to
+`0.0.0.0` exposes the unauthenticated HTTP endpoint to the local network and is
+therefore an explicit opt-in. Safe mode can apply an MCP change to the current
+process but does not persist it.
 
 ## User storage roots
 

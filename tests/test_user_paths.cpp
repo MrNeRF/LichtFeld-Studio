@@ -106,6 +106,11 @@ namespace {
         EXPECT_NE(contents.find("\"theme\": \"dark\""), std::string::npos);
         EXPECT_NE(contents.find("\"ui_scale\": \"auto\""), std::string::npos);
         EXPECT_NE(contents.find("\"language\": \"en\""), std::string::npos);
+        const auto json = nlohmann::json::parse(contents);
+        ASSERT_TRUE(json.at("mcp").is_object());
+        EXPECT_TRUE(json.at("mcp").at("enabled").get<bool>());
+        EXPECT_FALSE(json.at("mcp").at("expose_network").get<bool>());
+        EXPECT_EQ(json.at("mcp").at("port").get<int>(), 45677);
     }
 
     TEST_F(UserPathsContractTest, ResetPreferencesBacksUpExistingFile) {

@@ -1263,6 +1263,46 @@ namespace lfs::vis {
         }
     }
 
+    void saveMcpPreferences(const McpPreferenceState& state) {
+        try {
+            if (preferencesDisabled())
+                return;
+            auto preferences = loadPreferences();
+            preferences["mcp"] = {
+                {"enabled", state.enabled},
+                {"expose_network", state.expose_network},
+                {"port", std::clamp(state.port, 1, 65535)},
+            };
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& error) {
+            LOG_WARN("Failed to save MCP preferences: {}", error.what());
+        }
+    }
+
+    McpPreferenceState loadMcpPreferences() {
+        McpPreferenceState result;
+        if (preferencesDisabled())
+            return result;
+        try {
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("mcp");
+            if (it == preferences.end() || !it->is_object())
+                return result;
+            if (const auto enabled = it->find("enabled"); enabled != it->end() && enabled->is_boolean())
+                result.enabled = enabled->get<bool>();
+            if (const auto expose = it->find("expose_network"); expose != it->end() && expose->is_boolean())
+                result.expose_network = expose->get<bool>();
+            if (const auto port = it->find("port"); port != it->end() && port->is_number_integer()) {
+                const int value = port->get<int>();
+                if (value >= 1 && value <= 65535)
+                    result.port = value;
+            }
+        } catch (const std::exception& error) {
+            LOG_WARN("Failed to load MCP preferences: {}", error.what());
+        }
+        return result;
+    }
+
     void setRememberCameraViewSnapPreference(const bool enabled) {
         try {
             auto preferences = loadPreferences();
