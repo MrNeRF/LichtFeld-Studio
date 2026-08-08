@@ -735,13 +735,15 @@ namespace lfs::training {
             _precomputed_edge_scores = Tensor();
             _edge_precompute_valid = false;
             reset_edge_accumulator();
-            // Phase 2.1: densify windows stay float-native; re-apply q16 once topology freezes
-            // so steady-state VRAM prize lands without mid-densify re-encode races.
+            // Topology freeze: ensure q16 residency (no-op if already committed
+            // after the last refine) and drop the bounded publish staging so
+            // steady-state peak is single-region q16 only.
             if (lfs::core::sh_value_quant::enabled() &&
                 _splat_data->shN().is_valid() &&
                 _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
                 lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
             }
+            lfs::training::sh_value::release_shN_publish_staging();
         }
 
         if (iter >= static_cast<int>(_params->stop_refine)) {
@@ -896,20 +898,13 @@ namespace lfs::training {
         // Phase 4.6: MRNF trim_memory_pool parity with MCMC/IGS+ after refine.
         lfs::core::Tensor::trim_memory_pool();
 
-        // ISS-027 root cause: re-encoding pad-dropped q16 into the exportable
-        // packed SoA after every refine races the zero-copy Vulkan viewport
-        // (CUDA write vs concurrent projection read of the same VMM block) and
-        // surfaces as async cudaErrorIllegalAddress on the next FastGS forward.
-        // Headless has no zero-copy reader — re-encode each refine for live
-        // B/splat. Exportable/GUI keeps float shN until stop_refine (post_backward
-        // stop_refine handler) or explicit commit after topology freezes.
-        const bool exportable_backed =
-            _splat_data->has_tensor_allocator() ||
-            (_splat_data->means().is_valid() && _splat_data->means().is_external_storage() &&
-             (_splat_data->means().external_storage_kind() == "vulkan_external_buffer" ||
-              _splat_data->means().external_storage_kind() == "splat.exportable"));
-        if (!exportable_backed &&
-            lfs::core::sh_value_quant::enabled() &&
+        // Re-encode to q16 after every refine (headless + exportable). Exportable
+        // uses chunked staging publish into the single live q16 region (device
+        // barrier between encode and live write) so the zero-copy viewport and
+        // FastGS never read a chunk mid-write — restores q16 residency and
+        // full-SH viewport during the refine window without the ISS-027 race
+        // (which was remigrate + unguarded full rewrite of the packed SoA).
+        if (lfs::core::sh_value_quant::enabled() &&
             _splat_data->shN().is_valid() &&
             _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);

@@ -4735,9 +4735,10 @@ namespace lfs::vis {
             force_upload,
             upload_sh_degree);
 
-        // ISS-027: densify float-native SH is outside the exportable block; force
-        // DC-only upload layout so zero-copy geometry bind can proceed without a
-        // full-copy fallback (or degraded mode).
+        // Brief densify mutation window only: float shN lives outside the exportable
+        // block while kernels run. After each refine, chunked q16 publish restores
+        // full-SH zero-copy (WO-SH-DOUBLEBUFFER). DC-only is no longer the refine-
+        // window strategy — only a transient safety net mid-densify.
         const bool shN_float_densify_early =
             splat_data.shN_raw().is_valid() &&
             splat_data.shN_raw().dtype() == lfs::core::DataType::Float32 &&
@@ -4783,9 +4784,9 @@ namespace lfs::vis {
         const bool has_deleted_mask = splat_data.has_deleted_mask();
         const bool base_inputs_external =
             means_storage && sh0_storage && rotations_storage && scaling_storage;
-        // ISS-027: densify keeps float4-swizzle shN outside the exportable block.
-        // Treat that workspace as "omit rest SH" for zero-copy bind (DC only) so
-        // the viewport stays live instead of entering degraded mode.
+        // Transient float densify workspace (milliseconds during refine()): omit
+        // rest SH for zero-copy geometry bind. Between densify events shN is q16
+        // in the exportable block and full-SH binds here.
         const bool shN_float_densify_workspace =
             splat_data.shN_raw().is_valid() &&
             splat_data.shN_raw().dtype() == lfs::core::DataType::Float32 &&
@@ -4798,8 +4799,8 @@ namespace lfs::vis {
             base_inputs_external &&
             shN_ok &&
             (opacity_storage || has_deleted_mask);
-        // Prefer full external layout when shN is also exportable; during densify
-        // float workspace, bind geometry external with omits_shN via upload_layout.
+        // Prefer full external layout when shN is also exportable; during the
+        // brief densify float workspace, bind geometry external with omits_shN.
         const auto& layout =
             can_bind_external && shN_storage && !shN_float_densify_workspace
                 ? external_layout
