@@ -480,8 +480,10 @@ TEST(ShValueStorageTest, ExportableQ16DensifyThenFastGSForward) {
     EXPECT_GE(model.shN().capacity(), sh_value_quant::sh_value_u16_count(kCap, rest));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
-    for (int active = 0; active <= 1; ++active) {
+    // Rock-solid: full active SH 0..max after densify commit (not just 0/1).
+    for (int active = 0; active <= kShDegree; ++active) {
         model.set_active_sh_degree(active);
+        ASSERT_TRUE(model.shN_value_quantized()) << "q16 must stay resident after densify commit";
         auto r = fast_rasterize_forward(camera, model, bg, 0, 0, 0, 0, false);
         ASSERT_TRUE(r.has_value()) << "active_sh=" << active << " "
                                    << lfs::format_for_developer(r.error());
@@ -615,5 +617,185 @@ TEST(ShDegreeCollisionTest, MaxDegreeChangeOnQ16RelayoutsViaCanonical) {
     ASSERT_TRUE(splat.shN_value_quantized());
     const auto requant = splat.shN_canonical().cpu().contiguous();
     EXPECT_LT(mse_tensors(down, requant), 1e-6);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+// Permanent CI regression: forced densify+degree-up same boundary on exportable
+// q16, across SH degrees 0..3, with capacity grow mid-window. Must leave q16
+// resident after commit (no multi-iter float densify window) and survive FastGS.
+TEST(ShDegreeCollisionTest, ExportableDegreeUpGrowSameBoundaryAllDegrees) {
+    joint_adam::set_joint_codec_enabled_for_testing(true);
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+
+    constexpr size_t kN0 = 512;
+    constexpr size_t kAppend = 250;
+    constexpr size_t kCap = 4096;
+    const auto rest = static_cast<uint32_t>(sh_rest_coefficients_for_degree(kShDegree));
+
+    auto storage_result = SplatExportableStorage::create(kCap, kShDegree, /*device=*/0, kCap * 2);
+    if (!storage_result) {
+        GTEST_SKIP() << "exportable create failed: " << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    auto allocator = storage->make_allocator();
+
+    auto seed = make_random_sh3(kN0, /*seed=*/0xC011);
+    Tensor means = allocator(TensorShape({kN0, 3}), kCap, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({kN0, 3}), kCap, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({kN0, 4}), kCap, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({kN0, 1}), kCap, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({kN0, 1, 3}), kCap, DataType::Float32, "SplatData.sh0");
+    means.copy_from(seed.means_raw());
+    scaling.copy_from(seed.scaling_raw());
+    rotation.copy_from(seed.rotation_raw());
+    opacity.copy_from(seed.opacity_raw());
+    sh0.copy_from(seed.sh0_raw());
+    const size_t n_floats = sh_swizzled_float_count(kN0, rest);
+    const size_t cap_floats = sh_swizzled_float_count(kCap, rest);
+    Tensor shN_float = Tensor::zeros_direct(TensorShape({n_floats}), cap_floats, Device::CUDA);
+    shN_float.copy_from(seed.shN_raw());
+    SplatData model(kShDegree, std::move(means), std::move(sh0), std::move(shN_float),
+                    std::move(scaling), std::move(rotation), std::move(opacity), 1.0f,
+                    SplatData::ShNLayout::Swizzled);
+    model.set_tensor_allocator(allocator);
+    model.set_active_sh_degree(0);
+
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
+    ASSERT_TRUE(model.shN_value_quantized());
+
+    AdamConfig cfg{};
+    cfg.initial_capacity = kCap;
+    AdamOptimizer opt(model, cfg);
+    opt.allocate_gradients(kCap);
+
+    std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    std::vector<float> T_data = {0, 0, 4};
+    auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    Camera camera(R, T, 100.f, 100.f, 32.f, 32.f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                  "coll", "", std::filesystem::path{}, 64, 64, 0);
+    Tensor bg = Tensor::zeros({3}, Device::CUDA);
+
+    // Two densify+degree-up cycles (simulates degree schedule colliding with refine).
+    for (int cycle = 0; cycle < 2; ++cycle) {
+        const size_t n_before = static_cast<size_t>(model.size());
+        ASSERT_TRUE(sh_value::ensure_shN_fp32_for_mutation(model));
+        ASSERT_EQ(model.shN().dtype(), DataType::Float32);
+        EXPECT_FALSE(model.shN_value_quantized());
+
+        // Capacity grow mid float window (exportable means grow-in-place).
+        model.means().reserve(std::min(kCap, n_before + kAppend * 2));
+
+        {
+            auto append_means = Tensor::zeros({kAppend, size_t{3}}, Device::CUDA);
+            opt.add_new_params(ParamType::Means, append_means, true);
+            opt.add_new_params(ParamType::Sh0,
+                               Tensor::full({kAppend, size_t{1}, size_t{3}}, 0.1f, Device::CUDA), true);
+            opt.add_new_params(ParamType::Scaling,
+                               Tensor::full({kAppend, size_t{3}}, -2.0f, Device::CUDA), true);
+            std::vector<float> rot(kAppend * 4, 0.f);
+            for (size_t i = 0; i < kAppend; ++i)
+                rot[i * 4] = 1.f;
+            opt.add_new_params(
+                ParamType::Rotation,
+                Tensor::from_blob(rot.data(), {kAppend, size_t{4}}, Device::CPU, DataType::Float32)
+                    .to(Device::CUDA),
+                true);
+            opt.add_new_params(ParamType::Opacity,
+                               Tensor::full({kAppend, size_t{1}}, 2.0f, Device::CUDA), true);
+        }
+        const size_t n_after = static_cast<size_t>(model.size());
+        {
+            const size_t needed = sh_swizzled_float_count(n_after, rest);
+            auto& shN = model.shN();
+            if (shN.numel() < needed) {
+                if (shN.capacity() < needed) {
+                    auto grown = Tensor::zeros_direct(
+                        shN.shape(), sh_swizzled_float_count(kCap, rest), Device::CUDA);
+                    if (shN.numel() > 0) {
+                        cudaMemcpy(grown.ptr<float>(), shN.ptr<float>(),
+                                   shN.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+                    }
+                    grown.set_name("splat.shN");
+                    shN = std::move(grown);
+                }
+                shN.append_zeros(needed - shN.numel());
+            }
+            opt.extend_state_for_new_params(ParamType::ShN, kAppend);
+        }
+
+        // Degree-up mid-window (same iteration as grow) — must not corrupt storage.
+        model.increment_sh_degree();
+
+        ASSERT_TRUE(sh_value::commit_shN_after_mutation(model));
+        ASSERT_TRUE(model.shN_value_quantized())
+            << "q16 must be resident after densify commit (no lingering float window)";
+        EXPECT_EQ(model.shN().external_storage_kind(), "splat.exportable");
+        EXPECT_EQ(model.shN_value_bounds().external_storage_kind(), "splat.exportable");
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+        // Ledger + storage: pad-dropped q16 residency after commit (not float).
+        const auto ledger = compute_training_state_ledger(model, &opt);
+        EXPECT_EQ(ledger.live_splats, n_after);
+        EXPECT_GT(ledger.params_bytes, 0u);
+        const size_t q16_cells = sh_value_quant::sh_value_u16_count(n_after, rest);
+        EXPECT_EQ(static_cast<size_t>(model.shN().numel()), q16_cells);
+        EXPECT_EQ(model.shN().dtype(), DataType::Float16);
+
+        for (int active = 0; active <= kShDegree; ++active) {
+            model.set_active_sh_degree(active);
+            ASSERT_TRUE(model.shN_value_quantized()) << "active=" << active << " cycle=" << cycle;
+            auto r = fast_rasterize_forward(camera, model, bg, 0, 0, 0, 0, false);
+            ASSERT_TRUE(r.has_value()) << "cycle=" << cycle << " active=" << active << " "
+                                       << lfs::format_for_developer(r.error());
+            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess)
+                << "illegal address cycle=" << cycle << " active=" << active;
+        }
+    }
+
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
+}
+
+// Cadence-misalign proxy: repeated densify windows with degree flips at every
+// boundary (interval-style). Storage remains q16 after each commit.
+TEST(ShDegreeCollisionTest, MisalignedCadenceDensifyDegreeSweep) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto splat = make_random_sh3(kN, /*seed=*/0xCAD3);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    splat.set_active_sh_degree(0);
+
+    // Simulated step schedule: refine every 100, degree every 250/333/1000-style
+    // offsets — force degree-up on both refining and non-refining boundaries.
+    const int degree_intervals[] = {1000, 250, 333, 100};
+    for (int interval : degree_intervals) {
+        for (int iter = 1; iter <= 2000; iter += 50) {
+            const bool refining = (iter % 100 == 0) && iter > 500 && iter < 15000;
+            if (refining) {
+                ASSERT_TRUE(sh_value::ensure_shN_fp32_for_mutation(splat));
+                // grow capacity mid-window on a subset of refining steps
+                if (iter % 200 == 0) {
+                    splat.means().reserve(static_cast<size_t>(splat.size()) + 64);
+                }
+                if (iter % interval == 0) {
+                    splat.increment_sh_degree();
+                }
+                ASSERT_TRUE(sh_value::commit_shN_after_mutation(splat));
+                ASSERT_TRUE(splat.shN_value_quantized())
+                    << "interval=" << interval << " iter=" << iter;
+            } else if (iter % interval == 0) {
+                // Non-refining degree bump: pure flag flip on resident q16.
+                const auto codes = snapshot_bytes(splat.shN());
+                splat.increment_sh_degree();
+                EXPECT_EQ(snapshot_bytes(splat.shN()), codes)
+                    << "degree bump mutated codes interval=" << interval
+                    << " iter=" << iter;
+                ASSERT_TRUE(splat.shN_value_quantized());
+            }
+        }
+        // Reset active degree for next interval sweep without touching storage.
+        splat.set_active_sh_degree(0);
+        ASSERT_TRUE(splat.shN_value_quantized());
+    }
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }

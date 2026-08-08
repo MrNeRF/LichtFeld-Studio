@@ -741,9 +741,8 @@ namespace lfs::training {
             _precomputed_edge_scores = Tensor();
             _edge_precompute_valid = false;
             reset_edge_accumulator();
-            // Topology freeze: ensure q16 residency (no-op if already committed
-            // after each refine). Single exportable buffer stays q16 at all times
-            // outside the brief densify float workspace under render_mutex exclusive.
+            // Topology freeze: ensure q16 residency (no-op if every refine already
+            // committed). Safety net if stop_refine lands on a non-refining step.
             if (lfs::core::sh_value_quant::enabled() &&
                 _splat_data->shN().is_valid() &&
                 _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
@@ -906,21 +905,15 @@ namespace lfs::training {
         ensure_densification_info_shape();
         _splat_data->_densification_info.zero_();
 
-        // Headless: re-encode every refine (cuda.direct; proven clean).
-        // Exportable/GUI: keep float densify workspace until stop_refine.
-        // Re-encoding pad-dropped q16 into the live exportable SoA after every
-        // refine still poisons the next FastGS forward once active SH degree
-        // becomes >0 (GUI only; headless clean; late sh-degree-interval clean).
-        // Device-sync densify barrier + exclusive render_mutex do not clear it.
-        // stop_refine (below) commits under the same barrier for single-buffer
-        // steady state after topology freezes. Residual of ISS-027 class.
-        const bool exportable_backed =
-            _splat_data->has_tensor_allocator() ||
-            (_splat_data->means().is_valid() && _splat_data->means().is_external_storage() &&
-             (_splat_data->means().external_storage_kind() == "vulkan_external_buffer" ||
-              _splat_data->means().external_storage_kind() == "splat.exportable"));
-        if (!exportable_backed &&
-            lfs::core::sh_value_quant::enabled() &&
+        // Single-buffer residency: re-encode to pad-dropped q16 after every refine
+        // for BOTH headless (cuda.direct) and exportable/GUI. The densify float
+        // workspace is transient under the trainer densify barrier + exclusive
+        // render_mutex only; there is no multi-iteration fp32 window until
+        // stop_refine (that residual ISS-027 class path is closed — rock-solid
+        // bar: q16 resident throughout, ledger-verified). Degree bump is deferred
+        // until after this commit (post_backward) so FastGS never samples rest SH
+        // against a mid-topology exportable buffer.
+        if (lfs::core::sh_value_quant::enabled() &&
             _splat_data->shN().is_valid() &&
             _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
