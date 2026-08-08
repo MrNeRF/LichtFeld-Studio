@@ -330,6 +330,8 @@ namespace lfs::vis {
                 return R::Sh0;
             if (name == "SplatData.shN")
                 return R::ShN;
+            if (name == "SplatData.shN_value_bounds")
+                return R::ShNBounds;
             throw lfs::core::TensorError(std::format(
                 "makeSplatExportableInteropAllocator: unknown tensor name '{}'", name));
         };
@@ -339,14 +341,18 @@ namespace lfs::vis {
         // Phase 5.1: clamp requested capacity to the committed exportable layout so
         // callers that still pass max_cap cannot claim more rows than the block holds.
         const std::size_t committed_capacity = storage.capacity();
-        const std::size_t shN_float_capacity =
-            storage.region_bytes[lfs::core::SplatExportableStorage::ShN] / sizeof(float);
+        // ShN is pad-dropped q16 (2 B/cell); bounds are float2 floats.
+        const std::size_t shN_u16_capacity =
+            storage.region_bytes[lfs::core::SplatExportableStorage::ShN] / sizeof(std::uint16_t);
+        const std::size_t shN_bounds_float_capacity =
+            storage.region_bytes[lfs::core::SplatExportableStorage::ShNBounds] / sizeof(float);
         return [sub_views,
                 region_offsets = storage.region_offsets,
                 cuda_base,
                 region_from_name,
                 committed_capacity,
-                shN_float_capacity](
+                shN_u16_capacity,
+                shN_bounds_float_capacity](
                    lfs::core::TensorShape shape,
                    std::size_t capacity,
                    lfs::core::DataType dtype,
@@ -357,8 +363,14 @@ namespace lfs::vis {
             std::shared_ptr<void> owner = sub_views[region];
             std::size_t clamped = capacity;
             if (region == lfs::core::SplatExportableStorage::ShN) {
-                if (shN_float_capacity > 0) {
-                    clamped = std::min(capacity, shN_float_capacity);
+                dtype = lfs::core::DataType::Float16;
+                if (shN_u16_capacity > 0) {
+                    clamped = std::min(capacity, shN_u16_capacity);
+                }
+            } else if (region == lfs::core::SplatExportableStorage::ShNBounds) {
+                dtype = lfs::core::DataType::Float32;
+                if (shN_bounds_float_capacity > 0) {
+                    clamped = std::min(capacity, shN_bounds_float_capacity);
                 }
             } else if (committed_capacity > 0) {
                 clamped = std::min(capacity, committed_capacity);

@@ -50,22 +50,10 @@ namespace lfs::training::sh_value {
         auto& shN = splat.shN();
         if (!shN.is_valid() || shN.numel() == 0)
             return false;
-        if (shN.dtype() == DataType::Float16)
-            return false; // already quantized
-        // Exportable/viewer path uses IEEE f16 float4-swizzle in the packed block
-        // (half the fp32 bytes). Never apply pad-dropped q16 there — the Vulkan
-        // projection shader binds half slots, and quant would detach shN from the
-        // exportable VA range.
-        const auto is_exportable_kind = [](const Tensor& t) {
-            if (!t.is_valid() || !t.is_external_storage())
-                return false;
-            const auto kind = t.external_storage_kind();
-            return kind == "vulkan_external_buffer" || kind == "splat.exportable";
-        };
-        if (is_exportable_kind(shN) || is_exportable_kind(splat.means())) {
-            LOG_DEBUG("SH value quant skipped: exportable/viewer-backed model (IEEE f16 path)");
+        // Already pad-dropped q16 (codes + bounds). IEEE f16 float4-swizzle is also
+        // Float16 but has no bounds — that path expands to float then re-encodes.
+        if (shN.dtype() == DataType::Float16 && splat.shN_value_quantized())
             return false;
-        }
 
         const auto n = static_cast<std::size_t>(splat.size());
         const auto rest = layout_rest(splat);
@@ -79,14 +67,31 @@ namespace lfs::training::sh_value {
         const auto n_bounds = core::sh_value_quant::n_bounds_for_prims(n);
         const auto n_bounds_cap = core::sh_value_quant::n_bounds_for_prims(cap);
 
-        Tensor u16 = Tensor::zeros_direct(TensorShape({n_cells}),
-                                          std::max(n_cells, capacity_cells), Device::CUDA,
-                                          DataType::Float16);
-        Tensor bounds = Tensor::zeros_direct(TensorShape({n_bounds * 2}),
-                                             std::max(n_bounds, n_bounds_cap) * 2, Device::CUDA,
-                                             DataType::Float32);
+        // Prefer the model's backing allocator (exportable / Vulkan-external) so
+        // codes + bounds land in the shared block the viewer zero-copies.
+        Tensor u16 = splat.allocate_named_param(
+            TensorShape({n_cells}),
+            std::max(n_cells, capacity_cells),
+            DataType::Float16,
+            "SplatData.shN");
+        Tensor bounds = splat.allocate_named_param(
+            TensorShape({n_bounds * 2}),
+            std::max(n_bounds, n_bounds_cap) * 2,
+            DataType::Float32,
+            "SplatData.shN_value_bounds");
         u16.set_name("splat.shN");
         bounds.set_name("splat.shN_value_bounds");
+
+        // Source may be fp32 float4-swizzle or IEEE f16 float4-swizzle (standalone
+        // / pre-quant). Stage to float for the encode kernel.
+        Tensor float_src = shN;
+        if (float_src.dtype() == DataType::Float16) {
+            float_src = float_src.to(DataType::Float32);
+        }
+        if (float_src.device() != Device::CUDA)
+            float_src = float_src.cuda();
+        if (!float_src.is_contiguous())
+            float_src = float_src.contiguous();
 
         // Encode on the current training stream, then sync before releasing the float
         // source. Null-stream launch + immediate free was the densify re-encode UAF
@@ -96,11 +101,11 @@ namespace lfs::training::sh_value {
             u16.set_stream(stream);
         if (bounds.stream() != stream)
             bounds.set_stream(stream);
-        if (shN.stream() != stream)
-            shN.set_stream(stream);
+        if (float_src.stream() != stream)
+            float_src.set_stream(stream);
 
         encode_shN_float4_to_u16(
-            shN.ptr<float>(),
+            float_src.ptr<float>(),
             reinterpret_cast<std::uint16_t*>(u16.data_ptr()),
             bounds.ptr<float>(),
             n,
@@ -129,8 +134,9 @@ namespace lfs::training::sh_value {
         const auto logical_floats = core::sh_swizzled_float_count(n, rest);
         const auto capacity_floats = core::sh_swizzled_float_count(cap, rest);
 
-        // IEEE f16 float4-swizzle (exportable GUI): element-wise half→float cast.
-        // Same topology as fp32; densify float-native ops then commit back to f16.
+        // IEEE f16 float4-swizzle (standalone PLY/SOG viewer path, no bounds):
+        // element-wise half→float cast. Training exportable is pad-dropped q16
+        // (has bounds) and takes the decode path below.
         if (splat.shN_ieee_f16()) {
             Tensor fp32 = shN.to(DataType::Float32);
             if (fp32.device() != Device::CUDA)
@@ -200,33 +206,13 @@ namespace lfs::training::sh_value {
         if (!shN.is_valid() || shN.dtype() != DataType::Float32)
             return false;
 
-        // GUI exportable path: means live in the exportable block, so shN must
-        // stay IEEE f16 float4-swizzle (not pad-dropped q16). ensure_* may have
-        // expanded to a float temp; convert back to half. Densify grow rebind
-        // reinstalls the view into the packed block.
-        const auto is_exportable_kind = [](const Tensor& t) {
-            if (!t.is_valid() || !t.is_external_storage())
-                return false;
-            const auto kind = t.external_storage_kind();
-            return kind == "vulkan_external_buffer" || kind == "splat.exportable";
-        };
-        if (is_exportable_kind(splat.means_raw()) || is_exportable_kind(shN)) {
-            Tensor half = shN.to(DataType::Float16);
-            if (half.device() != Device::CUDA)
-                half = half.cuda();
-            if (!half.is_contiguous())
-                half = half.contiguous();
-            half.set_name("splat.shN");
-            shN = std::move(half);
-            splat.shN_value_bounds() = Tensor{};
-            return true;
-        }
-
         if (!sh_value_quant_enabled())
             return false;
         // Rebuild codes+bounds from float after densify (heal-vs-rebuild: always rebuild
         // value storage so block min/max match post-growth N). Adam moments stay on the
         // float4-swizzle layout and are healed in prepare_fastgs_fused_adam.
+        // allocate_named_param keeps codes+bounds inside the exportable block when the
+        // model has a tensor_allocator (GUI training zero-copy q16 path).
         return apply_shN_value_quant(splat);
     }
 

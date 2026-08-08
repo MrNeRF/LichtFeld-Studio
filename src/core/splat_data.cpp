@@ -287,11 +287,12 @@ namespace {
     lfs::core::Tensor allocate_param_tensor(const lfs::core::TensorShape& shape,
                                             size_t capacity,
                                             const lfs::core::SplatTensorAllocator& allocator,
-                                            std::string_view name) {
+                                            std::string_view name,
+                                            lfs::core::DataType dtype = lfs::core::DataType::Float32) {
         using namespace lfs::core;
         Tensor tensor = allocator
-                            ? allocator(shape, capacity, DataType::Float32, name)
-                            : Tensor::zeros_direct(shape, capacity, Device::CUDA);
+                            ? allocator(shape, capacity, dtype, name)
+                            : Tensor::zeros_direct(shape, capacity, Device::CUDA, dtype);
         tensor.set_name(std::string{name});
         return tensor;
     }
@@ -583,9 +584,15 @@ namespace lfs::core {
                         static_cast<uint32_t>(sh_rest_coefficients_for_degree(_max_sh_degree));
                 }
             }
+            // Accept float4-swizzle fp32/f16 topology OR pad-dropped q16 cell count.
             const size_t expected_floats = sh_swizzled_float_count(n, layout_coeffs_rest);
-            if (!_shN.is_valid() || _shN.ndim() != 1 ||
-                static_cast<size_t>(_shN.shape()[0]) != expected_floats) {
+            const size_t expected_q16 =
+                sh_value_quant::sh_value_u16_count(n, layout_coeffs_rest);
+            const size_t have =
+                _shN.is_valid() && _shN.ndim() == 1 ? static_cast<size_t>(_shN.shape()[0]) : 0;
+            const bool shape_ok =
+                have == expected_floats || (expected_q16 > 0 && have == expected_q16);
+            if (!_shN.is_valid() || _shN.ndim() != 1 || !shape_ok) {
                 _shN = allocate_swizzled_shN(n, capacity, layout_coeffs_rest);
             }
             _shN.set_name("splat.shN");
@@ -612,6 +619,7 @@ namespace lfs::core {
           _means(std::move(other._means)),
           _sh0(std::move(other._sh0)),
           _shN(std::move(other._shN)),
+          _shN_value_bounds(std::move(other._shN_value_bounds)),
           _scaling(std::move(other._scaling)),
           _rotation(std::move(other._rotation)),
           _opacity(std::move(other._opacity)),
@@ -645,6 +653,7 @@ namespace lfs::core {
             _means = std::move(other._means);
             _sh0 = std::move(other._sh0);
             _shN = std::move(other._shN);
+            _shN_value_bounds = std::move(other._shN_value_bounds);
             _scaling = std::move(other._scaling);
             _rotation = std::move(other._rotation);
             _opacity = std::move(other._opacity);
@@ -896,6 +905,14 @@ namespace lfs::core {
             resize_swizzled_storage_preserving(_shN, n, cap, layout_rest);
         }
         _active_sh_degree = target_degree;
+    }
+
+    Tensor SplatData::allocate_named_param(
+        const TensorShape& shape,
+        std::size_t capacity,
+        DataType dtype,
+        std::string_view name) {
+        return allocate_param_tensor(shape, capacity, _tensor_allocator, name, dtype);
     }
 
     void SplatData::set_max_sh_degree(int sh_degree) {

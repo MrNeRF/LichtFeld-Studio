@@ -93,17 +93,27 @@ namespace lfs::vis::vksplat {
         std::uint32_t shN_layout_rest = 0;
         bool omits_shN = false;
         // True when resident shN is IEEE f16 float4-swizzle (2 B/component).
-        // False = fp32 float4-swizzle (or omit placeholder).
+        // False = fp32 float4-swizzle (or omit placeholder). Mutually exclusive
+        // with shN_q16.
         bool shN_f16 = false;
-        // Bytes per shN component element (4=fp32, 2=f16).
+        // True when resident shN is pad-dropped q16 (uint16 cells + float2
+        // bounds / 256). Training exportable zero-copy path.
+        bool shN_q16 = false;
+        // Bytes per shN component element (4=fp32, 2=f16/q16).
         std::size_t shN_element_bytes = sizeof(float);
+        // q16 only: number of pad-dropped u16 cells per primitive.
+        std::uint32_t shN_n_cells = 0;
+        // q16 only: bytes of the per-256 float2 bounds buffer.
+        std::size_t shN_bounds_bytes = 0;
     };
 
     // Raw split SplatData layout for the live Vulkan viewer. Unlike the packed
     // path above, this keeps log-scale/logit opacity and split SH untouched so
     // shaders can consume the training tensors directly when they are Vulkan
-    // external buffers. When splat_data.shN is IEEE f16 (exportable GUI path),
-    // shN_bytes is half the fp32 float4-swizzle size.
+    // external buffers.
+    //  - shN_value_quantized → pad-dropped q16 (+ bounds bytes)
+    //  - shN_ieee_f16        → IEEE f16 float4-swizzle (standalone PLY/SOG)
+    //  - else                → fp32 float4-swizzle
     LFS_VIS_API [[nodiscard]] std::expected<RawDeviceInputLayout, std::string> rawDeviceInputLayout(
         const lfs::core::SplatData& splat_data,
         int upload_sh_degree = -1);

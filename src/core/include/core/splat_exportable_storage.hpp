@@ -17,10 +17,15 @@
 
 namespace lfs::core {
 
-    // Coalesced exportable storage for the six per-primitive splat tensors. One
-    // CUDA VMM allocation backs all six; each tensor is a view at a fixed offset
-    // into the same physical memory. The Vulkan viewer imports this single block
-    // and reads the trainer's writes directly — no per-frame copy.
+    // Coalesced exportable storage for the per-primitive splat tensors. One
+    // CUDA VMM allocation backs every region; each tensor is a view at a fixed
+    // offset into the same physical memory. The Vulkan viewer imports this
+    // single block and reads the trainer's writes directly — no per-frame copy.
+    //
+    // ShN is pad-dropped q16 (uint16 cells, [ceil(N/32), n_cells, 32]) with
+    // per-256-splat float2 bounds in ShNBounds. The training viewport dequants
+    // in-shader (zero-copy). Standalone PLY/SOG viewing (no exportable block)
+    // keeps the separate IEEE f16 resident path.
     //
     // Capacity is the *committed* gaussian-row budget (live N + headroom), not
     // max_cap. Virtual address space can be reserved up to reserve_capacity so
@@ -35,7 +40,8 @@ namespace lfs::core {
             Opacity = 3,
             Sh0 = 4,
             ShN = 5,
-            Count = 6,
+            ShNBounds = 6,
+            Count = 7,
         };
 
         std::shared_ptr<ExportableBlock> block;
@@ -70,12 +76,14 @@ namespace lfs::core {
         // Returns a SplatTensorAllocator that hands out Tensor views into the
         // backing block. Matches on the name passed by SplatData
         // ("SplatData.means", "SplatData.scaling", "SplatData.rotation",
-        //  "SplatData.opacity", "SplatData.sh0", "SplatData.shN").
+        //  "SplatData.opacity", "SplatData.sh0", "SplatData.shN",
+        //  "SplatData.shN_value_bounds").
         // Tensor capacity is clamped to this storage's committed capacity so
         // callers that still pass max_cap cannot overflow the packed regions.
         // Captures a shared control block so post-grow offset updates are visible
         // to *new* tensors from this allocator; existing tensors must be rebuilt
         // (see rebindSplatDataToStorage).
+        // ShN is always Float16 (q16 codes); ShNBounds is Float32 float2s.
         [[nodiscard]] LFS_CORE_API SplatTensorAllocator make_allocator() const;
 
         // Rebuild SplatData parameter tensors as views into this storage at the

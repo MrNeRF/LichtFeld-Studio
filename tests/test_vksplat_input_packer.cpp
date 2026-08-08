@@ -11,8 +11,12 @@
 // garbage. The tests below construct deterministic SplatData inputs and
 // assert byte-level invariants on the packer's output.
 
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#include "lfs/training/sh_value_codec.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "rendering/rasterizer/vulkan/src/buffer.h"
 #include "rendering/rasterizer/vulkan/src/config.h"
 #include "rendering/rasterizer/vulkan/src/indirect_layout.h"
@@ -523,7 +527,7 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutUsesRequestedUploadShDegree) {
 }
 
 TEST(VksplatInputPackerTest, RawDeviceLayoutHalvesShNBytesForIeeeF16) {
-    // TDD: IEEE f16 float4-swizzle (exportable GUI path) reports half the
+    // TDD: IEEE f16 float4-swizzle (standalone PLY/SOG) reports half the
     // resident SH bytes of the historical fp32 layout.
     constexpr std::size_t n = SH_REORDER_SIZE * 3 + 11;
     SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/3, /*seed=*/0xF16u);
@@ -547,6 +551,7 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutHalvesShNBytesForIeeeF16) {
     EXPECT_EQ(f16_bytes * 2, fp32_bytes);
     EXPECT_EQ(raw_layout->shN_bytes, f16_bytes);
     EXPECT_TRUE(raw_layout->shN_f16);
+    EXPECT_FALSE(raw_layout->shN_q16);
     EXPECT_EQ(raw_layout->shN_element_bytes, sizeof(std::uint16_t));
 
     // 5M-capacity accounting for PROGRESS.md: deg3 rest → 96 B/splat f16 vs 192 fp32.
@@ -557,6 +562,54 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutHalvesShNBytesForIeeeF16) {
         kCap5M, layout_rest);
     EXPECT_EQ(at_5m_f16, at_5m_fp32 / 2);
     EXPECT_NEAR(static_cast<double>(at_5m_f16) / static_cast<double>(kCap5M), 96.0, 0.01);
+}
+
+TEST(VksplatInputPackerTest, RawDeviceLayoutReportsQ16BytesAndBounds) {
+    // TDD (tier 2): pad-dropped q16 exportable path reports 90 B/splat SH
+    // (deg3) plus per-256 float2 bounds — not the f16 float4-swizzle size.
+    constexpr std::size_t n = SH_REORDER_SIZE * 3 + 11;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/3, /*seed=*/0xA016u);
+    auto splat = buildSplatData(in);
+    ASSERT_TRUE(splat->shN().is_valid());
+    ASSERT_EQ(splat->shN().dtype(), lfs::core::DataType::Float32);
+
+    // Encode to pad-dropped q16 (training path).
+    lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(true);
+    ASSERT_TRUE(lfs::training::sh_value::apply_shN_value_quant(*splat));
+    ASSERT_TRUE(splat->shN_value_quantized());
+    ASSERT_FALSE(splat->shN_ieee_f16());
+
+    auto raw_layout = rawDeviceInputLayout(*splat);
+    ASSERT_TRUE(raw_layout.has_value()) << raw_layout.error();
+    const auto layout_rest = static_cast<std::uint32_t>(
+        lfs::core::sh_rest_coefficients_for_degree(3));
+    const std::size_t q16_bytes =
+        lfs::core::sh_value_quant::sh_value_u16_count(n, layout_rest) *
+        sizeof(std::uint16_t);
+    const std::size_t bounds_bytes =
+        lfs::core::sh_value_quant::n_bounds_for_prims(n) * 2u * sizeof(float);
+    EXPECT_EQ(raw_layout->shN_bytes, q16_bytes);
+    EXPECT_EQ(raw_layout->shN_bounds_bytes, bounds_bytes);
+    EXPECT_TRUE(raw_layout->shN_q16);
+    EXPECT_FALSE(raw_layout->shN_f16);
+    EXPECT_EQ(raw_layout->shN_n_cells,
+              lfs::core::sh_value_quant::n_value_cells_per_prim(layout_rest));
+    EXPECT_EQ(raw_layout->shN_element_bytes, sizeof(std::uint16_t));
+
+    // 5M capacity: 90 B/splat SH + ≪1 B/splat bounds.
+    constexpr std::size_t kCap5M = 5'000'000;
+    const std::size_t at_5m_q16 =
+        lfs::core::sh_value_quant::sh_value_u16_count(kCap5M, layout_rest) *
+        sizeof(std::uint16_t);
+    EXPECT_NEAR(static_cast<double>(at_5m_q16) / static_cast<double>(kCap5M), 90.0, 0.01);
+    // Exportable layout @ 5M must not allocate the f16 float4-swizzle region.
+    const std::size_t exportable_shN =
+        lfs::core::SplatExportableStorage::layoutBytes(kCap5M, 3);
+    // Full exportable is smaller than the historical f16-exportable (~725 MiB):
+    // means+scaling+rot+opacity+sh0 + q16 shN + bounds.
+    EXPECT_LT(exportable_shN, 700ull << 20);
+
+    lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
 TEST(VksplatInputPackerTest, RawOpacityCopyBakesDeletedMaskOnlyIntoOpacity) {

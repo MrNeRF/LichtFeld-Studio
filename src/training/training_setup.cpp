@@ -10,10 +10,12 @@
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
 #include "dataset.hpp"
 #include "io/loader.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include <algorithm>
 #include <format>
 #include <memory>
@@ -304,8 +306,19 @@ namespace lfs::training {
                            ? configured_max
                            : std::max<size_t>(model.means_raw().capacity(), n));
             const auto layout_rest = static_cast<std::uint32_t>(model.max_sh_coeffs_rest());
+            // Exportable/GUI path stores pad-dropped q16 codes; headless non-exportable
+            // may still be float4-swizzle until quant. Size the readiness check from
+            // the live storage layout so we don't force a rebuild every step.
+            const bool shN_is_q16 = model.shN_value_quantized();
             const size_t target_shN_capacity =
-                layout_rest > 0 ? lfs::core::sh_swizzled_float_count(target_capacity, layout_rest) : 0;
+                layout_rest == 0
+                    ? 0
+                    : (shN_is_q16
+                           ? lfs::core::sh_value_quant::sh_value_u16_count(target_capacity, layout_rest)
+                           : lfs::core::sh_swizzled_float_count(target_capacity, layout_rest));
+            const size_t target_bounds_capacity =
+                shN_is_q16 ? lfs::core::sh_value_quant::n_bounds_for_prims(target_capacity) * 2u
+                           : 0;
 
             const bool already_allocator_backed =
                 isAllocatorBackedTrainingTensorReady(model.means_raw(), target_capacity) &&
@@ -314,7 +327,10 @@ namespace lfs::training {
                 isAllocatorBackedTrainingTensorReady(model.rotation_raw(), target_capacity) &&
                 isAllocatorBackedTrainingTensorReady(model.opacity_raw(), target_capacity) &&
                 (target_shN_capacity == 0 ||
-                 isAllocatorBackedTrainingTensorReady(model.shN_raw(), target_shN_capacity));
+                 isAllocatorBackedTrainingTensorReady(model.shN_raw(), target_shN_capacity)) &&
+                (target_bounds_capacity == 0 ||
+                 isAllocatorBackedTrainingTensorReady(model.shN_value_bounds(),
+                                                      target_bounds_capacity));
             if (already_allocator_backed && !force_reallocation) {
                 model.set_tensor_allocator(tensor_allocator);
                 return {};
@@ -364,9 +380,36 @@ namespace lfs::training {
                     model.opacity_raw(), model.opacity_raw().shape(), target_capacity, "SplatData.opacity");
 
                 lfs::core::Tensor shN;
-                if (target_shN_capacity > 0 && model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
-                    shN = copy_param(
-                        model.shN_raw(), model.shN_raw().shape(), target_shN_capacity, "SplatData.shN");
+                lfs::core::Tensor shN_bounds;
+                if (layout_rest > 0 && model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
+                    if (model.shN_value_quantized()) {
+                        // Pad-dropped q16: install codes + bounds into exportable.
+                        const size_t q16_cap =
+                            lfs::core::sh_value_quant::sh_value_u16_count(target_capacity, layout_rest);
+                        const size_t bounds_cap =
+                            lfs::core::sh_value_quant::n_bounds_for_prims(target_capacity) * 2u;
+                        shN = copy_param(
+                            model.shN_raw(), model.shN_raw().shape(), q16_cap, "SplatData.shN");
+                        if (model.shN_value_bounds().is_valid() &&
+                            model.shN_value_bounds().numel() > 0) {
+                            shN_bounds = copy_param(
+                                model.shN_value_bounds(),
+                                model.shN_value_bounds().shape(),
+                                bounds_cap,
+                                "SplatData.shN_value_bounds");
+                        }
+                    } else {
+                        // Float/IEEE-f16 source: leave shN on the source allocator and
+                        // re-encode into exportable via apply_shN_value_quant after migrate
+                        // (exportable ShN region is q16-sized — float topology won't fit).
+                        shN = model.shN_raw();
+                        if (shN.device() != lfs::core::Device::CUDA) {
+                            shN = shN.cuda();
+                        }
+                        if (!shN.is_contiguous()) {
+                            shN = shN.contiguous();
+                        }
+                    }
                 }
 
                 lfs::core::SplatData migrated(max_sh,
@@ -379,6 +422,9 @@ namespace lfs::training {
                                               scene_scale,
                                               lfs::core::SplatData::ShNLayout::Swizzled);
                 migrated.set_active_sh_degree(active_sh);
+                if (shN_bounds.is_valid()) {
+                    migrated.shN_value_bounds() = std::move(shN_bounds);
+                }
                 if (deleted.is_valid()) {
                     migrated.deleted() = std::move(deleted);
                 }
@@ -391,13 +437,18 @@ namespace lfs::training {
                 if (capacity_ensure) {
                     model.set_capacity_ensure(std::move(capacity_ensure));
                 }
+                // Encode float/f16 rest into exportable q16 when still not quantized.
+                if (layout_rest > 0 && model.shN_raw().is_valid() && !model.shN_value_quantized()) {
+                    (void)lfs::training::sh_value::apply_shN_value_quant(model);
+                }
                 lfs::core::Tensor::trim_memory_pool();
 
                 LOG_INFO("Migrated training SplatData tensors to Vulkan-external storage "
-                         "(gaussians={}, capacity={}, shN_capacity_floats={})",
+                         "(gaussians={}, capacity={}, shN_q16={}, shN_capacity_cells={})",
                          n,
                          model.means_raw().capacity(),
-                         target_shN_capacity);
+                         model.shN_value_quantized(),
+                         model.shN_raw().is_valid() ? model.shN_raw().capacity() : 0);
             } catch (const std::exception& e) {
                 return std::unexpected(std::format(
                     "Failed to migrate training SplatData to Vulkan-external storage: {}",

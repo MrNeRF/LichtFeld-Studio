@@ -6,6 +6,7 @@
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_impl.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -23,11 +24,10 @@ namespace lfs::core {
     namespace {
 
         constexpr std::size_t kFloatBytes = sizeof(float);
-        // Exportable/viewer SH rest is IEEE f16 float4-swizzle (same topology as
-        // fp32, half the bytes). Training FastGS loads half→float in registers;
-        // the Vulkan projection shader does the same via f16tof32 on uint2 slots.
-        // Headless stays on pad-dropped q16 outside this block (quant skip removed
-        // only for non-exportable tensors).
+        // Exportable training SH rest is pad-dropped q16 (uint16 cells) with
+        // per-256-splat float2 bounds. Same format as headless; the Vulkan
+        // projection shader dequants in registers (LFS_SHN_Q16). Standalone
+        // PLY/SOG viewing keeps the separate IEEE f16 resident path.
         constexpr std::size_t kShNElementBytes = sizeof(std::uint16_t);
         constexpr std::size_t kRegionAlignment = 256;
 
@@ -72,15 +72,20 @@ namespace lfs::core {
             using R = SplatExportableStorage;
             const auto rest_coeffs =
                 static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(sh_degree));
-            const std::size_t shN_capacity_elems = sh_swizzled_float_count(capacity, rest_coeffs);
+            const std::size_t shN_u16_cells =
+                sh_value_quant::sh_value_u16_count(capacity, rest_coeffs);
+            const std::size_t bounds_float2s = sh_value_quant::n_bounds_for_prims(capacity);
+            // bounds region: float2 per 256-splat block → 2 floats each
+            const std::size_t bounds_bytes = bounds_float2s * 2u * kFloatBytes;
 
             const std::array<std::size_t, R::Count> raw_bytes{
-                region_bytes_for(capacity, 3),         // Means {N,3}
-                region_bytes_for(capacity, 3),         // Scaling {N,3}
-                region_bytes_for(capacity, 4),         // Rotation {N,4}
-                region_bytes_for(capacity, 1),         // Opacity {N,1}
-                region_bytes_for(capacity, 3),         // Sh0 {N,1,3}
-                shN_capacity_elems * kShNElementBytes, // ShN (IEEE f16)
+                region_bytes_for(capacity, 3),    // Means {N,3}
+                region_bytes_for(capacity, 3),    // Scaling {N,3}
+                region_bytes_for(capacity, 4),    // Rotation {N,4}
+                region_bytes_for(capacity, 1),    // Opacity {N,1}
+                region_bytes_for(capacity, 3),    // Sh0 {N,1,3}
+                shN_u16_cells * kShNElementBytes, // ShN (pad-dropped q16)
+                bounds_bytes,                     // ShNBounds (float2 / 256)
             };
 
             Layout layout{};
@@ -108,6 +113,8 @@ namespace lfs::core {
                 return SplatExportableStorage::Sh0;
             if (name == "SplatData.shN")
                 return SplatExportableStorage::ShN;
+            if (name == "SplatData.shN_value_bounds")
+                return SplatExportableStorage::ShNBounds;
             throw std::runtime_error(
                 std::format("SplatExportableStorage: unknown allocator name '{}'", name));
         }
@@ -182,7 +189,8 @@ namespace lfs::core {
         out.syncControl();
 
         LOG_INFO("SplatExportableStorage: total={} MiB capacity={} reserve_capacity={} "
-                 "sh_degree={} (means={}, scaling={}, rotation={}, opacity={}, sh0={}, shN={} MiB)",
+                 "sh_degree={} (means={}, scaling={}, rotation={}, opacity={}, sh0={}, "
+                 "shN(q16)={}, shN_bounds={} MiB)",
                  out.block->size >> 20,
                  capacity,
                  reserve_gaussians,
@@ -192,7 +200,8 @@ namespace lfs::core {
                  layout.bytes[Rotation] >> 20,
                  layout.bytes[Opacity] >> 20,
                  layout.bytes[Sh0] >> 20,
-                 layout.bytes[ShN] >> 20);
+                 layout.bytes[ShN] >> 20,
+                 layout.bytes[ShNBounds] >> 20);
 
         return out;
     }
@@ -345,20 +354,29 @@ namespace lfs::core {
             // Fallback for partially-constructed storage: capture by value.
             auto block_copy = block;
             auto offsets = region_offsets;
+            auto bytes = region_bytes;
             const std::size_t cap = capacity_;
-            return [block = std::move(block_copy), offsets, cap](TensorShape shape,
-                                                                 std::size_t capacity,
-                                                                 DataType dtype,
-                                                                 std::string_view name) -> Tensor {
+            return [block = std::move(block_copy), offsets, bytes, cap](
+                       TensorShape shape,
+                       std::size_t capacity,
+                       DataType dtype,
+                       std::string_view name) -> Tensor {
                 const Region region = region_from_name(name);
                 void* const data = static_cast<char*>(block->device_ptr) + offsets[region];
                 std::shared_ptr<void> owner = block;
-                // ShN region is IEEE f16 regardless of the caller's requested dtype.
+                std::size_t clamped = capacity;
                 if (region == ShN) {
+                    // Pad-dropped q16 codes: capacity is in uint16 cells.
                     dtype = DataType::Float16;
+                    const std::size_t max_cells = bytes[ShN] / kShNElementBytes;
+                    clamped = std::min(capacity, max_cells);
+                } else if (region == ShNBounds) {
+                    dtype = DataType::Float32;
+                    const std::size_t max_floats = bytes[ShNBounds] / kFloatBytes;
+                    clamped = std::min(capacity, max_floats);
+                } else if (cap > 0) {
+                    clamped = std::min(capacity, cap);
                 }
-                const std::size_t clamped =
-                    (region == ShN) ? capacity : std::min(capacity, cap > 0 ? cap : capacity);
                 return Tensor::from_external_owner(data,
                                                    std::move(shape),
                                                    Device::CUDA,
@@ -382,12 +400,16 @@ namespace lfs::core {
             // cannot claim more rows than the packed regions hold.
             std::size_t clamped = capacity;
             if (region == ShN) {
-                // ShN is IEEE f16 float4-swizzle: capacity is in half-elements
-                // (same count as the historical "float count" topology).
+                // Pad-dropped q16: capacity is in uint16 cells.
                 dtype = DataType::Float16;
-                const std::size_t max_elems =
+                const std::size_t max_cells =
                     ctrl->region_bytes[ShN] / kShNElementBytes;
-                clamped = std::min(capacity, max_elems);
+                clamped = std::min(capacity, max_cells);
+            } else if (region == ShNBounds) {
+                dtype = DataType::Float32;
+                const std::size_t max_floats =
+                    ctrl->region_bytes[ShNBounds] / kFloatBytes;
+                clamped = std::min(capacity, max_floats);
             } else if (ctrl->capacity > 0) {
                 clamped = std::min(capacity, ctrl->capacity);
             }
@@ -476,44 +498,80 @@ namespace lfs::core {
                 model.opacity_raw(), model.opacity_raw().shape(), capacity_, "SplatData.opacity");
 
             Tensor shN;
-            if (model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
-                const auto layout_rest =
-                    static_cast<std::uint32_t>(model.max_sh_coeffs_rest());
-                const size_t shN_cap = sh_swizzled_float_count(capacity_, layout_rest);
-                const size_t shN_logical = sh_swizzled_float_count(
-                    static_cast<size_t>(model.size()), layout_rest);
-                // Exportable ShN is always IEEE f16 float4-swizzle (half bytes of
-                // the historical fp32 layout). Same-block rebind only re-views
-                // (ISS-025). Cross-allocator install converts fp32 → f16.
-                // q16 sources must be expanded to fp32 before rebind (training
-                // ensure_shN_fp32_for_mutation); we refuse silent bitcast of codes.
+            Tensor shN_bounds;
+            const auto layout_rest =
+                static_cast<std::uint32_t>(model.max_sh_coeffs_rest());
+            const size_t n_live = static_cast<size_t>(model.size());
+            if (layout_rest > 0 && model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
+                // Pad-dropped q16 codes + per-256 float2 bounds live in the block.
+                // Same-block rebind only re-views (ISS-025). Cross-allocator install
+                // copies q16 codes when the source is already quantized.
+                // Float densify temps (ensure_shN_fp32) are kept outside the block —
+                // commit_shN_after_mutation re-encodes into exportable after mutation.
+                const size_t shN_cap = sh_value_quant::sh_value_u16_count(capacity_, layout_rest);
+                const size_t shN_logical = sh_value_quant::sh_value_u16_count(n_live, layout_rest);
+                const size_t bounds_cap = sh_value_quant::n_bounds_for_prims(capacity_) * 2u;
+                const size_t bounds_logical = sh_value_quant::n_bounds_for_prims(n_live) * 2u;
+
                 const Tensor& shN_src = model.shN_raw();
                 const bool aliases = tensor_aliases_exportable_block(shN_src, block_ref);
-                if (!aliases && model.shN_value_quantized()) {
-                    return std::unexpected(
-                        "SplatExportableStorage::rebindSplatData: shN is q16-quantized; "
-                        "expand to fp32 before exportable install (IEEE f16 path)");
+                const bool src_is_q16 = model.shN_value_quantized();
+
+                if (!aliases && !src_is_q16) {
+                    // Densify expand path: preserve float/f16 temp; do not zero-fill.
+                    shN = shN_src;
+                    if (shN.device() != Device::CUDA) {
+                        shN = shN.cuda();
+                    }
+                    if (!shN.is_contiguous()) {
+                        shN = shN.contiguous();
+                    }
+                    // Bounds stay empty until commit re-encodes.
+                    shN_bounds = Tensor{};
+                } else {
+                    Tensor dst = allocator(
+                        TensorShape({shN_logical}),
+                        shN_cap,
+                        DataType::Float16,
+                        "SplatData.shN");
+                    dst.set_name("SplatData.shN");
+                    if (!aliases && src_is_q16 && shN_src.is_valid() && shN_src.numel() > 0) {
+                        Tensor src = shN_src;
+                        if (src.device() != Device::CUDA) {
+                            src = src.cuda();
+                        }
+                        if (!src.is_contiguous()) {
+                            src = src.contiguous();
+                        }
+                        dst.copy_from(src);
+                    }
+                    shN = std::move(dst);
+
+                    Tensor bounds_dst = allocator(
+                        TensorShape({bounds_logical}),
+                        bounds_cap,
+                        DataType::Float32,
+                        "SplatData.shN_value_bounds");
+                    bounds_dst.set_name("SplatData.shN_value_bounds");
+                    const Tensor& bounds_src = model.shN_value_bounds();
+                    const bool bounds_alias =
+                        bounds_src.is_valid() &&
+                        tensor_aliases_exportable_block(bounds_src, block_ref);
+                    if (!bounds_alias && bounds_src.is_valid() && bounds_src.numel() > 0) {
+                        Tensor bsrc = bounds_src;
+                        if (bsrc.device() != Device::CUDA) {
+                            bsrc = bsrc.cuda();
+                        }
+                        if (!bsrc.is_contiguous()) {
+                            bsrc = bsrc.contiguous();
+                        }
+                        if (bsrc.dtype() != DataType::Float32) {
+                            bsrc = bsrc.to(DataType::Float32);
+                        }
+                        bounds_dst.copy_from(bsrc);
+                    }
+                    shN_bounds = std::move(bounds_dst);
                 }
-                Tensor dst = allocator(
-                    TensorShape({shN_logical}),
-                    shN_cap,
-                    DataType::Float16,
-                    "SplatData.shN");
-                dst.set_name("SplatData.shN");
-                if (!aliases && shN_src.is_valid() && shN_src.numel() > 0) {
-                    Tensor half_src = shN_src;
-                    if (half_src.dtype() != DataType::Float16) {
-                        half_src = half_src.to(DataType::Float16);
-                    }
-                    if (half_src.device() != Device::CUDA) {
-                        half_src = half_src.cuda();
-                    }
-                    if (!half_src.is_contiguous()) {
-                        half_src = half_src.contiguous();
-                    }
-                    dst.copy_from(half_src);
-                }
-                shN = std::move(dst);
             }
 
             SplatData rebound(max_sh,
@@ -525,6 +583,9 @@ namespace lfs::core {
                               std::move(opacity),
                               scene_scale,
                               SplatData::ShNLayout::Swizzled);
+            if (shN_bounds.is_valid()) {
+                rebound.shN_value_bounds() = std::move(shN_bounds);
+            }
             rebound.set_active_sh_degree(active_sh);
             if (deleted.is_valid()) {
                 rebound.deleted() = std::move(deleted);

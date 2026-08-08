@@ -707,6 +707,10 @@ namespace lfs::vis {
                  (root / "generated/projection_forward_shn_f16.spv").string()},
                 {"projection_forward_shn_f16_3dgut",
                  (root / "generated/projection_forward_shn_f16_3dgut.spv").string()},
+                {"projection_forward_shn_q16",
+                 (root / "generated/projection_forward_shn_q16.spv").string()},
+                {"projection_forward_shn_q16_3dgut",
+                 (root / "generated/projection_forward_shn_q16_3dgut.spv").string()},
                 {"selection_mask", (root / "generated/selection_mask.spv").string()},
                 {"selection_polygon_rasterize",
                  (root / "generated/selection_polygon_rasterize.spv").string()},
@@ -758,6 +762,8 @@ namespace lfs::vis {
                  (root / "generated/projection_forward_quant_survivors.spv").string()},
                 {"projection_forward_shn_f16_survivors",
                  (root / "generated/projection_forward_shn_f16_survivors.spv").string()},
+                {"projection_forward_shn_q16_survivors",
+                 (root / "generated/projection_forward_shn_q16_survivors.spv").string()},
                 {"prepare_visible_chain", (root / "generated/prepare_visible_chain.spv").string()},
                 {"copy_visible_indices", (root / "generated/copy_visible_indices.spv").string()},
                 {"cumsum_block_scan_indirect",
@@ -2916,6 +2922,9 @@ namespace lfs::vis {
         buffers_.page_frames.deviceBuffer = view(InputPageFrames);
         buffers_.quant_pool = true;
         buffers_.shN_f16 = false;
+        buffers_.shN_q16 = false;
+        buffers_.shN_n_cells = 0;
+        buffers_.shN_bounds.deviceBuffer = {};
         buffers_.pool_page_splats = static_cast<std::uint32_t>(LodPageCache::kChunkSplats);
         buffers_.scales_opacs.deviceBuffer = {};
         buffers_.sh_coeffs.deviceBuffer = {};
@@ -4748,12 +4757,13 @@ namespace lfs::vis {
         const bool input_upload_requested = force_upload || input_snapshot_changed;
 
         std::shared_ptr<VulkanExternalTensorStorage> means_storage, sh0_storage, shN_storage,
-            rotations_storage, scaling_storage, opacity_storage;
+            shN_bounds_storage, rotations_storage, scaling_storage, opacity_storage;
         {
             LOG_TIMER("prepareInputs.storage_lookup");
             means_storage = vulkanExternalStorage(splat_data.means_raw());
             sh0_storage = vulkanExternalStorage(splat_data.sh0_raw());
             shN_storage = vulkanExternalStorage(splat_data.shN_raw());
+            shN_bounds_storage = vulkanExternalStorage(splat_data.shN_value_bounds());
             rotations_storage = vulkanExternalStorage(splat_data.rotation_raw());
             scaling_storage = vulkanExternalStorage(splat_data.scaling_raw());
             opacity_storage = vulkanExternalStorage(splat_data.opacity_raw());
@@ -4764,9 +4774,13 @@ namespace lfs::vis {
         const bool has_deleted_mask = splat_data.has_deleted_mask();
         const bool base_inputs_external =
             means_storage && sh0_storage && rotations_storage && scaling_storage;
+        // q16 needs bounds in the exportable block for zero-copy dequant.
+        const bool shN_ok =
+            upload_layout->omits_shN ||
+            (shN_storage && (!upload_layout->shN_q16 || shN_bounds_storage));
         const bool can_bind_external =
             base_inputs_external &&
-            (upload_layout->omits_shN || shN_storage) &&
+            shN_ok &&
             (opacity_storage || has_deleted_mask);
         const auto& layout = can_bind_external && shN_storage ? external_layout : upload_layout;
 
@@ -4841,6 +4855,13 @@ namespace lfs::vis {
                 if (!layout->omits_shN) {
                     if (auto ok = require_capacity(shN_storage, layout->shN_bytes, "shN"); !ok) {
                         return std::unexpected(ok.error());
+                    }
+                    if (layout->shN_q16) {
+                        if (auto ok = require_capacity(
+                                shN_bounds_storage, layout->shN_bounds_bytes, "shN_value_bounds");
+                            !ok) {
+                            return std::unexpected(ok.error());
+                        }
                     }
                 }
                 if (auto ok = require_capacity(rotations_storage, layout->rotations_bytes, "rotation"); !ok) {
@@ -4954,7 +4975,30 @@ namespace lfs::vis {
                 buffers_.page_frames.deviceBuffer = {};
                 buffers_.quant_pool = false;
                 buffers_.pool_page_splats = 0;
-                buffers_.shN_f16 = layout->shN_f16;
+                // Feature gate: q16 zero-copy needs 16-bit storage support (same
+                // checks as gs_renderer macro chain). Fall back to f16 flag only
+                // when the model is IEEE f16; q16 without feature support leaves
+                // both false so the host refuses / uses a non-q16 pipeline.
+                const bool q16_supported =
+                    layout->shN_q16 && renderer_.supportsFloat16Storage();
+                buffers_.shN_q16 = q16_supported;
+                buffers_.shN_f16 = layout->shN_f16 && !buffers_.shN_q16;
+                buffers_.shN_n_cells = buffers_.shN_q16 ? layout->shN_n_cells : 0u;
+                if (buffers_.shN_q16 && shN_bounds_storage) {
+                    buffers_.shN_bounds.deviceBuffer = makeBorrowedBufferView(
+                        shN_bounds_storage->vkBuffer(),
+                        shN_bounds_storage->vkBufferSize(),
+                        shN_bounds_storage->bytes(),
+                        layout->shN_bounds_bytes,
+                        shN_bounds_storage->vkOffset());
+                } else {
+                    buffers_.shN_bounds.deviceBuffer = {};
+                }
+                if (layout->shN_q16 && !q16_supported) {
+                    return std::unexpected(
+                        "VkSplat q16 SH requires shaderFloat16+storageBuffer16BitAccess; "
+                        "device lacks 16-bit storage (fp16 fallback is standalone-only)");
+                }
                 update_input_metadata(input_snapshot_changed && !deleted_mask_only_change);
 
                 // Keep the borrowed storages alive until the frame that binds
@@ -4968,7 +5012,7 @@ namespace lfs::vis {
                 retired_input_storages_.emplace_back(
                     *retirement_value,
                     std::vector<std::shared_ptr<void>>{
-                        means_storage, sh0_storage, shN_storage,
+                        means_storage, sh0_storage, shN_storage, shN_bounds_storage,
                         rotations_storage, scaling_storage, opacity_storage});
             }
 

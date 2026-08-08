@@ -5,6 +5,7 @@
 #include "vksplat_input_packer.hpp"
 
 #include "core/logger.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "rendering/rasterizer/vulkan/src/config.h"
@@ -400,26 +401,51 @@ namespace lfs::vis::vksplat {
             layout_rest,
             lfs::core::sh_rest_coefficients_for_degree(effective_upload_sh_degree));
         const bool omit_shN_upload = upload_layout_rest == 0;
-        // IEEE f16 float4-swizzle (exportable GUI path) stores the same component
-        // count as fp32 but 2 bytes each. q16 pad-dropped is a different layout and
-        // is not bound through this raw split path without a dequant pack step.
-        const bool shN_f16 = splat_data.shN_ieee_f16();
-        const std::size_t element_bytes = shN_f16 ? sizeof(std::uint16_t) : sizeof(float);
-        const std::size_t resident_shN_bytes =
-            lfs::core::sh_swizzled_byte_count_for_element(n, layout_rest, element_bytes);
-        const std::size_t upload_shN_bytes =
-            lfs::core::sh_swizzled_byte_count_for_element(n, upload_layout_rest, element_bytes);
-        const std::size_t shN_bytes = omit_shN_upload
-                                          ? sizeof(float4)
-                                          : upload_shN_bytes;
+        // Three resident SH formats on the raw split path:
+        //  1. pad-dropped q16 (exportable training) — u16 cells + float2 bounds
+        //  2. IEEE f16 float4-swizzle (standalone PLY/SOG) — same topology as fp32
+        //  3. fp32 float4-swizzle
+        const bool shN_q16 = splat_data.shN_value_quantized() && !omit_shN_upload;
+        const bool shN_f16 = splat_data.shN_ieee_f16() && !omit_shN_upload && !shN_q16;
+        const std::uint32_t n_cells =
+            shN_q16 ? lfs::core::sh_value_quant::n_value_cells_per_prim(upload_layout_rest) : 0u;
+        std::size_t shN_bytes = sizeof(float4);
+        std::size_t element_bytes = sizeof(float);
+        std::size_t bounds_bytes = 0;
+        if (!omit_shN_upload) {
+            if (shN_q16) {
+                element_bytes = sizeof(std::uint16_t);
+                shN_bytes = lfs::core::sh_value_quant::sh_value_u16_count(n, upload_layout_rest) *
+                            sizeof(std::uint16_t);
+                bounds_bytes = lfs::core::sh_value_quant::n_bounds_for_prims(n) * 2u * sizeof(float);
+            } else {
+                element_bytes = shN_f16 ? sizeof(std::uint16_t) : sizeof(float);
+                shN_bytes = lfs::core::sh_swizzled_byte_count_for_element(
+                    n, upload_layout_rest, element_bytes);
+            }
+        }
         if (!omit_shN_upload && shN_raw.is_valid() && shN_raw.numel() > 0) {
             if (shN_raw.ndim() != 1) {
                 return std::unexpected("VkSplat expected swizzled SH rest coefficients as a 1D tensor");
             }
             const std::size_t src_elem =
                 shN_raw.dtype() == DataType::Float16 ? sizeof(std::uint16_t) : sizeof(float);
-            if (static_cast<std::size_t>(shN_raw.numel()) * src_elem < resident_shN_bytes) {
+            const std::size_t resident_bytes =
+                shN_q16
+                    ? lfs::core::sh_value_quant::sh_value_u16_count(n, layout_rest) *
+                          sizeof(std::uint16_t)
+                    : lfs::core::sh_swizzled_byte_count_for_element(n, layout_rest, element_bytes);
+            if (static_cast<std::size_t>(shN_raw.numel()) * src_elem < resident_bytes) {
                 return std::unexpected("VkSplat swizzled SH rest tensor is smaller than expected");
+            }
+            if (shN_q16) {
+                const auto& bounds = splat_data.shN_value_bounds();
+                const std::size_t need_bounds =
+                    lfs::core::sh_value_quant::n_bounds_for_prims(n) * 2u;
+                if (!bounds.is_valid() || static_cast<std::size_t>(bounds.numel()) < need_bounds) {
+                    return std::unexpected(
+                        "VkSplat q16 SH rest requires per-256 float2 bounds");
+                }
             }
         } else if (!omit_shN_upload && splat_data.max_sh_coeffs_rest() > 0) {
             return std::unexpected("VkSplat expected swizzled SH rest coefficients for max SH degree");
@@ -435,8 +461,11 @@ namespace lfs::vis::vksplat {
             .opacity_bytes = n * sizeof(float),
             .shN_layout_rest = upload_layout_rest,
             .omits_shN = omit_shN_upload,
-            .shN_f16 = shN_f16 && !omit_shN_upload,
+            .shN_f16 = shN_f16,
+            .shN_q16 = shN_q16,
             .shN_element_bytes = omit_shN_upload ? sizeof(float) : element_bytes,
+            .shN_n_cells = n_cells,
+            .shN_bounds_bytes = bounds_bytes,
         };
     }
 

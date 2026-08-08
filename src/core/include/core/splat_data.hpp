@@ -377,6 +377,17 @@ namespace lfs::core {
         void set_tensor_allocator(SplatTensorAllocator allocator) {
             _tensor_allocator = std::move(allocator);
         }
+        [[nodiscard]] bool has_tensor_allocator() const noexcept {
+            return static_cast<bool>(_tensor_allocator);
+        }
+        // Allocate a named param tensor via the active backing allocator when set
+        // (exportable / Vulkan-external), otherwise zeros_direct. Used by SH q16
+        // encode to keep codes+bounds inside the exportable block.
+        [[nodiscard]] LFS_CORE_API Tensor allocate_named_param(
+            const TensorShape& shape,
+            std::size_t capacity,
+            DataType dtype,
+            std::string_view name);
 
         // Optional hook for exportable / external storage growth (Phase 5.1).
         // When densification needs more rows than the committed exportable block,
