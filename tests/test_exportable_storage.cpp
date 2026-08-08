@@ -951,3 +951,187 @@ TEST(ExportableStorageTest, GrowAfterImporterDetachKeepsStableVa) {
     ASSERT_EQ(cudaMalloc(&probe, 4096), cudaSuccess);
     ASSERT_EQ(cudaFree(probe), cudaSuccess);
 }
+
+// ---------------------------------------------------------------------------
+// q16 poison D1/D2 permanent suite (rock-solid bar)
+// ---------------------------------------------------------------------------
+
+// D1: shape that overruns the packed region must fail loud (not silent OOB view).
+TEST(SplatExportableStorageTest, AllocatorRejectsShapeOverrunRegion) {
+    require_cuda();
+
+    constexpr std::size_t kCap = 64;
+    constexpr int kShDegree = 1;
+    auto storage_result = SplatExportableStorage::create(kCap, kShDegree, 0, kCap);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    auto allocator = storage.make_allocator();
+
+    // Request means with more logical rows than the region can hold.
+    const std::size_t too_many = kCap * 4;
+    EXPECT_THROW(
+        {
+            (void)allocator(TensorShape({too_many, 3}), too_many, DataType::Float32,
+                            "SplatData.means");
+        },
+        std::runtime_error);
+
+    // q16 codes: request more u16 cells than ShN region bytes.
+    const auto rest = static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(kShDegree));
+    const size_t max_cells = sh_value_quant::sh_value_u16_count(kCap, rest);
+    EXPECT_THROW(
+        {
+            (void)allocator(TensorShape({max_cells * 8}), max_cells * 8, DataType::Float16,
+                            "SplatData.shN");
+        },
+        std::runtime_error);
+}
+
+// D2: partially-constructed storage (no control) must refuse make_allocator —
+// no by-value snapshot flavor that hands out offsets which go stale on grow.
+TEST(SplatExportableStorageTest, MakeAllocatorRequiresControlBlock) {
+    require_cuda();
+    SplatExportableStorage empty{};
+    EXPECT_FALSE(empty.valid());
+    EXPECT_THROW((void)empty.make_allocator(), std::runtime_error);
+}
+
+// Generation-checked resolve: holding a Tensor across grow sees live pointer via
+// resolve_exportable_device_ptr (baked storage_ptr is stale after grow).
+TEST(SplatExportableStorageTest, ResolveUsesLivePointerAfterGrow) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 128;
+    constexpr std::size_t kGrown = 512;
+    constexpr std::size_t kLiveN = 32;
+    constexpr int kShDegree = 1;
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kGrown * 2);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    auto allocator = storage.make_allocator();
+
+    const auto rest = static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(kShDegree));
+    const size_t cells = sh_value_quant::sh_value_u16_count(kLiveN, rest);
+    const size_t cap_cells = sh_value_quant::sh_value_u16_count(kInitial, rest);
+    const size_t bounds_n = sh_value_quant::n_bounds_for_prims(kLiveN) * 2u;
+    const size_t bounds_cap = sh_value_quant::n_bounds_for_prims(kInitial) * 2u;
+
+    Tensor shN = allocator(TensorShape({cells}), cap_cells, DataType::Float16, "SplatData.shN");
+    Tensor bounds =
+        allocator(TensorShape({bounds_n}), bounds_cap, DataType::Float32, "SplatData.shN_value_bounds");
+    ASSERT_TRUE(shN.has_exportable_provenance());
+    ASSERT_TRUE(bounds.has_exportable_provenance());
+
+    void* const shN_before = shN.storage_ptr();
+    void* const bounds_before = bounds.storage_ptr();
+    void* const shN_resolved_before = resolve_exportable_device_ptr(shN);
+    EXPECT_EQ(shN_resolved_before, shN_before);
+
+    const auto gen_before = storage.generation();
+    auto grew = storage.grow(kGrown);
+    if (!grew) {
+        FAIL() << grew.error();
+    }
+    ASSERT_TRUE(*grew);
+    EXPECT_GT(storage.generation(), gen_before);
+
+    // Baked storage_ptr is stale (pre-grow region base). Live resolve must differ
+    // for regions that relocate (ShN is not at offset 0).
+    void* const shN_live = resolve_exportable_device_ptr(shN);
+    void* const bounds_live = resolve_exportable_device_ptr(bounds);
+    EXPECT_EQ(shN_live, storage.live_region_ptr(SplatExportableStorage::ShN));
+    EXPECT_EQ(bounds_live, storage.live_region_ptr(SplatExportableStorage::ShNBounds));
+    // Means is at offset 0 and stays put; ShN relocates when capacity grows.
+    EXPECT_NE(shN_live, shN_before)
+        << "ShN region must relocate on grow; resolve must not return baked ptr";
+    EXPECT_NE(bounds_live, bounds_before);
+
+    // Fresh allocator views match live control.
+    auto alloc2 = storage.make_allocator();
+    const size_t cells2 = sh_value_quant::sh_value_u16_count(kLiveN, rest);
+    const size_t cap2 = sh_value_quant::sh_value_u16_count(kGrown, rest);
+    Tensor shN2 = alloc2(TensorShape({cells2}), cap2, DataType::Float16, "SplatData.shN");
+    EXPECT_EQ(shN2.storage_ptr(), shN_live);
+    EXPECT_EQ(shN2.exportable_bound_generation(), storage.generation());
+}
+
+// Stale held view + resolve pair for q16 codes/bounds must agree on generation
+// when rebound, and survive a grow under a held Tensor without illegal address.
+TEST(SplatExportableStorageTest, Q16BindPtrsSurviveGrowUnderHeldView) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 256;
+    constexpr std::size_t kGrown = 1024;
+    constexpr std::size_t kLiveN = 64;
+    constexpr int kShDegree = 2;
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kGrown * 2);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    auto allocator = storage.make_allocator();
+
+    Tensor means = allocator(TensorShape({kLiveN, 3}), kInitial, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({kLiveN, 3}), kInitial, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({kLiveN, 4}), kInitial, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({kLiveN, 1}), kInitial, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({kLiveN, 1, 3}), kInitial, DataType::Float32, "SplatData.sh0");
+    const auto rest = static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(kShDegree));
+    const size_t cells = sh_value_quant::sh_value_u16_count(kLiveN, rest);
+    const size_t cap_cells = sh_value_quant::sh_value_u16_count(kInitial, rest);
+    const size_t bounds_n = sh_value_quant::n_bounds_for_prims(kLiveN) * 2u;
+    const size_t bounds_cap = sh_value_quant::n_bounds_for_prims(kInitial) * 2u;
+    Tensor shN = allocator(TensorShape({cells}), cap_cells, DataType::Float16, "SplatData.shN");
+    Tensor shN_bounds =
+        allocator(TensorShape({bounds_n}), bounds_cap, DataType::Float32, "SplatData.shN_value_bounds");
+
+    SplatData model(kShDegree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    1.0f,
+                    SplatData::ShNLayout::Swizzled);
+    model.shN_value_bounds() = std::move(shN_bounds);
+    model.set_tensor_allocator(allocator);
+    model.set_active_sh_degree(kShDegree);
+    ASSERT_TRUE(model.shN_value_quantized());
+
+    // Hold raw pointers as a naive consumer would (pre-fix poison path).
+    Tensor held_codes = model.shN_raw();
+    Tensor held_bounds = model.shN_value_bounds();
+    void* const baked_codes = held_codes.storage_ptr();
+
+    auto grew = storage.grow(kGrown);
+    if (!grew) {
+        FAIL() << grew.error();
+    }
+    ASSERT_TRUE(*grew);
+
+    // Without rebind, resolve still returns LIVE region bases (no illegal address).
+    void* const live_codes = resolve_exportable_device_ptr(held_codes);
+    void* const live_bounds = resolve_exportable_device_ptr(held_bounds);
+    EXPECT_EQ(live_codes, storage.live_region_ptr(SplatExportableStorage::ShN));
+    EXPECT_EQ(live_bounds, storage.live_region_ptr(SplatExportableStorage::ShNBounds));
+    EXPECT_NE(live_codes, baked_codes);
+
+    // After rebind, model views are generation-fresh and resolve_q16 agrees.
+    ASSERT_TRUE(storage.rebindSplatData(model, storage.make_allocator()).has_value());
+    model.set_tensor_allocator(storage.make_allocator());
+    ASSERT_TRUE(model.shN_value_quantized());
+    const auto q16 = resolve_q16_bind_ptrs(model);
+    ASSERT_NE(q16.codes, nullptr);
+    ASSERT_NE(q16.bounds, nullptr);
+    EXPECT_EQ(static_cast<const void*>(q16.codes),
+              storage.live_region_ptr(SplatExportableStorage::ShN));
+    EXPECT_TRUE(q16.generation_checked);
+    EXPECT_EQ(q16.generation, storage.generation());
+}
