@@ -27,23 +27,25 @@ namespace lfs::vis::gui::native_panels {
     public:
         explicit VideoExtractorPanel(lfs::gui::IVideoExtractorWidget* widget);
         void draw(const PanelDrawContext& ctx) override;
-        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
-                           float clip_y_min, float clip_y_max,
-                           const PanelInputState* input) override;
-        bool supportsDirectDraw() const override;
-        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) override;
-        bool drawDirectCached(float x, float y, float w, float h,
-                              const PanelDrawContext& ctx) override;
-        float getDirectDrawHeight() const override;
-        void setInputClipY(float y_min, float y_max) override;
+        PanelRenderCapabilities renderCapabilities() const override;
+        PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
+                                             const PanelDrawContext& ctx) override;
         void setInput(const PanelInputState* input) override;
-        void setForcedHeight(float h) override;
-        void setPanelSpace(PanelSpace space) override;
         bool wantsKeyboard() const override;
         bool needsAnimationFrame() const override;
         void reloadRmlResources() override;
 
     private:
+        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
+                           float clip_y_min, float clip_y_max,
+                           const PanelInputState* input);
+        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx);
+        bool drawDirectCached(float x, float y, float w, float h,
+                              const PanelDrawContext& ctx);
+        float getDirectDrawHeight() const;
+        void setInputClipY(float y_min, float y_max);
+        void setForcedHeight(float h);
+        void setPanelSpace(PanelSpace space);
         lfs::gui::IVideoExtractorWidget* widget_;
     };
 
@@ -81,18 +83,18 @@ namespace lfs::vis::gui::native_panels {
         SequencerPanel(SequencerUIManager* seq, const PanelLayoutManager* layout);
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
-        bool supportsDirectDraw() const override { return true; }
-        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
-                           float clip_y_min, float clip_y_max,
-                           const PanelInputState* input) override;
-        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) override;
-        float getDirectDrawHeight() const override { return direct_draw_height_; }
+        PanelRenderCapabilities renderCapabilities() const override {
+            return {.direct = true, .external_floating_shadow = false};
+        }
+        PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
+                                             const PanelDrawContext& ctx) override;
         void setInput(const PanelInputState* input) override { input_ = input; }
-        void setForcedHeight(float h) override { forced_height_ = h; }
-        bool wantsExternalFloatingShadow() const override { return false; }
-        void setPanelSpace(PanelSpace space) override { is_floating_ = space == PanelSpace::Floating; }
 
     private:
+        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
+                           float clip_y_min, float clip_y_max,
+                           const PanelInputState* input);
+        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx);
         SequencerUIManager* seq_;
         const PanelLayoutManager* layout_;
         const PanelInputState* input_ = nullptr;

@@ -19,6 +19,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace lfs::core {
@@ -30,6 +31,44 @@ namespace lfs::vis::gui {
     struct UIContext;
     struct ViewportLayout;
     struct PanelInputState;
+
+    enum class PanelRenderTargetKind : uint8_t {
+        Space,
+        Panel,
+        Children,
+    };
+
+    struct PanelRenderTarget {
+        PanelRenderTargetKind kind = PanelRenderTargetKind::Space;
+        PanelSpace space = PanelSpace::Floating;
+        std::string id;
+
+        [[nodiscard]] static PanelRenderTarget for_space(PanelSpace panel_space) {
+            return {.kind = PanelRenderTargetKind::Space, .space = panel_space, .id = {}};
+        }
+
+        [[nodiscard]] static PanelRenderTarget for_panel(std::string panel_id) {
+            return {.kind = PanelRenderTargetKind::Panel, .id = std::move(panel_id)};
+        }
+
+        [[nodiscard]] static PanelRenderTarget for_children(std::string parent_id) {
+            return {.kind = PanelRenderTargetKind::Children, .id = std::move(parent_id)};
+        }
+    };
+
+    struct PanelRenderOptions {
+        PanelRenderTarget target;
+        bool direct = false;
+        bool cached = false;
+        bool preload_only = false;
+        float x = 0.0f;
+        float y = 0.0f;
+        float width = 0.0f;
+        float height = 0.0f;
+        float clip_y_min = -1.0f;
+        float clip_y_max = -1.0f;
+        const PanelInputState* input = nullptr;
+    };
 
     struct PanelDrawBounds {
         float x = 0.0f;
@@ -83,6 +122,36 @@ namespace lfs::vis::gui {
         float title_height,
         float visible_fraction = 0.1f);
 
+    enum class PanelDirectRenderMode : uint8_t {
+        Measure,
+        Draw,
+        Cached,
+        Preload,
+    };
+
+    struct PanelDirectRenderRequest {
+        PanelDirectRenderMode mode = PanelDirectRenderMode::Draw;
+        PanelSpace space = PanelSpace::Floating;
+        float x = 0.0f;
+        float y = 0.0f;
+        float width = 0.0f;
+        float height = 0.0f;
+        float clip_y_min = -1.0f;
+        float clip_y_max = -1.0f;
+        float forced_height = 0.0f;
+        const PanelInputState* input = nullptr;
+    };
+
+    struct PanelDirectRenderResult {
+        bool handled = false;
+        float height = 0.0f;
+    };
+
+    struct PanelRenderCapabilities {
+        bool direct = false;
+        bool external_floating_shadow = true;
+    };
+
     class IPanel {
     public:
         virtual ~IPanel() = default;
@@ -91,45 +160,28 @@ namespace lfs::vis::gui {
             (void)ctx;
             return true;
         }
-        virtual bool supportsDirectDraw() const { return false; }
         virtual void preload(const PanelDrawContext& ctx) { (void)ctx; }
-        virtual void preloadDirect(float w, float h, const PanelDrawContext& ctx,
-                                   float clip_y_min = -1.0f, float clip_y_max = -1.0f,
-                                   const PanelInputState* input = nullptr) {
-            (void)w;
-            (void)h;
-            (void)clip_y_min;
-            (void)clip_y_max;
-            (void)input;
-            preload(ctx);
-        }
-        virtual void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) {
-            (void)x;
-            (void)y;
-            (void)w;
-            (void)h;
-            draw(ctx);
-        }
-        virtual bool drawDirectCached(float x, float y, float w, float h,
-                                      const PanelDrawContext& ctx) {
-            (void)x;
-            (void)y;
-            (void)w;
-            (void)h;
-            (void)ctx;
-            return false;
-        }
-        virtual float getDirectDrawHeight() const { return 0.0f; }
-        virtual void setInputClipY(float y_min, float y_max) {
-            (void)y_min;
-            (void)y_max;
-        }
         virtual void setInput(const PanelInputState* input) { (void)input; }
-        virtual void setForcedHeight(float h) { (void)h; }
+        virtual PanelRenderCapabilities renderCapabilities() const { return {}; }
+        virtual PanelDirectRenderResult renderDirect(
+            const PanelDirectRenderRequest& request,
+            const PanelDrawContext& ctx) {
+            switch (request.mode) {
+            case PanelDirectRenderMode::Measure:
+                return {.handled = true};
+            case PanelDirectRenderMode::Draw:
+                draw(ctx);
+                return {.handled = true};
+            case PanelDirectRenderMode::Preload:
+                preload(ctx);
+                return {.handled = true};
+            case PanelDirectRenderMode::Cached:
+                return {};
+            }
+            return {};
+        }
         virtual bool wantsKeyboard() const { return false; }
         virtual bool needsAnimationFrame() const { return false; }
-        virtual bool wantsExternalFloatingShadow() const { return true; }
-        virtual void setPanelSpace(PanelSpace space) { (void)space; }
         virtual void reloadRmlResources() {}
         virtual void releaseRendererResources() {}
     };
@@ -152,33 +204,36 @@ namespace lfs::vis::gui {
         float initial_height = 0;
         float original_width = 0;
         float original_height = 0;
-        float float_x = NAN;
-        float float_y = NAN;
-        bool float_auto_center = true;
-        uint64_t float_stack_order = 0;
-        bool float_dragging = false;
-        float float_drag_ox = 0;
-        float float_drag_oy = 0;
-        bool float_resizing = false;
-        float float_resize_start_w = 0;
-        float float_resize_start_h = 0;
-        float float_resize_start_mx = 0;
-        float float_resize_start_my = 0;
-        float float_resize_start_px = 0;
-        float float_resize_start_py = 0;
-        int8_t float_resize_dir_x = 0;
-        int8_t float_resize_dir_y = 0;
-        float float_user_height = 0;
-        bool float_last_bounds_valid = false;
-        float float_last_x = 0;
-        float float_last_y = 0;
-        float float_last_w = 0;
-        float float_last_h = 0;
         static constexpr int MAX_CONSECUTIVE_ERRORS = 3;
 
         bool has_option(PanelOption opt) const {
             return (options & static_cast<uint32_t>(opt)) != 0;
         }
+    };
+
+    struct FloatingPanelInteraction {
+        float x = NAN;
+        float y = NAN;
+        bool auto_center = true;
+        uint64_t stack_order = 0;
+        bool dragging = false;
+        float drag_offset_x = 0.0f;
+        float drag_offset_y = 0.0f;
+        bool resizing = false;
+        float resize_start_width = 0.0f;
+        float resize_start_height = 0.0f;
+        float resize_start_mouse_x = 0.0f;
+        float resize_start_mouse_y = 0.0f;
+        float resize_start_panel_x = 0.0f;
+        float resize_start_panel_y = 0.0f;
+        int8_t resize_direction_x = 0;
+        int8_t resize_direction_y = 0;
+        float user_height = 0.0f;
+        bool last_bounds_valid = false;
+        float last_x = 0.0f;
+        float last_y = 0.0f;
+        float last_width = 0.0f;
+        float last_height = 0.0f;
     };
 
     struct PanelAnimationVisibility {
@@ -248,6 +303,7 @@ namespace lfs::vis::gui {
         float float_y;
         int order = 100;
         uint64_t float_stack_order = 0;
+        std::shared_ptr<IPanel> panel_holder;
 
         bool has_option(PanelOption opt) const {
             return (options & static_cast<uint32_t>(opt)) != 0;
@@ -270,50 +326,8 @@ namespace lfs::vis::gui {
         void unregister_panel(const std::string& id);
         void unregister_all_non_native();
 
-        void draw_panels(PanelSpace space, const PanelDrawContext& ctx,
-                         const PanelInputState* input = nullptr);
-        void preload_panels(PanelSpace space, const PanelDrawContext& ctx);
-        void draw_single_panel(const std::string& id, const PanelDrawContext& ctx);
+        float render_panels(const PanelRenderOptions& options, const PanelDrawContext& ctx);
         bool has_panels(PanelSpace space) const;
-
-        float draw_panels_direct(PanelSpace space, float x, float y, float w, float max_h,
-                                 const PanelDrawContext& ctx,
-                                 const PanelInputState* input = nullptr);
-        float draw_panels_direct_cached(PanelSpace space, float x, float y, float w, float max_h,
-                                        const PanelDrawContext& ctx,
-                                        const PanelInputState* input = nullptr);
-        float preload_panels_direct(PanelSpace space, float w, float max_h,
-                                    const PanelDrawContext& ctx,
-                                    float clip_y_min = -1.0f, float clip_y_max = -1.0f,
-                                    const PanelInputState* input = nullptr);
-        float draw_single_panel_direct(const std::string& id, float x, float y, float w, float h,
-                                       const PanelDrawContext& ctx,
-                                       float clip_y_min = -1.0f, float clip_y_max = -1.0f,
-                                       const PanelInputState* input = nullptr);
-        float draw_single_panel_direct_cached(const std::string& id, float x, float y,
-                                              float w, float h,
-                                              const PanelDrawContext& ctx,
-                                              float clip_y_min = -1.0f,
-                                              float clip_y_max = -1.0f,
-                                              const PanelInputState* input = nullptr);
-        float preload_single_panel_direct(const std::string& id, float w, float h,
-                                          const PanelDrawContext& ctx,
-                                          float clip_y_min = -1.0f, float clip_y_max = -1.0f,
-                                          const PanelInputState* input = nullptr);
-        float preload_child_panels_direct(const std::string& parent_id, float w, float h,
-                                          const PanelDrawContext& ctx,
-                                          float clip_y_min = -1.0f, float clip_y_max = -1.0f,
-                                          const PanelInputState* input = nullptr);
-        float draw_child_panels_direct(const std::string& parent_id, float x, float y, float w, float h,
-                                       const PanelDrawContext& ctx,
-                                       float clip_y_min = -1.0f, float clip_y_max = -1.0f,
-                                       const PanelInputState* input = nullptr);
-        float draw_child_panels_direct_cached(const std::string& parent_id, float x,
-                                              float y, float w, float h,
-                                              const PanelDrawContext& ctx,
-                                              float clip_y_min = -1.0f,
-                                              float clip_y_max = -1.0f,
-                                              const PanelInputState* input = nullptr);
 
         std::vector<PanelSummary> get_panels_for_space(PanelSpace space);
         std::vector<std::string> get_panel_names(PanelSpace space) const;
@@ -343,13 +357,24 @@ namespace lfs::vis::gui {
 
         bool check_poll(const PanelSnapshot& snap, const PanelDrawContext& ctx);
         void track_draw_result(const PanelSnapshot& snap, bool draw_succeeded);
+        PanelSnapshot make_snapshot_locked(size_t index, const PanelInfo& panel) const;
+        std::vector<PanelSnapshot> collect_snapshots_locked(
+            const PanelRenderTarget& target,
+            const PanelDrawContext& ctx) const;
+        float render_standard_panels(const PanelRenderOptions& options,
+                                     const PanelDrawContext& ctx);
+        float render_direct_panels(const PanelRenderOptions& options,
+                                   const PanelDrawContext& ctx);
+        void render_space_panels(PanelSpace space, const PanelDrawContext& ctx,
+                                 const PanelInputState* input);
         uint64_t alloc_float_stack_order_locked();
-        void ensure_float_stack_order_locked(PanelInfo& panel);
-        void bring_floating_panel_to_front_locked(PanelInfo& panel);
+        FloatingPanelInteraction& ensure_floating_interaction_locked(const PanelInfo& panel);
+        void bring_floating_panel_to_front_locked(const PanelInfo& panel);
 
         mutable std::mutex mutex_;
         mutable std::mutex poll_mutex_;
         std::vector<PanelInfo> panels_;
+        std::unordered_map<std::string, FloatingPanelInteraction> floating_interactions_;
         std::unordered_set<std::string> disabled_overrides_;
         mutable std::unordered_map<std::string, PollCacheEntry> poll_cache_;
         uint64_t next_float_stack_order_ = 1;
