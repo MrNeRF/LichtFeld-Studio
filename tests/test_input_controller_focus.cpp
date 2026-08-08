@@ -41,35 +41,41 @@ namespace lfs::vis {
                 restoreHome();
             }
 
+            [[nodiscard]] const std::filesystem::path& isolatedHome() const { return temp_home_; }
+
         private:
             std::optional<std::string> old_home_;
             std::filesystem::path temp_home_;
 
             void isolateInputProfileHome() {
-#ifndef _WIN32
-                if (const char* home = std::getenv("HOME")) {
+                if (const char* home = std::getenv("LFS_HOME")) {
                     old_home_ = home;
                 }
                 temp_home_ = std::filesystem::temp_directory_path() /
                              ("lfs_input_focus_home_" +
                               std::to_string(reinterpret_cast<std::uintptr_t>(this)));
                 std::filesystem::create_directories(temp_home_);
-                setenv("HOME", temp_home_.string().c_str(), 1);
+#ifdef _WIN32
+                _putenv_s("LFS_HOME", temp_home_.string().c_str());
+#else
+                setenv("LFS_HOME", temp_home_.string().c_str(), 1);
 #endif
             }
 
             void restoreHome() {
-#ifndef _WIN32
+#ifdef _WIN32
+                _putenv_s("LFS_HOME", old_home_ ? old_home_->c_str() : "");
+#else
                 if (old_home_) {
-                    setenv("HOME", old_home_->c_str(), 1);
+                    setenv("LFS_HOME", old_home_->c_str(), 1);
                 } else {
-                    unsetenv("HOME");
+                    unsetenv("LFS_HOME");
                 }
+#endif
                 if (!temp_home_.empty()) {
                     std::error_code ec;
                     std::filesystem::remove_all(temp_home_, ec);
                 }
-#endif
             }
         };
     } // namespace
@@ -1021,6 +1027,29 @@ namespace lfs::vis {
                   input::Action::NONE);
 
         std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, SafeModeAllowsExplicitExchangeWithoutAutoPersistingMigration) {
+        const auto keymap_dir = isolatedHome() / "config" / "keymaps";
+        std::filesystem::create_directories(keymap_dir);
+        const auto canonical_profile = keymap_dir / "Default.json";
+        const std::string original_profile =
+            R"({"name":"Default","version":19,"bindings":[]})";
+        std::ofstream(canonical_profile) << original_profile;
+
+        input::InputBindings::setPersistenceEnabled(false);
+        input::InputBindings bindings;
+        const bool imported = bindings.loadProfileFromFile(canonical_profile);
+        std::ifstream persisted_profile(canonical_profile);
+        const std::string after((std::istreambuf_iterator<char>(persisted_profile)), {});
+        const auto explicit_export = isolatedHome() / "exported.json";
+        const bool exported = bindings.saveProfileToFile(explicit_export);
+        input::InputBindings::setPersistenceEnabled(true);
+
+        EXPECT_TRUE(imported);
+        EXPECT_EQ(after, original_profile);
+        EXPECT_TRUE(exported);
+        EXPECT_TRUE(std::filesystem::is_regular_file(explicit_export));
     }
 
     TEST_F(InputControllerFocusTest, HistogramZoomMarkedDefaultsToCtrlScroll) {

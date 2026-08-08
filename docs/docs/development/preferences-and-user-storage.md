@@ -27,7 +27,9 @@ file.
 ## User storage roots
 
 The default root follows the platform policy implemented by `UserPaths`.
-Explicit application roots use one isolated `.lichtfeld` tree.
+Explicit application roots use one isolated unified storage tree.
+Portable builds use a `.lichtfeld` tree next to the executable. `LFS_HOME`
+remains an explicit override on every platform and in portable builds.
 The application never scans old profile directories and never imports files
 from them automatically.
 
@@ -36,6 +38,7 @@ The modern tree contains, as applicable:
 ```text
 config/preferences.json
 config/layout.json
+config/window.json
 config/keymaps/
 data/backups/
 data/presets/
@@ -68,7 +71,8 @@ specified by a future feature.
 ## Safe mode
 
 `--safe-mode` starts the application with user plugin loading disabled and
-disables automatic persistence for recovery-sensitive state. It must not
+disables automatic persistence for preferences, keymaps, legacy layout state,
+window geometry, and the Vulkan pipeline cache. It must not
 overwrite an externally supplied `LFS_SAFE_MODE=1` when starting normally.
 Explicit user actions such as keymap export remain separate from automatic
 persistence and should remain available in safe mode.

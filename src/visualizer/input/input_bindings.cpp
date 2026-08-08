@@ -447,7 +447,8 @@ namespace lfs::vis::input {
             // Auto-persist the canonical Default profile so disk stays current
             // after a versioned migration. User-imported files are left untouched;
             // the migration still applies in memory.
-            if (migrated > 0 && version < PROFILE_VERSION) {
+            if (g_persistence_enabled.load(std::memory_order_acquire) &&
+                migrated > 0 && version < PROFILE_VERSION) {
                 std::error_code ec;
                 const auto config_dir = getConfigDir();
                 if (config_dir) {

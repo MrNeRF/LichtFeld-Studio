@@ -51,6 +51,7 @@
 #include "input/sdl_key_mapping.hpp"
 #include "internal/resource_paths.hpp"
 #include "tools/align_tool.hpp"
+#include "window/window_state_utils.hpp"
 
 #include "core/events.hpp"
 #include "core/parameters.hpp"
@@ -2998,9 +2999,19 @@ namespace lfs::vis::gui {
             }
         }
         std::optional<WindowManager::PersistentWindowState> loadWindowState() {
-            const auto paths = lfs::core::UserPaths::resolve();
-            if (!paths || !std::filesystem::is_regular_file(paths->windowStateFile()))
+            if (!automaticWindowStatePersistenceEnabled())
                 return std::nullopt;
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths) {
+                LOG_WARN("Unable to resolve window state path: {}", paths.error());
+                return std::nullopt;
+            }
+            std::error_code filesystem_error;
+            if (!std::filesystem::is_regular_file(paths->windowStateFile(), filesystem_error)) {
+                if (filesystem_error)
+                    LOG_WARN("Unable to inspect window state: {}", filesystem_error.message());
+                return std::nullopt;
+            }
             try {
                 std::ifstream file(paths->windowStateFile());
                 const auto json = nlohmann::json::parse(file);
@@ -3020,9 +3031,13 @@ namespace lfs::vis::gui {
         }
 
         void saveWindowState(const WindowManager::PersistentWindowState& state) {
-            const auto paths = lfs::core::UserPaths::resolve();
-            if (!paths)
+            if (!automaticWindowStatePersistenceEnabled())
                 return;
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths) {
+                LOG_WARN("Unable to resolve window state path: {}", paths.error());
+                return;
+            }
             const nlohmann::json json = {
                 {"x", state.x},
                 {"y", state.y},
@@ -3060,10 +3075,7 @@ namespace lfs::vis::gui {
         video_widget_ = lfs::gui::createVideoWidget();
 
         // Initialize window states
-        window_states_["scene_panel"] = true;
         window_states_["system_console"] = false;
-        window_states_["training_tab"] = false;
-        window_states_["export_dialog"] = false;
         window_states_["python_console"] = false;
         for (const auto& [name, visible] : saved_layout.window_visibility) {
             if (window_states_.contains(name))
@@ -6649,10 +6661,7 @@ namespace lfs::vis::gui {
         const LayoutState defaults;
         panel_layout_.applyState(defaults);
         window_states_.clear();
-        window_states_["scene_panel"] = true;
         window_states_["system_console"] = false;
-        window_states_["training_tab"] = false;
-        window_states_["export_dialog"] = false;
         window_states_["python_console"] = false;
         PanelRegistry::instance().reset_floating_panel_layouts();
         rml_viewport_overlay_.resetVramHudLayout();

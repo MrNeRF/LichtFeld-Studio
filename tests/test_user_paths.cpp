@@ -4,18 +4,51 @@
 
 #include <gtest/gtest.h>
 
+#include "core/executable_path.hpp"
 #include "core/user_paths.hpp"
 
+#include <array>
 #include <chrono>
+#include <cstdlib>
 #include <expected>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace {
 
     namespace fs = std::filesystem;
+
+    class ScopedEnvironmentVariable {
+    public:
+        ScopedEnvironmentVariable(const char* name, const std::optional<std::string>& value)
+            : name_(name) {
+            if (const char* previous = std::getenv(name))
+                previous_ = previous;
+            set(value);
+        }
+
+        ~ScopedEnvironmentVariable() { set(previous_); }
+
+    private:
+        void set(const std::optional<std::string>& value) const {
+#ifdef _WIN32
+            (void)_putenv_s(name_.c_str(), value ? value->c_str() : "");
+#else
+            if (value)
+                (void)setenv(name_.c_str(), value->c_str(), 1);
+            else
+                (void)unsetenv(name_.c_str());
+#endif
+        }
+
+        std::string name_;
+        std::optional<std::string> previous_;
+    };
 
     class UserPathsContractTest : public ::testing::Test {
     protected:
@@ -72,6 +105,7 @@ namespace {
         const std::string contents((std::istreambuf_iterator<char>(preferences)), {});
         EXPECT_NE(contents.find("\"theme\": \"dark\""), std::string::npos);
         EXPECT_NE(contents.find("\"ui_scale\": \"auto\""), std::string::npos);
+        EXPECT_NE(contents.find("\"language\": \"en\""), std::string::npos);
     }
 
     TEST_F(UserPathsContractTest, ResetPreferencesBacksUpExistingFile) {
@@ -114,6 +148,22 @@ namespace {
         EXPECT_NE(resolved.error().find("executable directory"), std::string::npos);
     }
 
+    TEST_F(UserPathsContractTest, ExplicitRootTakesPrecedenceOverEnvironmentRoot) {
+        const ScopedEnvironmentVariable lfs_home("LFS_HOME", (root_ / "environment").string());
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        EXPECT_EQ(resolved->configDir(), root_ / "current" / "config");
+    }
+
+    TEST_F(UserPathsContractTest, EnvironmentRootUsesUnifiedStorageTree) {
+        const ScopedEnvironmentVariable lfs_home("LFS_HOME", (root_ / "environment").string());
+        const auto resolved = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        EXPECT_TRUE(resolved->usesUnifiedRoot());
+        EXPECT_EQ(resolved->configDir(), root_ / "environment" / "config");
+        EXPECT_EQ(resolved->pluginDir(), root_ / "environment" / "plugins");
+    }
+
     TEST_F(UserPathsContractTest, AtomicPreferenceWriteCreatesValidJsonAndNoTemporaryFiles) {
         const auto resolved = resolvePaths();
         ASSERT_TRUE(resolved.has_value()) << resolved.error();
@@ -146,6 +196,47 @@ namespace {
         EXPECT_EQ(json.size(), 1U);
     }
 
+    TEST_F(UserPathsContractTest, ConcurrentAtomicWritesDoNotShareTemporaryFiles) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+
+        std::array<std::optional<std::string>, 8> errors;
+        std::vector<std::thread> writers;
+        for (int index = 0; index < 8; ++index) {
+            writers.emplace_back([&paths, &errors, index] {
+                const auto result = paths.writePreferencesAtomically(
+                    nlohmann::json{{"writer", index}}.dump());
+                if (!result)
+                    errors[static_cast<std::size_t>(index)] = result.error();
+            });
+        }
+        for (auto& writer : writers)
+            writer.join();
+        for (const auto& error : errors)
+            EXPECT_FALSE(error.has_value()) << error.value_or("");
+
+        std::ifstream file(paths.preferencesFile());
+        const auto json = nlohmann::json::parse(file);
+        EXPECT_GE(json.at("writer").get<int>(), 0);
+        EXPECT_LT(json.at("writer").get<int>(), 8);
+        for (const auto& entry : fs::directory_iterator(paths.configDir()))
+            EXPECT_EQ(entry.path().filename().string().find("preferences.json.tmp-"), std::string::npos);
+    }
+
+    TEST_F(UserPathsContractTest, FailedAtomicReplacementPreservesDestinationAndCleansTemporaryFile) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+        ASSERT_TRUE(fs::create_directories(paths.preferencesFile()));
+
+        const auto result = paths.writePreferencesAtomically(R"({"theme":"light"})");
+        EXPECT_FALSE(result.has_value());
+        EXPECT_TRUE(fs::is_directory(paths.preferencesFile()));
+        for (const auto& entry : fs::directory_iterator(paths.configDir()))
+            EXPECT_EQ(entry.path().filename().string().find("preferences.json.tmp-"), std::string::npos);
+    }
+
     TEST_F(UserPathsContractTest, AtomicWindowWriteCreatesParentDirectory) {
         const auto resolved = resolvePaths();
         ASSERT_TRUE(resolved.has_value()) << resolved.error();
@@ -170,6 +261,9 @@ namespace {
         ASSERT_TRUE(reset->has_value());
         EXPECT_TRUE(fs::is_regular_file(**reset));
         EXPECT_FALSE(fs::exists(paths.layoutFile()));
+        std::ifstream backup(**reset);
+        EXPECT_EQ(std::string((std::istreambuf_iterator<char>(backup)), {}),
+                  R"({"right_panel_width":420})");
     }
 
     TEST_F(UserPathsContractTest, ResetWindowStateBacksUpExistingFile) {
@@ -188,6 +282,9 @@ namespace {
         ASSERT_TRUE(reset->has_value());
         EXPECT_TRUE(fs::is_regular_file(**reset));
         EXPECT_FALSE(fs::exists(paths.windowStateFile()));
+        std::ifstream backup(**reset);
+        EXPECT_EQ(std::string((std::istreambuf_iterator<char>(backup)), {}),
+                  R"({"x":10,"y":20,"width":1280,"height":720,"maximized":false})");
     }
 
     TEST_F(UserPathsContractTest, ResetWithoutExistingFilesCreatesNoBackup) {
@@ -208,5 +305,93 @@ namespace {
         ASSERT_TRUE(window_reset.has_value()) << window_reset.error();
         EXPECT_FALSE(window_reset->has_value());
     }
+
+    TEST_F(UserPathsContractTest, ResetRejectsNonRegularSettingsPath) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+        ASSERT_TRUE(fs::create_directories(paths.layoutFile()));
+
+        const auto reset = paths.resetLayout();
+        EXPECT_FALSE(reset.has_value());
+        EXPECT_TRUE(fs::is_directory(paths.layoutFile()));
+    }
+
+    TEST_F(UserPathsContractTest, EnsureDirectoriesRejectsFileCollision) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        ASSERT_TRUE(fs::create_directories(resolved->configDir().parent_path()));
+        {
+            std::ofstream collision(resolved->configDir());
+            collision << "not a directory";
+        }
+        EXPECT_FALSE(resolved->ensureDirectories().has_value());
+    }
+
+    TEST_F(UserPathsContractTest, ConsecutiveResetsUseDistinctBackupDirectories) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+        ASSERT_TRUE(paths.ensureDirectories().has_value());
+
+        std::ofstream(paths.layoutFile()) << "first";
+        const auto first = paths.resetLayout();
+        ASSERT_TRUE(first && first->has_value());
+        std::ofstream(paths.layoutFile()) << "second";
+        const auto second = paths.resetLayout();
+        ASSERT_TRUE(second && second->has_value());
+        EXPECT_NE((*first)->parent_path(), (*second)->parent_path());
+    }
+
+#if !defined(LFS_BUILD_PORTABLE)
+#ifdef _WIN32
+    TEST_F(UserPathsContractTest, WindowsDefaultUsesProfileDotLichtfeld) {
+        const ScopedEnvironmentVariable lfs_home("LFS_HOME", std::nullopt);
+        const ScopedEnvironmentVariable profile("USERPROFILE", root_.string());
+        const auto resolved = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        EXPECT_EQ(resolved->configDir(), root_ / ".lichtfeld" / "config");
+    }
+#else
+    TEST_F(UserPathsContractTest, LinuxDefaultHonorsEveryXdgDirectory) {
+        const ScopedEnvironmentVariable lfs_home("LFS_HOME", std::nullopt);
+        const ScopedEnvironmentVariable home("HOME", (root_ / "home").string());
+        const ScopedEnvironmentVariable config("XDG_CONFIG_HOME", (root_ / "xdg-config").string());
+        const ScopedEnvironmentVariable data("XDG_DATA_HOME", (root_ / "xdg-data").string());
+        const ScopedEnvironmentVariable cache("XDG_CACHE_HOME", (root_ / "xdg-cache").string());
+        const ScopedEnvironmentVariable state("XDG_STATE_HOME", (root_ / "xdg-state").string());
+        const auto resolved = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        EXPECT_EQ(resolved->configDir(), root_ / "xdg-config" / "lichtfeld-studio");
+        EXPECT_EQ(resolved->dataDir(), root_ / "xdg-data" / "lichtfeld-studio");
+        EXPECT_EQ(resolved->cacheDir(), root_ / "xdg-cache" / "lichtfeld-studio");
+        EXPECT_EQ(resolved->logDir(), root_ / "xdg-state" / "lichtfeld-studio");
+        EXPECT_EQ(resolved->pluginDir(), root_ / "home" / ".lichtfeld" / "plugins");
+    }
+
+    TEST_F(UserPathsContractTest, LinuxDefaultFallsBackToHomeForEmptyXdgVariables) {
+        const ScopedEnvironmentVariable lfs_home("LFS_HOME", std::nullopt);
+        const ScopedEnvironmentVariable home("HOME", (root_ / "home").string());
+        const ScopedEnvironmentVariable config("XDG_CONFIG_HOME", "");
+        const ScopedEnvironmentVariable data("XDG_DATA_HOME", "");
+        const ScopedEnvironmentVariable cache("XDG_CACHE_HOME", "");
+        const ScopedEnvironmentVariable state("XDG_STATE_HOME", "");
+        const auto resolved = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        EXPECT_EQ(resolved->configDir(), root_ / "home" / ".config" / "lichtfeld-studio");
+        EXPECT_EQ(resolved->logDir(), root_ / "home" / ".local/state" / "lichtfeld-studio");
+    }
+#endif
+#endif
+
+#if defined(LFS_BUILD_PORTABLE)
+    TEST_F(UserPathsContractTest, PortableBuildDefaultsNextToExecutable) {
+        const ScopedEnvironmentVariable lfs_home("LFS_HOME", std::nullopt);
+        const auto resolved = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        EXPECT_EQ(resolved->configDir(),
+                  lfs::core::getExecutableDir() / ".lichtfeld" / "config");
+    }
+#endif
 
 } // namespace

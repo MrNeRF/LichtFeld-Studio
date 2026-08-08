@@ -639,12 +639,17 @@ namespace lfs::app {
                 }
                 return true;
             };
-            return reset_file(params.reset_preferences || params.reset_all_settings, "preferences",
-                              [&paths] { return paths->resetPreferences(); }) &&
-                   reset_file(params.reset_layout || params.reset_all_settings, "layout",
-                              [&paths] { return paths->resetLayout(); }) &&
-                   reset_file(params.reset_all_settings, "window",
-                              [&paths] { return paths->resetWindowState(); });
+            bool success = true;
+            success = reset_file(params.reset_preferences || params.reset_all_settings, "preferences",
+                                 [&paths] { return paths->resetPreferences(); }) &&
+                      success;
+            success = reset_file(params.reset_layout || params.reset_all_settings, "layout",
+                                 [&paths] { return paths->resetLayout(); }) &&
+                      success;
+            success = reset_file(params.reset_all_settings, "window",
+                                 [&paths] { return paths->resetWindowState(); }) &&
+                      success;
+            return success;
         }
 
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {

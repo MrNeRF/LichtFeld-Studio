@@ -1140,15 +1140,12 @@ namespace lfs::vis {
                 const auto& ui_scale = preferences["ui_scale"];
                 if (ui_scale.is_string() && ui_scale.get<std::string>() == "auto")
                     return 0.0f;
-                // Compatibility with the short-lived array representation from
-                // the initial preferences.json migration.
-                if (ui_scale.is_array() && ui_scale.size() == 1 &&
-                    ui_scale.front().is_string() && ui_scale.front().get<std::string>() == "auto") {
-                    return 0.0f;
-                }
                 // Compatibility with preferences.json written by earlier builds.
-                if (ui_scale.is_number())
-                    return ui_scale.get<float>();
+                if (ui_scale.is_number()) {
+                    const float scale = ui_scale.get<float>();
+                    if (std::isfinite(scale) && scale >= 1.0f && scale <= 4.0f)
+                        return scale;
+                }
             }
         } catch (const std::exception& e) {
             LOG_WARN("Failed to load UI scale preference: {}", e.what());

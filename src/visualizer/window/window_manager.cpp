@@ -10,6 +10,7 @@
 #include "rendering/cuda_vulkan_interop.hpp"
 #include "vulkan_context.hpp"
 #include "vulkan_loader_probe.hpp"
+#include "window_state_utils.hpp"
 #include <SDL3/SDL.h>
 #if defined(__linux__)
 #include <X11/Xatom.h>
@@ -44,40 +45,40 @@ namespace lfs::vis {
         constexpr unsigned kResizeTop = 1u << 2;
         constexpr unsigned kResizeBottom = 1u << 3;
 
-        bool windowRectangleVisibleOnAnyDisplay(const WindowManager::PersistentWindowState& state) {
+        std::vector<WindowRectangle> availableDisplayRectangles() {
             int display_count = 0;
             SDL_DisplayID* displays = SDL_GetDisplays(&display_count);
             if (!displays)
-                return false;
+                return {};
 
-            bool visible = false;
+            std::vector<WindowRectangle> rectangles;
+            rectangles.reserve(static_cast<std::size_t>(std::max(0, display_count)));
             for (int display = 0; display < display_count; ++display) {
                 SDL_Rect bounds{};
                 if (!SDL_GetDisplayBounds(displays[display], &bounds))
                     continue;
-
-                const int left = std::max(state.x, bounds.x);
-                const int top = std::max(state.y, bounds.y);
-                const int right = std::min(state.x + state.width, bounds.x + bounds.w);
-                const int bottom = std::min(state.y + state.height, bounds.y + bounds.h);
-                if (right - left >= kMinimumVisibleWindowWidth &&
-                    bottom - top >= kMinimumVisibleWindowHeight)
-                    visible = true;
-                break;
+                rectangles.push_back({bounds.x, bounds.y, bounds.w, bounds.h});
             }
             SDL_free(displays);
-            return visible;
+            return rectangles;
         }
 
         void sanitizeInitialWindowState(WindowManager::PersistentWindowState& state) {
-            if (windowRectangleVisibleOnAnyDisplay(state))
+            const WindowRectangle saved{state.x, state.y, state.width, state.height};
+            if (windowRectangleVisible(saved, availableDisplayRectangles(),
+                                       kMinimumVisibleWindowWidth, kMinimumVisibleWindowHeight))
                 return;
 
             SDL_Rect fallback{};
             const SDL_DisplayID primary_display = SDL_GetPrimaryDisplay();
             if (primary_display && SDL_GetDisplayBounds(primary_display, &fallback)) {
-                state.x = fallback.x + (fallback.w - state.width) / 2;
-                state.y = fallback.y + (fallback.h - state.height) / 2;
+                const auto recovered = centerWindowOnDisplay(
+                    saved, {fallback.x, fallback.y, fallback.w, fallback.h},
+                    kMinWindowWidth, kMinWindowHeight);
+                state.x = recovered.x;
+                state.y = recovered.y;
+                state.width = recovered.width;
+                state.height = recovered.height;
                 LOG_WARN("Saved window geometry is outside all displays; centering it on the primary display");
             } else {
                 state.x = SDL_WINDOWPOS_CENTERED;

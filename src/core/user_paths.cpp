@@ -5,24 +5,43 @@
 #include "core/user_paths.hpp"
 
 #include "core/environment.hpp"
+#include "core/executable_path.hpp"
 #include "path_utils.hpp"
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
+#include <cerrno>
 #include <chrono>
+#include <cstdint>
 #include <format>
 #include <fstream>
+#include <mutex>
 #include <string_view>
 #include <system_error>
 #include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace lfs::core {
 
     namespace {
+
+        std::atomic<std::uint64_t> g_temporary_file_sequence{0};
+        std::mutex g_atomic_write_mutex;
+
+        [[nodiscard]] std::uint64_t currentProcessId() noexcept {
+#ifdef _WIN32
+            return static_cast<std::uint64_t>(::GetCurrentProcessId());
+#else
+            return static_cast<std::uint64_t>(::getpid());
+#endif
+        }
 
         [[nodiscard]] std::optional<std::filesystem::path> environmentPath(const char* const name) {
             if (const auto value = environment::value(name))
@@ -55,25 +74,28 @@ namespace lfs::core {
 
         [[nodiscard]] std::expected<void, std::string> writeTextAtomically(
             const std::filesystem::path& destination, const std::string& contents) {
+            const std::lock_guard write_lock(g_atomic_write_mutex);
             std::error_code error;
             std::filesystem::create_directories(destination.parent_path(), error);
             if (error)
                 return std::unexpected(std::format("Unable to create directory '{}': {}",
                                                    path_to_utf8(destination.parent_path()), error.message()));
 
-            const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    std::chrono::system_clock::now().time_since_epoch())
-                                    .count();
+            const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+            const auto sequence = g_temporary_file_sequence.fetch_add(1, std::memory_order_relaxed);
             const auto temporary = destination.parent_path() /
-                                   std::format("{}.tmp-{}", path_to_utf8(destination.filename()), millis);
+                                   std::format("{}.tmp-{}-{}-{}", path_to_utf8(destination.filename()),
+                                               currentProcessId(), ticks, sequence);
             {
                 std::ofstream file(temporary, std::ios::trunc);
                 if (!file)
                     return std::unexpected(std::format("Unable to write temporary file '{}'", path_to_utf8(temporary)));
                 file << contents;
                 file.close();
-                if (!file)
+                if (!file) {
+                    std::filesystem::remove(temporary, error);
                     return std::unexpected(std::format("Unable to finish temporary file '{}'", path_to_utf8(temporary)));
+                }
             }
 
 #ifdef _WIN32
@@ -84,12 +106,35 @@ namespace lfs::core {
                                                    path_to_utf8(destination), message));
             }
 #else
+            const int temporary_fd = ::open(temporary.c_str(), O_RDONLY);
+            if (temporary_fd < 0 || ::fsync(temporary_fd) != 0) {
+                const int sync_error = errno;
+                if (temporary_fd >= 0)
+                    ::close(temporary_fd);
+                std::filesystem::remove(temporary, error);
+                return std::unexpected(std::format("Unable to flush temporary file '{}': {}",
+                                                   path_to_utf8(temporary),
+                                                   std::system_category().message(sync_error)));
+            }
+            ::close(temporary_fd);
+
             std::filesystem::rename(temporary, destination, error);
             if (error) {
                 std::filesystem::remove(temporary, error);
                 return std::unexpected(std::format("Unable to replace '{}' atomically: {}",
                                                    path_to_utf8(destination), error.message()));
             }
+
+            const int directory_fd = ::open(destination.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
+            if (directory_fd < 0 || ::fsync(directory_fd) != 0) {
+                const int sync_error = errno;
+                if (directory_fd >= 0)
+                    ::close(directory_fd);
+                return std::unexpected(std::format("Unable to flush directory '{}': {}",
+                                                   path_to_utf8(destination.parent_path()),
+                                                   std::system_category().message(sync_error)));
+            }
+            ::close(directory_fd);
 #endif
             return {};
         }
@@ -116,7 +161,11 @@ namespace lfs::core {
 
             const auto now = std::chrono::system_clock::now().time_since_epoch();
             const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
-            const auto destination = backup_root / std::format("reset-{}-{}", category, millis) / source.filename();
+            const auto sequence = g_temporary_file_sequence.fetch_add(1, std::memory_order_relaxed);
+            const auto destination = backup_root /
+                                     std::format("reset-{}-{}-{}-{}", category, millis,
+                                                 currentProcessId(), sequence) /
+                                     source.filename();
             std::filesystem::create_directories(destination.parent_path(), error);
             if (error)
                 return std::unexpected(std::format("Unable to create reset backup directory '{}': {}",
@@ -137,6 +186,7 @@ namespace lfs::core {
         writeDefaultPreferences(const std::filesystem::path& destination) {
             return writeJsonAtomically(destination, {
                                                         {"schema_version", 1},
+                                                        {"language", "en"},
                                                         {"theme", "dark"},
                                                         {"ui_scale", "auto"},
                                                     });
@@ -176,6 +226,17 @@ namespace lfs::core {
 
         if (const auto root = environmentPath("LFS_HOME"))
             return fromUnifiedRoot(*root);
+
+#ifdef LFS_BUILD_PORTABLE
+        if (!options.portable) {
+            try {
+                return fromUnifiedRoot(getExecutableDir() / ".lichtfeld");
+            } catch (const std::exception& error) {
+                return std::unexpected(std::format(
+                    "Unable to resolve portable executable directory: {}", error.what()));
+            }
+        }
+#endif
 
         if (options.portable) {
             if (!options.executable_dir || options.executable_dir->empty())
