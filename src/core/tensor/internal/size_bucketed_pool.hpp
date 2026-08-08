@@ -71,6 +71,11 @@ namespace lfs::core {
             return ((bytes + 1024ULL * 1024 * 1024 - 1) / (1024ULL * 1024 * 1024)) * (1024ULL * 1024 * 1024);
         }
 
+        // Unclamped bucket index. Values ≥ NUM_BUCKETS mean "too large for the
+        // fixed cache table" — callers must bypass the cache rather than alias
+        // into bucket 127 (which would let try_allocate_cached hand back a
+        // smaller cached block for a ≥~60 GiB request). get_bucket_size itself
+        // is correct and must not be changed.
         static size_t get_bucket_index(size_t bucket_size) {
             if (bucket_size <= 1024 * 1024)
                 return (bucket_size / (256 * 1024)) - 1;
@@ -82,8 +87,13 @@ namespace lfs::core {
                 return 36 + (bucket_size / (64 * 1024 * 1024)) - 4;
             if (bucket_size <= 8ULL * 1024 * 1024 * 1024)
                 return 48 + (bucket_size / (256ULL * 1024 * 1024)) - 4;
-            const size_t idx = 76 + (bucket_size / (1024ULL * 1024 * 1024)) - 8;
-            return std::min(idx, NUM_BUCKETS - 1);
+            return 76 + (bucket_size / (1024ULL * 1024 * 1024)) - 8;
+        }
+
+        /// True when the request is larger than the last cacheable bucket and
+        /// must not share bucket 127 with smaller sizes.
+        [[nodiscard]] static bool bucket_index_bypasses_cache(size_t bucket_index) {
+            return bucket_index >= NUM_BUCKETS;
         }
 
         static size_t max_cached_entries_for_bucket(size_t bucket_size) {
@@ -106,7 +116,8 @@ namespace lfs::core {
             LFS_CUDA_BREADCRUMB_STREAM("tensor.bucket.allocate", stream);
             const size_t bucket_size = get_bucket_size(bytes);
             const size_t bucket_idx = get_bucket_index(bucket_size);
-            if (bucket_idx >= NUM_BUCKETS)
+            // Bypass: unclamped index past the table (was clamp-to-127 alias).
+            if (bucket_index_bypasses_cache(bucket_idx))
                 return nullptr;
 
             {
@@ -146,7 +157,8 @@ namespace lfs::core {
         bool cache_free(void* ptr, size_t bytes, cudaStream_t stream = nullptr) {
             const size_t bucket_size = get_bucket_size(bytes);
             const size_t bucket_idx = get_bucket_index(bucket_size);
-            if (bucket_idx >= NUM_BUCKETS)
+            // Bypass cache for oversize requests (same predicate as allocate).
+            if (bucket_index_bypasses_cache(bucket_idx))
                 return false;
 
             {

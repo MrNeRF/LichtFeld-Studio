@@ -37,6 +37,49 @@ TEST(AllocatorPolicyTest, BucketCacheBudgetStaysBoundedOnLargeGpus) {
     EXPECT_EQ(SizeBucketedPool::cache_budget_for_total_memory(48 * GiB), 256 * MiB);
 }
 
+// WO-FIX-Q16-GUARD1 Part B: bucket-127 clamp aliasing.
+// get_bucket_size remains correct (bucket_size(x) >= x). get_bucket_index must
+// NOT clamp to NUM_BUCKETS-1 — oversize requests bypass the cache entirely.
+TEST(AllocatorPolicyTest, BucketIndexBypassesCachePastTableAndSizeContractHolds) {
+    constexpr size_t GiB = 1024ULL * 1024 * 1024;
+    // Sweep includes sizes that formerly alias into bucket 127 (≥ ~60 GiB).
+    const size_t sizes[] = {
+        1 * GiB,
+        8 * GiB,
+        16 * GiB,
+        32 * GiB,
+        59 * GiB,
+        60 * GiB,
+        70 * GiB,
+        100 * GiB,
+    };
+    for (const size_t req : sizes) {
+        const size_t bucket_size = SizeBucketedPool::get_bucket_size(req);
+        EXPECT_GE(bucket_size, req) << "get_bucket_size must round up for " << req;
+        const size_t idx = SizeBucketedPool::get_bucket_index(bucket_size);
+        if (idx >= SizeBucketedPool::NUM_BUCKETS) {
+            EXPECT_TRUE(SizeBucketedPool::bucket_index_bypasses_cache(idx));
+            // try_allocate_cached / cache_free must no-op (return null/false)
+            // without handing back a smaller block from bucket 127.
+            auto& pool = SizeBucketedPool::instance();
+            EXPECT_EQ(pool.try_allocate_cached(req), nullptr);
+            EXPECT_FALSE(pool.cache_free(reinterpret_cast<void*>(0x1), req));
+        } else {
+            EXPECT_FALSE(SizeBucketedPool::bucket_index_bypasses_cache(idx));
+            EXPECT_LT(idx, SizeBucketedPool::NUM_BUCKETS);
+        }
+    }
+    // Explicit aliasing pair: two sizes that under the old clamp shared 127.
+    const size_t a = SizeBucketedPool::get_bucket_size(60 * GiB);
+    const size_t b = SizeBucketedPool::get_bucket_size(70 * GiB);
+    EXPECT_GE(a, 60 * GiB);
+    EXPECT_GE(b, 70 * GiB);
+    EXPECT_TRUE(SizeBucketedPool::bucket_index_bypasses_cache(
+        SizeBucketedPool::get_bucket_index(a)));
+    EXPECT_TRUE(SizeBucketedPool::bucket_index_bypasses_cache(
+        SizeBucketedPool::get_bucket_index(b)));
+}
+
 TEST(AllocatorPolicyTest, OversizedSingletonDoesNotEscapeBucketCacheBudget) {
     constexpr size_t MiB = 1024 * 1024;
     auto& pool = SizeBucketedPool::instance();
