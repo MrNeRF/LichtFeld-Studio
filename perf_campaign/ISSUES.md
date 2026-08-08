@@ -317,3 +317,15 @@ capacity-ensure abort. Tracked as ISS-024.
   + analytic red (old code records 1 event on severed stream; new test asserts 0).
 - Gate: PinnedStreamTeardownTest 3/3; GUI --train bonsai 1500 to completion with pinned tier
   populated (237 entries / 4393 MiB): survived teardown window, exit 0, no failure reports.
+
+## ISS-027 — GUI MRNF illegal address (700) on published tip 170aabdb; teardown std::terminate
+- **Status:** OPEN — fix worker dispatched. Found by OWNER's .100 verification GUI session
+  (09:12-09:13, strategy=mrnf, ~24s in). error.log: scratchpad gsc-error.log (59k lines).
+- Async cudaErrorIllegalAddress surfaces at densification_kernels.cu:541
+  (launch_normalize_by_positive_median D2H, MRNF::accumulate_edge_sample) and at
+  tensor_unified_ops.cpp:508 (Scene::rebuildModelCacheIfNeeded zeros) on ANOTHER thread —
+  both victims of an earlier async fault. Suspect: tier-2 zero-copy q16 exportable SH layout
+  (viewersh2, 134da8ff..) consumers on the GUI densify/growth path; its GUI gate ran -i 800
+  only (does NOT cross full densification — gate gap, same class as ISS-025's max-cap repro).
+- Secondary: RasterizerMemoryArena::full_reset() throws (cudaDeviceSynchronize,
+  memory_arena.cu:739) during ~Trainer unwind on poisoned context -> std::terminate.
