@@ -95,3 +95,10 @@ Otherwise it is YOUR red. No exceptions.
 NEVER `pkill -f LichtFeld-Studio` — your own process cmdline contains that string via --cwd
 and you will SIGKILL yourself. Kill stuck app runs by PID (prefer `timeout` wrappers), or use
 the pattern `pkill -f 'build/LichtFeld-Studio'` which does not match worker cmdlines.
+
+## Watchdog friendly-fire trap (killed two workers 2026-08-08 evening)
+The stall watchdog's pgrep fallback (`prompt-file.*WO-.*X.md` for stale entry X) can match
+UNRELATED workers whose work-order filename merely ends with the same letter (WO-FIX-Q16-
+RESIDUAL.md matched the fleetL check). Fixed: watchdog now skips entries with a .stalled
+marker. Rule: never name work orders ending in a single letter that collides with historical
+fleet names, and any watchdog kill must log WHICH pid/cmdline it killed for audit.
