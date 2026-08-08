@@ -86,6 +86,7 @@ set(TRAINING_NEW_SOURCES
     joint_adam_codec.cpp
     sh_value_codec.cpp
     sh_value_storage.cpp
+    live_model_mutation_guard.cpp
     optimizer/scheduler.cpp
     losses/regularization.cpp
     losses/photometric_loss.cpp

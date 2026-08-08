@@ -9,6 +9,7 @@
 #include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_quant_kernels.hpp"
 
@@ -123,6 +124,8 @@ namespace lfs::training::sh_value {
     }
 
     bool ensure_shN_fp32_for_mutation(core::SplatData& splat) {
+        LiveModelMutationGuard mutation_guard("ensure_shN_fp32_for_mutation");
+        LFS_ASSERT_LIVE_MODEL_MUTATION_LOCK_HELD();
         auto& shN = splat.shN();
         if (!shN.is_valid() || shN.dtype() != DataType::Float16)
             return false;
@@ -212,6 +215,8 @@ namespace lfs::training::sh_value {
     }
 
     bool commit_shN_after_mutation(core::SplatData& splat) {
+        LiveModelMutationGuard mutation_guard("commit_shN_after_mutation");
+        LFS_ASSERT_LIVE_MODEL_MUTATION_LOCK_HELD();
         auto& shN = splat.shN();
         if (!shN.is_valid() || shN.dtype() != DataType::Float32)
             return false;
@@ -219,9 +224,8 @@ namespace lfs::training::sh_value {
         if (!sh_value_quant_enabled())
             return false;
         // Single-buffer: rebuild codes+bounds into the live exportable q16 region
-        // (allocate_named_param). Call only under trainer render_mutex exclusive so
-        // the zero-copy viewport cannot project mid-write. Adam moments stay on the
-        // float4-swizzle layout and are healed in prepare_fastgs_fused_adam.
+        // (allocate_named_param). Guard acquires render exclusive when the caller
+        // did not (crop/python/stop_refine); refining block re-enters as no-op.
         return apply_shN_value_quant(splat);
     }
 

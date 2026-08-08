@@ -726,15 +726,13 @@ namespace lfs::training {
         LOG_TIMER("MRNF::post_backward");
         using namespace lfs::core;
 
-        // SH degree schedule is applied AFTER densify/commit on refining steps.
-        // Raising active SH bases before re-encoding q16 into the exportable
-        // block left FastGS reading rest SH from a mid-topology model on the
-        // next forward (illegal address at the densify+degree-up coincidence,
-        // typically iter 1000). Non-refining steps still bump immediately.
+        // ONE degree-bump site (rock-solid bar #1): post-commit when refining,
+        // otherwise immediately. Same cadence as before — bump when
+        // iter % sh_degree_interval == 0 — but never duplicated across branches.
+        // On refining steps, bump after refine() so densify/commit sees the prior
+        // degree and the next forward first samples rest SH on a stable model.
         const bool refining_this_iter = is_refining(iter);
-        if (!refining_this_iter && iter % _params->sh_degree_interval == 0) {
-            _splat_data->increment_sh_degree();
-        }
+        const bool degree_bump_due = (iter % _params->sh_degree_interval == 0);
 
         if (iter == static_cast<int>(_params->stop_refine)) {
             _splat_data->_densification_info = Tensor::empty({0});
@@ -742,7 +740,8 @@ namespace lfs::training {
             _edge_precompute_valid = false;
             reset_edge_accumulator();
             // Topology freeze safety net: re-encode if a non-refining stop_refine
-            // step still holds float SH (every refine already commits).
+            // step still holds float SH (every refine already commits). Self-guards
+            // via LiveModelMutationGuard inside commit_shN_after_mutation.
             if (lfs::core::sh_value_quant::enabled() &&
                 _splat_data->shN().is_valid() &&
                 _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
@@ -751,6 +750,11 @@ namespace lfs::training {
         }
 
         if (iter >= static_cast<int>(_params->stop_refine)) {
+            // Still honor a late degree schedule after topology freeze (no-op
+            // once at max). Metadata-only on q16.
+            if (degree_bump_due) {
+                _splat_data->increment_sh_degree();
+            }
             return;
         }
 
@@ -781,15 +785,13 @@ namespace lfs::training {
             inject_noise(iter);
         }
 
-        if (is_refining(iter)) {
+        if (refining_this_iter) {
             refine(iter);
             _precomputed_edge_scores = Tensor();
             _edge_precompute_valid = false;
-            // Raise active SH only after densify q16 commit so the next forward
-            // never samples rest SH against a mid-topology exportable buffer.
-            if (iter % _params->sh_degree_interval == 0) {
-                _splat_data->increment_sh_degree();
-            }
+        }
+        if (degree_bump_due) {
+            _splat_data->increment_sh_degree();
         }
     }
 

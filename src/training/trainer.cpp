@@ -37,6 +37,7 @@
 #include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/vram_ledger.hpp"
@@ -4035,6 +4036,21 @@ namespace lfs::training {
                         DensifyBarrierGuard(const DensifyBarrierGuard&) = delete;
                         DensifyBarrierGuard& operator=(const DensifyBarrierGuard&) = delete;
                     } densify_barrier(this, refining);
+                    // Nested LiveModelMutationGuard inside ensure/commit must no-op.
+                    struct RefiningMutationMark {
+                        explicit RefiningMutationMark(bool on) {
+                            if (on) {
+                                mark_live_model_mutation_lock_held(true);
+                            }
+                            on_ = on;
+                        }
+                        ~RefiningMutationMark() {
+                            if (on_) {
+                                mark_live_model_mutation_lock_held(false);
+                            }
+                        }
+                        bool on_ = false;
+                    } refining_mutation_mark(refining);
                     auto& model = strategy_->get_model();
                     const size_t model_size_before = static_cast<size_t>(model.size());
                     strategy_->post_backward(iter, r_output);
