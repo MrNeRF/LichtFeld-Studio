@@ -1968,6 +1968,12 @@ namespace lfs::training {
         LFS_ASSERT_MSG(device_count > 0, "CUDA is not available - aborting");
         createCudaResources();
 
+        // One-lock: bind Scene live-model readers to this trainer's step-boundary
+        // mutex for the lifetime of the trainer. TrainerManager::setTrainer also
+        // wires this; constructor covers every Trainer(Scene) path.
+        scene.setLiveModelMutex(&render_mutex_);
+        LOG_INFO("Scene live-model mutex wired to trainer render_mutex_ (one-lock q16)");
+
         LOG_DEBUG("Trainer constructed from Scene with {} cameras", scene.getAllCameras().size());
     }
 
@@ -3227,6 +3233,9 @@ namespace lfs::training {
         }
 
         LOG_DEBUG("Trainer shutdown");
+        if (scene_ && scene_->liveModelMutex() == &render_mutex_) {
+            scene_->setLiveModelMutex(nullptr);
+        }
         stop_requested_ = true;
 
         lfs::core::image_io::wait_for_pending_saves();
@@ -3994,13 +4003,12 @@ namespace lfs::training {
                     if (refining) {
                         lock.lock();
                     }
-                    // E2 discrimination (q16 residual): hold Scene::combined_model_mutex_
-                    // across commit+trim so rebuildModelCacheIfNeeded cannot race the
-                    // float-workspace swap. Expect CLEAN under always-commit deg1.
+                    // One-lock complete: exclusive render_mutex_ already bars new
+                    // shared live-model readers. Also hold combined_model_mutex so
+                    // any rebuild that started before exclusive cannot re-enter
+                    // (or finish late) across float-workspace swap + trim.
                     std::unique_lock<std::mutex> combined_model_lock;
-                    if (refining && scene_ &&
-                        lfs::core::environment::flag("LFS_DEBUG_HOLD_COMBINED_MUTEX_ON_COMMIT",
-                                                     false)) {
+                    if (refining && scene_) {
                         combined_model_lock = scene_->acquireCombinedModelExclusive();
                     }
                     // Drain in-flight reader events immediately before post_backward's
@@ -5502,11 +5510,9 @@ namespace lfs::training {
                             // tear the model. Refining excludes them via render_mutex_.
                             model_write_lock.lock();
                         }
-                        // E2 discrimination: see fastgs post_backward block above.
+                        // One-lock complete: see fastgs post_backward block above.
                         std::unique_lock<std::mutex> combined_model_lock;
-                        if (refining && scene_ &&
-                            lfs::core::environment::flag("LFS_DEBUG_HOLD_COMBINED_MUTEX_ON_COMMIT",
-                                                         false)) {
+                        if (refining && scene_) {
                             combined_model_lock = scene_->acquireCombinedModelExclusive();
                         }
                         // Drain in-flight reader events immediately before the optimizer

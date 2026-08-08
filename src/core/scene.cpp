@@ -1117,8 +1117,7 @@ namespace lfs::core {
 
     void Scene::rebuildModelCacheIfNeeded(const bool include_hidden_splats) const {
         // E1 (q16 residual discrimination): early-return disables the cross-thread
-        // Scene cache rebuild that races trainer commit/trim. Expect CLEAN under
-        // GUI always-commit deg1 if the analyst primary mechanism holds.
+        // Scene cache rebuild that races trainer commit/trim.
         if (environment::flag("LFS_DEBUG_DISABLE_SCENE_CACHE_REBUILD", false)) {
             if (!include_hidden_splats) {
                 model_cache_valid_.store(true, std::memory_order_release);
@@ -1129,11 +1128,29 @@ namespace lfs::core {
         if (!include_hidden_splats && model_cache_valid_.load(std::memory_order_acquire))
             return;
 
+        // Permanent E1-class: while a trainer owns this scene (live_model_mutex_
+        // wired), Dataset training serves the live model via getTrainingModel()
+        // and status uses topology atomics. Rebuilding a combined cache from the
+        // live training SplatData races shN float-workspace swap+trim even under
+        // try-lock (async copy can outlive the CPU lock). Defer combined rebuild
+        // until the trainer detaches (mutex cleared). Consolidation (include
+        // hidden) still rebuilds under the step-boundary lock below.
+        if (!include_hidden_splats && liveModelMutex() != nullptr &&
+            !training_model_node_.empty()) {
+            // Point single-node cache at the training model without copying SH.
+            if (const auto* node = getNode(training_model_node_); node && node->model) {
+                single_node_model_ = node->model.get();
+                cached_combined_.reset();
+                model_cache_valid_.store(true, std::memory_order_release);
+            }
+            return;
+        }
+
         // One-lock: serialize live-model reads with trainer densify commit/trim
         // and the cadenced preview path (Trainer::render_mutex_). Nested acquires
         // on the same thread (preview already holds shared + noteLiveModelLock*)
-        // are skipped. try_to_lock keeps passive UI off the critical path; on
-        // densify contention leave the cache invalid and retry next tick.
+        // are skipped. Prefer try_to_lock so status/UI never stalls densify; if
+        // densify holds exclusive, leave the cache invalid and retry next tick.
         std::shared_lock<std::shared_mutex> live_lock;
         if (std::shared_mutex* const live_mu = liveModelMutex()) {
             if (live_model_lock_depth() == 0) {
@@ -1365,6 +1382,18 @@ namespace lfs::core {
 
         if (has_any_deleted) {
             cached_combined_->deleted() = std::move(deleted);
+        }
+
+        // Epoch fence: any CUDA copies from live training tensors must complete
+        // before this function returns and drops live_model / combined locks.
+        // Otherwise post-refine trim_memory_pool can decommit a float workspace
+        // still referenced by in-flight rebuild kernels (q16 residual poison).
+        if (liveModelMutex() != nullptr) {
+            const cudaError_t sync_err = cudaDeviceSynchronize();
+            if (sync_err != cudaSuccess) {
+                LOG_ERROR("rebuildModelCacheIfNeeded stream fence failed: {} ({})",
+                          cudaGetErrorName(sync_err), cudaGetErrorString(sync_err));
+            }
         }
 
         model_cache_valid_.store(true, std::memory_order_release);
@@ -3463,8 +3492,9 @@ namespace lfs::core {
 
         // During training, status-bar polling must not force a live-model cache
         // rebuild (that path races densify commit/trim). Prefer the topology
-        // atomic published by syncTrainingModelTopology.
-        if (!training_model_node_.empty() && liveModelMutex() != nullptr) {
+        // atomic published by syncTrainingModelTopology whenever a training
+        // model node is registered.
+        if (!training_model_node_.empty()) {
             return getTrainingModelGaussianCount();
         }
 
