@@ -247,6 +247,7 @@ namespace lfs::vis {
         bool enabled = true;
         bool expose_network = false;
         int port = 45677;
+        bool request_logging = false;
     };
 
     LFS_VIS_API void saveMcpPreferences(const McpPreferenceState& state);

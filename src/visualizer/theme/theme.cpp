@@ -1272,6 +1272,7 @@ namespace lfs::vis {
                 {"enabled", state.enabled},
                 {"expose_network", state.expose_network},
                 {"port", std::clamp(state.port, 1, 65535)},
+                {"request_logging", state.request_logging},
             };
             savePreferences(std::move(preferences));
         } catch (const std::exception& error) {
@@ -1297,6 +1298,8 @@ namespace lfs::vis {
                 if (value >= 1 && value <= 65535)
                     result.port = value;
             }
+            if (const auto logging = it->find("request_logging"); logging != it->end() && logging->is_boolean())
+                result.request_logging = logging->get<bool>();
         } catch (const std::exception& error) {
             LOG_WARN("Failed to load MCP preferences: {}", error.what());
         }

@@ -224,12 +224,14 @@ TEST(ThemePreferencesContract, McpPreferencesRoundTripAndValidateInput) {
     EXPECT_TRUE(defaults.enabled);
     EXPECT_FALSE(defaults.expose_network);
     EXPECT_EQ(defaults.port, 45677);
+    EXPECT_FALSE(defaults.request_logging);
 
-    lfs::vis::saveMcpPreferences({.enabled = false, .expose_network = true, .port = 50123});
+    lfs::vis::saveMcpPreferences({.enabled = false, .expose_network = true, .port = 50123, .request_logging = true});
     const auto saved = lfs::vis::loadMcpPreferences();
     EXPECT_FALSE(saved.enabled);
     EXPECT_TRUE(saved.expose_network);
     EXPECT_EQ(saved.port, 50123);
+    EXPECT_TRUE(saved.request_logging);
 
     std::ofstream(paths->preferencesFile())
         << R"({"mcp":{"enabled":"yes","expose_network":7,"port":70000}})";
@@ -237,6 +239,7 @@ TEST(ThemePreferencesContract, McpPreferencesRoundTripAndValidateInput) {
     EXPECT_TRUE(invalid.enabled);
     EXPECT_FALSE(invalid.expose_network);
     EXPECT_EQ(invalid.port, 45677);
+    EXPECT_FALSE(invalid.request_logging);
     std::filesystem::remove_all(root, error);
 }
 
@@ -260,10 +263,11 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         EXPECT_TRUE(mcp.enabled);
         EXPECT_FALSE(mcp.expose_network);
         EXPECT_EQ(mcp.port, 45677);
+        EXPECT_FALSE(mcp.request_logging);
         lfs::vis::saveThemePreferenceName("gruvbox");
         lfs::vis::saveUiScalePreference(2.0f);
         lfs::vis::saveLanguagePreference("fr");
-        lfs::vis::saveMcpPreferences({.enabled = true, .expose_network = false, .port = 45677});
+        lfs::vis::saveMcpPreferences({.enabled = true, .expose_network = false, .port = 45677, .request_logging = true});
     }
 
     std::ifstream file(paths->preferencesFile());

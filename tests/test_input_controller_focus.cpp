@@ -13,6 +13,7 @@
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "visualizer/visualizer.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -36,6 +37,7 @@ namespace lfs::vis {
             }
 
             void TearDown() override {
+                setRuntimeServiceControls({});
                 gui::guiFocusState().reset();
                 services().clear();
                 restoreHome();
@@ -1228,6 +1230,114 @@ namespace lfs::vis {
                         .getTriggerForAction(input::Action::TOOL_MIRROR,
                                              input::ToolMode::GLOBAL)
                         .has_value());
+    }
+
+    TEST_F(InputControllerFocusTest, McpBindingShortcutInvokesRuntimeControl) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        int calls = 0;
+        setRuntimeServiceControls({
+            .toggle_mcp_binding = [&] {
+                ++calls;
+                return true;
+            },
+        });
+
+        EXPECT_EQ(controller.getBindings().getActionForKey(
+                      input::ToolMode::GLOBAL, input::KEY_N,
+                      input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_BINDING);
+
+        controller.handleKey(input::KEY_N, input::ACTION_PRESS,
+                             input::MODIFIER_CTRL | input::MODIFIER_SHIFT);
+
+        EXPECT_EQ(calls, 1);
+    }
+
+    TEST_F(InputControllerFocusTest, McpBindingShortcutBypassesPythonKeyboardCapture) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+
+        int calls = 0;
+        setRuntimeServiceControls({
+            .toggle_mcp_binding = [&] {
+                ++calls;
+                return true;
+            },
+        });
+
+        lfs::python::request_keyboard_capture("mcp-shortcut-test");
+        controller.handleKey(input::KEY_N, input::ACTION_PRESS,
+                             input::MODIFIER_CTRL | input::MODIFIER_SHIFT);
+        lfs::python::release_keyboard_capture("mcp-shortcut-test");
+
+        EXPECT_EQ(calls, 1);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyOneProfileMigratesMcpBindingShortcut) {
+        const auto profile_path = std::filesystem::temp_directory_path() /
+                                  "lfs_input_bindings_legacy_v21.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV21",
+  "version": 21,
+  "bindings": []
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_N,
+                                         input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_BINDING);
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyTwoProfileReplacesLegacyMcpBindingShortcut) {
+        const auto profile_path = std::filesystem::temp_directory_path() /
+                                  "lfs_input_bindings_legacy_v22.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV22",
+  "version": 22,
+  "bindings": [
+    {
+      "mode": 0,
+      "action": 79,
+      "description": "Toggle MCP Local/Network Binding",
+      "trigger_type": "key",
+      "key": 77,
+      "modifiers": 6,
+      "on_repeat": false
+    }
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_N,
+                                         input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_BINDING);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_M,
+                                         input::MODIFIER_CTRL | input::MODIFIER_ALT),
+                  input::Action::NONE);
+
+        std::filesystem::remove(profile_path);
     }
 
     TEST_F(InputControllerFocusTest, ToolLocalOperationalShortcutsDoNotResolveAcrossModes) {

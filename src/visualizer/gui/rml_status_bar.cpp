@@ -419,6 +419,11 @@ namespace lfs::vis::gui {
         ctor.Bind("mcp_tooltip", &model_.mcp_tooltip);
         ctor.Bind("mcp_color", &model_.mcp_color);
         ctor.Bind("mcp_preferences_label", &model_.mcp_preferences_label);
+        ctor.Bind("mcp_server_enabled", &model_.mcp_server_enabled);
+        ctor.Bind("mcp_toggle_label", &model_.mcp_toggle_label);
+        ctor.Bind("mcp_total_text", &model_.mcp_total_text);
+        ctor.Bind("mcp_success_text", &model_.mcp_success_text);
+        ctor.Bind("mcp_error_text", &model_.mcp_error_text);
         ctor.Bind("show_status_message", &model_.show_status_message);
         ctor.Bind("status_message_text", &model_.status_message_text);
         ctor.Bind("status_message_color", &model_.status_message_color);
@@ -485,6 +490,8 @@ namespace lfs::vis::gui {
         account_listener_ = nullptr;
         delete mcp_toggle_listener_;
         mcp_toggle_listener_ = nullptr;
+        delete mcp_power_listener_;
+        mcp_power_listener_ = nullptr;
         delete mcp_preferences_listener_;
         mcp_preferences_listener_ = nullptr;
     }
@@ -740,6 +747,14 @@ namespace lfs::vis::gui {
         }
         if (auto* el = document_->GetElementById("mcp-preferences"))
             el->AddEventListener(Rml::EventId::Click, mcp_preferences_listener_);
+
+        if (!mcp_power_listener_) {
+            mcp_power_listener_ = new CallbackListener([] {
+                lfs::vis::toggleMcpRuntimeEnabled();
+            });
+        }
+        if (auto* el = document_->GetElementById("mcp-toggle"))
+            el->AddEventListener(Rml::EventId::Click, mcp_power_listener_);
     }
 
     void RmlStatusBar::setModelString(const char* name, std::string& field, std::string value) {
@@ -988,8 +1003,7 @@ namespace lfs::vis::gui {
             std::string color;
             if (!status.enabled) {
                 summary = LOC("status_bar.mcp_off");
-                details = LOC("status_bar.mcp_disabled_detail");
-                tooltip = details;
+                tooltip = LOC("status_bar.mcp_disabled_detail");
                 color = colorToRml(p.text_dim);
             } else if (!status.running) {
                 summary = LOC("status_bar.mcp_error");
@@ -998,9 +1012,6 @@ namespace lfs::vis::gui {
                 color = colorToRml(p.error);
             } else {
                 summary = status.network_exposed ? LOC("status_bar.mcp_network") : LOC("status_bar.mcp_local");
-                const char* address = status.network_exposed ? "0.0.0.0" : "127.0.0.1";
-                details = std::format("{}:{} · {} {}", address, status.port,
-                                      status.request_count, LOC("status_bar.mcp_requests"));
                 tooltip = status.network_exposed
                               ? LOC("status_bar.mcp_network_tooltip")
                               : LOC("status_bar.mcp_local_tooltip");
@@ -1010,6 +1021,15 @@ namespace lfs::vis::gui {
             setModelString("mcp_details", model_.mcp_details, std::move(details));
             setModelString("mcp_tooltip", model_.mcp_tooltip, std::move(tooltip));
             setModelString("mcp_color", model_.mcp_color, std::move(color));
+            setModelString("mcp_toggle_label", model_.mcp_toggle_label,
+                           LOC(status.enabled ? "status_bar.mcp_turn_off" : "status_bar.mcp_turn_on"));
+            setModelBool("mcp_server_enabled", model_.mcp_server_enabled, status.enabled);
+            setModelString("mcp_total_text", model_.mcp_total_text,
+                           std::format("{} {}", status.request_count, LOC("status_bar.mcp_requests")));
+            setModelString("mcp_success_text", model_.mcp_success_text,
+                           std::format("{} {}", status.success_count, LOC("status_bar.mcp_successes")));
+            setModelString("mcp_error_text", model_.mcp_error_text,
+                           std::format("{} {}", status.error_count, LOC("status_bar.mcp_errors")));
         }
 
         // Get managers
@@ -1376,22 +1396,25 @@ namespace lfs::vis::gui {
         const float dp_ratio = rml_context_
                                    ? rml_context_->GetDensityIndependentPixelRatio()
                                    : 1.0f;
-        return 94.0f * dp_ratio;
+        // Reserve enough space for several active network adapters (for
+        // example Ethernet, Wi-Fi and VPN) without clipping the popup.
+        return 150.0f * dp_ratio;
     }
 
     bool RmlStatusBar::isOverlayPoint(const float local_x, const float local_y,
                                       const float bar_w) const {
-        const float overlay_height = overlayHeight();
-        if (overlay_height <= 0.0f || !rml_context_)
+        (void)bar_w;
+        if (overlayHeight() <= 0.0f || !document_)
             return false;
-
-        const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
-        constexpr float popup_width_dp = 270.0f;
-        constexpr float popup_right_dp = 8.0f;
-        const float popup_right = bar_w - popup_right_dp * dp_ratio;
-        const float popup_left = std::max(0.0f, popup_right - popup_width_dp * dp_ratio);
-        return local_x >= popup_left && local_x < popup_right &&
-               local_y >= -overlay_height && local_y < 0.0f;
+        auto* const popup = document_->GetElementById("mcp-popup");
+        if (!popup || !popup->IsVisible())
+            return false;
+        const auto offset = popup->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const float width = popup->GetOffsetWidth();
+        const float height = popup->GetOffsetHeight();
+        const float context_y = local_y + overlayHeight();
+        return local_x >= offset.x && local_x < offset.x + width &&
+               context_y >= offset.y && context_y < offset.y + height;
     }
 
     void RmlStatusBar::queueCachedVulkanContext(const float x, const float y,
@@ -1441,6 +1464,11 @@ namespace lfs::vis::gui {
         const bool theme_current =
             has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
         const auto now = std::chrono::steady_clock::now();
+        const auto runtime_revision = lfs::vis::runtimeServiceRevision();
+        if (runtime_revision != last_runtime_service_revision_) {
+            last_runtime_service_revision_ = runtime_revision;
+            model_dirty_ = true;
+        }
         const bool refresh_due =
             next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
             now >= next_refresh_at_;

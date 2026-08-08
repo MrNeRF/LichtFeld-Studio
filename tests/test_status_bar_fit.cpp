@@ -13,6 +13,7 @@
 
 #include <cassert>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <sstream>
@@ -32,6 +33,7 @@ namespace lfs::vis::gui {
             status_bar.document_ = document;
             status_bar.fit_level_ = 0;
             status_bar.applyFitLevel(0);
+            status_bar.attachElementListeners();
         }
 
         static int fit(RmlStatusBar& status_bar, const bool allow_expand = false) {
@@ -41,6 +43,26 @@ namespace lfs::vis::gui {
 
         static void setMcpExpanded(RmlStatusBar& status_bar, const bool expanded) {
             status_bar.model_.mcp_details_expanded = expanded;
+        }
+
+        static bool mcpExpanded(const RmlStatusBar& status_bar) {
+            return status_bar.model_.mcp_details_expanded;
+        }
+
+        static void shutdown(RmlStatusBar& status_bar) {
+            const auto detach = [&](const char* id, Rml::EventListener* listener) {
+                if (listener) {
+                    if (auto* element = status_bar.document_->GetElementById(id))
+                        element->RemoveEventListener(Rml::EventId::Click, listener);
+                }
+            };
+            detach("git-commit", status_bar.git_commit_listener_);
+            detach("gpu-icon", status_bar.gpu_icon_listener_);
+            detach("account-chip", status_bar.account_listener_);
+            detach("mcp-chip", status_bar.mcp_toggle_listener_);
+            detach("mcp-toggle", status_bar.mcp_power_listener_);
+            detach("mcp-preferences", status_bar.mcp_preferences_listener_);
+            status_bar.shutdown();
         }
     };
 
@@ -134,6 +156,11 @@ namespace {
         std::string mcp_tooltip = "MCP is listening only on this computer";
         std::string mcp_color = "#ffffff";
         std::string mcp_preferences_label = "Edit";
+        bool mcp_server_enabled = true;
+        std::string mcp_toggle_label = "Turn off";
+        std::string mcp_total_text = "2 requests";
+        std::string mcp_success_text = "2 successful";
+        std::string mcp_error_text = "0 errors";
         bool show_status_message = false;
         std::string status_message_text = "A long transient status message that must remain on one line";
         std::string status_message_color = "#ffffff";
@@ -255,10 +282,16 @@ namespace {
             bound &= constructor.Bind("mcp_tooltip", &model_.mcp_tooltip);
             bound &= constructor.Bind("mcp_color", &model_.mcp_color);
             bound &= constructor.Bind("mcp_preferences_label", &model_.mcp_preferences_label);
+            bound &= constructor.Bind("mcp_server_enabled", &model_.mcp_server_enabled);
+            bound &= constructor.Bind("mcp_toggle_label", &model_.mcp_toggle_label);
+            bound &= constructor.Bind("mcp_total_text", &model_.mcp_total_text);
+            bound &= constructor.Bind("mcp_success_text", &model_.mcp_success_text);
+            bound &= constructor.Bind("mcp_error_text", &model_.mcp_error_text);
             bound &= constructor.Bind("show_status_message", &model_.show_status_message);
             bound &= constructor.Bind("status_message_text", &model_.status_message_text);
             bound &= constructor.Bind("status_message_color", &model_.status_message_color);
             ASSERT_TRUE(bound);
+            model_handle_ = constructor.GetModelHandle();
 
             const auto document_path = std::filesystem::path(PROJECT_ROOT_PATH) /
                                        "src/visualizer/gui/rmlui/resources/statusbar.rml";
@@ -278,6 +311,8 @@ namespace {
         }
 
         void TearDown() override {
+            model_handle_ = {};
+            lfs::vis::gui::RmlStatusBarTestAccess::shutdown(status_bar_);
             ASSERT_TRUE(Rml::RemoveContext("status_bar_fit"));
             context_ = nullptr;
             document_ = nullptr;
@@ -286,6 +321,7 @@ namespace {
         inline static StubRenderInterface render_interface_;
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+        Rml::DataModelHandle model_handle_;
         StatusBarModel model_;
         lfs::vis::gui::RmlStatusBar status_bar_;
     };
@@ -322,12 +358,71 @@ namespace {
         EXPECT_FALSE(status_bar_.isOverlayPoint(2300.0f, -20.0f, 2400.0f));
 
         lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, true);
+        model_.mcp_details_expanded = true;
+        model_handle_.DirtyVariable("mcp_details_expanded");
+        context_->SetDimensions({2400, static_cast<int>(22.0f + status_bar_.overlayHeight())});
+        ASSERT_TRUE(document_->SetProperty(
+            "height", std::format("{}px", 22.0f + status_bar_.overlayHeight())));
+        context_->Update();
         EXPECT_GT(status_bar_.overlayHeight(), 0.0f);
-        EXPECT_TRUE(status_bar_.isOverlayPoint(2300.0f, -20.0f, 2400.0f));
+        auto* const popup = document_->GetElementById("mcp-popup");
+        ASSERT_NE(popup, nullptr);
+        const auto popup_offset = popup->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const float popup_center_x = popup_offset.x + popup->GetOffsetWidth() * 0.5f;
+        const float popup_center_local_y = popup_offset.y + popup->GetOffsetHeight() * 0.5f -
+                                           status_bar_.overlayHeight();
+        EXPECT_TRUE(status_bar_.isOverlayPoint(popup_center_x, popup_center_local_y, 2400.0f));
         EXPECT_FALSE(status_bar_.isOverlayPoint(100.0f, -20.0f, 2400.0f));
 
         lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, false);
         EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
+    }
+
+    TEST_F(StatusBarFitTest, McpPowerSwitchKeepsPopupExpanded) {
+        int toggle_count = 0;
+        lfs::vis::setRuntimeServiceControls({
+            .toggle_mcp_enabled = [&] {
+                ++toggle_count;
+                return true;
+            },
+        });
+        lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, true);
+
+        auto* const toggle = document_->GetElementById("mcp-toggle");
+        if (!toggle) {
+            lfs::vis::setRuntimeServiceControls({});
+            FAIL() << "MCP power switch is missing";
+        }
+        toggle->DispatchEvent("click", {});
+
+        EXPECT_EQ(toggle_count, 1);
+        EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::mcpExpanded(status_bar_));
+        lfs::vis::setRuntimeServiceControls({});
+    }
+
+    TEST(RuntimeServiceControlsTest, DispatchesMcpActionsWithoutVisualizerDependingOnMcp) {
+        const auto initial_revision = lfs::vis::runtimeServiceRevision();
+        int enabled_toggles = 0;
+        int binding_toggles = 0;
+        lfs::vis::setRuntimeServiceControls({
+            .toggle_mcp_enabled = [&] {
+                ++enabled_toggles;
+                return true; },
+            .toggle_mcp_binding = [&] {
+                ++binding_toggles;
+                return true; },
+        });
+
+        EXPECT_TRUE(lfs::vis::toggleMcpRuntimeEnabled());
+        EXPECT_TRUE(lfs::vis::toggleMcpRuntimeBinding());
+        EXPECT_EQ(enabled_toggles, 1);
+        EXPECT_EQ(binding_toggles, 1);
+        EXPECT_EQ(lfs::vis::runtimeServiceRevision(), initial_revision + 2);
+
+        lfs::vis::setRuntimeServiceControls({});
+        EXPECT_FALSE(lfs::vis::toggleMcpRuntimeEnabled());
+        EXPECT_FALSE(lfs::vis::toggleMcpRuntimeBinding());
+        EXPECT_EQ(lfs::vis::runtimeServiceRevision(), initial_revision + 2);
     }
 
 } // namespace

@@ -35,6 +35,8 @@ body.floating-panel {
     flex: 1;
     min-width: 0;
     min-height: 0;
+    overflow-y: auto;
+    padding-right: 6dp;
 }
 
 .preferences-section {
@@ -54,13 +56,16 @@ body.floating-panel {
 }
 
 .preferences-value-selectable {
-    text-align: right;
+    width: 360dp;
+    white-space: pre-wrap;
 }
 
 .preferences-inline-actions {
     display: flex;
+    flex-wrap: wrap;
+    gap: 6dp;
     justify-content: flex-end;
-    margin-top: 8dp;
+    margin: 8dp 0 12dp 0;
 }
 
 .preferences-row {
@@ -88,6 +93,46 @@ body.floating-panel {
 
 .preferences-checkbox-row input {
     margin-left: auto;
+}
+
+.preferences-switch-row {
+    align-items: center;
+}
+
+.preferences-mcp-toggle {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    width: 30dp;
+    height: 18dp;
+    margin-left: auto;
+    padding: 0;
+    border-width: 0;
+    background-color: transparent;
+}
+
+.preferences-mcp-switch-track {
+    display: block;
+    position: relative;
+    width: 22dp;
+    height: 10dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+}
+
+.preferences-mcp-switch-knob {
+    display: block;
+    position: absolute;
+    left: 1dp;
+    top: 1dp;
+    width: 6dp;
+    height: 6dp;
+    border-radius: 4dp;
+}
+
+.preferences-mcp-toggle.is-on .preferences-mcp-switch-knob {
+    left: 13dp;
 }
 
 .preferences-actions {

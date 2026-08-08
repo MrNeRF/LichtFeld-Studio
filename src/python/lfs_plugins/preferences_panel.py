@@ -19,9 +19,10 @@ class PreferencesPanel(Panel):
     order = 100
     template = "rmlui/preferences.rml"
     height_mode = lf.ui.PanelHeightMode.FILL
-    size = (780, 360)
+    size = (780, 440)
     options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_policy = "dirty"
+    update_policy = "interval"
+    update_interval_ms = 50
 
     SCALE_OPTIONS = (
         (0.0, "menu.view.ui_scale.auto"),
@@ -58,8 +59,12 @@ class PreferencesPanel(Panel):
         self._mcp_enabled = True
         self._mcp_expose_network = False
         self._mcp_port = "45677"
+        self._mcp_request_logging = False
+        self._last_mcp_runtime_config = None
+        self._document = None
 
     def on_bind_model(self, ctx):
+        self._read_mcp_preferences()
         model = ctx.create_data_model("preferences")
         if model is None:
             return
@@ -87,10 +92,13 @@ class PreferencesPanel(Panel):
         model.bind("mcp_enabled", lambda: self._mcp_enabled, self._set_mcp_enabled)
         model.bind("mcp_expose_network", lambda: self._mcp_expose_network, self._set_mcp_expose_network)
         model.bind("mcp_port", lambda: self._mcp_port, self._set_mcp_port)
+        model.bind("mcp_request_logging", lambda: self._mcp_request_logging, self._set_mcp_request_logging)
         model.bind_func("mcp_status", self._mcp_status_text)
-        model.bind_func("mcp_endpoint", self._mcp_endpoint_text)
+        model.bind("mcp_endpoint_value", self._mcp_endpoint_text, lambda _value: None)
         model.bind_func("mcp_error", self._mcp_error_text)
         model.bind_func("mcp_has_error", lambda: bool(self._mcp_error_text()))
+        model.bind_func("mcp_log_file", self._mcp_log_file_text)
+        model.bind_func("mcp_has_log_file", lambda: bool(self._mcp_log_file_text()))
         model.bind_event("close", self._on_close)
         model.bind_event("reset_current_section", self._on_reset_current_section)
         model.bind_event("reset_all_settings", self._on_reset_all_settings)
@@ -99,7 +107,8 @@ class PreferencesPanel(Panel):
         model.bind_event("show_input", lambda *_: self._set_section("input"))
         model.bind_event("show_interface", lambda *_: self._set_section("interface"))
         model.bind_event("show_mcp", lambda *_: self._set_section("mcp"))
-        model.bind_event("apply_mcp", self._on_apply_mcp)
+        model.bind_event("toggle_mcp_enabled", self._on_toggle_mcp_enabled)
+        model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_record_list("themes")
         model.bind_record_list("scales")
@@ -109,6 +118,7 @@ class PreferencesPanel(Panel):
 
     def on_mount(self, doc):
         super().on_mount(doc)
+        self._document = doc
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._dirty_expanded_sections()
         self._rebuild_records()
@@ -118,11 +128,13 @@ class PreferencesPanel(Panel):
         self._refresh_selection()
 
     def on_unmount(self, doc):
+        self._document = None
         self._handle = None
         doc.remove_data_model("preferences")
 
     def on_update(self, doc):
         self._consume_section_request()
+        self._sync_mcp_runtime()
         state = self._state()
         if state == self._last_state:
             return
@@ -264,21 +276,50 @@ class PreferencesPanel(Panel):
             lf.set_camera_view_snap_enabled(lf.get_camera_view_snap_enabled())
         self._refresh_selection()
 
-    def _load_mcp_preferences(self):
+    def _read_mcp_preferences(self):
         preferences = lf.ui.get_mcp_preferences()
         self._mcp_enabled = bool(preferences.get("enabled", True))
         self._mcp_expose_network = bool(preferences.get("expose_network", False))
         self._mcp_port = str(preferences.get("port", 45677))
+        self._mcp_request_logging = bool(preferences.get("request_logging", False))
+        self._last_mcp_runtime_config = self._mcp_runtime_config_signature()
+
+    def _load_mcp_preferences(self):
+        self._read_mcp_preferences()
         self._dirty_mcp()
 
     def _set_mcp_enabled(self, enabled):
         self._mcp_enabled = bool(enabled)
+        self._apply_mcp_preferences()
+
+    def _on_toggle_mcp_enabled(self, _handle, _event, _args):
+        self._set_mcp_enabled(not self._mcp_enabled)
 
     def _set_mcp_expose_network(self, enabled):
         self._mcp_expose_network = bool(enabled)
+        self._apply_mcp_preferences()
 
     def _set_mcp_port(self, value):
         self._mcp_port = str(value).strip()
+        self._apply_mcp_preferences()
+
+    def _set_mcp_request_logging(self, enabled):
+        self._mcp_request_logging = bool(enabled)
+        self._apply_mcp_preferences()
+
+    def _apply_mcp_preferences(self):
+        try:
+            port = int(self._mcp_port)
+        except (TypeError, ValueError):
+            return False
+        if port < 1 or port > 65535:
+            return False
+
+        lf.ui.set_mcp_preferences(self._mcp_enabled, self._mcp_expose_network, port,
+                                  self._mcp_request_logging)
+        self._last_mcp_runtime_config = self._mcp_runtime_config_signature()
+        self._dirty_mcp()
+        return True
 
     def _mcp_status_signature(self):
         status = lf.ui.get_mcp_status()
@@ -288,8 +329,28 @@ class PreferencesPanel(Panel):
             bool(status.get("expose_network")),
             int(status.get("port", 0)),
             int(status.get("request_count", 0)),
+            int(status.get("success_count", 0)),
+            int(status.get("error_count", 0)),
+            bool(status.get("request_logging")),
+            str(status.get("log_file", "")),
             str(status.get("error", "")),
+            tuple(str(endpoint) for endpoint in status.get("endpoints") or ()),
         )
+
+    def _mcp_runtime_config_signature(self):
+        status = lf.ui.get_mcp_status()
+        return (
+            bool(status.get("enabled")),
+            bool(status.get("expose_network")),
+            int(status.get("port", 45677)),
+            bool(status.get("request_logging")),
+        )
+
+    def _sync_mcp_runtime(self):
+        signature = self._mcp_runtime_config_signature()
+        if signature == self._last_mcp_runtime_config:
+            return
+        self._load_mcp_preferences()
 
     def _mcp_status_text(self):
         status = lf.ui.get_mcp_status()
@@ -301,26 +362,25 @@ class PreferencesPanel(Panel):
 
     def _mcp_endpoint_text(self):
         status = lf.ui.get_mcp_status()
-        address = "0.0.0.0" if status.get("expose_network") else "127.0.0.1"
-        return f"http://{address}:{status.get('port', 45677)}/mcp"
+        endpoints = status.get("endpoints") or []
+        if endpoints:
+            return "\n".join(str(endpoint) for endpoint in endpoints)
+        port = status.get("port", 45677)
+        if status.get("expose_network"):
+            return f"http://0.0.0.0:{port}/mcp"
+        return f"http://127.0.0.1:{port}/mcp\nhttp://localhost:{port}/mcp"
+
+    def _mcp_endpoint_rows(self):
+        return min(10, max(2, len(self._mcp_endpoint_text().splitlines())))
 
     def _mcp_error_text(self):
         return str(lf.ui.get_mcp_status().get("error", ""))
 
-    def _on_apply_mcp(self, _handle, _event, _args):
-        try:
-            port = int(self._mcp_port)
-            if port < 1 or port > 65535:
-                raise ValueError
-        except (TypeError, ValueError):
-            lf.ui.message_dialog(
-                lf.ui.tr("preferences.mcp_server"),
-                lf.ui.tr("preferences.mcp_invalid_port"),
-                "error",
-            )
-            return
-        lf.ui.set_mcp_preferences(self._mcp_enabled, self._mcp_expose_network, port)
-        self._dirty_mcp()
+    def _mcp_log_file_text(self):
+        return str(lf.ui.get_mcp_status().get("log_file", ""))
+
+    def _on_open_mcp_log_folder(self, _handle, _event, _args):
+        lf.ui.open_url(lf.ui.get_mcp_log_directory())
 
     def _consume_section_request(self):
         section = lf.ui.take_preferences_section_request()
@@ -330,9 +390,14 @@ class PreferencesPanel(Panel):
     def _dirty_mcp(self):
         if not self._handle:
             return
-        for name in ("mcp_enabled", "mcp_expose_network", "mcp_port", "mcp_status",
-                     "mcp_endpoint", "mcp_error", "mcp_has_error"):
+        for name in ("mcp_enabled", "mcp_expose_network", "mcp_port", "mcp_request_logging", "mcp_status",
+                     "mcp_endpoint_value", "mcp_error", "mcp_has_error", "mcp_log_file",
+                     "mcp_has_log_file"):
             self._handle.dirty(name)
+        if self._document:
+            endpoint_list = self._document.get_element_by_id("mcp-endpoints")
+            if endpoint_list:
+                endpoint_list.set_attribute("rows", str(self._mcp_endpoint_rows()))
 
     def _on_close(self, _handle, _event, _args):
         lf.ui.set_panel_enabled(self.id, False)
@@ -436,7 +501,7 @@ class PreferencesPanel(Panel):
         elif section == "interface":
             return lf.ui.reset_layout()
         elif section == "mcp":
-            lf.ui.set_mcp_preferences(True, False, 45677)
+            lf.ui.set_mcp_preferences(True, False, 45677, False)
             self._load_mcp_preferences()
         self._refresh_selection()
         return None

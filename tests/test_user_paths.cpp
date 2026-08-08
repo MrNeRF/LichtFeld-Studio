@@ -7,6 +7,7 @@
 #include "core/executable_path.hpp"
 #include "core/user_paths.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -87,6 +88,7 @@ namespace {
         EXPECT_TRUE(fs::is_directory(paths.dataDir()));
         EXPECT_TRUE(fs::is_directory(paths.cacheDir()));
         EXPECT_TRUE(fs::is_directory(paths.logDir()));
+        EXPECT_TRUE(fs::is_directory(paths.mcpLogDir()));
         EXPECT_TRUE(fs::is_directory(paths.pluginDir()));
         EXPECT_TRUE(fs::is_directory(paths.venvDir()));
         EXPECT_FALSE(fs::exists(root_ / "LichtFeldStudio"));
@@ -111,6 +113,7 @@ namespace {
         EXPECT_TRUE(json.at("mcp").at("enabled").get<bool>());
         EXPECT_FALSE(json.at("mcp").at("expose_network").get<bool>());
         EXPECT_EQ(json.at("mcp").at("port").get<int>(), 45677);
+        EXPECT_FALSE(json.at("mcp").at("request_logging").get<bool>());
     }
 
     TEST_F(UserPathsContractTest, ResetPreferencesBacksUpExistingFile) {
@@ -132,6 +135,21 @@ namespace {
         std::ifstream backup(**reset, std::ios::binary);
         const std::string backup_contents((std::istreambuf_iterator<char>(backup)), {});
         EXPECT_EQ(backup_contents, R"({"theme":"light","ui_scale":"150"})");
+    }
+
+    TEST_F(UserPathsContractTest, McpLogsAreAtomicallyWrittenInsideDedicatedDirectory) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+        ASSERT_TRUE(paths.ensureDirectories().has_value());
+
+        ASSERT_TRUE(paths.writeMcpLogAtomically("20260808-120000-mcp.jsonl", "first\n").has_value());
+        ASSERT_TRUE(paths.writeMcpLogAtomically("20260808-120000-mcp.jsonl", "second\n").has_value());
+        std::ifstream log(paths.mcpLogDir() / "20260808-120000-mcp.jsonl", std::ios::binary);
+        std::string contents((std::istreambuf_iterator<char>(log)), {});
+        std::erase(contents, '\r');
+        EXPECT_EQ(contents, "second\n");
+        EXPECT_FALSE(paths.writeMcpLogAtomically("../outside.jsonl", "invalid").has_value());
     }
 
     TEST_F(UserPathsContractTest, PortableRootUsesExecutableDirectory) {

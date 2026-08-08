@@ -125,6 +125,7 @@ namespace lfs::vis::gui {
         Rml::EventListener* gpu_icon_listener_ = nullptr;
         Rml::EventListener* account_listener_ = nullptr;
         Rml::EventListener* mcp_toggle_listener_ = nullptr;
+        Rml::EventListener* mcp_power_listener_ = nullptr;
         Rml::EventListener* mcp_preferences_listener_ = nullptr;
 
         std::size_t last_theme_signature_ = 0;
@@ -218,6 +219,11 @@ namespace lfs::vis::gui {
             std::string mcp_tooltip;
             std::string mcp_color;
             std::string mcp_preferences_label;
+            bool mcp_server_enabled = false;
+            std::string mcp_toggle_label;
+            std::string mcp_total_text;
+            std::string mcp_success_text;
+            std::string mcp_error_text;
             bool show_status_message = false;
             std::string status_message_text;
             std::string status_message_color;
@@ -239,6 +245,7 @@ namespace lfs::vis::gui {
         float last_dp_ratio_ = 0.0f;
         uint32_t section_signature_ = 0;
         uint32_t last_section_signature_ = 0;
+        std::uint64_t last_runtime_service_revision_ = 0;
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         int last_document_h_ = 0;

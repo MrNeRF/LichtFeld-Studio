@@ -133,6 +133,8 @@ namespace lfs::vis::input {
         CUT_SELECTION,
         TOGGLE_PERFORMANCE_HUD,
         OPEN_PREFERENCES,
+        TOGGLE_MCP_SERVER,
+        TOGGLE_MCP_BINDING,
 
     };
 

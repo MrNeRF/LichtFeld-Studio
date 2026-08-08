@@ -38,6 +38,7 @@ body {
 }
 
 #mcp-chip {
+    position: relative;
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -51,8 +52,8 @@ body {
 
 #mcp-popup {
     position: absolute;
-    right: 8dp;
-    bottom: 26dp;
+    right: 0;
+    bottom: 20dp;
     width: 270dp;
     box-sizing: border-box;
     padding: 9dp 10dp;
@@ -61,17 +62,80 @@ body {
     white-space: normal;
 }
 
-#mcp-popup-title {
+#mcp-popup-header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
     font-weight: bold;
     margin-bottom: 5dp;
 }
 
+#mcp-popup-title {
+    flex: 1;
+}
+
 #mcp-details {
+    margin-bottom: 8dp;
+    white-space: pre-wrap;
+}
+
+#mcp-counters {
+    display: flex;
+    flex-direction: row;
     margin-bottom: 8dp;
 }
 
-#mcp-preferences {
-    float: right;
+#mcp-counters > span {
+    margin-right: 8dp;
+}
+
+#mcp-toggle {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    width: 30dp;
+    height: 18dp;
+    padding: 0;
+    border-width: 0;
+    background-color: transparent;
+}
+
+.mcp-switch-track {
+    display: block;
+    position: relative;
+    width: 22dp;
+    height: 10dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+}
+
+.mcp-switch-knob {
+    display: block;
+    position: absolute;
+    left: 1dp;
+    top: 1dp;
+    width: 6dp;
+    height: 6dp;
+    border-radius: 4dp;
+}
+
+#mcp-toggle.is-on .mcp-switch-knob {
+    left: 13dp;
+}
+
+#mcp-actions {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-end;
+}
+
+.mcp-edit-button {
+    min-width: 54dp;
+    padding: 2dp 10dp;
+    border-width: 1dp;
+    border-radius: 2dp;
 }
 
 #status-left {

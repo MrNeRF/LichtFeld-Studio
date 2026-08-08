@@ -100,9 +100,11 @@
           <span class="text-accent">@tr:preferences.mcp_server</span>
         </div>
         <div class="section-content" data-if="mcp_expanded">
-          <div class="preferences-row preferences-checkbox-row">
+          <div class="preferences-row preferences-switch-row">
             <span class="preferences-label">@tr:preferences.mcp_enabled</span>
-            <input type="checkbox" data-checked="mcp_enabled" />
+            <button class="preferences-mcp-toggle" data-class-is-on="mcp_enabled" data-event-click="toggle_mcp_enabled" data-attr-title="mcp_status">
+              <span class="preferences-mcp-switch-track"><span class="preferences-mcp-switch-knob"></span></span>
+            </button>
           </div>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.mcp_expose_network</span>
@@ -113,17 +115,25 @@
             <span class="preferences-label">@tr:preferences.mcp_port</span>
             <input class="preferences-select" type="text" data-value="mcp_port" maxlength="5" />
           </div>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.mcp_request_logging</span>
+            <input type="checkbox" data-checked="mcp_request_logging" />
+          </div>
           <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.mcp_status</span>
             <span>{{ mcp_status }}</span>
           </div>
+          <div class="preferences-row" data-if="mcp_has_log_file">
+            <span class="preferences-label">@tr:preferences.mcp_current_log</span>
+            <span class="preferences-value-selectable">{{ mcp_log_file }}</span>
+          </div>
           <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.mcp_endpoint</span>
-            <span class="preferences-value-selectable">{{ mcp_endpoint }}</span>
+            <textarea id="mcp-endpoints" class="preferences-value-selectable" data-value="mcp_endpoint_value" rows="2" readonly="readonly"></textarea>
           </div>
           <span class="preferences-description preferences-error" data-if="mcp_has_error">{{ mcp_error }}</span>
           <div class="preferences-inline-actions">
-            <button class="btn btn--primary" data-event-click="apply_mcp">@tr:preferences.mcp_apply</button>
+            <button class="btn" data-event-click="open_mcp_log_folder">@tr:preferences.mcp_open_log_folder</button>
           </div>
         </div>
       </div>

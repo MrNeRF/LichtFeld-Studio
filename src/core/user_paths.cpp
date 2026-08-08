@@ -193,6 +193,7 @@ namespace lfs::core {
                                                                     {"enabled", true},
                                                                     {"expose_network", false},
                                                                     {"port", 45677},
+                                                                    {"request_logging", false},
                                                                 }},
                                                     });
         }
@@ -274,7 +275,7 @@ namespace lfs::core {
 
     std::expected<void, std::string> UserPaths::ensureDirectories() const {
         const std::filesystem::path directories[] = {
-            config_dir_, data_dir_, cache_dir_, log_dir_, plugin_dir_, venv_dir_,
+            config_dir_, data_dir_, cache_dir_, log_dir_, mcpLogDir(), plugin_dir_, venv_dir_,
             keymapDir(), presetDir(), assetLibraryDir(), backupDir()};
         for (const auto& directory : directories) {
             std::error_code error;
@@ -318,4 +319,11 @@ namespace lfs::core {
     std::filesystem::path UserPaths::presetDir() const { return data_dir_ / "presets"; }
     std::filesystem::path UserPaths::assetLibraryDir() const { return data_dir_ / "asset_library"; }
     std::filesystem::path UserPaths::backupDir() const { return data_dir_ / "backups"; }
+    std::filesystem::path UserPaths::mcpLogDir() const { return log_dir_ / "mcp"; }
+    std::expected<void, std::string> UserPaths::writeMcpLogAtomically(
+        const std::filesystem::path& filename, const std::string& contents) const {
+        if (filename.empty() || filename.has_parent_path())
+            return std::unexpected("MCP log filename must not contain a directory");
+        return writeTextAtomically(mcpLogDir() / filename, contents);
+    }
 } // namespace lfs::core

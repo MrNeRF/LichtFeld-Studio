@@ -115,7 +115,9 @@ namespace lfs::vis::gui {
             std::lock_guard lock(g_preferences_section_mutex);
             g_preferences_section_request = std::move(section);
         }
-        PanelRegistry::instance().set_panel_enabled("lfs.preferences", true);
+        auto& panels = PanelRegistry::instance();
+        panels.set_panel_enabled("lfs.preferences", true);
+        panels.bring_panel_to_front("lfs.preferences");
     }
 
     std::string consumePreferencesSectionRequest() {

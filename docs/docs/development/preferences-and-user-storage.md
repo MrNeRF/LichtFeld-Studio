@@ -18,18 +18,23 @@ The Preferences panel currently exposes:
 - camera navigation mode;
 - axis/view snap;
 - per-setting remember options;
-- MCP server enablement, bind scope, and port;
+- MCP server enablement, bind scope, port, and opt-in request logging;
 - interface and layout reset actions.
 
 Preferences are stored in `config/preferences.json`. Writes must use the
 atomic JSON writer so an interrupted shutdown cannot leave a partially written
 file.
 
-The `mcp` object defaults to an enabled server bound to `127.0.0.1` on port
-`45677`. Changes made in Preferences are applied immediately. Binding to
+The `mcp` object defaults to an enabled server bound to the loopback interface
+on port `45677`; the UI lists both `127.0.0.1` and `localhost` aliases. Changes
+made in Preferences are applied immediately. Binding to
 `0.0.0.0` exposes the unauthenticated HTTP endpoint to the local network and is
-therefore an explicit opt-in. Safe mode can apply an MCP change to the current
-process but does not persist it.
+therefore an explicit opt-in. Safe mode forces the MCP server and request
+logging off for the current process and does not persist MCP changes.
+The default input profile uses `Ctrl+Shift+M` to enable or disable the server
+and `Ctrl+Shift+N` to switch between loopback and network binding without
+enabling a server that is currently off. Both shortcuts can be rebound in
+Input Settings.
 
 ## User storage roots
 
@@ -60,12 +65,14 @@ Project-owned layout and session state is expected to move into the `.licht`
 project format. `layout.json` is therefore transitional and must not acquire
 new categories of project state.
 
-## Reset operations
+## Startup and reset operations
 
-The command-line reset flags are:
+The related command-line flags are:
 
 | Flag | Behaviour |
 | --- | --- |
+| `--safe-mode` | Start with user plugins and automatic persistence disabled; MCP and MCP request logging remain off for the process. |
+| `--no-splash` | Skip the startup splash screen in non-portable builds. |
 | `--reset-preferences` | Back up and restore application preferences to built-in defaults. |
 | `--reset-layout` | Back up and remove the transitional saved UI layout. |
 | `--reset-all-settings` | Reset preferences, the transitional layout file, and window state using the same backup policy. |

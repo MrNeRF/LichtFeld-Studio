@@ -697,6 +697,42 @@ namespace lfs::app {
             mcp::McpHttpServer mcp_http({.enable_resources = true});
             mcp::setActiveMcpHttpServer(&mcp_http);
             const auto mcp_preferences = vis::loadMcpPreferences();
+            vis::setRuntimeServiceControls({
+                .toggle_mcp_enabled = [] {
+                    const auto status = mcp::activeMcpHttpStatus();
+                    const mcp::McpHttpConfig config{
+                        .enabled = !status.enabled,
+                        .expose_network = status.expose_network,
+                        .port = status.port,
+                        .request_logging = status.request_logging,
+                    };
+                    if (!mcp::applyActiveMcpHttpConfig(config))
+                        return false;
+                    vis::saveMcpPreferences({
+                        .enabled = config.enabled,
+                        .expose_network = config.expose_network,
+                        .port = config.port,
+                        .request_logging = config.request_logging,
+                    });
+                    return true; },
+                .toggle_mcp_binding = [] {
+                    const auto status = mcp::activeMcpHttpStatus();
+                    const mcp::McpHttpConfig config{
+                        .enabled = status.enabled,
+                        .expose_network = !status.expose_network,
+                        .port = status.port,
+                        .request_logging = status.request_logging,
+                    };
+                    if (!mcp::applyActiveMcpHttpConfig(config))
+                        return false;
+                    vis::saveMcpPreferences({
+                        .enabled = config.enabled,
+                        .expose_network = config.expose_network,
+                        .port = config.port,
+                        .request_logging = config.request_logging,
+                    });
+                    return true; },
+            });
             auto viewer = vis::Visualizer::create({
                 .title = window_title,
                 .width = 1280,
@@ -712,6 +748,11 @@ namespace lfs::app {
                         .network_exposed = status.expose_network,
                         .port = status.port,
                         .request_count = status.request_count,
+                        .success_count = status.success_count,
+                        .error_count = status.error_count,
+                        .endpoints = status.endpoints,
+                        .request_logging = status.request_logging,
+                        .log_file = status.log_file,
                         .error = status.error,
                     };
                 },
@@ -757,14 +798,16 @@ namespace lfs::app {
                 mcp_http.stop();
             });
             if (!mcp_http.start({
-                    .enabled = mcp_preferences.enabled,
+                    .enabled = !safe_mode && mcp_preferences.enabled,
                     .expose_network = mcp_preferences.expose_network,
                     .port = mcp_preferences.port,
+                    .request_logging = !safe_mode && mcp_preferences.request_logging,
                 }))
                 LOG_ERROR("Failed to start MCP HTTP server");
 
             viewer->run();
 
+            vis::setRuntimeServiceControls({});
             mcp::setActiveMcpHttpServer(nullptr);
             mcp_http.stop();
 

@@ -4,6 +4,7 @@
 
 #include "py_ui.hpp"
 #include "control/command_api.hpp"
+#include "core/environment.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
@@ -12,6 +13,7 @@
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "core/scene.hpp"
+#include "core/user_paths.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/rml_menu_bar.hpp"
@@ -71,6 +73,7 @@
 #include <memory>
 #include <mutex>
 #include <stack>
+#include <stdexcept>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -4733,30 +4736,36 @@ namespace lfs::python {
             [] {
                 const auto state = vis::loadMcpPreferences();
                 nb::dict result;
-                result["enabled"] = state.enabled;
+                const bool safe_mode = core::environment::flag("LFS_SAFE_MODE", false);
+                result["enabled"] = !safe_mode && state.enabled;
                 result["expose_network"] = state.expose_network;
                 result["port"] = state.port;
+                result["request_logging"] = !safe_mode && state.request_logging;
                 return result;
             },
             "Get persisted MCP HTTP server preferences");
 
         m.def(
             "set_mcp_preferences",
-            [](const bool enabled, const bool expose_network, const int port) {
+            [](const bool enabled, const bool expose_network, const int port,
+               const bool request_logging) {
                 if (port < 1 || port > 65535)
                     throw nb::value_error("MCP port must be between 1 and 65535");
                 vis::saveMcpPreferences({
                     .enabled = enabled,
                     .expose_network = expose_network,
                     .port = port,
+                    .request_logging = request_logging,
                 });
                 return mcp::applyActiveMcpHttpConfig({
                     .enabled = enabled,
                     .expose_network = expose_network,
                     .port = port,
+                    .request_logging = request_logging,
                 });
             },
             nb::arg("enabled"), nb::arg("expose_network"), nb::arg("port"),
+            nb::arg("request_logging") = false,
             "Persist and immediately apply MCP HTTP server preferences");
 
         m.def(
@@ -4769,10 +4778,29 @@ namespace lfs::python {
                 result["expose_network"] = status.expose_network;
                 result["port"] = status.port;
                 result["request_count"] = status.request_count;
+                result["success_count"] = status.success_count;
+                result["error_count"] = status.error_count;
+                result["endpoints"] = status.endpoints;
+                result["request_logging"] = status.request_logging;
+                result["log_file"] = status.log_file;
                 result["error"] = status.error;
                 return result;
             },
             "Get current MCP HTTP server runtime status");
+
+        m.def(
+            "get_mcp_log_directory",
+            [] {
+                const auto paths = core::UserPaths::resolve();
+                if (!paths)
+                    throw std::runtime_error(paths.error());
+                if (!core::environment::flag("LFS_SAFE_MODE", false)) {
+                    if (const auto ensured = paths->ensureDirectories(); !ensured)
+                        throw std::runtime_error(ensured.error());
+                }
+                return core::path_to_utf8(paths->mcpLogDir());
+            },
+            "Return the MCP per-session log directory, creating it if needed");
 
         m.def(
             "take_preferences_section_request",
