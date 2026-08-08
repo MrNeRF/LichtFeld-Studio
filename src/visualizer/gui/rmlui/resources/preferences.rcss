@@ -95,6 +95,28 @@ body.floating-panel {
     margin-left: auto;
 }
 
+.preferences-port-control {
+    display: flex;
+    flex: 0 0 240dp;
+    align-items: center;
+    gap: 6dp;
+    margin-left: auto;
+}
+
+.preferences-port-input {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 100dp;
+    margin-left: 0;
+}
+
+.preferences-port-confirm {
+    flex: 0 0 auto;
+    min-width: 34dp;
+    padding-left: 8dp;
+    padding-right: 8dp;
+}
+
 .preferences-switch-row {
     align-items: center;
 }

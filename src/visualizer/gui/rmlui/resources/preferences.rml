@@ -113,7 +113,11 @@
           <span class="preferences-description preferences-warning">@tr:preferences.mcp_network_warning</span>
           <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.mcp_port</span>
-            <input class="preferences-select" type="text" data-value="mcp_port" maxlength="5" />
+            <div class="preferences-port-control">
+              <input class="preferences-select preferences-port-input" type="text" data-value="mcp_port" maxlength="5"
+                     data-event-change="mcp_port_change(ev.value)" />
+              <button class="btn btn--primary preferences-port-confirm" data-event-click="confirm_mcp_port">@tr:common.ok</button>
+            </div>
           </div>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.mcp_request_logging</span>

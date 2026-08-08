@@ -269,10 +269,12 @@ namespace lfs::mcp {
         };
         request_logging_.store(request_logging, std::memory_order_release);
         if (!enabled) {
+            last_announced_listener_url_.clear();
             appendSessionLog({{"event", "state"}, {"state", "disabled"}, {"expose_network", config.expose_network}, {"port", config.port}});
             return true;
         }
         if (config.port < 1 || config.port > 65535) {
+            last_announced_listener_url_.clear();
             status_.error = "Port must be between 1 and 65535";
             appendSessionLog({{"event", "configuration_error"}, {"reason", "invalid_port"}, {"port", config.port}});
             return false;
@@ -280,6 +282,7 @@ namespace lfs::mcp {
 
         const char* const bind_address = config.expose_network ? "0.0.0.0" : "127.0.0.1";
         if (!http_server_->bind_to_port(bind_address, config.port)) {
+            last_announced_listener_url_.clear();
             status_.error = std::format("Unable to bind {}:{}", bind_address, config.port);
             LOG_WARN("MCP HTTP server failed to bind to {}:{}", bind_address, config.port);
             appendSessionLog({{"event", "configuration_error"}, {"reason", "bind_failed"}, {"address", bind_address}, {"port", config.port}});
@@ -289,7 +292,9 @@ namespace lfs::mcp {
         running_.store(true, std::memory_order_release);
         appendSessionLog({{"event", "state"}, {"state", "started"}, {"address", bind_address}, {"port", config.port}});
         const auto listener_url = std::format("http://{}:{}/mcp", bind_address, config.port);
-        const bool announce_listener = announced_listener_urls_.insert(listener_url).second;
+        const bool announce_listener = listener_url != last_announced_listener_url_;
+        if (announce_listener)
+            last_announced_listener_url_ = listener_url;
         listener_thread_ = std::jthread([this, listener_url, announce_listener](std::stop_token /*st*/) {
             if (announce_listener)
                 LOG_INFO("MCP HTTP server listening on {}", listener_url);

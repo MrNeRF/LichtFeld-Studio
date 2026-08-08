@@ -59,6 +59,7 @@ class PreferencesPanel(Panel):
         self._mcp_enabled = True
         self._mcp_expose_network = False
         self._mcp_port = "45677"
+        self._mcp_applied_port = 45677
         self._mcp_request_logging = False
         self._last_mcp_runtime_config = None
         self._document = None
@@ -108,6 +109,8 @@ class PreferencesPanel(Panel):
         model.bind_event("show_interface", lambda *_: self._set_section("interface"))
         model.bind_event("show_mcp", lambda *_: self._set_section("mcp"))
         model.bind_event("toggle_mcp_enabled", self._on_toggle_mcp_enabled)
+        model.bind_event("mcp_port_change", self._on_mcp_port_change)
+        model.bind_event("confirm_mcp_port", self._on_confirm_mcp_port)
         model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_record_list("themes")
@@ -281,6 +284,7 @@ class PreferencesPanel(Panel):
         self._mcp_enabled = bool(preferences.get("enabled", True))
         self._mcp_expose_network = bool(preferences.get("expose_network", False))
         self._mcp_port = str(preferences.get("port", 45677))
+        self._mcp_applied_port = int(self._mcp_port)
         self._mcp_request_logging = bool(preferences.get("request_logging", False))
         self._last_mcp_runtime_config = self._mcp_runtime_config_signature()
 
@@ -301,25 +305,45 @@ class PreferencesPanel(Panel):
 
     def _set_mcp_port(self, value):
         self._mcp_port = str(value).strip()
-        self._apply_mcp_preferences()
+        self._dirty_mcp()
+
+    def _on_mcp_port_change(self, _handle, event, args):
+        if args:
+            self._set_mcp_port(args[0])
+        if event.get_bool_parameter("linebreak", False):
+            self._commit_mcp_port()
+
+    def _on_confirm_mcp_port(self, _handle, _event, _args):
+        self._commit_mcp_port()
+
+    def _commit_mcp_port(self):
+        port = self._validated_mcp_port()
+        if port is None:
+            self._dirty_mcp()
+            return False
+        if port == self._mcp_applied_port:
+            return True
+        return self._apply_mcp_preferences(port)
 
     def _set_mcp_request_logging(self, enabled):
         self._mcp_request_logging = bool(enabled)
         self._apply_mcp_preferences()
 
-    def _apply_mcp_preferences(self):
-        try:
-            port = int(self._mcp_port)
-        except (TypeError, ValueError):
-            return False
-        if port < 1 or port > 65535:
-            return False
-
+    def _apply_mcp_preferences(self, port=None):
+        port = self._mcp_applied_port if port is None else port
         lf.ui.set_mcp_preferences(self._mcp_enabled, self._mcp_expose_network, port,
                                   self._mcp_request_logging)
+        self._mcp_applied_port = port
         self._last_mcp_runtime_config = self._mcp_runtime_config_signature()
         self._dirty_mcp()
         return True
+
+    def _validated_mcp_port(self):
+        try:
+            port = int(self._mcp_port)
+        except (TypeError, ValueError):
+            return None
+        return port if 1 <= port <= 65535 else None
 
     def _mcp_status_signature(self):
         status = lf.ui.get_mcp_status()
@@ -353,6 +377,8 @@ class PreferencesPanel(Panel):
         self._load_mcp_preferences()
 
     def _mcp_status_text(self):
+        if self._validated_mcp_port() is None:
+            return lf.ui.tr("preferences.mcp_status_error")
         status = lf.ui.get_mcp_status()
         if not status.get("enabled"):
             return lf.ui.tr("preferences.mcp_status_off")
@@ -374,6 +400,8 @@ class PreferencesPanel(Panel):
         return min(10, max(2, len(self._mcp_endpoint_text().splitlines())))
 
     def _mcp_error_text(self):
+        if self._validated_mcp_port() is None:
+            return lf.ui.tr("preferences.mcp_invalid_port")
         return str(lf.ui.get_mcp_status().get("error", ""))
 
     def _mcp_log_file_text(self):
@@ -400,6 +428,8 @@ class PreferencesPanel(Panel):
                 endpoint_list.set_attribute("rows", str(self._mcp_endpoint_rows()))
 
     def _on_close(self, _handle, _event, _args):
+        if not self._commit_mcp_port():
+            return
         lf.ui.set_panel_enabled(self.id, False)
 
     def _set_section(self, section):

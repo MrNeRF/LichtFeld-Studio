@@ -12,7 +12,6 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <unordered_set>
 #include <vector>
 
 namespace httplib {
@@ -76,7 +75,7 @@ namespace lfs::mcp {
         std::string log_filename_;
         std::string log_contents_;
         bool log_failure_reported_ = false;
-        std::unordered_set<std::string> announced_listener_urls_;
+        std::string last_announced_listener_url_;
 
         void appendSessionLog(const nlohmann::json& event);
         void stageConfig(const McpHttpConfig& config);
