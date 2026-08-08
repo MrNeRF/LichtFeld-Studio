@@ -300,19 +300,29 @@ namespace lfs::vis {
             "exportable_splat_block",
             std::shared_ptr<void>(storage.block));
 
-        // Build sub-views per region, keyed by SplatExportableStorage::Region.
+        // Live control block: offsets/bytes update on grow(). Capturing them by
+        // value was D2-class — any Tensor allocated from a pre-grow interop
+        // allocator (or a holder that survived rebind) would bake stale region
+        // bases. Sub-views still pin the Vulkan import at construction; physical
+        // grow always re-imports (new allocator) before further use.
+        auto ctrl = storage.control();
+        if (!ctrl) {
+            return std::unexpected(
+                "SplatExportableStorage control block missing; refuse by-value "
+                "interop snapshot allocator (D2)");
+        }
+
+        // Build sub-views per region at the CURRENT layout. After grow the
+        // caller must rebuild this allocator (TrainerManager rebind path).
         std::array<std::shared_ptr<VulkanExternalTensorStorage>,
                    lfs::core::SplatExportableStorage::Count>
             sub_views;
         for (std::size_t i = 0; i < lfs::core::SplatExportableStorage::Count; ++i) {
             sub_views[i] = std::make_shared<VulkanExternalTensorStorage>(
                 parent,
-                storage.region_offsets[i],
-                storage.region_bytes[i]);
+                ctrl->region_offsets[i],
+                ctrl->region_bytes[i]);
         }
-
-        // Compute base CUDA pointer once; each tensor view is base + region_offsets[i].
-        void* const cuda_base = storage.block->device_ptr;
 
         // Resolve a name → region enum index.
         const auto region_from_name =
@@ -336,46 +346,91 @@ namespace lfs::vis {
                 "makeSplatExportableInteropAllocator: unknown tensor name '{}'", name));
         };
 
-        // Capture sub_views + offsets by value. cuda_base + region_offsets[r] gives the
-        // CUDA write pointer; the sub-view at index r becomes the tensor's owner.
-        // Phase 5.1: clamp requested capacity to the committed exportable layout so
-        // callers that still pass max_cap cannot claim more rows than the block holds.
-        const std::size_t committed_capacity = storage.capacity();
-        // ShN is pad-dropped q16 (2 B/cell); bounds are float2 floats.
-        const std::size_t shN_u16_capacity =
-            storage.region_bytes[lfs::core::SplatExportableStorage::ShN] / sizeof(std::uint16_t);
-        const std::size_t shN_bounds_float_capacity =
-            storage.region_bytes[lfs::core::SplatExportableStorage::ShNBounds] / sizeof(float);
-        return [sub_views,
-                region_offsets = storage.region_offsets,
-                cuda_base,
-                region_from_name,
-                committed_capacity,
-                shN_u16_capacity,
-                shN_bounds_float_capacity](
+        // Capture control for live offsets + sub_views for Vulkan ownership.
+        // Phase 5.1: clamp requested capacity to the committed exportable layout.
+        // D1: shape/capacity bytes must fit region_bytes (fail loud).
+        return [sub_views, ctrl, region_from_name](
                    lfs::core::TensorShape shape,
                    std::size_t capacity,
                    lfs::core::DataType dtype,
                    std::string_view name) -> lfs::core::Tensor {
+            using R = lfs::core::SplatExportableStorage;
             const auto region = region_from_name(name);
-            void* const data =
-                static_cast<char*>(cuda_base) + region_offsets[region];
+            if (!ctrl || !ctrl->block || !ctrl->block->device_ptr) {
+                throw lfs::core::TensorError(
+                    "makeSplatExportableInteropAllocator: control block invalid");
+            }
+            // Live pointer from control (not a by-value offset snapshot).
+            void* const data = ctrl->region_ptr(region);
+            const std::size_t region_bytes = ctrl->region_bytes[region];
             std::shared_ptr<void> owner = sub_views[region];
             std::size_t clamped = capacity;
-            if (region == lfs::core::SplatExportableStorage::ShN) {
+            if (region == R::ShN) {
                 dtype = lfs::core::DataType::Float16;
-                if (shN_u16_capacity > 0) {
-                    clamped = std::min(capacity, shN_u16_capacity);
+                const std::size_t max_cells = region_bytes / sizeof(std::uint16_t);
+                if (max_cells > 0) {
+                    clamped = std::min(capacity, max_cells);
                 }
-            } else if (region == lfs::core::SplatExportableStorage::ShNBounds) {
+            } else if (region == R::ShNBounds) {
                 dtype = lfs::core::DataType::Float32;
-                if (shN_bounds_float_capacity > 0) {
-                    clamped = std::min(capacity, shN_bounds_float_capacity);
+                const std::size_t max_floats = region_bytes / sizeof(float);
+                if (max_floats > 0) {
+                    clamped = std::min(capacity, max_floats);
                 }
-            } else if (committed_capacity > 0) {
-                clamped = std::min(capacity, committed_capacity);
+            } else if (ctrl->capacity > 0) {
+                clamped = std::min(capacity, ctrl->capacity);
             }
-            return lfs::core::Tensor::from_external_owner(
+
+            const auto dtype_bytes = [](lfs::core::DataType dt) -> std::size_t {
+                switch (dt) {
+                case lfs::core::DataType::Float32:
+                    return 4;
+                case lfs::core::DataType::Float16:
+                    return 2;
+                case lfs::core::DataType::Int32:
+                case lfs::core::DataType::UInt8:
+                    return dt == lfs::core::DataType::UInt8 ? 1 : 4;
+                case lfs::core::DataType::Int64:
+                    return 8;
+                case lfs::core::DataType::Bool:
+                    return 1;
+                default:
+                    return 0;
+                }
+            };
+            const std::size_t elem_b = dtype_bytes(dtype);
+            if (elem_b == 0) {
+                throw lfs::core::TensorError(std::format(
+                    "makeSplatExportableInteropAllocator: invalid dtype for '{}'", name));
+            }
+            std::size_t row_elems = 1;
+            if (shape.rank() > 1) {
+                for (std::size_t i = 1; i < shape.rank(); ++i) {
+                    row_elems *= shape[i];
+                }
+            }
+            const std::size_t shape_rows = shape.rank() == 0 ? 0 : shape[0];
+            const std::size_t shape_bytes = shape_rows * row_elems * elem_b;
+            if (shape_bytes > region_bytes) {
+                throw lfs::core::TensorError(std::format(
+                    "makeSplatExportableInteropAllocator: shape for '{}' needs {} bytes "
+                    "but region only holds {} (fail-loud D1)",
+                    name,
+                    shape_bytes,
+                    region_bytes));
+            }
+            const std::size_t rows = shape.rank() == 0 ? 0 : (clamped == 0 ? shape[0] : clamped);
+            const std::size_t alloc_bytes = rows * row_elems * elem_b;
+            if (alloc_bytes > region_bytes) {
+                throw lfs::core::TensorError(std::format(
+                    "makeSplatExportableInteropAllocator: capacity for '{}' needs {} bytes "
+                    "but region only holds {} (fail-loud D1)",
+                    name,
+                    alloc_bytes,
+                    region_bytes));
+            }
+
+            auto t = lfs::core::Tensor::from_external_owner(
                 data,
                 std::move(shape),
                 lfs::core::Device::CUDA,
@@ -384,6 +439,8 @@ namespace lfs::vis {
                 clamped,
                 /*stream=*/nullptr,
                 "vulkan_external_buffer");
+            lfs::core::stamp_exportable_provenance(t, ctrl, region);
+            return t;
         };
     }
 
