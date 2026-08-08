@@ -6,6 +6,7 @@
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/environment.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -1115,8 +1116,34 @@ namespace lfs::core {
     }
 
     void Scene::rebuildModelCacheIfNeeded(const bool include_hidden_splats) const {
+        // E1 (q16 residual discrimination): early-return disables the cross-thread
+        // Scene cache rebuild that races trainer commit/trim. Expect CLEAN under
+        // GUI always-commit deg1 if the analyst primary mechanism holds.
+        if (environment::flag("LFS_DEBUG_DISABLE_SCENE_CACHE_REBUILD", false)) {
+            if (!include_hidden_splats) {
+                model_cache_valid_.store(true, std::memory_order_release);
+            }
+            return;
+        }
+
         if (!include_hidden_splats && model_cache_valid_.load(std::memory_order_acquire))
             return;
+
+        // One-lock: serialize live-model reads with trainer densify commit/trim
+        // and the cadenced preview path (Trainer::render_mutex_). Nested acquires
+        // on the same thread (preview already holds shared + noteLiveModelLock*)
+        // are skipped. try_to_lock keeps passive UI off the critical path; on
+        // densify contention leave the cache invalid and retry next tick.
+        std::shared_lock<std::shared_mutex> live_lock;
+        if (std::shared_mutex* const live_mu = liveModelMutex()) {
+            if (live_model_lock_depth() == 0) {
+                live_lock = std::shared_lock<std::shared_mutex>(*live_mu, std::try_to_lock);
+                if (!live_lock.owns_lock()) {
+                    // Densify exclusive held: skip rebuild this tick.
+                    return;
+                }
+            }
+        }
 
         std::lock_guard<std::mutex> lock(combined_model_mutex_);
         if (!include_hidden_splats && model_cache_valid_.load(std::memory_order_acquire))
@@ -3432,6 +3459,13 @@ namespace lfs::core {
                 }
             }
             return total;
+        }
+
+        // During training, status-bar polling must not force a live-model cache
+        // rebuild (that path races densify commit/trim). Prefer the topology
+        // atomic published by syncTrainingModelTopology.
+        if (!training_model_node_.empty() && liveModelMutex() != nullptr) {
+            return getTrainingModelGaussianCount();
         }
 
         const auto* model = getCombinedModel();

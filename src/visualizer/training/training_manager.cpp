@@ -437,6 +437,11 @@ namespace lfs::vis {
 
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_ = std::move(trainer);
+            // One-lock: Scene live-model readers (cache rebuild, status) share the
+            // trainer step-boundary mutex with densify commit/trim and preview draw.
+            if (scene_ && trainer_) {
+                scene_->setLiveModelMutex(&trainer_->getRenderMutex());
+            }
             if (!state_machine_.transitionTo(TrainingState::Ready)) {
                 LOG_WARN("Failed to transition to Ready");
             }
@@ -460,6 +465,9 @@ namespace lfs::vis {
 
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_ = std::move(trainer);
+            if (scene_ && trainer_) {
+                scene_->setLiveModelMutex(&trainer_->getRenderMutex());
+            }
             internal::TrainerReady{}.emit();
 
             if (!state_machine_.transitionTo(TrainingState::Paused)) {
@@ -501,6 +509,9 @@ namespace lfs::vis {
 
         {
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
+            if (scene_) {
+                scene_->setLiveModelMutex(nullptr);
+            }
             trainer_.reset();
             // Model tensors retain their own shared ownership while edit/view mode
             // still uses the exportable block. The manager must not remain the final

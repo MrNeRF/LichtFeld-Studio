@@ -905,34 +905,20 @@ namespace lfs::training {
         ensure_densification_info_shape();
         _splat_data->_densification_info.zero_();
 
-        // Headless (cuda.direct): re-encode every refine — proven clean with
-        // FastGS at all SH degrees (q16 throughout, rock-solid bar item 3).
-        //
-        // Exportable/GUI residual: always-commit after every refine still
-        // illegal-addresses FastGS preprocess once active SH degree > 0
-        // (GUI --sh-degree 1 dies ~iter 1001; no capacity grow; no generation
-        // mismatch; cuda-only and Vulkan rebind barriers do not clear it;
-        // unit ExportableDegreeUpGrowSameBoundaryAllDegrees is green). The
-        // analyst D2 grow-staleness path is fixed by construction
-        // (resolve_q16_bind_ptrs + D1 shape validation + deleted by-value
-        // allocator), but is NOT the sole GUI always-commit root. Until that
-        // residual is isolated, exportable keeps the densify float workspace
-        // until stop_refine (ISS-027 lineage) — headless stays always-commit.
-        const bool exportable_backed =
-            _splat_data->has_tensor_allocator() ||
-            (_splat_data->means().is_valid() && _splat_data->means().is_external_storage() &&
-             (_splat_data->means().external_storage_kind() == "vulkan_external_buffer" ||
-              _splat_data->means().external_storage_kind() == "splat.exportable"));
-        if (!exportable_backed &&
-            lfs::core::sh_value_quant::enabled() &&
+        // Always-commit q16 after every refine (exportable + headless). The
+        // multi-iter exportable float densify window is deleted: Scene cache
+        // rebuild and preview share Trainer::render_mutex_ with commit+trim, so
+        // the float workspace cannot be read/decommitted concurrently.
+        if (lfs::core::sh_value_quant::enabled() &&
             _splat_data->shN().is_valid() &&
             _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
         }
 
         // Phase 4.6: MRNF trim_memory_pool parity with MCMC/IGS+ after refine.
-        // Trim AFTER commit so pool recycling cannot free densify/quant temps
-        // still referenced by the re-encode path.
+        // Epoch-pinned release: trim runs under the same render_mutex_ exclusive
+        // that bars Scene rebuild / preview from holding the float workspace
+        // (trainer acquires exclusive for refining steps around post_backward).
         lfs::core::Tensor::trim_memory_pool();
     }
 

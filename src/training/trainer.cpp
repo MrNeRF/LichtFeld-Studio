@@ -18,6 +18,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda_error.hpp"
 #include "core/cuda_error_typed.hpp"
+#include "core/environment.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
@@ -3993,6 +3994,15 @@ namespace lfs::training {
                     if (refining) {
                         lock.lock();
                     }
+                    // E2 discrimination (q16 residual): hold Scene::combined_model_mutex_
+                    // across commit+trim so rebuildModelCacheIfNeeded cannot race the
+                    // float-workspace swap. Expect CLEAN under always-commit deg1.
+                    std::unique_lock<std::mutex> combined_model_lock;
+                    if (refining && scene_ &&
+                        lfs::core::environment::flag("LFS_DEBUG_HOLD_COMBINED_MUTEX_ON_COMMIT",
+                                                     false)) {
+                        combined_model_lock = scene_->acquireCombinedModelExclusive();
+                    }
                     // Drain in-flight reader events immediately before post_backward's
                     // in-place writes — not only at the loop top — so the trainer stream
                     // is ordered after any read that began mid-step, collapsing the
@@ -5491,6 +5501,13 @@ namespace lfs::training {
                             // readers (which take it shared) cannot enter mid-write and
                             // tear the model. Refining excludes them via render_mutex_.
                             model_write_lock.lock();
+                        }
+                        // E2 discrimination: see fastgs post_backward block above.
+                        std::unique_lock<std::mutex> combined_model_lock;
+                        if (refining && scene_ &&
+                            lfs::core::environment::flag("LFS_DEBUG_HOLD_COMBINED_MUTEX_ON_COMMIT",
+                                                         false)) {
+                            combined_model_lock = scene_->acquireCombinedModelExclusive();
                         }
                         // Drain in-flight reader events immediately before the optimizer
                         // step's in-place writes — not only at the loop top — so the

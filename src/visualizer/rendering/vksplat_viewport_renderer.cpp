@@ -4735,19 +4735,14 @@ namespace lfs::vis {
             force_upload,
             upload_sh_degree);
 
-        // Single-buffer steady state is pad-dropped q16. During the residual
-        // exportable densify float window (until always-commit residual is
-        // closed) bind DC-only so zero-copy never projects mid-encode rest.
-        const bool shN_float_densify_early =
-            splat_data.shN_raw().is_valid() &&
-            splat_data.shN_raw().dtype() == lfs::core::DataType::Float32 &&
-            !splat_data.shN_value_quantized();
+        // Single-buffer: pad-dropped q16 is resident throughout training. Densify
+        // expands a float workspace only under trainer render_mutex exclusive;
+        // passive preview try-locks and retains the last frame across that window,
+        // so the zero-copy path never projects mid-encode rest (no DC-only fallback).
         const int effective_upload_sh_degree =
-            shN_float_densify_early
-                ? 0
-                : (upload_sh_degree < 0
-                       ? splat_data.get_max_sh_degree()
-                       : std::clamp(upload_sh_degree, 0, splat_data.get_max_sh_degree()));
+            upload_sh_degree < 0
+                ? splat_data.get_max_sh_degree()
+                : std::clamp(upload_sh_degree, 0, splat_data.get_max_sh_degree());
         auto upload_layout = vksplat::rawDeviceInputLayout(splat_data, effective_upload_sh_degree);
         if (!upload_layout) {
             return std::unexpected(upload_layout.error());
@@ -4783,21 +4778,24 @@ namespace lfs::vis {
         const bool has_deleted_mask = splat_data.has_deleted_mask();
         const bool base_inputs_external =
             means_storage && sh0_storage && rotations_storage && scaling_storage;
-        // Transient float densify workspace: omit rest SH for zero-copy geometry.
-        // Between densify events (and after stop_refine commit) shN is q16.
-        const bool shN_float_densify_workspace =
+        // q16-throughout: shN must be exportable pad-dropped codes (+ bounds) for
+        // zero-copy. A mid-densify float workspace is excluded by render_mutex_;
+        // if a reader ever observes float shN, fall through to copy upload rather
+        // than binding a non-exportable rest buffer.
+        const bool shN_float_workspace =
             splat_data.shN_raw().is_valid() &&
             splat_data.shN_raw().dtype() == lfs::core::DataType::Float32 &&
             !splat_data.shN_value_quantized();
         const bool shN_ok =
-            upload_layout->omits_shN || shN_float_densify_workspace ||
+            upload_layout->omits_shN ||
             (shN_storage && (!upload_layout->shN_q16 || shN_bounds_storage));
         const bool can_bind_external =
             base_inputs_external &&
             shN_ok &&
+            !shN_float_workspace &&
             (opacity_storage || has_deleted_mask);
         const auto& layout =
-            can_bind_external && shN_storage && !shN_float_densify_workspace
+            can_bind_external && shN_storage
                 ? external_layout
                 : upload_layout;
 
