@@ -348,44 +348,157 @@ namespace lfs::core {
         return true;
     }
 
-    SplatTensorAllocator SplatExportableStorage::make_allocator() const {
-        auto ctrl = control_;
-        if (!ctrl) {
-            // Fallback for partially-constructed storage: capture by value.
-            auto block_copy = block;
-            auto offsets = region_offsets;
-            auto bytes = region_bytes;
-            const std::size_t cap = capacity_;
-            return [block = std::move(block_copy), offsets, bytes, cap](
-                       TensorShape shape,
-                       std::size_t capacity,
-                       DataType dtype,
-                       std::string_view name) -> Tensor {
-                const Region region = region_from_name(name);
-                void* const data = static_cast<char*>(block->device_ptr) + offsets[region];
-                std::shared_ptr<void> owner = block;
-                std::size_t clamped = capacity;
-                if (region == ShN) {
-                    // Pad-dropped q16 codes: capacity is in uint16 cells.
-                    dtype = DataType::Float16;
-                    const std::size_t max_cells = bytes[ShN] / kShNElementBytes;
-                    clamped = std::min(capacity, max_cells);
-                } else if (region == ShNBounds) {
-                    dtype = DataType::Float32;
-                    const std::size_t max_floats = bytes[ShNBounds] / kFloatBytes;
-                    clamped = std::min(capacity, max_floats);
-                } else if (cap > 0) {
-                    clamped = std::min(capacity, cap);
+    void* SplatExportableStorage::live_region_ptr(Region region) const {
+        if (!control_) {
+            return nullptr;
+        }
+        return control_->region_ptr(region);
+    }
+
+    namespace {
+
+        [[nodiscard]] std::size_t element_bytes_for_dtype(DataType dtype) {
+            const std::size_t n = dtype_size(dtype);
+            if (n == 0) {
+                throw std::runtime_error(
+                    "SplatExportableStorage allocator: invalid dtype");
+            }
+            return n;
+        }
+
+        // D1: requested logical shape must fit inside the packed region. Capacity
+        // is clamped separately; shape overrun is a silent-OOB-by-construction
+        // footgun (Tensor::from_external_owner will otherwise happily view past
+        // the region / committed frontier).
+        void validate_exportable_shape_fits_region(std::string_view name,
+                                                   const TensorShape& shape,
+                                                   DataType dtype,
+                                                   std::size_t region_bytes) {
+            const std::size_t elems = shape.elements();
+            const std::size_t elem_bytes = element_bytes_for_dtype(dtype);
+            if (elems > 0 && elem_bytes > 0 &&
+                elems > (std::numeric_limits<std::size_t>::max() / elem_bytes)) {
+                throw std::runtime_error(std::format(
+                    "SplatExportableStorage allocator: shape byte overflow for '{}' "
+                    "(elems={}, elem_bytes={})",
+                    name,
+                    elems,
+                    elem_bytes));
+            }
+            const std::size_t shape_bytes = elems * elem_bytes;
+            if (shape_bytes > region_bytes) {
+                throw std::runtime_error(std::format(
+                    "SplatExportableStorage allocator: shape for '{}' needs {} bytes "
+                    "but region only holds {} (fail-loud D1)",
+                    name,
+                    shape_bytes,
+                    region_bytes));
+            }
+        }
+
+        [[nodiscard]] Tensor make_exportable_view(
+            const std::shared_ptr<SplatExportableStorage::Control>& ctrl,
+            SplatExportableStorage::Region region,
+            TensorShape shape,
+            std::size_t capacity,
+            DataType dtype,
+            std::string_view name,
+            std::string external_kind,
+            std::shared_ptr<void> owner,
+            cudaStream_t stream) {
+            if (!ctrl || !ctrl->block || !ctrl->block->device_ptr) {
+                throw std::runtime_error(
+                    "SplatExportableStorage allocator: control block missing "
+                    "(partially-constructed storage must fail loud — D2)");
+            }
+            if (region >= SplatExportableStorage::Count) {
+                throw std::runtime_error(
+                    "SplatExportableStorage allocator: region out of range");
+            }
+
+            // Live offsets from control — never a by-value snapshot (D2).
+            void* const data = ctrl->region_ptr(region);
+            const std::size_t region_bytes = ctrl->region_bytes[region];
+
+            std::size_t clamped = capacity;
+            if (region == SplatExportableStorage::ShN) {
+                dtype = DataType::Float16;
+                const std::size_t max_cells = region_bytes / kShNElementBytes;
+                clamped = std::min(capacity, max_cells);
+            } else if (region == SplatExportableStorage::ShNBounds) {
+                dtype = DataType::Float32;
+                const std::size_t max_floats = region_bytes / kFloatBytes;
+                clamped = std::min(capacity, max_floats);
+            } else if (ctrl->capacity > 0) {
+                clamped = std::min(capacity, ctrl->capacity);
+            }
+
+            validate_exportable_shape_fits_region(name, shape, dtype, region_bytes);
+
+            // Capacity headroom (dim0 rows) must also fit the packed region.
+            // Mirrors Tensor::storage_allocation_bytes without calling the private helper.
+            std::size_t row_elems = 1;
+            if (shape.rank() > 1) {
+                for (std::size_t i = 1; i < shape.rank(); ++i) {
+                    if (shape[i] > 0 &&
+                        row_elems > std::numeric_limits<std::size_t>::max() / shape[i]) {
+                        throw std::runtime_error(std::format(
+                            "SplatExportableStorage allocator: row overflow for '{}'", name));
+                    }
+                    row_elems *= shape[i];
                 }
-                return Tensor::from_external_owner(data,
+            }
+            const std::size_t rows =
+                shape.rank() == 0 ? 0 : (clamped == 0 ? shape[0] : clamped);
+            const std::size_t elem_bytes = element_bytes_for_dtype(dtype);
+            if (rows > 0 && row_elems > 0 &&
+                rows > std::numeric_limits<std::size_t>::max() / row_elems) {
+                throw std::runtime_error(std::format(
+                    "SplatExportableStorage allocator: capacity element overflow for '{}'",
+                    name));
+            }
+            const std::size_t total_elems = rows * row_elems;
+            if (total_elems > 0 &&
+                total_elems > std::numeric_limits<std::size_t>::max() / elem_bytes) {
+                throw std::runtime_error(std::format(
+                    "SplatExportableStorage allocator: capacity byte overflow for '{}'",
+                    name));
+            }
+            const std::size_t alloc_bytes = total_elems * elem_bytes;
+            if (alloc_bytes > region_bytes) {
+                throw std::runtime_error(std::format(
+                    "SplatExportableStorage allocator: capacity for '{}' needs {} bytes "
+                    "but region only holds {} (fail-loud D1)",
+                    name,
+                    alloc_bytes,
+                    region_bytes));
+            }
+
+            if (!owner) {
+                owner = ctrl->block;
+            }
+            Tensor t = Tensor::from_external_owner(data,
                                                    std::move(shape),
                                                    Device::CUDA,
                                                    dtype,
                                                    std::move(owner),
                                                    clamped,
-                                                   /*stream=*/getCurrentCUDAStream(),
-                                                   "splat.exportable");
-            };
+                                                   stream,
+                                                   std::move(external_kind));
+            stamp_exportable_provenance(t, ctrl, region);
+            return t;
+        }
+
+    } // namespace
+
+    SplatTensorAllocator SplatExportableStorage::make_allocator() const {
+        auto ctrl = control_;
+        if (!ctrl) {
+            // D2: no by-value snapshot flavor. Partially-constructed storage must
+            // fail loud rather than hand out offsets that go stale on grow.
+            throw std::runtime_error(
+                "SplatExportableStorage::make_allocator: control block missing "
+                "(storage not fully constructed — refuse by-value snapshot views)");
         }
 
         return [ctrl](TensorShape shape,
@@ -393,35 +506,108 @@ namespace lfs::core {
                       DataType dtype,
                       std::string_view name) -> Tensor {
             const Region region = region_from_name(name);
-            void* const data =
-                static_cast<char*>(ctrl->block->device_ptr) + ctrl->region_offsets[region];
-            std::shared_ptr<void> owner = ctrl->block;
-            // Clamp requested capacity to committed storage so max_cap callers
-            // cannot claim more rows than the packed regions hold.
-            std::size_t clamped = capacity;
-            if (region == ShN) {
-                // Pad-dropped q16: capacity is in uint16 cells.
-                dtype = DataType::Float16;
-                const std::size_t max_cells =
-                    ctrl->region_bytes[ShN] / kShNElementBytes;
-                clamped = std::min(capacity, max_cells);
-            } else if (region == ShNBounds) {
-                dtype = DataType::Float32;
-                const std::size_t max_floats =
-                    ctrl->region_bytes[ShNBounds] / kFloatBytes;
-                clamped = std::min(capacity, max_floats);
-            } else if (ctrl->capacity > 0) {
-                clamped = std::min(capacity, ctrl->capacity);
-            }
-            return Tensor::from_external_owner(data,
-                                               std::move(shape),
-                                               Device::CUDA,
-                                               dtype,
-                                               std::move(owner),
-                                               clamped,
-                                               /*stream=*/getCurrentCUDAStream(),
-                                               "splat.exportable");
+            return make_exportable_view(ctrl,
+                                        region,
+                                        std::move(shape),
+                                        capacity,
+                                        dtype,
+                                        name,
+                                        "splat.exportable",
+                                        /*owner=*/{},
+                                        getCurrentCUDAStream());
         };
+    }
+
+    void stamp_exportable_provenance(
+        Tensor& tensor,
+        std::shared_ptr<SplatExportableStorage::Control> control,
+        SplatExportableStorage::Region region) {
+        if (!control) {
+            return;
+        }
+        // Store Control as shared_ptr<void> for Tensor metadata.
+        std::shared_ptr<void> ctrl_void = control;
+        tensor.set_exportable_provenance(
+            std::move(ctrl_void),
+            static_cast<std::uint32_t>(region),
+            control->generation);
+    }
+
+    void* resolve_exportable_device_ptr(const Tensor& tensor) {
+        if (!tensor.is_valid() || !tensor.has_exportable_provenance()) {
+            // Non-exportable or unstamped: fall through to baked pointer.
+            return const_cast<void*>(
+                tensor.is_valid() ? tensor.data_ptr() : nullptr);
+        }
+        auto ctrl_void = tensor.exportable_control();
+        if (!ctrl_void) {
+            return const_cast<void*>(tensor.data_ptr());
+        }
+        auto* ctrl =
+            static_cast<SplatExportableStorage::Control*>(ctrl_void.get());
+        if (!ctrl || !ctrl->block || !ctrl->block->device_ptr) {
+            throw std::runtime_error(
+                "resolve_exportable_device_ptr: exportable control block invalid");
+        }
+        const auto region =
+            static_cast<SplatExportableStorage::Region>(tensor.exportable_region());
+        if (region >= SplatExportableStorage::Count) {
+            throw std::runtime_error(
+                "resolve_exportable_device_ptr: exportable region out of range");
+        }
+        // Always re-resolve through the live control block (by construction —
+        // no baked pointer can survive a grow). Log generation mismatch so
+        // hold-across-grow without rebind is visible in receipts.
+        void* const live = ctrl->region_ptr(region);
+        const std::uint64_t bound_gen = tensor.exportable_bound_generation();
+        if (bound_gen != ctrl->generation) {
+            // Fail-loud observability + by-construction safety: always return the
+            // live region base so FastGS/Adam cannot illegal-address. Shape/capacity
+            // still require rebindSplatData; pointer re-resolve alone is enough for
+            // the q16-read poison (region base after grow).
+            LOG_ERROR(
+                "exportable generation mismatch at resolve: bound_gen={} live_gen={} "
+                "region={} baked_ptr={:#x} live_ptr={:#x} (q16 poison D2 class — "
+                "returning live pointer; caller should rebind for shape/capacity)",
+                bound_gen,
+                ctrl->generation,
+                static_cast<std::size_t>(region),
+                reinterpret_cast<std::uintptr_t>(tensor.storage_ptr()),
+                reinterpret_cast<std::uintptr_t>(live));
+        }
+        return live;
+    }
+
+    Q16BindPtrs resolve_q16_bind_ptrs(const SplatData& model) {
+        Q16BindPtrs out{};
+        if (!model.shN_value_quantized()) {
+            return out;
+        }
+        const Tensor& codes = model.shN_raw();
+        const Tensor& bounds = model.shN_value_bounds();
+        if (!codes.is_valid() || codes.numel() == 0) {
+            return out;
+        }
+        out.codes = static_cast<const float*>(resolve_exportable_device_ptr(codes));
+        if (bounds.is_valid() && bounds.numel() > 0) {
+            out.bounds = static_cast<const float*>(resolve_exportable_device_ptr(bounds));
+        }
+        out.n_cells_per_prim = static_cast<unsigned>(
+            sh_value_quant::n_value_cells_per_prim(
+                static_cast<std::uint32_t>(model.max_sh_coeffs_rest())));
+        if (codes.has_exportable_provenance()) {
+            out.generation = codes.exportable_bound_generation();
+            out.generation_checked = true;
+            // Codes + bounds must share the same live generation (0.15 alt).
+            if (bounds.is_valid() && bounds.has_exportable_provenance() &&
+                bounds.exportable_bound_generation() != codes.exportable_bound_generation()) {
+                LOG_ERROR(
+                    "q16 codes/bounds generation pair mismatch: codes_gen={} bounds_gen={}",
+                    codes.exportable_bound_generation(),
+                    bounds.exportable_bound_generation());
+            }
+        }
+        return out;
     }
 
     std::expected<void, std::string>

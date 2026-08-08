@@ -104,13 +104,11 @@ namespace lfs::core {
         [[nodiscard]] int shDegree() const noexcept { return sh_degree_; }
         [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
 
-    private:
-        std::size_t capacity_ = 0;
-        std::size_t reserved_capacity_ = 0;
-        int sh_degree_ = 0;
-        std::uint64_t generation_ = 0;
-
-        // Shared so make_allocator captures live offsets/capacity across grow().
+        // Live control block shared with every allocator lambda. Offsets/bytes/
+        // generation update on grow(); consumers must resolve pointers through
+        // this block (or via resolve_exportable_device_ptr) — never trust a raw
+        // pointer baked into a Tensor that outlived a generation bump (q16
+        // poison D2 / rock-solid collision bar).
         struct Control {
             std::shared_ptr<ExportableBlock> block;
             std::array<std::size_t, Count> region_offsets{};
@@ -118,10 +116,53 @@ namespace lfs::core {
             std::size_t capacity = 0;
             int sh_degree = 0;
             std::uint64_t generation = 0;
+
+            [[nodiscard]] void* region_ptr(Region region) const {
+                if (!block || !block->device_ptr) {
+                    return nullptr;
+                }
+                return static_cast<char*>(block->device_ptr) + region_offsets[region];
+            }
         };
+
+        [[nodiscard]] std::shared_ptr<Control> control() const noexcept { return control_; }
+
+        // Live region base for the current generation (null if invalid).
+        [[nodiscard]] LFS_CORE_API void* live_region_ptr(Region region) const;
+
+    private:
+        std::size_t capacity_ = 0;
+        std::size_t reserved_capacity_ = 0;
+        int sh_degree_ = 0;
+        std::uint64_t generation_ = 0;
+
         std::shared_ptr<Control> control_;
 
         void syncControl() const;
     };
+
+    // Stamp live-control provenance onto an exportable view Tensor so bind sites
+    // can re-resolve the device pointer after a grow without holding storage.
+    LFS_CORE_API void stamp_exportable_provenance(
+        Tensor& tensor,
+        std::shared_ptr<SplatExportableStorage::Control> control,
+        SplatExportableStorage::Region region);
+
+    // Resolve the device pointer for an exportable-backed Tensor through the
+    // live control block. On generation mismatch: logs + returns the live
+    // pointer (release) / throws (debug asserts). Non-exportable tensors fall
+    // through to data_ptr().
+    [[nodiscard]] LFS_CORE_API void* resolve_exportable_device_ptr(const Tensor& tensor);
+
+    // q16 codes + bounds pair fetched through live control when exportable-
+    // tracked; null bounds when not q16. Generation mismatch fails loud.
+    struct Q16BindPtrs {
+        const float* codes = nullptr;  // u16 bit-patterns as float*
+        const float* bounds = nullptr; // float2 as float*
+        unsigned n_cells_per_prim = 0;
+        std::uint64_t generation = 0;
+        bool generation_checked = false;
+    };
+    [[nodiscard]] LFS_CORE_API Q16BindPtrs resolve_q16_bind_ptrs(const SplatData& model);
 
 } // namespace lfs::core

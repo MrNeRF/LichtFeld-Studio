@@ -478,6 +478,13 @@ namespace lfs::core {
         std::vector<std::weak_ptr<Tensor>> lazy_snapshots;
         std::string external_kind;
         std::shared_ptr<void> external_owner;
+        // Exportable packed-SoA provenance (q16 poison D2). When set, bind sites
+        // re-resolve the device pointer through the live control block instead of
+        // trusting the baked data_ pointer across a capacity grow.
+        // exportable_control holds shared_ptr<SplatExportableStorage::Control>.
+        std::shared_ptr<void> exportable_control;
+        std::uint32_t exportable_region = 0;
+        std::uint64_t exportable_bound_generation = 0;
     };
 
 } // namespace lfs::core
@@ -1887,6 +1894,28 @@ namespace lfs::core {
         }
         std::shared_ptr<void> external_storage_owner() const {
             return storage_meta_ ? storage_meta_->external_owner : nullptr;
+        }
+
+        // Exportable SoA provenance (stamped by SplatExportableStorage allocators).
+        void set_exportable_provenance(std::shared_ptr<void> control,
+                                       std::uint32_t region,
+                                       std::uint64_t bound_generation) {
+            ensure_storage_meta();
+            storage_meta_->exportable_control = std::move(control);
+            storage_meta_->exportable_region = region;
+            storage_meta_->exportable_bound_generation = bound_generation;
+        }
+        [[nodiscard]] bool has_exportable_provenance() const noexcept {
+            return storage_meta_ && static_cast<bool>(storage_meta_->exportable_control);
+        }
+        [[nodiscard]] std::shared_ptr<void> exportable_control() const noexcept {
+            return storage_meta_ ? storage_meta_->exportable_control : nullptr;
+        }
+        [[nodiscard]] std::uint32_t exportable_region() const noexcept {
+            return storage_meta_ ? storage_meta_->exportable_region : 0u;
+        }
+        [[nodiscard]] std::uint64_t exportable_bound_generation() const noexcept {
+            return storage_meta_ ? storage_meta_->exportable_bound_generation : 0u;
         }
         static std::string storage_memory_summary();
         static void log_storage_memory();
