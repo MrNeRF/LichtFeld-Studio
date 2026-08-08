@@ -1,152 +1,88 @@
-# Campaign Handoff — Speed & VRAM Optimization (2026-08-06 → 2026-08-07)
+# Campaign Handoff — Speed/VRAM + GUI-hardening (2026-08-06 → 2026-08-08, evening)
 
-Branch: **`lfs-elite`** (local; clean published mirror at `origin/lfs-elite` via `./push-clean.sh <rev>`).
-This document is INTERNAL (excluded from publication). Full evidence trail:
-`perf_campaign/{PROGRESS,ISSUES,BASELINE,RULES}.md`, analysis reports in `docs/analysis/`,
-worker outputs in `~/lfs-campaign-out/`.
+Branch **lfs-elite** (local). Published mirror: origin/lfs-elite @ **69efab99** (2026-08-08 ~13:00,
+content-stripped via ./push-clean.sh — owner-run). INTERNAL doc, stripped at publish.
+Evidence: perf_campaign/{PROGRESS,ISSUES,RULES}.md, receipts ~/lfs-campaign-out/ (logs kept,
+binary payloads cleaned 08-08 evening; stale worktrees deleted, ~181 GB freed).
 
----
+## 1. Results (measured, receipts in PROGRESS)
 
-## 1. Results (all 3-run medians, RTX 4080, measured — receipts in PROGRESS.md)
+| Metric | Campaign start | Now (local tip) |
+|---|---:|---:|
+| Bonsai steady | 4.129 ms/iter | ~2.61 (−37%) |
+| Bicycle-7k steady | 3.290 ms/iter | ~2.65 (wall −34%) |
+| Training state | 429 B/splat | 307.4 |
+| Quality 30k/5M (PSNR) | bonsai 33.05 / bicycle 24.92 | 32.67 (variance) / 25.00 (better) |
+| GUI VRAM, bicycle images_4 mrnf | ~5.1 GiB (08-08 morning) | **2.2 GiB measured** (2-gen scale); 5M projection ~3.5 |
+| GUI GT cache | 5.4 GiB device | 0 device + pinned/prefetch (dl_wait unchanged) |
+| Suite | 14 chronic reds | 3440 PASS; 13 env-only reds (green in desktop env) |
+| Env flags | 20 campaign flags | 0 (optimized paths only; --perf-bench/--profile-window CLI) |
 
-| Metric | Campaign start | Current | Δ |
-|---|---:|---:|---|
-| Bonsai steady ms/iter | 4.129 | **3.113** | **−25%** |
-| Bonsai wall (2k iters) | 9.00 s | ~7.3 s | −19% |
-| Bicycle-7k steady ms/iter | 3.290 | **2.737** | **−17%** |
-| Bicycle-7k wall | 31.15 s | ~20.6 s | **−34%** |
-| Persistent training state | 429 B/splat | **304.3 / 306.8 B/splat** | −29% — at/below the reference implementation (304) |
-| Steady-state allocations/iter | 5.05 | ~0.10 | −98% |
-| Hard host syncs/iter | 1 | 0 | eliminated |
-| Dataloader wait (was invisible) | ~4.8 ms/img decode | ~0.005 ms | GT device cache |
-| Bicycle final-loss band | 0.098–0.121 | **0.085–0.101** | quality BETTER than baseline |
-| (Validity caveat: numbers verified on the DEFAULT path — FastGS+MRNF, quant ON. See §4 must-fix wave for non-default configs.) | | | |
-| GUI startup reservation (5M cap) | 1183 MiB | 142 MiB | −1.04 GB |
-| PLY save (1M splats) | 1.57 s | 0.70 s | 2.2× |
+GUI crash lineage fixed & gated: ISS-022 mask freeze, ISS-023 capacity hook, ISS-025 grow-rebind
+wipe, ISS-026 pinned teardown, ISS-027 layer-1. Permanent forced-collision tests in suite.
 
-Peak VRAM: bonsai ~1495 MiB / bicycle ~1636 MiB *including* the opt-in GT device cache
-(339/564 MiB, budget-gated, own ledger line, disable to reclaim).
+## 2. OPEN CRITICAL PATH — the q16 always-commit fault (one bug left)
 
-## 2. What was done (by area)
+GUI + always-commit q16 SH faults ~iter 1001 (5th densify / first degree-up). Currently masked
+on the branch by the float-densify window (safe but −490 MiB during refine + stop_refine
+landmine ~15k, NEVER gate-crossed on the PUBLISHED tip — warn owner off long GUI runs there).
 
-**FastGS rasterizer (training hot path)**
-- Persistent high-water sort buffers (was 5× cudaMallocAsync/free per step); async
-  `n_instances` (the per-step hard `cudaStreamSynchronize` is gone); preflight
-  pointer-validation debug-only.
-- Background compose fused into `blend_cu`; backward unblend pass removed.
-- `blend_backward` T_eff clamp (skips the dead splat tail; bit-identical math).
-- **Warp-level sub-tile culling** in `blend_cu` (per the cited CGIT paper, doi:10.1145/3820019,
-  using our own Vulkan shader's ellipse-exact subtile test): −18.5% kernel, bit-identical;
-  batch size retuned 256→192. Backward port (WO-WARP-BWD) in flight.
-- Philox RNG in all noise/relocation kernels — the old per-thread XORWOW init was 99.5%
-  of the noise kernel (measured 1149 µs → 6.5 µs at N=400k, ~1.3 ms/iter recovered).
+**Falsification ledger (all with receipts):** NOT stale-pointers-post-grow (generation-checked
+fetches landed, 5e4fb453..), NOT layout-generation mismatch, NOT Scene-cache rebuild race
+(one-lock complete c267d3ae/26489b80: ctor-bound mutex, fence-before-release, combined hold
+across commit+trim, training cache-rebuild skip), NOT Vulkan import, NOT preview try-lock
+(verified skip-and-retain), NOT headless/unit reachable.
 
-**Quantization (the memory prize)**
-- Joint (u, log_s) Adam codec, 16-bit non-SH / 8-bit SH, per-256-block bounds (−20 B/splat).
-- SH-rest 16-bit value quantization with decode-in-registers and single re-encode in the
-  fused Adam tail; densify re-encode handles capacity growth (−102 B/splat). Runtime
-  fallbacks: `LFS_SH_VALUE_QUANT`, `LFS_ADAM_LEGACY_CODEC`.
-- Gradient-recovery + unfused `AdamOptimizer::step()` implemented for the joint codec
-  (the ISS-015 root cause — found by bisect after numerical-gradient tests caught it).
+**Hunter B static audit (hunt/static-audit.md, M1 ~0.45):** the lock is enforced per CALL SITE
+and only on `refining` branches; unlocked live-model mutations exist — mrnf.cpp:735 degree bump
+on non-refining steps; mrnf.cpp:744-749 UNLOCKED float→q16 shN swap at stop_refine. Fix
+directive: RAII ShMutationGuard INSIDE the mutation helpers (exclusive + combined +
+waitForModelReaders, depth-counted) + debug assert lock-held (names guilty sites). Runners-up
+M2 (densify-barrier host sync vs in-flight viewer GPU work), M3 (render-thread storage
+retirement vs epoch pinning). Fix-regardless: get_bucket_size unbraced-return bug (2-byte
+bucket for >8 GiB reqs, size_bucketed_pool.hpp ~66-73).
+**Hunter A dynamic capture: IN FLIGHT** (sanitizer trace to corroborate M1). Then: grok worker
+implements per WO to be written from A+B convergence; gate = rock-solid bar (ISSUES addendum)
+incl. stop_refine-crossing run + sanitizer reaching iter 1001+ + SH degrees 0-3.
 
-**Tensor library**
-- Host dispatch: lazy-IR recording now opt-in (was a global mutex + string per op);
-  `has_lazy_expr()` lock-free; contiguous same-shape binary fast path; shared TensorState
-  on copy + inline small-vector shapes.
-- Kernels: binary(+reduce) fusion; dead coalesced/smem Channel3D broadcast kernels wired;
-  `where` host clones removed; SM-capped grid-stride elementwise; device-side mean/prod
-  finalize; fp16 API holes filled (reductions/unary/clamp/fill); half2 fast paths.
-- Memory: zero-stride `expand`/`broadcast_to` views behind a correctness firewall
-  (incl. materialize-on-raw-pointer-escape); strided reduce with per-shape heuristic
-  (up to 5× vs transpose-copy); `out=` destination APIs; allocator hygiene (pooled
-  metadata allocs, empty-slab reclaim, no 1-byte sentinels).
-- Correctness: training-reachable strided-op bug set fixed with regression tests
-  (legacy findings doc Theme A subset).
+## 3. Remaining to done
+1. Hunter A trace → fix WO → grok implements → full gate.
+2. Supervisor review vs rock-solid bar; then TRUE 5M acceptance (images_4, GUI mrnf, per-second
+   peak; target <= 4.0 GiB; projection ~3.5). Nothing dataset/resolution-specific (verified by
+   3-point scaling tables in gtzero/attrf16 receipts).
+3. push-clean.sh <rev> (owner-run; NO content rewriting — that sed was removed after it broke
+   the published build once). Update .100 worktree ~/projects/lfs-elite-test (env vars needed:
+   VCPKG_ROOT=/home/paja/projects/vcpkg, CUDA 12.8 PATH; owner's main checkout there is on
+   their own feature branch — do not touch).
+4. Owner verification on .100: GUI mrnf session past densify AND past stop_refine.
+5. Deferred backlog: HANDOFF-era §4 items (graphs/WDDM, HP-2, per-band SH bits, themes B-F),
+   viewer q16 zero-copy f16 fallback polish, ISS-028 ledger dedupe (minor).
 
-**Trainer / losses / strategies**
-- Loss-workspace union (5 mutually-exclusive variants share one arena region);
-  `zero_terms` (23.7 MiB of literal zeros) eliminated; fp16 SSIM partials everywhere the
-  fused path already proved them; regularizer loss scalars folded into fused backward;
-  persistent cropbox/frozen masks; mask-chain fusion; densification-info zeroed in-kernel.
-- MRNF densify: fused free-slot writes, batched refine readbacks, selection-based medians,
-  reusable child workspace, ≤2× bounded compaction, Adam capacity-invariant guard.
-- GT device cache (opt-in by VRAM budget) — killed the single-threaded host JPEG-decode
-  bottleneck (was 73% of the bicycle window). `dataloader_wait_ms` is now a bench metric.
+## 4. Ops runbook (hard-won; all traps hit at least once)
+- Workers: grok CLI via systemd-run, lfs.slice, MemoryHigh=12G MemoryMax=20G, RuntimeMaxSec=8h.
+  Fable forks: analysis/supervision only (owner directive; grok implements).
+- BUILD FIRST via ./perf_campaign/build.sh before any bench/ctest (unbounded rebuild OOM-killed
+  two workers). GPU timing under flock /tmp/lfs-bench.lock, quiet machine.
+- TRAPS: (1) never `pkill -f LichtFeld-Studio` — self-kill via own cmdline; use PID or
+  'build/LichtFeld-Studio'. (2) watchdog.sh pgrep matched unrelated WOs by filename suffix
+  (WO-...L.md ≡ fleetL) — patched to skip .stalled; never name WOs ending in old fleet letters.
+  (3) NEVER write run outputs to the session /tmp scratchpad — quota bricked tooling and forged
+  a false PSNR; use ~/lfs-campaign-out/. (4) "killed" background tasks often completed — check
+  logs before rerunning. (5) verify a "clean" run by ITERATION TRACE, not the plan line (one
+  worker misread "1500 planned" as success). (6) GUI hang diagnosis without ptrace: `ps -o
+  wchan=` — drm_syncobj_array_wait_timeout = Vulkan semaphore never signaled.
+- GATES that exist because each one caught something real: GUI repro past densify at DEFAULT
+  reserve (max-cap 500k skips grow!), multi-resolution scaling smokes, stop_refine crossing,
+  sanitizer reaching the fault window, red-provenance (git-log proof), receipts-or-it-didn't-
+  happen (one worker claimed an unrun sweep).
+- Publication: push-clean strips internals (perf_campaign, HANDOFF, plan docs) and Claude
+  trailers; owner deletes the remote branch during testing — just re-push, don't investigate.
 
-**Gsplat path**: per-step isect buffer frees → persistent (0 steady allocs/forward).
-**IO**: PLY save parallel-pack + buffered write (2.2×).
-**GUI**: exportable splat block grows with live N (was max_cap upfront); CUDA-VMM/Vulkan
-release-order bug fixed (the NVRM `invalid mmap context` errors); TLS buffer release hooks;
-teardown-order release before pool shutdown (exit-139 class).
-**Checkpoint/export**: resume fixed for joint codec + q16 (was a segfault); Sog export
-dequantizes correctly; graph-capture device-fault test fixed.
-
-## 3. How it is verified
-- `perf_campaign/bench.sh` — dual-workload gate (bonsai 2k; bicycle 7k = quality canary,
-  compare loss CURVES). `perf_campaign/profile.sh` — nsys steady-window kernel profiling
-  (late window `LFS_PROF_START=1600` matters: one regression was SH-degree-gated and
-  invisible early).
-- Every change: fail-first test evidence + before/after numbers in `PROGRESS.md`.
-  ~60 new tests (codecs, gradients numerical, leak-regression, teardown, views, resume).
-- Full-suite gate mandatory since ISS-015 (loss curves alone missed a gradient bug).
-
-## 4. What remains
-
-**MUST-FIX WAVE (from the hostile final review, 2026-08-07 — full report:
-`~/lfs-campaign-out/ADVERSARIAL-REVIEW.md`).** The review found a systemic blind spot:
-strategy test suites forced quantization OFF, so the dual-representation state
-(q16 SH codes + joint Adam moments) was only ever exercised through the fused FastGS
-chokepoint. Outside it: 4 blockers + 5 majors of crash/silent-corruption on documented
-configs (legacy-codec fallback flag, gut/gsplat mode, improved_gs_plus strategy,
-checkpoint-after-real-steps), plus a PLY cancel-path UAF and a viewer-grow ordering bug
-(sibling of the fixed NVRM issue). Two fix orders are dispatched and chained:
-- WO-FIX-CODEC (in queue): BL-1/BL-2, MJ-1..MJ-4, bounds-family hardening + the missing
-  quant-ON strategy/checkpoint-after-step test suites.
-- WO-FIX-INTEG (chained): BL-3/BL-4, MJ-5/MJ-6/MJ-12, MJ-14/MJ-15 triage, MN-1/2/4.
-IMPORTANT until these land: the DEFAULT bench path (FastGS+MRNF, quant ON) is validated;
-gut mode, improved_gs_plus, and the LFS_ADAM_LEGACY_CODEC fallback are UNSAFE with
-quantization enabled.
-
-**In flight**
-- WO-WARP-BWD: warp-culling port into blend_backward (est. −0.2–0.5 ms/iter further).
-
-**Queued to review-ready**
-1. FIX-CODEC → FIX-INTEG (above) with their new test suites.
-2. Final full-suite + dual-workload bench → final numbers table.
-3. Rebase onto current origin/master (MN-11; one commit behind, textual overlap with
-   viewport work — do it deliberately).
-4. Publish final rev: `./push-clean.sh <rev>` (owner-run).
-
-**Ship-as-documented (filed with repro recipes from the review)**
-- MJ-7 DLPack-of-expanded-view UAF (Python edge), MJ-8 RowProxy write-on-view,
-  MJ-9 render-thread TLS caches retained for session, MJ-10/MJ-11 gsplat stream/teardown
-  latents, MJ-13 GT cache invisible to OOM pressure, MN-1..MN-13 minors/nits.
-- ISS-007: 10-min MANUAL GUI check (owner). ISS-016/019 pre-existing reds (attribution
-  notes in the review). ncu counters admin-locked (one-liner + reboot in profile.sh docs).
-
-**Deferred backlog** (unchanged): graphs (Windows/WDDM case), HP-2 parallel decode,
-per-band SH bits, hardening themes B–F, bucket-pool tuning, Vulkan 128-bit packing audit.
-
-**Process addition:** RULES.md now carries a red-provenance clause — a failing test may be
-called "pre-existing" only with git-log or branch-point-run proof (a campaign-added
-fail-loud guard was misclassified once; MJ-14).
-
-## 5. Ops runbook
-- Workers: grok CLI via systemd units in `lfs.slice` (MemoryHigh 14G), max 3 concurrent,
-  queue runner + stall watchdog in `~/lfs-campaign-out/`. Build: `./perf_campaign/build.sh`
-  (2-slot machine-wide semaphore — 30 GB RAM box, oomd kills the desktop above ~50%
-  pressure; this was learned the hard way, see ISS-012 and RULES.md).
-- Worktrees: `./perf_campaign/setup-worktree.sh` (submodules, ccache-not-sccache,
-  VCPKG_ROOT, CUDA PATH, libtorch symlink — all five traps).
-- GPU timing: always under `flock /tmp/lfs-bench.lock`, quiet machine for wall-clock.
-- Publication: `./push-clean.sh <verified-rev>` — owner-run only.
-
-## 6. Lessons that must survive
-1. Measure before believing any ranking — the top-3 speed wins (RNG init, decode
-  bottleneck, dead-tail walk) were all invisible to static analysis, and CUDA graphs
-  (the assumed endgame) measured near-worthless here.
-2. Loss curves are NOT a gradient-correctness gate; numerical-gradient suites are.
-3. Fuses must be sized for the worst legitimate phase (builds), not the average.
-4. Never edit a running bash script; never let workers read prompts from a tree that
-  other workers mutate (bisect wiped the work orders once).
-5. The bicycle canary earns its keep — but only past densification growth (7k iters).
+## 5. Lessons that must survive (added to the 08-07 list)
+6. Locks enforced at call sites rot; enforce INSIDE the mutation (RAII), assert-held in debug.
+7. A gate is only as good as the parameters of its repro — under-specified repros passed five
+   broken builds; write iteration counts and reserve sizes INTO the order.
+8. Falsification ledgers beat confidence: six wrong mechanisms died to cheap discriminating
+   experiments; every "obvious" fix would have shipped still-broken.
+9. When two independent analyses converge (static + dynamic), act; when they diverge, the
+   experiment is under-specified.
