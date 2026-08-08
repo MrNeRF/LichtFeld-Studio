@@ -97,7 +97,7 @@ namespace lfs::python {
         }
         throw nb::type_error(
             "UILayout.template_tree is unsupported; use the live "
-            "RmlUILayout.tree_node/tree_pop API from a Python panel draw callback");
+            "RmlUILayout.collapsing_header API from a Python panel draw callback");
     }
 
     std::tuple<bool, std::string> PyUILayoutTemplates::template_id(
@@ -153,7 +153,7 @@ namespace lfs::python {
                     return PyUILayoutTemplates::template_tree(self, label, draw_callback, default_open);
                 },
                 nb::arg("label"), nb::arg("draw_callback"), nb::arg("default_open") = false,
-                "Unsupported on UILayout; use RmlUILayout.tree_node/tree_pop.")
+                "Unsupported on UILayout; use RmlUILayout.collapsing_header.")
             .def(
                 "template_id",
                 [](PyUILayout& self, const std::string& label, const std::vector<std::string>& items,

@@ -161,6 +161,6 @@ with layout.column() as col:
 ```python
 with layout.row() as row:
     row.same_line()         # delegated to UILayout
-    row.begin_group()       # delegated to UILayout
-    row.end_group()         # delegated to UILayout
+    row.push_id("details")  # delegated to UILayout
+    row.pop_id()            # delegated to UILayout
 ```
