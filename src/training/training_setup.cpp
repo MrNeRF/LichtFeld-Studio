@@ -310,6 +310,12 @@ namespace lfs::training {
             // may still be float4-swizzle until quant. Size the readiness check from
             // the live storage layout so we don't force a rebuild every step.
             const bool shN_is_q16 = model.shN_value_quantized();
+            // ISS-027: densify keeps a float4-swizzle workspace outside the exportable
+            // block (float-native mutation). That is intentional — do not treat it as
+            // "not ready" or remigrate/re-encode every refine (was re-poisoning FastGS).
+            const bool shN_float_densify_workspace =
+                layout_rest > 0 && model.shN_raw().is_valid() &&
+                model.shN_raw().dtype() == lfs::core::DataType::Float32 && !shN_is_q16;
             const size_t target_shN_capacity =
                 layout_rest == 0
                     ? 0
@@ -320,17 +326,21 @@ namespace lfs::training {
                 shN_is_q16 ? lfs::core::sh_value_quant::n_bounds_for_prims(target_capacity) * 2u
                            : 0;
 
+            const bool shN_ready =
+                target_shN_capacity == 0 || shN_float_densify_workspace ||
+                isAllocatorBackedTrainingTensorReady(model.shN_raw(), target_shN_capacity);
+            const bool bounds_ready =
+                target_bounds_capacity == 0 || shN_float_densify_workspace ||
+                isAllocatorBackedTrainingTensorReady(model.shN_value_bounds(),
+                                                     target_bounds_capacity);
+
             const bool already_allocator_backed =
                 isAllocatorBackedTrainingTensorReady(model.means_raw(), target_capacity) &&
                 isAllocatorBackedTrainingTensorReady(model.sh0_raw(), target_capacity) &&
                 isAllocatorBackedTrainingTensorReady(model.scaling_raw(), target_capacity) &&
                 isAllocatorBackedTrainingTensorReady(model.rotation_raw(), target_capacity) &&
                 isAllocatorBackedTrainingTensorReady(model.opacity_raw(), target_capacity) &&
-                (target_shN_capacity == 0 ||
-                 isAllocatorBackedTrainingTensorReady(model.shN_raw(), target_shN_capacity)) &&
-                (target_bounds_capacity == 0 ||
-                 isAllocatorBackedTrainingTensorReady(model.shN_value_bounds(),
-                                                      target_bounds_capacity));
+                shN_ready && bounds_ready;
             if (already_allocator_backed && !force_reallocation) {
                 model.set_tensor_allocator(tensor_allocator);
                 return {};
@@ -454,6 +464,9 @@ namespace lfs::training {
                 }
                 // Encode float/f16 rest into exportable q16 when the target block
                 // is pad-dropped (probe above detected Float16-clamped ShN).
+                // ISS-027: skip when this is a densify float workspace re-install
+                // (force_reallocation false and source was already Float32 densify
+                // state). Initial cold migrate still quantizes.
                 if (need_q16_encode && model.shN_raw().is_valid() &&
                     !model.shN_value_quantized()) {
                     (void)lfs::training::sh_value::apply_shN_value_quant(model);

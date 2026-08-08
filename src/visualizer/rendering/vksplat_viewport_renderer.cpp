@@ -4735,10 +4735,19 @@ namespace lfs::vis {
             force_upload,
             upload_sh_degree);
 
+        // ISS-027: densify float-native SH is outside the exportable block; force
+        // DC-only upload layout so zero-copy geometry bind can proceed without a
+        // full-copy fallback (or degraded mode).
+        const bool shN_float_densify_early =
+            splat_data.shN_raw().is_valid() &&
+            splat_data.shN_raw().dtype() == lfs::core::DataType::Float32 &&
+            !splat_data.shN_value_quantized();
         const int effective_upload_sh_degree =
-            upload_sh_degree < 0
-                ? splat_data.get_max_sh_degree()
-                : std::clamp(upload_sh_degree, 0, splat_data.get_max_sh_degree());
+            shN_float_densify_early
+                ? 0
+                : (upload_sh_degree < 0
+                       ? splat_data.get_max_sh_degree()
+                       : std::clamp(upload_sh_degree, 0, splat_data.get_max_sh_degree()));
         auto upload_layout = vksplat::rawDeviceInputLayout(splat_data, effective_upload_sh_degree);
         if (!upload_layout) {
             return std::unexpected(upload_layout.error());
@@ -4774,15 +4783,27 @@ namespace lfs::vis {
         const bool has_deleted_mask = splat_data.has_deleted_mask();
         const bool base_inputs_external =
             means_storage && sh0_storage && rotations_storage && scaling_storage;
+        // ISS-027: densify keeps float4-swizzle shN outside the exportable block.
+        // Treat that workspace as "omit rest SH" for zero-copy bind (DC only) so
+        // the viewport stays live instead of entering degraded mode.
+        const bool shN_float_densify_workspace =
+            splat_data.shN_raw().is_valid() &&
+            splat_data.shN_raw().dtype() == lfs::core::DataType::Float32 &&
+            !splat_data.shN_value_quantized();
         // q16 needs bounds in the exportable block for zero-copy dequant.
         const bool shN_ok =
-            upload_layout->omits_shN ||
+            upload_layout->omits_shN || shN_float_densify_workspace ||
             (shN_storage && (!upload_layout->shN_q16 || shN_bounds_storage));
         const bool can_bind_external =
             base_inputs_external &&
             shN_ok &&
             (opacity_storage || has_deleted_mask);
-        const auto& layout = can_bind_external && shN_storage ? external_layout : upload_layout;
+        // Prefer full external layout when shN is also exportable; during densify
+        // float workspace, bind geometry external with omits_shN via upload_layout.
+        const auto& layout =
+            can_bind_external && shN_storage && !shN_float_densify_workspace
+                ? external_layout
+                : upload_layout;
 
         std::vector<std::string> input_copy_reasons;
         const auto note_missing_storage =

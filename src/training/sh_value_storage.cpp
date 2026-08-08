@@ -154,6 +154,7 @@ namespace lfs::training::sh_value {
                 fp32.set_name("splat.shN");
             }
             shN = std::move(fp32);
+            splat.shN_value_bounds() = Tensor{};
             return true;
         }
 
@@ -198,6 +199,11 @@ namespace lfs::training::sh_value {
         sync_codec_stream(stream);
 
         shN = std::move(fp32);
+        // ISS-027: drop bounds once codes are expanded. Leaving pad-dropped bounds
+        // attached to a Float32 float4-swizzle buffer is a dual-representation
+        // footgun (FastGS/viewer may treat Float16+bounds as q16; a later
+        // partial rebind can re-install codes without matching bounds).
+        splat.shN_value_bounds() = Tensor{};
         return true;
     }
 

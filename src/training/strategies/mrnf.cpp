@@ -501,9 +501,15 @@ namespace lfs::training {
             // Only skip Vulkan/exportable interop storage. zeros_direct marks
             // external_kind="cuda.direct", which is_external_storage() also reports
             // true for — those must still grow to max_cap here.
+            // ISS-027: "splat.exportable" is the CUDA-only view of the same packed
+            // block (post-grow pre-Vulkan-reimport). Stealing either kind onto a
+            // private max_cap buffer orphans the zero-copy layout and, for q16 SH,
+            // mis-sizes float topology capacity against pad-dropped cells.
             auto is_interop_external = [](const Tensor& t) {
-                return t.is_external_storage() &&
-                       t.external_storage_kind() == "vulkan_external_buffer";
+                if (!t.is_external_storage())
+                    return false;
+                const auto kind = t.external_storage_kind();
+                return kind == "vulkan_external_buffer" || kind == "splat.exportable";
             };
 
             auto ensure_capacity_direct = [capacity, &is_interop_external](Tensor& param) {
@@ -520,15 +526,28 @@ namespace lfs::training {
                 param = std::move(new_param);
             };
 
-            // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
+            // shN capacity units depend on resident layout: float4-swizzle floats
+            // (fp32 / IEEE f16) or pad-dropped q16 u16 cells. Never treat q16 cell
+            // capacity as float-slot capacity (ISS-027).
             const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-            auto ensure_shN_capacity_direct = [capacity, layout_rest, &is_interop_external](Tensor& param) {
-                const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity, layout_rest);
-                if (param.capacity() >= cap_floats)
-                    return;
+            auto ensure_shN_capacity_direct = [capacity, layout_rest, &is_interop_external,
+                                               this](Tensor& param) {
                 if (is_interop_external(param))
                     return;
-                auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
+                const bool q16 = _splat_data->shN_value_quantized();
+                const size_t need_cap =
+                    q16 ? lfs::core::sh_value_quant::sh_value_u16_count(capacity, layout_rest)
+                        : lfs::core::sh_swizzled_float_count(capacity, layout_rest);
+                if (param.capacity() >= need_cap)
+                    return;
+                // Refuse to grow quantized codes with a float memcpy — expand via
+                // ensure_shN_fp32 / commit instead.
+                if (param.dtype() != DataType::Float32) {
+                    LOG_DEBUG("MRNF: skip pre-alloc grow of non-float shN (dtype={})",
+                              static_cast<int>(param.dtype()));
+                    return;
+                }
+                auto new_param = Tensor::zeros_direct(param.shape(), need_cap);
                 cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
                            param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
                 param = std::move(new_param);
@@ -773,9 +792,7 @@ namespace lfs::training {
         lfs::core::alloc_counter::ScopedSite densify_site("densify");
         LOG_TIMER("MRNF::refine");
         using namespace lfs::core;
-        // Phase 2.1: densify ops are float-native. Expand q16 once and KEEP float for the
-        // whole densify phase (re-encode at stop_refine). Mid-refine re-encode was racing
-        // capacity/bounds after N growth and poisoning the next forward.
+        // Phase 2.1 / ISS-027: densify ops are float-native. Expand q16 → float.
         (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
 
         ++_refine_windows_since_bounds;
@@ -877,24 +894,28 @@ namespace lfs::training {
         _splat_data->_densification_info.zero_();
 
         // Phase 4.6: MRNF trim_memory_pool parity with MCMC/IGS+ after refine.
-        // Trim FIRST so pool recycling cannot free buffers still referenced by a
-        // just-completed densify kernel, then re-encode (device barrier inside).
         lfs::core::Tensor::trim_memory_pool();
 
-        // Re-encode after densify growth so B/splat prize is live before stop_refine.
-        // Heal-vs-rebuild: always rebuild codes+bounds from float (commit); Adam
-        // moments stay float-layout and are healed in prepare_fastgs_fused_adam.
-        if (lfs::core::sh_value_quant::enabled() &&
+        // ISS-027 root cause: re-encoding pad-dropped q16 into the exportable
+        // packed SoA after every refine races the zero-copy Vulkan viewport
+        // (CUDA write vs concurrent projection read of the same VMM block) and
+        // surfaces as async cudaErrorIllegalAddress on the next FastGS forward.
+        // Headless has no zero-copy reader — re-encode each refine for live
+        // B/splat. Exportable/GUI keeps float shN until stop_refine (post_backward
+        // stop_refine handler) or explicit commit after topology freezes.
+        const bool exportable_backed =
+            _splat_data->has_tensor_allocator() ||
+            (_splat_data->means().is_valid() && _splat_data->means().is_external_storage() &&
+             (_splat_data->means().external_storage_kind() == "vulkan_external_buffer" ||
+              _splat_data->means().external_storage_kind() == "splat.exportable"));
+        if (!exportable_backed &&
+            lfs::core::sh_value_quant::enabled() &&
             _splat_data->shN().is_valid() &&
             _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
         }
 
         // WO-X: do NOT trim_memory_pool after every refine.
-        // Phase 4.6 used to cudaFreeAsync the entire size-bucket cache here,
-        // forcing ~20 driver allocs on the next densify (growing exact-size
-        // temps never hit cache). MemoryPressureCoordinator still trims under
-        // OOM. Peak residual is the pool_bucket_cache ledger line.
     }
 
     void MRNF::grow_and_split(int iter, int pruned_count) {
