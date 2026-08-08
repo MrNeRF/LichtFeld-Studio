@@ -16,6 +16,7 @@
 #include "kernels/image_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
+#include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 #include "training/dataset.hpp"
@@ -568,6 +569,10 @@ namespace lfs::training {
             _densify_n_scratch.ensure_n(capacity, _splat_data->means().device());
             _densify_n_scratch.ensure_k(std::max(capacity / 20, size_t{1024}),
                                         _splat_data->means().device());
+            if (lfs::training::PerfBenchCollector::enabled()) {
+                lfs::training::PerfBenchCollector::instance().set_densify_workspace_bytes(
+                    _densify_n_scratch.resident_bytes());
+            }
         }
 
         const size_t n = static_cast<size_t>(_splat_data->size());
@@ -906,6 +911,10 @@ namespace lfs::training {
         // driver allocs (post-refine trim_memory_pool would otherwise force
         // pool misses on every growing exact size).
         _densify_n_scratch.ensure_n(n, Device::CUDA);
+        if (PerfBenchCollector::enabled()) {
+            PerfBenchCollector::instance().set_densify_workspace_bytes(
+                _densify_n_scratch.resident_bytes());
+        }
 
         lfs::core::Tensor active_mask;
         if (_free_mask.is_valid() && n > 0) {

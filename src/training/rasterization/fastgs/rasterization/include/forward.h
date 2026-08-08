@@ -37,6 +37,11 @@ namespace fast_lfs::rasterization {
     /// Testing: drop high-water capacity so the next forward must grow+sync.
     void reset_sort_capacity_for_testing() noexcept;
 
+    /// Process-peak attribution (ex-cache ledger): grow-only sort TLS high-water
+    /// residency on the calling thread (keys×2 + indices×2 + CUB WS).
+    [[nodiscard]] std::size_t sort_workspace_high_water_bytes() noexcept;
+    [[nodiscard]] int sort_workspace_capacity_n_instances() noexcept;
+
     /// Warp-cull mode for blend_cu (WO-WARP-FWD TDD):
     /// 0 = enabled (production), 1 = disabled (all-1s mask, reference),
     /// 2 = wrong empty mask (deliberately incorrect).

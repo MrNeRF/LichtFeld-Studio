@@ -32,6 +32,11 @@ namespace lfs::training {
     compute_training_state_ledger(const core::SplatData& splat,
                                   const AdamOptimizer* optimizer = nullptr);
 
+    /// Capacity-backed footprint (row capacity × trailing dims) for peak attribution.
+    [[nodiscard]] std::size_t
+    compute_training_state_reserved_bytes(const core::SplatData& splat,
+                                          const AdamOptimizer* optimizer = nullptr);
+
     /// Convenience: compute + publish into the process-wide VramProfiler.
     void publish_training_state_ledger(const core::SplatData& splat,
                                        const AdamOptimizer* optimizer = nullptr);

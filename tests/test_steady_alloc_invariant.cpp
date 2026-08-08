@@ -144,12 +144,45 @@ TEST(PeakExCacheLedger, JustifiedResidualsCoverGate) {
     const std::size_t loss_ws = 20ull * 1024ull * 1024ull;
     const std::size_t densify_ws = 10ull * 1024ull * 1024ull;
     const std::size_t pool_cache = 50ull * 1024ull * 1024ull;
+    const std::size_t sort_hwm = 30ull * 1024ull * 1024ull;
     const std::size_t excess = 80ull * 1024ull * 1024ull;
-    const std::size_t justified_new = loss_ws + densify_ws + pool_cache;
+    const std::size_t justified_new = loss_ws + densify_ws + pool_cache + sort_hwm;
     const std::size_t unjustified =
         excess > justified_new ? excess - justified_new : 0;
     EXPECT_EQ(unjustified, 0u)
-        << "documented Phase 6D/4.3/allocator residuals cover an 80 MiB excess";
+        << "documented Phase 6D/4.3/allocator/sort residuals cover an 80 MiB excess";
+}
+
+TEST(PeakExCacheLedger, UnattributedResidualIsNotAutoJustified) {
+    // WO-EXCACHE: catch-all "no_trim" rubber-stamp is gone. A residual larger
+    // than measured new-vs-Wave2 owners must remain unjustified.
+    const std::size_t loss_ws = 20ull * 1024ull * 1024ull;
+    const std::size_t densify_ws = 5ull * 1024ull * 1024ull;
+    const std::size_t pool_cache = 6ull * 1024ull * 1024ull;
+    const std::size_t sort_hwm = 30ull * 1024ull * 1024ull;
+    const std::size_t excess = 380ull * 1024ull * 1024ull; // ~raw device-wide excess
+    const std::size_t justified_new = loss_ws + densify_ws + pool_cache + sort_hwm;
+    const std::size_t unjustified =
+        excess > justified_new ? excess - justified_new : 0;
+    EXPECT_GT(unjustified, 300ull * 1024ull * 1024ull)
+        << "large residual must surface as unjustified until attributed/fixed";
+    EXPECT_LT(justified_new, excess);
+}
+
+TEST(PeakExCacheLedger, BaselineSubtractYieldsProcessNet) {
+    // Device-wide peak 1660, baseline 300, gt 339 → net ex = 1660-300-339 = 1021.
+    const std::size_t peak = static_cast<std::size_t>(1660.0 * 1024.0 * 1024.0);
+    const std::size_t baseline = static_cast<std::size_t>(300.0 * 1024.0 * 1024.0);
+    const std::size_t gt = static_cast<std::size_t>(339.0 * 1024.0 * 1024.0);
+    const std::size_t legacy_ex = peak - gt;
+    const std::size_t net_ex = peak - baseline - gt;
+    EXPECT_GT(legacy_ex, net_ex);
+    const double net_mib = static_cast<double>(net_ex) / (1024.0 * 1024.0);
+    EXPECT_NEAR(net_mib, 1021.0, 1.0);
+    // Net excess vs Wave-2 938 is the process-local growth to audit.
+    const double excess_net = net_mib - 938.3;
+    EXPECT_GT(excess_net, 0.0);
+    EXPECT_LT(excess_net, 120.0) << "after baseline subtract, tip excess should be << 383";
 }
 
 TEST(AllocCounterSiteTags, RecordSiteIncrementsPerSite) {

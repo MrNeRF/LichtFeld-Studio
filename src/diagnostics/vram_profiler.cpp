@@ -1000,6 +1000,11 @@ namespace lfs::diagnostics {
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
+    std::size_t VramProfiler::cudaDeviceBaselineBytes() const {
+        std::lock_guard lock(impl_->mutex);
+        return impl_->cuda_device_baseline;
+    }
+
     void VramProfiler::captureCudaWarmupDelta() {
         std::size_t used = 0;
         if (!sample_cuda_used_bytes(used))

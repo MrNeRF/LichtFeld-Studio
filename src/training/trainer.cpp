@@ -856,6 +856,13 @@ namespace lfs::training {
             record_vram_current(scope, "forward.per_primitive_buffers", ctx.forward_ctx.per_primitive_buffers_size);
             record_vram_current(scope, "forward.per_tile_buffers", ctx.forward_ctx.per_tile_buffers_size);
             record_vram_current(scope, "forward.sorted_indices_live", ctx.forward_ctx.sorted_primitive_indices_size);
+            if (PerfBenchCollector::enabled()) {
+                const std::size_t raster_live =
+                    ctx.forward_ctx.per_primitive_buffers_size +
+                    ctx.forward_ctx.per_tile_buffers_size +
+                    ctx.forward_ctx.sorted_primitive_indices_size;
+                PerfBenchCollector::instance().set_fastgs_raster_live_bytes(raster_live);
+            }
             // Sort scratch is released after forward, and sort_total includes sorted_indices_live.
             // Clear these legacy live rows so the HUD does not count transient/duplicate bytes
             // as retained process VRAM.
@@ -5611,6 +5618,9 @@ namespace lfs::training {
                     const auto ledger = compute_training_state_ledger(
                         strategy_->get_model(), &strategy_->get_optimizer());
                     bench.set_ledger(ledger);
+                    bench.set_training_state_reserved_bytes(
+                        compute_training_state_reserved_bytes(
+                            strategy_->get_model(), &strategy_->get_optimizer()));
                     bench.on_step_end(iter,
                                       current_loss_.load(),
                                       strategy_->get_model().size());

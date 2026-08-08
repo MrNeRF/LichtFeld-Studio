@@ -50,8 +50,14 @@ namespace lfs::training {
         /// Loss-workspace arena footprint (Phase 6D) for peak attribution.
         void set_loss_workspace_bytes(std::size_t bytes);
 
-        /// Densify child workspace high-water (Phase 4.3) for peak attribution.
+        /// Densify child / N-scratch high-water (Phase 4.3 / WO-X) for peak attribution.
         void set_densify_workspace_bytes(std::size_t bytes);
+
+        /// Capacity-backed training-state high-water (params+optim reserved, not logical N).
+        void set_training_state_reserved_bytes(std::size_t bytes);
+
+        /// FastGS raster live buffers at a step (per_prim + per_tile + sorted).
+        void set_fastgs_raster_live_bytes(std::size_t bytes);
 
         /// Write JSON report to @p path (parent dirs created as needed).
         void finalize(const std::filesystem::path& path);
@@ -63,6 +69,8 @@ namespace lfs::training {
 
     private:
         PerfBenchCollector() = default;
+
+        void capture_peak_snapshot(int iter, std::size_t used, std::size_t total);
 
         bool started_ = false;
         int total_iters_ = 0;
@@ -86,9 +94,24 @@ namespace lfs::training {
         std::uint64_t steady_dataloader_wait_count_ = 0;
         std::size_t peak_cuda_used_ = 0;
         std::size_t peak_cuda_total_ = 0;
+        /// Device-wide used sampled at on_training_start (desktop + CUDA context
+        /// already resident). Subtracted for process-net ex_cache so Wave-2
+        /// quiet-GPU comparisons are not polluted by concurrent GPU users.
+        std::size_t baseline_cuda_used_ = 0;
+        std::size_t peak_pool_reserved_ = 0;
+        std::size_t peak_pool_used_ = 0;
+        std::size_t peak_pool_bucket_cache_ = 0;
+        std::size_t peak_exportable_splat_ = 0;
+        std::size_t peak_arena_capacity_ = 0;
+        std::size_t peak_fastgs_sort_hwm_ = 0;
+        std::size_t peak_fastgs_raster_live_ = 0;
+        int peak_iter_ = 0;
+        std::vector<diagnostics::PeakSubsystemLine> peak_rows_;
         std::size_t gt_cache_bytes_ = 0;
         std::size_t loss_workspace_bytes_ = 0;
         std::size_t densify_workspace_bytes_ = 0;
+        std::size_t training_state_reserved_bytes_ = 0;
+        std::size_t fastgs_raster_live_bytes_ = 0;
         float last_loss_ = 0.0f;
         std::size_t last_live_splats_ = 0;
         double last_psnr_ = -1.0;

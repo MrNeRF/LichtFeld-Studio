@@ -16,6 +16,23 @@ namespace lfs::training {
             return tensor.bytes();
         }
 
+        /// Capacity-backed footprint (row capacity × trailing dims × dtype).
+        [[nodiscard]] std::size_t tensor_reserved_bytes(const lfs::core::Tensor& tensor) {
+            if (!tensor.is_valid()) {
+                return 0;
+            }
+            if (tensor.capacity() == 0 || tensor.ndim() == 0) {
+                return tensor.bytes();
+            }
+            std::size_t row_elems = 1;
+            if (tensor.ndim() > 1) {
+                for (std::size_t dim = 1; dim < tensor.ndim(); ++dim) {
+                    row_elems *= tensor.shape()[dim];
+                }
+            }
+            return tensor.capacity() * row_elems * lfs::core::dtype_size(tensor.dtype());
+        }
+
     } // namespace
 
     diagnostics::TrainingStateLedger
@@ -65,6 +82,35 @@ namespace lfs::training {
                 static_cast<double>(ledger.live_splats);
         }
         return ledger;
+    }
+
+    std::size_t compute_training_state_reserved_bytes(const core::SplatData& splat,
+                                                      const AdamOptimizer* optimizer) {
+        std::size_t bytes = 0;
+        bytes += tensor_reserved_bytes(splat.means());
+        bytes += tensor_reserved_bytes(splat.sh0());
+        bytes += tensor_reserved_bytes(splat.shN());
+        bytes += tensor_reserved_bytes(splat.shN_value_bounds());
+        bytes += tensor_reserved_bytes(splat.scaling_raw());
+        bytes += tensor_reserved_bytes(splat.rotation_raw());
+        bytes += tensor_reserved_bytes(splat.opacity_raw());
+        bytes += tensor_reserved_bytes(splat._densification_info);
+        bytes += tensor_reserved_bytes(splat.deleted());
+        if (optimizer != nullptr) {
+            for (const auto type : AdamOptimizer::all_param_types()) {
+                const auto* state = optimizer->get_state(type);
+                if (state == nullptr) {
+                    continue;
+                }
+                bytes += tensor_reserved_bytes(state->exp_avg);
+                bytes += tensor_reserved_bytes(state->exp_avg_sq);
+                bytes += tensor_reserved_bytes(state->exp_avg_scale);
+                bytes += tensor_reserved_bytes(state->exp_avg_sq_scale);
+                bytes += tensor_reserved_bytes(state->joint_bounds);
+                bytes += tensor_reserved_bytes(state->grad);
+            }
+        }
+        return bytes;
     }
 
     void publish_training_state_ledger(const core::SplatData& splat,

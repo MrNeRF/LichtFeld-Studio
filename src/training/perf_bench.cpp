@@ -5,6 +5,7 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/logger.hpp"
+#include "training/rasterization/fastgs/rasterization/include/forward.h"
 
 #include <cuda_runtime.h>
 
@@ -14,6 +15,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 
 namespace lfs::training {
     namespace {
@@ -36,6 +38,39 @@ namespace lfs::training {
             }
         }
 
+        void sample_pool_hwm(std::size_t& used_high, std::size_t& reserved_high,
+                             std::size_t& used_cur, std::size_t& reserved_cur) {
+            used_high = reserved_high = used_cur = reserved_cur = 0;
+#if CUDART_VERSION >= 12080
+            int device = 0;
+            if (cudaGetDevice(&device) != cudaSuccess) {
+                return;
+            }
+            cudaMemPool_t pool = nullptr;
+            if (cudaDeviceGetDefaultMemPool(&pool, device) != cudaSuccess || !pool) {
+                return;
+            }
+            std::uint64_t u = 0;
+            std::uint64_t r = 0;
+            if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &u) == cudaSuccess) {
+                used_high = static_cast<std::size_t>(u);
+            }
+            if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemHigh, &r) ==
+                cudaSuccess) {
+                reserved_high = static_cast<std::size_t>(r);
+            }
+            u = r = 0;
+            if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &u) ==
+                cudaSuccess) {
+                used_cur = static_cast<std::size_t>(u);
+            }
+            if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &r) ==
+                cudaSuccess) {
+                reserved_cur = static_cast<std::size_t>(r);
+            }
+#endif
+        }
+
     } // namespace
 
     PerfBenchCollector& PerfBenchCollector::instance() {
@@ -47,6 +82,23 @@ namespace lfs::training {
         g_perf_bench_enabled.store(enable, std::memory_order_relaxed);
         if (warmup > 0) {
             g_perf_bench_warmup.store(warmup, std::memory_order_relaxed);
+        }
+        // Prefer main.cpp's early device baseline (post primary-context, pre-model).
+        // Fall back to a configure-time sample when the profiler baseline is unset
+        // (unit tests / non-main entry points).
+        if (enable) {
+            auto& c = instance();
+            const auto early =
+                diagnostics::VramProfiler::instance().cudaDeviceBaselineBytes();
+            if (early > 0) {
+                c.baseline_cuda_used_ = early;
+            } else {
+                std::size_t used = 0;
+                std::size_t total = 0;
+                sample_cuda_used(used, total);
+                c.baseline_cuda_used_ = used;
+                (void)total;
+            }
         }
     }
 
@@ -73,9 +125,22 @@ namespace lfs::training {
         steady_ms_sum_ = 0.0;
         peak_cuda_used_ = 0;
         peak_cuda_total_ = 0;
+        // baseline_cuda_used_ was set in configure() (pre model load). If
+        // configure was skipped, fall back to the value already stored (0).
+        peak_pool_reserved_ = 0;
+        peak_pool_used_ = 0;
+        peak_pool_bucket_cache_ = 0;
+        peak_exportable_splat_ = 0;
+        peak_arena_capacity_ = 0;
+        peak_fastgs_sort_hwm_ = 0;
+        peak_fastgs_raster_live_ = 0;
+        peak_iter_ = 0;
+        peak_rows_.clear();
         gt_cache_bytes_ = 0;
         loss_workspace_bytes_ = 0;
         densify_workspace_bytes_ = 0;
+        training_state_reserved_bytes_ = 0;
+        fastgs_raster_live_bytes_ = 0;
         dataloader_wait_ms_sum_ = 0.0;
         steady_dataloader_wait_ms_sum_ = 0.0;
         dataloader_wait_count_ = 0;
@@ -102,6 +167,72 @@ namespace lfs::training {
         step_start_ns_ = now_ns();
     }
 
+    void PerfBenchCollector::capture_peak_snapshot(const int iter,
+                                                   const std::size_t used,
+                                                   const std::size_t total) {
+        peak_cuda_used_ = used;
+        peak_cuda_total_ = total;
+        peak_iter_ = iter;
+
+        std::size_t used_high = 0;
+        std::size_t reserved_high = 0;
+        std::size_t used_cur = 0;
+        std::size_t reserved_cur = 0;
+        sample_pool_hwm(used_high, reserved_high, used_cur, reserved_cur);
+        peak_pool_used_ = std::max(peak_pool_used_, std::max(used_high, used_cur));
+        peak_pool_reserved_ =
+            std::max(peak_pool_reserved_, std::max(reserved_high, reserved_cur));
+
+        const auto sort_hwm = fast_lfs::rasterization::sort_workspace_high_water_bytes();
+        peak_fastgs_sort_hwm_ = std::max(peak_fastgs_sort_hwm_, sort_hwm);
+        peak_fastgs_raster_live_ =
+            std::max(peak_fastgs_raster_live_, fastgs_raster_live_bytes_);
+
+        // Refresh process snapshot so pool_bucket_cache / exportable are current.
+        auto& profiler = diagnostics::VramProfiler::instance();
+        profiler.sampleCudaMemory();
+        const auto snap = profiler.snapshot();
+        peak_pool_bucket_cache_ =
+            std::max(peak_pool_bucket_cache_, snap.process.cuda_pool_bucket_cache_bytes);
+        peak_exportable_splat_ =
+            std::max(peak_exportable_splat_, snap.process.exportable_splat_bytes);
+
+        std::size_t arena_cap = 0;
+        std::size_t raster_live = 0;
+        peak_rows_.clear();
+        for (const auto& row : snap.rows) {
+            if (row.live_bytes == 0 && row.peak_bytes == 0) {
+                continue;
+            }
+            if (row.label == "arena.capacity" ||
+                row.label.find("arena.capacity") != std::string::npos) {
+                arena_cap = std::max(arena_cap, std::max(row.live_bytes, row.peak_bytes));
+            }
+            if (row.label.find("per_primitive_buffers") != std::string::npos ||
+                row.label.find("per_tile_buffers") != std::string::npos ||
+                row.label.find("sorted_indices") != std::string::npos) {
+                raster_live += std::max(row.live_bytes, row.peak_bytes);
+            }
+            diagnostics::PeakSubsystemLine line;
+            line.name = row.scope.empty() ? row.label : (row.scope + "." + row.label);
+            line.owner = "vram_profiler";
+            line.bytes = std::max(row.live_bytes, row.peak_bytes);
+            line.justified = true;
+            peak_rows_.push_back(std::move(line));
+        }
+        peak_arena_capacity_ = std::max(peak_arena_capacity_, arena_cap);
+        if (raster_live > 0) {
+            peak_fastgs_raster_live_ = std::max(peak_fastgs_raster_live_, raster_live);
+        }
+
+        // Keep the largest rows for the JSON ledger (top 12 by bytes).
+        std::sort(peak_rows_.begin(), peak_rows_.end(),
+                  [](const auto& a, const auto& b) { return a.bytes > b.bytes; });
+        if (peak_rows_.size() > 12) {
+            peak_rows_.resize(12);
+        }
+    }
+
     void PerfBenchCollector::on_step_end(const int iter,
                                          const float loss,
                                          const std::size_t live_splats) {
@@ -117,8 +248,22 @@ namespace lfs::training {
         std::size_t total = 0;
         sample_cuda_used(used, total);
         if (used > peak_cuda_used_) {
-            peak_cuda_used_ = used;
-            peak_cuda_total_ = total;
+            capture_peak_snapshot(iter, used, total);
+        } else {
+            // Still track pool / sort high-water even when device-wide free dips.
+            std::size_t used_high = 0;
+            std::size_t reserved_high = 0;
+            std::size_t used_cur = 0;
+            std::size_t reserved_cur = 0;
+            sample_pool_hwm(used_high, reserved_high, used_cur, reserved_cur);
+            peak_pool_used_ = std::max(peak_pool_used_, std::max(used_high, used_cur));
+            peak_pool_reserved_ =
+                std::max(peak_pool_reserved_, std::max(reserved_high, reserved_cur));
+            peak_fastgs_sort_hwm_ = std::max(
+                peak_fastgs_sort_hwm_,
+                fast_lfs::rasterization::sort_workspace_high_water_bytes());
+            peak_fastgs_raster_live_ =
+                std::max(peak_fastgs_raster_live_, fastgs_raster_live_bytes_);
         }
 
         last_loss_ = loss;
@@ -176,9 +321,6 @@ namespace lfs::training {
         // Include cache in the reported peak when it is the dominant resident
         // consumer (cudaMemGetInfo peak already covers live use; this is the
         // explicit ledger line for the GT cache bucket).
-        if (bytes > peak_cuda_used_) {
-            // Do not inflate peak beyond measured CUDA used; peak is measured.
-        }
         (void)bytes;
     }
 
@@ -196,42 +338,64 @@ namespace lfs::training {
         densify_workspace_bytes_ = std::max(densify_workspace_bytes_, bytes);
     }
 
+    void PerfBenchCollector::set_training_state_reserved_bytes(const std::size_t bytes) {
+        if (!started_) {
+            return;
+        }
+        training_state_reserved_bytes_ = std::max(training_state_reserved_bytes_, bytes);
+    }
+
+    void PerfBenchCollector::set_fastgs_raster_live_bytes(const std::size_t bytes) {
+        if (!started_) {
+            return;
+        }
+        fastgs_raster_live_bytes_ = bytes;
+        peak_fastgs_raster_live_ = std::max(peak_fastgs_raster_live_, bytes);
+    }
+
     diagnostics::PeakExCacheLedger PerfBenchCollector::peak_ex_cache_ledger() const {
         diagnostics::PeakExCacheLedger out;
         out.peak_cuda_used_bytes = peak_cuda_used_;
+        out.baseline_cuda_used_bytes = baseline_cuda_used_;
+        out.peak_pool_reserved_bytes = peak_pool_reserved_;
+        out.peak_pool_used_bytes = peak_pool_used_;
         out.gt_cache_bytes = gt_cache_bytes_;
         out.training_state_bytes = ledger_.total_bytes;
+        out.training_state_reserved_bytes = training_state_reserved_bytes_;
         out.loss_workspace_bytes = loss_workspace_bytes_;
         out.densify_workspace_bytes = densify_workspace_bytes_;
+        out.fastgs_sort_hwm_bytes = peak_fastgs_sort_hwm_;
+        out.fastgs_raster_live_bytes = peak_fastgs_raster_live_;
+        out.arena_capacity_bytes = peak_arena_capacity_;
+        out.peak_iter = peak_iter_;
+        out.peak_rows = peak_rows_;
 
         const auto snap = diagnostics::VramProfiler::instance().snapshot();
-        out.pool_bucket_cache_bytes = snap.process.cuda_pool_bucket_cache_bytes;
-        out.exportable_splat_bytes = snap.process.exportable_splat_bytes;
+        // Prefer peak-moment bucket cache; fall back to finalize snapshot.
+        out.pool_bucket_cache_bytes =
+            peak_pool_bucket_cache_ > 0 ? peak_pool_bucket_cache_
+                                        : snap.process.cuda_pool_bucket_cache_bytes;
+        out.exportable_splat_bytes =
+            peak_exportable_splat_ > 0 ? peak_exportable_splat_
+                                       : snap.process.exportable_splat_bytes;
 
-        // Pull arena capacity from profiler rows when present (Phase 1 raster arena).
-        std::size_t arena_capacity = 0;
-        std::size_t sort_live = 0;
-        for (const auto& row : snap.rows) {
-            if (row.label == "arena.capacity" || row.label.find("arena.capacity") != std::string::npos) {
-                arena_capacity = std::max(arena_capacity, row.live_bytes);
-            }
-            if (row.label.find("sorted_indices") != std::string::npos ||
-                row.label.find("sort_total") != std::string::npos ||
-                row.label.find("per_primitive_buffers") != std::string::npos ||
-                row.label.find("per_tile_buffers") != std::string::npos) {
-                sort_live += row.live_bytes;
-            }
-        }
-        // Fallback: GlobalArenaManager if linked via row "arena.capacity" only.
-        (void)sort_live;
-
-        // Ex-cache = device peak minus the budget-gated GT cache (Wave-2 had none).
+        // Legacy ex_cache = device peak − GT (device-wide free; ISS-008 contamination).
         out.ex_cache_bytes =
             peak_cuda_used_ > gt_cache_bytes_ ? peak_cuda_used_ - gt_cache_bytes_ : 0;
+        // Process-net: also subtract pre-train baseline (desktop + cold CUDA context).
+        // Wave-2's 938 MiB was a quiet-GPU device-wide sample — baseline ≈ small.
+        // On a busy desktop baseline can be 200–300 MiB and must not count as "ours".
+        const std::size_t peak_above_baseline =
+            peak_cuda_used_ > baseline_cuda_used_ ? peak_cuda_used_ - baseline_cuda_used_
+                                                  : 0;
+        out.ex_cache_net_bytes =
+            peak_above_baseline > gt_cache_bytes_ ? peak_above_baseline - gt_cache_bytes_
+                                                  : 0;
+        // Gate compares process-net to Wave-2 (fairer than raw device-wide).
         out.wave2_ex_cache_bytes = diagnostics::PeakExCacheLedger::kWave2ExCacheBytes;
         out.excess_over_wave2_bytes =
-            out.ex_cache_bytes > out.wave2_ex_cache_bytes
-                ? out.ex_cache_bytes - out.wave2_ex_cache_bytes
+            out.ex_cache_net_bytes > out.wave2_ex_cache_bytes
+                ? out.ex_cache_net_bytes - out.wave2_ex_cache_bytes
                 : 0;
 
         auto add = [&](const char* name, const char* owner, std::size_t bytes, bool justified) {
@@ -249,39 +413,64 @@ namespace lfs::training {
             }
         };
 
-        // GT cache is *inside* peak_cuda_used but excluded from ex_cache; still
-        // listed so the HUD / JSON can show the owner.
+        // Inventory (not all of these are "new vs Wave-2").
+        add("baseline_cuda_context", "desktop+ctx", baseline_cuda_used_,
+            /*justified=*/true);
         add("gt_cache", "WO-HP1", gt_cache_bytes_, /*justified=*/true);
         add("training_state", "Phase0.2/2.2", ledger_.total_bytes, /*justified=*/true);
+        add("training_state_capacity_overhead",
+            "capacity",
+            training_state_reserved_bytes_ > ledger_.total_bytes
+                ? training_state_reserved_bytes_ - ledger_.total_bytes
+                : 0,
+            /*justified=*/true);
         add("loss_workspace_arena", "Phase6D", loss_workspace_bytes_, /*justified=*/true);
-        add("densify_child_workspace", "Phase4.3", densify_workspace_bytes_,
+        add("densify_child_workspace", "Phase4.3/WO-X", densify_workspace_bytes_,
             /*justified=*/true);
         add("pool_bucket_cache", "allocator", out.pool_bucket_cache_bytes,
             /*justified=*/true);
         add("exportable_splat", "Phase5.1", out.exportable_splat_bytes,
             /*justified=*/true);
-        add("rasterizer_arena", "Phase1-arena", arena_capacity, /*justified=*/true);
+        add("fastgs_sort_hwm", "Phase1.1", out.fastgs_sort_hwm_bytes, /*justified=*/true);
+        add("fastgs_raster_live", "FastGS", out.fastgs_raster_live_bytes,
+            /*justified=*/true);
+        add("rasterizer_arena", "Phase1-arena", out.arena_capacity_bytes,
+            /*justified=*/true);
 
-        // New-vs-Wave2 justified residuals that inflate ex_cache:
-        // loss arena (6D), densify scratch (4.3/WO-X), pool free-list growth.
-        // Rasterizer arena + training_state existed in Wave-2; do not use them
-        // to "cover" excess (they are baseline).
-        //
-        // WO-X intentionally stopped post-refine trim_memory_pool so densify
-        // temps stay in the size-bucket free list (zero-alloc steady). The
-        // residual peak above loss+densify+published_pool is that retained
-        // free-list / densify high-water — owner WO-X, by design (trade peak
-        // for G2 alloc invariant). Documented so the gate is honest.
+        // Only *new-vs-Wave2* residuals may cover excess_over_wave2.
+        // Wave-2 already had training_state + raster working set; do not use them
+        // as cover. New justified residuals since Wave-2 quiet peak:
+        //   - loss arena (6D)
+        //   - densify N-scratch / child workspace (4.3 / WO-X)
+        //   - pool free-list residency (when trim is off / residual cache)
+        //   - FastGS persistent sort high-water (Phase 1.1, ~+31 MiB documented)
+        //   - exportable splat block (GUI; headless typically 0)
+        //   - capacity overhead when tensors grow to max_cap beyond Wave-2's live N
+        //   - q16 densify expand is transient; capacity overhead captures retained
+        const std::size_t capacity_overhead =
+            training_state_reserved_bytes_ > ledger_.total_bytes
+                ? training_state_reserved_bytes_ - ledger_.total_bytes
+                : 0;
         const std::size_t new_justified =
-            loss_workspace_bytes_ + densify_workspace_bytes_ + out.pool_bucket_cache_bytes;
-        const std::size_t remaining =
+            loss_workspace_bytes_ + densify_workspace_bytes_ + out.pool_bucket_cache_bytes +
+            out.fastgs_sort_hwm_bytes + out.exportable_splat_bytes + capacity_overhead;
+
+        // Honest residual: do NOT auto-justify the remainder as "no_trim".
+        // MRNF currently trims after refine (G6); free-list residual is the
+        // measured pool_bucket_cache line above. Anything left is unattributed.
+        out.unjustified_excess_bytes =
             out.excess_over_wave2_bytes > new_justified
                 ? out.excess_over_wave2_bytes - new_justified
                 : 0;
-        if (remaining > 0) {
-            add("no_trim_pool_residency", "WO-X", remaining, /*justified=*/true);
+        if (out.unjustified_excess_bytes > 0) {
+            add("unattributed_residual",
+                "audit",
+                out.unjustified_excess_bytes,
+                /*justified=*/false);
         }
-        out.unjustified_excess_bytes = 0;
+        // justified_excess_bytes already sums all justified inventory lines;
+        // for the gate, track new-vs-wave2 cover separately via new_justified.
+        out.justified_excess_bytes = new_justified;
         return out;
     }
 
@@ -295,6 +484,11 @@ namespace lfs::training {
         if (ledger_.total_bytes == 0) {
             ledger_ = diagnostics::VramProfiler::instance().trainingStateLedger();
         }
+
+        // Final sort HWM (TLS still alive on this thread at finalize).
+        peak_fastgs_sort_hwm_ = std::max(
+            peak_fastgs_sort_hwm_,
+            fast_lfs::rasterization::sort_workspace_high_water_bytes());
 
         const double wall_s =
             static_cast<double>(train_end_ns_ - train_start_ns_) / 1.0e9;
@@ -328,6 +522,8 @@ namespace lfs::training {
             static_cast<double>(peak_ledger.ex_cache_bytes) / (1024.0 * 1024.0);
         const double excess_mib =
             static_cast<double>(peak_ledger.excess_over_wave2_bytes) / (1024.0 * 1024.0);
+        const double unjustified_mib =
+            static_cast<double>(peak_ledger.unjustified_excess_bytes) / (1024.0 * 1024.0);
 
         std::error_code ec;
         std::filesystem::create_directories(path.parent_path(), ec);
@@ -356,13 +552,21 @@ namespace lfs::training {
         out << "  \"steady_allocs_per_iter\": " << steady_allocs_iter << ",\n";
         out << "  \"peak_cuda_used_bytes\": " << peak_cuda_used_ << ",\n";
         out << "  \"peak_cuda_total_bytes\": " << peak_cuda_total_ << ",\n";
+        out << "  \"baseline_cuda_used_bytes\": " << baseline_cuda_used_ << ",\n";
+        out << "  \"peak_pool_reserved_bytes\": " << peak_pool_reserved_ << ",\n";
+        out << "  \"peak_pool_used_bytes\": " << peak_pool_used_ << ",\n";
         out << "  \"gt_cache_bytes\": " << gt_cache_bytes_ << ",\n";
         out << "  \"gt_cache_mib\": " << gt_cache_mib << ",\n";
         out << "  \"ex_cache_bytes\": " << peak_ledger.ex_cache_bytes << ",\n";
         out << "  \"ex_cache_mib\": " << ex_cache_mib << ",\n";
+        out << "  \"ex_cache_net_bytes\": " << peak_ledger.ex_cache_net_bytes << ",\n";
+        out << "  \"ex_cache_net_mib\": "
+            << (static_cast<double>(peak_ledger.ex_cache_net_bytes) / (1024.0 * 1024.0))
+            << ",\n";
         out << "  \"ex_cache_excess_over_wave2_mib\": " << excess_mib << ",\n";
         out << "  \"ex_cache_unjustified_excess_bytes\": " << peak_ledger.unjustified_excess_bytes
             << ",\n";
+        out << "  \"ex_cache_unjustified_excess_mib\": " << unjustified_mib << ",\n";
         out << "  \"last_loss\": " << last_loss_ << ",\n";
         out << "  \"last_psnr\": " << last_psnr_ << ",\n";
         out << "  \"last_live_splats\": " << last_live_splats_ << ",\n";
@@ -388,19 +592,28 @@ namespace lfs::training {
         out << "    \"gt_cache_bytes\": " << gt_cache_bytes_ << ",\n";
         out << "    \"loss_workspace_bytes\": " << loss_workspace_bytes_ << ",\n";
         out << "    \"densify_workspace_bytes\": " << densify_workspace_bytes_ << ",\n";
+        out << "    \"training_state_reserved_bytes\": " << training_state_reserved_bytes_ << ",\n";
         out << "    \"total_bytes\": " << ledger_.total_bytes << ",\n";
         out << "    \"live_splats\": " << ledger_.live_splats << ",\n";
         out << "    \"bytes_per_splat\": " << ledger_.bytes_per_splat << "\n";
         out << "  },\n";
         out << "  \"peak_ex_cache\": {\n";
         out << "    \"ex_cache_bytes\": " << peak_ledger.ex_cache_bytes << ",\n";
+        out << "    \"ex_cache_net_bytes\": " << peak_ledger.ex_cache_net_bytes << ",\n";
+        out << "    \"baseline_cuda_used_bytes\": " << peak_ledger.baseline_cuda_used_bytes
+            << ",\n";
         out << "    \"wave2_ex_cache_bytes\": " << peak_ledger.wave2_ex_cache_bytes << ",\n";
         out << "    \"excess_over_wave2_bytes\": " << peak_ledger.excess_over_wave2_bytes << ",\n";
-        out << "    \"justified_new_bytes\": "
-            << (loss_workspace_bytes_ + densify_workspace_bytes_ +
-                peak_ledger.pool_bucket_cache_bytes)
+        out << "    \"justified_new_bytes\": " << peak_ledger.justified_excess_bytes << ",\n";
+        out << "    \"unjustified_excess_bytes\": " << peak_ledger.unjustified_excess_bytes
             << ",\n";
-        out << "    \"unjustified_excess_bytes\": " << peak_ledger.unjustified_excess_bytes << ",\n";
+        out << "    \"peak_iter\": " << peak_ledger.peak_iter << ",\n";
+        out << "    \"peak_pool_reserved_bytes\": " << peak_ledger.peak_pool_reserved_bytes
+            << ",\n";
+        out << "    \"peak_pool_used_bytes\": " << peak_ledger.peak_pool_used_bytes << ",\n";
+        out << "    \"fastgs_sort_hwm_bytes\": " << peak_ledger.fastgs_sort_hwm_bytes << ",\n";
+        out << "    \"fastgs_raster_live_bytes\": " << peak_ledger.fastgs_raster_live_bytes
+            << ",\n";
         out << "    \"lines\": [\n";
         for (std::size_t i = 0; i < peak_ledger.lines.size(); ++i) {
             const auto& L = peak_ledger.lines[i];
@@ -408,6 +621,13 @@ namespace lfs::training {
                 << "\", \"bytes\": " << L.bytes
                 << ", \"justified\": " << (L.justified ? "true" : "false") << "}";
             out << (i + 1 < peak_ledger.lines.size() ? ",\n" : "\n");
+        }
+        out << "    ],\n";
+        out << "    \"peak_rows\": [\n";
+        for (std::size_t i = 0; i < peak_ledger.peak_rows.size(); ++i) {
+            const auto& L = peak_ledger.peak_rows[i];
+            out << "      {\"name\": \"" << L.name << "\", \"bytes\": " << L.bytes << "}";
+            out << (i + 1 < peak_ledger.peak_rows.size() ? ",\n" : "\n");
         }
         out << "    ]\n";
         out << "  }\n";
@@ -417,16 +637,22 @@ namespace lfs::training {
         lfs::core::alloc_counter::set_steady_state(false);
 
         LOG_INFO("PerfBench: wrote {} (steady {:.2f} ms/iter, dl_wait {:.2f} ms/iter steady, "
-                 "{:.1f} allocs/iter, peak VRAM {:.1f} MiB, gt_cache {:.1f} MiB, "
-                 "ex_cache {:.1f} MiB (excess {:.1f} vs Wave2), {:.1f} B/splat)",
+                 "{:.1f} allocs/iter, peak VRAM {:.1f} MiB, baseline {:.1f} MiB, "
+                 "gt_cache {:.1f} MiB, ex_cache {:.1f} MiB / net {:.1f} MiB "
+                 "(excess {:.1f} vs Wave2, unjustified {:.1f}), "
+                 "sort_hwm {:.1f} MiB, {:.1f} B/splat)",
                  path.string(),
                  steady_ms_iter,
                  steady_dataloader_wait_ms_per_iter,
                  steady_allocs_iter,
                  static_cast<double>(peak_cuda_used_) / (1024.0 * 1024.0),
+                 static_cast<double>(baseline_cuda_used_) / (1024.0 * 1024.0),
                  gt_cache_mib,
                  ex_cache_mib,
+                 static_cast<double>(peak_ledger.ex_cache_net_bytes) / (1024.0 * 1024.0),
                  excess_mib,
+                 unjustified_mib,
+                 static_cast<double>(peak_ledger.fastgs_sort_hwm_bytes) / (1024.0 * 1024.0),
                  ledger_.bytes_per_splat);
     }
 

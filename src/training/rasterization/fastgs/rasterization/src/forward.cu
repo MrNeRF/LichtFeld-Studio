@@ -324,6 +324,17 @@ void fast_lfs::rasterization::reset_sort_capacity_for_testing() noexcept {
     cache.force_sync_next = true;
 }
 
+std::size_t fast_lfs::rasterization::sort_workspace_high_water_bytes() noexcept {
+    const auto& cache = sort_buffer_cache();
+    return cache.keys_current.size() + cache.keys_alternate.size() +
+           cache.primitive_indices_current.size() +
+           cache.primitive_indices_alternate.size() + cache.cub_workspace.size();
+}
+
+int fast_lfs::rasterization::sort_workspace_capacity_n_instances() noexcept {
+    return sort_buffer_cache().capacity_n_instances;
+}
+
 fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     std::function<char*(size_t)> per_primitive_buffers_func,
     std::function<char*(size_t)> per_tile_buffers_func,

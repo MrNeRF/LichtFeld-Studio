@@ -111,6 +111,18 @@ namespace lfs::training {
         void ensure_n(size_t n, lfs::core::Device device);
         void ensure_k(size_t k, lfs::core::Device device);
 
+        /// Resident capacity bytes (f32×2 + bool×2 + i64×2 at high-water).
+        [[nodiscard]] std::size_t resident_bytes() const noexcept {
+            std::size_t bytes = 0;
+            if (n_capacity > 0) {
+                bytes += n_capacity * (2 * sizeof(float) + 2 * sizeof(bool));
+            }
+            if (k_capacity > 0) {
+                bytes += k_capacity * 2 * sizeof(std::int64_t);
+            }
+            return bytes;
+        }
+
         // Drop all storage. Not process-static (lives on the strategy), but
         // zeros_direct f32/bool + pool-backed i64 free paths are teardown-safe
         // (ISS-020). Call when the owning strategy is reset early.

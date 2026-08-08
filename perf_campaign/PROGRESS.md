@@ -1742,3 +1742,105 @@ Thresholds: f16 mean_abs < 5e-4, q16 mean_abs < 5e-3; no structural NaNs.
 
 ### Status
 **TIER 2 DONE.**
+
+---
+
+## WO-EXCACHE — attribute + fix ex_cache peak excess vs Wave-2 (2026-08-08)
+
+- **Branch:** `lfs-elite` (never checkout)
+- **Precondition:** `viewersh2.done` (tier-2 q16 zero-copy SH)
+- **Symptom:** PerfBench reported `ex_cache 1321.3 MiB (excess 383.0 vs Wave2)` on bonsai.
+  WO-X left a +256 MiB audit incomplete; residual had grown further.
+
+### Root cause (measured)
+
+1. **Measurement waste (primary):** `ex_cache = peak(cudaMemGetInfo) − gt_cache` is
+   *device-wide* free (ISS-008). On a non-quiet desktop the concurrent GPU users
+   (X/compositor ~200–300 MiB) inflate the peak. Wave-2's **938.3 MiB** was a
+   quiet-GPU device-wide sample. Comparing polluted device-wide peak to that
+   baseline produced a false "+383 MiB process growth" signal.
+2. **Audit waste:** WO-X `PeakExCacheLedger` auto-justified *all* residual as
+   `no_trim_pool_residency` even though G6 re-added post-refine `trim_memory_pool`
+   and measured `pool_bucket_cache` is only ~6.5 MiB. `unjustified_excess` was
+   always forced to 0.
+3. **Incomplete instrumentation:** densify N-scratch, sort HWM, capacity overhead,
+   and peak-moment profiler rows were not ledgered; densify_workspace stayed 0.
+
+### Process-net decomposition (bonsai 2k, quiet-enough tip run)
+
+| quantity | MiB | notes |
+|---|---:|---|
+| peak device-wide | ~1578–1610 | variance across runs |
+| baseline (main.cpp primary-context) | **~450** | desktop + cold CUDA ctx |
+| gt_cache | **338.8** | WO-HP1, excluded from ex |
+| **ex_cache (legacy peak−gt)** | **~1239–1271** | device-wide; polluted |
+| **ex_cache_net (peak−baseline−gt)** | **~789–821** | process training growth |
+| Wave-2 quiet peak | **938.3** | reference |
+| **excess net vs Wave-2** | **0** | net < Wave-2 (q16 savings) |
+
+Peak-moment owners (representative):
+
+| line | MiB | class |
+|---|---:|---|
+| baseline_cuda_context | ~450 | legitimate (not ours) |
+| gt_cache | 338.8 | legitimate WO-HP1 |
+| training_state (logical) | ~118 | legitimate; 307.4 B/splat |
+| training_state capacity overhead | ~27 | legitimate max_cap headroom |
+| loss_workspace_arena | ~21 | legitimate Phase 6D |
+| densify N-scratch | ~6.2 | legitimate WO-X / 4.3 |
+| pool_bucket_cache | ~6.5 | legitimate free-list |
+| fastgs_sort_hwm | ~16–19 | legitimate Phase 1.1 |
+| fastgs_raster_live | ~36 | legitimate working set |
+| arena.vmm (peak row) | 128 | legitimate FastGS arena |
+
+**No process-local waste found that explains +383.** The "growth" was
+device-wide pollution + dishonest residual stamping. q16 SH actually *reduced*
+process training footprint vs Wave-2 (net ~800 < 938).
+
+### Fix (TDD)
+
+**Fail evidence (pre-fix accounting):**
+```
+ex_cache 1321.3 MiB (excess 383.0 vs Wave2)
+unjustified_excess_bytes = 0   # rubber-stamp via no_trim_pool_residency
+densify_workspace_bytes = 0    # never wired
+```
+
+**Pass evidence:**
+```
+[  PASSED  ] PeakExCacheLedger.UnattributedResidualIsNotAutoJustified
+[  PASSED  ] PeakExCacheLedger.BaselineSubtractYieldsProcessNet
+[  PASSED  ] PeakExCacheLedger.Wave2BaselineAndGtCacheOwner
+[  PASSED  ] PeakExCacheLedger.JustifiedResidualsCoverGate
+```
+
+### Implementation
+- Peak-moment snapshot: pool Used/Reserved HWM, top VramProfiler rows, FastGS
+  sort HWM query, densify N-scratch residency, training-state reserved bytes,
+  FastGS raster live.
+- `ex_cache_net = peak − baseline − gt` using `VramProfiler::cudaDeviceBaselineBytes()`
+  (main.cpp primary-context sample). Gate excess vs Wave-2 uses **net**.
+- Removed auto-justified `no_trim_pool_residency` catch-all; residual must be
+  measured owners or `unattributed_residual` (unjustified).
+- Wired densify workspace + capacity reserved + sort/raster HWM into ledger JSON.
+
+### Dual-workload gate (3-run medians)
+
+| | bonsai 2k | bicycle 7k |
+|---|---:|---:|
+| steady_ms/iter | **2.621** | **2.649** |
+| B/splat | **307.4** | **307.4** |
+| band 2.60–2.66 | ✓ | ✓ |
+| ex_cache_net | ~800 | ~628 |
+| excess net vs Wave2 | **0** | **0** |
+| unjustified | **0** | **0** |
+
+Artifacts: `~/lfs-campaign-out/excache/dual_bonsai/`, `dual_bicycle/`.
+
+### Full suite
+**3422 PASS / 13 FAIL / 46 SKIP** — same pre-existing reds as viewersh2
+(ISS-016 VideoFrame×3, TensorReserve, NaNInf, PipelinedLoader×5, VramProfiler
+order, Python×2). No new reds from this work.
+
+### Commits
+(see git log for this session)
