@@ -362,3 +362,29 @@ Supervisor review bar for the shlock landing — reject if any point fails:
 4. compute-sanitizer memcheck clean on the collision scenarios, not just the happy path.
 If the landed fix is schedule-reordering only, a hardening follow-up order is mandatory before
 any publish.
+
+## ISS-029 — GUI exportable always-commit illegal address at first SH degree-up (~iter 1001)
+- **Status:** OPEN (CRITICAL). WO-FIX-Q16-GUARD1 partial.
+- **Evidence:** hunt/static-verify-B.md + Fork A dynamic (M1 refuted, M4 cadence confirmed);
+  q16m1/c0-localize.log, c1-interval600.log, d3b-viewer-off.log, headless-deg1.log (clean).
+- **M1 (unguarded non-refining mutation):** sites real but **inert at default cadences**
+  (every %1000 is refining). Full lock experiment still crashed. **Downgraded** to latent
+  hardening class — RAII LiveModelMutationGuard landed (`6b95b121`) so collision safety is
+  inside ensure/commit, not only call sites. One degree-bump path in MRNF.
+- **M4 cadence:** CONFIRMED — fault tracks active 0→1 wherever scheduled (interval 600 →
+  crash at 601; sh-degree 0 full run clean).
+- **M4 mechanism "viewer first q16 SH rebind":** **REFUTED by D3** — `LFS_VIEWER_Q16=0`
+  (viewer omits rest SH entirely, training stays always-commit q16) still sticky-700 at
+  ~601. Residual corridor: **exportable + concurrent GUI viewer + first training rest-SH
+  sample after degree-up**. Headless (no exportable viewer) clean.
+- **bucket-127 clamp aliasing:** FIXED `fc088459` (bypass cache when unclamped index ≥
+  NUM_BUCKETS; get_bucket_size untouched). Was neighbor of refuted D-NEW.
+- **Float densify window:** still present; not removed until C green (always-commit GUI).
+- **Next:** localize exportable FastGS rest-SH bind under concurrent zero-copy means/etc.
+  (viewer DC-only still races the same VMM block), or force private codes/bounds snapshot
+  for the first degree≥1 training frames under exclusive.
+
+### WO-FIX-Q16-GUARD1 commits (partial)
+- `fc088459` fix(core): bucket-127 bypass
+- `6b95b121` fix(q16): LiveModelMutationGuard + one degree bump
+- `fcb44cf5` fix(viewer): live-control sub-views + degree snapshot (C infra only)

@@ -2073,3 +2073,66 @@ Artifacts: `~/lfs-campaign-out/attrf16/`.
 ### Status
 **DONE.** Zero-copy is the binding lever for bet #3 (full 210 MiB). Primary-attr f16
 deferred honestly (peak-window densify expand would negate it).
+
+## WO-FIX-Q16-GUARD1 — RAII mutation guard + q16 always-commit (2026-08-09)
+
+- **Branch:** `lfs-elite` @ fcb44cf5 (from 063b5c40)
+- **Worker:** grok
+- **Artifacts:** `~/lfs-campaign-out/q16m1/`
+
+### C-0 localization (CUDA_LAUNCH_BLOCKING=1)
+
+- Fast repro: `--sh-degree 1 --sh-degree-interval 600 -i 1200` (GUI, exportable).
+- First sticky CUDA 700 at **iteration=600/601** (degree-up densify step).
+- Detection sites are **victims** (FastGS forward status D2H, arena end_frame) — not the origin.
+- With CUDA_LAUNCH_BLOCKING, breadcrumbs still show training FastGS fwd/bwd; **Vulkan compute
+  OOB would not appear as a CUDA launch**. Conclusion: origin is not a single CUDA kernel
+  pin-pointed by blocking mode alone.
+- Log: `~/lfs-campaign-out/q16m1/c0-localize.log`, analysis `c0-analysis.txt`.
+
+### Mechanism naming (Part C)
+
+**Working name after D3:** `ExportableDegreeUpConcurrentViewer` (not pure ViewerFirstQ16ShBind).
+
+| Discriminator | Result | Notes |
+|---|---|---|
+| `--sh-degree 0` GUI | CLEAN (prior hunt/repro8) | No rest-SH read ever |
+| `--sh-degree-interval 600` | Crash moves to ~601 | Fault tracks degree-up |
+| Headless always-commit deg1 | CLEAN (`q16m1/headless-deg1.log`, iter trace 1200) | No concurrent viewer; non-exportable |
+| **D3** `LFS_VIEWER_Q16=0` (viewer rest SH fully omitted, training q16) | **STILL CRASHES at ~601** (`d3b-viewer-off.log`) | **Refutes** "viewer's first q16 SH rebind" as sole mechanism |
+| M1 full locks (prior Fork A) | STILL CRASHES | Locks alone insufficient |
+
+So M4's **cadence claim is confirmed** (fault tracks degree-up), but the hypothesized
+**viewer q16 SH rebind** as the sole poisoner is **refuted by D3**. Remaining corridor:
+exportable + GUI concurrent viewer (even DC-only viewport) + first training rest-SH sample
+after 0→1. Headless exportable-less path is clean.
+
+### Landed (partial)
+
+1. **Part B** `fc088459` — bucket-127 clamp aliasing: unclamped index; bypass cache when
+   `idx >= NUM_BUCKETS`. Test `BucketIndexBypassesCachePastTableAndSizeContractHolds` **PASS**.
+2. **Part A** `6b95b121` — `LiveModelMutationGuard` inside ensure/commit; refining mark for
+   reentrancy no-op; MRNF **one** degree-bump site post-refine/commit.
+3. **Part C infra** `fcb44cf5` — live-control Vulkan sub-views; snapshot degree/bounds/gen;
+   first-q16 enable log; `LFS_VIEWER_Q16` D3 knob.
+
+### Gates
+
+| # | Gate | Result | Evidence |
+|---|---|---|---|
+| 1 | Debug assert sweep | **NOT RUN** | Part C red first |
+| 2 | GUI densify+degree-up ×2 | **RED** | `c1-interval600.log` iter=601 sticky 700; D3 also red |
+| 3 | SH degree sweep 0–3 | **NOT RUN** | blocked on 2 |
+| 4 | Misaligned cadence | **NOT RUN** | blocked on 2 |
+| 5 | stop_refine crossing | **NOT RUN** | blocked on 2 |
+| 6 | Crop-tool collision | **NOT RUN** | blocked on 2 |
+| 7 | Sanitizer ≥1100 | **NOT RUN** | blocked on 2 |
+| 8 | Full suite | **NOT RUN** | blocked on 2 |
+| 9 | Dual bench | **NOT RUN** | blocked on 2 |
+| 10 | VRAM ≤2.3 GiB | **NOT RUN** | blocked on 2 |
+
+Float-densify window **not removed** (exit criterion requires C green).
+
+### Status
+**PARTIAL / STOPPED on red gate 2.** Parts A+B landed and unit-tested for B. Part C
+mechanism refined by D3; full fix still open. Do not claim always-commit GUI clean.
