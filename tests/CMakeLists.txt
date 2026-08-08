@@ -325,6 +325,7 @@ set(TEST_FILES
     test_error_envelope.cpp
 )
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
+list(APPEND TEST_FILES test_viewer_sh_zerocopy_triad.cpp)
 # Phase 7A: bounded-wait machine + SubmissionState + QW-6 (GPU-free).
 list(APPEND TEST_FILES test_vulkan_wait_bounded.cpp)
 list(APPEND TEST_FILES test_submission_state_transitions.cpp)
