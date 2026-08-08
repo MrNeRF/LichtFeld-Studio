@@ -498,3 +498,108 @@ TEST(ShValueStorageTest, ExportableQ16DensifyThenFastGSForward) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
     joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
 }
+
+// ============================================================================
+// Rock-solid bar (owner): SH degree-up must be collision-safe BY CONSTRUCTION
+// against densify/grow at any iteration alignment. Representation is declared
+// state, never inferred; q16 storage has exactly one writer (codec commit).
+// ============================================================================
+
+namespace {
+    std::vector<std::uint8_t> snapshot_bytes(const Tensor& t) {
+        auto c = t.cpu().contiguous();
+        const auto* p = static_cast<const std::uint8_t*>(c.data_ptr());
+        const size_t nbytes = c.numel() * (c.dtype() == DataType::Float16 ? 2 : 4);
+        return {p, p + nbytes};
+    }
+} // namespace
+
+TEST(ShDegreeCollisionTest, Q16DegreeUpIsStorageNoOpAllDegrees) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto splat = make_random_sh3(kN);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    splat.set_active_sh_degree(0);
+
+    const auto codes_before = snapshot_bytes(splat.shN());
+    const auto bounds_before = snapshot_bytes(splat.shN_value_bounds());
+
+    for (int d = 0; d <= kShDegree; ++d) {
+        splat.set_active_sh_degree(d);
+        EXPECT_EQ(splat.get_active_sh_degree(), d);
+    }
+    EXPECT_EQ(snapshot_bytes(splat.shN()), codes_before)
+        << "degree-up mutated q16 codes";
+    EXPECT_EQ(snapshot_bytes(splat.shN_value_bounds()), bounds_before)
+        << "degree-up mutated q16 bounds";
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShDegreeCollisionTest, DegreeUpInsideOpenMutationWindowBothOrders) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    for (const bool increment_before_commit : {true, false}) {
+        auto splat = make_random_sh3(kN);
+        ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+        splat.set_active_sh_degree(1);
+        const auto ref = splat.shN_canonical().cpu().contiguous();
+
+        ASSERT_TRUE(sh_value::ensure_shN_fp32_for_mutation(splat));
+        if (increment_before_commit) {
+            splat.increment_sh_degree(); // inside the open float window
+            ASSERT_TRUE(sh_value::commit_shN_after_mutation(splat));
+        } else {
+            ASSERT_TRUE(sh_value::commit_shN_after_mutation(splat));
+            splat.increment_sh_degree(); // immediately after commit, same boundary
+        }
+        ASSERT_TRUE(splat.shN_value_quantized());
+        const auto after = splat.shN_canonical().cpu().contiguous();
+        const double mse = mse_tensors(ref, after);
+        EXPECT_LT(mse, 1e-6) << "order=" << increment_before_commit << " MSE=" << mse;
+    }
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShDegreeCollisionTest, DegreeUpWithGrownMeansCapacitySameBoundary) {
+    // Densify grow raises means.capacity before/while codes grow. A degree-up on
+    // the same boundary must either no-op (consistent q16) or fail loud — never
+    // silently rewrite codes with float-topology sizing (the ISS-027-family bug).
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    constexpr size_t kCapGrow = kN * 2;
+    auto splat = make_random_sh3(kN);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+
+    // Simulate the densify float window with capacity growth mid-flight.
+    ASSERT_TRUE(sh_value::ensure_shN_fp32_for_mutation(splat));
+    splat.means().reserve(kCapGrow);
+    splat.increment_sh_degree(); // degree-up lands mid-window with cap grown
+    ASSERT_TRUE(sh_value::commit_shN_after_mutation(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+
+    // Post-commit codes/bounds must be sized for the CURRENT n at max-degree
+    // layout and survive further degree flips untouched.
+    const auto codes = snapshot_bytes(splat.shN());
+    splat.set_active_sh_degree(0);
+    splat.set_active_sh_degree(kShDegree);
+    EXPECT_EQ(snapshot_bytes(splat.shN()), codes);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShDegreeCollisionTest, InconsistentQ16StorageFailsLoudNotSilentRepair) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto splat = make_random_sh3(kN);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    // Corrupt the invariant: drop bounds while codes stay q16-shaped.
+    splat.shN_value_bounds() = Tensor{};
+    EXPECT_THROW(splat.set_active_sh_degree(1), std::runtime_error);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShDegreeCollisionTest, MaxDegreeChangeOnQ16FailsLoud) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto splat = make_random_sh3(kN);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    EXPECT_THROW(splat.set_max_sh_degree(kShDegree - 1), std::runtime_error);
+    // Documented path: dequantize first, then relayout succeeds.
+    ASSERT_TRUE(sh_value::ensure_shN_fp32_for_mutation(splat));
+    EXPECT_NO_THROW(splat.set_max_sh_degree(kShDegree - 1));
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}

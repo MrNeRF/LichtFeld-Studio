@@ -362,6 +362,9 @@ namespace lfs::core {
 
         // ========== SH degree management ==========
         void increment_sh_degree();
+        // Non-q16 shN verify/resize shared by degree setters (fail-loud on
+        // unclassifiable Float16 storage). Internal maintenance helper.
+        void verify_or_resize_non_q16_shN(size_t n, size_t cap, uint32_t layout_rest);
         void set_active_sh_degree(int sh_degree);
         void set_max_sh_degree(int sh_degree);
         bool set_sh_degree(int sh_degree);

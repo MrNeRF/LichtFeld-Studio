@@ -446,7 +446,18 @@ namespace {
                         cudaMemcpyDeviceToDevice, dst_swizzled.stream());
     }
 
+    // The shN representation is DECLARED by SplatData state (dtype + bounds validity),
+    // never inferred from element counts. Heuristic repr-guessing corrupted q16 codes
+    // when degree-up coincided with densify (ISS-027 family, rock-solid bar item 1).
+    enum class ShNRepr {
+        F32Swizzle,    // fp32 float4-swizzle (pre-quant models, mutation workspaces)
+        IeeeF16,       // IEEE half, fp32 topology (standalone viewer path, no bounds)
+        Q16PadDropped, // pad-dropped q16 codes + per-block bounds (training resident)
+    };
+
     [[nodiscard]] bool swizzled_storage_matches(const lfs::core::Tensor& shN,
+                                                ShNRepr repr,
+                                                const lfs::core::Tensor& bounds,
                                                 size_t n,
                                                 size_t capacity,
                                                 uint32_t layout_coeffs_rest) {
@@ -454,41 +465,52 @@ namespace {
         const size_t cap = std::max(capacity, n);
         if (!shN.is_valid() || shN.ndim() != 1)
             return false;
-        // Float16 is either pad-dropped q16 (u16 cell count) or IEEE f16
-        // float4-swizzle (same element count as fp32 topology — exportable GUI).
-        if (shN.dtype() == DataType::Float16) {
+        switch (repr) {
+        case ShNRepr::Q16PadDropped: {
             const size_t q16_need = sh_value_quant::sh_value_u16_count(n, layout_coeffs_rest);
             const size_t q16_cap = sh_value_quant::sh_value_u16_count(cap, layout_coeffs_rest);
-            if (static_cast<size_t>(shN.shape()[0]) == q16_need && shN.capacity() >= q16_cap)
-                return true;
+            const size_t bounds_need = sh_value_quant::n_bounds_for_prims(n) * 2;
+            return static_cast<size_t>(shN.shape()[0]) == q16_need &&
+                   shN.capacity() >= q16_cap &&
+                   bounds.is_valid() &&
+                   static_cast<size_t>(bounds.numel()) >= bounds_need;
+        }
+        case ShNRepr::IeeeF16: {
             const size_t f16_need = sh_swizzled_float_count(n, layout_coeffs_rest);
             const size_t f16_cap = sh_swizzled_float_count(cap, layout_coeffs_rest);
             return static_cast<size_t>(shN.shape()[0]) == f16_need && shN.capacity() >= f16_cap;
+        }
+        case ShNRepr::F32Swizzle:
+            break;
         }
         return static_cast<size_t>(shN.shape()[0]) == sh_swizzled_float_count(n, layout_coeffs_rest) &&
                shN.capacity() >= sh_swizzled_float_count(cap, layout_coeffs_rest);
     }
 
     void resize_swizzled_storage_preserving(lfs::core::Tensor& shN,
+                                            ShNRepr repr,
                                             size_t n,
                                             size_t capacity,
                                             uint32_t layout_coeffs_rest) {
         using namespace lfs::core;
         const size_t cap = std::max(capacity, n);
 
-        // Float16 storage: pad-dropped q16 OR IEEE f16 float4-swizzle (exportable).
-        // Distinguish by shape: q16 uses cell count; IEEE f16 uses float topology count.
-        if (shN.is_valid() && shN.dtype() == DataType::Float16) {
-            const size_t f16_topo = sh_swizzled_float_count(n, layout_coeffs_rest);
-            const size_t f16_topo_cap = sh_swizzled_float_count(cap, layout_coeffs_rest);
-            const size_t q16_need = sh_value_quant::sh_value_u16_count(n, layout_coeffs_rest);
-            const size_t q16_cap = sh_value_quant::sh_value_u16_count(cap, layout_coeffs_rest);
-            const bool ieee_f16 =
-                static_cast<size_t>(shN.numel()) == f16_topo ||
-                (q16_need > 0 && static_cast<size_t>(shN.numel()) != q16_need &&
-                 static_cast<size_t>(shN.numel()) % (kShReorderSize * 4u) == 0);
-            const size_t need = ieee_f16 ? f16_topo : q16_need;
-            const size_t need_cap = ieee_f16 ? f16_topo_cap : q16_cap;
+        // Q16 has exactly ONE writer: the sh_value codec commit under the trainer's
+        // exclusion barrier (codes and bounds are rebuilt together, atomically).
+        // A byte-level "preserving" resize here would extend codes without extending
+        // bounds — silent corruption. Fail loud instead (rock-solid bar item 1).
+        if (repr == ShNRepr::Q16PadDropped) {
+            LOG_ERROR("resize_swizzled_storage_preserving called on q16 shN "
+                      "(n={} cap={} rest={}): q16 storage is codec-owned; "
+                      "callers must go through the sh_value mutation path",
+                      n, cap, layout_coeffs_rest);
+            throw std::runtime_error(
+                "resize_swizzled_storage_preserving: q16 shN is codec-owned");
+        }
+
+        if (repr == ShNRepr::IeeeF16) {
+            const size_t need = sh_swizzled_float_count(n, layout_coeffs_rest);
+            const size_t need_cap = sh_swizzled_float_count(cap, layout_coeffs_rest);
             if (shN.capacity() >= need_cap) {
                 if (static_cast<size_t>(shN.numel()) < need) {
                     shN.append_zeros(need - static_cast<size_t>(shN.numel()));
@@ -505,6 +527,15 @@ namespace {
             }
             grown.set_name(shN.name().empty() ? "splat.shN" : shN.name());
             shN = std::move(grown);
+            return;
+        }
+
+        // F32Swizzle. A capacity-padded mutation workspace already carries the full
+        // layout for n at layout_coeffs_rest — nothing to resize; rebuilding through
+        // numel-based rest inference would misread the padding (rock-solid bar).
+        if (shN.is_valid() &&
+            static_cast<size_t>(shN.numel()) >= sh_swizzled_float_count(n, layout_coeffs_rest) &&
+            shN.capacity() >= sh_swizzled_float_count(cap, layout_coeffs_rest)) {
             return;
         }
 
@@ -914,10 +945,54 @@ namespace lfs::core {
         const size_t n = static_cast<size_t>(size());
         const size_t cap = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
         const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
-        if (!swizzled_storage_matches(_shN, n, cap, layout_rest)) {
-            resize_swizzled_storage_preserving(_shN, n, cap, layout_rest);
+
+        // The swizzled layout is pinned to the MAX degree; the active degree is a
+        // flag and never a storage mutation. Collision-safe by construction: a
+        // degree-up landing on the same iteration as densify/grow touches no bytes.
+        if (shN_value_quantized()) {
+            if (!swizzled_storage_matches(_shN, ShNRepr::Q16PadDropped, _shN_value_bounds,
+                                          n, cap, layout_rest)) {
+                LOG_ERROR("set_active_sh_degree: q16 shN/bounds inconsistent with N={} cap={} "
+                          "(codes numel={} bounds numel={}) — refusing silent repair",
+                          n, cap,
+                          _shN.is_valid() ? _shN.numel() : 0,
+                          _shN_value_bounds.is_valid() ? _shN_value_bounds.numel() : 0);
+                throw std::runtime_error(
+                    "set_active_sh_degree: q16 shN storage inconsistent — codec owns q16 sizing");
+            }
+            _active_sh_degree = target_degree;
+            return;
         }
+
+        verify_or_resize_non_q16_shN(n, cap, layout_rest);
         _active_sh_degree = target_degree;
+    }
+
+    // Non-quantized shN maintenance shared by the degree setters. IEEE f16 is only
+    // accepted when the sizing matches its declared topology; a Float16 buffer that
+    // matches neither ieee-f16 nor a legal grow target is q16 codes whose bounds were
+    // lost — corrupted state, fail loud instead of silently reshaping (rock-solid bar).
+    void SplatData::verify_or_resize_non_q16_shN(size_t n, size_t cap, uint32_t layout_rest) {
+        if (_shN.is_valid() && _shN.dtype() == DataType::Float16) {
+            if (swizzled_storage_matches(_shN, ShNRepr::IeeeF16, _shN_value_bounds,
+                                         n, cap, layout_rest)) {
+                return;
+            }
+            const size_t q16_need = sh_value_quant::sh_value_u16_count(n, layout_rest);
+            if (q16_need > 0 && static_cast<size_t>(_shN.numel()) == q16_need) {
+                LOG_ERROR("shN looks like q16 codes (numel={}) but bounds are missing — "
+                          "refusing to reinterpret as IEEE f16",
+                          _shN.numel());
+                throw std::runtime_error(
+                    "shN storage: q16 codes without bounds — corrupted state");
+            }
+            resize_swizzled_storage_preserving(_shN, ShNRepr::IeeeF16, n, cap, layout_rest);
+            return;
+        }
+        if (!swizzled_storage_matches(_shN, ShNRepr::F32Swizzle, _shN_value_bounds,
+                                      n, cap, layout_rest)) {
+            resize_swizzled_storage_preserving(_shN, ShNRepr::F32Swizzle, n, cap, layout_rest);
+        }
     }
 
     Tensor SplatData::allocate_named_param(
@@ -937,10 +1012,27 @@ namespace lfs::core {
             const size_t n = static_cast<size_t>(size());
             const size_t cap = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
             const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
-            if (!swizzled_storage_matches(_shN, n, cap, layout_rest)) {
-                resize_swizzled_storage_preserving(_shN, n, cap, layout_rest);
+            if (shN_value_quantized()) {
+                if (!swizzled_storage_matches(_shN, ShNRepr::Q16PadDropped, _shN_value_bounds,
+                                              n, cap, layout_rest)) {
+                    throw std::runtime_error(
+                        "set_max_sh_degree: q16 shN storage inconsistent — codec owns q16 sizing");
+                }
+                return;
             }
+            verify_or_resize_non_q16_shN(n, cap, layout_rest);
             return;
+        }
+
+        // Changing MAX degree changes the swizzled topology. q16 and IEEE f16 residents
+        // cannot be relayouted byte-wise; callers must dequantize first (documented path:
+        // shN_canonical -> set_max_sh_degree -> re-quantize). Fail loud, never guess.
+        if (shN_value_quantized() || shN_ieee_f16()) {
+            LOG_ERROR("set_max_sh_degree: {} -> {} with non-fp32 shN resident — dequantize "
+                      "before changing the max degree",
+                      _max_sh_degree, target_degree);
+            throw std::runtime_error(
+                "set_max_sh_degree: max-degree change requires fp32 shN (dequantize first)");
         }
 
         _max_sh_degree = target_degree;
@@ -951,6 +1043,7 @@ namespace lfs::core {
         const size_t n = static_cast<size_t>(size());
         const size_t cap = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
         resize_swizzled_storage_preserving(_shN,
+                                           ShNRepr::F32Swizzle,
                                            n,
                                            cap,
                                            static_cast<uint32_t>(max_sh_coeffs_rest()));
