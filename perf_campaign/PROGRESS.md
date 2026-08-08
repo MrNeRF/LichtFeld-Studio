@@ -1679,3 +1679,66 @@ Quality A/B vs campaign-start baseline e5506f39 (30k iters, --eval, test-every 8
 | bicycle | 24.9237 / 0.7487 | 25.0003 / 0.7530 | tip BETTER |
 Ops: /tmp session quota exhaustion caused the earlier corrupted finale A/B numbers and
 three background-task kills; artifacts now under ~/lfs-campaign-out/ab-new/.
+
+## WO-VIEWER-SH-ZEROCOPY — pad-dropped q16 zero-copy (2026-08-08)
+
+Tier 2 of WO-VIEWER-SH-F16: eliminate the IEEE f16 exportable SH resident
+format for **training** sessions. Exportable block now holds pad-dropped
+q16 + per-256 float2 bounds; VkSplat projection dequants in-shader
+(`LFS_SHN_Q16`). Standalone PLY/SOG keeps tier-1 IEEE f16 path.
+
+### TDD
+- `VksplatInputPackerTest.RawDeviceLayoutReportsQ16BytesAndBounds` — 90 B/splat
+  deg3, bounds bytes, `shN_q16=true`.
+- `ViewerShZerocopyTriad.Fp32VsF16VsQ16MeanAbs` — mean-abs triad (see below).
+- ISS-025 `RebindGrowRebindPreservesAllRegionPatterns` updated for q16+bounds;
+  fixed `SplatData` move to transfer `_shN_value_bounds`.
+
+### Implementation
+- Exportable regions: `ShN` (u16 cells) + `ShNBounds` (float2/256).
+- Training quant writes into exportable via `allocate_named_param`.
+- Shader `read_spherical_harmonics_coeffs_split_q16` + pipelines
+  `projection_forward_shn_q16{,_3dgut,_survivors}`.
+- Feature gate: `supportsFloat16Storage()`; standalone f16 fallback unchanged.
+- Model init: float workspace when allocator is q16-sized exportable.
+
+### Viewer SH bytes (deg3 rest) @ 5M capacity
+| | B/splat SH | @ 5M | exportable total |
+|---|---:|---:|---:|
+| **fp32 (pre tier1)** | **192.0** | **915.5 MiB** | ~1183 MiB |
+| **f16 (tier1)** | **96.0** | **457.8 MiB** | ~725 MiB |
+| **q16 (tier2)** | **90.0** | **429.2 MiB** | **~696 MiB** (+0.15 MiB bounds) |
+| Delta vs f16 | −6.0 | **−28.6 MiB** | **−28.5 MiB** |
+
+Training sessions: no separate InputShN viewer copy — SH is the exportable
+q16 region (shared train+view). Standalone PLY keeps f16 resident.
+
+### Pixel / SH mean-abs triad (N=4096 deg3, seed 0xF16A016)
+Artifact: `~/lfs-campaign-out/viewer-sh-zerocopy/triad_stats.txt`
+| pair | mean_abs | max_abs | NaNs |
+|---|---:|---:|---:|
+| **f16 vs fp32** | **4.07e-5** | **1.22e-4** | **0** |
+| **q16 vs fp32** | **3.80e-6** | **7.74e-6** | **0** |
+
+Thresholds: f16 mean_abs < 5e-4, q16 mean_abs < 5e-3; no structural NaNs.
+(Codec-level SH coeff triad; pays tier-1 pixel-diff debt for SH path.)
+
+### Gates
+- Full suite: **3422 PASS / 13 FAIL / 42 SKIP** — all 13 are documented
+  pre-existing env reds (ISS-016/017/019, PipelinedLoader fixtures, NaNInf,
+  VramProfiler order, PythonIO cancel). No new reds from this work.
+- Dual-workload bench (headless unchanged by design):
+  - bonsai: **2.620 ms/iter** med, **307.4 B/splat**, dl_wait 0.004
+  - bicycle 7k: **2.636 ms/iter** med, **307.4 B/splat**
+  Band 2.60–2.66 held.
+- GUI bonsai `--train -i 800`: clean complete; exportable log
+  `shN(q16)=26 MiB` @ capacity 309919, `shN_q16=true` after migrate.
+- Standalone PLY view: `splat_30000.ply` (5M) loads and renders exit 0.
+
+### Commits
+- `134da8ff` feat(viewer-sh): zero-copy q16 SH for training exportable viewport
+- `9a859804` fix(migrate): keep float SH path for non-exportable allocators
+- (this) fix(viewer-sh): float workspace for q16 exportable model init + triad test
+
+### Status
+**TIER 2 DONE.**
