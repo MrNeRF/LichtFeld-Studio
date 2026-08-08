@@ -453,7 +453,7 @@ namespace lfs::vis::gui {
         syncPanel(ctx);
     }
 
-3    PanelDirectRenderResult NativeScenePanel::renderDirect(
+    PanelDirectRenderResult NativeScenePanel::renderDirect(
         const PanelDirectRenderRequest& request,
         const PanelDrawContext& ctx) {
         if (request.mode == PanelDirectRenderMode::Measure)
