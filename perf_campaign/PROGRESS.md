@@ -2027,3 +2027,49 @@ VramProfiler order, Python×2). Our 17 GT-cache tests green. No new reds.
 
 ### Status
 **DONE.**
+
+
+## WO-ATTR-F16 — non-SH zero-copy contract (2026-08-08)
+
+- **Branch:** `lfs-elite` (never checkout)
+- **Precondition:** `gtzero.done`
+- **Commit:** `842d5046`
+
+### TDD
+- `VksplatInputPackerTest.RawDeviceLayoutReportsNonShBytesAndZeroCopyContract`
+  - FAIL→PASS: `non_sh_bytes == N*44` for fp32; attrs_f16 reports 30 B/splat
+    (xyz 12 + rot 8 + scale 8 + opac 2) when tensors are Float16.
+  - 5M accounting: historical separate pack 210 MiB; zero-copy separate = 0.
+
+### Implementation
+Live training viewport already zero-copies exportable means/rotation/scaling/opacity
+via Vulkan-external borrow (`prepareInputs` / `can_bind_external`). This order:
+
+1. Locks the layout contract (`non_sh_bytes`, `attrs_f16`) and documents the packer
+   as test/offline-only.
+2. `SplatData::non_sh_attrs_f16()` + `buffers.attrs_f16` for lodq/future half paths.
+3. **Does not** f16-pack primary exportable geometry: densify/FastGS still need float
+   kernels; expand-to-float during densify would erase peak savings when it matters.
+
+### Per-splat bytes
+
+| | B/splat non-SH | @5M separate |
+|---|---:|---:|
+| Before (historical pack) | 44 | 210 MiB |
+| After (zero-copy) | 44 shared / **0 separate** | **0** |
+| Recovered | | **210 MiB** (≥105) |
+
+### Gates
+| gate | result |
+|---|---|
+| GUI bicycle images_4 peak | **2201 MiB** << 4096 (gen=2, clean) |
+| Scaling images_8 / images_4 / full | 2028 / 2201 / 3314 MiB (monotonic) |
+| SH deg 0–3 densify (headless) | 4/4 clean |
+| Full suite | 3440 PASS / 13 FAIL / 42 SKIP (same pre-existing reds) |
+| Dual bench | bonsai 2.613 / bicycle 2.678 ms/iter, 307.4 B/splat |
+
+Artifacts: `~/lfs-campaign-out/attrf16/`.
+
+### Status
+**DONE.** Zero-copy is the binding lever for bet #3 (full 210 MiB). Primary-attr f16
+deferred honestly (peak-window densify expand would negate it).
