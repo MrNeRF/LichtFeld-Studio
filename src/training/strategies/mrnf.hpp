@@ -115,7 +115,6 @@ namespace lfs::training {
             const lfs::core::Tensor& shN,
             const lfs::core::Tensor& opacities,
             int64_t count);
-        [[nodiscard]] lfs::core::Tensor compute_edge_scores(int iter);
         [[nodiscard]] lfs::core::Tensor edge_guidance_factor() const;
 
         std::unique_ptr<AdamOptimizer> _optimizer;
