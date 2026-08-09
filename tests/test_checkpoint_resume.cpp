@@ -23,7 +23,6 @@
 #include "core/tensor.hpp"
 #include "io/loader.hpp"
 #include "io/loaders/checkpoint_loader.hpp"
-#include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/checkpoint.hpp"
@@ -360,13 +359,11 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    // ISS-014: joint Adam + optional q16 shN must survive save→load resume with both
+    // joint Adam + optional q16 shN must survive save→load resume with both
     // codec modes. Round-trips moments (joint_bits/packed) and dequantised shN.
     TEST(CheckpointResumeRoundtripTest, JointCodecAndQ16ShN) {
-        namespace joint_adam = lfs::training::joint_adam;
         namespace sh_value = lfs::training::sh_value;
 
-        joint_adam::set_joint_codec_enabled_for_testing(true);
         sh_value::set_sh_value_quant_enabled_for_testing(true);
 
         constexpr size_t count = 32;
@@ -467,9 +464,6 @@ namespace {
             EXPECT_LT(max_abs, 0.15) << "shN q16/canonical round-trip error too high";
         }
 
-        // Legacy Adam codec checkpoint path removed (joint is the only codec).
-
-        joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
         sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
         std::filesystem::remove_all(temp_dir, ec);
     }
@@ -805,11 +799,11 @@ namespace {
         const auto& [strategy, sh_degree, checkpoint_iter, total_iter] = GetParam();
         LOG_INFO("Testing checkpoint resume: strategy={}, sh_degree={}", strategy, sh_degree);
         const int phase_one_iterations = checkpoint_iter + 1;
-        // Phase 1 always leaves the rotating checkpoint at the completed iteration because the
+        // The initial run leaves the rotating checkpoint at the completed iteration because the
         // final save path writes a .resume alongside the final PLY.
         const int checkpoint_iteration = phase_one_iterations;
 
-        // Phase 1: Write multiple checkpoints and verify the latest save is the only one retained.
+        // First write multiple checkpoints and verify only the latest is retained.
         {
             auto params = createParams(phase_one_iterations);
             params.optimization.save_steps = {
@@ -852,7 +846,7 @@ namespace {
         }
         EXPECT_EQ(resume_file_count, 1u);
 
-        // Phase 2: Load checkpoint and resume to final iteration
+        // Then load the retained checkpoint and resume to the final iteration.
         {
             auto checkpoint_params_result = lfs::core::load_checkpoint_params(checkpoint_path);
             ASSERT_TRUE(checkpoint_params_result.has_value())

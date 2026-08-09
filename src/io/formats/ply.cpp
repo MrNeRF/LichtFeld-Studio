@@ -451,7 +451,7 @@ namespace lfs::io {
                 return false;
             }
 
-            struct stat st{};
+            struct stat st {};
             if (fstat(fd, &st) < 0) {
                 return false;
             }
@@ -1067,10 +1067,10 @@ namespace lfs::io {
             __cpuid(cpuInfo, 7);
             has_avx2 = (cpuInfo[1] & (1 << 5)) != 0;
 #elif defined(__GNUC__) || defined(__clang__)
-            __builtin_cpu_init();
-            has_avx2 = __builtin_cpu_supports("avx2");
+                __builtin_cpu_init();
+                has_avx2 = __builtin_cpu_supports("avx2");
 #else
-            has_avx2 = false;
+                has_avx2 = false;
 #endif
         });
 
@@ -2850,7 +2850,7 @@ namespace lfs::io {
                     return make_error(ErrorCode::WRITE_FAILURE,
                                       "Cannot open temporary file", temp_path);
                 }
-                // MJ-6: declare the stdio buffer BEFORE FileCloser so destruction order
+                // declare the stdio buffer BEFORE FileCloser so destruction order
                 // is fclose (via guard) first, then buffer free. Declaring the guard
                 // first made early cancel/error returns destroy the buffer while
                 // fclose still flushed through it (heap use-after-free).
@@ -2909,7 +2909,6 @@ namespace lfs::io {
                             });
                     });
 
-                    // Write body in large slices for progress + friendly write sizes.
                     constexpr size_t kWriteSlice = size_t{16} * 1024 * 1024;
                     size_t offset = 0;
                     while (offset < body_bytes) {

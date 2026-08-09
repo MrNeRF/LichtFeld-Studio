@@ -41,7 +41,7 @@ namespace lfs::training::losses {
             const lfs::core::Tensor& gt_image,
             const Params& params);
 
-        // Phase 6D.1: fused / pure-SSIM / decoupled / masked variants share one arena.
+        // fused / pure-SSIM / decoupled / masked variants share one arena.
         [[nodiscard]] kernels::LossWorkspaceArena& arena() { return arena_; }
         [[nodiscard]] const kernels::LossWorkspaceArena& arena() const { return arena_; }
 
@@ -49,7 +49,7 @@ namespace lfs::training::losses {
         const kernels::SSIMWorkspace& ssim_workspace() const { return arena_.pure_ssim(); }
 
     private:
-        // Shared grow-only storage for mutually-exclusive L1+SSIM workspaces (6D.1).
+        // Shared grow-only storage for mutually-exclusive L1+SSIM workspaces.
         lfs::training::kernels::LossWorkspaceArena arena_;
 
         // Pre-allocated buffers for pure-L1 path (lambda_dssim == 0)

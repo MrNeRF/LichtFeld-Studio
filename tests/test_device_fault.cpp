@@ -1,9 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Phase 6C-P3 — device-fault reference kernel (index_select) + ValidatedIndexToken
-// + ABI / graph-capture / first-fault / device-trap coverage.
-// Spec: .codex_tmp/phase-6c-device-fault-spec.md §1.10, §3, §9.
+// Device-fault reference kernel and ValidatedIndexToken coverage for the ABI,
+// graph capture, first-fault handling, and device traps.
 
 #include "core/device_fault.hpp"
 #include "core/error.hpp"
@@ -295,8 +294,8 @@ namespace {
         {
             // Allocate tensors BEFORE capture begins (allocations must not join the graph).
             // Keep tensor lifetimes nested inside the stream lifetime: free_routed bridges
-            // via the home stream, and destroying the stream first SIGSEGVs in libcuda
-            // (ISS-013 / CUDA 13.3 cuStreamWaitEvent on a dead capture stream).
+            // via the home stream. Destroying the stream first can fault in
+            // cuStreamWaitEvent on CUDA 13.3.
             auto input = Tensor::from_vector(std::vector<float>{1.f, 2.f, 3.f},
                                              {3}, Device::CUDA);
             auto indices = Tensor::from_vector(std::vector<int>{0}, {1}, Device::CUDA);
@@ -337,7 +336,7 @@ namespace {
             indices.set_stream(nullptr);
             out.set_stream(nullptr);
             ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-        } // tensors free while stream is still alive and no longer their home
+        }
 
         ASSERT_EQ(cudaStreamDestroy(stream), cudaSuccess);
 

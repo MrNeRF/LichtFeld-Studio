@@ -150,7 +150,7 @@ set(TEST_FILES
     test_zero_stride_expand.cpp
     test_strided_reduce_w2.cpp
     test_tensor_masking.cpp
-    test_theme_a_strided_ops.cpp
+    test_strided_tensor_ops.cpp
     test_tensor_lazy_gather.cpp
     test_zip_gather.cpp
     test_tensor_ordering_distance.cpp

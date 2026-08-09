@@ -173,7 +173,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_WithHome_StreamMetadata) {
     EXPECT_EQ(copy.stream(), home.get());
     EXPECT_FALSE(copy.owns_memory());
 
-    // 6A.1: Tensor copy shares TensorState — stream is on the shared impl.
+    // Tensor copy shares TensorState — stream is on the shared impl.
     copy.set_stream(retagged_home.get());
     EXPECT_EQ(copy.stream(), retagged_home.get());
     EXPECT_EQ(blob.stream(), retagged_home.get());

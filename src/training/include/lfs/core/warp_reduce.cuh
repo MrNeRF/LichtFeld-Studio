@@ -167,7 +167,7 @@ namespace lfs::core {
         /**
          * @brief Fused block min of float4 via __shfl_xor butterfly + one shared round.
          *
-         * FIX-2.2 F2: joint Adam bounds pack {u_min, -u_max, s_min, -s_max} so one
+         * joint Adam bounds pack {u_min, -u_max, s_min, -s_max} so one
          * min4 replace four alternating min/max block reduces (which raced on
          * static __shared__ storage and cost 4 barriers). One barrier here;
          * result valid in warp 0 (thread 0 reads for bounds write).

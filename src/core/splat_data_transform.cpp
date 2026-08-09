@@ -677,7 +677,7 @@ namespace lfs::core {
             }
         }
 
-        // ISS-022: keep deleted mask sized to the new N (or invalidate).
+        // keep deleted mask sized to the new N (or invalidate).
         if (splat_data.has_deleted_mask()) {
             if (static_cast<size_t>(splat_data.deleted().numel()) == static_cast<size_t>(num_points)) {
                 Tensor gathered = splat_data.deleted()

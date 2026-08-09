@@ -143,7 +143,7 @@ namespace lfs::core {
             }
         }
 
-        // ============= FP16 Packed128 / half2 vectorized path (6C.7) =============
+        // ============= FP16 Packed128 / half2 vectorized path =============
         // 8× __half per 16 B load via Packed128. Functors applied element-wise
         // after float promotion where the op is float-oriented; otherwise direct.
 

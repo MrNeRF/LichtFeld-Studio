@@ -5,12 +5,12 @@
 
 /**
  * @file tensor_zero_stride.hpp
- * @brief Correctness firewall for zero-stride expand / broadcast views (WO-W.1).
+ * @brief Correctness firewall for zero-stride expand / broadcast views.
  *
  * Expand / broadcast_to may return views with stride-0 on broadcast dims.
  * Only consumers on the allowlist may touch such views without an explicit
  * materialization barrier. Every other op MUST call dense_for_kernel /
- * contiguous_read / contiguous() at its boundary so Theme-A kernels never
+ * contiguous_read / contiguous() at its boundary so strided kernels never
  * see stride-0 storage.
  */
 

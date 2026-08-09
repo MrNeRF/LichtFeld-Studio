@@ -52,7 +52,7 @@ namespace fast_lfs::rasterization {
         bool mip_filter,
         DensificationType densification_type,
         FusedAdamSettings fused_adam,
-        // ISS-029: model-truth shN-rest decode binds (fused Adam's copy is
+        // model-truth shN-rest decode binds (fused Adam's copy is
         // enablement-gated and null during SH warmup).
         const float2* shN_value_bounds,
         const uint shN_value_n_cells,

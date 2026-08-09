@@ -401,10 +401,10 @@ namespace lfs::vis::vksplat {
             layout_rest,
             lfs::core::sh_rest_coefficients_for_degree(effective_upload_sh_degree));
         const bool omit_shN_upload = upload_layout_rest == 0;
-        // Three resident SH formats on the raw split path:
-        //  1. pad-dropped q16 (exportable training) — u16 cells + float2 bounds
-        //  2. IEEE f16 float4-swizzle (standalone PLY/SOG) — same topology as fp32
-        //  3. fp32 float4-swizzle
+        // The raw split path accepts three resident SH formats:
+        // - pad-dropped q16 with u16 cells and float2 bounds
+        // - IEEE f16 float4-swizzle with the same topology as fp32
+        // - fp32 float4-swizzle
         const bool shN_q16 = splat_data.shN_value_quantized() && !omit_shN_upload;
         const bool shN_f16 = splat_data.shN_ieee_f16() && !omit_shN_upload && !shN_q16;
         const std::uint32_t n_cells =
@@ -515,7 +515,7 @@ namespace lfs::vis::vksplat {
                 deleted.is_contiguous() &&
                 static_cast<std::size_t>(deleted.numel()) == n;
             if (!contract_ok) {
-                // ISS-022: a single stale frame (N-mutating densify/compact race)
+                // a single stale frame (N-mutating densify/compact race)
                 // must not hard-fail permanently. Soft-skip the bake and copy raw
                 // opacity; writers reconcile the mask so subsequent frames recover.
                 // has_deleted_mask() with a broken contract is treated like no mask

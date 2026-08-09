@@ -1,15 +1,9 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Task 4.2 — Capacity invariant guard.
-// Force the Adam slow-path grow (state.capacity=0), then assert:
-//   (a) a second consecutive grow uses the fast path (tiny alloc delta / no cat)
-//   (b) the slow-path telemetry counter fires exactly once
-
 #include "core/alloc_counter.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
-#include "lfs/training/joint_adam_codec.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
 #include <cuda_runtime.h>
@@ -18,15 +12,6 @@
 
 using namespace lfs::core;
 using namespace lfs::training;
-
-namespace {
-    // Capacity tests exercise both codecs; force joint (default) explicitly and
-    // also cover legacy via env in a separate assertion path when needed.
-    struct JointOnGuard {
-        JointOnGuard() { joint_adam::set_joint_codec_enabled_for_testing(true); }
-        ~JointOnGuard() { joint_adam::set_joint_codec_enabled_for_testing(std::nullopt); }
-    };
-} // namespace
 
 namespace {
 
@@ -66,7 +51,6 @@ namespace {
 } // namespace
 
 TEST(AdamCapacityInvariant, SlowPathReReservesSoSecondGrowIsFast) {
-    JointOnGuard joint_guard;
     constexpr size_t n0 = 16;
     constexpr size_t n_grow = 4;
 
@@ -76,7 +60,7 @@ TEST(AdamCapacityInvariant, SlowPathReReservesSoSecondGrowIsFast) {
     cfg.growth_factor = 1.5f;
     cfg.initial_capacity = 0; // do not pre-reserve a large cap
     AdamOptimizer opt(splat, cfg);
-    opt.allocate_gradients(); // init state for all params
+    opt.allocate_gradients();
 
     auto* state = opt.get_state_mutable(ParamType::Means);
     ASSERT_NE(state, nullptr);
@@ -84,7 +68,6 @@ TEST(AdamCapacityInvariant, SlowPathReReservesSoSecondGrowIsFast) {
     ASSERT_EQ(state->capacity, 0u);
     ASSERT_EQ(state->exp_avg.capacity(), 0u);
 
-    // Reset telemetry so this test is hermetic.
     AdamOptimizer::reset_slow_path_grow_count();
     ASSERT_EQ(AdamOptimizer::slow_path_grow_count(), 0u);
 
@@ -144,7 +127,6 @@ TEST(AdamCapacityInvariant, SlowPathReReservesSoSecondGrowIsFast) {
     const auto alloc_delta = alloc_counter::delta_since(snap);
     const uint64_t slow_after = AdamOptimizer::slow_path_grow_count();
 
-    // (a) second grow used fast path
     EXPECT_EQ(slow_after, slow_before)
         << "second grow must not re-enter the slow path after re-reserve";
     EXPECT_EQ(slow_after, 1u)

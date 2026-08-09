@@ -663,7 +663,7 @@ namespace lfs::training {
             prefetch_next_batch();
         }
 
-        /// WO-X: decode every unique camera once so the GT device cache is full
+        /// decode every unique camera once so the GT device cache is full
         /// before the timed training loop. clear() preserves the cache.
         /// Call after configure_gt_cache(); then reset() for a clean sampler.
         void warm_gt_device_cache() {

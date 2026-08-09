@@ -288,7 +288,7 @@ namespace lfs::training {
             const lfs::core::Tensor& free_mask,
             const size_t n_rows) {
             // Keep deleted.numel() == size(). Safe to call before or after param
-            // growth (ISS-022): pad with live(false) rows, never leave a stale
+            // growth: pad with live(false) rows, never leave a stale
             // mask that violates the VkSplat packer contract.
             if (n_rows == 0 && splat_data.deleted_mask_matches_size()) {
                 return;
@@ -454,7 +454,6 @@ namespace lfs::training {
         }
 
         void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
-            // Phase 4.8: compact positives + radix-sort (not full-tensor sort).
             if (tensor.device() == lfs::core::Device::CUDA &&
                 tensor.dtype() == lfs::core::DataType::Float32 &&
                 tensor.is_valid() && tensor.numel() > 0) {
@@ -501,7 +500,7 @@ namespace lfs::training {
             // Only skip Vulkan/exportable interop storage. zeros_direct marks
             // external_kind="cuda.direct", which is_external_storage() also reports
             // true for — those must still grow to max_cap here.
-            // ISS-027: "splat.exportable" is the CUDA-only view of the same packed
+            // "splat.exportable" is the CUDA-only view of the same packed
             // block (post-grow pre-Vulkan-reimport). Stealing either kind onto a
             // private max_cap buffer orphans the zero-copy layout and, for q16 SH,
             // mis-sizes float topology capacity against pad-dropped cells.
@@ -516,7 +515,7 @@ namespace lfs::training {
                 if (param.capacity() >= capacity)
                     return;
                 // GUI exportable / Vulkan-external tensors grow with live N via
-                // SplatExportableStorage (Phase 5.1); do not steal them onto a
+                // SplatExportableStorage; do not steal them onto a
                 // private zeros_direct max_cap buffer.
                 if (is_interop_external(param))
                     return;
@@ -528,7 +527,7 @@ namespace lfs::training {
 
             // shN capacity units depend on resident layout: float4-swizzle floats
             // (fp32 / IEEE f16) or pad-dropped q16 u16 cells. Never treat q16 cell
-            // capacity as float-slot capacity (ISS-027).
+            // capacity as float-slot capacity.
             const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
             auto ensure_shN_capacity_direct = [capacity, layout_rest, &is_interop_external,
                                                this](Tensor& param) {
@@ -563,7 +562,7 @@ namespace lfs::training {
             ensure_capacity_direct(_splat_data->opacity_raw());
         }
 
-        // Phase 2.1 / WO-G3: convert shN to pad-dropped u16 after float capacity reserve.
+        // Convert shN to pad-dropped u16 after reserving float capacity.
         lfs::training::sh_value::apply_shN_value_quant(*_splat_data);
 
         _optimizer = create_optimizer(*_splat_data, *_params);
@@ -581,9 +580,8 @@ namespace lfs::training {
         _free_mask = Tensor::zeros_bool({capacity}, _splat_data->means().device());
         sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
 
-        // WO-X: pre-size densify N/K scratch to max_cap so refine never driver-allocs
-        // as live N climbs (growing exact-size Tensor::empty/zeros was ~0.05 of the
-        // Wave-4 allocs/iter drift).
+        // Pre-size densification scratch to max_cap so increasing live N does not
+        // allocate from the driver during refinement.
         if (capacity > 0) {
             _densify_n_scratch.ensure_n(capacity, _splat_data->means().device());
             _densify_n_scratch.ensure_k(std::max(capacity / 20, size_t{1024}),
@@ -638,7 +636,6 @@ namespace lfs::training {
 
     void MRNF::ensure_densification_info_shape() {
         const size_t n = static_cast<size_t>(_splat_data->size());
-        // Phase 4.3: reuse buffer when shape already matches (no realloc-zeros).
         ensure_densification_info_shape_inplace(
             _splat_data->_densification_info,
             n,
@@ -726,7 +723,7 @@ namespace lfs::training {
         LOG_TIMER("MRNF::post_backward");
         using namespace lfs::core;
 
-        // ONE degree-bump site (rock-solid bar #1): post-commit when refining,
+        // The only degree-bump site is post-commit when refining,
         // otherwise immediately. Same cadence as before — bump when
         // iter % sh_degree_interval == 0 — but never duplicated across branches.
         // On refining steps, bump after refine() so densify/commit sees the prior
@@ -769,7 +766,6 @@ namespace lfs::training {
         assert(info.shape()[1] == n);
 
         if (_refine_weight_max.numel() == n) {
-            // Phase 1.9: fold densification into vis/refine and zero [2,N] in one kernel.
             mrnf_strategy::launch_fold_densification_and_zero(
                 _vis_count.ptr<float>(),
                 _refine_weight_max.ptr<float>(),
@@ -805,7 +801,7 @@ namespace lfs::training {
         lfs::core::alloc_counter::ScopedSite densify_site("densify");
         LOG_TIMER("MRNF::refine");
         using namespace lfs::core;
-        // Phase 2.1: densify ops are float-native. Expand q16 → float for this step only;
+        // densify ops are float-native. Expand q16 → float for this step only;
         // commit restores q16 before refine() returns (single buffer residency).
         (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
 
@@ -856,7 +852,6 @@ namespace lfs::training {
         }
         prune_mask = exclude_frozen_from_mask(*_splat_data, prune_mask);
 
-        // Phase 4.5: prune count via packed refine readout (slot 0).
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
             _refine_counts_dev = Tensor::zeros({4}, Device::CUDA, DataType::Int64);
         }
@@ -917,7 +912,7 @@ namespace lfs::training {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
         }
 
-        // Phase 4.6: MRNF trim_memory_pool parity with MCMC/IGS+ after refine.
+        // MRNF trim_memory_pool parity with MCMC/IGS+ after refine.
         // Epoch-pinned release: trim runs under the same render_mutex_ exclusive
         // that bars Scene rebuild / preview from holding the float workspace
         // (trainer acquires exclusive for refining steps around post_backward).
@@ -934,7 +929,7 @@ namespace lfs::training {
 
         const size_t n = static_cast<size_t>(_splat_data->size());
         const size_t current_active = active_count();
-        // WO-X: densify N-scratch pre-sized to max_cap; views avoid per-refine
+        // densify N-scratch pre-sized to max_cap; views avoid per-refine
         // driver allocs (post-refine trim_memory_pool would otherwise force
         // pool misses on every growing exact size).
         _densify_n_scratch.ensure_n(n, Device::CUDA);
@@ -974,8 +969,8 @@ namespace lfs::training {
         Tensor replace_mask;
         int actual_replace = 0;
 
-        // Build replace weights first (if needed) so we can pack cand_sum + replace_nnz
-        // into one D2H (Phase 4.5). Write into grow-only f32_a scratch.
+        // Build replacement weights first so the candidate sum and nonzero count
+        // share one D2H transfer. Store the final weights in grow-only scratch.
         Tensor replace_weights;
         if (requested_replace > 0) {
             auto opacities = _splat_data->get_opacity();
@@ -1022,7 +1017,7 @@ namespace lfs::training {
         if (requested_replace > 0) {
             actual_replace = std::min(requested_replace, selectable_replace);
             if (actual_replace > 0) {
-                // WO-X: grow-only index/mask scratch (no per-refine driver alloc).
+                // grow-only index/mask scratch (no per-refine driver alloc).
                 _densify_n_scratch.ensure_n(n, Device::CUDA);
                 _densify_n_scratch.ensure_k(static_cast<size_t>(actual_replace), Device::CUDA);
                 replace_inds = _densify_n_scratch.i64_a_view(static_cast<size_t>(actual_replace));
@@ -1098,7 +1093,6 @@ namespace lfs::training {
                              _splat_data->shN().is_valid() &&
                              _splat_data->shN().numel() > 0;
 
-        // Phase 4.3: reusable densify child workspace (grow-only).
         _densify_ws.ensure(K, sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::CUDA);
         auto child_means = _densify_ws.means_view(K);
         auto child_log_scales = _densify_ws.scales_view(K);
@@ -1137,7 +1131,7 @@ namespace lfs::training {
                 layout_rest);
         }
 
-        // Phase 4.4: fused Adam-scale zero for split parents + grad zero (step runs next).
+        // fused Adam-scale zero for split parents + grad zero (step runs next).
         {
             float* adam_ptrs[12] = {};
             const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
@@ -1164,7 +1158,7 @@ namespace lfs::training {
         const size_t n_append = K - append_start;
         if (n_append > 0) {
             const size_t old_size = static_cast<size_t>(_splat_data->size());
-            // ISS-023 addendum 2: capacity-ensure MUST succeed before free_mask or
+            // capacity-ensure MUST succeed before free_mask or
             // any param mutates. A mid-commit throw left torn Means/Sh0 vs Scaling
             // and free_mask past size() → loss spikes then abort.
             if (!_optimizer->preflight_grow_capacity(n_append)) {
@@ -1176,7 +1170,7 @@ namespace lfs::training {
             } else {
                 // Grow free_mask bookkeeping first, then params (size()), then the
                 // deleted mask — never leave deleted.numel() != size() mid-grow
-                // (ISS-022: viewer packer rejects stale masks and freezes the viewport).
+                // (viewer packer rejects stale masks and freezes the viewport).
                 if (_free_mask.is_valid() && _free_mask.numel() < old_size + n_append) {
                     _free_mask.reserve(old_size + n_append);
                     _free_mask.append_zeros(n_append);
@@ -1276,10 +1270,8 @@ namespace lfs::training {
         const size_t new_size = valid_indices.numel();
         const size_t cap = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
 
-        // Gather kept rows directly into a single pre-reserved destination (Task 4.1).
-        // Old path was index_select(exact) → reserve(max_cap) while the source still
-        // lived → peak ≈ source@cap + exact + dest@cap ≈ 3×. New path allocates once
-        // at max_cap, index_select_into it, then swap → peak ≤ source + dest@cap (2×).
+        // Gather kept rows into one max-capacity destination so compaction keeps
+        // at most the source and destination allocations live concurrently.
         auto compact = [&](Tensor& t) {
             if (!t.is_valid() || t.numel() == 0)
                 return;
@@ -1372,7 +1364,7 @@ namespace lfs::training {
                     state->size = new_size;
                     state->capacity = cap;
                 }
-                // WO-X: grow-only zero bounds (free-zero moments after compact).
+                // grow-only zero bounds (free-zero moments after compact).
                 ensure_joint_bounds_capacity(state->joint_bounds, new_size, cap,
                                              Device::CUDA, /*zero_all=*/true);
             } else if (pt == ParamType::ShN) {
@@ -1455,7 +1447,7 @@ namespace lfs::training {
             info.index_select_into(dest, 1, valid_indices, BoundaryMode::Assert);
             _splat_data->_densification_info = std::move(dest);
         }
-        // ISS-022: deleted mask must track the new live N for VkSplat. Compact
+        // deleted mask must track the new live N for VkSplat. Compact
         // when sized to the pre-compact N; otherwise rebuild/clear so a stale
         // pre-compact mask cannot freeze the viewport after training.
         if (_splat_data->has_deleted_mask()) {
@@ -1681,7 +1673,7 @@ namespace lfs::training {
         const int64_t slots_to_fill = std::min(count, num_free);
         auto target_indices = free_indices.slice(0, 0, slots_to_fill);
 
-        // Phase 4.4: one fused kernel writes all attrs + zeros Adam scales + clears free mask.
+        // one fused kernel writes all attrs + zeros Adam scales + clears free mask.
         float* adam_ptrs[12] = {};
         const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
         const int opacity_dim = (_splat_data->opacity_raw().ndim() == 2) ? 1 : 0;

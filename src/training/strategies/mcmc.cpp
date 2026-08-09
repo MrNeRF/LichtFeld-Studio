@@ -61,8 +61,8 @@ namespace lfs::training {
             splat_data.notify_deleted_mask_changed();
         }
 
-        void append_live_deleted_rows(lfs::core::SplatData& splat_data, const size_t n_rows) {
-            // ISS-022: keep deleted.numel() == size() after densify grow.
+        void append_live_deleted_rows(lfs::core::SplatData& splat_data) {
+            // keep deleted.numel() == size() after densify grow.
             if (!splat_data.has_deleted_mask()) {
                 return;
             }
@@ -83,7 +83,6 @@ namespace lfs::training {
                 return;
             }
             splat_data.reconcile_deleted_mask();
-            (void)n_rows;
         }
 
         void zero_optimizer_state(
@@ -167,7 +166,7 @@ namespace lfs::training {
 
     void MCMC::ensure_densification_info_shape() {
         const size_t n = static_cast<size_t>(_splat_data->size());
-        // Phase 4.3: reuse densification_info / score buffers in place when possible.
+        // reuse densification_info / score buffers in place when possible.
         const size_t reserve =
             (_params && _params->max_cap > 0) ? static_cast<size_t>(_params->max_cap) : 0;
         ensure_densification_info_shape_inplace(
@@ -536,7 +535,7 @@ namespace lfs::training {
             }
         }
 
-        // ISS-023 addendum 2: preflight exportable capacity BEFORE parent-row
+        // preflight exportable capacity BEFORE parent-row
         // relocate writes or multi-param gather grow (no torn model on failure).
         if (!_optimizer->preflight_grow_capacity(static_cast<size_t>(n_new))) {
             LOG_ERROR(
@@ -576,7 +575,7 @@ namespace lfs::training {
             _optimizer->add_new_params_gather(ParamType::Scaling, sampled_idxs);
         }
 
-        append_live_deleted_rows(*_splat_data, n_new);
+        append_live_deleted_rows(*_splat_data);
         if (_splat_data->has_frozen_ranges()) {
             apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
         }
@@ -703,7 +702,7 @@ namespace lfs::training {
             _optimizer->add_new_params_gather(ParamType::Scaling, sampled_idxs_i64);
         }
 
-        append_live_deleted_rows(*_splat_data, static_cast<size_t>(n_new));
+        append_live_deleted_rows(*_splat_data);
 
         return n_new;
     }
@@ -720,7 +719,7 @@ namespace lfs::training {
             return;
         }
 
-        // Phase 1.8: one fused kernel (curand + cov transform + add); no noise buffer.
+        // one fused kernel (curand + cov transform + add); no noise buffer.
         const auto frozen_mask = make_frozen_mask(*_splat_data, n, Device::CUDA);
         const auto seed = static_cast<uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count());
@@ -755,7 +754,6 @@ namespace lfs::training {
 
             // One training iteration corresponds to one camera view, so info[1] is E_k^pi.
             // Keep the max over views as the densification priority.
-            // Phase 1.9: fold + zero densification_info in one kernel (no separate [2,N] memset).
             const auto& info = _splat_data->_densification_info;
             if (info.is_valid() &&
                 info.ndim() == 2 &&
@@ -790,7 +788,6 @@ namespace lfs::training {
             LFS_GAUGE("model.gaussians.live", n);
             LFS_GAUGE("model.gaussians.capacity", deleted_mask_capacity(*_splat_data));
 
-            // Phase 4.3: append_zeros growth instead of cat realloc.
             ensure_score_buffer_inplace(
                 _error_score_max, n, _splat_data->means().device(),
                 _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
@@ -905,7 +902,7 @@ namespace lfs::training {
                 auto ensure_capacity_direct = [capacity](Tensor& param) {
                     if (param.capacity() >= capacity)
                         return;
-                    // GUI exportable tensors grow with live N (Phase 5.1).
+                    // GUI exportable tensors grow with live N.
                     if (param.is_external_storage())
                         return;
                     auto new_param = Tensor::zeros_direct(param.shape(), capacity);
@@ -937,7 +934,7 @@ namespace lfs::training {
                 ensure_capacity_direct(_splat_data->rotation_raw());
                 ensure_capacity_direct(_splat_data->opacity_raw());
 
-                // Phase 1.8: noise is generated inside inject_noise_kernel (no buffer).
+                // noise is generated inside inject_noise_kernel (no buffer).
 
                 LOG_INFO("Pre-allocated capacity: {}/{} Gaussians ({:.1f}%)",
                          current_size, capacity, 100.0f * current_size / capacity);
@@ -946,7 +943,7 @@ namespace lfs::training {
             }
         }
 
-        // Phase 2.1 / WO-G3: convert shN to pad-dropped u16 after float capacity reserve.
+        // Convert shN to pad-dropped u16 after reserving float capacity.
         lfs::training::sh_value::apply_shN_value_quant(*_splat_data);
 
         _n_max = 51;

@@ -1,15 +1,5 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
- * SPDX-License-Identifier: GPL-3.0-or-later
- *
- * WO-WARP-FWD — Warp-level sub-tile culling for FastGS forward blend_cu.
- *
- * TDD (pixel identity):
- *  1. Wrong empty mask (mode=2) MUST differ from reference (mode=1 disabled cull)
- *     on a scene with partial splat coverage — proves the test is sensitive.
- *  2. Enabled cull (mode=0) MUST be bit-identical to disabled cull (mode=1)
- *     on synthetic and denser "real-ish" fixtures.
- *  3. Batch-size overrides (32..256 step 32) MUST stay bit-identical to default.
- */
+ * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
@@ -175,9 +165,7 @@ protected:
     std::unique_ptr<SplatData> dense_;
 };
 
-// ---------------------------------------------------------------------------
-// TDD fail-first: wrong mask must NOT match the reference (disabled cull).
-// ---------------------------------------------------------------------------
+// A deliberately wrong mask must not match the cull-disabled reference.
 TEST_F(WarpCullBlendTest, WrongMaskDiffersFromReference) {
     auto ref = render_image(*camera_, *synthetic_, bg_, /*cull_mode=*/1);
     auto wrong = render_image(*camera_, *synthetic_, bg_, /*cull_mode=*/2);
@@ -236,66 +224,4 @@ TEST_F(WarpCullBlendTest, EnabledIsDeterministic) {
     auto b = render_image(*camera_, *dense_, bg_, /*cull_mode=*/0);
     ASSERT_GT(a.numel(), 0u);
     EXPECT_TRUE(images_bit_identical(a, b));
-}
-
-// ---------------------------------------------------------------------------
-// Batch-size microbench (informational): print mean forward ms per batch size.
-// Used to pick config::blend_batch_size on RTX 4080; not a pass/fail gate.
-// Enable with: --gtest_filter=WarpCullBlendTest.BatchSizeMicrobench
-// ---------------------------------------------------------------------------
-TEST_F(WarpCullBlendTest, BatchSizeMicrobench) {
-    // Larger resolution + more splats → blend-dominated.
-    auto cam = make_camera(512, 512);
-    auto splat = make_dense_splat(4096);
-    constexpr int kWarm = 10;
-    constexpr int kRuns = 50;
-
-    // Warmup path once so sort capacity / arena settle.
-    set_warp_cull_mode_for_testing(0);
-    set_blend_batch_size_for_testing(256);
-    for (int i = 0; i < kWarm; ++i) {
-        auto r = fast_rasterize_forward(cam, *splat, bg_, 0, 0, 0, 0, false);
-        ASSERT_TRUE(r.has_value());
-        r->second.release_forward_context();
-    }
-    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-
-    std::printf("\n=== blend batch-size sweep (forward wall, %d runs, 512², N=4096) ===\n", kRuns);
-    double best_ms = 1e300;
-    int best_b = 256;
-    for (int b = 32; b <= 256; b += 32) {
-        set_blend_batch_size_for_testing(b);
-        // Brief re-warm after mode change.
-        for (int i = 0; i < 3; ++i) {
-            auto r = fast_rasterize_forward(cam, *splat, bg_, 0, 0, 0, 0, false);
-            ASSERT_TRUE(r.has_value());
-            r->second.release_forward_context();
-        }
-        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-
-        cudaEvent_t start{}, stop{};
-        ASSERT_EQ(cudaEventCreate(&start), cudaSuccess);
-        ASSERT_EQ(cudaEventCreate(&stop), cudaSuccess);
-        ASSERT_EQ(cudaEventRecord(start), cudaSuccess);
-        for (int i = 0; i < kRuns; ++i) {
-            auto r = fast_rasterize_forward(cam, *splat, bg_, 0, 0, 0, 0, false);
-            ASSERT_TRUE(r.has_value());
-            r->second.release_forward_context();
-        }
-        ASSERT_EQ(cudaEventRecord(stop), cudaSuccess);
-        ASSERT_EQ(cudaEventSynchronize(stop), cudaSuccess);
-        float ms = 0.f;
-        ASSERT_EQ(cudaEventElapsedTime(&ms, start, stop), cudaSuccess);
-        cudaEventDestroy(start);
-        cudaEventDestroy(stop);
-        const double mean = static_cast<double>(ms) / kRuns;
-        std::printf("  batch=%3d  mean_fwd_ms=%.4f\n", b, mean);
-        if (mean < best_ms) {
-            best_ms = mean;
-            best_b = b;
-        }
-    }
-    std::printf("  argmin batch=%d (%.4f ms)\n", best_b, best_ms);
-    set_blend_batch_size_for_testing(0);
-    SUCCEED();
 }

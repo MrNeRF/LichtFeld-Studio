@@ -220,7 +220,6 @@ namespace lfs::training::mcmc {
             noise[idx_3d], noise[idx_3d + 1], noise[idx_3d + 2]);
     }
 
-    // Phase 1.8: RNG + covariance transform + add in one kernel (no noise buffer).
     __global__ void inject_noise_kernel(
         const float* raw_opacities,
         const float* raw_scales,
@@ -238,7 +237,7 @@ namespace lfs::training::mcmc {
         if (frozen_mask != nullptr && idx < frozen_mask_size && frozen_mask[idx])
             return;
 
-        // Philox: free counter init vs XORWOW skip-ahead (Directive-2: 1149→6.5µs).
+        // Philox: free counter init vs XORWOW skip-ahead (1149→6.5µs).
         curandStatePhilox4_32_10_t rng;
         curand_init(seed, idx, 0, &rng);
         const float4 n = curand_normal4(&rng);
@@ -753,7 +752,6 @@ namespace lfs::training::mcmc {
         LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.elementwise_max");
     }
 
-    // Phase 1.9: fold densification_info[1,:] into error_max and zero both rows.
     __global__ void max_error_and_zero_densification_kernel(
         float* __restrict__ error_max,
         float* __restrict__ densification_info,

@@ -387,7 +387,7 @@ namespace lfs::training {
             // q16: Float16 codes + bounds. IEEE f16 float4-swizzle: Float16 without
             // bounds (exportable GUI). fp32: Float32 float4-swizzle.
             // Generation-checked fetch: never pass a baked exportable pointer that
-            // survived a capacity grow (q16 poison D2).
+            // survived a capacity grow.
             const bool shN_q16 = gaussian_model.shN_value_quantized();
             const bool shN_f16 = gaussian_model.shN_ieee_f16();
             const float* shN_ptr = nullptr;
@@ -488,7 +488,7 @@ namespace lfs::training {
             const std::string message = forward_ctx.error_message
                                             ? forward_ctx.error_message
                                             : "unknown forward failure";
-            // ISS-025: instance-count overflow is a bad frame, not a run-killer.
+            // instance-count overflow is a bad frame, not a run-killer.
             // FailedPrecondition → trainer skips the step and continues.
             if (forward_ctx.instance_count_overflow) {
                 return std::unexpected(lfs::make_error(lfs::ErrorInit{
@@ -523,7 +523,7 @@ namespace lfs::training {
         RenderOutput render_output;
         const cudaStream_t stream = image.stream();
 
-        // Phase 1.4: background is composed inside blend_cu (single write).
+        // background is composed inside blend_cu (single write).
         // No separate full-image compose pass.
 
         render_output.image = image;
@@ -710,9 +710,8 @@ namespace lfs::training {
             }
         }
 
-        // Phase 1.4: blend_backward_cu does not read the image buffer
+        // blend_backward_cu does not read the image buffer
         // ((void)image in the kernel) — it reconstructs transmittance from
-        // tile_final_transmittance. Unblend was pure dead work. Keep the
         // blended image in ctx (one-image VRAM already resident for the
         // loss path); do not allocate a separate pre-blend cache.
         auto raw_image = ctx.image;
@@ -771,7 +770,7 @@ namespace lfs::training {
             throw std::runtime_error("FastGS fused Adam state is not available");
         }
 
-        // ISS-029: the backward binds shN-rest exactly like the forward —
+        // the backward binds shN-rest exactly like the forward
         // generation-checked resolve plus EXPLICIT representation params
         // (bounds / n_cells / bits). The fused Adam settings' sh_value_* copy is
         // enablement-gated (null through SH warmup) and gates only the update
@@ -863,7 +862,7 @@ namespace lfs::training {
     }
 
     namespace {
-        // ISS-020: training-thread release is not enough for the test binary /
+        // training-thread release is not enough for the test binary
         // process exit path — main-thread TLS FastGS sort + rasterizer caches
         // survive until after CudaMemoryPool shutdown. Register the same
         // release sequence as a process pre-shutdown hook.

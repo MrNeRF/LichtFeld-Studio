@@ -116,7 +116,6 @@ namespace lfs::core {
             LFS_CUDA_BREADCRUMB_STREAM("tensor.bucket.allocate", stream);
             const size_t bucket_size = get_bucket_size(bytes);
             const size_t bucket_idx = get_bucket_index(bucket_size);
-            // Bypass: unclamped index past the table (was clamp-to-127 alias).
             if (bucket_index_bypasses_cache(bucket_idx))
                 return nullptr;
 

@@ -189,7 +189,7 @@ namespace lfs::training {
     void PPISPController::release_shared_buffers() noexcept {
         // Class-static Tensor members are default-constructed before main (and
         // thus before the CudaMemoryPool Meyers singleton). Reverse destruction
-        // would free them *after* the pool → SIGSEGV (ISS-020). Release here
+        // would free them *after* the pool → SIGSEGV. Release here
         // via the process pre-shutdown hook while the pool is still alive.
         shared_buf_conv1_ = {};
         shared_buf_pool_ = {};

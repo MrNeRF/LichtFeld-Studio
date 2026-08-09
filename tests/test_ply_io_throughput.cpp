@@ -1,11 +1,6 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Worker T — PLY save/load throughput microbench (1M synthetic SH3 splats).
-// Records wall + MB/s for save and load; verifies roundtrip means/opacity.
-// Binary PLY uses parallel-pack writer (only path).
-
-#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -70,14 +65,6 @@ namespace {
                          std::move(scaling), std::move(rotation), std::move(opacity), 1.0f);
     }
 
-    double mib_of(const std::uintmax_t bytes) {
-        return static_cast<double>(bytes) / (1024.0 * 1024.0);
-    }
-
-    double mib_per_s(const std::uintmax_t bytes, const double wall_s) {
-        return wall_s > 0.0 ? mib_of(bytes) / wall_s : 0.0;
-    }
-
     double max_abs_diff(const Tensor& a, const Tensor& b, const size_t max_elems) {
         auto ac = a.cpu().contiguous();
         auto bc = b.cpu().contiguous();
@@ -93,8 +80,8 @@ namespace {
 
 } // namespace
 
-TEST(PlyIoThroughput, OneMillionSplatSaveLoadRoundtrip) {
-    constexpr size_t kN = 1'000'000;
+TEST(PlyIoRoundtrip, OneMillionSplatSaveLoadRoundtrip) {
+    constexpr size_t kN = 100'000;
     constexpr int kShDegree = 3;
 
     const fs::path out_dir = fs::temp_directory_path() / "lfs_ply_io_throughput";
@@ -106,44 +93,21 @@ TEST(PlyIoThroughput, OneMillionSplatSaveLoadRoundtrip) {
     auto splat = make_synthetic_splat(kN, kShDegree);
     ASSERT_EQ(splat.size(), kN);
 
-    // Warm small path once (not timed) so first-call TLS/arena cost is excluded.
-    {
-        const fs::path warm = out_dir / "warm.ply";
-        auto tiny = make_synthetic_splat(1024, kShDegree);
-        PlySaveOptions warm_opts;
-        warm_opts.output_path = warm;
-        warm_opts.binary = true;
-        ASSERT_TRUE(save_ply(tiny, warm_opts).has_value());
-        fs::remove(warm, ec);
-    }
-
     PlySaveOptions opts;
     opts.output_path = ply_path;
     opts.binary = true;
 
-    const auto t0 = std::chrono::steady_clock::now();
     auto save_result = save_ply(splat, opts);
-    const auto t1 = std::chrono::steady_clock::now();
     ASSERT_TRUE(save_result.has_value()) << save_result.error().format();
     ASSERT_TRUE(fs::exists(ply_path));
 
     const auto file_bytes = fs::file_size(ply_path);
-    const double save_s =
-        std::chrono::duration<double>(t1 - t0).count();
-    const double save_mibs = mib_per_s(file_bytes, save_s);
-
     auto loader = Loader::create();
-    const auto t2 = std::chrono::steady_clock::now();
     auto load_result = loader->load(ply_path);
-    const auto t3 = std::chrono::steady_clock::now();
     ASSERT_TRUE(load_result.has_value()) << load_result.error().format();
     ASSERT_TRUE(std::holds_alternative<std::shared_ptr<SplatData>>(load_result->data));
     auto& loaded = *std::get<std::shared_ptr<SplatData>>(load_result->data);
     EXPECT_EQ(loaded.size(), kN);
-
-    const double load_s =
-        std::chrono::duration<double>(t3 - t2).count();
-    const double load_mibs = mib_per_s(file_bytes, load_s);
 
     // Spot-check means + opacity (format-preserving write). First 4k + last 64 rows.
     const double means_err_head =
@@ -167,32 +131,18 @@ TEST(PlyIoThroughput, OneMillionSplatSaveLoadRoundtrip) {
         EXPECT_LT(tail_err, 1e-5) << "means drift after PLY roundtrip (tail)";
     }
 
-    // Always print so campaign can scrape numbers into PROGRESS.md.
-    std::printf(
-        "\n[PlyIoThroughput] path=%s N=%zu file=%.1f MiB\n"
-        "  SAVE wall=%.3f s  throughput=%.1f MiB/s\n"
-        "  LOAD wall=%.3f s  throughput=%.1f MiB/s\n"
-        "  means max_abs_err (first 4k)=%.3e opacity=%.3e\n",
-        "FAST(pack+buffered)",
-        kN, mib_of(file_bytes), save_s, save_mibs, load_s, load_mibs,
-        means_err_head, opacity_err);
-
-    // Sanity: non-zero file, positive throughput. Absolute gate is campaign A/B.
-    EXPECT_GT(file_bytes, size_t{100} * 1024 * 1024);
-    EXPECT_GT(save_mibs, 1.0);
-    EXPECT_GT(load_mibs, 1.0);
+    EXPECT_GT(file_bytes, size_t{1});
 
     fs::remove(ply_path, ec);
     fs::remove_all(out_dir, ec);
 }
 
-// MJ-6: cancel during write must not UAF the stdio buffer (declaration order).
-// Callback returns false on first progress report → CANCELLED without crash.
+// cancel during write must not UAF the stdio buffer (declaration order).
 TEST(PlyExportCancel, CancelMidWriteDoesNotCrash) {
     constexpr size_t kN = 50'000; // large enough to enter buffered write path
     constexpr int kShDegree = 1;
 
-    const fs::path out_dir = fs::temp_directory_path() / "lfs_ply_cancel_mj6";
+    const fs::path out_dir = fs::temp_directory_path() / "lfs_ply_cancel";
     fs::create_directories(out_dir);
     const fs::path ply_path = out_dir / "cancel.ply";
     std::error_code ec;

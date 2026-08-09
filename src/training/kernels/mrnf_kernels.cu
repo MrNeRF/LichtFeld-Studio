@@ -71,7 +71,7 @@ namespace lfs::training::mrnf_strategy {
             return;
 
         // Philox: counter-setup only (no XORWOW skip-ahead). curand_normal4
-        // yields 3 usable normals + 1 discarded — matches Directive-2 microbench.
+        // yields 3 usable normals + 1 discarded — matches microbench.
         curandStatePhilox4_32_10_t rng;
         curand_init(seed, idx, 0, &rng);
         const float4 n = curand_normal4(&rng);
@@ -187,7 +187,6 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.elementwise_add");
     }
 
-    // Phase 1.9: fold densification [2,N] into vis/refine and zero both rows.
     __global__ void fold_densification_and_zero_kernel(
         float* __restrict__ vis_count,
         float* __restrict__ refine_weight_max,

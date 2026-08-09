@@ -5,7 +5,7 @@
 
 /**
  * @file perf_bench.hpp
- * @brief Phase 0.3 training-loop measurement harness.
+ * @brief training-loop measurement harness.
  *
  * Activated via CLI `--perf-bench` (and optional `--perf-bench-warmup=N`).
  * Collects per-iteration wall time, real device allocs (alloc_counter), peak
@@ -28,7 +28,6 @@ namespace lfs::training {
         /// Configure from CLI (`--perf-bench` / `--perf-bench-warmup=N`). Call before training.
         static void configure(bool enable, int warmup_iters = 200);
 
-        /// True when `--perf-bench` was configured for this process.
         [[nodiscard]] static bool enabled();
 
         /// Warmup length for steady-state metrics (default 200).
@@ -47,10 +46,10 @@ namespace lfs::training {
         /// Decoded-GT device cache footprint (bytes) for VRAM ledger line.
         void set_gt_cache_bytes(std::size_t bytes);
 
-        /// Loss-workspace arena footprint (Phase 6D) for peak attribution.
+        // Loss-workspace arena footprint for peak attribution.
         void set_loss_workspace_bytes(std::size_t bytes);
 
-        /// Densify child / N-scratch high-water (Phase 4.3 / WO-X) for peak attribution.
+        // Densify child / N-scratch high-water for peak attribution.
         void set_densify_workspace_bytes(std::size_t bytes);
 
         /// Capacity-backed training-state high-water (params+optim reserved, not logical N).
@@ -62,7 +61,7 @@ namespace lfs::training {
         /// Write JSON report to @p path (parent dirs created as needed).
         void finalize(const std::filesystem::path& path);
 
-        /// Build the WO-X peak ex-cache ledger (owners + justified residuals).
+        // Build the peak ex-cache ledger (owners + justified residuals).
         [[nodiscard]] diagnostics::PeakExCacheLedger peak_ex_cache_ledger() const;
 
         [[nodiscard]] bool started() const noexcept { return started_; }
@@ -95,7 +94,7 @@ namespace lfs::training {
         std::size_t peak_cuda_used_ = 0;
         std::size_t peak_cuda_total_ = 0;
         /// Device-wide used sampled at on_training_start (desktop + CUDA context
-        /// already resident). Subtracted for process-net ex_cache so Wave-2
+        // already resident). Subtracted for process-net ex_cache so
         /// quiet-GPU comparisons are not polluted by concurrent GPU users.
         std::size_t baseline_cuda_used_ = 0;
         std::size_t peak_pool_reserved_ = 0;

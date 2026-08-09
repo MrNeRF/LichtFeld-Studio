@@ -31,7 +31,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         return make_float4(clamp_grad(g.x), clamp_grad(g.y), clamp_grad(g.z), clamp_grad(g.w));
     }
 
-    // FIX-2.2 F1: minBlocks=3 budgets registers so shN Adam no longer lives across
+    // minBlocks=3 budgets registers so shN Adam no longer lives across
     // the geometry backward (sweep 2..4; 3 is the measured default).
     template <bool MIP_FILTER, int ACTIVE_SH_BASES>
     __global__ void __launch_bounds__(config::block_size_preprocess_backward, 3) preprocess_backward_cu(
@@ -60,7 +60,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float cy,
         const uint sh_layout_slots,
         FusedAdamSettings fused_adam,
-        // ISS-029: model-truth shN-rest decode binds. fused_adam.shN.sh_value_*
+        // model-truth shN-rest decode binds. fused_adam.shN.sh_value_*
         // is enablement-gated (null during SH warmup) and gates only the UPDATE
         // path; reading sh_coefficients_rest must always use these.
         const float2* __restrict__ shN_value_bounds,
@@ -112,7 +112,7 @@ namespace fast_lfs::rasterization::kernels::backward {
 
         // Grad buffers. Joint block-bounds needs all threads to hit the same
         // adam_step_row sequence — no early returns before Adam sections.
-        // FIX-2.2 F1: sh0/shN Adam runs immediately after SH-grad fill so
+        // sh0/shN Adam runs immediately after SH-grad fill so
         // shN_grads[15]×3 + joint us_u/us_s do not live across covariance/EWA.
         float mean_grads[3] = {0.0f, 0.0f, 0.0f};
         float rotation_grads[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -128,7 +128,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const bool invisible = in_range && primitive_n_touched_tiles[primitive_idx] == 0;
         const bool visible = in_range && !invisible;
 
-        // ---- Phase A: SH backward grads only (close branch before geometry) ----
+        // Compute SH backward gradients before entering the geometry path.
         if (invisible) {
             // Reg-only scale/opacity; SH/means/rot get pure momentum decay (zeros).
             const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
@@ -147,7 +147,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 sh0_grads,
                 shN_grads,
                 // q16: bits==16 + bounds. IEEE f16: bits==16 + null bounds.
-                // ISS-029: decode from the model bind, NOT fused_adam.shN —
+                // decode from the model bind, NOT fused_adam.shN
                 // the optimizer copy is null during SH warmup while the buffer
                 // is already q16 (first degree-up ≤ warmup misread → MMU fault).
                 shN_value_bounds,
@@ -155,8 +155,8 @@ namespace fast_lfs::rasterization::kernels::backward {
                 shN_value_bits == 16u ? 16u : 0u);
         } // close visible — SH Adam next kills shN live range before geometry
 
-        // ---- Phase B: SH Adam (ALL threads — joint block-bounds reduction) ----
-        // Also the single re-encode site for SH value quant (Phase 2.1).
+        // Apply SH Adam for all threads so joint block-bounds reduction remains valid.
+        // Also the single re-encode site for SH value quant.
         adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         if constexpr (ACTIVE_SH_BASES > 1) {
             constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
@@ -165,7 +165,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         }
         // sh0_grads / shN_grads are dead from here on (compiler can free them).
 
-        // ---- Phase C: reopen visible for covariance / EWA / means-rot-scale-opa ----
+        // Re-enter the visible-only path for covariance, EWA, and geometry gradients.
         if (visible) {
             const float3 mean3d = means[primitive_idx];
 
@@ -335,7 +335,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 atomicAdd(&grad_w2c[2].z, dL_dmean3d_cam.z * mean3d.z);
             }
 
-            // 3d mean gradient from splatting + SH color path (saved from Phase A)
+            // Combine the splatting gradient with the saved SH color gradient.
             const float3 dL_dmean3d_from_splatting = make_float3(
                 w2c_r1.x * dL_dmean3d_cam.x + w2c_r2.x * dL_dmean3d_cam.y + w2c_r3.x * dL_dmean3d_cam.z,
                 w2c_r1.y * dL_dmean3d_cam.x + w2c_r2.y * dL_dmean3d_cam.y + w2c_r3.y * dL_dmean3d_cam.z,
@@ -428,7 +428,7 @@ namespace fast_lfs::rasterization::kernels::backward {
             }
         } // visible geometry
 
-        // ---- Phase D: geometry Adam only (sh0/shN already applied in Phase B) ----
+        // Apply geometry Adam after sh0 and shN have already been updated.
         adam_step_row(mean_grads, fused_adam.means, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(rotation_grads, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
@@ -458,7 +458,7 @@ namespace fast_lfs::rasterization::kernels::backward {
     }
 
     // ---------------------------------------------------------------------------
-    // blend_backward_cu — warp-level sub-tile culling reverse walk (WO-WARP-BWD).
+    // blend_backward_cu — warp-level sub-tile culling reverse walk.
     //
     // Source: Yang, Drettakis, Bernstein, "Warp-Level Culling for Efficient Blending
     // in 3D Gaussian Splatting", ACM CGIT 9(4):54, 2026, doi:10.1145/3820019.
@@ -466,7 +466,7 @@ namespace fast_lfs::rasterization::kernels::backward {
     // (clamp bounds RANGE; warp-cull skips WITHIN range; warp-scoped sync replaces
     // block fences on the reverse walk).
     //
-    // Structure (supersedes Directive-1 BWD-C/D diagonal / lockstep prototypes):
+    // Structure (supersedes BWD-C/D diagonal / lockstep prototypes):
     //   • 16×16 tile → 8×4 sub-tiles, 1 warp / 32 px (pixel-centric)
     //   • reverse walk over [0, T_eff) only (BWD-A clamp kept)
     //   • collaborative batch fetch → block.sync once per batch (NOT per splat)
@@ -477,7 +477,7 @@ namespace fast_lfs::rasterization::kernels::backward {
     // Numerical policy: FP reduction order may change → grads within 1e-6 of the
     // uncull reference (NOT bit-exact). warp_cull_mode: 0=on, 1=off (ref), 2=wrong empty.
     // WARP_BWD_WALK_BEGIN / WARP_BWD_WALK_END mark the reverse-walk body: zero
-    // block.sync / __syncthreads inside (TDD sync-count assertion).
+    // The sync-count assertion depends on the block.sync and __syncthreads calls below.
     // ---------------------------------------------------------------------------
     template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL>
     __global__ void __launch_bounds__(config::block_size_blend_backward, 8) blend_backward_cu(

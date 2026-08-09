@@ -276,10 +276,10 @@ namespace lfs::training {
 
             const size_t n = static_cast<size_t>(model.size());
 
-            // Phase 5.1 exportable blocks commit live-N + headroom, not max_cap.
+            // exportable blocks commit live-N + headroom, not max_cap.
             // Requiring capacity >= max_cap made readiness always fail (allocator
             // clamps to the committed row budget), so every strategy step rebuilt
-            // SplatData and wiped capacity_ensure → densify abort (ISS-023).
+            // SplatData and wiped capacity_ensure → densify abort.
             //
             // Kind note: CUDA-only views use "splat.exportable"; the GUI interop
             // allocator tags the same clamped VMM block as "vulkan_external_buffer".
@@ -308,12 +308,11 @@ namespace lfs::training {
             const auto layout_rest = static_cast<std::uint32_t>(model.max_sh_coeffs_rest());
             // Exportable/GUI path stores pad-dropped q16 codes; headless non-exportable
             // may still be float4-swizzle until quant. Size the readiness check from
-            // the live storage layout so we don't force a rebuild every step.
             const bool shN_is_q16 = model.shN_value_quantized();
             // Single-buffer design: q16 is steady-state (always-commit). Densify
             // may hold a barrier-transient float workspace outside the exportable
             // block under render_mutex exclusive. Treat that float as migrate-ready
-            // so ensureModel never remigrates/re-encodes mid-barrier (ISS-027).
+            // so ensureModel never remigrates/re-encodes mid-barrier.
             // commit restores q16 before the barrier ends.
             const bool shN_float_densify_workspace =
                 layout_rest > 0 && model.shN_raw().is_valid() &&

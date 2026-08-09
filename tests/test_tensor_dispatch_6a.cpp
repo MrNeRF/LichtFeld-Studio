@@ -1,16 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Phase 6A host-dispatch relief: 6A.5a / 6A.2 / 6A.3.
-
 #include "core/tensor.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
 
-#include <chrono>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
-#include <iostream>
 #include <vector>
 
 using namespace lfs::core;
@@ -53,10 +49,10 @@ namespace {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// 6A.5a — has_lazy_expr() from local deferred state, not the global IR mutex map
+// has_lazy_expr() from local deferred state, not the global IR mutex map
 // ---------------------------------------------------------------------------
 
-TEST(TensorDispatch6A, HasLazyExprReadsLocalDeferredStateOnly) {
+TEST(TensorDispatch, HasLazyExprReadsLocalDeferredStateOnly) {
     Dispatch6AGuard guard;
 
     // Force IR on so eager binaries still record debug nodes into the map.
@@ -68,7 +64,7 @@ TEST(TensorDispatch6A, HasLazyExprReadsLocalDeferredStateOnly) {
 
     ASSERT_TRUE(eager.is_valid());
     EXPECT_FALSE(eager.is_deferred());
-    // Eager results must not report lazy expr via the IR map after 6A.5a.
+    // Eager results must not report a lazy expression through the global IR map.
     EXPECT_FALSE(eager.has_lazy_expr());
     // IR introspection still works when IR recording is enabled.
     EXPECT_GT(eager.lazy_expr_id(), 0u);
@@ -81,7 +77,7 @@ TEST(TensorDispatch6A, HasLazyExprReadsLocalDeferredStateOnly) {
     EXPECT_TRUE(deferred.is_valid());
 }
 
-TEST(TensorDispatch6A, HasLazyExprMatchesIsDeferredWhenIrOff) {
+TEST(TensorDispatch, HasLazyExprMatchesIsDeferredWhenIrOff) {
     Dispatch6AGuard guard;
     internal::lazy_ir_set_active_for_testing(false);
 
@@ -100,10 +96,10 @@ TEST(TensorDispatch6A, HasLazyExprMatchesIsDeferredWhenIrOff) {
 }
 
 // ---------------------------------------------------------------------------
-// 6A.2 — IR recording opt-in; fusion still works with IR off
+// IR recording opt-in; fusion still works with IR off
 // ---------------------------------------------------------------------------
 
-TEST(TensorDispatch6A, LazyIrDefaultOffAndOptIn) {
+TEST(TensorDispatch, LazyIrDefaultOffAndOptIn) {
     Dispatch6AGuard guard;
     // Testing override cleared → production default is OFF.
     internal::lazy_ir_set_active_for_testing(std::nullopt);
@@ -116,7 +112,7 @@ TEST(TensorDispatch6A, LazyIrDefaultOffAndOptIn) {
     EXPECT_FALSE(internal::lazy_ir_active());
 }
 
-TEST(TensorDispatch6A, EagerBinaryDoesNotRecordWhenIrOff) {
+TEST(TensorDispatch, EagerBinaryDoesNotRecordWhenIrOff) {
     Dispatch6AGuard guard;
     internal::lazy_ir_set_active_for_testing(false);
 
@@ -132,7 +128,7 @@ TEST(TensorDispatch6A, EagerBinaryDoesNotRecordWhenIrOff) {
     EXPECT_EQ(after.expr_nodes_created, before.expr_nodes_created);
 }
 
-TEST(TensorDispatch6A, UnaryReduceFusesWithIrOff) {
+TEST(TensorDispatch, UnaryReduceFusesWithIrOff) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA device required";
     }
@@ -154,53 +150,11 @@ TEST(TensorDispatch6A, UnaryReduceFusesWithIrOff) {
         << "unary→reduce must still fuse when lazy IR recording is off";
 }
 
-// Microbench: IR on vs IR off for tight eager-add loops (host path cost).
-// Prints Mops/s; does not assert a ratio (machine-dependent).
-TEST(TensorDispatch6A, MicrobenchEagerAddIrOnVsOff) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
-    Dispatch6AGuard guard;
-    constexpr int kIters = 20000;
-
-    auto run = [&](bool ir_on, const TensorShape& shape) -> double {
-        internal::lazy_ir_set_active_for_testing(ir_on);
-        internal::clear_lazy_ir_for_testing();
-        auto a = Tensor::ones(shape, Device::CUDA, DataType::Float32);
-        auto b = Tensor::ones(shape, Device::CUDA, DataType::Float32);
-        // Warmup
-        for (int i = 0; i < 100; ++i) {
-            (void)a.add(b);
-        }
-        cudaDeviceSynchronize();
-        const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < kIters; ++i) {
-            (void)a.add(b);
-        }
-        cudaDeviceSynchronize();
-        const auto t1 = std::chrono::steady_clock::now();
-        const double sec = std::chrono::duration<double>(t1 - t0).count();
-        return static_cast<double>(kIters) / sec;
-    };
-
-    for (const auto& shape : {TensorShape({1}), TensorShape({4096})}) {
-        const double on = run(true, shape);
-        const double off = run(false, shape);
-        std::cout << "MICROBENCH 6A.2 shape=" << shape.str()
-                  << " IR_on=" << on << " ops/s"
-                  << " IR_off=" << off << " ops/s"
-                  << " delta=" << ((off - on) / on * 100.0) << "%\n";
-        EXPECT_GT(on, 0.0);
-        EXPECT_GT(off, 0.0);
-    }
-}
-
 // ---------------------------------------------------------------------------
-// 6A.3 — Contiguous same-shape same-dtype binary fast path correctness
+// Contiguous same-shape same-dtype binary fast path correctness
 // ---------------------------------------------------------------------------
 
-TEST(TensorDispatch6A, BinaryFastPathFloat32Cpu) {
+TEST(TensorDispatch, BinaryFastPathFloat32Cpu) {
     Dispatch6AGuard guard;
     internal::lazy_ir_set_active_for_testing(false);
 
@@ -216,7 +170,7 @@ TEST(TensorDispatch6A, BinaryFastPathFloat32Cpu) {
     ASSERT_EQ(diff.to_vector(), (std::vector<float>{-9.0f, -18.0f, -27.0f, -36.0f}));
 }
 
-TEST(TensorDispatch6A, BinaryFastPathEmptyAndScalarShapes) {
+TEST(TensorDispatch, BinaryFastPathEmptyAndScalarShapes) {
     Dispatch6AGuard guard;
     internal::lazy_ir_set_active_for_testing(false);
 
@@ -233,7 +187,7 @@ TEST(TensorDispatch6A, BinaryFastPathEmptyAndScalarShapes) {
     EXPECT_FLOAT_EQ(ssum.item<float>(), 7.0f);
 }
 
-TEST(TensorDispatch6A, BinaryFastPathInt32) {
+TEST(TensorDispatch, BinaryFastPathInt32) {
     Dispatch6AGuard guard;
     internal::lazy_ir_set_active_for_testing(false);
 
@@ -244,7 +198,7 @@ TEST(TensorDispatch6A, BinaryFastPathInt32) {
     ASSERT_EQ(vals, (std::vector<int>{5, 7, 9}));
 }
 
-TEST(TensorDispatch6A, BinaryFastPathInt64) {
+TEST(TensorDispatch, BinaryFastPathInt64) {
     Dispatch6AGuard guard;
     internal::lazy_ir_set_active_for_testing(false);
 
@@ -259,7 +213,7 @@ TEST(TensorDispatch6A, BinaryFastPathInt64) {
     ASSERT_EQ(vals, (std::vector<int64_t>{11, 22, 33}));
 }
 
-TEST(TensorDispatch6A, BinaryFastPathFloat32Cuda) {
+TEST(TensorDispatch, BinaryFastPathFloat32Cuda) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA device required";
     }
@@ -275,7 +229,7 @@ TEST(TensorDispatch6A, BinaryFastPathFloat32Cuda) {
     ASSERT_EQ(prod.to_vector(), (std::vector<float>{10.0f, 40.0f, 90.0f, 160.0f}));
 }
 
-TEST(TensorDispatch6A, BinaryFastPathFloat16Cuda) {
+TEST(TensorDispatch, BinaryFastPathFloat16Cuda) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA device required";
     }
@@ -296,7 +250,7 @@ TEST(TensorDispatch6A, BinaryFastPathFloat16Cuda) {
     EXPECT_NEAR(vals[3], 7.5f, 1e-2f);
 }
 
-TEST(TensorDispatch6A, BinaryPromotionAndBroadcastStillWork) {
+TEST(TensorDispatch, BinaryPromotionAndBroadcastStillWork) {
     Dispatch6AGuard guard;
     internal::lazy_ir_set_active_for_testing(false);
 
@@ -325,58 +279,11 @@ TEST(TensorDispatch6A, BinaryPromotionAndBroadcastStillWork) {
     EXPECT_FLOAT_EQ(bv[5], 32.0f);
 }
 
-// Microbench: host dispatch cost for contiguous same-shape binary add/mul (6A.3).
-// Prints ns/op; does not assert a ratio (machine-dependent).
-TEST(TensorDispatch6A, MicrobenchBinaryFastPathNsPerOp) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
-    Dispatch6AGuard guard;
-    internal::lazy_ir_set_active_for_testing(false);
-    constexpr int kIters = 50000;
-
-    auto measure_ns = [&](const TensorShape& shape, bool use_mul) -> double {
-        auto a = Tensor::ones(shape, Device::CUDA, DataType::Float32);
-        auto b = Tensor::ones(shape, Device::CUDA, DataType::Float32);
-        for (int i = 0; i < 200; ++i) {
-            if (use_mul) {
-                (void)a.mul(b);
-            } else {
-                (void)a.add(b);
-            }
-        }
-        cudaDeviceSynchronize();
-        const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < kIters; ++i) {
-            if (use_mul) {
-                (void)a.mul(b);
-            } else {
-                (void)a.add(b);
-            }
-        }
-        cudaDeviceSynchronize();
-        const auto t1 = std::chrono::steady_clock::now();
-        const double sec = std::chrono::duration<double>(t1 - t0).count();
-        return (sec * 1e9) / static_cast<double>(kIters);
-    };
-
-    for (const auto& shape : {TensorShape({1}), TensorShape({4096})}) {
-        const double add_ns = measure_ns(shape, false);
-        const double mul_ns = measure_ns(shape, true);
-        std::cout << "MICROBENCH 6A.3 shape=" << shape.str()
-                  << " add=" << add_ns << " ns/op"
-                  << " mul=" << mul_ns << " ns/op\n";
-        EXPECT_GT(add_ns, 0.0);
-        EXPECT_GT(mul_ns, 0.0);
-    }
-}
-
 // ---------------------------------------------------------------------------
-// 6A.1 — Share TensorState on Tensor copy (stream/name/lazy/capacity on shared impl)
+// Share TensorState on Tensor copy (stream/name/lazy/capacity on shared impl)
 // ---------------------------------------------------------------------------
 
-TEST(TensorHandle6A, CopySharesNameAndTrackedState) {
+TEST(TensorHandle, CopySharesNameAndTrackedState) {
     Dispatch6AGuard guard;
 
     auto a = Tensor::ones({8}, Device::CPU, DataType::Float32);
@@ -389,12 +296,12 @@ TEST(TensorHandle6A, CopySharesNameAndTrackedState) {
 
     // Mutating metadata through either handle must be visible on both.
     b.set_name("beta");
-    EXPECT_EQ(a.name(), "beta") << "6A.1: copy must share TensorState (name)";
+    EXPECT_EQ(a.name(), "beta") << "copy must share TensorState (name)";
     a.set_tracked(false);
-    EXPECT_FALSE(b.is_tracked()) << "6A.1: copy must share TensorState (tracked)";
+    EXPECT_FALSE(b.is_tracked()) << "copy must share TensorState (tracked)";
 }
 
-TEST(TensorHandle6A, CopySharesCapacityMetadata) {
+TEST(TensorHandle, CopySharesCapacityMetadata) {
     Dispatch6AGuard guard;
 
     auto a = Tensor::ones({4, 3}, Device::CPU, DataType::Float32);
@@ -407,11 +314,11 @@ TEST(TensorHandle6A, CopySharesCapacityMetadata) {
     EXPECT_EQ(b.logical_size(), a.logical_size());
 
     b.reserve(32);
-    EXPECT_EQ(a.capacity(), b.capacity()) << "6A.1: capacity must live on shared TensorState";
+    EXPECT_EQ(a.capacity(), b.capacity()) << "capacity must live on shared TensorState";
     EXPECT_GE(a.capacity(), 32u);
 }
 
-TEST(TensorHandle6A, EmptyDefaultTensorCopyIsSafe) {
+TEST(TensorHandle, EmptyDefaultTensorCopyIsSafe) {
     Dispatch6AGuard guard;
 
     Tensor empty;
@@ -430,7 +337,7 @@ TEST(TensorHandle6A, EmptyDefaultTensorCopyIsSafe) {
     EXPECT_FALSE(assigned.is_valid());
 }
 
-TEST(TensorHandle6A, DeferredCopyMaterializesIndependentlyOnHandle) {
+TEST(TensorHandle, DeferredCopyMaterializesIndependentlyOnHandle) {
     Dispatch6AGuard guard;
     internal::lazy_ir_set_active_for_testing(false);
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
@@ -440,7 +347,7 @@ TEST(TensorHandle6A, DeferredCopyMaterializesIndependentlyOnHandle) {
     auto deferred = x.add(1.0f).mul(2.0f);
     ASSERT_TRUE(deferred.is_deferred());
 
-    auto sibling = deferred; // shares lazy state after 6A.1
+    auto sibling = deferred;
     EXPECT_TRUE(sibling.is_deferred());
 
     // Materialize through the original handle (16 elements — use to_vector, not item).
@@ -459,10 +366,10 @@ TEST(TensorHandle6A, DeferredCopyMaterializesIndependentlyOnHandle) {
 }
 
 // ---------------------------------------------------------------------------
-// 6A.4 — Inline small-vector shapes/strides (no heap for rank ≤ 8)
+// Inline small-vector shapes/strides (no heap for rank ≤ 8)
 // ---------------------------------------------------------------------------
 
-TEST(TensorHandle6A, ShapeStridesRankedNoHeapSemantics) {
+TEST(TensorHandle, ShapeStridesRankedNoHeapSemantics) {
     Dispatch6AGuard guard;
 
     const TensorShape shape({2, 3, 4});
@@ -494,60 +401,4 @@ TEST(TensorHandle6A, ShapeStridesRankedNoHeapSemantics) {
     for (size_t i = 0; i < t.strides().size(); ++i) {
         EXPECT_EQ(c.strides()[i], t.strides()[i]);
     }
-}
-
-// Microbench: Tensor copy cost (6A.1) + small eager add host path (6A.1+6A.4).
-TEST(TensorHandle6A, MicrobenchTensorCopyAndPerOpNs) {
-    Dispatch6AGuard guard;
-    internal::lazy_ir_set_active_for_testing(false);
-
-    constexpr int kCopyIters = 200000;
-    constexpr int kOpIters = 50000;
-
-    auto measure_copy_ns = [&](const Tensor& src) -> double {
-        for (int i = 0; i < 1000; ++i) {
-            Tensor tmp = src;
-            (void)tmp;
-        }
-        const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < kCopyIters; ++i) {
-            Tensor tmp = src;
-            (void)tmp;
-        }
-        const auto t1 = std::chrono::steady_clock::now();
-        const double sec = std::chrono::duration<double>(t1 - t0).count();
-        return (sec * 1e9) / static_cast<double>(kCopyIters);
-    };
-
-    // CPU tensor copy (pure host path — isolates TensorState deep-copy cost).
-    auto cpu = Tensor::ones({64}, Device::CPU, DataType::Float32);
-    const double cpu_copy_ns = measure_copy_ns(cpu);
-    std::cout << "MICROBENCH 6A.1 Tensor_copy_cpu_ns=" << cpu_copy_ns << "\n";
-    EXPECT_GT(cpu_copy_ns, 0.0);
-
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for CUDA copy + per-op microbench";
-    }
-
-    auto cuda = Tensor::ones({64}, Device::CUDA, DataType::Float32);
-    const double cuda_copy_ns = measure_copy_ns(cuda);
-    std::cout << "MICROBENCH 6A.1 Tensor_copy_cuda_ns=" << cuda_copy_ns << "\n";
-    EXPECT_GT(cuda_copy_ns, 0.0);
-
-    auto a = Tensor::ones({16}, Device::CUDA, DataType::Float32);
-    auto b = Tensor::ones({16}, Device::CUDA, DataType::Float32);
-    for (int i = 0; i < 200; ++i) {
-        (void)a.add(b);
-    }
-    cudaDeviceSynchronize();
-    const auto t0 = std::chrono::steady_clock::now();
-    for (int i = 0; i < kOpIters; ++i) {
-        (void)a.add(b);
-    }
-    cudaDeviceSynchronize();
-    const auto t1 = std::chrono::steady_clock::now();
-    const double op_ns =
-        (std::chrono::duration<double>(t1 - t0).count() * 1e9) / static_cast<double>(kOpIters);
-    std::cout << "MICROBENCH 6A.1+6A.4 eager_add_16_ns_per_op=" << op_ns << "\n";
-    EXPECT_GT(op_ns, 0.0);
 }

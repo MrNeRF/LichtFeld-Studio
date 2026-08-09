@@ -108,13 +108,15 @@ namespace lfs::vis {
             const lfs::core::Scene* scene = nullptr;
             LiveModelLockBundle() = default;
             LiveModelLockBundle(std::shared_lock<std::shared_mutex>&& l, const lfs::core::Scene* s)
-                : lock(std::move(l)), scene(s) {
+                : lock(std::move(l)),
+                  scene(s) {
                 if (scene && lock.owns_lock()) {
                     scene->noteLiveModelLockAcquired();
                 }
             }
             LiveModelLockBundle(LiveModelLockBundle&& other) noexcept
-                : lock(std::move(other.lock)), scene(other.scene) {
+                : lock(std::move(other.lock)),
+                  scene(other.scene) {
                 other.scene = nullptr;
             }
             LiveModelLockBundle& operator=(LiveModelLockBundle&& other) noexcept {
@@ -1687,7 +1689,7 @@ namespace lfs::vis {
                         // stale handle. Re-installed after the handshake re-init below.
                         frame_stream_guard.reset();
                         vksplat_viewport_renderer_->reset();
-                        // F3-4: clear GT async ticket host state after ring teardown.
+                        // Clear GT async ticket host state after ring teardown.
                         gt_async_depth_ticket_ = 0;
                         gt_async_depth_dest_ = {};
                         gt_async_ticket_mode_ = GTComparisonMode::RGB;
@@ -1841,13 +1843,12 @@ namespace lfs::vis {
                 VksplatViewportRenderer::OutputSlot::Main) &&
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
         if (vksplat_viewport_resize) {
-            // Viewer-side quiesce (no trainer pause):
-            // 1) While size is still moving, return cached frames so this path
-            //    starts no model reads and publishes no new viewer borrows.
-            // 2) Once quiet, fall through: ensureOutputImages retires prior
-            //    rings via producer/consumer watermarks; the exportable model
-            //    block import is viewport-size-independent and is not rebuilt.
-            // 3) Handshake re-arms on the normal live-submit path below.
+            // While the viewport size is moving, return cached frames without
+            // starting model reads or publishing viewer borrows. Once it is
+            // stable, ensureOutputImages retires prior rings through the
+            // producer/consumer watermarks; the viewport-independent exportable
+            // model import is retained. A normal live submit then re-arms the
+            // handshake.
             if (has_cached_viewport_output &&
                 frame_lifecycle_service_.resizeRecentlyChanged(kTrainingOutputResizeStableDelay)) {
                 dirty_mask_.fetch_or(vksplatOutputResizeRetryDirty(frame_dirty),
@@ -2559,8 +2560,8 @@ namespace lfs::vis {
                                 // display when Ready; submit at most one new ticket when free. The
                                 // panel keeps the previous display until the new one is ready.
                                 const auto clear_gt_async_ticket = [this]() {
-                                    // F3-3: detach dest under the ring lock before freeing host
-                                    // storage; markFailed keeps pins until timeline reclaim (F3-2).
+                                    // Detach dest under the ring lock before freeing host
+                                    // storage; markFailed keeps pins until timeline reclaim.
                                     if (gt_async_depth_ticket_ != 0 && vksplat_viewport_renderer_) {
                                         vksplat_viewport_renderer_->abandonReadbackTicket(
                                             gt_async_depth_ticket_);
@@ -3140,7 +3141,7 @@ namespace lfs::vis {
                     vk_req.deleted_mask = &model->deleted();
                     // Content revision for the soft-delete mask itself (not the
                     // point-cloud positions revision). Stale wiring here caused
-                    // silent cache reuse after densify/compact (ISS-022).
+                    // silent cache reuse after densify/compact.
                     vk_req.deleted_mask_revision = model->deleted_mask_version();
                 }
                 vk_req.selection_mask = pc_request.overlay.selection_mask.get();

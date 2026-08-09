@@ -1,9 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// ISS-026 — pinned GT-cache blocks must not record CUDA events on streams that
-// were severed via release_stream(): the caller-supplied deleter stream can be
-// a destroyed handle at teardown (GUI train-end clear_gt_cache crash, exit 139).
+// Pinned GT-cache blocks must not record CUDA events on streams severed via
+// release_stream(), because the caller-supplied deleter stream may already be
+// destroyed during teardown.
 
 #include "core/pinned_memory_allocator.hpp"
 
@@ -23,10 +23,8 @@ namespace {
 
 } // namespace
 
-// After release_stream(s), a deallocate(ptr, s) must not record any use event
-// on s — the sever declared the stream about to be destroyed. Pre-fix this
-// recorded one event on the (soon dangling) handle; in production the handle
-// is already destroyed and cudaEventRecord segfaults inside libcuda.
+// After release_stream(s), deallocate(ptr, s) must not record another use event
+// on a stream that has been declared ready for destruction.
 TEST_F(PinnedStreamTeardownTest, DeallocateAfterReleaseStreamRecordsNoEvent) {
     auto& alloc = PinnedMemoryAllocator::instance();
 
@@ -49,9 +47,9 @@ TEST_F(PinnedStreamTeardownTest, DeallocateAfterReleaseStreamRecordsNoEvent) {
     ASSERT_EQ(cudaStreamDestroy(stream), cudaSuccess);
 }
 
-// The exact production sequence: record a use, sever, DESTROY the stream, then
-// deallocate passing the stale handle. Pre-fix this is the GUI train-end
-// SIGSEGV; post-fix it must be a clean no-op for that stream.
+// Preserve the teardown order: record a use, sever the stream, destroy it, then
+// deallocate using the stale handle. The final operation must not touch the
+// destroyed stream.
 TEST_F(PinnedStreamTeardownTest, DeallocateWithDestroyedSeveredStreamIsSafe) {
     auto& alloc = PinnedMemoryAllocator::instance();
 

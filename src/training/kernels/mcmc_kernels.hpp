@@ -72,10 +72,8 @@ namespace lfs::training::mcmc {
         void* stream = nullptr);
 
     /**
-     * Phase 1.8: fused RNG + covariance transform + means update.
-     * Replaces normal_() full-buffer pass + separate add_noise kernel.
-     * Honors frozen_mask. Seed controls curand sequence (not bit-identical
-     * to the old two-pass path).
+     * Fused RNG, covariance transform, and means update.
+     * Honors frozen_mask. The seed controls the curand sequence.
      */
     void launch_inject_noise_kernel(
         const float* raw_opacities,
@@ -235,7 +233,7 @@ namespace lfs::training::mcmc {
         void* stream = nullptr);
 
     /**
-     * Phase 1.9: fold densification error row into running max and zero the
+     * fold densification error row into running max and zero the
      * full [2,N] densification buffer in one pass (replaces max + zero_).
      *
      * densification_info layout: row0 [0..N), row1 [N..2N) — only row1 is maxed.

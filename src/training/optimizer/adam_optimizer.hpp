@@ -46,7 +46,7 @@ namespace lfs::training {
     struct AdamParamState {
         lfs::core::Tensor grad; // Gradient (transient, fp32)
         // Legacy codec: separate uint8 m / sqrt(v) + per-primitive fp32 scales.
-        // Joint codec (Phase 2.2): exp_avg holds packed (u,log_s) bytes;
+        // Joint codec: exp_avg holds packed (u,log_s) bytes;
         //   joint_bounds holds float4 per 256-splat block; exp_avg_sq/scales empty.
         lfs::core::Tensor exp_avg;
         lfs::core::Tensor exp_avg_sq;
@@ -60,7 +60,7 @@ namespace lfs::training {
         [[nodiscard]] bool is_joint() const noexcept { return joint_bits != 0; }
     };
 
-    /// WO-X: grow-only joint (u,log_s) bounds table. Reuses capacity via append_zeros
+    /// grow-only joint (u,log_s) bounds table. Reuses capacity via append_zeros
     /// when possible; only driver-allocates when nb exceeds current capacity.
     /// When @p zero_all is true (compact path), existing storage is zeroed in place.
     void ensure_joint_bounds_capacity(lfs::core::Tensor& joint_bounds,
@@ -87,7 +87,7 @@ namespace lfs::training {
         uint8_t* joint_packed = nullptr;
         float* joint_bounds = nullptr;
         int joint_bits = 0;
-        // Phase 2.1 SH value quant (shN only)
+        // SH value quant (shN only)
         float* sh_value_bounds = nullptr;
         int sh_value_bits = 0;
         int sh_value_n_cells = 0;
@@ -169,7 +169,7 @@ namespace lfs::training {
         void add_new_params(ParamType type, const lfs::core::Tensor& new_values, bool validate = false);
         void add_new_params_gather(ParamType type, const lfs::core::Tensor& indices);
 
-        /// ISS-023 addendum 2: preflight exportable capacity for a densify grow of
+        // preflight exportable capacity for a densify grow of
         /// `n_new` rows BEFORE any free_mask / param mutation. Returns false when
         /// capacity-ensure fails so callers can abort with zero torn state.
         [[nodiscard]] bool preflight_grow_capacity(size_t n_new);

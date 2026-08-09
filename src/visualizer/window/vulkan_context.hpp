@@ -267,9 +267,6 @@ namespace lfs::vis {
         // Immediate vkQueueSubmit count for the current GUI frame (proof counter for #1575).
         // Accounting starts at resetImmediateSubmitsThisFrame (prepareFrame) and is logged
         // at endFrame; beginFrame must not clear it because prepare runs first.
-        [[nodiscard]] std::uint32_t immediateSubmitsThisFrame() const noexcept {
-            return immediate_submits_this_frame_;
-        }
         void resetImmediateSubmitsThisFrame() noexcept { immediate_submits_this_frame_ = 0; }
         // Highest serial S such that every graphics submit with serial <= S has
         // retired. Non-blocking (vkGetFenceStatus); serial-0 slots ignored.
@@ -291,7 +288,7 @@ namespace lfs::vis {
         [[nodiscard]] bool deviceWaitIdle();
         // Returns false if the wait was rejected (frame inactive / mono violation);
         // endFrame will refuse submit when any wait fails. Callers that commit
-        // layout optimistically must not do so on false (F2-2).
+        // layout optimistically must not do so on false.
         [[nodiscard]] bool addFrameTimelineWait(
             VkSemaphore semaphore,
             std::uint64_t value,

@@ -109,7 +109,7 @@ TEST(TensorLazyIrTest, OnModeDefersUntilBoundaryAndMaterializes) {
     auto b = Tensor::ones({16}, Device::CPU, DataType::Float32);
     auto c = a.add(b);
 
-    // Eager binaries are not deferred; has_lazy_expr() is local-deferred-only (6A.5a).
+    // Eager binaries are not deferred; has_lazy_expr() is local-deferred-only.
     // With IR recording enabled (this suite), the debug map still tracks the node.
     EXPECT_FALSE(c.is_deferred());
     EXPECT_FALSE(c.has_lazy_expr());
@@ -292,7 +292,7 @@ TEST(TensorLazyIrTest, OnModePlannerExecutorCachesSharedSubgraphWithinMaterializ
     auto branch_a = base.slice(0, 0, 2);
     auto branch_b = base.slice(0, 0, 2);
     const auto shared = branch_a.add(branch_b);
-    // 6C.1: when LHS is a deferred fusion/unary node, binary may stay deferred
+    // when LHS is a deferred fusion/unary node, binary may stay deferred
     // and fuse at materialization. Eager or deferred both must yield correct values.
     ASSERT_TRUE(shared.is_valid());
     auto [shared_values, shared_mat_delta] = measure_materialization_delta(shared);
@@ -322,7 +322,7 @@ TEST(TensorLazyIrTest, OnModePlannerDiagnosticsCaptureFanOutExecution) {
     auto left = base.mul(2.0f).add(3.0f);
     auto right = base.sub(4.0f).abs();
     auto fanout = left.add(right);
-    // 6C.1: binary over deferred LHS may itself be deferred (tensor-binary fusion).
+    // binary over deferred LHS may itself be deferred (tensor-binary fusion).
     ASSERT_TRUE(fanout.is_valid());
 
     const auto values = fanout.to_vector();
@@ -1898,7 +1898,7 @@ TEST(TensorLazyRuntimeTest, DeferredHintedChainWaitsForProducerWhenConsumedWitho
         CUDAStreamGuard hint_guard(hinted_consumer);
         deferred = base.add(bias);
     }
-    // 6C.1: large same-shape binaries may seed a deferred fusion node; the
+    // large same-shape binaries may seed a deferred fusion node; the
     // stream hint from the CUDAStreamGuard must still stamp onto the result.
     ASSERT_TRUE(deferred.is_valid());
     ASSERT_EQ(deferred.stream(), hinted_consumer);

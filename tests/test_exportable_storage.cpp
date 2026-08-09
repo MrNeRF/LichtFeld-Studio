@@ -107,7 +107,7 @@ TEST(ExportableStorageTest, ImmediateDestroyLeavesCudaUsable) {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 5.1 — exportable splat block grows with live N
+// exportable splat block grows with live N
 // ---------------------------------------------------------------------------
 
 TEST(SplatExportableStorageTest, CreateTracksLiveCapacityNotMaxCap) {
@@ -181,7 +181,6 @@ TEST(SplatExportableStorageTest, GrowPreservesDataAndTracksBytes) {
     EXPECT_EQ(snap.process.exportable_splat_bytes, storage.block->size);
     EXPECT_GE(snap.process.exportable_splat_bytes, SplatExportableStorage::layoutBytes(kGrown, kShDegree));
 
-    // (a) old data intact after growth (means at offset 0, scaling at new offset).
     expect_device_pattern(storage.block->device_ptr, kMeansFloats, 10.0f);
     void* scaling_after =
         static_cast<char*>(storage.block->device_ptr) + storage.region_offsets[SplatExportableStorage::Scaling];
@@ -216,7 +215,6 @@ TEST(SplatExportableStorageTest, TensorViewsValidAfterGrowViaRebind) {
     Tensor sh0 = allocator(TensorShape({n, 1, 3}), kInitial, DataType::Float32, "SplatData.sh0");
     Tensor shN; // degree 0: empty rest
 
-    // Fill means with identity pattern.
     {
         std::vector<float> host(n * 3);
         for (size_t i = 0; i < n * 3; ++i)
@@ -281,7 +279,7 @@ TEST(SplatExportableStorageTest, GrowthCapacityHelper) {
 }
 
 // ---------------------------------------------------------------------------
-// ISS-007 / VRAM audit — multi-grow must plateau (no VMM physical chunk leak)
+// VRAM audit — multi-grow must plateau (no VMM physical chunk leak)
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -455,8 +453,8 @@ TEST(SplatExportableStorageTest, GrowKeepsStableVaWhileImportersHoldBlock) {
     ASSERT_EQ(cudaFree(probe), cudaSuccess);
 }
 
-// ISS-025 (Analyst B primary): post-grow rebind must NOT copy from stale pre-grow
-// views. Sequence mirrors TrainerManager::growExportableForDensify:
+// Post-grow rebind must not copy from stale pre-grow views. The sequence mirrors
+// TrainerManager::growExportableForDensify:
 //   rebind(make_allocator) -> grow -> rebind(make_allocator)
 // grow() relocates every region; a copying rebind overwrites correct new-offset
 // data with garbage from old offsets (means@0 survives; scaling/rot/opacity die).
@@ -467,7 +465,7 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
     constexpr std::size_t kGrown = 256;
     constexpr std::size_t kLiveN = 64;
     constexpr std::size_t kReserve = 1024;
-    constexpr int kShDegree = 3; // include shN (analyst B mechanism 3 closure)
+    constexpr int kShDegree = 3;
 
     auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
     if (!storage_result) {
@@ -524,7 +522,7 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
             const float* host = fp32.ptr<float>();
             for (size_t i = 0; i < n; ++i) {
                 EXPECT_FLOAT_EQ(host[i], f16_val(base, i))
-                    << label << " index " << i << " (ISS-025 post-grow rebind integrity, q16 bits)";
+                    << label << " index " << i << " (post-grow rebind integrity, q16 bits)";
             }
             return;
         }
@@ -533,7 +531,7 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
                   cudaSuccess);
         for (size_t i = 0; i < n; ++i) {
             EXPECT_FLOAT_EQ(host[i], base + static_cast<float>(i))
-                << label << " index " << i << " (ISS-025 post-grow rebind integrity)";
+                << label << " index " << i << " (post-grow rebind integrity)";
         }
     };
 
@@ -557,7 +555,7 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
     model.shN_value_bounds() = std::move(shN_bounds);
     model.set_tensor_allocator(storage.make_allocator());
 
-    // Step 1: pre-grow rebind (GUI drops Vulkan import → CUDA-only views).
+    // pre-grow rebind (GUI drops Vulkan import → CUDA-only views).
     // Self-alias into the same block at current offsets — must preserve patterns.
     {
         auto ok = storage.rebindSplatData(model, storage.make_allocator());
@@ -574,7 +572,7 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
     const auto gen_before = storage.generation();
     const std::size_t scaling_off_before = storage.region_offsets[SplatExportableStorage::Scaling];
 
-    // Step 2: grow relocates non-means regions to new offsets.
+    // grow relocates non-means regions to new offsets.
     auto grew = storage.grow(kGrown);
     ASSERT_TRUE(grew.has_value()) << grew.error();
     ASSERT_TRUE(*grew);
@@ -600,8 +598,7 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
             storage.region_offsets[SplatExportableStorage::Opacity],
         kLiveN * 1, 300.0f);
 
-    // Step 3: post-grow rebind — THE BUG. Must install views at new offsets
-    // without copy_from(stale pre-grow views).
+    // Install views at the new offsets without copying stale pre-grow views.
     {
         auto ok = storage.rebindSplatData(model, storage.make_allocator());
         ASSERT_TRUE(ok.has_value()) << ok.error();
@@ -622,8 +619,8 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
     EXPECT_TRUE(model.shN_value_quantized());
 }
 
-// ISS-025 hardening (Analyst A): grown slack rows must be non-renderable
-// (opacity → sigmoid(−∞)≈0, identity quat) so a future stale-row leak is dark.
+// Grown slack rows must be non-renderable (opacity → sigmoid(−∞)≈0,
+// identity quaternion) so an accidental stale-row read remains dark.
 TEST(SplatExportableStorageTest, GrowSlackRowsAreNonRenderable) {
     require_cuda();
 
@@ -665,7 +662,7 @@ TEST(SplatExportableStorageTest, GrowSlackRowsAreNonRenderable) {
     }
 }
 
-// ISS-023: densify past the initial live-N commit must grow the exportable
+// densify past the initial live-N commit must grow the exportable
 // block via capacity_ensure (storage layer, no GUI). Mirrors
 // TrainerManager::growExportableForDensify: work lives outside the std::function
 // so rebind can replace SplatData mid-grow without destroying the active frame.
@@ -744,10 +741,8 @@ TEST(SplatExportableStorageTest, CapacityEnsureGrowsPastInitialCommit) {
     EXPECT_TRUE(model.has_capacity_ensure()) << "hook must be reinstalled after grow+rebind";
 }
 
-// ISS-023 regression: migrateTrainingModelToAllocator used to require capacity
-// >= max_cap. Phase 5.1 exportable commits live-N headroom only (clamped), so
-// the readiness check always failed → full SplatData rebuild every strategy
-// step → capacity_ensure wiped → densify abort.
+// Migration must retain the capacity-ensure callback even when committed
+// exportable headroom is below max_cap.
 TEST(SplatExportableStorageTest, MigratePreservesCapacityEnsureUnderMaxCap) {
     require_cuda();
 
@@ -822,7 +817,7 @@ TEST(SplatExportableStorageTest, MigratePreservesCapacityEnsureUnderMaxCap) {
             params, model, storage->make_allocator());
         ASSERT_TRUE(result.has_value()) << result.error() << " iter=" << i;
         ASSERT_TRUE(model.has_capacity_ensure())
-            << "migrate wiped capacity_ensure (ISS-023) iter=" << i;
+            << "migrate wiped capacity_ensure at iter=" << i;
         EXPECT_EQ(model.means_raw().capacity(), kInitialCap);
         EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
     }
@@ -833,7 +828,7 @@ TEST(SplatExportableStorageTest, MigratePreservesCapacityEnsureUnderMaxCap) {
             params, model, storage->make_allocator(), /*force_reallocation=*/true);
         ASSERT_TRUE(result.has_value()) << result.error();
         ASSERT_TRUE(model.has_capacity_ensure())
-            << "force migrate wiped capacity_ensure (ISS-023)";
+            << "forced migration wiped capacity_ensure";
     }
 
     ASSERT_TRUE(model.ensure_param_capacity(kNeed))
@@ -843,9 +838,8 @@ TEST(SplatExportableStorageTest, MigratePreservesCapacityEnsureUnderMaxCap) {
     EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
 }
 
-// ISS-023 addendum 2: when capacity-ensure fails, densify must not leave a
-// partially-grown model (owner saw loss spike on torn Means vs Scaling).
-// preflight_grow_capacity + abort-before-mutation is the contract under test.
+// A failed capacity ensure must abort before mutation and leave all parameter
+// row counts unchanged.
 TEST(SplatExportableStorageTest, ForcedGrowFailureLeavesModelUntouched) {
     require_cuda();
 
@@ -917,7 +911,7 @@ TEST(SplatExportableStorageTest, ForcedGrowFailureLeavesModelUntouched) {
     EXPECT_EQ(static_cast<std::size_t>(model.size()), size_before);
 }
 
-// MJ-12 storage-layer contract: growExportableDeviceBlock must only run after
+// storage-layer contract: growExportableDeviceBlock must only run after
 // external importers (Vulkan VkDeviceMemory) are detached. Protocol mirror of
 // TrainerManager::growExportableForDensify / shared-scratch commit path —
 // drop the simulated import hold BEFORE grow, then grow keeps VA stable.
@@ -936,7 +930,7 @@ TEST(ExportableStorageTest, GrowAfterImporterDetachKeepsStableVa) {
     // Simulated Vulkan import lifetime (extra_owner_ / imported_buffer).
     std::shared_ptr<void> importer_hold = block;
 
-    // MJ-12 correct order: detach import BEFORE release_physical inside grow.
+    // correct order: detach import BEFORE release_physical inside grow.
     importer_hold.reset();
     auto grew = growExportableDeviceBlock(block, old_size * 2);
     if (!grew) {
@@ -952,11 +946,7 @@ TEST(ExportableStorageTest, GrowAfterImporterDetachKeepsStableVa) {
     ASSERT_EQ(cudaFree(probe), cudaSuccess);
 }
 
-// ---------------------------------------------------------------------------
-// q16 poison D1/D2 permanent suite (rock-solid bar)
-// ---------------------------------------------------------------------------
-
-// D1: shape that overruns the packed region must fail loud (not silent OOB view).
+// shape that overruns the packed region must fail loud (not silent OOB view).
 TEST(SplatExportableStorageTest, AllocatorRejectsShapeOverrunRegion) {
     require_cuda();
 
@@ -989,7 +979,7 @@ TEST(SplatExportableStorageTest, AllocatorRejectsShapeOverrunRegion) {
         std::runtime_error);
 }
 
-// D2: partially-constructed storage (no control) must refuse make_allocator —
+// partially-constructed storage (no control) must refuse make_allocator
 // no by-value snapshot flavor that hands out offsets which go stale on grow.
 TEST(SplatExportableStorageTest, MakeAllocatorRequiresControlBlock) {
     require_cuda();
@@ -1105,7 +1095,7 @@ TEST(SplatExportableStorageTest, Q16BindPtrsSurviveGrowUnderHeldView) {
     model.set_active_sh_degree(kShDegree);
     ASSERT_TRUE(model.shN_value_quantized());
 
-    // Hold raw pointers as a naive consumer would (pre-fix poison path).
+    // Hold raw pointers to model a consumer that does not rebind after growth.
     Tensor held_codes = model.shN_raw();
     Tensor held_bounds = model.shN_value_bounds();
     void* const baked_codes = held_codes.storage_ptr();

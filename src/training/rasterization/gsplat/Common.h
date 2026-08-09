@@ -108,7 +108,7 @@ namespace gsplat_lfs {
             maybe_inject_cuda_allocation_failure(label);
         }
 
-        // Count real driver allocs (gate G2) so gsplat high-water pools are visible
+        // Count real driver allocs so gsplat high-water pools are visible
         // to alloc_counter / steady-state smoke tests. Pool reuse does not call this.
         void after_allocate(void*, size_t, std::string_view) const noexcept {
             lfs::core::alloc_counter::record();

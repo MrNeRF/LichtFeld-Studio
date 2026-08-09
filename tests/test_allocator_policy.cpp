@@ -37,7 +37,6 @@ TEST(AllocatorPolicyTest, BucketCacheBudgetStaysBoundedOnLargeGpus) {
     EXPECT_EQ(SizeBucketedPool::cache_budget_for_total_memory(48 * GiB), 256 * MiB);
 }
 
-// WO-FIX-Q16-GUARD1 Part B: bucket-127 clamp aliasing.
 // get_bucket_size remains correct (bucket_size(x) >= x). get_bucket_index must
 // NOT clamp to NUM_BUCKETS-1 — oversize requests bypass the cache entirely.
 TEST(AllocatorPolicyTest, BucketIndexBypassesCachePastTableAndSizeContractHolds) {

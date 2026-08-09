@@ -555,7 +555,7 @@ namespace lfs::core {
         // Best-effort drain. Even when the sync fails the caller is about to
         // destroy the handle, so the sever below must happen unconditionally —
         // a later cudaEventRecord on the destroyed handle is a driver-side
-        // use-after-free (GUI train-end SIGSEGV, ISS-026).
+        // use-after-free (GUI train-end SIGSEGV).
         const cudaError_t status = cudaStreamSynchronize(stream);
         if (status != cudaSuccess) {
             if (!is_cuda_shutdown(status)) {

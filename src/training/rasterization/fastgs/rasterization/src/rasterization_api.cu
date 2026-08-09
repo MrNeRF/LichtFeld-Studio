@@ -28,16 +28,16 @@ namespace fast_lfs::rasterization {
         thread_local std::string last_forward_error;
         thread_local std::string last_backward_error;
 
-        // Phase 1.5: count cudaPointerGetAttributes preflight calls (test/telemetry).
+        // count cudaPointerGetAttributes preflight calls (test/telemetry).
         std::atomic<std::uint64_t> g_preflight_pointer_attr_calls{0};
 
         void free_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept {
-            // Phase 1.1: persistent high-water sort buffers — no cudaFree.
+            // persistent high-water sort buffers — no cudaFree.
             release_sorted_primitive_indices(ptr, stream);
         }
 
 #ifndef NDEBUG
-        // Debug-only preflight helpers (Phase 1.5: skipped entirely in Release).
+        // Debug-only preflight helpers (skipped entirely in Release).
         const char* cuda_memory_type_name(cudaMemoryType type) {
             switch (type) {
             case cudaMemoryTypeHost: return "host";
@@ -410,7 +410,7 @@ namespace fast_lfs::rasterization {
             return ctx;
 
         } catch (const std::overflow_error& e) {
-            // ISS-025: pathological instance counts (garbage scale/rot after
+            // pathological instance counts (garbage scale/rot after
             // post-grow corruption, etc.). Soft-fail the frame; trainer skips
             // the step instead of killing the run.
             if (frame_started && arena) {

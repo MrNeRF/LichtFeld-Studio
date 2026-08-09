@@ -321,7 +321,7 @@ namespace {
         using namespace lfs::core;
         const size_t cap = std::max(capacity, n);
         // Always allocate float4-swizzled fp32 here. Training may convert in-place to
-        // pad-dropped Float16 u16 codes via apply_shN_value_quant (Phase 2.1 / WO-G3)
+        // pad-dropped Float16 u16 codes via apply_shN_value_quant
         // so densify/export keep a float-native constructor path.
         const size_t logical_floats = sh_swizzled_float_count(n, layout_coeffs_rest);
         const size_t capacity_floats = sh_swizzled_float_count(cap, layout_coeffs_rest);
@@ -447,8 +447,8 @@ namespace {
     }
 
     // The shN representation is DECLARED by SplatData state (dtype + bounds validity),
-    // never inferred from element counts. Heuristic repr-guessing corrupted q16 codes
-    // when degree-up coincided with densify (ISS-027 family, rock-solid bar item 1).
+    // never inferred from element counts, because degree growth can coincide
+    // with densification.
     enum class ShNRepr {
         F32Swizzle,    // fp32 float4-swizzle (pre-quant models, mutation workspaces)
         IeeeF16,       // IEEE half, fp32 topology (standalone viewer path, no bounds)
@@ -490,7 +490,7 @@ namespace {
     // src_rest_hint == 0: same-layout grow/verify (capacity-padded buffers are
     // already complete — no-op). src_rest_hint > 0: forced relayout from the
     // caller-KNOWN old topology; element-count inference is never used to pick
-    // a layout (rock-solid bar: representation and topology are declared).
+    // a layout whose representation and topology are declared.
     void resize_swizzled_storage_preserving(lfs::core::Tensor& shN,
                                             ShNRepr repr,
                                             size_t n,
@@ -503,7 +503,7 @@ namespace {
         // Q16 has exactly ONE writer: the sh_value codec commit under the trainer's
         // exclusion barrier (codes and bounds are rebuilt together, atomically).
         // A byte-level "preserving" resize here would extend codes without extending
-        // bounds — silent corruption. Fail loud instead (rock-solid bar item 1).
+        // bounds — silent corruption. Fail loudly instead.
         if (repr == ShNRepr::Q16PadDropped) {
             LOG_ERROR("resize_swizzled_storage_preserving called on q16 shN "
                       "(n={} cap={} rest={}): q16 storage is codec-owned; "
@@ -537,7 +537,7 @@ namespace {
 
         // F32Swizzle. Same-layout mode: a capacity-padded mutation workspace already
         // carries the full layout for n — nothing to resize; numel-based inference
-        // would misread the padding (rock-solid bar). Relayout mode (src_rest_hint
+        // would misread the padding. Relayout mode (src_rest_hint
         // set) skips this and rebuilds from the declared old topology.
         if (src_rest_hint == 0 && shN.is_valid() &&
             static_cast<size_t>(shN.numel()) >= sh_swizzled_float_count(n, layout_coeffs_rest) &&
@@ -802,7 +802,6 @@ namespace lfs::core {
         // Quantized path: materialise float4-swizzled temp via host/device dequant helper.
         // Full GPU dequant is in training::sh_value::decode_shN_u16_to_float4; for core we
         // fall back to a float temporary when the resident tensor is Float16 — callers that
-        // need dequant on the hot path should use the training helper. Here we allocate a
         // zero float swizzled buffer then leave dequant to higher layers when quant is on
         // without bounds (bounds required for correct decode).
         if (_shN.dtype() == DataType::Float16) {
@@ -979,7 +978,7 @@ namespace lfs::core {
     // Non-quantized shN maintenance shared by the degree setters. IEEE f16 is only
     // accepted when the sizing matches its declared topology; a Float16 buffer that
     // matches neither ieee-f16 nor a legal grow target is q16 codes whose bounds were
-    // lost — corrupted state, fail loud instead of silently reshaping (rock-solid bar).
+    // lost — corrupted state, so fail loudly instead of silently reshaping.
     void SplatData::verify_or_resize_non_q16_shN(size_t n, size_t cap, uint32_t layout_rest) {
         if (_shN.is_valid() && _shN.dtype() == DataType::Float16) {
             if (swizzled_storage_matches(_shN, ShNRepr::IeeeF16, _shN_value_bounds,
@@ -1097,7 +1096,6 @@ namespace lfs::core {
     void SplatData::reserve_capacity(const size_t capacity) {
         // zeros_direct / cuda.direct tensors reject Tensor::reserve when growth would
         // reallocate — rebuild with zeros_direct + D2D copy instead (checkpoint resume
-        // with max_cap > N after q16 quant is the canary; ISS-014).
         const auto grow_direct = [](Tensor& t, const size_t cap_rows) {
             if (!t.is_valid() || cap_rows == 0)
                 return;
@@ -1250,10 +1248,8 @@ namespace lfs::core {
         }
 
         // Rebuild to the live N. Preserve a prefix of previous truth values when
-        // the mask was simply grown/shrunk without a gather; free-slot writers
         // re-sync on the next densify step if needed. has_deleted_mask()=false
         // is also legal, but preserving prefix avoids a one-frame flash of
-        // previously soft-deleted rows after densify grow.
         Tensor fresh = Tensor::zeros({n}, _means.device(), DataType::Bool);
         fresh.set_name("splat.deleted_mask");
         const size_t old_n = static_cast<size_t>(_deleted.numel());
@@ -1267,7 +1263,6 @@ namespace lfs::core {
             }
             const size_t copy_n = std::min(old_n, n);
             if (copy_n > 0 && src.device() == Device::CUDA) {
-                // Copy the leading copy_n bools into the fresh mask.
                 auto src_prefix = src.ndim() == 1 ? src.slice(0, 0, copy_n) : src;
                 auto dst_prefix = fresh.slice(0, 0, copy_n);
                 dst_prefix.copy_from(src_prefix.contiguous());

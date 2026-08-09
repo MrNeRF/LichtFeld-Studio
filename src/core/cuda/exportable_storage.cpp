@@ -470,7 +470,7 @@ namespace lfs::core {
         owned->mapped_size = aligned_new;
         // Fresh export replaces the fd closed by release_physical above.
         // Callers that hold a Vulkan import of the old fd must already have
-        // destroyed it (MJ-12); they must re-import block->handle after this.
+        // destroyed it; they must re-import block->handle after this.
         owned->native = new_native;
         owned->native_valid = true;
 

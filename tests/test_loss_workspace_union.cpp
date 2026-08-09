@@ -4,7 +4,7 @@
 
 /**
  * @file test_loss_workspace_union.cpp
- * @brief Phase 6D.1 — mutually-exclusive L1+SSIM workspaces must share one arena
+ * @brief Mutually exclusive L1+SSIM workspaces share one arena
  *        region (capacity = max(variant), not sum).
  */
 
@@ -76,9 +76,8 @@ protected:
     }
 };
 
-// Documents the pre-6D.1 bug: five independent ensure_size calls retain the sum.
-// After the arena lands this still shows the independent-stack path is "sum", while
-// SequentialModesThroughArenaStayWithinMax asserts the production union path.
+// Five independent workspaces retain the sum of their allocations, while
+// SequentialModesThroughArenaStayWithinMax checks the production union path.
 TEST_F(LossWorkspaceUnionTest, IndependentWorkspacesRetainSum) {
     const std::vector<size_t> shape = {1, 3, 64, 96};
 
@@ -104,19 +103,18 @@ TEST_F(LossWorkspaceUnionTest, IndependentWorkspacesRetainSum) {
     const size_t max_variant = std::max({fb, pb, db, mb, mdb});
     const size_t slack = 64 * 1024; // 64 KiB alignment / overhead budget
 
-    // Independent path intentionally retains the sum (documents the bug class).
     EXPECT_GT(total, max_variant + slack)
         << "independent retention total=" << total << " max=" << max_variant;
     EXPECT_GE(total, 2 * max_variant)
         << "sum should be well above a single variant";
 }
 
-// 6D.1 gate: sequential mode activation through the shared arena keeps capacity
-// at max(variant) + slack, not the sum of every mode ever touched.
+// Sequential activation through the shared arena must retain the largest variant
+// plus alignment slack, not the sum of every mode touched.
 TEST_F(LossWorkspaceUnionTest, SequentialModesThroughArenaStayWithinMax) {
     const std::vector<size_t> shape = {1, 3, 64, 96};
 
-    // Per-variant sizes via independent ensure (oracle for max).
+    // Independently allocated variants provide the maximum-size oracle.
     FusedL1SSIMWorkspace fused_ref;
     SSIMWorkspace pure_ref;
     DecoupledFusedL1SSIMWorkspace decoupled_ref;
@@ -210,21 +208,20 @@ TEST_F(LossWorkspaceUnionTest, PhotometricLossExposesSharedArena) {
     EXPECT_LE(after_many, 16ull * 1024 * 1024);
 }
 
-// Phase 6D.2 — zero_terms deleted; decoupled layout drops one full image buffer,
-// and app-branch grads match the (now removed) zeros-buffer path.
+// The appearance branch omits sigma partials while preserving gradient results.
 TEST_F(LossWorkspaceUnionTest, ZeroTermsDeletedAndDecoupledGradsStable) {
     const int N = 1, C = 3, H = 48, W = 48;
     const std::vector<size_t> shape = {1, 3, 48, 48};
     const float ssim_weight = 0.2f;
 
-    // Alloc drop: decoupled independent workspace must be smaller than the
-    // pre-6D.2 layout that included a full-image zero_terms buffer.
+    // The reference budget includes a full-image zero_terms buffer; the current
+    // layout omits it.
     DecoupledFusedL1SSIMWorkspace ws;
     ws.ensure_size(shape);
     const size_t live = decoupled_bytes(ws);
     const size_t image_f32 = static_cast<size_t>(N * C * H * W) * sizeof(float);
-    // Pre-6D.2 fields: ssim_map(C1) + 4 dm + zero_terms + 2 grad + reduce
-    // ≈ map + 7*image + reduce. Post: map + 6*image + reduce.
+    // Reference fields: ssim_map(C1) + 4 dm + zero_terms + 2 grad + reduce
+    // Current: map + four partials + two gradients + reduction.
     const size_t map_bytes = static_cast<size_t>(N * 1 * H * W) * sizeof(float);
     const size_t reduce = 1024 * sizeof(float) + sizeof(float);
     const size_t pre_6d2 = map_bytes + 7 * image_f32 + reduce;
@@ -284,9 +281,8 @@ TEST_F(LossWorkspaceUnionTest, ZeroTermsDeletedAndDecoupledGradsStable) {
     EXPECT_LT(max_combo, 5e-4) << "decoupled(corrected==raw) vs fused max abs " << max_combo;
 }
 
-// Phase 6D.3 — fp16 dm_* partials for pure-SSIM / decoupled / masked / masked-decoupled
-// (fused path already ships Float16 partials). Fail-first: dtype + workspace-byte
-// assertions against the pre-fp16 layout; then grad equivalence within fp16 tol.
+// Pure-SSIM, decoupled, masked, and masked-decoupled paths use fp16 dm_* partials.
+// Workspace byte bounds use fp32-partial layouts as reference ceilings.
 TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
     const int N = 1, C = 3, H = 48, W = 48;
     const std::vector<size_t> shape = {1, 3, 48, 48};
@@ -295,13 +291,14 @@ TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
     const size_t image_f16 = image_f32 / 2;
     const size_t map_bytes = static_cast<size_t>(N * 1 * H * W) * sizeof(float);
 
-    // --- Dtype + alloc drop oracles (fail first under pre-6D.3 fp32 partials) ---
+    // Verify partial dtypes and allocation ceilings.
     SSIMWorkspace pure_ws;
     pure_ws.ensure_size(shape);
     EXPECT_EQ(pure_ws.dm_dmu1.dtype(), DataType::Float16);
     EXPECT_EQ(pure_ws.dm_dsigma1_sq.dtype(), DataType::Float16);
     EXPECT_EQ(pure_ws.dm_dsigma12.dtype(), DataType::Float16);
-    // Pre-6D.3 pure: 6× image f32 + reduce. Post: 3× f16 dm + 3× f32 maps/grads.
+    // Reference: six fp32 images plus reduction. Current: three fp16 partials,
+    // three fp32 maps or gradients, and reduction.
     const size_t pure_pre = 6 * image_f32 + 1024 * sizeof(float) + sizeof(float);
     const size_t pure_post = 3 * image_f16 + 3 * image_f32 + 1024 * sizeof(float) + sizeof(float);
     EXPECT_LE(pure_ssim_bytes(pure_ws), pure_post + 4096);
@@ -314,8 +311,8 @@ TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
     EXPECT_EQ(dec_ws.raw_dm_dmu1.dtype(), DataType::Float16);
     EXPECT_EQ(dec_ws.raw_dm_dsigma1_sq.dtype(), DataType::Float16);
     EXPECT_EQ(dec_ws.raw_dm_dsigma12.dtype(), DataType::Float16);
-    // Pre-6D.3 (after 6D.2): map + 4 dm f32 + 2 grad f32 + reduce.
-    // Post: map + 4 dm f16 + 2 grad f32 + reduce.
+    // Reference: map, four fp32 partials, two fp32 gradients, and reduction.
+    // Current: map + four fp16 partials + two fp32 gradients + reduction.
     const size_t reduce = 1024 * sizeof(float) + sizeof(float);
     const size_t dec_pre = map_bytes + 4 * image_f32 + 2 * image_f32 + reduce;
     const size_t dec_post = map_bytes + 4 * image_f16 + 2 * image_f32 + reduce;
@@ -345,12 +342,12 @@ TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
     EXPECT_LE(masked_decoupled_bytes(mdec_ws), mdec_post + 4096);
     EXPECT_LT(masked_decoupled_bytes(mdec_ws), mdec_pre);
 
-    // Arena max_variant must also shrink with the new layouts.
+    // The arena maximum must reflect the compact layouts.
     const size_t arena_max = LossWorkspaceArena::max_variant_bytes(shape);
-    // Largest post-6D.3 is pure-SSIM or masked-decoupled; both << pre-6D.3 pure (~6*img).
+    // The largest compact variant remains below the six-fp32-image reference.
     EXPECT_LT(arena_max, pure_pre);
 
-    // --- Grad equivalence within fp16 tolerance vs fused (already fp16 partials) ---
+    // Gradients must match the fused path within fp16 tolerance.
     auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
     auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
 

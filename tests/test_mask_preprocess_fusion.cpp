@@ -1,16 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
- * SPDX-License-Identifier: GPL-3.0-or-later
- *
- * Worker S — Mask-path fusion:
- *  Fuse trainer mask preprocess chains (masked_fill / pow / sub) into single
- *  kernels; ROI/segment path allocation-free in steady state; loss-value
- *  equivalence vs the multi-kernel reference.
- *
- * TDD: equivalence + zero steady driver allocs after workspace warm.
- */
+ * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
+#include "mask_loss_reference.hpp"
 #include "training/losses/mask_loss.hpp"
 
 #include <algorithm>
@@ -40,7 +33,7 @@ namespace {
         auto m = mask_u8;
         m = m.masked_fill(m <= 250, 0);
         m = m.masked_fill(m > 250, 255);
-        return compose_pixel_loss_weights(m, roi);
+        return test_reference::compose_pixel_loss_weights_reference(m, roi);
     }
 
     /// Reference: Segment opacity penalty (old trainer chain).
@@ -56,7 +49,7 @@ namespace {
                 : mask;
         const auto bg = Tensor::full(mask_f.shape(), 1.0f, mask_f.device()) - mask_f;
         const auto pen_w = bg.pow(power);
-        return compute_mask_opacity_penalty(alpha, pen_w, roi, scale);
+        return test_reference::compute_mask_opacity_penalty_reference(alpha, pen_w, roi, scale);
     }
 
     /// Reference: SegmentAndIgnore opacity penalty (old trainer chain).
@@ -76,7 +69,7 @@ namespace {
                 : m;
         const auto bg = Tensor::full(mask_f.shape(), 1.0f, mask_f.device()) - mask_f;
         const auto pen_w = bg.pow(power);
-        return compute_mask_opacity_penalty(alpha, pen_w, roi, scale);
+        return test_reference::compute_mask_opacity_penalty_reference(alpha, pen_w, roi, scale);
     }
 
     /// Reference: AlphaConsistent (old trainer chain).
@@ -236,7 +229,7 @@ TEST(MaskPreprocessFusionTest, SteadyStateRoiSegmentPathIsAllocationFree) {
 TEST(MaskPreprocessFusionTest, BinaryGt0PhotoWithRoiMatchesCompose) {
     const auto mask = u8_mask_from({0, 1, 1, 0}, 2, 2);
     const auto roi = f32_from({1.f, 0.5f, 0.25f, 0.0f}, 2, 2);
-    const auto ref = compose_pixel_loss_weights(mask, roi);
+    const auto ref = test_reference::compose_pixel_loss_weights_reference(mask, roi);
 
     MaskPreprocessWorkspace ws;
     const auto fused = fuse_photometric_mask_weight(ws, mask, roi, /*segment_and_ignore=*/false);

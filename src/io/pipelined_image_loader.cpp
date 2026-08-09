@@ -38,7 +38,7 @@ namespace lfs::io {
 
         constexpr int DEFAULT_DECODER_POOL_SIZE = 8;
 
-        // Live loaders for MJ-13 pressure reclaim (device-tier GT cache).
+        // Live loaders for pressure reclaim (device-tier GT cache).
         std::mutex& gt_loader_registry_mutex() {
             static std::mutex mu;
             return mu;

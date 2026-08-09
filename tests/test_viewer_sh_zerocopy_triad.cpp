@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// WO-VIEWER-SH-ZEROCOPY: mean-abs triad for SH rest formats.
+// mean-abs triad for SH rest formats.
 // fp32 float4-swizzle reference vs IEEE f16 cast vs pad-dropped q16 decode.
 
 #include "core/cuda/sh_layout.cuh"
@@ -16,8 +16,7 @@
 
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
-#include <fstream>
+#include <cstdio>
 #include <random>
 #include <vector>
 
@@ -95,18 +94,6 @@ namespace {
         return s;
     }
 
-    void write_stats(const char* path, const DiffStats& f16, const DiffStats& q16) {
-        std::ofstream out(path);
-        out << "viewer_sh_zerocopy_triad\n";
-        out << "n_elems=" << f16.n << "\n";
-        out << "f16_vs_fp32_mean_abs=" << f16.mean_abs << "\n";
-        out << "f16_vs_fp32_max_abs=" << f16.max_abs << "\n";
-        out << "f16_vs_fp32_nan=" << f16.nan_count << "\n";
-        out << "q16_vs_fp32_mean_abs=" << q16.mean_abs << "\n";
-        out << "q16_vs_fp32_max_abs=" << q16.max_abs << "\n";
-        out << "q16_vs_fp32_nan=" << q16.nan_count << "\n";
-    }
-
 } // namespace
 
 TEST(ViewerShZerocopyTriad, Fp32VsF16VsQ16MeanAbs) {
@@ -137,16 +124,4 @@ TEST(ViewerShZerocopyTriad, Fp32VsF16VsQ16MeanAbs) {
     EXPECT_LT(f16_stats.max_abs, 5e-3) << "f16 max_abs=" << f16_stats.max_abs;
     EXPECT_LT(q16_stats.mean_abs, 5e-3) << "q16 mean_abs=" << q16_stats.mean_abs;
     EXPECT_LT(q16_stats.max_abs, 5e-2) << "q16 max_abs=" << q16_stats.max_abs;
-
-    const char* out_path = std::getenv("LFS_TRIAD_OUT");
-    if (!out_path) {
-        out_path = "/home/gauss/lfs-campaign-out/viewer-sh-zerocopy/triad_stats.txt";
-    }
-    write_stats(out_path, f16_stats, q16_stats);
-
-    // Structured print for PROGRESS.md capture.
-    std::printf("TRIAD f16_vs_fp32 mean_abs=%.6g max_abs=%.6g nan=%zu\n",
-                f16_stats.mean_abs, f16_stats.max_abs, f16_stats.nan_count);
-    std::printf("TRIAD q16_vs_fp32 mean_abs=%.6g max_abs=%.6g nan=%zu\n",
-                q16_stats.mean_abs, q16_stats.max_abs, q16_stats.nan_count);
 }

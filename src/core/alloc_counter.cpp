@@ -10,8 +10,6 @@ namespace lfs::core::alloc_counter {
         // Process-wide counter living in lfs_core.so so every SO shares one value.
         std::atomic<std::uint64_t> g_device_allocs{0};
         std::atomic<std::uint64_t> g_site_counts[static_cast<std::size_t>(Site::Count)]{};
-        std::atomic<bool> g_steady{false};
-
         constexpr int kMaxLogicalDepth = 8;
         thread_local const char* t_logical_stack[kMaxLogicalDepth]{};
         thread_local int t_logical_depth = 0;
@@ -104,14 +102,6 @@ namespace lfs::core::alloc_counter {
         }
         const char* n = t_logical_stack[t_logical_depth - 1];
         return n ? n : "";
-    }
-
-    void set_steady_state(const bool steady) noexcept {
-        g_steady.store(steady, std::memory_order_relaxed);
-    }
-
-    bool steady_state() noexcept {
-        return g_steady.load(std::memory_order_relaxed);
     }
 
     ScopedSite::ScopedSite(const char* name) noexcept {

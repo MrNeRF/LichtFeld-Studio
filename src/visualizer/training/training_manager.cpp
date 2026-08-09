@@ -56,7 +56,7 @@ namespace lfs::vis {
             (void)lfs::training::release_gsplat_rasterizer_thread_local_caches();
             (void)gsplat_lfs::release_intersect_thread_local_cache();
             (void)lfs::core::tensor_ops::release_nan_check_thread_buffers();
-            // Phase 1.1 sort workspaces — explicit release before thread join so
+            // sort workspaces — explicit release before thread join so
             // high-water VRAM is not held until TLS dtor races CUDA teardown.
             lfs::training::release_fastgs_sort_workspace_buffers();
         }
@@ -114,7 +114,7 @@ namespace lfs::vis {
                 : 0;
         const int sh_degree = params.optimization.sh_degree;
 
-        // Phase 5.1: size the exportable block to live N (+ 1.5× headroom), not
+        // size the exportable block to live N (+ 1.5× headroom), not
         // max_cap. Virtual-reserve max_cap so densify can grow in place.
         std::size_t live_estimate = min_capacity;
         if (live_estimate == 0 && scene_) {
@@ -163,7 +163,7 @@ namespace lfs::vis {
                     LOG_INFO("Training tensors share one CUDA-exportable VMM block "
                              "imported into Vulkan (live≈{}, capacity={}, reserve={}, "
                              "sh_degree={}, block={} MiB) — zero-copy viewer interop "
-                             "(Phase 5.1 live-N growth)",
+                             "during live-N growth",
                              live_estimate,
                              exportable_capacity,
                              reserve_capacity,
@@ -282,9 +282,8 @@ namespace lfs::vis {
         }
         // Device-sync under render_mutex exclusive + waitForModelReaders.
         // Full cuda-only↔Vulkan rebind is reserved for capacity grow (physical
-        // remap). Mid-densify rebind around always-commit was trialed and did not
-        // clear the GUI deg1 poison; generation-checked bind handles pointer
-        // staleness by construction for FastGS/Adam readers.
+        // remap). Generation-checked bind handles protect FastGS and Adam
+        // readers from stale pointers during densification.
         if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
             LOG_ERROR("cudaDeviceSynchronize before densify exportable barrier failed: {} ({})",
                       cudaGetErrorName(err),
@@ -292,8 +291,6 @@ namespace lfs::vis {
             return false;
         }
         exportable_densify_barrier_depth_ = 1;
-        LOG_INFO("Exportable densify barrier: begin device-sync gen={}",
-                 splat_storage_->generation());
         return true;
     }
 
@@ -311,8 +308,6 @@ namespace lfs::vis {
                       cudaGetErrorString(err));
             return false;
         }
-        LOG_INFO("Exportable densify barrier: end device-sync gen={}",
-                 splat_storage_ ? splat_storage_->generation() : 0);
         return true;
     }
 
@@ -337,7 +332,7 @@ namespace lfs::vis {
         // that happens. Drop all VulkanExternalTensorStorage owners by rebinding
         // to CUDA-only views of the SAME ExportableBlock (not a separate pool —
         // make_allocator hands out base+offset views into the packed SoA). The
-        // rebind is views-only when source already aliases the block (ISS-025).
+        // rebind is views-only when source already aliases the block.
         // Trainer may also hold the old interop allocator — clear it too.
         //
         // Grow must run when the GPU is not reading the block (densify is on the
@@ -374,7 +369,7 @@ namespace lfs::vis {
 
         // Post-grow rebind: grow() already relocated every region to the new
         // offsets. rebindSplatData installs views at those offsets and does NOT
-        // copy_from the stale pre-grow tensors (ISS-025 Analyst B). Always
+        // copy_from the stale pre-grow tensors. Always
         // re-import Vulkan after grow (export handle changes).
         if (!rebindExportableVulkanInterop()) {
             LOG_ERROR("Exportable rebind after grow failed");
@@ -802,15 +797,6 @@ namespace lfs::vis {
 
         trainer_->request_pause();
         LOG_TRACE("Training temporary pause requested at iteration {}", iteration);
-    }
-
-    bool TrainerManager::pauseTrainingTemporaryIfActive() {
-        if (!isRunning() || !trainer_ || trainer_->is_paused()) {
-            return false;
-        }
-
-        pauseTrainingTemporary();
-        return true;
     }
 
     TrainerManager::TemporaryPauseResult

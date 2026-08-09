@@ -56,7 +56,8 @@ namespace lfs::training {
             return h;
         }
 
-        // Phase 1.7: process-wide GPU frozen mask cache (steady inject_noise path).
+        // This process-wide cache avoids rebuilding the frozen mask when its
+        // model, size, ranges, and device are unchanged.
         struct FrozenMaskCache {
             const void* key = nullptr;
             size_t n = 0;
@@ -89,8 +90,8 @@ namespace lfs::training {
             splat_data.reserve_capacity(capacity);
         }
 
-        // Phase 2.1: convert shN to pad-dropped u16 storage when flag ON (default).
-        // Must run after reserve so capacity is correct for the quant layout.
+        // Apply quantization after reserving capacity so the quantized layout
+        // inherits the correct capacity.
         lfs::training::sh_value::apply_shN_value_quant(splat_data);
     }
 
@@ -381,9 +382,7 @@ namespace lfs::training {
         const size_t new_cap = std::max(
             n, static_cast<size_t>(static_cast<double>(std::max(n_capacity, n)) * 1.2) + 1);
         f32_a = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
-        f32_b = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
         bool_a = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Bool);
-        bool_b = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Bool);
         n_capacity = new_cap;
     }
 
@@ -405,14 +404,8 @@ namespace lfs::training {
     lfs::core::Tensor DensifyNScratch::f32_a_view(const size_t n) const {
         return f32_a.slice(0, 0, n);
     }
-    lfs::core::Tensor DensifyNScratch::f32_b_view(const size_t n) const {
-        return f32_b.slice(0, 0, n);
-    }
     lfs::core::Tensor DensifyNScratch::bool_a_view(const size_t n) const {
         return bool_a.slice(0, 0, n);
-    }
-    lfs::core::Tensor DensifyNScratch::bool_b_view(const size_t n) const {
-        return bool_b.slice(0, 0, n);
     }
     lfs::core::Tensor DensifyNScratch::i64_a_view(const size_t k) const {
         return i64_a.slice(0, 0, k);
@@ -439,7 +432,6 @@ namespace lfs::training {
             (use_shN && (!shN.is_valid() || shN.ndim() != 3));
 
         if (capacity < need || layout_changed) {
-            // Grow-only with 1.2× headroom (Phase 4.3).
             const size_t new_cap = std::max(
                 need,
                 static_cast<size_t>(static_cast<double>(std::max(capacity, need)) * 1.2) + 1);
@@ -501,8 +493,8 @@ namespace lfs::training {
         // densification_info is row-major [2, N]: row1 starts at offset N. Growing N
         // cannot use append_zeros (that grows dim0). When shape already matches,
         // reuse the buffer (caller zeros). On mismatch, allocate exact [2,n].
-        // Note: reserve_cols pre-size would break rasterizer layout (writes N+g);
-        // see ISSUES if a stride-aware densify path is added later.
+        // Pre-sizing columns would break the rasterizer's [2,N] row offsets, so
+        // shape mismatches require an exact allocation.
         if (densification_info.is_valid() &&
             densification_info.ndim() == 2 &&
             densification_info.shape()[0] >= 2 &&

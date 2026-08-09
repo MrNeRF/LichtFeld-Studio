@@ -91,7 +91,7 @@ namespace lfs::core {
         // (same ExportableBlock VA range — including CUDA-only and Vulkan-interop
         // views), installs views WITHOUT copying. grow() has already relocated
         // every region to the new offsets; a copy_from of the stale pre-grow
-        // views would overwrite correct data (ISS-025). Genuine cross-allocator
+        // views would overwrite correct data. Genuine cross-allocator
         // migrations (cuda.direct / other blocks → this storage) still copy.
         // When `allocator` is empty, uses make_allocator(); pass the Vulkan
         // interop allocator for GUI zero-copy rebind after growth.
@@ -107,8 +107,7 @@ namespace lfs::core {
         // Live control block shared with every allocator lambda. Offsets/bytes/
         // generation update on grow(); consumers must resolve pointers through
         // this block (or via resolve_exportable_device_ptr) — never trust a raw
-        // pointer baked into a Tensor that outlived a generation bump (q16
-        // poison D2 / rock-solid collision bar).
+        // pointer baked into a Tensor that outlived a generation bump.
         struct Control {
             std::shared_ptr<ExportableBlock> block;
             std::array<std::size_t, Count> region_offsets{};

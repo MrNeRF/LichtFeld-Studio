@@ -53,9 +53,9 @@ namespace fast_lfs::rasterization::kernels {
     // Cost (SH3): 12 coalesced float4 loads per warp vs the old 15 misaligned float3 loads
     // (= 45 4-byte sectors per warp).
     //
-    // Phase 2.1 q16: when sh_value_bounds != nullptr, `sh_f4` is actually a bitcast of
+    // q16: when sh_value_bounds != nullptr, `sh_f4` is actually a bitcast of
     // uint16 cell-linear storage (pad-dropped: n_cells = coeffs_rest*3). Decode in registers
-    // at the use site — do NOT materialise a float workspace (FIX-2.2 live-range lesson).
+    // at the use site — do NOT materialise a float workspace (live-range lesson).
     //
     // IEEE f16 float4-swizzle (GUI exportable): sh_value_bits==16 with null bounds.
     // Same slot topology as fp32; each float4 slot is stored as 4×__half (8 bytes).
@@ -224,37 +224,8 @@ namespace fast_lfs::rasterization::kernels {
         return result;
     }
 
-    // Quantised Adam moment helpers (see fast_lfs::optimizer::kernels::adam for the rationale).
-    //   m: signed int8 around zero-point 128, scale = max|m| / 127.
-    //   v: quantised sqrt(v), scale = sqrt(max v) / 255.
-    constexpr int FUSED_MOMENT_ZERO_POINT = 128;
     // Max contiguous (non-shN) attributes per primitive (rotation = 4 is the largest).
     constexpr int MAX_FUSED_ADAM_ATTRIBUTES = 4;
-
-    __device__ inline float dequant_m(const std::uint8_t q, const float scale) {
-        return scale == 0.0f ? 0.0f : (static_cast<int>(q) - FUSED_MOMENT_ZERO_POINT) * scale;
-    }
-
-    __device__ inline std::uint8_t quantize_m(const float value, const float scale) {
-        if (scale == 0.0f)
-            return static_cast<std::uint8_t>(FUSED_MOMENT_ZERO_POINT);
-        const int q = static_cast<int>(roundf(value / scale)) + FUSED_MOMENT_ZERO_POINT;
-        return static_cast<std::uint8_t>(min(255, max(0, q)));
-    }
-
-    __device__ inline float dequant_sqrt_v(const std::uint8_t q, const float scale) {
-        return scale == 0.0f ? 0.0f : static_cast<float>(q) * scale;
-    }
-
-    __device__ inline std::uint8_t quantize_sqrt_v(const float v, const float scale) {
-        if (scale == 0.0f)
-            return 0;
-        const float s = sqrtf(fmaxf(v, 0.0f));
-        const int q = static_cast<int>(roundf(s / scale));
-        if (v > 0.0f && q == 0)
-            return 1;
-        return static_cast<std::uint8_t>(min(255, max(0, q)));
-    }
 
     // Joint (u, log_s) Adam step for a contiguous param row. ALL threads in the CUDA
     // block must call this together (block_reduce + __syncthreads). Disabled params
@@ -338,7 +309,7 @@ namespace fast_lfs::rasterization::kernels {
             }
         }
 
-        // FIX-2.2 F2: fused min4 on {u_min,-u_max,s_min,-s_max} → 1 barrier
+        // fused min4 on {u_min,-u_max,s_min,-s_max} → 1 barrier
         // (plus the sm_bounds sync below = 2/section) instead of 4 separate
         // min/max reduces that raced on static __shared__.
         const float4 red = lfs::core::warp_ops::block_reduce_min4(
@@ -363,7 +334,7 @@ namespace fast_lfs::rasterization::kernels {
         }
         __syncthreads();
         const float4 new_mm = sm_bounds;
-        // FIX-2.2 F3: hoist block-uniform inv ranges (2 fdiv → FMA per cell).
+        // hoist block-uniform inv ranges (2 fdiv → FMA per cell).
         const float inv_u_range = 1.0f / fmaxf(new_mm.y - new_mm.x, lfs::training::joint_adam::kEpsDevice);
         const float inv_s_range = 1.0f / fmaxf(new_mm.w - new_mm.z, lfs::training::joint_adam::kEpsDevice);
 
@@ -377,7 +348,7 @@ namespace fast_lfs::rasterization::kernels {
 
     // Joint (u, log_s) Adam step over a contiguous [n_attributes] row of one primitive
     // (means / sh0 / scaling / rotation / opacity). Block-bounded; all threads must call
-    // when joint_bits != 0. Legacy uint8+scales path removed.
+    // when joint_bits != 0.
     __device__ inline void adam_step_row(
         const float* grads,
         const FusedAdamParam& param,
@@ -479,7 +450,7 @@ namespace fast_lfs::rasterization::kernels {
     // Walks ALL layout slots (not only active SH) so inactive bands re-encode under new
     // bounds and stay true-zero when their codes represent (u,log_s)=(0,0).
     //
-    // Phase 2.1: when p.sh_value_bits==16, param is pad-dropped uint16 codes; decode in
+    // when p.sh_value_bits==16, param is pad-dropped uint16 codes; decode in
     // registers, Adam-update, then single re-encode after value bounds reduce. Moments still
     // use the float4-slot cell indexing (48 cells). Value re-encode is the single writer.
     __device__ inline void apply_shN_grads_packed_joint(
@@ -502,7 +473,7 @@ namespace fast_lfs::rasterization::kernels {
         bool apply_step = true;
         bool touch = p.enabled && sh_layout_slots > 0u &&
                      p.joint_packed != nullptr && p.joint_bounds != nullptr;
-        // MJ-1: grid overhang threads (ceil(N/256)*256 - N) must stay in the reduce
+        // grid overhang threads (ceil(N/256)*256 - N) must stay in the reduce
         // with ±inf identities — never decode/encode into capacity slack / OOB.
         if (touch && p.n_primitives > 0 &&
             primitive_idx >= static_cast<uint>(p.n_primitives)) {
@@ -630,14 +601,14 @@ namespace fast_lfs::rasterization::kernels {
             (void)n_cells_local;
         }
 
-        // FIX-2.2 F2: fused min4 bounds reduce for Adam moment (u,log_s).
+        // fused min4 bounds reduce for Adam moment (u,log_s).
         const float4 red = lfs::core::warp_ops::block_reduce_min4(
             make_float4(local_u_min, -local_u_max, local_s_min, -local_s_max));
         const float u_min = red.x;
         const float u_max = -red.y;
         const float s_min = red.z;
         const float s_max = -red.w;
-        // Phase 2.1 value bounds (separate from moment bounds).
+        // value bounds (separate from moment bounds).
         const float v_min = value_q16 ? lfs::core::warp_ops::block_reduce_min(local_v_min) : 0.0f;
         const float v_max = value_q16 ? lfs::core::warp_ops::block_reduce_max(local_v_max) : 0.0f;
 
@@ -660,7 +631,7 @@ namespace fast_lfs::rasterization::kernels {
         __syncthreads();
         const float4 new_mm = sm_bounds;
         const float2 new_vmm = value_q16 ? sm_vbounds : make_float2(0.0f, 0.0f);
-        // FIX-2.2 F3: hoist block-uniform inv ranges (2 fdiv → FMA per cell).
+        // hoist block-uniform inv ranges (2 fdiv → FMA per cell).
         const float inv_u_range = 1.0f / fmaxf(new_mm.y - new_mm.x, lfs::training::joint_adam::kEpsDevice);
         const float inv_s_range = 1.0f / fmaxf(new_mm.w - new_mm.z, lfs::training::joint_adam::kEpsDevice);
 
@@ -694,7 +665,7 @@ namespace fast_lfs::rasterization::kernels {
 
     // Joint (u, log_s) Adam step over swizzled shN moments of one primitive.
     // n_slots_to_update is derived from active SH bases. All threads must call
-    // when joint_bits==8 (block bounds). Legacy uint8+scales path removed.
+    // when joint_bits==8 (block bounds).
     __device__ inline void apply_shN_grads_packed(
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
@@ -799,38 +770,11 @@ namespace fast_lfs::rasterization::kernels {
         return dcolor_dposition;
     }
 
-    // Legacy wrapper: compute SH grads then apply Adam immediately (legacy codec path).
-    template <int ACTIVE_SH_BASES>
-    __device__ inline float3 convert_sh_to_color_backward(
-        const float4* sh_coefficients_rest,
-        float3* grad_color_helper,
-        const FusedAdamSettings& fused_adam,
-        const float3& position,
-        const float3& cam_position,
-        const uint primitive_idx,
-        const uint sh_layout_slots) {
-        float sh0_grads[3] = {0.0f, 0.0f, 0.0f};
-        float3 g[15];
-#pragma unroll
-        for (int i = 0; i < 15; ++i)
-            g[i] = make_float3(0.0f, 0.0f, 0.0f);
-        const float3 dcolor_dposition = convert_sh_to_color_backward_grads<ACTIVE_SH_BASES>(
-            sh_coefficients_rest, grad_color_helper, position, cam_position,
-            primitive_idx, sh_layout_slots, sh0_grads, g);
-        adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        if constexpr (ACTIVE_SH_BASES > 1) {
-            constexpr uint n_slots = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
-                                                                                         : 3u;
-            apply_shN_grads_packed(fused_adam, primitive_idx, g, n_slots, sh_layout_slots);
-        }
-        return dcolor_dposition;
-    }
-
     // Ellipse–AABB overlap (exact). Port of alphablend_shader.slang / utils.slang
     // ellipse_box_overlap_test. Ellipse centered at origin, defined by inv_cov with r=1:
     //   form = a x^2 + 2 b x y + c y^2  (inv_cov.y is the half cross-term, same as conic.y).
     // Box is axis-aligned [x0,x1] × [y0,y1] in the same frame.
-    // Used for warp sub-tile culling (WO-WARP-FWD/BWD): tighter than pixel AABB, still
+    // Used for warp sub-tile culling: tighter than pixel AABB, still
     // never drops a sample whose power is below the contribution threshold when inv_cov
     // has been scaled by 1/(2 * power_threshold).
     __device__ __forceinline__ bool ellipse_box_overlap_test(

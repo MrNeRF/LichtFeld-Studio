@@ -385,7 +385,7 @@ namespace lfs::core {
             if (result.device_ == Device::CUDA) {
                 cudaStream_t s = result.stream();
                 void* ptr = allocate_cuda_storage(bytes, s);
-                // ISS-020: do not call CudaMemoryPool::instance() from the
+                // Do not call CudaMemoryPool::instance() from the
                 // deleter — after ordered process teardown the Meyers singleton
                 // may already be destroyed. safe_cuda_pool_deallocate no-ops
                 // when the process-wide live pointer has been cleared.
@@ -413,7 +413,7 @@ namespace lfs::core {
                             bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                     }
                     cudaStream_t s = result.stream();
-                    // ISS-020: after PinnedMemoryAllocator::shutdown() the
+                    // After PinnedMemoryAllocator::shutdown() the
                     // allocator still exists but re-freeing emptied cache
                     // blocks from late statics is unsafe. Skip when process
                     // teardown has started (hooks already drained long-lived
@@ -611,7 +611,7 @@ namespace lfs::core {
             if (result.device_ == Device::CUDA) {
                 cudaStream_t s = result.stream();
                 void* ptr = allocate_cuda_storage(bytes, s);
-                // ISS-020: pool-liveness-aware deleter (see empty/ path above).
+                // pool-liveness-aware deleter (see empty/ path above).
                 result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
                     safe_cuda_pool_deallocate(p, s);
                 });
@@ -648,7 +648,7 @@ namespace lfs::core {
                         bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                 }
                 cudaStream_t s = result.stream();
-                // ISS-020: pool/pinned teardown-safe free (see empty path above).
+                // pool/pinned teardown-safe free (see empty path above).
                 result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
                     if (p && !gpu_process_teardown_started())
                         PinnedMemoryAllocator::instance().deallocate(p, s);
@@ -1038,8 +1038,8 @@ namespace lfs::core {
         LFS_ASSERT_MSG(replacement || static_cast<size_t>(num_samples) <= weights.numel(),
                        "multinomial cannot sample more entries than weights without replacement");
 
-        // Theme A (TENSOR_LIB_FINDINGS): kernels scan weights densely. Force a
-        // contiguous logical copy at the API boundary so host validation and
+        // The kernels scan weights densely. Force a contiguous logical copy at
+        // the API boundary so host validation and
         // device sampling always see the same probability mass (strided column
         // views from densify LAS paths are training-reachable).
         Tensor weights_materialized;
@@ -1113,7 +1113,7 @@ namespace lfs::core {
                            dtype_ == DataType::Int32 || dtype_ == DataType::Bool,
                        "reduce currently supports only Float32, Float16, Int32, and Bool");
         // Float16: reduce in f32 then cast back (kernels are float-specialized).
-        // Avoids Theme-B silent holes; cost is one convert each way.
+        // Avoids silent holes in the float16 path; cost is one convert each way.
         if (dtype_ == DataType::Float16) {
             Tensor f32 = this->to(DataType::Float32);
             Tensor out = f32.reduce(op, args);
@@ -1433,7 +1433,6 @@ namespace lfs::core {
                     auto result =
                         empty_on_tensor_stream(TensorShape(out_shape), device_, dtype_, *this);
 
-                    LOG_DEBUG("[COLUMN REDUCE] M={}, N={}, op={}", M, N, static_cast<int>(op));
                     tensor_ops::launch_column_reduce(ptr<float>(), result.ptr<float>(), M, N, op,
                                                      result.stream());
                     tensor_ops::set_reduce_last_path_for_testing(RP::Column);
@@ -1443,7 +1442,7 @@ namespace lfs::core {
             }
         }
 
-        // WO-W.2: non-last-dim reduce with large inner_size.
+        // non-last-dim reduce with large inner_size.
         // Prefer modern strided/column-style kernel over permute+contiguous when
         // the measured heuristic says so; keep transpose for the cheap-copy edge
         // class (argmin of microbench — see should_prefer_strided_over_transpose).
@@ -1491,8 +1490,6 @@ namespace lfs::core {
                         }
                         auto result = empty_on_tensor_stream(
                             TensorShape(out_dims), device_, dtype_, *this);
-                        LOG_DEBUG("[STRIDED FAST] outer={} reduce={} inner={} op={}",
-                                  outer_size, reduce_size, inner_size, static_cast<int>(op));
                         tensor_ops::launch_strided_reduce_fast(
                             ptr<float>(), result.ptr<float>(),
                             outer_size, reduce_size, inner_size, op, result.stream());
@@ -1509,9 +1506,6 @@ namespace lfs::core {
                         }
                     }
                     perm.push_back(dim);
-
-                    LOG_DEBUG("[REDUCE TRANSPOSE] dim={}, inner_size={}, outer={}, reduce={}",
-                              dim, inner_size, outer_size, reduce_size);
 
                     Tensor transposed = this->permute(perm).contiguous();
                     tensor_ops::set_reduce_last_path_for_testing(RP::Transpose);
@@ -2008,12 +2002,12 @@ namespace lfs::core {
 
         DataType out_dtype = promote_types(b.dtype(), c.dtype());
 
-        // Kernel is shape-aware: matched-shape operands need no clone (6C.4).
+        // Kernel is shape-aware: matched-shape operands need no clone.
         // Only expand when a true broadcast is required.
         Tensor a_broadcast, b_broadcast, c_broadcast;
 
         // where kernels (CUDA shape-indexed OR CPU linear) require dense expanded
-        // storage. broadcast_to is a zero-stride view (WO-W.1) — materialize.
+        // storage. broadcast_to is a zero-stride view — materialize.
         if (shape_ == shape_abc) {
             a_broadcast = *this;
         } else {

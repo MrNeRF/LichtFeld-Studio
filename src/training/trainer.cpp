@@ -550,15 +550,6 @@ namespace lfs::training {
             }
         }
 
-        template <typename Entries>
-        [[nodiscard]] size_t sum_entry_bytes(const Entries& entries) {
-            size_t total = 0;
-            for (const auto& [_, bytes] : entries) {
-                total += bytes;
-            }
-            return total;
-        }
-
         struct LoadedCameraMetricsInputs {
             lfs::core::Tensor gt_image;
             lfs::core::Tensor mask;
@@ -757,7 +748,6 @@ namespace lfs::training {
             return inputs;
         }
 
-        // Phase 6D.1: single arena capacity (not sum of exclusive variants).
         [[nodiscard]] size_t photometric_workspace_bytes(const losses::PhotometricLoss& photometric_loss) {
             return photometric_loss.arena().allocated_bytes();
         }
@@ -1909,7 +1899,7 @@ namespace lfs::training {
             return;
         }
 
-        // Phase 1.7: rebuild only on cropbox geometry / topology (N) / scale change.
+        // rebuild only on cropbox geometry / topology (N) / scale change.
         // Means drift between densify events is intentionally not a rebuild trigger
         // (damping is a soft LR scale, not a hard cull).
         const size_t n = static_cast<size_t>(model.size());
@@ -2688,12 +2678,12 @@ namespace lfs::training {
         try {
             params_ = params;
 
-            // BL-3: GUT/gsplat uses unfused Adam step(). Joint shN is fused-FastGS-only
+            // GUT/gsplat uses unfused Adam step(). Joint shN is fused-FastGS-only
             // and q16 re-encode is fused-only — GUT with sh_degree > 0 will fail at the
             // unfused shN step. Codecs are permanent; no env/fallback disable path.
             if (params_.optimization.gut) {
                 LOG_WARN(
-                    "BL-3: GUT/gsplat uses unfused Adam; joint codec shN requires fused "
+                    "GUT/gsplat uses unfused Adam; joint codec shN requires fused "
                     "FastGS backward. Prefer FastGS (default) for SH training.");
             }
 
@@ -3331,7 +3321,7 @@ namespace lfs::training {
         }
 
         if (!exiting_headless) {
-            // Release GPU memory pools back to system. ISS-027: never let a
+            // Never let a
             // poisoned CUDA context turn arena full_reset into std::terminate.
             try {
                 lfs::core::Tensor::trim_memory_pool();
@@ -3750,7 +3740,7 @@ namespace lfs::training {
         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
         lfs::core::Tensor::trim_memory_pool();
 
-        // MJ-13: GT device cache is optional and invisible to densify/viewer peak
+        // GT device cache is optional and invisible to densify/viewer peak
         // unless reclaimed here. Pressure client also covers the allocator path;
         // this is the training-safe explicit drop.
         if (auto loader = getActiveImageLoader()) {
@@ -4019,7 +4009,7 @@ namespace lfs::training {
                     // exclusive lock (when refining) additionally bars new readers.
                     waitForModelReaders();
                     // Single-buffer q16 commit into the live exportable block: drop
-                    // Vulkan import for the densify window (ISS-027 class exclusion).
+                    // Keep the Vulkan import absent throughout the densification window.
                     struct DensifyBarrierGuard {
                         Trainer* self = nullptr;
                         bool held = false;
@@ -4065,10 +4055,8 @@ namespace lfs::training {
                         sparsity_optimizer_->reset();
                     }
                     if (static_cast<size_t>(model.size()) != model_size_before) {
-                        // Defer topology fan-out until after the densify barrier
-                        // re-exports/stabilizes exportable q16 — concurrent scene
-                        // cache rebuilds racing the next FastGS q16 forward were a
-                        // GUI-only illegal-address vector (exportable always-commit).
+                        // Defer topology fan-out until the densify barrier stabilizes
+                        // exportable q16 so cache rebuilds cannot race the next forward.
                         if (!refining) {
                             syncTrainingSceneTopology(scene_, model);
                         }
@@ -4125,9 +4113,8 @@ namespace lfs::training {
                         if (normal_supervision_started) {
                             fused_extra_gradients.flatten_reg_weight = params_.optimization.normal_flatten_weight;
                         }
-                        // Phase 1.3: accumulate reg loss scalars inside preprocess_backward
-                        // (block reduce + atomicAdd) — kill loss-only full-N kernels +
-                        // their per-call empty({num_blocks})+empty({1}) allocs.
+                        // Fused backward owns regularization accumulation, avoiding
+                        // separate full-N kernels and their temporary allocations.
                         if (params_.optimization.scale_reg > 0.0f) {
                             if (!fused_scale_reg_loss_.is_valid()) {
                                 fused_scale_reg_loss_ = lfs::core::Tensor::zeros(
@@ -4281,7 +4268,7 @@ namespace lfs::training {
                                 }
 
                                 lfs::Error forward_error = std::move(rasterize_result.error());
-                                // ISS-025: pathological 32-bit instance overflow must not
+                                // pathological 32-bit instance overflow must not
                                 // kill the run — skip the step (loud error) and continue.
                                 if (forward_error.code() == lfs::ErrorCode::FailedPrecondition &&
                                     forward_error.detail().find(
@@ -4564,7 +4551,7 @@ namespace lfs::training {
                                 : lfs::core::Tensor{};
 
                         // Final tonemapping: clamp to [0, 1] for loss computation.
-                        // Phase 1.6: skip when PPISP is active — CRF already clamps.
+                        // skip when PPISP is active — CRF already clamps.
                         if (!(ppisp_ && params_.optimization.use_ppisp)) {
                             corrected_image.clamp_(0.0f, 1.0f);
                         }
@@ -6098,8 +6085,8 @@ namespace lfs::training {
             setActiveImageLoader(train_dataloader->get_loader_shared());
             strategy_->set_image_loader(train_dataloader->get_loader());
 
-            // WO-HP1: configure decoded-GT device cache budget from dataset size
-            // and first-camera dimensions (u8 CHW RGB ≈ 3*W*H).
+            // Budget decoded GT caching from dataset size and first-camera
+            // dimensions (u8 CHW RGB is approximately 3*W*H bytes).
             if (train_dataset_ && train_dataloader->get_loader()) {
                 const size_t n_images = train_dataset_->size();
                 size_t bytes_per = 0;
@@ -6157,7 +6144,7 @@ namespace lfs::training {
                 lfs::core::Camera* cam = nullptr;
                 lfs::core::Tensor gt_image;
                 train_phase = StepPhase::AcquireData;
-                // Dataloader wait is outside train_step / steady_ms (Directive-3).
+                // Dataloader wait is outside train_step / steady_ms.
                 const auto dl_wait_t0 = std::chrono::steady_clock::now();
                 auto example_opt = train_dataloader->next();
                 const auto dl_wait_t1 = std::chrono::steady_clock::now();

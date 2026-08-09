@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * RAM + VRAM leak regression guard (ISS-007 follow-up / system-RAM pressure).
+ * RAM and VRAM leak regression guard under system-memory pressure.
  * Runs N fixed-size "training-like" cycles and asserts host RSS and CUDA free
  * memory deltas are ~0 between cycle 10 (steady) and cycle N.
  */

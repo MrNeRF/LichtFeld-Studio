@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "adam_optimizer.hpp"
-#include "adam_api.h" // fast_lfs::optimizer::adam_step_raw
+#include "adam_api.h"
 #include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
 #include "core/checkpoint_format.hpp"
@@ -92,7 +92,7 @@ namespace lfs::training {
             new_bounds = lfs::core::Tensor::zeros(shape, device);
         }
         if (!zero_all && joint_bounds.is_valid() && joint_bounds.numel() > 0) {
-            // MN-6: keep the source alive until the D2D copy finishes. Destroying
+            // Keep the source alive until the D2D copy finishes. Destroying
             // joint_bounds immediately after cudaMemcpyAsync races the async read.
             const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
             lfs::core::waitForCUDAStream(stream, joint_bounds.stream());
@@ -231,7 +231,7 @@ namespace lfs::training {
                 continue;
             }
 
-            // BL-2: moments always track the float4-swizzle layout. Under q16, param.shape()[0]
+            // moments always track the float4-swizzle layout. Under q16, param.shape()[0]
             // is the pad-dropped u16 cell count (45/prim for SH3), not the float cell count
             // (48/prim). Never seed state.size / moment tensors from the u16 shape.
             const size_t logical_size =
@@ -348,7 +348,7 @@ namespace lfs::training {
         const size_t prim_rows = scale_row_count(type);
         prim_capacity = std::max(prim_capacity, prim_rows);
 
-        // BL-2: shN moments are always float4-swizzle cells, never pad-dropped q16 cells.
+        // shN moments are always float4-swizzle cells, never pad-dropped q16 cells.
         const auto layout_rest =
             static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
         const size_t shN_float_rows =
@@ -512,11 +512,11 @@ namespace lfs::training {
             return;
         }
 
-        // BL-3: unfused path (GUT/gsplat) must not see q16 shN as float — dequant
+        // unfused path (GUT/gsplat) must not see q16 shN as float — dequant
         // in-place so param_size matches float-layout state.size before the guard.
         // Re-bind param after dequant (storage is replaced).
         if (type == ParamType::ShN && splat_data_.shN_value_quantized()) {
-            LOG_ERROR("BL-3: unfused Adam step with q16 shN — dequantising to fp32 "
+            LOG_ERROR("Unfused Adam step with q16 shN; dequantising to fp32 "
                       "(gsplat/GUT path cannot step value codes; prefer FastGS)");
             (void)sh_value::ensure_shN_fp32_for_mutation(splat_data_);
         }
@@ -556,7 +556,7 @@ namespace lfs::training {
             crop_damping_mask_.sync_to_stream(execution_stream);
         }
 
-        // Joint (u,log_s) codec (default ON since 63aa08c6): non-fused step for contiguous
+        // The joint (u,log_s) codec uses a non-fused step for contiguous
         // params. shN joint remains fused-only (swizzle + SH value quant single-writer).
         if (state.is_joint()) {
             if (type == ParamType::ShN) {
@@ -640,7 +640,6 @@ namespace lfs::training {
             // pad-dropped u16 params (different numel). After densify grow/relocate/compact
             // or re-encode, heal undersized SH moment bookkeeping + joint_bounds.
             //
-            // Heal-vs-rebuild (ISS-2.1):
             //   HEAL  — moment capacity already covers float_layout(N): advance state.size;
             //           grow joint_bounds logical rows (capacity-first, else realloc bounds).
             //   REBUILD — capacity short: extend_state_for_new_params (growth_factor re-reserve).
@@ -763,7 +762,7 @@ namespace lfs::training {
 
             // SH value quant stores u16 codes as Float16 bit-patterns; use data_ptr.
             // Generation-checked when exportable-backed so a pre-grow raw pointer
-            // cannot survive into the fused step (q16 poison D2 class).
+            // cannot survive into the fused step.
             out.param = static_cast<float*>(
                 lfs::core::resolve_exportable_device_ptr(param));
             out.n_primitives = static_cast<int>(splat_data_.size());
@@ -798,7 +797,6 @@ namespace lfs::training {
         fused.shN = prepare_param(ParamType::ShN,
                                   static_cast<int>(lfs::core::sh_float4_slots_for_rest(layout_rest) * 4u),
                                   active_rest > 0 && iteration > SH_WARMUP_ITERATIONS);
-        // Phase 2.1: wire SH value quant single-writer re-encode into fused Adam.
         // Generation-checked q16 fetch — never bake a pre-grow exportable pointer.
         if (fused.shN.enabled && splat_data_.shN_value_quantized() &&
             splat_data_.shN_value_bounds().is_valid()) {
@@ -825,7 +823,7 @@ namespace lfs::training {
     }
 
     void AdamOptimizer::commit_fastgs_fused_adam(const int iteration) {
-        // MN-1: only bump step_count for params that prepare_fastgs_fused_adam
+        // Only bump step_count for parameters that prepare_fastgs_fused_adam
         // actually enabled this iteration. During SH warmup prepare disables shN
         // but the old commit still advanced its counter → first real shN update
         // ran with t≈1001 bias correction instead of t=1.
@@ -983,7 +981,7 @@ namespace lfs::training {
                                    : compute_new_capacity(new_size, new_size);
             ensure_joint_bounds_capacity(state.joint_bounds, new_size, prim_cap,
                                          param.device(), /*zero_all=*/false);
-            // MJ-3: raw gather copies codes across blocks with different bounds → garbage.
+            // raw gather copies codes across blocks with different bounds → garbage.
             // Transcode decode(src bounds) → encode(dst bounds) for the new rows.
             if (n_new > 0 && state.joint_bounds.is_valid()) {
                 const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
@@ -1118,7 +1116,7 @@ namespace lfs::training {
             LFS_DEBUG_ASSERT_MSG(state.capacity >= state.size,
                                  "extend_state_for_new_params(joint): capacity < size");
 
-            // MJ-3: raw zero codes under a live mid-block's non-zero bounds do NOT
+            // raw zero codes under a live mid-block's non-zero bounds do NOT
             // decode to (m,v)=(0,0). Zero-encode the newly appended prim rows.
             if (n_new > 0 && prim_n >= n_new && state.exp_avg.is_valid() &&
                 state.joint_bounds.is_valid()) {
@@ -1224,7 +1222,7 @@ namespace lfs::training {
             return true;
         }
         // Grow/rebind the shared exportable block once before any densify
-        // mutation. Failure must leave row counts untouched (ISS-023 addendum 2).
+        // mutation. Failure must leave row counts untouched.
         bool layout_changed = false;
         const bool ok = splat_data_.ensure_param_capacity(new_size, &layout_changed);
 #ifndef NDEBUG
@@ -1265,7 +1263,7 @@ namespace lfs::training {
         const size_t new_size = old_size + n_new;
         bool layout_changed = false;
         if (param.capacity() < new_size && param.is_external_storage()) {
-            // Phase 5.1: grow exportable block (and rebind) instead of cat, which
+            // grow exportable block (and rebind) instead of cat, which
             // would orphan the Vulkan zero-copy mapping. Prefer preflight_grow_capacity
             // at densify entry so this path is a last-resort safety net that still
             // throws BEFORE mutating this param (no partial append on failure).
@@ -1277,7 +1275,7 @@ namespace lfs::training {
                     new_size));
             }
         }
-        // Re-fetch after possible rebind. ISS-025: in-flight Tensor& `param` is
+        // Re-fetch after a possible rebind because the in-flight Tensor& `param` is
         // dangling if layout_changed; never use it past this point.
         auto& param_ref = get_param(type);
 #ifndef NDEBUG
@@ -1385,7 +1383,8 @@ namespace lfs::training {
             if (states_.contains(name)) {
                 auto& state = states_[name];
 
-                // MJ-4: joint codec has no exp_avg_sq/scales — legacy gate was a silent no-op.
+                // Joint states grow exp_avg directly because exp_avg_sq and
+                // per-tensor scales are absent.
                 if (state.is_joint() && state.exp_avg.is_valid()) {
                     const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
                     const size_t packed_growth = growth * static_cast<size_t>(bpc);
@@ -1704,7 +1703,7 @@ namespace lfs::training {
             const bool is_shN = (name == "shN");
             const ParamType ptype = *maybe_type;
             const auto& parameter = get_param(ptype);
-            // BL-2: shN state.size is always float4-swizzle cells, never q16 u16 cells.
+            // shN state.size is always float4-swizzle cells, never q16 u16 cells.
             // After a fused step the heal sets state.size = float_layout; strategy re-quant
             // before deserialize leaves parameter.shape()[0] as u16 count — do not compare
             // those units.
@@ -1739,7 +1738,7 @@ namespace lfs::training {
                     state.joint_bounds.ndim() != 2 || state.joint_bounds.shape()[1] != 4) {
                     throw std::runtime_error("Invalid AdamOptimizer checkpoint: joint moment schema mismatch");
                 }
-                // MN-5: accept grow-only bounds tables (shape >= live blocks). Compaction
+                // Accept grow-only bounds tables (shape >= live blocks). Compaction
                 // can leave extra zero blocks; never require strict equality.
                 const size_t expected_bounds = joint_adam::n_bounds_for_prims(primitive_rows);
                 if (!state.joint_bounds.is_valid() ||
@@ -1747,7 +1746,7 @@ namespace lfs::training {
                     throw std::runtime_error("Invalid AdamOptimizer checkpoint: joint bounds size mismatch");
                 }
                 if (is_shN) {
-                    // Packed 1D: one cell per float4-swizzle float, bpc bytes each (BL-2).
+                    // Packed 1D: one cell per float4-swizzle float, bpc bytes each.
                     const size_t expected_bytes =
                         lfs::core::sh_swizzled_float_count(primitive_rows, layout_rest) *
                         static_cast<size_t>(bpc);

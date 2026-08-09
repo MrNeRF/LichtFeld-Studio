@@ -208,7 +208,7 @@ TEST_F(StridedFillTest, Fill_LargeTensor3D) {
 TEST_F(StridedFillTest, ExpandedView_Fill) {
     auto col = Tensor::full({256, 1}, 0.0f, Device::CUDA);
     auto expanded = col.expand({256, 256});
-    // WO-W.1: zero-stride expand views reject in-place mutation (shared cells).
+    // zero-stride expand views reject in-place mutation (shared cells).
     // Materialize first if a dense write is required.
     EXPECT_TRUE(expanded.has_zero_stride());
     EXPECT_THROW(expanded.fill_(2.0f), std::runtime_error);

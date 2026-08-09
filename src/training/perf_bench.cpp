@@ -125,7 +125,6 @@ namespace lfs::training {
         steady_ms_sum_ = 0.0;
         peak_cuda_used_ = 0;
         peak_cuda_total_ = 0;
-        // baseline_cuda_used_ was set in configure() (pre model load). If
         // configure was skipped, fall back to the value already stored (0).
         peak_pool_reserved_ = 0;
         peak_pool_used_ = 0;
@@ -151,7 +150,6 @@ namespace lfs::training {
         ledger_ = {};
         train_start_ns_ = now_ns();
         train_end_ns_ = train_start_ns_;
-        lfs::core::alloc_counter::set_steady_state(false);
         lfs::core::alloc_counter::reset_site_counts();
 
         // Ensure the VRAM profiler is on so the ledger is published each step.
@@ -277,7 +275,6 @@ namespace lfs::training {
             ++warmup_steps_;
             if (iter == warmup_) {
                 // Next step is the first steady-state step — enable alloc trace.
-                lfs::core::alloc_counter::set_steady_state(true);
             }
         } else {
             steady_allocs_ += allocs;
@@ -379,11 +376,10 @@ namespace lfs::training {
             peak_exportable_splat_ > 0 ? peak_exportable_splat_
                                        : snap.process.exportable_splat_bytes;
 
-        // Legacy ex_cache = device peak − GT (device-wide free; ISS-008 contamination).
+        // ex_cache is the device-wide peak after subtracting the GT cache.
         out.ex_cache_bytes =
             peak_cuda_used_ > gt_cache_bytes_ ? peak_cuda_used_ - gt_cache_bytes_ : 0;
         // Process-net: also subtract pre-train baseline (desktop + cold CUDA context).
-        // Wave-2's 938 MiB was a quiet-GPU device-wide sample — baseline ≈ small.
         // On a busy desktop baseline can be 200–300 MiB and must not count as "ours".
         const std::size_t peak_above_baseline =
             peak_cuda_used_ > baseline_cuda_used_ ? peak_cuda_used_ - baseline_cuda_used_
@@ -391,11 +387,11 @@ namespace lfs::training {
         out.ex_cache_net_bytes =
             peak_above_baseline > gt_cache_bytes_ ? peak_above_baseline - gt_cache_bytes_
                                                   : 0;
-        // Gate compares process-net to Wave-2 (fairer than raw device-wide).
-        out.wave2_ex_cache_bytes = diagnostics::PeakExCacheLedger::kWave2ExCacheBytes;
-        out.excess_over_wave2_bytes =
-            out.ex_cache_net_bytes > out.wave2_ex_cache_bytes
-                ? out.ex_cache_net_bytes - out.wave2_ex_cache_bytes
+        // Compare process-net usage with the quiet-GPU baseline.
+        out.baseline_ex_cache_bytes = diagnostics::PeakExCacheLedger::kExCacheBaselineBytes;
+        out.excess_over_baseline_bytes =
+            out.ex_cache_net_bytes > out.baseline_ex_cache_bytes
+                ? out.ex_cache_net_bytes - out.baseline_ex_cache_bytes
                 : 0;
 
         auto add = [&](const char* name, const char* owner, std::size_t bytes, bool justified) {
@@ -413,40 +409,35 @@ namespace lfs::training {
             }
         };
 
-        // Inventory (not all of these are "new vs Wave-2").
+        // Attribute retained allocations to their owning subsystem.
         add("baseline_cuda_context", "desktop+ctx", baseline_cuda_used_,
             /*justified=*/true);
-        add("gt_cache", "WO-HP1", gt_cache_bytes_, /*justified=*/true);
-        add("training_state", "Phase0.2/2.2", ledger_.total_bytes, /*justified=*/true);
+        add("gt_cache", "ground_truth", gt_cache_bytes_, /*justified=*/true);
+        add("training_state", "optimizer", ledger_.total_bytes, /*justified=*/true);
         add("training_state_capacity_overhead",
             "capacity",
             training_state_reserved_bytes_ > ledger_.total_bytes
                 ? training_state_reserved_bytes_ - ledger_.total_bytes
                 : 0,
             /*justified=*/true);
-        add("loss_workspace_arena", "Phase6D", loss_workspace_bytes_, /*justified=*/true);
-        add("densify_child_workspace", "Phase4.3/WO-X", densify_workspace_bytes_,
+        add("loss_workspace_arena", "loss_workspace", loss_workspace_bytes_, /*justified=*/true);
+        add("densify_child_workspace", "densification", densify_workspace_bytes_,
             /*justified=*/true);
         add("pool_bucket_cache", "allocator", out.pool_bucket_cache_bytes,
             /*justified=*/true);
-        add("exportable_splat", "Phase5.1", out.exportable_splat_bytes,
+        add("exportable_splat", "viewport", out.exportable_splat_bytes,
             /*justified=*/true);
-        add("fastgs_sort_hwm", "Phase1.1", out.fastgs_sort_hwm_bytes, /*justified=*/true);
+        add("fastgs_sort_hwm", "fastgs_sort", out.fastgs_sort_hwm_bytes, /*justified=*/true);
         add("fastgs_raster_live", "FastGS", out.fastgs_raster_live_bytes,
             /*justified=*/true);
-        add("rasterizer_arena", "Phase1-arena", out.arena_capacity_bytes,
+        add("rasterizer_arena", "rasterizer", out.arena_capacity_bytes,
             /*justified=*/true);
 
-        // Only *new-vs-Wave2* residuals may cover excess_over_wave2.
-        // Wave-2 already had training_state + raster working set; do not use them
-        // as cover. New justified residuals since Wave-2 quiet peak:
-        //   - loss arena (6D)
-        //   - densify N-scratch / child workspace (4.3 / WO-X)
-        //   - pool free-list residency (when trim is off / residual cache)
-        //   - FastGS persistent sort high-water (Phase 1.1, ~+31 MiB documented)
-        //   - exportable splat block (GUI; headless typically 0)
-        //   - capacity overhead when tensors grow to max_cap beyond Wave-2's live N
-        //   - q16 densify expand is transient; capacity overhead captures retained
+        // Only residuals added above the baseline may cover excess_over_baseline;
+        // the baseline already includes training state and the raster working set.
+        // Eligible residuals are the loss arena, densification workspace, pool
+        // free lists, FastGS sort high-water, exportable splat block, and retained
+        // tensor capacity above live N. Transient q16 expansion is excluded.
         const std::size_t capacity_overhead =
             training_state_reserved_bytes_ > ledger_.total_bytes
                 ? training_state_reserved_bytes_ - ledger_.total_bytes
@@ -456,11 +447,11 @@ namespace lfs::training {
             out.fastgs_sort_hwm_bytes + out.exportable_splat_bytes + capacity_overhead;
 
         // Honest residual: do NOT auto-justify the remainder as "no_trim".
-        // MRNF currently trims after refine (G6); free-list residual is the
+        // MRNF currently trims after refine; free-list residual is the
         // measured pool_bucket_cache line above. Anything left is unattributed.
         out.unjustified_excess_bytes =
-            out.excess_over_wave2_bytes > new_justified
-                ? out.excess_over_wave2_bytes - new_justified
+            out.excess_over_baseline_bytes > new_justified
+                ? out.excess_over_baseline_bytes - new_justified
                 : 0;
         if (out.unjustified_excess_bytes > 0) {
             add("unattributed_residual",
@@ -469,7 +460,7 @@ namespace lfs::training {
                 /*justified=*/false);
         }
         // justified_excess_bytes already sums all justified inventory lines;
-        // for the gate, track new-vs-wave2 cover separately via new_justified.
+        // for the gate, track post-baseline cover separately via new_justified.
         out.justified_excess_bytes = new_justified;
         return out;
     }
@@ -521,7 +512,7 @@ namespace lfs::training {
         const double ex_cache_mib =
             static_cast<double>(peak_ledger.ex_cache_bytes) / (1024.0 * 1024.0);
         const double excess_mib =
-            static_cast<double>(peak_ledger.excess_over_wave2_bytes) / (1024.0 * 1024.0);
+            static_cast<double>(peak_ledger.excess_over_baseline_bytes) / (1024.0 * 1024.0);
         const double unjustified_mib =
             static_cast<double>(peak_ledger.unjustified_excess_bytes) / (1024.0 * 1024.0);
 
@@ -563,7 +554,7 @@ namespace lfs::training {
         out << "  \"ex_cache_net_mib\": "
             << (static_cast<double>(peak_ledger.ex_cache_net_bytes) / (1024.0 * 1024.0))
             << ",\n";
-        out << "  \"ex_cache_excess_over_wave2_mib\": " << excess_mib << ",\n";
+        out << "  \"ex_cache_excess_over_baseline_mib\": " << excess_mib << ",\n";
         out << "  \"ex_cache_unjustified_excess_bytes\": " << peak_ledger.unjustified_excess_bytes
             << ",\n";
         out << "  \"ex_cache_unjustified_excess_mib\": " << unjustified_mib << ",\n";
@@ -602,8 +593,8 @@ namespace lfs::training {
         out << "    \"ex_cache_net_bytes\": " << peak_ledger.ex_cache_net_bytes << ",\n";
         out << "    \"baseline_cuda_used_bytes\": " << peak_ledger.baseline_cuda_used_bytes
             << ",\n";
-        out << "    \"wave2_ex_cache_bytes\": " << peak_ledger.wave2_ex_cache_bytes << ",\n";
-        out << "    \"excess_over_wave2_bytes\": " << peak_ledger.excess_over_wave2_bytes << ",\n";
+        out << "    \"baseline_ex_cache_bytes\": " << peak_ledger.baseline_ex_cache_bytes << ",\n";
+        out << "    \"excess_over_baseline_bytes\": " << peak_ledger.excess_over_baseline_bytes << ",\n";
         out << "    \"justified_new_bytes\": " << peak_ledger.justified_excess_bytes << ",\n";
         out << "    \"unjustified_excess_bytes\": " << peak_ledger.unjustified_excess_bytes
             << ",\n";
@@ -634,12 +625,10 @@ namespace lfs::training {
         out << "}\n";
         out.close();
 
-        lfs::core::alloc_counter::set_steady_state(false);
-
         LOG_INFO("PerfBench: wrote {} (steady {:.2f} ms/iter, dl_wait {:.2f} ms/iter steady, "
                  "{:.1f} allocs/iter, peak VRAM {:.1f} MiB, baseline {:.1f} MiB, "
                  "gt_cache {:.1f} MiB, ex_cache {:.1f} MiB / net {:.1f} MiB "
-                 "(excess {:.1f} vs Wave2, unjustified {:.1f}), "
+                 "(excess {:.1f} vs baseline, unjustified {:.1f}), "
                  "sort_hwm {:.1f} MiB, {:.1f} B/splat)",
                  path.string(),
                  steady_ms_iter,

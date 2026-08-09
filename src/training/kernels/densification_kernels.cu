@@ -222,10 +222,6 @@ namespace lfs::training::kernels {
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.long_axis_split_inplace");
     }
 
-    // ============================================================================
-    // Phase 4.4 — fused free-slot write + Adam scale zero
-    // ============================================================================
-
     __global__ void fill_free_slots_fused_kernel(
         const int64_t* __restrict__ target_indices,
         size_t n_fill,
@@ -395,10 +391,6 @@ namespace lfs::training::kernels {
         LFS_CUDA_CHECK_MSG(cudaFreeAsync(d_adam, stream), "zero_adam free ptrs");
     }
 
-    // ============================================================================
-    // Phase 4.5 — packed refine counts (one D2H)
-    // ============================================================================
-
     __global__ void packed_refine_counts_kernel(
         const bool* __restrict__ bool0,
         size_t n_bool0,
@@ -469,10 +461,6 @@ namespace lfs::training::kernels {
             out_counts4);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.packed_refine_counts");
     }
-
-    // ============================================================================
-    // Phase 4.8 — positive median via compact + radix sort (not full-tensor sort)
-    // ============================================================================
 
     __global__ void zero_nan_kernel(float* data, size_t n) {
         const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;

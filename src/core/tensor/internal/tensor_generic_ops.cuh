@@ -64,7 +64,7 @@ namespace lfs::core::tensor_ops {
             }
         }
 
-        // FAST PATH 3: Packed128 half->half (6C.7)
+        // FAST PATH 3: Packed128 half->half
         if constexpr (std::is_same_v<InT, __half> && std::is_same_v<OutT, __half>) {
             bool a_aligned = (reinterpret_cast<uintptr_t>(a) % 16) == 0;
             bool b_aligned = (reinterpret_cast<uintptr_t>(b) % 16) == 0;
@@ -106,7 +106,7 @@ namespace lfs::core::tensor_ops {
             }
         }
 
-        // FAST PATH: Packed128 half->half (6C.7)
+        // FAST PATH: Packed128 half->half
         if constexpr (std::is_same_v<InT, __half> && std::is_same_v<OutT, __half>) {
             bool input_aligned = (reinterpret_cast<uintptr_t>(input) % 16) == 0;
             bool output_aligned = (reinterpret_cast<uintptr_t>(output) % 16) == 0;

@@ -1,14 +1,5 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
- * SPDX-License-Identifier: GPL-3.0-or-later
- *
- * Phase 1.6 — Photometric loop hygiene:
- *  - no reduction_result.clone() (return workspace scalar view)
- *  - no grad_img.zero_() (kernel overwrites every pixel)
- *  - skip clamp_ when PPISP CRF already clamps (trainer path; covered by code)
- *
- * TDD: loss-value equivalence across two steady steps; alloc delta for the
- * forward scalar path is 0 (no clone).
- */
+ * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
@@ -58,7 +49,6 @@ TEST(PhotometricHygieneTest, FusedLossValueStableAndNoCloneAlloc) {
         ASSERT_GT(loss0.cpu().item<float>(), 0.0f);
     }
 
-    // Steady forward: no driver allocs for the loss scalar (was clone → empty({1})).
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     const auto snap = alloc_counter::snapshot();
     auto [loss1, ctx1] = fused_l1_ssim_forward(pred, gt, kSsimWeight, ws, true);

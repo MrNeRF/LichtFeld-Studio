@@ -143,7 +143,7 @@ namespace lfs::training {
             const float* scales_ptr = scales.ptr<float>();
             const float* quats_ptr = quats.ptr<float>();
             const float* sh0_ptr = sh0.ptr<float>();
-            // Phase 2.1: gsplat is float-native — dequant q16 shN into a temporary float4
+            // gsplat is float-native — dequant q16 shN into a temporary float4
             // buffer (does not mutate resident storage). FastGS path decodes in-registers.
             core::Tensor shN_dequant_temp;
             const float* shN_ptr = nullptr;
@@ -522,7 +522,7 @@ namespace lfs::training {
             ctx.scales = scales;
             ctx.opacities = opacities;
             ctx.sh0 = sh0;
-            // BL-3: backward calls ctx.shN.ptr<float>(). When resident shN is q16
+            // backward calls ctx.shN.ptr<float>(). When resident shN is q16
             // (Float16 bit-patterns), the forward dequant temp is the float4 buffer
             // the kernels actually read — must save that, not the raw codes.
             ctx.shN = shN_dequant_temp.is_valid() ? shN_dequant_temp : shN;
@@ -896,7 +896,7 @@ namespace lfs::training {
     }
 
     namespace {
-        // ISS-020: main-thread TLS gsplat caches released before pool shutdown.
+        // main-thread TLS gsplat caches released before pool shutdown.
         const bool g_gsplat_tls_release_hook_registered = [] {
             lfs::core::register_gpu_pre_shutdown_hook([]() noexcept {
                 (void)release_gsplat_rasterizer_thread_local_caches();

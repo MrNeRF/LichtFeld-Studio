@@ -1,13 +1,6 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-/**
- * Dual-representation optimizer-state cluster (adversarial BL-1/2, MJ-1..4, MN-5/6).
- *
- * Both strategy suites historically forced joint+q16 OFF — these paths were untested.
- * All cases here run with the codecs ON (joint + SH value quant permanently ON).
- */
-
 #include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
 #include "core/sh_value_quant.hpp"
@@ -39,12 +32,10 @@ namespace {
 
     struct CodecsOnGuard {
         CodecsOnGuard() {
-            joint_adam::set_joint_codec_enabled_for_testing(true);
             sh_value::set_sh_value_quant_enabled_for_testing(true);
         }
         ~CodecsOnGuard() {
             sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
-            joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
         }
     };
 
@@ -90,9 +81,9 @@ namespace {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// BL-2: joint shN moments sized from float layout, not q16 cell count
+// joint shN moments sized from float layout, not q16 cell count
 // ---------------------------------------------------------------------------
-TEST(DualRepOptimizer, BL2_JointShNMomentsUseFloatLayoutNotQ16Cells) {
+TEST(DualRepOptimizer, JointShNMomentsUseFloatLayoutNotQ16Cells) {
     CodecsOnGuard guard;
     constexpr size_t n = 32;
     constexpr size_t cap = 64;
@@ -126,9 +117,9 @@ TEST(DualRepOptimizer, BL2_JointShNMomentsUseFloatLayoutNotQ16Cells) {
 }
 
 // ---------------------------------------------------------------------------
-// BL-2: checkpoint roundtrip AFTER real fused prepare (heals state.size)
+// checkpoint roundtrip AFTER real fused prepare (heals state.size)
 // ---------------------------------------------------------------------------
-TEST(DualRepOptimizer, BL2_CheckpointRoundtripAfterFusedPrepareWithQuantOn) {
+TEST(DualRepOptimizer, CheckpointRoundtripAfterFusedPrepareWithQuantOn) {
     CodecsOnGuard guard;
     constexpr size_t n = 24;
     constexpr size_t max_cap = 48;
@@ -155,8 +146,7 @@ TEST(DualRepOptimizer, BL2_CheckpointRoundtripAfterFusedPrepareWithQuantOn) {
     ASSERT_NE(shN_st, nullptr);
     ASSERT_TRUE(shN_st->is_joint());
 
-    // Real fused prepare past SH warmup — this is the heal path that advances
-    // state.size to float_layout. Prior roundtrip tests never stepped.
+    // Fused preparation past SH warmup must advance state.size to the float layout.
     constexpr int past_warmup = 1001;
     auto fused = opt.prepare_fastgs_fused_adam(past_warmup);
     EXPECT_TRUE(fused.enabled);
@@ -181,7 +171,7 @@ TEST(DualRepOptimizer, BL2_CheckpointRoundtripAfterFusedPrepareWithQuantOn) {
     const auto loaded = load_checkpoint(checkpoint_output_path(temp_dir), target,
                                         load_params, nullptr, nullptr, nullptr);
     ASSERT_TRUE(loaded.has_value()) << loaded.error()
-                                    << " — BL-2: save→load after fused prepare must not throw "
+                                    << " — save→load after fused prepare must not throw "
                                        "'state size does not match model'";
     EXPECT_EQ(*loaded, past_warmup);
 
@@ -193,12 +183,7 @@ TEST(DualRepOptimizer, BL2_CheckpointRoundtripAfterFusedPrepareWithQuantOn) {
     std::filesystem::remove_all(temp_dir, ec);
 }
 
-// BL-1 legacy+q16 refusal test removed — legacy Adam codec deleted.
-
-// ---------------------------------------------------------------------------
-// MJ-2: zero-encode under bounds that exclude 0 must still decode to ~0
-// ---------------------------------------------------------------------------
-TEST(DualRepOptimizer, MJ2_JointEncodeZeroUnderBoundsExcludingZero) {
+TEST(DualRepOptimizer, JointEncodeZeroUnderBoundsExcludingZero) {
     CodecsOnGuard guard;
     constexpr int n = 8;
     constexpr int n_attr = 3;
@@ -260,9 +245,9 @@ TEST(DualRepOptimizer, MJ2_JointEncodeZeroUnderBoundsExcludingZero) {
 }
 
 // ---------------------------------------------------------------------------
-// MJ-3: joint grow then decode new rows ≈ 0 under live non-zero bounds
+// joint grow then decode new rows ≈ 0 under live non-zero bounds
 // ---------------------------------------------------------------------------
-TEST(DualRepOptimizer, MJ3_JointGrowZeroEncodesNewRows) {
+TEST(DualRepOptimizer, JointGrowZeroEncodesNewRows) {
     CodecsOnGuard guard;
     constexpr size_t n0 = 16;
     constexpr size_t n_grow = 4;
@@ -284,7 +269,7 @@ TEST(DualRepOptimizer, MJ3_JointGrowZeroEncodesNewRows) {
     ASSERT_NE(st, nullptr);
     ASSERT_TRUE(st->is_joint());
 
-    // Poison block bounds so raw zeros would decode to non-zero.
+    // Use nonzero block bounds so raw zero codes decode to nonzero values.
     {
         auto b = st->joint_bounds.cpu();
         auto* p = b.ptr<float>();
@@ -337,9 +322,9 @@ TEST(DualRepOptimizer, MJ3_JointGrowZeroEncodesNewRows) {
 }
 
 // ---------------------------------------------------------------------------
-// MJ-4: joint add_new_params_gather(ShN) must grow moment tensor
+// joint add_new_params_gather(ShN) must grow moment tensor
 // ---------------------------------------------------------------------------
-TEST(DualRepOptimizer, MJ4_JointAddNewParamsGatherShNGrowsMoments) {
+TEST(DualRepOptimizer, JointAddNewParamsGatherShNGrowsMoments) {
     CodecsOnGuard guard;
     // Cross a reorder block boundary (R=32) so float_layout actually grows.
     constexpr size_t n0 = 30;
@@ -392,9 +377,9 @@ TEST(DualRepOptimizer, MJ4_JointAddNewParamsGatherShNGrowsMoments) {
 }
 
 // ---------------------------------------------------------------------------
-// MJ-1: n_primitives set; N%256≠0 prepare does not set q16 OOB conditions
+// n_primitives set; N%256≠0 prepare does not set q16 OOB conditions
 // ---------------------------------------------------------------------------
-TEST(DualRepOptimizer, MJ1_FusedPrepareSetsNPrimitivesForOverhangGuard) {
+TEST(DualRepOptimizer, FusedPrepareSetsNPrimitivesForOverhangGuard) {
     CodecsOnGuard guard;
     constexpr size_t n = 300; // not divisible by 256 → grid overhang
     auto splat = make_sh_splat(n, 1);
@@ -408,10 +393,7 @@ TEST(DualRepOptimizer, MJ1_FusedPrepareSetsNPrimitivesForOverhangGuard) {
     EXPECT_EQ(fused.means.n_primitives, static_cast<int>(n));
 }
 
-// ---------------------------------------------------------------------------
-// MN-5: joint bounds load accepts shape[0] >= expected (grow-only slack)
-// ---------------------------------------------------------------------------
-TEST(DualRepOptimizer, MN5_JointBoundsLoadAcceptsOversizedTable) {
+TEST(DualRepOptimizer, JointBoundsLoadAcceptsOversizedTable) {
     CodecsOnGuard guard;
     constexpr size_t n = 10;
     auto splat = make_sh_splat(n, 0);
@@ -441,7 +423,7 @@ TEST(DualRepOptimizer, MN5_JointBoundsLoadAcceptsOversizedTable) {
     AdamOptimizer loaded(splat, make_cfg(32));
     loaded.allocate_gradients(32);
     ASSERT_NO_THROW(loaded.deserialize(ss))
-        << "MN-5: oversized joint bounds table must not fail strict-equality load";
+        << "oversized joint bounds table must not fail strict-equality load";
 }
 
 // ---------------------------------------------------------------------------
@@ -481,17 +463,11 @@ TEST(DualRepOptimizer, MRNF_InitializeWithBothCodecsOn) {
     EXPECT_TRUE(st->is_joint());
 }
 
-// ---------------------------------------------------------------------------
-// FIX-CODEC gate (step 0 of FIX-INTEG): quant-ON MCMC mid-run save/load/resume
-// past SH warmup. Simulates 2k-iter smoke schedule: train prepare/commit through
-// densify-like growth, save mid-run, load, continue past 2k.
-// ---------------------------------------------------------------------------
 TEST(DualRepOptimizer, MCMC_QuantOn_MidRunSaveLoadResume) {
     CodecsOnGuard guard;
     constexpr size_t n0 = 48;
     constexpr size_t max_cap = 128;
     constexpr int sh_degree = 3;
-    // Mid-run past SH warmup (1000) — matches 2k-iter smoke save point.
     constexpr int mid_iter = 1200;
     constexpr int resume_to = 2000;
 
@@ -516,9 +492,7 @@ TEST(DualRepOptimizer, MCMC_QuantOn_MidRunSaveLoadResume) {
     strategy.initialize(params.optimization);
     auto& opt = strategy.get_optimizer();
 
-    // Drive fused prepare/commit through SH warmup so joint moments heal to
-    // float layout (the BL-2 failure mode) and shN step_count only advances
-    // post-warmup (MN-1).
+    // shN step_count advances only after SH warmup.
     for (int it = 1; it <= mid_iter; ++it) {
         auto fused = opt.prepare_fastgs_fused_adam(it);
         EXPECT_TRUE(fused.enabled);
@@ -532,9 +506,8 @@ TEST(DualRepOptimizer, MCMC_QuantOn_MidRunSaveLoadResume) {
     const auto layout_rest =
         static_cast<uint32_t>(strategy.get_model().max_sh_coeffs_rest());
     EXPECT_EQ(shN_st->size, sh_swizzled_float_count(n_live, layout_rest));
-    // MN-1: after warmup, shN step_count should be mid_iter - 1000, not mid_iter.
     EXPECT_EQ(shN_st->step_count, mid_iter - 1000)
-        << "MN-1: shN step_count must not inflate during warmup";
+        << "shN step_count must not inflate during warmup";
 
     ASSERT_TRUE(save_checkpoint(temp_dir, mid_iter, strategy, params).has_value());
 
@@ -545,13 +518,12 @@ TEST(DualRepOptimizer, MCMC_QuantOn_MidRunSaveLoadResume) {
     const auto loaded = load_checkpoint(checkpoint_output_path(temp_dir), target,
                                         load_params, nullptr, nullptr, nullptr);
     ASSERT_TRUE(loaded.has_value()) << loaded.error()
-                                    << " — FIX-CODEC: quant-ON mid-run resume must load";
+                                    << " — quantized mid-run resume must load";
     EXPECT_EQ(*loaded, mid_iter);
     EXPECT_EQ(static_cast<size_t>(target.get_model().size()), n_live);
     EXPECT_TRUE(target.get_model().shN_value_quantized() ||
                 target.get_model().shN_raw().dtype() == DataType::Float16);
 
-    // Resume: prepare/commit from mid_iter+1 through resume_to (2k smoke).
     auto& ropt = target.get_optimizer();
     for (int it = mid_iter + 1; it <= resume_to; ++it) {
         auto fused = ropt.prepare_fastgs_fused_adam(it);
@@ -566,14 +538,12 @@ TEST(DualRepOptimizer, MCMC_QuantOn_MidRunSaveLoadResume) {
     ASSERT_NE(rst, nullptr);
     EXPECT_TRUE(rst->is_joint());
     EXPECT_EQ(rst->size, sh_swizzled_float_count(n_live, layout_rest));
-    // MN-1 still holds after resume: base was mid-1000, plus (resume_to-mid_iter).
     EXPECT_EQ(rst->step_count, (mid_iter - 1000) + (resume_to - mid_iter));
 
     std::filesystem::remove_all(temp_dir, ec);
 }
 
-// MN-2: short bounds must throw (loud), not silently wipe SH.
-TEST(DualRepOptimizer, MN2_ShortBoundsFailsLoud) {
+TEST(DualRepOptimizer, ShortBoundsFailsLoud) {
     CodecsOnGuard guard;
     auto splat = make_sh_splat(300, 3); // >256 so n_bounds=2 → need 4 floats
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -585,7 +555,6 @@ TEST(DualRepOptimizer, MN2_ShortBoundsFailsLoud) {
     EXPECT_THROW((void)sh_value::ensure_shN_fp32_for_mutation(splat), std::runtime_error);
 }
 
-// BL-4 + MJ-5: improved_gs_plus densify + prune under quant-ON joint.
 TEST(DualRepOptimizer, IGSPlus_QuantOnDensifyAndPrune) {
     CodecsOnGuard guard;
     constexpr size_t n = 32;
@@ -604,7 +573,7 @@ TEST(DualRepOptimizer, IGSPlus_QuantOnDensifyAndPrune) {
     opt_params.refine_every = 10;
     ASSERT_NO_THROW(strategy.initialize(opt_params));
 
-    // Seed non-trivial joint moments so prune must clear them (MJ-5).
+    // Seed non-trivial joint moments so prune must clear them.
     auto* means_st = strategy.get_optimizer().get_state_mutable(ParamType::Means);
     ASSERT_NE(means_st, nullptr);
     ASSERT_TRUE(means_st->is_joint());
@@ -634,8 +603,6 @@ TEST(DualRepOptimizer, IGSPlus_QuantOnDensifyAndPrune) {
     }
     ASSERT_NO_THROW(strategy.remove_gaussians(prune));
 
-    // After joint reset, decoded moments at pruned indices should be ~0.
-    // Spot-check: reset_state_at_indices was invoked (no throw) and state still joint.
     means_st = strategy.get_optimizer().get_state_mutable(ParamType::Means);
     ASSERT_NE(means_st, nullptr);
     EXPECT_TRUE(means_st->is_joint());

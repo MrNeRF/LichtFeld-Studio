@@ -2,23 +2,18 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 /**
- * WO-W.2 — Strided reduce that beats transpose+copy (per-shape heuristic).
+ * Strided reduce that beats transpose+copy (per-shape heuristic).
  *
  * Correctness vs reference (last-dim reduce of permuted dense), Float16,
- * path selection when strided wins, microbench table printed for PROGRESS.
  */
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
 
-#include <chrono>
 #include <cmath>
 #include <cuda_runtime.h>
-#include <functional>
 #include <gtest/gtest.h>
-#include <iomanip>
-#include <iostream>
 #include <string>
 #include <vector>
 
@@ -70,21 +65,6 @@ namespace {
             float thr = atol + rtol * std::abs(bv[i]);
             EXPECT_NEAR(av[i], bv[i], thr) << ctx << " i=" << i;
         }
-    }
-
-    double time_us(std::function<void()> fn, int warmup = 5, int reps = 20) {
-        for (int i = 0; i < warmup; ++i) {
-            fn();
-            cudaDeviceSynchronize();
-        }
-        cudaDeviceSynchronize();
-        auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < reps; ++i) {
-            fn();
-        }
-        cudaDeviceSynchronize();
-        auto t1 = std::chrono::steady_clock::now();
-        return std::chrono::duration<double, std::micro>(t1 - t0).count() / reps;
     }
 
     struct PathGuard {
@@ -254,75 +234,4 @@ TEST(StridedReduceW2, HeuristicPrefersStridedOnHugeReduce) {
     EXPECT_EQ(tensor_ops::reduce_last_path_for_testing(),
               tensor_ops::ReducePathForTesting::StridedFast);
     expect_close(result, ref_reduce_sum(t, 1, false), 1e-3f, 5e-2f, "huge-reduce");
-}
-
-// ---------------------------------------------------------------------------
-// Microbench table (shape × method µs) — printed for PROGRESS.md
-// ---------------------------------------------------------------------------
-
-TEST(StridedReduceW2, MicrobenchTableShapeXMethod) {
-    PathGuard g;
-    struct Case {
-        std::vector<size_t> shape;
-        int dim;
-        const char* name;
-    };
-    const Case cases[] = {
-        {{1024, 1024}, 0, "[1024,1024] dim0"},
-        {{64, 512, 512}, 0, "[64,512,512] dim0"},
-        {{32, 128, 512}, 1, "[32,128,512] dim1"},
-        {{8, 64, 1024}, 1, "[8,64,1024] dim1"},
-        {{16, 16, 256}, 0, "[16,16,256] dim0"},
-        {{4, 2048, 256}, 1, "[4,2048,256] dim1"},
-        {{1, 4096, 512}, 1, "[1,4096,512] dim1"},
-    };
-
-    std::cout << "\n=== WO-W.2 microbench (µs, mean of 20 after 5 warmup) ===\n";
-    std::cout << std::left << std::setw(28) << "shape" << std::setw(14) << "default"
-              << std::setw(14) << "force_strided" << std::setw(14) << "force_transpose"
-              << "winner\n";
-
-    for (const auto& c : cases) {
-        auto t = sequential_cuda(c.shape);
-        cuda_ok();
-
-        auto time_default = time_us([&] {
-            auto r = t.sum({c.dim}, false);
-            (void)r;
-        });
-
-        auto time_strided = time_us([&] {
-            tensor_ops::set_reduce_path_override_for_testing(
-                tensor_ops::ReducePathForTesting::StridedFast);
-            auto r = t.sum({c.dim}, false);
-            (void)r;
-            tensor_ops::set_reduce_path_override_for_testing(
-                tensor_ops::ReducePathForTesting::None);
-        });
-
-        auto time_transpose = time_us([&] {
-            tensor_ops::set_reduce_path_override_for_testing(
-                tensor_ops::ReducePathForTesting::Transpose);
-            auto r = t.sum({c.dim}, false);
-            (void)r;
-            tensor_ops::set_reduce_path_override_for_testing(
-                tensor_ops::ReducePathForTesting::None);
-        });
-
-        const char* winner = "default";
-        double best = time_default;
-        if (time_strided + 0.5 < best) {
-            best = time_strided;
-            winner = "strided";
-        }
-        if (time_transpose + 0.5 < best) {
-            winner = "transpose";
-        }
-
-        std::cout << std::left << std::setw(28) << c.name << std::setw(14) << std::fixed
-                  << std::setprecision(1) << time_default << std::setw(14) << time_strided
-                  << std::setw(14) << time_transpose << winner << "\n";
-    }
-    std::cout << std::flush;
-    SUCCEED();
 }

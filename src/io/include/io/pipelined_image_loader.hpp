@@ -69,7 +69,7 @@ namespace lfs::io {
     };
 
     /// Default free-VRAM headroom reserved above the GT-cache footprint so
-    /// headless/CLI training peak still has room (Directive-3 / WO-HP1).
+    // headless/CLI training peak still has room.
     constexpr size_t GT_CACHE_DEFAULT_HEADROOM_BYTES = 2ULL * 1024 * 1024 * 1024;
 
     /// Interactive H2D staging depth: rotating freestanding device buffers for
@@ -127,7 +127,7 @@ namespace lfs::io {
         }
 
         if (interactive) {
-            // Owner binding (bet #2): GUI device tier = 0 always. Pinned host
+            // Owner binding: GUI device tier = 0 always. Pinned host
             // holds the decoded set; H2D staging (not a device cache) hides
             // upload latency. free_vram / cap do not re-enable device tier —
             // no residual mini-tier knobs.
@@ -178,7 +178,7 @@ namespace lfs::io {
         std::chrono::milliseconds output_wait_timeout{config::DEFAULT_OUTPUT_TIMEOUT_MS};
         bool use_16bit_color = false;
 
-        // Decoded-GT device / pinned cache (Directive-3). Disabled when false;
+        // Decoded-GT device / pinned cache. Disabled when false;
         // when true the budget gate still decides device vs pinned vs off.
         bool enable_gt_cache = true;
         bool enable_gt_pinned_fallback = true;
@@ -312,7 +312,7 @@ namespace lfs::io {
             std::uint64_t succeeded_sequences = 0;
             std::uint64_t cancelled_sequences = 0;
             std::uint64_t failed_sequences = 0;
-            // Decoded-GT device / pinned cache (WO-HP1)
+            // Decoded-GT device / pinned cache
             bool gt_device_cache_enabled = false;
             bool gt_pinned_cache_enabled = false;
             size_t gt_device_cache_entries = 0;

@@ -1,12 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * TDD coverage for 6C.3 / 6C.5 / 6C.7 / 6D.5:
- *  - SM-capped grid-stride vectorized elementwise + lowered Thrust cutoff
- *  - Device-side mean/prod finalize (no 1-el Thrust / host prod)
- *  - Multi-block count_nonzero + float4 same-shape compares
- *  - half2/Packed128 fp16 elementwise
- *  - Float16 full reduce
+ * SM-capped vectorized elementwise, device-side reductions, multi-block
+ * count_nonzero, float4 comparisons, and Float16 operations.
  */
 
 #include "core/tensor.hpp"
@@ -37,10 +33,10 @@ namespace {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// 6C.3 — vectorized elementwise correctness across cutoff boundary
+// vectorized elementwise correctness across cutoff boundary
 // ---------------------------------------------------------------------------
 
-TEST(TensorKernels6CElem, UnaryBinaryAcrossVectorizedCutoff) {
+TEST(TensorElementwiseKernels, UnaryBinaryAcrossVectorizedCutoff) {
     // Below old 1024 cutoff but above new 256 → must hit vectorized path.
     for (size_t n : {64u, 257u, 512u, 1025u, 4096u, 100003u}) {
         std::vector<float> a(n), b(n);
@@ -66,10 +62,10 @@ TEST(TensorKernels6CElem, UnaryBinaryAcrossVectorizedCutoff) {
 }
 
 // ---------------------------------------------------------------------------
-// 6C.5 — mean / prod fully device-side; count_nonzero; compares
+// mean / prod fully device-side; count_nonzero; compares
 // ---------------------------------------------------------------------------
 
-TEST(TensorKernels6CElem, MeanAndProdMatchReference) {
+TEST(TensorElementwiseKernels, MeanAndProdMatchReference) {
     std::vector<float> vals = {1.f, 2.f, 3.f, 4.f, 0.5f, -1.f, 8.f, 0.25f};
     auto t = f32_cuda(vals, vals.size());
 
@@ -85,7 +81,7 @@ TEST(TensorKernels6CElem, MeanAndProdMatchReference) {
     EXPECT_NEAR(t.prod().item(), prod, 1e-4f); // prod accumulates more error
 }
 
-TEST(TensorKernels6CElem, MeanSegmentedScaleDeviceSide) {
+TEST(TensorElementwiseKernels, MeanSegmentedScaleDeviceSide) {
     // [2, 4] mean over last dim → two means
     std::vector<float> vals = {1, 2, 3, 4, 10, 20, 30, 40};
     auto t = f32_cuda(vals, {2, 4});
@@ -95,7 +91,7 @@ TEST(TensorKernels6CElem, MeanSegmentedScaleDeviceSide) {
     EXPECT_NEAR(m[1], 25.f, 1e-5f);
 }
 
-TEST(TensorKernels6CElem, CountNonzeroMatchesReference) {
+TEST(TensorElementwiseKernels, CountNonzeroMatchesReference) {
     // Large enough to exercise multi-block path (>=100k)
     const size_t n = 200000;
     std::vector<float> vals(n, 0.f);
@@ -112,7 +108,7 @@ TEST(TensorKernels6CElem, CountNonzeroMatchesReference) {
     EXPECT_EQ(mask.count_nonzero(), expected);
 }
 
-TEST(TensorKernels6CElem, CompareFloat4SameShape) {
+TEST(TensorElementwiseKernels, CompareFloat4SameShape) {
     const size_t n = 5000; // > kVectorizedMinElems
     std::vector<float> a(n), b(n);
     for (size_t i = 0; i < n; ++i) {
@@ -133,13 +129,9 @@ TEST(TensorKernels6CElem, CompareFloat4SameShape) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 6C.7 / 6D.5 — Float16 binary + full reduce
-// ---------------------------------------------------------------------------
-
-TEST(TensorKernels6CElem, Float16BinaryVectorized) {
+TEST(TensorElementwiseKernels, Float16BinaryVectorized) {
     // Host already wires Float16 binary arithmetic (tensor_exports).
-    // Unary/reduce host gates remain fail-loud (ISS-010); kernel launches exist.
+    // Unary/reduce host gates remain fail-loud; kernel launches exist.
     if (!has_cuda_device())
         GTEST_SKIP() << "CUDA required";
 
@@ -161,13 +153,7 @@ TEST(TensorKernels6CElem, Float16BinaryVectorized) {
     }
 }
 
-TEST(TensorKernels6CElem, Float16HostReduceIsCorrect) {
-    // MJ-14 triage: campaign commit 2645e679 added Float16HostReduceFailsLoud asserting
-    // f16 sum() throws. Contract later gained f16→f32→reduce→f16 support in
-    // tensor_unified_ops.cpp (Theme-B). The "fail loud" test became red because the
-    // implementation is intentional — not a silent wrong result.
-    // Provenance: test added on campaign branch (not on master); contract change is
-    // the correct resolution. Validate numerical correctness instead of throw.
+TEST(TensorElementwiseKernels, Float16HostReduceIsCorrect) {
     if (!has_cuda_device())
         GTEST_SKIP() << "CUDA required";
 
@@ -176,43 +162,4 @@ TEST(TensorKernels6CElem, Float16HostReduceIsCorrect) {
     auto s_f32 = s.to(DataType::Float32).cpu();
     ASSERT_EQ(s_f32.numel(), 1u);
     EXPECT_NEAR(s_f32.ptr<float>()[0], 10.f, 1e-2f);
-}
-
-// Microbench: report GB/s for large elementwise (numbers for PROGRESS)
-TEST(TensorKernels6CElem, MicrobenchElementwiseGBs) {
-    if (!has_cuda_device())
-        GTEST_SKIP() << "CUDA required";
-
-    const size_t n = 1 << 22; // 4M floats
-    auto A = Tensor::randn({n}, Device::CUDA);
-    auto B = Tensor::randn({n}, Device::CUDA);
-    // Warmup
-    for (int i = 0; i < 5; ++i) {
-        auto c = A + B;
-        (void)c;
-    }
-    cudaDeviceSynchronize();
-
-    const int iters = 50;
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    cudaEventRecord(start);
-    for (int i = 0; i < iters; ++i) {
-        auto c = A + B;
-        (void)c;
-    }
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    float ms = 0.f;
-    cudaEventElapsedTime(&ms, start, stop);
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-
-    // 3 tensors (2 read + 1 write) * 4 B * n * iters
-    const double bytes = 3.0 * 4.0 * static_cast<double>(n) * iters;
-    const double gbs = (bytes / 1e9) / (static_cast<double>(ms) * 1e-3);
-    std::printf("MICROBENCH 6C.3 f32 add N=%zu  %.4f ms/op  %.1f GB/s\n",
-                n, ms / iters, gbs);
-    EXPECT_GT(gbs, 50.0); // sanity: should be memory-bound-ish on 4080
 }

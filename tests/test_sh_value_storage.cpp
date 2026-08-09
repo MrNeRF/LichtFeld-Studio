@@ -1,20 +1,12 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-/**
- * WO-G3 / Phase 2.1 — SH value quant storage + densify bridge + export dequant.
- *
- * TDD: GPU encode/decode roundtrip, densify expand/commit, shN_canonical fp32,
- * and render-equivalence PSNR > 55 dB (synthetic SH evaluation proxy).
- */
-
 #include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
-#include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_quant_kernels.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -211,7 +203,6 @@ TEST(ShValueStorageTest, KernelEncodeDecodeMatchesHost) {
 }
 
 TEST(ShValueStorageTest, LedgerBpsUnder307WithJoint) {
-    joint_adam::set_joint_codec_enabled_for_testing(true);
     sh_value::set_sh_value_quant_enabled_for_testing(true);
 
     // Large-N asymptotic: use N=1024 so bounds amortize.
@@ -229,12 +220,10 @@ TEST(ShValueStorageTest, LedgerBpsUnder307WithJoint) {
     EXPECT_GT(ledger.bytes_per_splat, 290.0);
 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
-    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
 }
 
-// ISS-2.1 / WO-G6: G3 crash repro — grow N across 256-block boundary, re-encode, FastGS forward.
+// Grow N across a 256-row block boundary, re-encode, then run FastGS forward.
 TEST(ShValueStorageTest, PostDensifyReencodeThenFastGSForward) {
-    joint_adam::set_joint_codec_enabled_for_testing(true);
     sh_value::set_sh_value_quant_enabled_for_testing(true);
 
     constexpr size_t kCap = 2048;
@@ -346,7 +335,7 @@ TEST(ShValueStorageTest, PostDensifyReencodeThenFastGSForward) {
         auto r = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
         ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess)
-            << "illegal address after post-densify re-encode (ISS-2.1)";
+            << "illegal address after post-densify re-encode";
         opt.zero_grad(100);
         auto grad_out = Tensor::ones_like(r->first.image).mul(0.01f);
         ASSERT_NO_THROW(fast_rasterize_backward(r->second, grad_out, splat, opt, {}, {},
@@ -358,15 +347,13 @@ TEST(ShValueStorageTest, PostDensifyReencodeThenFastGSForward) {
     }
 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
-    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
 }
 
-// ISS-027: GUI exportable q16 SH densify expand → append → re-encode, then
+// GUI exportable q16 SH densify expand → append → re-encode, then
 // FastGS forward/backward must not illegal-address. Headless pool q16 already
 // has PostDensifyReencodeThenFastGSForward; this is the packed SoA path the
 // viewport zero-copy gate missed (gate ran -i 800 without a full densify).
 TEST(ShValueStorageTest, ExportableQ16DensifyThenFastGSForward) {
-    joint_adam::set_joint_codec_enabled_for_testing(true);
     sh_value::set_sh_value_quant_enabled_for_testing(true);
 
     constexpr size_t kN0 = 512;
@@ -480,7 +467,7 @@ TEST(ShValueStorageTest, ExportableQ16DensifyThenFastGSForward) {
     EXPECT_GE(model.shN().capacity(), sh_value_quant::sh_value_u16_count(kCap, rest));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
-    // Rock-solid: full active SH 0..max after densify commit (not just 0/1).
+    // Exercise every active SH degree after the densification commit.
     for (int active = 0; active <= kShDegree; ++active) {
         model.set_active_sh_degree(active);
         ASSERT_TRUE(model.shN_value_quantized()) << "q16 must stay resident after densify commit";
@@ -488,7 +475,7 @@ TEST(ShValueStorageTest, ExportableQ16DensifyThenFastGSForward) {
         ASSERT_TRUE(r.has_value()) << "active_sh=" << active << " "
                                    << lfs::format_for_developer(r.error());
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess)
-            << "illegal address after exportable q16 densify (ISS-027) active_sh=" << active;
+            << "illegal address after exportable q16 densify, active_sh=" << active;
         opt.zero_grad(100);
         auto grad_out = Tensor::ones_like(r->first.image).mul(0.01f);
         ASSERT_NO_THROW(fast_rasterize_backward(r->second, grad_out, model, opt, {}, {},
@@ -498,14 +485,10 @@ TEST(ShValueStorageTest, ExportableQ16DensifyThenFastGSForward) {
     }
 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
-    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
 }
 
-// ============================================================================
-// Rock-solid bar (owner): SH degree-up must be collision-safe BY CONSTRUCTION
-// against densify/grow at any iteration alignment. Representation is declared
-// state, never inferred; q16 storage has exactly one writer (codec commit).
-// ============================================================================
+// SH degree updates must remain collision-safe with densification and growth.
+// Representation is declared state, and codec commit is the sole q16 writer.
 
 namespace {
     std::vector<std::uint8_t> snapshot_bytes(const Tensor& t) {
@@ -563,7 +546,7 @@ TEST(ShDegreeCollisionTest, DegreeUpInsideOpenMutationWindowBothOrders) {
 TEST(ShDegreeCollisionTest, DegreeUpWithGrownMeansCapacitySameBoundary) {
     // Densify grow raises means.capacity before/while codes grow. A degree-up on
     // the same boundary must either no-op (consistent q16) or fail loud — never
-    // silently rewrite codes with float-topology sizing (the ISS-027-family bug).
+    // silently rewrite codes using float-topology sizing.
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     constexpr size_t kCapGrow = kN * 2;
     auto splat = make_random_sh3(kN);
@@ -620,11 +603,10 @@ TEST(ShDegreeCollisionTest, MaxDegreeChangeOnQ16RelayoutsViaCanonical) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-// Permanent CI regression: forced densify+degree-up same boundary on exportable
-// q16, across SH degrees 0..3, with capacity grow mid-window. Must leave q16
+// Force densification and degree growth at the same exportable q16 boundary,
+// across SH degrees 0..3, with capacity growth mid-window. The model must leave q16
 // resident after commit (no multi-iter float densify window) and survive FastGS.
 TEST(ShDegreeCollisionTest, ExportableDegreeUpGrowSameBoundaryAllDegrees) {
-    joint_adam::set_joint_codec_enabled_for_testing(true);
     sh_value::set_sh_value_quant_enabled_for_testing(true);
 
     constexpr size_t kN0 = 512;
@@ -754,7 +736,6 @@ TEST(ShDegreeCollisionTest, ExportableDegreeUpGrowSameBoundaryAllDegrees) {
     }
 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
-    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
 }
 
 // Cadence-misalign proxy: repeated densify windows with degree flips at every
@@ -800,10 +781,8 @@ TEST(ShDegreeCollisionTest, MisalignedCadenceDensifyDegreeSweep) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-// Landmine gate: stop_refine crossing with always-commit. The deferred-commit
-// float window used to leave float shN until stop_refine (~15k+ iters); every
-// prior gate stopped short of that boundary. Simulate the refine schedule up
-// through stop_refine and assert q16 is resident on both sides of the freeze.
+// Crossing stop_refine must keep q16 resident on both sides of the refinement
+// freeze.
 TEST(ShDegreeCollisionTest, StopRefineCrossingAlwaysCommitQ16Throughout) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(kN, /*seed=*/0x57A8);

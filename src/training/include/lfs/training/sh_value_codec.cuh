@@ -4,7 +4,7 @@
 #pragma once
 
 /**
- * Device-side 16-bit SH-rest value codec (Phase 2.1).
+ * Device-side 16-bit SH-rest value codec.
  * Mirrors host math in sh_value_codec.hpp.
  */
 

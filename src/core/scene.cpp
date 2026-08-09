@@ -6,7 +6,6 @@
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
-#include "core/environment.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -1116,15 +1115,6 @@ namespace lfs::core {
     }
 
     void Scene::rebuildModelCacheIfNeeded(const bool include_hidden_splats) const {
-        // E1 (q16 residual discrimination): early-return disables the cross-thread
-        // Scene cache rebuild that races trainer commit/trim.
-        if (environment::flag("LFS_DEBUG_DISABLE_SCENE_CACHE_REBUILD", false)) {
-            if (!include_hidden_splats) {
-                model_cache_valid_.store(true, std::memory_order_release);
-            }
-            return;
-        }
-
         if (!include_hidden_splats && model_cache_valid_.load(std::memory_order_acquire))
             return;
 
@@ -1387,7 +1377,7 @@ namespace lfs::core {
         // Epoch fence: any CUDA copies from live training tensors must complete
         // before this function returns and drops live_model / combined locks.
         // Otherwise post-refine trim_memory_pool can decommit a float workspace
-        // still referenced by in-flight rebuild kernels (q16 residual poison).
+        // still referenced by in-flight rebuild kernels.
         if (liveModelMutex() != nullptr) {
             const cudaError_t sync_err = cudaDeviceSynchronize();
             if (sync_err != cudaSuccess) {

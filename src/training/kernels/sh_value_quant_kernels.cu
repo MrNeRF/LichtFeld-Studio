@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 /**
- * SH value quant conversion kernels (WO-G3 / Phase 2.1).
+ * SH value quant conversion kernels.
  */
 
 #include "core/cuda/sh_layout.cuh"

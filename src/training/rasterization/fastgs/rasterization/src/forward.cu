@@ -25,7 +25,7 @@
 namespace {
     namespace raster = fast_lfs::rasterization;
 
-    // Grow-only high-water sort scratch (Phase 1.1). Never shrinks; frees only
+    // Grow-only high-water sort scratch. Never shrinks; frees only
     // on destruction / explicit reset (slot-style grow-only buffer semantics).
     // 1.5× headroom absorbs typical densify/view jumps without overflow re-runs.
     constexpr double kSortBufferGrowthFactor = 1.5;
@@ -81,7 +81,7 @@ namespace {
             ptr_ = nullptr;
             size_ = 0;
 
-            // ISS-020: after ordered process teardown the primary context may
+            // after ordered process teardown the primary context may
             // already be unusable. Late TLS dtors must not touch the driver.
             if (lfs::core::gpu_process_teardown_started()) {
                 return;
@@ -137,7 +137,6 @@ namespace {
                         "requested_bytes={}, label={}", size,
                         label_ ? label_ : "rasterizer.fastgs.scratch"));
             }
-            // Phase 0.1: count real driver allocs for gate G2 (sort-buffer churn).
             lfs::core::alloc_counter::record_site(lfs::core::alloc_counter::Site::FastgsSort);
             ptr_ = ptr;
             size_ = size;
@@ -171,7 +170,7 @@ namespace {
 
         FastGSSortBufferCache() {
 #if CUDART_VERSION >= 11020
-            // Pinned host slot for async n_instances D2H (Phase 1.2).
+            // Pinned host slot for async n_instances D2H.
             void* ptr = nullptr;
             if (cudaMallocHost(&ptr, sizeof(std::uint64_t)) == cudaSuccess) {
                 h_n_instances_pinned = static_cast<std::uint64_t*>(ptr);
@@ -191,7 +190,7 @@ namespace {
         }
 
         ~FastGSSortBufferCache() {
-            // ISS-020: pre-shutdown hook already released device + host state.
+            // pre-shutdown hook already released device + host state.
             // After gpu_process_teardown_started(), never re-enter CUDA or free.
             if (lfs::core::gpu_process_teardown_started()) {
                 n_instances_ready_event = nullptr;
@@ -255,9 +254,9 @@ namespace {
         return cache;
     }
 
-    // Phase 1.2: count mid-pipeline n_instances hard-sync fallbacks (warmup/growth only).
+    // count mid-pipeline n_instances hard-sync fallbacks (warmup/growth only).
     std::atomic<std::uint64_t> g_n_instances_fallback_syncs{0};
-    // WO-WARP-FWD test hooks (host-side; passed as kernel args each launch).
+    // test hooks (host-side; passed as kernel args each launch).
     std::atomic<int> g_warp_cull_mode{0};            // 0=on, 1=off, 2=wrong empty
     std::atomic<int> g_blend_batch_size_override{0}; // 0 = use config::blend_batch_size
     std::atomic<bool> g_force_n_instances_sync{false};
@@ -267,7 +266,7 @@ namespace {
 void fast_lfs::rasterization::release_sorted_primitive_indices(
     void* ptr,
     cudaStream_t /*stream*/) noexcept {
-    // Phase 1.1: sorted indices live in the grow-only thread-local cache.
+    // sorted indices live in the grow-only thread-local cache.
     // Ownership is never transferred to the caller — do not cudaFree.
     // Stream ordering with subsequent forwards on the same stream keeps the
     // buffer valid through backward without an explicit free.
@@ -459,7 +458,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         static_cast<uint64_t>(n_primitives),
         n_tiles_u64);
 
-    // Phase 1.1/1.2: grow-only sort buffers + async n_instances (no mid-pipeline
+    // grow-only sort buffers + async n_instances (no mid-pipeline
     // hard sync in steady state). Device count always at offset[n_primitives-1].
     auto& sort_cache = sort_buffer_cache();
     sort_cache.bind_stream(stream);
@@ -628,11 +627,10 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                 static_cast<uint>(n_instances));
         }
     } else {
-        // Steady state: no mid-pipeline StreamSynchronize.
-        // 1) Proactively grow capacity from last_n headroom (no sync).
-        // 2) Launch create_instances clamped to capacity (overlaps D2H).
-        // 3) Event-wait ONLY for the D2H (not create/sort/blend).
-        // 4) Sort/extract/blend with the exact host count.
+        // The steady-state pipeline first grows capacity from last_n headroom
+        // without synchronizing. create_instances then runs clamped to that
+        // capacity while the count is copied to the host. Wait only for that
+        // copy before sorting, extracting, and blending with the exact count.
         // Overflow (n > capacity) is the rare growth fallback.
         if (sort_cache.last_n_instances > 0) {
             const int predicted = static_cast<int>(

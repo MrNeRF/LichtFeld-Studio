@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Phase 1.1 — Persistent high-water sort buffers in FastGS forward.
- * Phase 1.2 — Remove n_instances hard sync (async + capacity path).
+ * Persistent high-water sort buffers in FastGS forward.
+ * Remove n_instances hard sync (async + capacity path).
  */
 
 #include "core/alloc_counter.hpp"
@@ -87,10 +87,7 @@ protected:
     std::unique_ptr<SplatData> splat_;
 };
 
-// ---------------------------------------------------------------------------
-// Task 1.1 — second same-size forward must issue 0 real driver allocs.
-// Baseline (pre-1.1): ~5 cudaMallocAsync for sort keys×2, indices×2, CUB WS.
-// ---------------------------------------------------------------------------
+// A second same-size forward must issue no driver allocations.
 TEST_F(FastGSSortBufferTest, SteadyStateSecondForwardHasZeroSortAllocs) {
     // Warmup: arena + thread-local image buffers + first sort-buffer growth.
     {
@@ -130,11 +127,9 @@ TEST_F(FastGSSortBufferTest, SteadyStateSecondForwardHasZeroSortAllocs) {
         << delta2;
 }
 
-// ---------------------------------------------------------------------------
-// Task 1.2 — async n_instances path matches sync path (pixel golden).
+// The asynchronous n_instances path must match the synchronous pixel result.
 // First forward forces mid-pipeline sync (empty capacity); second uses steady
 // async/capacity path. Images must be bit-identical.
-// ---------------------------------------------------------------------------
 TEST_F(FastGSSortBufferTest, AsyncPathMatchesSyncPathPixels) {
     using fast_lfs::rasterization::n_instances_fallback_sync_count;
     using fast_lfs::rasterization::reset_n_instances_fallback_sync_count;
@@ -179,9 +174,7 @@ TEST_F(FastGSSortBufferTest, AsyncPathMatchesSyncPathPixels) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Task 1.2 — capacity growth / fallback path fires when high-water is reset.
-// ---------------------------------------------------------------------------
+// Resetting the high-water mark must exercise the capacity-growth fallback.
 TEST_F(FastGSSortBufferTest, CapacityGrowthTakesFallbackSync) {
     using fast_lfs::rasterization::n_instances_fallback_sync_count;
     using fast_lfs::rasterization::reset_n_instances_fallback_sync_count;
@@ -223,11 +216,9 @@ TEST_F(FastGSSortBufferTest, CapacityGrowthTakesFallbackSync) {
     set_force_n_instances_sync_for_testing(false);
 }
 
-// ---------------------------------------------------------------------------
-// Task 1.5 — cudaPointerGetAttributes preflight is debug-only.
+// cudaPointerGetAttributes preflight is debug-only.
 // Release (NDEBUG) builds must not call it per-step; after N frames the
 // instrumented counter stays 0.
-// ---------------------------------------------------------------------------
 TEST_F(FastGSSortBufferTest, ReleasePreflightPointerAttrsAreSkipped) {
     using fast_lfs::rasterization::preflight_pointer_attr_call_count;
     using fast_lfs::rasterization::reset_preflight_pointer_attr_call_count;

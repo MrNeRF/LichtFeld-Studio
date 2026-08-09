@@ -1,18 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// ISS-020 — post-suite teardown SIGSEGV (static destruction order).
-//
-// FAIL evidence (before fix): process exit 139 after a fully green gtest run:
-//
-//   lichtfeld_tests --gtest_filter=\
-//     'PPISPControllerTest.*:DensifyEvents4x.*:FastGSGradientTest.Numerical_Means:CheckpointStrategies/*'
-//   → [PASSED] 21 tests, "Shutting down CudaMemoryPool...", then SIGSEGV (exit 139).
-//
-// PASS evidence: same filter exits 0; full lichtfeld_tests exits 0 (only
-// documented pre-existing reds). Do NOT call teardown_gpu_before_exit() in
-// the parent process mid-suite (it kills the pool for later tests). CUDA
-// death-tests are also avoided — fork + CUDA is unreliable (child OOM).
+// Do not call teardown_gpu_before_exit() in the parent process mid-suite; it
+// shuts down the pool needed by later tests. CUDA death tests are also avoided
+// because forked CUDA processes are unreliable.
 
 #include "components/ppisp_controller.hpp"
 #include "core/tensor.hpp"

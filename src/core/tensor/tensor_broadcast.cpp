@@ -53,7 +53,7 @@ namespace lfs::core {
 
         // An empty dimension vector represents a scalar, not an incompatibility.
         if (src.shape() == target) {
-            // Same shape: return a shallow handle (no clone). WO-W.1.
+            // Same shape: return a shallow handle (no clone).
             return src;
         }
 
@@ -70,7 +70,7 @@ namespace lfs::core {
             return Tensor::empty(target, src.device(), src.dtype());
         }
 
-        // WO-W.1: zero-stride expand view — no device allocation.
+        // zero-stride expand view — no device allocation.
         // Consumers that are not on the zero_stride allowlist materialize via
         // contiguous_read / contiguous() / dense-for-kernel at their boundary.
         auto new_strides = expand_strides(src, target);

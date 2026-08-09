@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Phase 1.9 — densification_info fold+zero fused (no separate full [2,N] memset).
- * Equivalence: multi-step accumulate into max/vis matches the old max/add + zero path.
+ * Fused densification-info fold-and-zero tests.
+ * The fused operation must match separate max/add and zero operations.
  */
 
 #include "core/tensor.hpp"
@@ -52,7 +52,6 @@ TEST(DensificationInfoZeroTest, MrnfFoldMatchesMultiStepReference) {
         auto info = make_info(r0, r1);
         auto info_ref = info.clone();
 
-        // New fused path
         mrnf_strategy::launch_fold_densification_and_zero(
             vis.ptr<float>(),
             refine_max.ptr<float>(),
@@ -60,7 +59,6 @@ TEST(DensificationInfoZeroTest, MrnfFoldMatchesMultiStepReference) {
             N);
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
-        // Reference
         mcmc::launch_elementwise_max_inplace(
             refine_ref.ptr<float>(),
             info_ref.ptr<float>() + N,

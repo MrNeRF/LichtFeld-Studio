@@ -94,7 +94,6 @@ namespace lfs::training {
         }
 
         void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
-            // Phase 4.8: compact positives + radix-sort (not full-tensor sort).
             if (tensor.device() == lfs::core::Device::CUDA &&
                 tensor.dtype() == lfs::core::DataType::Float32 &&
                 tensor.is_valid() && tensor.numel() > 0) {
@@ -165,9 +164,8 @@ namespace lfs::training {
             splat_data.notify_deleted_mask_changed();
         }
 
-        void append_live_deleted_rows(lfs::core::SplatData& splat_data, const lfs::core::Tensor& free_mask, size_t n_rows) {
-            // ISS-022: safe before or after param growth — pad to size() with live rows.
-            (void)n_rows;
+        void append_live_deleted_rows(lfs::core::SplatData& splat_data, const lfs::core::Tensor& free_mask) {
+            // safe before or after param growth — pad to size with live rows.
             const size_t target_size = static_cast<size_t>(splat_data.size());
             auto& deleted = splat_data.deleted();
             const size_t desired_capacity = std::max(
@@ -342,7 +340,6 @@ namespace lfs::training {
         const size_t n = static_cast<size_t>(_splat_data->size());
         const size_t reserve =
             (_params && _params->max_cap > 0) ? static_cast<size_t>(_params->max_cap) : 0;
-        // Phase 4.3: grow score buffer via append_zeros when capacity allows.
         ensure_score_buffer_inplace(
             _error_score_max, n, _splat_data->means().device(), reserve);
     }
@@ -439,7 +436,7 @@ namespace lfs::training {
     }
 
     void ImprovedGSPlus::LAS_densify(const lfs::core::Tensor& scores, const int64_t budget_for_alloc) {
-        // BL-4: densify kernels read/write float shN; dequant q16 for the mutation
+        // densify kernels read/write float shN; dequant q16 for the mutation
         // window (mirrors MCMC ensure_shN_fp32_for_mutation).
         const bool shN_expanded =
             lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
@@ -452,8 +449,7 @@ namespace lfs::training {
             }
         } shn_guard{_splat_data, shN_expanded};
 
-        // Phase 4.7: fused Gumbel-topk sample (without replacement) — replaces Theme-A
-        // Tensor::multinomial and matches MCMC's custom sampling path.
+        // Sample without replacement through the same Gumbel-top-k path as MCMC.
         const size_t n_scores = scores.numel();
         const size_t k_sample = static_cast<size_t>(budget_for_alloc);
         auto sampled_idxs = lfs::core::Tensor::empty(
@@ -479,7 +475,7 @@ namespace lfs::training {
         const lfs::core::Device device = _splat_data->means().device();
         const size_t K = static_cast<size_t>(budget_for_alloc);
 
-        // Phase 4.3: reusable densify child workspace (grow-only).
+        // reusable densify child workspace (grow-only).
         _densify_ws.ensure(K, layout_rest, use_shN, /*sh0_flat_layout=*/true, device);
         auto second_positions = _densify_ws.means_view(K);
         auto second_rotations = _densify_ws.rotations_view(K);
@@ -594,7 +590,7 @@ namespace lfs::training {
                 reset_optimizer_state_at_indices(ParamType::ShN);
                 reset_optimizer_state_at_indices(ParamType::Opacity);
             } else {
-                // Phase 4.4: fused Adam-scale zero for split parents (legacy codec fast path).
+                // fused Adam-scale zero for split parents (legacy codec fast path).
                 {
                     float* adam_ptrs[12] = {};
                     const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
@@ -624,7 +620,7 @@ namespace lfs::training {
             const size_t old_size = static_cast<size_t>(_splat_data->size());
             const size_t n_remaining = static_cast<size_t>(remaining);
 
-            // ISS-023 addendum 2: preflight before multi-param append so a
+            // preflight before multi-param append so a
             // capacity-ensure failure cannot leave partial row growth.
             if (!_optimizer->preflight_grow_capacity(n_remaining)) {
                 LOG_ERROR(
@@ -649,7 +645,7 @@ namespace lfs::training {
             const auto new_indices = lfs::core::Tensor::from_vector(
                 new_indices_vec, lfs::core::TensorShape({n_remaining}), device);
 
-            // Grow params first, then pad deleted mask to the new size (ISS-022).
+            // Grow params first, then pad deleted mask to the new size.
             _splat_data->means().append_zeros(n_remaining);
             _splat_data->means().index_put_(new_indices, append_positions);
 
@@ -666,7 +662,7 @@ namespace lfs::training {
 
             _splat_data->opacity_raw().append_zeros(n_remaining);
             _splat_data->opacity_raw().index_put_(new_indices, append_opacities);
-            append_live_deleted_rows(*_splat_data, _free_mask, n_remaining);
+            append_live_deleted_rows(*_splat_data, _free_mask);
 
             if (use_shN) {
                 auto append_shN = second_shN.slice(0, num_filled, budget_for_alloc);
@@ -746,7 +742,6 @@ namespace lfs::training {
                 _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
             ensure_error_score_shape();
 
-            // Phase 1.9: fold error row into max and zero densification_info in one kernel.
             const auto& accum = _splat_data->_densification_info;
             if (accum.is_valid() &&
                 accum.ndim() == 2 &&
@@ -798,7 +793,6 @@ namespace lfs::training {
 
             lfs::core::Tensor::trim_memory_pool();
 
-            // Phase 4.3: reuse densification_info when shape matches (no realloc-zeros).
             ensure_densification_info_shape_inplace(
                 _splat_data->_densification_info,
                 static_cast<size_t>(_splat_data->size()),
@@ -984,7 +978,7 @@ namespace lfs::training {
         _splat_data->rotation_raw().index_put_(prune_indices, zero_rotation);
 
         // Zero optimizer states in-place (preserves capacity).
-        // MJ-5: joint codec has no exp_avg_scale — early-return left stale moments on
+        // joint codec has no exp_avg_scale — early-return left stale moments on
         // pruned slots (reused after soft-delete). Mirror MCMC joint reset branch.
         auto zero_optimizer_state = [&](ParamType param_type) {
             auto* state = _optimizer->get_state_mutable(param_type);
@@ -1104,7 +1098,6 @@ namespace lfs::training {
         const int64_t slots_to_fill = std::min(count, num_free);
         auto target_indices = free_indices.slice(0, 0, slots_to_fill);
 
-        // Phase 4.4: fused free-slot write (attrs + Adam scales + free_mask=false).
         float* adam_ptrs[12] = {};
         const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
         const int opacity_dim = (_splat_data->opacity_raw().ndim() == 2) ? 1 : 0;
@@ -1159,7 +1152,6 @@ namespace lfs::training {
             auto* probe = _optimizer->get_state_mutable(ParamType::Means);
             const bool joint_codec = probe && probe->is_joint();
             if (joint_codec) {
-                // Reset optimizer states for filled slots
                 auto reset_optimizer_state = [&](ParamType param_type) {
                     auto* state = _optimizer->get_state_mutable(param_type);
                     if (!state)

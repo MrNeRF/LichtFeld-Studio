@@ -30,7 +30,7 @@ namespace lfs::training {
 
     // Build the row mask for splats loaded via --add-splat ... --freeze.
     // Invalid/empty means no frozen rows for the requested size.
-    // Phase 1.7: GPU mask is cached and rebuilt only when frozen ranges or N change
+    // GPU mask is cached and rebuilt only when frozen ranges or N change
     // (no host vector + H2D on the steady inject_noise path).
     lfs::core::Tensor make_frozen_mask(
         const lfs::core::SplatData& splat_data,
@@ -95,15 +95,13 @@ namespace lfs::training {
         const lfs::core::Tensor& rotations);
 
     /**
-     * WO-X / Phase 4.3 — grow-only N-row densify scratch (masks + weights).
+     * Grow-only N-row densify scratch for masks and weights.
      * Sized once to max_cap so refine never re-driver-allocs as live N climbs.
      */
     struct DensifyNScratch {
-        lfs::core::Tensor f32_a; // weights / scores
-        lfs::core::Tensor f32_b;
+        lfs::core::Tensor f32_a;  // weights / scores
         lfs::core::Tensor bool_a; // masks
-        lfs::core::Tensor bool_b;
-        lfs::core::Tensor i64_a; // indices (K, grows with K high-water)
+        lfs::core::Tensor i64_a;  // indices (K, grows with K high-water)
         lfs::core::Tensor i64_b;
         size_t n_capacity = 0;
         size_t k_capacity = 0;
@@ -111,11 +109,11 @@ namespace lfs::training {
         void ensure_n(size_t n, lfs::core::Device device);
         void ensure_k(size_t k, lfs::core::Device device);
 
-        /// Resident capacity bytes (f32×2 + bool×2 + i64×2 at high-water).
+        /// Resident capacity bytes (f32×1 + bool×1 + i64×2 at high-water).
         [[nodiscard]] std::size_t resident_bytes() const noexcept {
             std::size_t bytes = 0;
             if (n_capacity > 0) {
-                bytes += n_capacity * (2 * sizeof(float) + 2 * sizeof(bool));
+                bytes += n_capacity * (sizeof(float) + sizeof(bool));
             }
             if (k_capacity > 0) {
                 bytes += k_capacity * 2 * sizeof(std::int64_t);
@@ -125,12 +123,10 @@ namespace lfs::training {
 
         // Drop all storage. Not process-static (lives on the strategy), but
         // zeros_direct f32/bool + pool-backed i64 free paths are teardown-safe
-        // (ISS-020). Call when the owning strategy is reset early.
+        // Call when the owning strategy is reset early.
         void release() noexcept {
             f32_a = {};
-            f32_b = {};
             bool_a = {};
-            bool_b = {};
             i64_a = {};
             i64_b = {};
             n_capacity = 0;
@@ -138,15 +134,13 @@ namespace lfs::training {
         }
 
         [[nodiscard]] lfs::core::Tensor f32_a_view(size_t n) const;
-        [[nodiscard]] lfs::core::Tensor f32_b_view(size_t n) const;
         [[nodiscard]] lfs::core::Tensor bool_a_view(size_t n) const;
-        [[nodiscard]] lfs::core::Tensor bool_b_view(size_t n) const;
         [[nodiscard]] lfs::core::Tensor i64_a_view(size_t k) const;
         [[nodiscard]] lfs::core::Tensor i64_b_view(size_t k) const;
     };
 
     /**
-     * Phase 4.3 — reusable densify child-buffer workspace.
+     * Reusable densification child-buffer workspace.
      * Grow-only high-water for LAS second-child attribute buffers (K rows).
      * Avoids per-refine empty() allocs for means/rot/scale/sh0/shN/opacity.
      */
@@ -175,7 +169,7 @@ namespace lfs::training {
     };
 
     /**
-     * Phase 4.3 — grow densification_info / 1D score buffers without full realloc
+     * grow densification_info / 1D score buffers without full realloc
      * when reserved capacity allows. densification_info is [2,N]: when n grows we
      * must reallocate (row1 offset = N); when shape already matches, reuse + zero.
      * For 1D scores: append_zeros into reserved capacity when possible.

@@ -1,7 +1,6 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Phase 1.7 — Persistent masks:
  *  - frozen GPU mask rebuilt once across N unchanged calls; rebuilt on range change
  *  - cropbox damping mask rebuilt once across unchanged steps; rebuilt on topology
  */

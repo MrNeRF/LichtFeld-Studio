@@ -83,7 +83,6 @@ add_subdirectory(depth_anchor)
 # Optimizer sources
 set(TRAINING_NEW_SOURCES
     optimizer/adam_optimizer.cpp
-    joint_adam_codec.cpp
     sh_value_codec.cpp
     sh_value_storage.cpp
     live_model_mutation_guard.cpp
@@ -148,7 +147,7 @@ target_link_libraries(lfs_training
         lfs_io                  # For CacheLoader, exporter, pipelined loader
         lfs_event_bridge        # Shared event bridge for cross-module singletons
         lfs_training_kernels    # LibTorch-free SSIM kernels
-        fastlfs_backend         # For adam_step_raw CUDA kernel (LibTorch-free)
+        fastlfs_backend         # LibTorch-free FastGS rasterization and optimizer kernels
         gsplat_backend_lfs      # LibTorch-free gsplat rasterization backend
 	edge_compute_backend    # For igs+ edge score rasterization
     PRIVATE

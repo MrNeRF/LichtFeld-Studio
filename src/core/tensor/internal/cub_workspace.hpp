@@ -28,7 +28,7 @@ namespace lfs::core::tensor_ops {
         }
 
         void deallocate(void* ptr, const cudaStream_t stream) const noexcept {
-            // ISS-020: pool-liveness-aware (static/TLS destruction after teardown).
+            // pool-liveness-aware (static/TLS destruction after teardown).
             safe_cuda_pool_deallocate(ptr, stream);
         }
     };

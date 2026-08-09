@@ -72,7 +72,7 @@ namespace lfs::core {
             if (!g_gpu_pre_shutdown_overflow_logged.exchange(true, std::memory_order_relaxed)) {
                 try {
                     LOG_ERROR("register_gpu_pre_shutdown_hook: capacity {} exceeded; "
-                              "hook dropped (ISS-020 static/TLS release incomplete)",
+                              "hook dropped during static/TLS release",
                               kMaxGpuPreShutdownHooks);
                 } catch (...) {
                 }
@@ -95,7 +95,7 @@ namespace lfs::core {
 
     void teardown_gpu_before_exit() noexcept {
         try {
-            // ISS-020 step 0: release every registered long-lived CUDA holder
+            // release every registered long-lived CUDA holder
             // (TLS FastGS sort workspaces, rasterizer image caches, PPISP shared
             // statics, mirror mult cache, nan-check scratch, …) while the pool
             // and CUDA context are still usable. After this returns, static/TLS
@@ -104,8 +104,8 @@ namespace lfs::core {
             run_gpu_pre_shutdown_hooks_once();
             g_gpu_process_teardown_started.store(true, std::memory_order_release);
 
-            // Phase 6C §9 Ruling 2: drain dedicated DeviceFaultRecord slots
-            // (cudaMalloc-owned, never pool memory) BEFORE the tensor memory
+            // Drain dedicated DeviceFaultRecord slots (cudaMalloc-owned, never
+            // pool memory) before the tensor memory
             // pool shuts down. device_fault_registry_teardown is no-throw and
             // idempotent (LFS_CUDA_LOG_TEARDOWN on every free).
             device_fault_registry_teardown();
@@ -217,7 +217,7 @@ namespace lfs::core {
                 ::backtrace_symbols_fd(frames.data(), count, g_crash_log_fd);
             }
 
-            struct sigaction action{};
+            struct sigaction action {};
             action.sa_handler = SIG_DFL;
             sigemptyset(&action.sa_mask);
             action.sa_flags = 0;

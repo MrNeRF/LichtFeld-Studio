@@ -198,8 +198,8 @@ TEST_F(ExpandedTensorOpsTest, ScatterToRGBA) {
     }
 }
 
-// WO-W.1 regression (found by CheckpointResumeTest): raw ptr() on a stride-0
-// expand view must materialize dense storage — callers hand ptr()+numel() to
+// Raw ptr() on a stride-0 expand view must materialize dense storage because
+// callers hand ptr()+numel() to
 // flat memcpy/kernels (e.g. SplatData init scaling upload) and read N*expand
 // elements from a physically smaller buffer otherwise.
 TEST(ExpandedTensorOps, RawPtrOnExpandViewMaterializesDense) {
@@ -211,7 +211,6 @@ TEST(ExpandedTensorOps, RawPtrOnExpandViewMaterializesDense) {
     ASSERT_TRUE(expanded.has_zero_stride());
     const float* p = expanded.ptr<float>(); // must be safe for flat reads
     ASSERT_NE(p, nullptr);
-    // Escape boundary materializes: handle is no longer a zero-stride view.
     EXPECT_FALSE(expanded.has_zero_stride());
     EXPECT_TRUE(expanded.is_contiguous());
     for (int r = 0; r < 3; ++r)
@@ -275,7 +274,7 @@ TEST(ExpandedTensorOps, EmptyZeroDimTensorPtrIsSafe) {
     });
 }
 
-// Device-mismatch canary: a CPU-tagged handle whose storage is CUDA device
+// A CPU-tagged handle whose storage is CUDA device
 // memory must be rejected at raw-pointer escape (would produce cudaMemcpy
 // invalid argument with src/dst in the same address region).
 TEST(ExpandedTensorOps, CpuTaggedDeviceStorageRejectedOnPtr) {

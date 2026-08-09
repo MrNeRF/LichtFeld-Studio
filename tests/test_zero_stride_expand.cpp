@@ -1,16 +1,6 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-/**
- * WO-W.1 — Zero-stride expand / broadcast_to views + correctness firewall.
- *
- * TDD contract:
- *  - expand / broadcast_to create zero-stride views (no device alloc)
- *  - allowlisted ops match materialized reference
- *  - non-allowlisted Theme-A ops materialize at boundary (never corrupt)
- *  - in-place on expand views throws
- */
-
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/tensor_zero_stride.hpp"
@@ -50,13 +40,6 @@ namespace {
         }
     }
 
-    /// Materialized expand via clone of contiguous dense result (reference oracle).
-    Tensor materialized_expand(const Tensor& src, const TensorShape& target) {
-        // Force the materializing path: contiguous copy of broadcast content.
-        // After W.1, broadcast_to is a view — materialize with contiguous().
-        return src.broadcast_to(target).contiguous();
-    }
-
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -81,7 +64,7 @@ TEST(ZeroStrideExpand, ExpandIsViewWithZeroStrideNoAlloc) {
     auto base = Tensor::full({1, 64}, 3.25f, Device::CUDA);
     cuda_ok();
 
-    // Poison: allocate+free a different size so the expand target is cold.
+    // Allocate and free a different size so the expand target is cold.
     {
         auto poison = Tensor::empty({rows, 64}, Device::CUDA);
         (void)poison;
@@ -101,8 +84,8 @@ TEST(ZeroStrideExpand, ExpandIsViewWithZeroStrideNoAlloc) {
     ASSERT_EQ(exp.strides().size(), 2u);
     EXPECT_EQ(exp.strides()[0], 0u) << "broadcast dim stride must be 0";
     EXPECT_EQ(exp.strides()[1], 1u);
-    // Shares allocation with base. Use storage_ptr() — data_ptr()/ptr() are
-    // flat-buffer escapes that materialize zero-stride views (WO-W.1 raw-ptr fix).
+    // storage_ptr() observes the shared allocation without materializing the
+    // zero-stride view; data_ptr() and ptr() are flat-buffer escapes.
     EXPECT_EQ(exp.storage_ptr(), base.storage_ptr());
 }
 
@@ -214,11 +197,7 @@ TEST(ZeroStrideExpand, InPlaceZeroOnExpandViewThrows) {
     EXPECT_THROW(v.zero_(), std::runtime_error);
 }
 
-// ---------------------------------------------------------------------------
-// Theme-A canaries — non-allowlisted ops must materialize, never corrupt
-// ---------------------------------------------------------------------------
-
-TEST(ZeroStrideExpand, ThemeACanaryCatMaterializesNotCorrupt) {
+TEST(ZeroStrideExpand, NonAllowlistedCatMaterializesWithoutCorruption) {
     auto row = cuda_f32({1.f, 2.f, 3.f}, {1, 3});
     auto a = row.expand(TensorShape({2, 3})); // [[1,2,3],[1,2,3]]
     auto b = cuda_f32({4.f, 5.f, 6.f, 7.f, 8.f, 9.f}, {2, 3});
@@ -232,7 +211,7 @@ TEST(ZeroStrideExpand, ThemeACanaryCatMaterializesNotCorrupt) {
     expect_allclose(cat, expected, 1e-5f, "cat canary");
 }
 
-TEST(ZeroStrideExpand, ThemeACanaryMaskedSelectMaterializes) {
+TEST(ZeroStrideExpand, NonAllowlistedMaskedSelectMaterializes) {
     auto base = cuda_f32({1.f, 2.f, 3.f}, {1, 3});
     auto v = base.expand(TensorShape({2, 3}));
     auto mask = Tensor::from_vector(
@@ -252,7 +231,7 @@ TEST(ZeroStrideExpand, ThemeACanaryMaskedSelectMaterializes) {
     EXPECT_FLOAT_EQ(vals[2], 2.f);
 }
 
-TEST(ZeroStrideExpand, ThemeACanaryCloneMaterializesDense) {
+TEST(ZeroStrideExpand, NonAllowlistedCloneMaterializesDense) {
     auto base = cuda_f32({5.f, 6.f}, {1, 2});
     auto v = base.expand(TensorShape({2, 2}));
     auto c = v.clone();

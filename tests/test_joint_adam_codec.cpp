@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 /**
- * Phase 2.2 — joint (u, log_s) Adam codec unit tests (TDD).
+ * joint (u, log_s) Adam codec unit tests.
  *
  * Host-side encode/decode, zero fixed point, bounds reduction, and
  * optimizer-step trajectory error vs fp32 reference (joint <= legacy).
@@ -246,7 +246,6 @@ TEST(JointAdamCodecTest, TrajectoryErrorNotWorseThanLegacy) {
 }
 
 TEST(JointAdamCodecTest, OptimBpsConstantsMatchFootprint) {
-    // Fail-first guard: ledger expects these after 2.2.
     EXPECT_EQ(kOptimBpsLegacySh3, 172u);
     EXPECT_EQ(kOptimBpsJointSh3, 152u); // LFS swizzled SH pad: 48 cells × 2 B
     EXPECT_LT(kOptimBpsJointSh3, kOptimBpsLegacySh3);

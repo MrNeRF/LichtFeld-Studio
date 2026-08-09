@@ -53,7 +53,7 @@ namespace fast_lfs::rasterization {
         // Error handling for OOM / pathological frames
         bool success = false;
         bool resource_exhausted = false;
-        // ISS-025: 32-bit instance-count overflow (garbage extents). Soft —
+        // 32-bit instance-count overflow (garbage extents). Soft
         // fail the step, do not kill the training run.
         bool instance_count_overflow = false;
         const char* error_message = nullptr;
@@ -128,7 +128,7 @@ namespace fast_lfs::rasterization {
         bool mip_filter,
         DensificationType densification_type,
         const FusedAdamSettings* fused_adam,
-        // ISS-029: shN representation binds, mirroring forward_raw. The backward
+        // shN representation binds, mirroring forward_raw. The backward
         // kernel decodes sh_coefficients_rest with THESE, never with the fused
         // Adam settings' copy — optimizer enablement (SH warmup) must not change
         // how the coefficient buffer is interpreted. bits==16 with bounds → q16
@@ -140,7 +140,7 @@ namespace fast_lfs::rasterization {
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();
 
-    /// Phase 1.5: cudaPointerGetAttributes preflight call count (0 in Release/NDEBUG).
+    /// cudaPointerGetAttributes preflight call count (0 in Release/NDEBUG).
     [[nodiscard]] std::uint64_t preflight_pointer_attr_call_count() noexcept;
     void reset_preflight_pointer_attr_call_count() noexcept;
 

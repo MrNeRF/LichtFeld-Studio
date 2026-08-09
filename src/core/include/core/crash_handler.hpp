@@ -17,7 +17,7 @@ namespace lfs::core {
     LFS_CORE_API void flush_diagnostics_noexcept() noexcept;
 
     // ---------------------------------------------------------------------------
-    // ISS-020 — ordered GPU release hooks (TLS / static CUDA tensor holders)
+    // ordered GPU release hooks (TLS / static CUDA tensor holders)
     //
     // Why hooks (not only pool-liveness-aware deleters):
     //   Static / thread_local Tensors that outlive CudaMemoryPool's function-
@@ -43,16 +43,13 @@ namespace lfs::core {
     // should no-op when this is set (CUDA context may already be unusable).
     [[nodiscard]] LFS_CORE_API bool gpu_process_teardown_started() noexcept;
 
-    // Explicit, idempotent, ordered GPU teardown while CUDA and diagnostics are
-    // still alive, so static destructors at process exit find nothing left to do
-    // (the wedge scenario 6f3b93868 defended against). Ordering:
-    //   0. registered GpuPreShutdownHook list — TLS caches, static Tensor
-    //      holders (PPISP shared buffers, mirror mult cache, …)  [ISS-020]
-    //   1. device_fault_registry_teardown()  — dedicated cudaMalloc fault slots
-    //      (phase-6c §9 Ruling 2; must run before pool shutdown)
-    //   2. GlobalArenaManager::instance().shutdown()
-    //   3. Tensor::shutdown_memory_pool()
-    //   4. PinnedMemoryAllocator::instance().shutdown()
+    // Explicit, idempotent GPU teardown while CUDA and diagnostics are still
+    // alive. Preserve this order:
+    // - registered hooks release TLS caches and static Tensor holders;
+    // - device_fault_registry_teardown() releases dedicated cudaMalloc slots;
+    // - GlobalArenaManager::instance().shutdown() releases arenas;
+    // - Tensor::shutdown_memory_pool() releases the tensor pool;
+    // - PinnedMemoryAllocator::instance().shutdown() releases pinned storage.
     // CPU-only processes pay only idempotent-guard checks — see
     // Tensor::shutdown_memory_pool's g_cuda_memory_pool_instance guard and
     // PinnedMemoryAllocator's constructor, neither of which touches CUDA unless

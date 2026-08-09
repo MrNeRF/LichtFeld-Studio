@@ -49,7 +49,7 @@ namespace lfs::core {
         MirrorCache g_cache;
 
         void clear_mirror_cache() noexcept {
-            // ISS-020: g_cache is a non-local static constructed before the
+            // g_cache is a non-local static constructed before the
             // CudaMemoryPool singleton. Free CUDA mult tensors while the pool
             // is still alive so static destruction finds empty holders.
             std::lock_guard lock(g_cache_mutex);
@@ -154,7 +154,7 @@ namespace lfs::core {
             rot.index_copy_(0, indices, rot.index_select(0, indices) * g_cache.quat_mult[a]);
         }
 
-        // SH coefficients (degrees 1-3 only, shN excludes DC). MN-4: use
+        // SH coefficients (degrees 1-3 only, shN excludes DC). Use
         // shN_canonical() so q16-resident models dequant correctly (raw
         // shN().ptr<float>() aborts on Float16 codes).
         const size_t layout_rest = splat_data.max_sh_coeffs_rest();

@@ -331,7 +331,7 @@ namespace lfs::vis {
             std::shared_ptr<void>(storage.block));
 
         // Live control block: offsets/bytes update on grow(). Capturing them by
-        // value was D2-class — any Tensor allocated from a pre-grow interop
+        // value was stale — any Tensor allocated from a pre-grow interop
         // allocator (or a holder that survived rebind) would bake stale region
         // bases. Sub-views still pin the Vulkan import at construction; physical
         // grow always re-imports (new allocator) before further use.
@@ -339,12 +339,12 @@ namespace lfs::vis {
         if (!ctrl) {
             return std::unexpected(
                 "SplatExportableStorage control block missing; refuse by-value "
-                "interop snapshot allocator (D2)");
+                "interop snapshot allocator");
         }
 
         // Live-control sub-views: offset/bytes re-resolve on every vkOffset()/
         // bytes() so a capacity grow cannot leave the viewer binding a pre-grow
-        // region while CUDA readers already use live control (M4 / D2 pair).
+        // region while CUDA readers already use live control.
         // Physical grow still rebuilds the interop parent (new Vk import);
         // these sub-views cover same-block generation bumps and rebindSplatData.
         std::array<std::shared_ptr<VulkanExternalTensorStorage>,
@@ -380,8 +380,8 @@ namespace lfs::vis {
         };
 
         // Capture control for live offsets + sub_views for Vulkan ownership.
-        // Phase 5.1: clamp requested capacity to the committed exportable layout.
-        // D1: shape/capacity bytes must fit region_bytes (fail loud).
+        // clamp requested capacity to the committed exportable layout.
+        // shape/capacity bytes must fit region_bytes (fail loud).
         return [sub_views, ctrl, region_from_name](
                    lfs::core::TensorShape shape,
                    std::size_t capacity,
@@ -447,7 +447,7 @@ namespace lfs::vis {
             if (shape_bytes > region_bytes) {
                 throw lfs::core::TensorError(std::format(
                     "makeSplatExportableInteropAllocator: shape for '{}' needs {} bytes "
-                    "but region only holds {} (fail-loud D1)",
+                    "but region only holds {}",
                     name,
                     shape_bytes,
                     region_bytes));
@@ -457,7 +457,7 @@ namespace lfs::vis {
             if (alloc_bytes > region_bytes) {
                 throw lfs::core::TensorError(std::format(
                     "makeSplatExportableInteropAllocator: capacity for '{}' needs {} bytes "
-                    "but region only holds {} (fail-loud D1)",
+                    "but region only holds {}",
                     name,
                     alloc_bytes,
                     region_bytes));

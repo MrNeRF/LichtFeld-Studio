@@ -5,7 +5,7 @@
 
 /**
  * @file sh_value_codec.hpp
- * @brief 16-bit linear SH-rest value codec (Phase 2.1).
+ * @brief 16-bit linear SH-rest value codec.
  *
  * Per cell: endpoint-exact linear quant to uint16 over float2 (min,max) bounds.
  * Bounds layout: one float2 per 256-splat block (FPBO / per-splat-block).
@@ -14,7 +14,7 @@
  * Runtime: SH value quantization is permanently ON in production.
  * Tests may force off via set_sh_value_quant_enabled_for_testing.
  *
- * Storage (pad-dropped, Phase 2.4): n_cells = coeffs_rest * 3 per primitive
+ * Storage (pad-dropped): n_cells = coeffs_rest * 3 per primitive
  * (45 for SH3 — no float4 tail pad). Swizzle [ceil(N/R), n_cells, R] of uint16.
  * Bounds: float2 per 256-splat block (FPBO). Params ≈ 56+90 = 146 B/splat SH3.
  */

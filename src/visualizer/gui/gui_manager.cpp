@@ -5538,7 +5538,7 @@ namespace lfs::vis::gui {
                             "Skipping Vulkan GUI frame after unknown CUDA/Vulkan interop failure");
                     }
                 } else if (rendering) {
-                    // F2-1: export-locked frames still run begin/endFrame, so layout-commit
+                    // Export-locked frames still run begin/endFrame, so layout-commit
                     // markers must be evaluated every frame even when Phases 1–2 uploads skip.
                     rendering->viewportInterop().syncUnsubmittedLayoutCommits(*vulkan_context);
                 }
@@ -5554,7 +5554,7 @@ namespace lfs::vis::gui {
             }
             if (begin_ok) {
                 if (rendering) {
-                    // #1575 Phase 3: GENERAL→READ_ONLY barriers + CUDA S2 waits on the frame
+                    // #1575: GENERAL→READ_ONLY barriers + CUDA S2 waits on the frame
                     // submit, before any sampling of interop images (slot B).
                     rendering->viewportInterop().recordFrameBarriers(frame.command_buffer,
                                                                      *vulkan_context);

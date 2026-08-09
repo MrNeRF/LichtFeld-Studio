@@ -737,7 +737,7 @@ namespace lfs::core::tensor_ops {
         size_t c_elements;
     };
 
-    // Same-shape early-out: no index math, optional float4 vectorization (6C.4).
+    // Same-shape early-out: no index math, optional float4 vectorization.
     template <typename T, typename OutputT, typename BinaryOp>
     __global__ void broadcast_binary_same_shape_kernel(
         const T* __restrict__ a, const T* __restrict__ b, OutputT* __restrict__ c,
@@ -1000,7 +1000,7 @@ namespace lfs::core::tensor_ops {
             }
 
             case BroadcastPattern::Channel3D: {
-                // Channel3D: (H×W×C) op (1×1×C). Heuristic by C (6C.2):
+                // Channel3D: (H×W×C) op (1×1×C). Heuristic by C:
                 //   C <= 8  → per-pixel kernel (best for small C; float4/RGB specials)
                 //   C <= 128 and smem fits → smem kernel (channels reused from shared)
                 //   else    → coalesced warp kernel (large C, consecutive channels)
@@ -1105,7 +1105,7 @@ namespace lfs::core::tensor_ops {
         // Generic kernel for all types and complex patterns
         const int block_size = 256;
 
-        // 6C.4: same-shape early-out (no broadcast index math; float4 when aligned)
+        // same-shape early-out (no broadcast index math; float4 when aligned)
         bool same_shape = (a_rank == c_rank && b_rank == c_rank);
         if (same_shape) {
             for (size_t i = 0; i < c_rank; ++i) {

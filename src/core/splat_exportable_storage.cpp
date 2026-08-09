@@ -34,7 +34,7 @@ namespace lfs::core {
         // True when `source` is a view into `block`'s VA range (CUDA-only or
         // Vulkan-interop alias of the same ExportableBlock). In that case
         // rebind must install views only — never copy_from the (possibly stale
-        // offset) source into the new layout (ISS-025).
+        // offset) source into the new layout.
         [[nodiscard]] bool tensor_aliases_exportable_block(const Tensor& source,
                                                            const ExportableBlock& block) {
             if (!source.is_valid() || !source.is_external_storage()) {
@@ -227,7 +227,7 @@ namespace lfs::core {
         const Layout prev_layout = compute_layout(capacity_, sh_degree_);
         const Layout grown_layout = compute_layout(new_capacity, sh_degree_);
 
-        // ISS-025 stream fence: relocation memcpys use the default stream; drain
+        // stream fence: relocation memcpys use the default stream; drain
         // trainer/render work that may still be reading the block first.
         if (const auto err = cudaDeviceSynchronize(); err != cudaSuccess) {
             return std::unexpected(std::format(
@@ -293,8 +293,8 @@ namespace lfs::core {
             cudaFree(staging);
         }
 
-        // ISS-025 hardening (Analyst A): slack rows [old_capacity, new_capacity)
-        // must not render if ever exposed — opacity raw → −∞ (sigmoid≈0),
+        // Slack rows [old_capacity, new_capacity) must not render if exposed:
+        // opacity raw → −∞ (sigmoid≈0),
         // identity quaternion (1,0,0,0). Zero-fill alone yields opacity=0.5 and
         // zero quat → NaN extents (half-screen splat blast radius).
         if (new_capacity > old_capacity) {
@@ -366,7 +366,7 @@ namespace lfs::core {
             return n;
         }
 
-        // D1: requested logical shape must fit inside the packed region. Capacity
+        // requested logical shape must fit inside the packed region. Capacity
         // is clamped separately; shape overrun is a silent-OOB-by-construction
         // footgun (Tensor::from_external_owner will otherwise happily view past
         // the region / committed frontier).
@@ -389,7 +389,7 @@ namespace lfs::core {
             if (shape_bytes > region_bytes) {
                 throw std::runtime_error(std::format(
                     "SplatExportableStorage allocator: shape for '{}' needs {} bytes "
-                    "but region only holds {} (fail-loud D1)",
+                    "but region only holds {}",
                     name,
                     shape_bytes,
                     region_bytes));
@@ -409,14 +409,14 @@ namespace lfs::core {
             if (!ctrl || !ctrl->block || !ctrl->block->device_ptr) {
                 throw std::runtime_error(
                     "SplatExportableStorage allocator: control block missing "
-                    "(partially-constructed storage must fail loud — D2)");
+                    "(partially-constructed storage must fail loudly)");
             }
             if (region >= SplatExportableStorage::Count) {
                 throw std::runtime_error(
                     "SplatExportableStorage allocator: region out of range");
             }
 
-            // Live offsets from control — never a by-value snapshot (D2).
+            // Live offsets must come from control, never a by-value snapshot.
             void* const data = ctrl->region_ptr(region);
             const std::size_t region_bytes = ctrl->region_bytes[region];
 
@@ -468,7 +468,7 @@ namespace lfs::core {
             if (alloc_bytes > region_bytes) {
                 throw std::runtime_error(std::format(
                     "SplatExportableStorage allocator: capacity for '{}' needs {} bytes "
-                    "but region only holds {} (fail-loud D1)",
+                    "but region only holds {}",
                     name,
                     alloc_bytes,
                     region_bytes));
@@ -494,7 +494,7 @@ namespace lfs::core {
     SplatTensorAllocator SplatExportableStorage::make_allocator() const {
         auto ctrl = control_;
         if (!ctrl) {
-            // D2: no by-value snapshot flavor. Partially-constructed storage must
+            // no by-value snapshot flavor. Partially-constructed storage must
             // fail loud rather than hand out offsets that go stale on grow.
             throw std::runtime_error(
                 "SplatExportableStorage::make_allocator: control block missing "
@@ -564,10 +564,10 @@ namespace lfs::core {
             // Fail-loud observability + by-construction safety: always return the
             // live region base so FastGS/Adam cannot illegal-address. Shape/capacity
             // still require rebindSplatData; pointer re-resolve alone is enough for
-            // the q16-read poison (region base after grow).
+            // stale q16 readers after the region base moves.
             LOG_ERROR(
                 "exportable generation mismatch at resolve: bound_gen={} live_gen={} "
-                "region={} baked_ptr={:#x} live_ptr={:#x} (q16 poison D2 class — "
+                "region={} baked_ptr={:#x} live_ptr={:#x} (stale q16 pointer — "
                 "returning live pointer; caller should rebind for shape/capacity)",
                 bound_gen,
                 ctrl->generation,
@@ -632,7 +632,7 @@ namespace lfs::core {
                     capacity_));
             }
 
-            // ISS-025: same-block rebind (post-grow, pre-grow Vulkan drop) only
+            // same-block rebind (post-grow, pre-grow Vulkan drop) only
             // installs views at current region offsets. grow() already relocated
             // live rows; copying from stale pre-grow views destroys them.
             // Cross-allocator migrations (cuda.direct → exportable) still copy.
@@ -690,7 +690,7 @@ namespace lfs::core {
             const size_t n_live = static_cast<size_t>(model.size());
             if (layout_rest > 0 && model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
                 // Pad-dropped q16 codes + per-256 float2 bounds live in the block.
-                // Same-block rebind only re-views (ISS-025). Cross-allocator install
+                // Same-block rebind only re-views. Cross-allocator install
                 // copies q16 codes when the source is already quantized.
                 // Float densify temps (ensure_shN_fp32) are kept outside the block —
                 // commit_shN_after_mutation re-encodes into exportable after mutation.
@@ -793,7 +793,7 @@ namespace lfs::core {
             // reinstall after rebind returns (TrainerManager, tests).
             model = std::move(rebound);
             // Restore + bump generation so densify re-fetch discipline sees the
-            // layout change (ISS-025 post-grow re-fetch signal).
+            // layout change (post-grow re-fetch signal).
             while (model.param_layout_generation() <= layout_gen) {
                 model.note_param_layout_changed();
             }

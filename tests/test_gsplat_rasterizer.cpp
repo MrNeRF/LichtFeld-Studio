@@ -16,7 +16,6 @@
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
 
-#include <chrono>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <iostream>
@@ -211,11 +210,8 @@ TEST_F(GsplatRasterizerTest, InferenceWrapper) {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Worker R — persistent high-water isect buffers (gut/gsplat path).
-// Pre-change: every forward cudaMalloc'd isect_ids + flatten_ids and callers
-// cudaFree'd them (trainer cleanup + backward). Post-change: grow-only TLS.
-// ---------------------------------------------------------------------------
+// The gsplat intersection buffers are grow-only thread-local storage; a second
+// same-size forward must not allocate them again.
 TEST_F(GsplatRasterizerTest, SteadyStateSecondForwardHasZeroIsectAllocs) {
     // Visible fixture so n_isects > 0 and the isect/sort path runs.
     auto camera = make_camera(64, 64);
@@ -253,8 +249,7 @@ TEST_F(GsplatRasterizerTest, SteadyStateSecondForwardHasZeroIsectAllocs) {
         << delta2;
 }
 
-// Small gut-mode microbench: median ms/forward after warmup (record in PROGRESS).
-TEST_F(GsplatRasterizerTest, GutModeSmokeBench) {
+TEST_F(GsplatRasterizerTest, GutModeSteadyStateAllocs) {
     auto camera = make_camera(128, 128);
     auto splat = make_visible_splat(256);
     auto bg = Tensor::zeros({3}, Device::CUDA);
@@ -270,7 +265,6 @@ TEST_F(GsplatRasterizerTest, GutModeSmokeBench) {
     }
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
-    const auto t0 = std::chrono::steady_clock::now();
     std::uint64_t allocs = 0;
     for (int i = 0; i < kIters; ++i) {
         const auto snap = alloc_counter::snapshot();
@@ -282,23 +276,14 @@ TEST_F(GsplatRasterizerTest, GutModeSmokeBench) {
         allocs += alloc_counter::delta_since(snap);
     }
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-    const auto t1 = std::chrono::steady_clock::now();
-    const double ms_total =
-        std::chrono::duration<double, std::milli>(t1 - t0).count();
-    const double ms_per = ms_total / static_cast<double>(kIters);
     const double allocs_per = static_cast<double>(allocs) / static_cast<double>(kIters);
-
-    std::cout << "GUT_SMOKE_BENCH ms/forward=" << ms_per
-              << " allocs/forward=" << allocs_per
-              << " iters=" << kIters
-              << " N=256 128x128" << std::endl;
 
     // Steady high-water: average allocs per forward should be ~0.
     EXPECT_LT(allocs_per, 0.5)
         << "gut steady-state should not touch the driver every forward";
 }
 
-// BL-3: gut/gsplat forward+backward with default quant ON + sh_degree>0.
+// gut/gsplat forward+backward with default quant ON + sh_degree>0.
 // Saves dequant temp in ctx so backward does not dtype-abort on q16 codes.
 TEST(GsplatRasterizerQuantTest, GutForwardBackwardWithDefaultQuantAndShDegree) {
     // Default flags: quant ON (no force-off).
@@ -342,7 +327,7 @@ TEST(GsplatRasterizerQuantTest, GutForwardBackwardWithDefaultQuantAndShDegree) {
         /*use_gut=*/true);
     ASSERT_TRUE(result.has_value()) << result.error();
     auto& [output, ctx] = *result;
-    // BL-3: ctx must hold float dequant, not raw Float16 codes.
+    // ctx must hold float dequant, not raw Float16 codes.
     ASSERT_TRUE(ctx.shN.is_valid());
     EXPECT_EQ(ctx.shN.dtype(), DataType::Float32)
         << "backward requires float dequant temp in ctx under q16";

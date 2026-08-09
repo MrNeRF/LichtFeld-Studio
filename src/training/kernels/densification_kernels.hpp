@@ -12,8 +12,7 @@ namespace lfs::training::kernels {
     /**
      * @brief Custom CUDA kernels for Gaussian densification (LAS path).
      *
-     * Long-axis split densification kernels minimize intermediate allocations
-     * versus the historical LibTorch-heavy densify path.
+     * Long-axis split densification kernels minimize intermediate allocations.
      */
 
     /**
@@ -65,7 +64,7 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr);
 
     /**
-     * Phase 4.4: fused free-slot write.
+     * fused free-slot write.
      *
      * For each i in [0, n_fill): writes child row i into param row target_indices[i]
      * (means/rot/scale/sh0/opacity), zeros up to 12 Adam per-primitive scale buffers
@@ -110,7 +109,7 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr);
 
     /**
-     * Phase 4.5: pack up to 4 host-needed counts into one device buffer for a
+     * pack up to 4 host-needed counts into one device buffer for a
      * single D2H. Each input may be null (skipped → out[i]=0).
      *   slot 0/1: count of true bools over n_bool0/1
      *   slot 2/3: count of strictly-positive floats over n_f0/1
@@ -128,7 +127,7 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr);
 
     /**
-     * Phase 4.8: positive-median normalize without full-tensor sort.
+     * positive-median normalize without full-tensor sort.
      * Compact positives → radix-sort the compact buffer → median at count/2 →
      * divide data in-place by max(median, 1e-9). NaN/non-positive left as-is
      * after a pre-pass that zeros NaNs (caller may pre-masked_fill).

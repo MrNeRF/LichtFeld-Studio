@@ -527,8 +527,8 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutUsesRequestedUploadShDegree) {
 }
 
 TEST(VksplatInputPackerTest, RawDeviceLayoutHalvesShNBytesForIeeeF16) {
-    // TDD: IEEE f16 float4-swizzle (standalone PLY/SOG) reports half the
-    // resident SH bytes of the historical fp32 layout.
+    // IEEE f16 float4-swizzle storage reports half the resident SH bytes of the
+    // equivalent fp32 layout.
     constexpr std::size_t n = SH_REORDER_SIZE * 3 + 11;
     SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/3, /*seed=*/0xF16u);
     auto splat = buildSplatData(in);
@@ -554,7 +554,7 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutHalvesShNBytesForIeeeF16) {
     EXPECT_FALSE(raw_layout->shN_q16);
     EXPECT_EQ(raw_layout->shN_element_bytes, sizeof(std::uint16_t));
 
-    // 5M-capacity accounting for PROGRESS.md: deg3 rest → 96 B/splat f16 vs 192 fp32.
+    // 5M-capacity accounting for: deg3 rest → 96 B/splat f16 vs 192 fp32.
     constexpr std::size_t kCap5M = 5'000'000;
     const std::size_t at_5m_f16 = lfs::core::sh_swizzled_f16_byte_count(
         kCap5M, layout_rest);
@@ -565,9 +565,8 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutHalvesShNBytesForIeeeF16) {
 }
 
 TEST(VksplatInputPackerTest, RawDeviceLayoutReportsNonShBytesAndZeroCopyContract) {
-    // WO-ATTR-F16 / bet #3: historical "viewer packed non-SH" was a separate
-    // 44 B/splat resident copy (xyz 12 + rot 16 + scales/opacity 16 = 210 MiB @5M).
-    // The live training path zero-copies exportable fp32 attrs (means/rot/scale/
+    // A packed non-SH copy would retain 44 B/splat (approximately 210 MiB at
+    // 5M). The live training path zero-copies exportable fp32 attributes (means/rot/scale/
     // opacity) into the viewport — separate pack bytes = 0. This test locks the
     // layout contract: non_sh_bytes is the SHARED exportable footprint, and
     // attrs_f16 is false for the fp32 training path (xyz stays fp32 forever for
@@ -598,7 +597,7 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutReportsNonShBytesAndZeroCopyContract
     const double shared_mib =
         static_cast<double>(kNonShB * kCap5M) / (1024.0 * 1024.0);
     EXPECT_NEAR(shared_mib, 209.808, 0.01);
-    // Recovered vs historical separate pack: full 210 MiB (zero-copy).
+    // Zero-copy keeps the separate packed allocation at zero.
     constexpr std::size_t kSeparatePackAfter = 0u;
     EXPECT_EQ(kSeparatePackAfter, 0u);
     EXPECT_GE(static_cast<double>(kNonShB * kCap5M) / (1024.0 * 1024.0), 105.0);
@@ -619,7 +618,7 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutReportsNonShBytesAndZeroCopyContract
 }
 
 TEST(VksplatInputPackerTest, RawDeviceLayoutReportsQ16BytesAndBounds) {
-    // TDD (tier 2): pad-dropped q16 exportable path reports 90 B/splat SH
+    // The pad-dropped q16 exportable path reports 90 B/splat of SH data
     // (deg3) plus per-256 float2 bounds — not the f16 float4-swizzle size.
     constexpr std::size_t n = SH_REORDER_SIZE * 3 + 11;
     SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/3, /*seed=*/0xA016u);
@@ -659,7 +658,7 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutReportsQ16BytesAndBounds) {
     // Exportable layout @ 5M must not allocate the f16 float4-swizzle region.
     const std::size_t exportable_shN =
         lfs::core::SplatExportableStorage::layoutBytes(kCap5M, 3);
-    // Full exportable is smaller than the historical f16-exportable (~725 MiB):
+    // Full exportable storage stays below the 725 MiB f16-layout ceiling:
     // means+scaling+rot+opacity+sh0 + q16 shN + bounds.
     EXPECT_LT(exportable_shN, 700ull << 20);
 
@@ -752,7 +751,7 @@ TEST(VksplatInputPackerTest, SoftDeleteAndUndeleteKeepDeletedMaskStorageStable) 
               (std::vector<bool>{false, false, true, false, false}));
 }
 
-// ISS-022: after any N-mutating path with an active deleted mask, the packer
+// after any N-mutating path with an active deleted mask, the packer
 // contract must hold (contiguous CUDA bool of size N) OR the mask must be
 // invalidated (has_deleted_mask()==false is legal). A single stale frame must
 // not permanently break opacity baking.
@@ -823,7 +822,7 @@ TEST(VksplatInputPackerTest, GrowWithActiveDeletedMaskKeepsPackerContract) {
     assertDeletedMaskPackerContract(*splat);
 
     // Densify grow of parameter tensors. Production paths must keep deleted()
-    // sized to the new N (or invalidate). Stale mask of old N is the ISS-022
+    // sized to the new N (or invalidate). Stale mask of old N is the
     // failure mode that freezes the VkSplat viewport.
     growSplatParamsBy(*splat, n_grow);
     ASSERT_EQ(static_cast<std::size_t>(splat->size()), n + n_grow);
@@ -857,7 +856,6 @@ TEST(VksplatInputPackerTest, CompactWithActiveDeletedMaskKeepsPackerContract) {
 }
 
 TEST(VksplatInputPackerTest, StaleDeletedMaskDoesNotPermanentlyBreakOpacityCopy) {
-    // Emulates the campaign composition bug: N changed while deleted() stayed
     // at the pre-mutation size. Packer must soft-skip a stale mask so a later
     // valid frame can recover (no hard permanent failure / degraded latch).
     constexpr std::size_t n = 6;
@@ -872,7 +870,7 @@ TEST(VksplatInputPackerTest, StaleDeletedMaskDoesNotPermanentlyBreakOpacityCopy)
     splat->soft_delete(mask);
 
     // Grow every row-shaped param so opacity/means stay consistent, but leave
-    // the deleted mask at the pre-growth N (the exact ISS-022 stale state).
+    // the deleted mask at the pre-growth N (the exact stale state).
     growSplatParamsBy(*splat, 2);
     ASSERT_EQ(static_cast<std::size_t>(splat->size()), n + 2);
     ASSERT_TRUE(splat->has_deleted_mask());

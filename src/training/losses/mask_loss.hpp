@@ -23,25 +23,13 @@ namespace lfs::training::losses {
         void ensure_size(size_t H, size_t W);
     };
 
-    /// Legacy multi-kernel compose (kept for reference / non-workspace callers).
-    [[nodiscard]] lfs::core::Tensor compose_pixel_loss_weights(
-        const lfs::core::Tensor& user_weight,
-        const lfs::core::Tensor& roi_weight);
-
     struct MaskOpacityPenalty {
         lfs::core::Tensor loss;
         lfs::core::Tensor grad_alpha;
     };
 
-    /// Legacy multi-kernel opacity penalty.
-    [[nodiscard]] MaskOpacityPenalty compute_mask_opacity_penalty(
-        const lfs::core::Tensor& alpha,
-        const lfs::core::Tensor& penalty_weight,
-        const lfs::core::Tensor& pixel_weight,
-        float scale);
-
     // -------------------------------------------------------------------------
-    // Fused single-kernel preprocess path (trainer.cpp:1768–1883 replacement)
+    // Fused single-kernel preprocess path.
     // -------------------------------------------------------------------------
 
     /// Fuse SegmentAndIgnore photometric band remap (or BinaryGt0) + optional ROI

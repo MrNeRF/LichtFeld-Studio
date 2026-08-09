@@ -4,7 +4,7 @@
 #pragma once
 
 /**
- * Device-side joint (u, log_s) Adam codec (Phase 2.2).
+ * Device-side joint (u, log_s) Adam codec.
  * Mirrors host math in joint_adam_codec.hpp.
  */
 
@@ -24,7 +24,7 @@ namespace lfs::training::joint_adam {
         static constexpr float kInvQMax = 1.0f / kQMax;
         static constexpr int kBytesPerCell = (BITS == 16) ? 4 : 2;
 
-        // FIX-2.2 F3: guarded fast transcode. __logf/__expf for the bulk of the
+        // guarded fast transcode. __logf/__expf for the bulk of the
         // range; log1pf/expm1f near zero so 0↔0 fixed point stays exact.
         // Thresholds: x>0.125 → __logf(1+x); log_s>0.118 → __expf-1.
         __device__ static inline float forward_sqrt_g2(const float sqrt_g2) {

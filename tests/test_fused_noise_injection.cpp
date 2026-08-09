@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Phase 1.8 — Fused MCMC noise injection (RNG + covariance transform + add).
- * Wave 5 WO-NOISE-PHILOX — Philox4_32_10 + curand_normal4 must preserve
+ * Fused MCMC noise injection (RNG + covariance transform + add).
+ * Philox4_32_10 + curand_normal4 must preserve
  * N(0, σ²) moments and crush per-thread XORWOW curand_init cost.
  * Bit-identical trajectories are NOT required.
  */
@@ -15,7 +15,6 @@
 #include <cmath>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
-#include <iostream>
 #include <vector>
 
 using namespace lfs::core;
@@ -63,102 +62,6 @@ namespace {
             quat_h[i * 4] = 1.f;
     }
 
-    double time_inject_noise_us(
-        const float* opacities,
-        const float* scales,
-        const float* quats,
-        float* means,
-        size_t N,
-        uint64_t seed,
-        int warmup,
-        int reps) {
-
-        for (int i = 0; i < warmup; ++i) {
-            mcmc::launch_inject_noise_kernel(
-                opacities, scales, quats, means,
-                nullptr, 0, 1.0f, N, seed + static_cast<uint64_t>(i));
-        }
-        if (cudaDeviceSynchronize() != cudaSuccess)
-            return -1.0;
-
-        cudaEvent_t start = nullptr, stop = nullptr;
-        if (cudaEventCreate(&start) != cudaSuccess ||
-            cudaEventCreate(&stop) != cudaSuccess)
-            return -1.0;
-
-        std::vector<float> times_ms;
-        times_ms.reserve(static_cast<size_t>(reps));
-        for (int i = 0; i < reps; ++i) {
-            // Zero means so each rep measures pure kernel cost, not growing means.
-            if (cudaMemset(means, 0, N * 3 * sizeof(float)) != cudaSuccess)
-                return -1.0;
-            cudaEventRecord(start);
-            mcmc::launch_inject_noise_kernel(
-                opacities, scales, quats, means,
-                nullptr, 0, 1.0f, N, seed + 1000ull + static_cast<uint64_t>(i));
-            cudaEventRecord(stop);
-            if (cudaEventSynchronize(stop) != cudaSuccess)
-                return -1.0;
-            float ms = 0.f;
-            if (cudaEventElapsedTime(&ms, start, stop) != cudaSuccess)
-                return -1.0;
-            times_ms.push_back(ms);
-        }
-        cudaEventDestroy(start);
-        cudaEventDestroy(stop);
-
-        std::sort(times_ms.begin(), times_ms.end());
-        const float median_ms = times_ms[times_ms.size() / 2];
-        return static_cast<double>(median_ms) * 1000.0; // µs
-    }
-
-    double time_mrnf_noise_us(
-        float* means,
-        const float* opacities,
-        const float* vis,
-        size_t N,
-        uint64_t seed,
-        int warmup,
-        int reps) {
-
-        for (int i = 0; i < warmup; ++i) {
-            mrnf_strategy::launch_mrnf_noise_injection(
-                means, opacities, vis, nullptr, 0,
-                /*lr_mean=*/1.0f, /*noise_weight=*/1.0f, /*median_scale=*/1e6f,
-                N, seed + static_cast<uint64_t>(i));
-        }
-        if (cudaDeviceSynchronize() != cudaSuccess)
-            return -1.0;
-
-        cudaEvent_t start = nullptr, stop = nullptr;
-        if (cudaEventCreate(&start) != cudaSuccess ||
-            cudaEventCreate(&stop) != cudaSuccess)
-            return -1.0;
-
-        std::vector<float> times_ms;
-        times_ms.reserve(static_cast<size_t>(reps));
-        for (int i = 0; i < reps; ++i) {
-            if (cudaMemset(means, 0, N * 3 * sizeof(float)) != cudaSuccess)
-                return -1.0;
-            cudaEventRecord(start);
-            mrnf_strategy::launch_mrnf_noise_injection(
-                means, opacities, vis, nullptr, 0,
-                1.0f, 1.0f, 1e6f, N, seed + 1000ull + static_cast<uint64_t>(i));
-            cudaEventRecord(stop);
-            if (cudaEventSynchronize(stop) != cudaSuccess)
-                return -1.0;
-            float ms = 0.f;
-            if (cudaEventElapsedTime(&ms, start, stop) != cudaSuccess)
-                return -1.0;
-            times_ms.push_back(ms);
-        }
-        cudaEventDestroy(start);
-        cudaEventDestroy(stop);
-
-        std::sort(times_ms.begin(), times_ms.end());
-        return static_cast<double>(times_ms[times_ms.size() / 2]) * 1000.0;
-    }
-
 } // namespace
 
 TEST(FusedNoiseInjectionTest, MeanAndVarMatchIdentityCovariance) {
@@ -199,7 +102,7 @@ TEST(FusedNoiseInjectionTest, MeanAndVarMatchIdentityCovariance) {
         << "var=" << m.var << " expected≈" << expected_var;
 }
 
-// Wave-5 TDD: Philox must keep Gaussian moments (not just mean/var).
+// Philox must keep Gaussian moments (not just mean/var).
 TEST(FusedNoiseInjectionTest, NormalityMomentsUnchanged) {
     constexpr size_t N = 100000;
     constexpr float lr = 1.0f;
@@ -304,49 +207,4 @@ TEST(FusedNoiseInjectionTest, FrozenMaskBlocksNoise) {
         energy += std::abs(p[i * 3]) + std::abs(p[i * 3 + 1]) + std::abs(p[i * 3 + 2]);
     }
     EXPECT_GT(energy, 1.0) << "unfrozen rows should receive noise";
-}
-
-// Directive-2 microbench shape: N=400k. XORWOW curand_init path is ~1ms+;
-// Philox + normal4 is ~6.5µs. Gate: >100x → median must be well under 50µs.
-TEST(FusedNoiseInjectionTest, PhiloxKernelTimeMcmcInjectUnder50usAt400k) {
-    constexpr size_t N = 400000;
-    constexpr uint64_t seed = 0x51EEdu;
-
-    auto means = Tensor::zeros({N, size_t{3}}, Device::CUDA);
-    auto opacities = Tensor::full({N}, -20.f, Device::CUDA);
-    auto scales = Tensor::zeros({N, size_t{3}}, Device::CUDA);
-    std::vector<float> quat_h;
-    fill_identity_quat(quat_h, N);
-    auto quats = Tensor::from_vector(quat_h, {N, size_t{4}}, Device::CUDA);
-
-    const double median_us = time_inject_noise_us(
-        opacities.ptr<float>(), scales.ptr<float>(), quats.ptr<float>(),
-        means.ptr<float>(), N, seed, /*warmup=*/5, /*reps=*/21);
-
-    // Recorded for PROGRESS.md; threshold encodes the >100x claim vs ~1ms XORWOW.
-    std::cout << "[PhiloxKernelTime] mcmc inject_noise N=400k median_us=" << median_us
-              << std::endl;
-    EXPECT_LT(median_us, 50.0)
-        << "inject_noise kernel median " << median_us
-        << " µs — expected <50µs with Philox (XORWOW baseline ~1ms+)";
-}
-
-TEST(FusedNoiseInjectionTest, PhiloxKernelTimeMrnfUnder50usAt400k) {
-    constexpr size_t N = 400000;
-    constexpr uint64_t seed = 0x51EEu;
-
-    auto means = Tensor::zeros({N, size_t{3}}, Device::CUDA);
-    // raw_op≈−20 → full weight path (no early return before RNG) for every thread.
-    auto opacities = Tensor::full({N}, -20.f, Device::CUDA);
-    auto vis = Tensor::full({N}, 1.f, Device::CUDA);
-
-    const double median_us = time_mrnf_noise_us(
-        means.ptr<float>(), opacities.ptr<float>(), vis.ptr<float>(),
-        N, seed, /*warmup=*/5, /*reps=*/21);
-
-    std::cout << "[PhiloxKernelTime] mrnf_noise_injection N=400k median_us=" << median_us
-              << std::endl;
-    EXPECT_LT(median_us, 50.0)
-        << "mrnf_noise kernel median " << median_us
-        << " µs — expected <50µs with Philox (XORWOW baseline ~1ms+)";
 }

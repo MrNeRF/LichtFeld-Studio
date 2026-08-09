@@ -54,7 +54,7 @@ void fast_lfs::rasterization::backward(
     bool mip_filter,
     DensificationType densification_type,
     FusedAdamSettings fused_adam,
-    // ISS-029: model-truth shN-rest decode binds (independent of fused Adam
+    // model-truth shN-rest decode binds (independent of fused Adam
     // enablement, which is off during SH warmup while the buffer is already q16).
     const float2* shN_value_bounds,
     const uint shN_value_n_cells,
@@ -71,7 +71,7 @@ void fast_lfs::rasterization::backward(
     auto* fastgs_status = per_primitive_buffers.forward_status;
 
     if (n_instances > 0) {
-        // WO-WARP-BWD: cull mode + batch size via shared test hooks (production: cull ON,
+        // cull mode + batch size via shared test hooks (production: cull ON,
         // config::blend_batch_size). Mode is read at backward launch so tests can set it
         // after forward returns.
         const int warp_cull_mode = warp_cull_mode_for_testing();

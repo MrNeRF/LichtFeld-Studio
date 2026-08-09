@@ -268,7 +268,7 @@ namespace lfs::core {
         inline Tensor& shN_raw() { return _shN; }
         inline const Tensor& shN_raw() const { return _shN; }
 
-        // Phase 2.1: float2 bounds per 256-splat block when SH value quant is ON.
+        // float2 bounds per 256-splat block when SH value quant is ON.
         inline Tensor& shN_value_bounds() { return _shN_value_bounds; }
         inline const Tensor& shN_value_bounds() const { return _shN_value_bounds; }
         // q16 pad-dropped codes: Float16 bit-patterns + per-block bounds.
@@ -402,7 +402,7 @@ namespace lfs::core {
             DataType dtype,
             std::string_view name);
 
-        // Optional hook for exportable / external storage growth (Phase 5.1).
+        // Optional hook for exportable / external storage growth.
         // When densification needs more rows than the committed exportable block,
         // AdamOptimizer calls this before falling back to Tensor::cat (which would
         // leave the Vulkan zero-copy path). Returns true if capacity >= needed.
@@ -410,9 +410,9 @@ namespace lfs::core {
         void set_capacity_ensure(CapacityEnsureFn fn) {
             _capacity_ensure = std::move(fn);
         }
-        // Full-model rebuilds (migrate/rebind) must transfer the hook: a fresh
-        // SplatData has none, and densify then aborts with capacity-ensure failed
-        // (ISS-023). Callers that replace the model object take + reinstall.
+        // Full-model rebuilds must transfer and reinstall this hook. A fresh
+        // SplatData has none, so densification would otherwise abort when its
+        // committed capacity is exhausted.
         [[nodiscard]] bool has_capacity_ensure() const noexcept {
             return static_cast<bool>(_capacity_ensure);
         }
@@ -420,8 +420,8 @@ namespace lfs::core {
             return std::move(_capacity_ensure);
         }
         // Bumped by rebindSplatData / exportable grow so densify code that holds
-        // Tensor& locals across ensure_param_capacity can detect layout changes
-        // (ISS-025 hardening: in-flight refs are invalid after a grow).
+        // Tensor& locals across ensure_param_capacity can detect invalidated
+        // references after a grow.
         [[nodiscard]] std::uint64_t param_layout_generation() const noexcept {
             return _param_layout_generation;
         }
@@ -465,7 +465,7 @@ namespace lfs::core {
         // Parameters
         Tensor _means;
         Tensor _sh0;
-        // When sh_value quant is ON (Phase 2.1): Float16 bit-pattern u16 codes,
+        // When sh_value quant is ON: Float16 bit-pattern u16 codes,
         // pad-dropped cell-linear layout (n_cells = coeffs_rest*3). When OFF: Float32
         // float4-swizzled as before. Access via shN() / data_ptr(); do not assume dtype.
         Tensor _shN;

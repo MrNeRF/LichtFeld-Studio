@@ -198,7 +198,7 @@ namespace lfs::training {
             splat_tensor_allocator_ = std::move(allocator);
         }
 
-        /// WO-SH-SINGLE-LOCK: densify re-encodes pad-dropped q16 into the live
+        /// densify re-encodes pad-dropped q16 into the live
         /// exportable block. TrainerManager installs begin/end that drop the
         /// Vulkan import for the exclusive densify window and re-import after
         /// commit — same exclusion principle as growExportableForDensify.
@@ -513,7 +513,7 @@ namespace lfs::training {
         // PPISP for physically-plausible ISP appearance modeling (optional)
         std::unique_ptr<PPISP> ppisp_;
 
-        // PPISP controller pool for novel view synthesis (Phase 2 distillation)
+        // PPISP controller pool for novel-view distillation.
         // Shared CNN and per-camera FC weights for memory efficiency
         std::unique_ptr<PPISPControllerPool> ppisp_controller_pool_;
 
@@ -524,10 +524,10 @@ namespace lfs::training {
 
         // Cached GPU scalar to avoid per-iteration allocation
         core::Tensor loss_accumulator_;
-        // Phase 1.3: persistent FastGS scale/opacity reg loss scalars (filled in fused bwd)
+        // persistent FastGS scale/opacity reg loss scalars (filled in fused bwd)
         core::Tensor fused_scale_reg_loss_;
         core::Tensor fused_opacity_reg_loss_;
-        // Phase 1.7: cropbox damping mask cache (rebuild on cropbox/topology change only)
+        // cropbox damping mask cache (rebuild on cropbox/topology change only)
         core::Tensor cropbox_damping_cached_mask_;
         size_t cropbox_damping_cached_n_ = 0;
         size_t cropbox_damping_geom_fp_ = 0;
@@ -560,7 +560,7 @@ namespace lfs::training {
 
         // Pre-allocated SSIM-map workspace for densification error maps.
         lfs::training::kernels::SSIMMapWorkspace densification_ssim_workspace_;
-        // Phase 6D.1: masked / decoupled / fused / pure-SSIM workspaces live in
+        // masked / decoupled / fused / pure-SSIM workspaces live in
         // photometric_loss_.arena() (mutually exclusive, single grow-only region).
 
         // Mask preprocess workspace: photometric weight / opacity penalty / alpha-consistent
@@ -667,7 +667,7 @@ namespace lfs::training {
         std::array<LossReadbackSlot, LOSS_RING> loss_slots_{};
         size_t loss_slot_head_ = 0;
 
-        // Always-compiled fault-injection seam used only by the Phase 5 OOM
+        // Always-compiled fault-injection seam used only by the OOM
         // recovery tests. Empty in production, where cudaDeviceSynchronize is
         // called directly.
         std::function<cudaError_t()> recovery_sync_for_testing_;
@@ -685,7 +685,7 @@ namespace lfs::training {
         GTLoadConfigSnapshot gt_load_config_snapshot_;
     };
 
-    /// Phase 1.7 test hook for cropbox damping mask cache.
+    // test hook for cropbox damping mask cache.
     struct TrainerCropboxMaskTestAccess {
         static void install(Trainer& t, core::SplatData& model, AdamOptimizer& optimizer) {
             t.install_cropbox_step_damping(model, optimizer);

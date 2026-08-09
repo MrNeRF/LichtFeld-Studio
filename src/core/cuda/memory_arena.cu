@@ -734,7 +734,7 @@ namespace lfs::core {
                 const auto device = entry.first;
                 auto& arena = entry.second;
                 if (arena) {
-                    // ISS-027: a poisoned CUDA context (e.g. async illegal address during
+                    // a poisoned CUDA context (e.g. async illegal address during
                     // training) must not escalate full_reset → std::terminate on the
                     // ~Trainer shutdown path. Log and continue decommitting host state.
                     {

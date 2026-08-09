@@ -324,7 +324,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         const uint4 diagnostic_bounds = make_uint4(screen_bounds.x, screen_bounds.y, screen_bounds.z, screen_bounds.w);
         const uint depth_key = active ? primitive_depth_keys[primitive_idx] : 0;
         const uint write_offset_end_raw = active ? static_cast<uint>(primitive_offsets[idx]) : 0;
-        // Phase 1.2: clamp to sort-buffer capacity; flag overflow for host re-run.
+        // clamp to sort-buffer capacity; flag overflow for host re-run.
         if (active && write_offset_end_raw > max_instances) {
             report_forward_status(
                 status,
@@ -399,7 +399,6 @@ namespace fast_lfs::rasterization::kernels::forward {
     }
 
     // n_instances_upper sizes the grid; real count is read from d_n_instances
-    // (Phase 1.2 async path — host may only know an upper bound).
     __global__ void extract_instance_ranges_cu(
         const InstanceKey* instance_keys,
         uint2* tile_instance_ranges,
@@ -463,7 +462,7 @@ namespace fast_lfs::rasterization::kernels::forward {
     // Output is bit-identical to the pre-cull kernel when the AABB is conservative.
     //
     // warp_cull_mode: 0 = enabled (production), 1 = disabled (mask all-1s, reference),
-    //                 2 = wrong empty mask (deliberately incorrect; TDD fail-first).
+    //                 2 = deliberately incorrect empty mask for negative coverage.
     // blend_batch_size_runtime: multiple of 32 in [32, block_size_blend]; 0 → config default.
     template <bool kRenderNormal>
     __global__ void __launch_bounds__(config::block_size_blend) blend_cu(
@@ -480,7 +479,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         float* __restrict__ normal_map,
         uint* __restrict__ tile_n_contributions,
         float* __restrict__ tile_final_transmittance,
-        // Phase 1.4: fuse background compose into the final write.
+        // fuse background compose into the final write.
         // out = fg + T * bg  (equivalent to fg + (1-alpha)*bg).
         // bg_image (CHW [3,H,W]) wins over solid bg_color [3]; either may be null → black.
         const float* __restrict__ bg_color,

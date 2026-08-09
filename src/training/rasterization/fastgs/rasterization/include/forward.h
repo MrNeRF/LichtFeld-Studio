@@ -20,7 +20,7 @@ namespace fast_lfs::rasterization {
         size_t per_instance_sort_total_size = 0;
     };
 
-    /// Phase 1.1: sorted indices live in grow-only thread-local cache — no free.
+    /// sorted indices live in grow-only thread-local cache — no free.
     void release_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept;
 
     /// Release grow-only FastGS sort workspaces on the calling thread (keys×2,
@@ -29,7 +29,7 @@ namespace fast_lfs::rasterization {
     /// when the TLS destructor runs.
     void release_sort_workspace_buffers() noexcept;
 
-    /// Phase 1.2: mid-pipeline n_instances hard-sync fallback count (warmup/growth).
+    /// mid-pipeline n_instances hard-sync fallback count (warmup/growth).
     [[nodiscard]] std::uint64_t n_instances_fallback_sync_count() noexcept;
     void reset_n_instances_fallback_sync_count() noexcept;
     /// Testing: force the next forward(s) onto the mid-pipeline sync path.
@@ -42,7 +42,7 @@ namespace fast_lfs::rasterization {
     [[nodiscard]] std::size_t sort_workspace_high_water_bytes() noexcept;
     [[nodiscard]] int sort_workspace_capacity_n_instances() noexcept;
 
-    /// Warp-cull mode for blend_cu (WO-WARP-FWD TDD):
+    // Warp-cull mode for blend_cu:
     /// 0 = enabled (production), 1 = disabled (all-1s mask, reference),
     /// 2 = wrong empty mask (deliberately incorrect).
     void set_warp_cull_mode_for_testing(int mode) noexcept;

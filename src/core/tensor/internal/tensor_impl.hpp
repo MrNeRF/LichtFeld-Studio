@@ -207,7 +207,7 @@ namespace lfs::core {
     };
 
     // Stack-resident ranked size list (rank ≤ MAX_TENSOR_RANK). Replaces heap
-    // std::vector for TensorShape dims and Tensor strides (6A.4).
+    // std::vector for TensorShape dims and Tensor strides.
     struct RankedDims {
         std::array<size_t, MAX_TENSOR_RANK> values{};
         size_t rank = 0;
@@ -326,7 +326,7 @@ namespace lfs::core {
         // Span-compatible view into stack storage (no heap).
         const RankedDims& dims() const { return dims_; }
 
-        // Row-major contiguous strides — stack only, no heap allocation (6A.4).
+        // Row-major contiguous strides — stack only, no heap allocation.
         RankedDims strides() const {
             RankedDims result;
             if (dims_.empty()) {
@@ -478,7 +478,7 @@ namespace lfs::core {
         std::vector<std::weak_ptr<Tensor>> lazy_snapshots;
         std::string external_kind;
         std::shared_ptr<void> external_owner;
-        // Exportable packed-SoA provenance (q16 poison D2). When set, bind sites
+        // Exportable packed-SoA provenance. When set, bind sites
         // re-resolve the device pointer through the live control block instead of
         // trusting the baked data_ pointer across a capacity grow.
         // exportable_control holds shared_ptr<SplatExportableStorage::Control>.
@@ -543,7 +543,7 @@ namespace lfs::core {
 
         void* data_ = nullptr;
         std::shared_ptr<void> data_owner_;
-        // 6A.1: shared handle state (stream/name/lazy/capacity). Default empty
+        // shared handle state (stream/name/lazy/capacity). Default empty
         // tensors keep a null state (no heap cell) until first mutation/use.
         std::shared_ptr<TensorState> state_;
         TensorShape shape_;
@@ -589,17 +589,17 @@ namespace lfs::core {
 
         /// Materialize zero-stride expand/broadcast views before raw-pointer escape.
         ///
-        /// Boundary choice (WO-W.1 regression, CheckpointResume / SplatData init):
+        /// Raw-pointer escape is the materialization boundary:
         /// - Op paths are firewalled via contiguous_read / dense_for_kernel / allowlist.
         /// - That firewall does NOT cover raw-pointer escapes: callers hand
         ///   ptr()+numel() or data_ptr()+bytes() to flat memcpy/kernels (e.g.
         ///   cudaMemcpy HostToDevice of scaling [N,3] from an expand of [N,1]).
-        /// - Materializing at the escape boundary (not at expand creation) keeps
-        ///   W.1's zero-copy expand for allowlisted ops, while making every
+        /// - Materializing at the escape boundary preserves zero-copy expansion
+        ///   for allowlisted ops while making every
         ///   flat-buffer consumer safe. storage_ptr() stays non-materializing
         ///   (allocation base for lifetime / sharing checks only).
         ///
-        /// Implementation note: must NOT use `*this = contiguous()`. Expand views
+        /// Do not assign `contiguous()` back to `*this`: expand views
         /// set is_view_=true, so operator= takes the view deep-copy path (copy_from),
         /// which re-enters data_ptr() → infinite recursion. Rebind fields like
         /// materialize_deferred_slow instead (implemented in tensor.cpp).
@@ -614,7 +614,7 @@ namespace lfs::core {
         /// Reject CPU-tagged tensors whose storage is CUDA device memory (and
         /// the inverse) when escaping via raw pointers. Mismatched tagging
         /// produces cudaMemcpy "invalid argument" with src/dst in the same
-        /// address region — hard to diagnose without an explicit canary.
+        /// address region and is otherwise hard to diagnose.
         void assert_device_storage_matches_tag() const;
 
         static Tensor make_deferred_expr_tensor(TensorShape shape,
@@ -627,7 +627,6 @@ namespace lfs::core {
                                                 std::function<Tensor()> materializer,
                                                 std::vector<uint64_t> lazy_input_ids);
 
-        // Alignment bookkeeping was write-only and removed; keep the hook for call sites.
         void compute_alignment() {}
 
         void init_storage_meta() {
@@ -795,7 +794,7 @@ namespace lfs::core {
                         result.numel(), op, result.stream());
                     // No sync - tensor operation
                 } else {
-                    // CPU broadcasting: expand may return zero-stride views (WO-W.1);
+                    // CPU broadcasting: expand may return zero-stride views;
                     // linear apply_binary_cpu needs dense storage — materialize.
                     auto a_broadcast = a_needs_broadcast
                                            ? broadcast_to(broadcast_shape).contiguous()
@@ -1013,8 +1012,8 @@ namespace lfs::core {
         }
 
         // Helper for binary operations with automatic type promotion.
-        // 6A.3: single same-shape contiguous ops stay on the eager fast path.
-        // 6C.1: when a fusable chain can form (size heuristic / deferred LHS),
+        // Single same-shape contiguous ops stay on the eager fast path. When a
+        // fusable chain can form from the size heuristic or deferred LHS,
         // seed or extend a pointwise fusion recipe with a tensor-binary stage so
         // mul+add and mul→reduce collapse to one fused launch.
         template <typename Op>
@@ -1040,15 +1039,15 @@ namespace lfs::core {
                 device_ == other.device() &&
                 numel() > 0;
 
-            // 6C.1 binary fusion: seed/extend deferred chain for large same-shape
+            // binary fusion: seed/extend deferred chain for large same-shape
             // float32 binaries (or whenever LHS is already a deferred fusion node).
-            // Single non-deferred ops below the size threshold keep the 6A.3 path.
+            // Single non-deferred ops below the size threshold remain eager.
             //
-            // Important: use the raw byte threshold here, NOT
+            // Use the raw byte threshold here, not
             // lazy_size_heuristic_should_defer(). That helper treats the test
             // override "size heuristic off" as "always defer" so small unaries
             // still form chains in IR tests — applying it to binaries would
-            // regress 6A.3 (tiny a.add(b) would become deferred).
+            // regress (tiny a.add(b) would become deferred).
             const bool lhs_deferred = is_deferred();
             const size_t nbytes = numel() * sizeof(float);
             const bool size_wants_defer =
@@ -1113,7 +1112,7 @@ namespace lfs::core {
                 return result;
             }
 
-            // 6A.3 fast path: same shape/device/dtype, contiguous, non-deferred —
+            // fast path: same shape/device/dtype, contiguous, non-deferred
             // skip BinaryExpr + TensorLeaf heap cells and launch directly.
             // Match BinaryExpr evaluator: prepare stream first, then empty, so the
             // result tensor inherits the prepared execution stream.
@@ -1292,7 +1291,7 @@ namespace lfs::core {
 
         // Helper to create view with shared ownership
         Tensor create_view(const TensorShape& new_shape) const {
-            // Per-handle deferred (6A.1): do not key off shared lazy alone —
+            // Per-handle deferred: do not key off shared lazy alone
             // a materialized sibling may still hold lazy->result for other handles.
             if (is_deferred()) {
                 const uint64_t source_id = lazy_expr_id();
@@ -1382,7 +1381,7 @@ namespace lfs::core {
         }
 
         /// Zero-copy expand / broadcast_to view. Logical numel may grow; broadcast
-        /// dims receive stride 0. Shares storage with *this (WO-W.1).
+        // dims receive stride 0. Shares storage with *this.
         Tensor create_broadcast_view(const TensorShape& target_shape,
                                      std::vector<size_t> new_strides) const {
             LFS_ASSERT_MSG(new_strides.size() == target_shape.rank(),
@@ -1708,7 +1707,7 @@ namespace lfs::core {
         template <typename T>
         const T* ptr() const {
             materialize_if_deferred();
-            // WO-W.1: raw ptr() is a flat-buffer escape — materialize stride-0 views.
+            // raw ptr() is a flat-buffer escape — materialize stride-0 views.
             materialize_zero_stride_for_raw_ptr_escape();
             tensor_contract::require_valid(
                 *this, "ptr<T>", "tensor", LFS_SOURCE_SITE_CURRENT());
@@ -1718,12 +1717,10 @@ namespace lfs::core {
                     (std::is_same_v<Value, float> && dtype_ == DataType::Float32) ||
                     (std::is_same_v<Value, __half> && dtype_ == DataType::Float16) ||
                     ((std::is_same_v<Value, int> || std::is_same_v<Value, int32_t> ||
-                      std::is_same_v<Value, uint32_t>) &&
-                     dtype_ == DataType::Int32) ||
+                      std::is_same_v<Value, uint32_t>)&&dtype_ == DataType::Int32) ||
                     (std::is_same_v<Value, int64_t> && dtype_ == DataType::Int64) ||
                     ((std::is_same_v<Value, bool> || std::is_same_v<Value, unsigned char> ||
-                      std::is_same_v<Value, uint8_t>) &&
-                     (dtype_ == DataType::Bool || dtype_ == DataType::UInt8));
+                      std::is_same_v<Value, uint8_t>)&&(dtype_ == DataType::Bool || dtype_ == DataType::UInt8));
                 LFS_ASSERT_MSG(dtype_matches,
                                "ptr<T>() type does not match tensor dtype");
             }
@@ -1737,7 +1734,7 @@ namespace lfs::core {
 
         void* data_ptr() {
             materialize_if_deferred();
-            // WO-W.1: raw data_ptr() is a flat-buffer escape — materialize stride-0 views.
+            // raw data_ptr() is a flat-buffer escape — materialize stride-0 views.
             materialize_zero_stride_for_raw_ptr_escape();
             preserve_lazy_snapshots_before_write();
             tensor_contract::require_valid(
@@ -1750,7 +1747,7 @@ namespace lfs::core {
         }
         const void* data_ptr() const {
             materialize_if_deferred();
-            // WO-W.1: raw data_ptr() is a flat-buffer escape — materialize stride-0 views.
+            // raw data_ptr() is a flat-buffer escape — materialize stride-0 views.
             materialize_zero_stride_for_raw_ptr_escape();
             tensor_contract::require_valid(
                 *this, "data_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
@@ -1790,7 +1787,7 @@ namespace lfs::core {
         // nodes (debug map) are NOT reported here; use lazy_expr_id() / IR APIs.
         // Per-handle: after materialize, this handle has storage so it is no
         // longer deferred even if shared TensorState still retains lazy->result
-        // for sibling copies (6A.1).
+        // for sibling copies.
         bool has_lazy_expr() const { return is_deferred(); }
         bool is_deferred() const {
             return state_ && state_->lazy && data_ == nullptr && !data_owner_ && !is_view_;
@@ -1932,7 +1929,7 @@ namespace lfs::core {
         Tensor to(DataType dtype) const;
         bool is_contiguous() const { return is_contiguous_; }
 
-        // Stride operations (Phase 4: Zero-copy views) — stack RankedDims (6A.4)
+        // Stride operations (Zero-copy views) — stack RankedDims
         const RankedDims& strides() const { return strides_; }
         size_t stride(size_t dim) const {
             LFS_ASSERT_MSG(is_valid(),
@@ -1945,9 +1942,8 @@ namespace lfs::core {
 
         /// True if any dimension with size > 1 has stride 0 (expand / broadcast_to).
         /// Such views share storage cells across logical indices; in-place mutation
-        /// is rejected and non-allowlisted kernels must materialize first (WO-W.1).
+        // is rejected and non-allowlisted kernels must materialize first.
         ///
-        /// Note: contiguous tensors with a *zero-size* dim get a row-major leading
         /// stride of 0 (product of later dims includes 0), e.g. shN [N,0,3] →
         /// strides [0,3,1]. That is NOT an expand view — only size>1 with stride 0
         /// is a true broadcast. Size-1 dims with stride 0 are also expand-like but

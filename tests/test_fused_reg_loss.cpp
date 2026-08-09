@@ -1,14 +1,5 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
- * SPDX-License-Identifier: GPL-3.0-or-later
- *
- * Phase 1.3 — Fold scale/opacity regularizer loss scalars into fused backward.
- *
- * TDD:
- *  - Equivalence: fused preprocess_backward accumulation vs loss-only kernels
- *    on a synthetic model (|delta| < 1e-5 relative).
- *  - Alloc counter: steady fused path must not issue the two per-call
- *    empty({num_blocks})+empty({1}) allocs of forward_loss_only.
- */
+ * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/alloc_counter.hpp"
 #include "core/camera.hpp"

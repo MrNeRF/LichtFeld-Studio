@@ -1,13 +1,5 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
- * SPDX-License-Identifier: GPL-3.0-or-later
- *
- * Phase 1.4 — Fuse background compose into blend_cu; drop backward unblend.
- *
- * TDD:
- *  - Forward pixel identity: fused bg path matches black-bg + external compose.
- *  - Backward grad identity: param grads match (image unused in blend_backward;
- *    unblend was dead work) within 1e-6.
- */
+ * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"

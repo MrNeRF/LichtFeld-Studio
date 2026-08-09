@@ -49,7 +49,7 @@ namespace lfs::core {
     // Multi-tier CUDA memory pool: slab (≤256KB), bucketed (≤16GB), cudaMallocAsync.
     class LFS_CORE_API CudaMemoryPool;
 
-    // ISS-020: pool-liveness-aware free for Tensor storage deleters.
+    // pool-liveness-aware free for Tensor storage deleters.
     // Returns the live pool pointer while CudaMemoryPool is constructed and
     // has not yet published shutdown to the process-wide atomic; nullptr after
     // Tensor::shutdown_memory_pool() clears that pointer. Prefer
@@ -607,7 +607,7 @@ namespace lfs::core {
         void free_routed(void* ptr, const AllocationInfo& info) {
             for (cudaStream_t extra : info.extra_streams) {
                 // Skip null / home-equal extras. Bridging a destroyed capture stream
-                // (ISS-013) can SIGSEGV inside the driver — callers should rehome first,
+                // can SIGSEGV inside the driver — callers should rehome first,
                 // but free must stay best-effort.
                 if (extra == nullptr || extra == info.home_stream)
                     continue;

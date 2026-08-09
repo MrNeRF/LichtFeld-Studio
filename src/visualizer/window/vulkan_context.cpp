@@ -281,7 +281,7 @@ namespace lfs::vis {
 #endif
         }
 
-        // ISS-031 / H3: CUDA-exported OPAQUE_FD payloads are foreign to Vulkan.
+        // CUDA-exported OPAQUE_FD payloads are foreign to Vulkan.
         // The validation layer keys its "created by Vulkan" OPAQUE_FD map by fd
         // *number*. After we close a Vulkan-exported or previously-imported fd,
         // the kernel reuses that number for the next CUDA export (or our dup of
@@ -347,12 +347,12 @@ namespace lfs::vis {
                                             ? callback_data->pMessage
                                             : "<missing validation message>";
 
-            // ISS-031 H3: targeted suppress of VUID-01742 only inside our CUDA
+            // targeted suppress of VUID-01742 only inside our CUDA
             // OPAQUE_FD import scope (see CudaOpaqueFdImportScopeGuard). Not a
             // blanket severity filter — label is the import diagnostic scope.
             if (isExpectedCudaOpaqueFdImportVuid01742(message_severity, callback_data)) {
                 LOG_DEBUG(
-                    "Vulkan validation (suppressed ISS-031 H3 CUDA OPAQUE_FD import, label={}): {}",
+                    "Vulkan validation (suppressed CUDA OPAQUE_FD import, label={}): {}",
                     g_cuda_opaque_fd_import_label != nullptr ? g_cuda_opaque_fd_import_label : "",
                     message);
                 return VK_FALSE;
@@ -3550,20 +3550,19 @@ namespace lfs::vis {
         // will close it on vkFreeMemory. Dup so the original exporter (CUDA) can
         // still own its copy; both close their fd independently on teardown.
         // Ownership: we never close `handle` here — ExportableBlock owns it
-        // (see ExportHandle contract in exportable_storage.hpp, ISS-031).
+        // (see ExportHandle contract in exportable_storage.hpp).
         const int dup_fd = ::dup(handle);
         if (dup_fd < 0) {
             destroyExternalBuffer(out);
             return fail("dup() of external memory fd failed for Vulkan import");
         }
 #ifndef NDEBUG
-        // ISS-031 H3 companion: debug-build self-check that the importer's fd is
-        // a live open file equal to the exporter's handle (D1 fstat + kcmp). A
-        // real H1/H2 regression (dead/stale handle) must assert here rather than
-        // hide behind the VUID-01742 suppression below.
+        // Debug builds verify that the importer's fd is live and aliases the
+        // exporter's handle. A stale handle must assert instead of being hidden
+        // by the VUID-01742 suppression below.
         {
-            struct stat st_src{};
-            struct stat st_dup{};
+            struct stat st_src {};
+            struct stat st_dup {};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;
@@ -3574,7 +3573,7 @@ namespace lfs::vis {
             if (st_src_rc != 0 || st_dup_rc != 0 || kcmp_rc != 0 ||
                 st_src.st_dev != st_dup.st_dev || st_src.st_ino != st_dup.st_ino) {
                 LOG_ERROR(
-                    "ISS-031 import self-check FAILED (possible H1/H2 stale fd): "
+                    "External-memory import self-check failed (possible stale fd): "
                     "src_fd={} dup_fd={} src_fstat={} dup_fstat={} kcmp={} "
                     "src_dev={} src_ino={} dup_dev={} dup_ino={} errno={} size={}",
                     handle,
@@ -3590,7 +3589,7 @@ namespace lfs::vis {
                     exported_allocation_size);
                 assert(st_src_rc == 0 && st_dup_rc == 0 && kcmp_rc == 0 &&
                        st_src.st_dev == st_dup.st_dev && st_src.st_ino == st_dup.st_ino &&
-                       "ISS-031: CUDA export fd identity check failed at Vulkan import");
+                       "CUDA export fd identity check failed at Vulkan import");
             }
         }
 #endif
@@ -3619,8 +3618,8 @@ namespace lfs::vis {
                 compatible_memory_type_bits));
         }
 
-        // ISS-031: mark the CUDA-foreign import scope so the debug callback can
-        // suppress exactly VUID-01742 (H3 layer fd-number aliasing). Label is the
+        // mark the CUDA-foreign import scope so the debug callback can
+        // suppress exactly VUID-01742 (layer fd-number aliasing). Label is the
         // diagnostic scope for audit; not a blanket severity filter.
         {
 #ifndef _WIN32

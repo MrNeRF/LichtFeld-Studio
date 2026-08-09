@@ -2,10 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 /**
- * Phase 0.2 / 2.2 — bytes-per-splat training-state ledger.
+ * Bytes-per-splat training-state ledger.
  *
- * Hand-computed sizes from SPEED_VRAM_OPTIMIZATION_PLAN §0b
- * (SH degree 3, capacity = live N):
+ * Hand-computed sizes for SH degree 3 with capacity equal to live N:
  *
  *   params:   means 12 + rot 16 + scale 12 + opac 4 + sh0 12 + shN 192 = 248 B/splat
  *   densify:   densification_info [2,N] fp32 = 8 B/splat
@@ -40,7 +39,7 @@ namespace {
     constexpr size_t kN = 32; // multiple of SH reorder block size (32)
     constexpr int kShDegree = 3;
 
-    // Hand-computed B/splat (footprint-compare §7 / plan §0b).
+    // Hand-computed bytes per splat.
     constexpr size_t kParamsBps = 248;
     constexpr size_t kDensifyBps = 8;
     constexpr size_t kGradsBps = 0;
@@ -87,13 +86,7 @@ namespace {
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// FAIL-first target: API + hand-computed ledger for synthetic SH3 splat + Adam
-// ---------------------------------------------------------------------------
-
 TEST(TrainingStateLedgerTest, SyntheticSh3MatchesFootprintTable) {
-    // Force joint codec path (Phase 2.2 default).
-    joint_adam::set_joint_codec_enabled_for_testing(true);
     // Keep SH values fp32 for this baseline footprint table (248 params).
     sh_value::set_sh_value_quant_enabled_for_testing(false);
 
@@ -133,14 +126,10 @@ TEST(TrainingStateLedgerTest, SyntheticSh3MatchesFootprintTable) {
     EXPECT_DOUBLE_EQ(ledger.bytes_per_splat,
                      static_cast<double>(expected_total) / static_cast<double>(kN));
 
-    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-// Legacy codec path removed (joint is the only Adam codec).
-
 TEST(TrainingStateLedgerTest, PublishesIntoVramProfiler) {
-    joint_adam::set_joint_codec_enabled_for_testing(true);
     sh_value::set_sh_value_quant_enabled_for_testing(false);
     auto& profiler = VramProfiler::instance();
     profiler.setEnabled(true);
@@ -162,17 +151,14 @@ TEST(TrainingStateLedgerTest, PublishesIntoVramProfiler) {
     EXPECT_EQ(snap.training_state.total_bytes, expected_total);
 
     profiler.setEnabled(false);
-    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-// Phase 2.1 / WO-G3: after apply_shN_value_quant, params drop shN 192→90 B/splat.
 TEST(TrainingStateLedgerTest, ShValueQuantDropsParamsTo146) {
-    joint_adam::set_joint_codec_enabled_for_testing(true);
     sh_value::set_sh_value_quant_enabled_for_testing(true);
 
     auto splat = make_sh3_splat(kN);
-    // Pre-quant: 248 params
+    // The unquantized model uses 248 parameter bytes per splat.
     {
         const auto before = compute_training_state_ledger(splat, nullptr);
         EXPECT_EQ(before.params_bytes, kParamsBps * kN);
@@ -194,5 +180,4 @@ TEST(TrainingStateLedgerTest, ShValueQuantDropsParamsTo146) {
     EXPECT_GT(ledger.bytes_per_splat, 280.0);
 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
-    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
 }

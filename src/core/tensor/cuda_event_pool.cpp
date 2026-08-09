@@ -81,7 +81,7 @@ namespace lfs::core {
             return;
         }
         // Null stream is the default stream — wait/record still valid, but a
-        // destroyed user stream handle can crash in the driver (ISS-013). Detect
+        // destroyed user stream handle can crash in the driver. Detect
         // capture status first; any query failure means the stream is unusable.
         if (from != nullptr) {
             cudaStreamCaptureStatus capture = cudaStreamCaptureStatusNone;

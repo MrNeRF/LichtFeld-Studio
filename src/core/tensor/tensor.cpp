@@ -580,7 +580,7 @@ namespace lfs::core {
             state_->stream = preserved_stream;
         }
 
-        // 6A.1: when TensorState is shared, keep lazy->result so sibling handles
+        // when TensorState is shared, keep lazy->result so sibling handles
         // can still publish. is_deferred() is per-handle (storage on this handle).
         // Drop lazy only when we exclusively own the state.
         if (state_.use_count() <= 1) {
@@ -648,8 +648,6 @@ namespace lfs::core {
     }
 
     // ============= Copy Constructor - SHALLOW COPY (LibTorch behavior) =============
-    // 6A.1: share TensorState (stream/name/lazy/capacity/tracked) via shared_ptr —
-    // previously deep-copied into a fresh make_shared on every copy.
     Tensor::Tensor(const Tensor& other)
         : data_(other.data_),
           data_owner_(other.data_owner_),
@@ -717,7 +715,7 @@ namespace lfs::core {
             LOG_WARN("Tensor assignment reduced capacity: old_capacity={} -> new_capacity={}, old_data={}, new_data={}",
                      old_capacity, new_capacity, old_data, new_data);
         }
-        // 6A.1: share TensorState (do not deep-copy into a new cell).
+        // share TensorState (do not deep-copy into a new cell).
         state_ = other.state_;
         id_ = next_id_++;
 
@@ -753,7 +751,7 @@ namespace lfs::core {
         // Clear so moved-from metadata is consistently empty (shape()[0] OOR).
         other.shape_ = TensorShape{};
         other.strides_.clear();
-        // 6A.1: moved-from stays empty (null state) — no heap TensorState.
+        // moved-from stays empty (null state) — no heap TensorState.
         if (profiling_enabled_) {
             LOG_DEBUG("Move constructed: tensor #{} (moved-from is now invalid)", id_);
         }
@@ -793,7 +791,7 @@ namespace lfs::core {
             lazy_ir_registered_ = std::exchange(other.lazy_ir_registered_, false);
             other.shape_ = TensorShape{};
             other.strides_.clear();
-            // 6A.1: moved-from stays empty (null state) — no heap TensorState.
+            // moved-from stays empty (null state) — no heap TensorState.
 
             if (profiling_enabled_) {
                 LOG_DEBUG("Move assigned: tensor #{} (moved-from is now invalid)", id_);
@@ -805,7 +803,7 @@ namespace lfs::core {
     namespace {
         // Published while the Meyers-singleton pool is live. Cleared by
         // Tensor::shutdown_memory_pool() so late Tensor dtors never re-enter
-        // a destroyed function-local static (ISS-020).
+        // a destroyed function-local static.
         std::atomic<CudaMemoryPool*> g_cuda_memory_pool_instance{nullptr};
     } // namespace
 
@@ -821,7 +819,7 @@ namespace lfs::core {
             pool->deallocate(ptr, stream);
         }
         // else: pool already shut down / not yet constructed — abandon storage
-        // at process exit. Explicit pre-shutdown hooks (ISS-020) should have
+        // at process exit. Explicit pre-shutdown hooks should have
         // released long-lived holders before this path is needed.
     }
 
@@ -944,7 +942,7 @@ namespace lfs::core {
         // A non-null pointer proves that an earlier CUDA allocation path
         // constructed the pool and all of its subordinate allocators.
         //
-        // ISS-020: exchange to nullptr *before* shutdown so concurrent /
+        // exchange to nullptr *before* shutdown so concurrent
         // subsequent Tensor deleters take the safe_cuda_pool_deallocate no-op
         // path instead of calling into a pool mid-teardown or after the
         // function-local static is destroyed.
@@ -3436,7 +3434,7 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             record_storage_allocation(StorageAccountingKind::CudaDirect, new_bytes);
             new_owner = std::shared_ptr<void>(new_data, [bytes = new_bytes](void* ptr) {
-                // ISS-020: skip cudaFree after ordered process teardown.
+                // skip cudaFree after ordered process teardown.
                 if (ptr && !gpu_process_teardown_started()) {
                     const cudaError_t status = cudaFree(ptr);
                     if (status != cudaSuccess) {
@@ -3569,7 +3567,7 @@ namespace lfs::core {
             if (!ptr) {
                 return;
             }
-            // ISS-020: densify N-scratch (and other zeros_direct holders) may be
+            // densify N-scratch (and other zeros_direct holders) may be
             // destroyed after ordered GPU teardown. Skipping cudaFree when the
             // process has already begun teardown avoids cudaErrorContextIsDestroyed
             // / SIGSEGV on a dead primary context. Pre-shutdown hooks should

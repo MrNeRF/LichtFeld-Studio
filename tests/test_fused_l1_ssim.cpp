@@ -305,7 +305,7 @@ TEST_F(FusedL1SSIMTest, WorkspaceReuse) {
     auto img2a = Tensor::randn({N, C, H, W}, Device::CUDA);
     auto [loss1, ctx1] = fused_l1_ssim_forward(img1a, img2a, ssim_weight, workspace, true);
     auto grad1 = fused_l1_ssim_backward(ctx1, workspace);
-    // Phase 1.6: loss tensor aliases workspace.reduction_result — capture before reuse.
+    // loss tensor aliases workspace.reduction_result — capture before reuse.
     const float loss1_value = loss1.item<float>();
     const float grad1_norm = grad1.abs().sum().item<float>();
 

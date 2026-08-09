@@ -90,8 +90,7 @@ namespace {
     //  - Optionally writes partial derivatives
     //    to dm_dmu1, dm_dsigma1_sq, dm_dsigma12
     // ------------------------------------------
-    // PartialT: float (legacy) or __half (Phase 6D.3 pure-SSIM / all non-fused paths).
-    template <typename TargetT, typename PartialT = float>
+    template <typename TargetT>
     __global__ void fusedssimCUDA(
         int H,
         int W,
@@ -101,9 +100,9 @@ namespace {
         const float* __restrict__ img1,
         const TargetT* __restrict__ img2,
         float* __restrict__ ssim_map,
-        PartialT* __restrict__ dm_dmu1,
-        PartialT* __restrict__ dm_dsigma1_sq,
-        PartialT* __restrict__ dm_dsigma12) {
+        __half* __restrict__ dm_dmu1,
+        __half* __restrict__ dm_dsigma1_sq,
+        __half* __restrict__ dm_dsigma12) {
         auto block = cg::this_thread_block();
         const int bIdx = block.group_index().z; // batch index
         const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -297,9 +296,9 @@ namespace {
                         float d_m_dsigma1_sq = (-C_ * D_) / (A * B * B);
                         float d_m_dsigma12 = (2.f * C_) / (A * B);
 
-                        dm_dmu1[global_idx] = static_cast<PartialT>(d_m_dmu1);
-                        dm_dsigma1_sq[global_idx] = static_cast<PartialT>(d_m_dsigma1_sq);
-                        dm_dsigma12[global_idx] = static_cast<PartialT>(d_m_dsigma12);
+                        dm_dmu1[global_idx] = static_cast<__half>(d_m_dmu1);
+                        dm_dsigma1_sq[global_idx] = static_cast<__half>(d_m_dsigma1_sq);
+                        dm_dsigma12[global_idx] = static_cast<__half>(d_m_dsigma12);
                     }
                 }
             }
@@ -312,7 +311,7 @@ namespace {
     //    (dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
     //    and dL/dmap (the gradient from above).
     // ------------------------------------------
-    template <typename TargetT, typename PartialT = float>
+    template <typename TargetT>
     __global__ void fusedssim_backwardCUDA(
         int H,
         int W,
@@ -323,9 +322,9 @@ namespace {
         const TargetT* __restrict__ img2,
         const float* __restrict__ dL_dmap,
         float* __restrict__ dL_dimg1,
-        const PartialT* __restrict__ dm_dmu1,
-        const PartialT* __restrict__ dm_dsigma1_sq,
-        const PartialT* __restrict__ dm_dsigma12) {
+        const __half* __restrict__ dm_dmu1,
+        const __half* __restrict__ dm_dsigma1_sq,
+        const __half* __restrict__ dm_dsigma12) {
         auto block = cg::this_thread_block();
 
         const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -659,8 +658,8 @@ namespace {
 
     // Fused L1+SSIM Backward Kernel.
     // HasSigmaPartials=false: sigma partials are identically zero (decoupled
-    // appearance branch). Avoids a full-image zero_terms buffer (Phase 6D.2).
-    template <typename TargetT, typename PartialT, bool HasSigmaPartials = true>
+    // appearance branch). Avoids a full-image zero_terms buffer.
+    template <typename TargetT, bool HasSigmaPartials = true>
     __global__ void fusedL1SSIMBackwardCUDA(
         float ssim_weight,
         int H,
@@ -673,9 +672,9 @@ namespace {
         const float* __restrict__ img1,
         const TargetT* __restrict__ img2,
         float* __restrict__ dL_dimg1,
-        const PartialT* __restrict__ dm_dmu1,
-        const PartialT* __restrict__ dm_dsigma1_sq,
-        const PartialT* __restrict__ dm_dsigma12) {
+        const __half* __restrict__ dm_dmu1,
+        const __half* __restrict__ dm_dsigma1_sq,
+        const __half* __restrict__ dm_dsigma12) {
 
         auto block = cg::this_thread_block();
         const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -829,8 +828,8 @@ namespace {
         }
     }
 
-    // Masked Fused L1+SSIM Forward Kernel (Phase 6D.3: dm_* as PartialT, default __half).
-    template <typename TargetT, typename PartialT = __half>
+    // Masked Fused L1+SSIM Forward Kernel.
+    template <typename TargetT>
     __global__ void maskedFusedL1SSIMForwardCUDA(
         int H,
         int W,
@@ -839,9 +838,9 @@ namespace {
         float C2,
         const float* __restrict__ img1,
         const TargetT* __restrict__ img2,
-        PartialT* __restrict__ dm_dmu1,
-        PartialT* __restrict__ dm_dsigma1_sq,
-        PartialT* __restrict__ dm_dsigma12,
+        __half* __restrict__ dm_dmu1,
+        __half* __restrict__ dm_dsigma1_sq,
+        __half* __restrict__ dm_dsigma12,
         float* __restrict__ ssim_map) {
 
         auto block = cg::this_thread_block();
@@ -1016,9 +1015,9 @@ namespace {
                         float d_m_dsigma1_sq = (-C_ * D_) / (A * B * B);
                         float d_m_dsigma12 = (2.f * C_) / (A * B);
 
-                        dm_dmu1[global_idx] = static_cast<PartialT>(d_m_dmu1);
-                        dm_dsigma1_sq[global_idx] = static_cast<PartialT>(d_m_dsigma1_sq);
-                        dm_dsigma12[global_idx] = static_cast<PartialT>(d_m_dsigma12);
+                        dm_dmu1[global_idx] = static_cast<__half>(d_m_dmu1);
+                        dm_dsigma1_sq[global_idx] = static_cast<__half>(d_m_dsigma1_sq);
+                        dm_dsigma12[global_idx] = static_cast<__half>(d_m_dsigma12);
                     }
                 }
             }
@@ -1030,9 +1029,8 @@ namespace {
     }
 
     // Masked Fused L1+SSIM Backward Kernel.
-    // HasSigmaPartials=false: appearance branch skips unused sigma partials (6D.2).
-    // PartialT=__half for 6D.3 fp16 dm_* partials.
-    template <typename TargetT, typename MaskT, typename PartialT = __half, bool HasSigmaPartials = true>
+    // HasSigmaPartials=false: appearance branch skips unused sigma partials.
+    template <typename TargetT, typename MaskT, bool HasSigmaPartials = true>
     __global__ void maskedFusedL1SSIMBackwardCUDA(
         float ssim_weight,
         float inv_mask_sum, // 1.0 / mask_sum for normalization
@@ -1045,9 +1043,9 @@ namespace {
         const TargetT* __restrict__ img2,
         const MaskT* __restrict__ mask,
         float* __restrict__ dL_dimg1,
-        const PartialT* __restrict__ dm_dmu1,
-        const PartialT* __restrict__ dm_dsigma1_sq,
-        const PartialT* __restrict__ dm_dsigma12) {
+        const __half* __restrict__ dm_dmu1,
+        const __half* __restrict__ dm_dsigma1_sq,
+        const __half* __restrict__ dm_dsigma12) {
 
         auto block = cg::this_thread_block();
         const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -1180,8 +1178,7 @@ namespace {
         }
     }
 
-    // Phase 6D.3: PartialT=__half for dm_* partials.
-    template <typename TargetT, typename PartialT = __half>
+    template <typename TargetT>
     __global__ void decoupledFusedL1SSIMForwardCUDA(
         int H,
         int W,
@@ -1192,10 +1189,10 @@ namespace {
         const float* __restrict__ corrected_img,
         const float* __restrict__ raw_img,
         const TargetT* __restrict__ gt_img,
-        PartialT* __restrict__ app_dm_dmu1,
-        PartialT* __restrict__ raw_dm_dmu1,
-        PartialT* __restrict__ raw_dm_dsigma1_sq,
-        PartialT* __restrict__ raw_dm_dsigma12,
+        __half* __restrict__ app_dm_dmu1,
+        __half* __restrict__ raw_dm_dmu1,
+        __half* __restrict__ raw_dm_dsigma1_sq,
+        __half* __restrict__ raw_dm_dsigma12,
         float* __restrict__ ssim_map) {
 
         auto block = cg::this_thread_block();
@@ -1401,14 +1398,14 @@ namespace {
                     if (app_dm_dmu1) {
                         const float dl_dmu1 =
                             2.f * (mu_gt * A_app - mu_corrected * C_app) / (A_app * A_app);
-                        app_dm_dmu1[global_idx] = static_cast<PartialT>(contrast_structure * dl_dmu1);
+                        app_dm_dmu1[global_idx] = static_cast<__half>(contrast_structure * dl_dmu1);
 
                         const float ds1sq = ssim_weight * (-(luminance * D_raw) / (B_raw * B_raw));
                         const float ds12 = ssim_weight * ((2.f * luminance) / B_raw);
-                        raw_dm_dsigma1_sq[global_idx] = static_cast<PartialT>(ds1sq);
-                        raw_dm_dsigma12[global_idx] = static_cast<PartialT>(ds12);
+                        raw_dm_dsigma1_sq[global_idx] = static_cast<__half>(ds1sq);
+                        raw_dm_dsigma12[global_idx] = static_cast<__half>(ds12);
                         raw_dm_dmu1[global_idx] =
-                            static_cast<PartialT>(ds1sq * (-2.f * mu_raw) + ds12 * (-mu_gt));
+                            static_cast<__half>(ds1sq * (-2.f * mu_raw) + ds12 * (-mu_gt));
                     }
                 }
             }
@@ -1446,13 +1443,11 @@ namespace lfs::training::kernels {
         void validate_ssim_context(const SSIMContext& ctx) {
             validate_loss_context_images(ctx.img1, ctx.img2, ctx.original_h, ctx.original_w);
             const auto validate_derivative = [&](const lfs::core::Tensor& tensor, const std::string_view name) {
-                // Phase 6D.3: pure-SSIM / non-fused paths store dm_* as Float16.
                 LFS_ASSERT_MSG(tensor.is_valid() && tensor.device() == lfs::core::Device::CUDA &&
-                                   (tensor.dtype() == lfs::core::DataType::Float16 ||
-                                    tensor.dtype() == lfs::core::DataType::Float32) &&
+                                   tensor.dtype() == lfs::core::DataType::Float16 &&
                                    tensor.is_contiguous() && tensor.shape() == ctx.img1.shape(),
                                lfs::core::detail::format_cuda_safe(
-                                   "{} must be a contiguous Float16/Float32 CUDA tensor matching {} (shape={})",
+                                   "{} must be a contiguous Float16 CUDA tensor matching {} (shape={})",
                                    name, ctx.img1.shape().str(), tensor.shape().str()));
             };
             validate_derivative(ctx.dm_dmu1, "SSIM dmu derivative");
@@ -1487,7 +1482,6 @@ namespace lfs::training::kernels {
         // Output SSIM map
         auto ssim_map = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
 
-        // Phase 6D.3: derivative buffers fp16.
         auto dm_dmu1 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
                                                 lfs::core::DataType::Float16);
         auto dm_dsigma1_sq = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
@@ -1497,7 +1491,7 @@ namespace lfs::training::kernels {
 
         dispatch_target_ptr(img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            fusedssimCUDA<TargetT, __half><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            fusedssimCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 H, W, C, C1, C2,
                 img1.ptr<float>(),
                 img2_ptr,
@@ -1558,7 +1552,7 @@ namespace lfs::training::kernels {
         const dim3 block(BLOCK_X, BLOCK_Y);
 
         auto ssim_map = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
-        // Phase 6D.3: dm_* fp16 (map path still materializes them for SSIMContext).
+        // dm_* fp16 (map path still materializes them for SSIMContext).
         auto dm_dmu1 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
                                                 lfs::core::DataType::Float16);
         auto dm_dsigma1_sq = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
@@ -1568,7 +1562,7 @@ namespace lfs::training::kernels {
 
         dispatch_target_ptr(img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            fusedssimCUDA<TargetT, __half><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            fusedssimCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 H, W, C, C1, C2,
                 img1.ptr<float>(), img2_ptr,
                 ssim_map.ptr<float>(), dm_dmu1.ptr<__half>(),
@@ -1624,8 +1618,7 @@ namespace lfs::training::kernels {
 
         dispatch_target_ptr(img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            // Partials unused for error-map-only path — PartialT=__half matches 6D.3 layout.
-            fusedssimCUDA<TargetT, __half><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            fusedssimCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 H, W, C, C1, C2,
                 img1.ptr<float>(), img2_ptr,
                 workspace.ssim_map.ptr<float>(),
@@ -1699,7 +1692,7 @@ namespace lfs::training::kernels {
 
         dispatch_target_ptr(ctx.img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            fusedssim_backwardCUDA<TargetT, __half><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            fusedssim_backwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 ctx.original_h, ctx.original_w, static_cast<int>(C), C1, C2,
                 ctx.img1.ptr<float>(),
                 img2_ptr,
@@ -1737,7 +1730,7 @@ namespace lfs::training::kernels {
 
         dispatch_target_ptr(ctx.img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            fusedssim_backwardCUDA<TargetT, __half><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            fusedssim_backwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 ctx.original_h, ctx.original_w, static_cast<int>(C), C1, C2,
                 ctx.img1.ptr<float>(), img2_ptr, gradient_map.ptr<float>(),
                 dL_dimg1.ptr<float>(), ctx.dm_dmu1.ptr<__half>(),
@@ -1784,7 +1777,7 @@ namespace lfs::training::kernels {
 
         dispatch_target_ptr(img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            fusedssimCUDA<TargetT, __half><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            fusedssimCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 H, W, C, C1, C2,
                 img1.ptr<float>(),
                 img2_ptr,
@@ -1806,8 +1799,8 @@ namespace lfs::training::kernels {
             N, C, H, W,
             apply_valid_padding,
             workspace.ssim_map.stream());
-        // Phase 1.6: return the workspace scalar view (no per-step clone alloc).
-        // Callers must consume the value before the next forward on this workspace.
+        // The returned scalar aliases the workspace and must be consumed before
+        // the next forward using this workspace.
         lfs::core::Tensor ssim_value_tensor = workspace.reduction_result;
 
         // Save context for backward (reference workspace buffers, not copies!)
@@ -1873,7 +1866,7 @@ namespace lfs::training::kernels {
 
         dispatch_target_ptr(ctx.img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            fusedssim_backwardCUDA<TargetT, __half><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            fusedssim_backwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 ctx.original_h, ctx.original_w, static_cast<int>(C), C1, C2,
                 ctx.img1.ptr<float>(),
                 img2_ptr,
@@ -1939,7 +1932,6 @@ namespace lfs::training::kernels {
                 apply_valid_padding,
                 workspace.ssim_map.stream());
         });
-        // Phase 1.6: no clone — persistent workspace scalar (see ssim_forward).
         lfs::core::Tensor loss_scalar = workspace.reduction_result;
 
         FusedL1SSIMContext ctx{
@@ -1980,16 +1972,12 @@ namespace lfs::training::kernels {
         const size_t numel = N * C * grad_h * grad_w;
         const float grad_per_pixel = 1.0f / static_cast<float>(numel);
 
-        // Phase 1.6: fusedL1SSIMBackwardCUDA assigns dL_dimg1[out_idx] for every
-        // in-bounds pixel (valid-padding only zeros the chain, not the write).
-        // zero_() is redundant.
-
         const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
         dispatch_target_ptr(ctx.img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            fusedL1SSIMBackwardCUDA<TargetT, __half><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            fusedL1SSIMBackwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 ctx.ssim_weight, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                 grad_per_pixel, ctx.apply_valid_padding,
                 ctx.img1.ptr<float>(), img2_ptr,
@@ -2038,7 +2026,7 @@ namespace lfs::training::kernels {
 
         dispatch_target_ptr(gt, [&](auto* gt_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
-            decoupledFusedL1SSIMForwardCUDA<TargetT, __half><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            decoupledFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 H, W, C, C1, C2, ssim_weight,
                 corrected.ptr<float>(), raw.ptr<float>(), gt_ptr,
                 workspace.app_dm_dmu1.ptr<__half>(),
@@ -2059,7 +2047,6 @@ namespace lfs::training::kernels {
                 apply_valid_padding,
                 workspace.ssim_map.stream());
         });
-        // Phase 1.6: no clone — persistent workspace scalar.
         lfs::core::Tensor loss_scalar = workspace.reduction_result;
 
         DecoupledFusedL1SSIMContext ctx{
@@ -2105,12 +2092,9 @@ namespace lfs::training::kernels {
         const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
-        // Phase 1.6: skip zero_ — fusedL1SSIMBackwardCUDA overwrites every pixel.
-        // Phase 6D.2: app branch has no sigma partials — HasSigmaPartials=false
-        // instead of a full-image zero_terms buffer.
         dispatch_target_ptr(ctx.gt_img, [&](auto* gt_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
-            fusedL1SSIMBackwardCUDA<TargetT, __half, /*HasSigmaPartials=*/false>
+            fusedL1SSIMBackwardCUDA<TargetT, /*HasSigmaPartials=*/false>
                 <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                     ctx.ssim_weight, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                     grad_per_pixel, ctx.apply_valid_padding,
@@ -2121,7 +2105,7 @@ namespace lfs::training::kernels {
                     /*dm_dsigma12=*/nullptr);
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.decoupled_fused_l1_backward");
 
-            fusedL1SSIMBackwardCUDA<TargetT, __half, /*HasSigmaPartials=*/true>
+            fusedL1SSIMBackwardCUDA<TargetT, /*HasSigmaPartials=*/true>
                 <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                     1.0f, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                     grad_per_pixel, ctx.apply_valid_padding,
@@ -2171,7 +2155,7 @@ namespace lfs::training::kernels {
         const auto stream = workspace.ssim_map.stream();
         dispatch_target_ptr(img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            maskedFusedL1SSIMForwardCUDA<TargetT, __half><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            maskedFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 H, W, C, C1, C2,
                 img1.ptr<float>(), img2_ptr,
                 workspace.dm_dmu1.ptr<__half>(),
@@ -2195,7 +2179,6 @@ namespace lfs::training::kernels {
             });
         });
 
-        // Phase 1.6: no clone — persistent workspace scalar.
         auto loss_scalar = workspace.masked_loss;
         const float mask_sum = workspace.mask_sum.item<float>();
 
@@ -2232,9 +2215,6 @@ namespace lfs::training::kernels {
         const size_t C = ctx.img1.shape()[1];
         const float inv_mask_sum = 1.0f / ctx.mask_sum_value;
 
-        // Phase 1.6: maskedFusedL1SSIMBackwardCUDA assigns every in-bounds pixel
-        // (mask=0 → write 0). zero_() is redundant.
-
         const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
@@ -2242,7 +2222,7 @@ namespace lfs::training::kernels {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
             dispatch_mask_ptr(mask, [&](auto* mask_ptr) {
                 using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(mask_ptr)>>;
-                maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, __half, /*HasSigmaPartials=*/true>
+                maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/true>
                     <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                         ctx.ssim_weight, inv_mask_sum, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                         ctx.img1.ptr<float>(), img2_ptr, mask_ptr,
@@ -2291,7 +2271,7 @@ namespace lfs::training::kernels {
         const auto stream = workspace.ssim_map.stream();
         dispatch_target_ptr(gt, [&](auto* gt_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
-            decoupledFusedL1SSIMForwardCUDA<TargetT, __half><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            decoupledFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 H, W, C, C1, C2, ssim_weight,
                 corrected.ptr<float>(), raw.ptr<float>(), gt_ptr,
                 workspace.app_dm_dmu1.ptr<__half>(),
@@ -2316,7 +2296,6 @@ namespace lfs::training::kernels {
             });
         });
 
-        // Phase 1.6: no clone — persistent workspace scalar.
         auto loss_scalar = workspace.masked_loss;
         const float mask_sum = workspace.mask_sum.item<float>();
 
@@ -2359,12 +2338,11 @@ namespace lfs::training::kernels {
         const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
-        // Phase 1.6: skip zero_ — masked kernel overwrites every in-bounds pixel.
         dispatch_target_ptr(ctx.gt_img, [&](auto* gt_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
             dispatch_mask_ptr(mask, [&](auto* mask_ptr) {
                 using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(mask_ptr)>>;
-                maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, __half, /*HasSigmaPartials=*/false>
+                maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/false>
                     <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                         ctx.ssim_weight, inv_mask_sum, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                         ctx.corrected_img.ptr<float>(), gt_ptr, mask_ptr,
@@ -2374,7 +2352,7 @@ namespace lfs::training::kernels {
                         /*dm_dsigma12=*/nullptr);
                 LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_fused_l1_backward");
 
-                maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, __half, /*HasSigmaPartials=*/true>
+                maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/true>
                     <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                         1.0f, inv_mask_sum, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                         ctx.raw_img.ptr<float>(), gt_ptr, mask_ptr,
@@ -2454,7 +2432,7 @@ namespace lfs::training::kernels {
     }
 
     // =========================================================================
-    // Phase 6D.1 — LossWorkspaceArena + independent ensure_size fallbacks
+    // LossWorkspaceArena + independent ensure_size fallbacks
     // =========================================================================
     namespace {
         constexpr size_t kArenaAlign = 256;
@@ -2492,7 +2470,6 @@ namespace lfs::training::kernels {
         if (allocated_shape != shape) {
             lfs::core::TensorShape tshape(shape);
             ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-            // Phase 6D.3: dm_* partials fp16.
             dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
             dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
             dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
@@ -2534,7 +2511,6 @@ namespace lfs::training::kernels {
             std::vector<size_t> map_shape = shape;
             map_shape[1] = 1;
             ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
-            // Phase 6D.3: dm_* partials fp16.
             app_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
             raw_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
             raw_dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
@@ -2557,7 +2533,6 @@ namespace lfs::training::kernels {
             std::vector<size_t> map_shape = shape;
             map_shape[1] = 1;
             ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
-            // Phase 6D.3: dm_* partials fp16.
             dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
             dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
             dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
@@ -2579,7 +2554,6 @@ namespace lfs::training::kernels {
             std::vector<size_t> map_shape = shape;
             map_shape[1] = 1;
             ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
-            // Phase 6D.3: dm_* partials fp16.
             app_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
             raw_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
             raw_dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
@@ -2608,7 +2582,7 @@ namespace lfs::training::kernels {
     }
 
     size_t LossWorkspaceArena::pure_ssim_layout_bytes(const std::vector<size_t>& shape) {
-        // 6D.3: 3× dm_* fp16; ssim_map / dL_dmap / dL_dimg1 stay fp32.
+        // 3× dm_* fp16; ssim_map / dL_dmap / dL_dimg1 stay fp32.
         return pack_fields({
             field_bytes(shape, lfs::core::DataType::Float32),
             field_bytes(shape, lfs::core::DataType::Float16),
@@ -2624,7 +2598,8 @@ namespace lfs::training::kernels {
     size_t LossWorkspaceArena::decoupled_layout_bytes(const std::vector<size_t>& shape) {
         std::vector<size_t> map_shape = shape;
         map_shape[1] = 1;
-        // 6D.2: no zero_terms. 6D.3: 4× dm_* fp16; grads stay fp32.
+        // Four dm_* fields use fp16; gradients remain fp32. There is no
+        // zero_terms field.
         return pack_fields({
             field_bytes(map_shape, lfs::core::DataType::Float32),
             field_bytes(shape, lfs::core::DataType::Float16),
@@ -2641,7 +2616,6 @@ namespace lfs::training::kernels {
     size_t LossWorkspaceArena::masked_fused_layout_bytes(const std::vector<size_t>& shape) {
         std::vector<size_t> map_shape = shape;
         map_shape[1] = 1;
-        // 6D.3: 3× dm_* fp16.
         return pack_fields({
             field_bytes(map_shape, lfs::core::DataType::Float32),
             field_bytes(shape, lfs::core::DataType::Float16),
@@ -2657,7 +2631,7 @@ namespace lfs::training::kernels {
     size_t LossWorkspaceArena::masked_decoupled_layout_bytes(const std::vector<size_t>& shape) {
         std::vector<size_t> map_shape = shape;
         map_shape[1] = 1;
-        // 6D.2: no zero_terms. 6D.3: 4× dm_* fp16.
+        // Four dm_* fields use fp16, with no zero_terms field.
         return pack_fields({
             field_bytes(map_shape, lfs::core::DataType::Float32),
             field_bytes(shape, lfs::core::DataType::Float16),

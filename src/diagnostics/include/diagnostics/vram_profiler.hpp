@@ -98,8 +98,8 @@ namespace lfs::diagnostics {
         std::size_t live_bytes = 0;
     };
 
-    // Persistent training-state ledger (Phase 0.2 / gate G1).
-    // Buckets: params / optim / grads / densify-aux (SPEED_VRAM_OPTIMIZATION_PLAN §0b).
+    // Persistent training-state ledger.
+    // Buckets: parameters, optimizer state, gradients, and densification data.
     // bytes_per_splat = total_bytes / live_splats (0 when N==0).
     struct TrainingStateLedger {
         std::size_t params_bytes = 0;
@@ -111,9 +111,9 @@ namespace lfs::diagnostics {
         double bytes_per_splat = 0.0;
     };
 
-    /// WO-X / WO-EXCACHE: process-peak attribution. Each named residual above
-    /// Wave-2's ex-cache baseline (938 MiB) must be eliminated or listed here
-    /// with an owner (justified = budget-gated / by design).
+    /// Process-peak attribution. Every residual above the 938 MiB ex-cache
+    /// baseline must be eliminated or listed with an owner; justified entries
+    /// are budget-gated or required by design.
     struct PeakSubsystemLine {
         std::string name;
         std::string owner;
@@ -122,32 +122,32 @@ namespace lfs::diagnostics {
     };
 
     struct PeakExCacheLedger {
-        // Wave-2 bonsai quiet-GPU peak (no GT cache). Gate: ex_cache within +5%
-        // or every excess line justified. Historical quiet-GPU device-wide
-        // cudaMemGetInfo sample (see PROGRESS Phase-1 final gate).
-        static constexpr std::size_t kWave2ExCacheBytes =
+        // Device-wide cudaMemGetInfo sample at the Bonsai quiet-GPU peak with
+        // no GT cache. ex_cache must remain within 5%, unless every excess line
+        // is justified.
+        static constexpr std::size_t kExCacheBaselineBytes =
             static_cast<std::size_t>(938.3 * 1024.0 * 1024.0);
 
         std::size_t peak_cuda_used_bytes = 0;     // device-wide free (legacy metric)
         std::size_t baseline_cuda_used_bytes = 0; // device-wide at train start
         std::size_t peak_pool_reserved_bytes = 0; // process-local pool HWM
         std::size_t peak_pool_used_bytes = 0;
-        /// peak_cuda - baseline - gt_cache (fair vs Wave-2 quiet-GPU)
+        // peak_cuda - baseline - gt_cache (fair vs quiet-GPU)
         std::size_t ex_cache_net_bytes = 0;
-        std::size_t gt_cache_bytes = 0;                // owner: WO-HP1, justified
+        std::size_t gt_cache_bytes = 0;
         std::size_t training_state_bytes = 0;          // params+optim+densify (logical)
         std::size_t training_state_reserved_bytes = 0; // capacity-backed
-        std::size_t loss_workspace_bytes = 0;          // owner: Phase 6D arena
+        std::size_t loss_workspace_bytes = 0;
         std::size_t densify_workspace_bytes = 0;
         std::size_t pool_bucket_cache_bytes = 0; // at peak moment when possible
         std::size_t exportable_splat_bytes = 0;
-        std::size_t fastgs_sort_hwm_bytes = 0;    // Phase 1.1 TLS sort
+        std::size_t fastgs_sort_hwm_bytes = 0;
         std::size_t fastgs_raster_live_bytes = 0; // per_prim+tile+sorted at peak
         std::size_t arena_capacity_bytes = 0;
-        // peak - gt_cache (the quantity compared to Wave-2's 938 MiB)
+        // peak - gt_cache (the quantity compared to 938 MiB)
         std::size_t ex_cache_bytes = 0;
-        std::size_t wave2_ex_cache_bytes = kWave2ExCacheBytes;
-        std::size_t excess_over_wave2_bytes = 0;
+        std::size_t baseline_ex_cache_bytes = kExCacheBaselineBytes;
+        std::size_t excess_over_baseline_bytes = 0;
         std::size_t justified_excess_bytes = 0;
         std::size_t unjustified_excess_bytes = 0;
         int peak_iter = 0;
@@ -357,8 +357,8 @@ namespace lfs::diagnostics {
         void captureCudaWarmupDelta();
         void recordCudaPhaseBytes(std::string_view phase, std::size_t bytes);
         void setCudaContextBaselineBytes(std::size_t bytes);
-        /// Device-wide cudaMemGetInfo used at primary-context init (main.cpp).
-        /// Prefer this over a late configure() sample for Wave-2-fair ex_cache_net.
+        /// Device-wide cudaMemGetInfo captured at primary-context initialization.
+        /// Late configure() samples include unrelated allocations in ex_cache_net.
         [[nodiscard]] std::size_t cudaDeviceBaselineBytes() const;
 
         void sampleCudaMemory();
@@ -367,7 +367,7 @@ namespace lfs::diagnostics {
                                  std::size_t total,
                                  std::string device_name);
 
-        // Training-state bytes-per-splat ledger (Phase 0.2). Caller computes the
+        // Training-state bytes-per-splat ledger. Caller computes the
         // ledger from SplatData + AdamOptimizer; profiler stores the last value
         // for HUD / bench scripts.
         void setTrainingStateLedger(const TrainingStateLedger& ledger);

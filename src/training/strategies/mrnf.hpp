@@ -139,11 +139,8 @@ namespace lfs::training {
         int _edge_last_sample_iter = -1;
         lfs::core::Tensor _free_mask;
 
-        // Phase 4.3 — reusable LAS child buffers (grow-only high-water).
         DensifyChildWorkspace _densify_ws;
-        // WO-X — grow-only N/K densify scratch (masks, weights, indices).
         DensifyNScratch _densify_n_scratch;
-        // Phase 4.5 — device buffer for packed refine counts (4× int64).
         lfs::core::Tensor _refine_counts_dev;
         lfs::core::Tensor _refine_counts_host; // pinned staging optional; use vector
 

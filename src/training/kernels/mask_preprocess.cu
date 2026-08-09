@@ -56,7 +56,7 @@ namespace lfs::training::kernels {
                 // After trainer remap: >250 kept as 255 → weight 1; else 0.
                 return v > 250.0f ? 1.0f : 0.0f;
             }
-            // BinaryGt0 matches compose_pixel_loss_weights:
+            // BinaryGt0 matches the reference weight composition:
             //   UInt8/Bool → (v != 0) as float; Float32 → pass-through.
             if constexpr (std::is_same_v<std::remove_cv_t<MaskT>, uint8_t>) {
                 return mask[idx] != 0 ? 1.0f : 0.0f;

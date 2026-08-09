@@ -5,7 +5,7 @@
 
 /**
  * @file joint_adam_codec.hpp
- * @brief Joint (u, log_s) Adam moment codec (Phase 2.2).
+ * @brief Joint (u, log_s) Adam moment codec.
  *
  * Per cell stores two linearly-quantized primitives:
  *   u     = m / (sqrt(v) + eps)
@@ -14,7 +14,7 @@
  * Endpoint-exact; all-zero packed+bounds decode to (m,v)=(0,0).
  *
  * Bit depths: 16-bit non-SH (4 B/cell), 8-bit SH (2 B/cell).
- * Joint is the only Adam moment codec (legacy uint8+scales path removed).
+ * Joint is the sole Adam moment codec.
  */
 
 #include <algorithm>
@@ -22,18 +22,11 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <optional>
 
 namespace lfs::training::joint_adam {
 
     inline constexpr int kBlockSize = 256;
     inline constexpr float kEps = 1e-15f;
-
-    /// Always true — joint (u, log_s) is the only Adam codec.
-    [[nodiscard]] bool joint_codec_enabled();
-
-    /// Historical test hook; no-op (joint is permanent).
-    void set_joint_codec_enabled_for_testing(std::optional<bool> enabled);
 
     [[nodiscard]] inline std::size_t n_bounds_for_prims(std::size_t n_prims) {
         if (n_prims == 0)
@@ -59,7 +52,7 @@ namespace lfs::training::joint_adam {
         static constexpr float kInvQMax = 1.0f / kQMax;
         static constexpr int kBytesPerCell = (BITS == 16) ? 4 : 2;
 
-        // Host mirror of device F3 fast-path thresholds (log1p/expm1 near 0;
+        // Host mirror of device fast-path thresholds (log1p/expm1 near 0;
         // std::log/exp for the bulk). Keeps 0↔0 fixed point exact.
         static float forward_sqrt_g2(float sqrt_g2) {
             const float x = std::max(sqrt_g2, 0.0f) * (1.0f / kEps);
@@ -108,7 +101,7 @@ namespace lfs::training::joint_adam {
             us_to_g1g2(u, log_s, g1, g2);
         }
 
-        /// Host encode (mirrors device F3: inv-range mul, not per-cell fdiv).
+        /// Host encode mirrors the device fast path: inverse-range multiplication, not per-cell division.
         static void encode_us(std::uint8_t* packed, std::size_t idx,
                               float u_val, float log_s_val,
                               float umin, float umax, float smin, float smax) {

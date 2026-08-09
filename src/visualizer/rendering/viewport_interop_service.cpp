@@ -659,7 +659,8 @@ namespace lfs::vis {
             return;
         }
 
-        // Defer Phase 1–2 work to prepareFrame so →GENERAL transitions coalesce.
+        // Defer transition and upload work to prepareFrame so transitions to
+        // GENERAL can be coalesced.
         pending_uploads_.push_back(ChannelUploadPlan{
             .channel = &channel,
             .target = &target,
@@ -706,7 +707,8 @@ namespace lfs::vis {
         prepareChannel(context, channels_->split_right, resize_deferring);
         prepareChannel(context, channels_->depth_blit, resize_deferring);
 
-        // Phase 1 — one coalesced pre-frame →GENERAL submit for every unit that needs it.
+        // Submit one coalesced pre-frame transition to GENERAL for every unit
+        // that needs it.
         std::vector<VulkanContext::ImmediateLayoutTransition> general_transitions;
         general_transitions.reserve(pending_uploads_.size());
         std::vector<PooledInteropUnit*> units_transitioned_to_general;
@@ -767,7 +769,7 @@ namespace lfs::vis {
             }
         }
 
-        // Phase 2 — CUDA wait/copy/signal per channel (shared upload stream, unchanged order).
+        // CUDA wait/copy/signal per channel (shared upload stream, unchanged order).
         for (const auto& plan : pending_uploads_) {
             auto& channel = *plan.channel;
             auto& target = *plan.target;
@@ -882,7 +884,7 @@ namespace lfs::vis {
             if (pending.unit == nullptr || pending.target == nullptr || pending.channel == nullptr) {
                 continue;
             }
-            // F2-2: only commit layout/publish when the frame wait is accepted.
+            // Only commit layout and publish when the frame wait is accepted.
             // A rejected wait marks the frame invalid for submit; leaving layout
             // GENERAL keeps CacheHit/bind from sampling a still-GENERAL GPU image.
             if (!context.addFrameTimelineWait(pending.unit->semaphore.semaphore,
@@ -896,7 +898,6 @@ namespace lfs::vis {
             pending.unit->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             pending.target->uploaded_source_generation = pending.source_generation;
             ++pending.target->generation;
-            // Publishing channels publish at sample-frame time, not before CUDA handoff.
             if (pending.channel->policy.publishes_published) {
                 publishFromTarget(*pending.channel, *pending.target);
             }

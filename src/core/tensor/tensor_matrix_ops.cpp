@@ -185,7 +185,7 @@ namespace lfs::core {
             const Tensor* a_operand = &a;
             const Tensor* b_operand = &b;
             if (a_batch == 1) {
-                // broadcast_to is a zero-stride view (WO-W.1); bmm needs dense batches.
+                // broadcast_to is a zero-stride view; bmm needs dense batches.
                 a_broadcast = a.broadcast_to({batch, a.shape_[1], a.shape_[2]}).contiguous();
                 a_operand = &a_broadcast;
             }

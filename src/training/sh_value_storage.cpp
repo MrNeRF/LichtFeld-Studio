@@ -40,7 +40,7 @@ namespace lfs::training::sh_value {
 
         /// Full device barrier after encode/decode. Stream-only sync is not enough:
         /// densify runs on the strategy stream while the next forward may launch on
-        /// the training stream without an intervening wait (ISS-2.1 multi-stream UAF).
+        // the training stream without an intervening wait (multi-stream UAF).
         void sync_codec_stream(cudaStream_t /*stream*/) {
             LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "sh_value quant codec device barrier");
         }
@@ -84,8 +84,8 @@ namespace lfs::training::sh_value {
         u16.set_name("splat.shN");
         bounds.set_name("splat.shN_value_bounds");
 
-        // Source may be fp32 float4-swizzle or IEEE f16 float4-swizzle (standalone
-        // / pre-quant). Stage to float for the encode kernel.
+        // Source may be fp32 or IEEE f16 float4-swizzle. Stage to float for the
+        // encode kernel.
         Tensor float_src = shN;
         if (float_src.dtype() == DataType::Float16) {
             float_src = float_src.to(DataType::Float32);
@@ -95,9 +95,8 @@ namespace lfs::training::sh_value {
         if (!float_src.is_contiguous())
             float_src = float_src.contiguous();
 
-        // Encode on the current training stream, then sync before releasing the float
-        // source. Null-stream launch + immediate free was the densify re-encode UAF
-        // (next FastGS preprocess illegal address — ISS-2.1).
+        // Encode on the current training stream, then sync before releasing the
+        // float source to prevent a use-after-free before the next FastGS preprocess.
         const cudaStream_t stream = core::getCurrentCUDAStream();
         if (u16.stream() != stream)
             u16.set_stream(stream);
@@ -179,9 +178,9 @@ namespace lfs::training::sh_value {
         auto& bounds = splat.shN_value_bounds();
         if (!bounds.is_valid() ||
             bounds.numel() < core::sh_value_quant::n_bounds_for_prims(n) * 2) {
-            // MN-2: rebuilding empty/zero bounds makes decode emit all zeros — a silent
+            // Rebuilding empty or zero bounds makes decode emit all zeros — a silent
             // SH wipe. Fail loud so densify/relocate never zero SH-rest by accident.
-            LOG_ERROR("MN-2: SH value quant expand refused — bounds short for N={} "
+            LOG_ERROR("SH value quant expand refused: bounds are short for N={} "
                       "(have={} need={}). Refusing silent SH wipe; restore bounds or "
                       "dequant via a known-good checkpoint.",
                       n,
@@ -189,7 +188,7 @@ namespace lfs::training::sh_value {
                       core::sh_value_quant::n_bounds_for_prims(n) * 2);
             throw std::runtime_error(
                 "ensure_shN_fp32_for_mutation: shN_value_bounds short/missing — "
-                "refusing silent SH wipe (MN-2)");
+                "refusing silent SH wipe");
         }
         if (bounds.stream() != stream)
             bounds.set_stream(stream);
@@ -206,7 +205,7 @@ namespace lfs::training::sh_value {
         sync_codec_stream(stream);
 
         shN = std::move(fp32);
-        // ISS-027: drop bounds once codes are expanded. Leaving pad-dropped bounds
+        // drop bounds once codes are expanded. Leaving pad-dropped bounds
         // attached to a Float32 float4-swizzle buffer is a dual-representation
         // footgun (FastGS/viewer may treat Float16+bounds as q16; a later
         // partial rebind can re-install codes without matching bounds).
@@ -227,13 +226,6 @@ namespace lfs::training::sh_value {
         // (allocate_named_param). Guard acquires render exclusive when the caller
         // did not (crop/python/stop_refine); refining block re-enters as no-op.
         return apply_shN_value_quant(splat);
-    }
-
-    void bind_shN_quant_for_raster(const core::SplatData& splat) {
-        (void)splat;
-    }
-
-    void clear_shN_quant_for_raster() {
     }
 
 } // namespace lfs::training::sh_value

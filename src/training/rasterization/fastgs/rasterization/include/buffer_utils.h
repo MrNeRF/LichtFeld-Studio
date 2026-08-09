@@ -24,7 +24,7 @@ namespace fast_lfs::rasterization {
         kFastGSForwardStatusInstanceWriteMismatch = 1u << 1,
         kFastGSForwardStatusPrimitiveIndexOutOfRange = 1u << 2,
         kFastGSForwardStatusTileInstanceRangeOutOfRange = 1u << 3,
-        /// Phase 1.2: instance count exceeded sort-buffer capacity (async path).
+        /// instance count exceeded sort-buffer capacity (async path).
         kFastGSForwardStatusSortCapacityOverflow = 1u << 4,
     };
 
@@ -272,7 +272,7 @@ namespace fast_lfs::rasterization {
         std::uint64_t* n_touched_tiles;
         std::uint64_t* offset;
         ushort4* screen_bounds;
-        PackedMeanBBox* mean2d; // packed mean2d + pixel AABB (was float2*)
+        PackedMeanBBox* mean2d;
         float4* conic_opacity;
         float4* color; // float3 padded to float4 for 128-bit shared/global loads
         FastGSForwardStatus* forward_status;

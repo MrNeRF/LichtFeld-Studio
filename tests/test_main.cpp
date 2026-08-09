@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
 
     const int result = RUN_ALL_TESTS();
 
-    // ISS-020: ordered GPU release (TLS caches, PPISP statics, mirror mults, …)
+    // ordered GPU release (TLS caches, PPISP statics, mirror mults, …)
     // then pool/arena/pinned shutdown while CUDA is still healthy. After that,
     // do NOT return into C++ static/TLS destruction — those dtors re-enter
     // freed pool storage / half-dead CUDA and produce SIGSEGV (exit 139) or

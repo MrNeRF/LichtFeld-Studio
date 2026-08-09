@@ -70,7 +70,8 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API void launch_clamp_scalar(float* data, float min_val, float max_val, size_t n, cudaStream_t stream);
     LFS_CORE_API void launch_clamp_fused(const float* src, float* dst, float min_val, float max_val, size_t n, cudaStream_t stream);
     LFS_CORE_API void launch_clamp_scalar_int(int* data, int min_val, int max_val, size_t n, cudaStream_t stream);
-    // Float16 clamp (6D.5). Host gate still needs Float16 acceptance (see ISSUES).
+    // Float16 clamp kernels exist, but host dispatch must reject them until its
+    // dtype gate is wired.
     LFS_CORE_API void launch_clamp_scalar_half(__half* data, float min_val, float max_val, size_t n,
                                                cudaStream_t stream);
     LFS_CORE_API void launch_clamp_fused_half(const __half* src, __half* dst, float min_val, float max_val,
@@ -108,7 +109,7 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API void launch_column_reduce(const float* input, float* output,
                                            size_t M, size_t N, ReduceOp op, cudaStream_t stream);
 
-    // ============= Fast general strided reduce (outer, reduce, inner) — WO-W.2 =============
+    // ============= Fast general strided reduce (outer, reduce, inner) =============
     // Column-style 2D grid, SM-capped, vectorized where possible. Beats transpose+copy
     // for many large-inner shapes; host heuristic chooses path.
     LFS_CORE_API void launch_strided_reduce_fast(const float* input, float* output,
@@ -116,11 +117,11 @@ namespace lfs::core::tensor_ops {
                                                  size_t inner_size, ReduceOp op,
                                                  cudaStream_t stream);
 
-    /// Host heuristic: true → prefer strided_fast over permute+contiguous (WO-W.2).
+    // Host heuristic: true → prefer strided_fast over permute+contiguous.
     [[nodiscard]] LFS_CORE_API bool should_prefer_strided_over_transpose(
         size_t outer_size, size_t reduce_size, size_t inner_size) noexcept;
 
-    // ---- Test/debug hooks for path selection (WO-W.2 TDD) ----
+    // Test/debug hooks for path selection
     enum class ReducePathForTesting : int {
         None = 0,
         StridedFast,

@@ -244,7 +244,7 @@ TEST(DeferredD1CopyRegistryTest, NamePreservedPerTensor) {
     Tensor a = Tensor::ones({4}, Device::CPU, DataType::Float32).add(2.0f);
     a.set_name("x");
     Tensor b = a;
-    // 6A.1: Tensor copy shares TensorState — name lives on the shared impl.
+    // Tensor copy shares TensorState — name lives on the shared impl.
     b.set_name("y");
 
     const auto a_values = a.to_vector();

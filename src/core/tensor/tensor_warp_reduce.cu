@@ -1545,7 +1545,7 @@ namespace lfs::core::tensor_ops {
     }
 
     // =========================================================================
-    // WO-W.2 — Fast general strided reduce (outer × reduce × inner layout)
+    // Fast general strided reduce (outer × reduce × inner layout)
     // =========================================================================
     // Column-style 2D grid over (output_elements × reduce_partitions):
     //   - X threads own consecutive output elements → coalesced loads along
@@ -1576,7 +1576,7 @@ namespace lfs::core::tensor_ops {
 
     bool should_prefer_strided_over_transpose(
         size_t outer_size, size_t reduce_size, size_t inner_size) noexcept {
-        // Measured argmin on RTX 4080 (WO-W.2 microbench, µs):
+        // Measured argmin on RTX 4080 (microbench, µs):
         //   [64,512,512] dim0:  strided ~109  vs transpose ~570  → strided
         //   [32,128,512] dim1:  strided ~17   vs transpose ~23   → strided
         //   [4,2048,256] dim1:  strided ~18   vs transpose ~38   → strided

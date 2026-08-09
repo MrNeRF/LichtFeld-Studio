@@ -1,17 +1,5 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
- * SPDX-License-Identifier: GPL-3.0-or-later
- *
- * WO-WARP-BWD — Warp-level sub-tile culling for FastGS blend_backward_cu.
- *
- * TDD:
- *  1. Sync-count: reverse-walk body (WARP_BWD_WALK_BEGIN..END) must contain
- *     zero block.sync / __syncthreads (block fences only at batch boundaries).
- *  2. Fail-first sensitivity: bwd cull mode=2 (empty mask) params after one
- *     fused step MUST differ from mode=1 (cull off).
- *  3. Grad-epsilon goldens: mode=0 (enabled) vs mode=1 (reference) → parameter
- *     deltas within 1e-6 (FP reduction order may change; NOT bit-exact).
- *  4. Existing FastGS numerical gradient suites remain the full-path gate.
- */
+ * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
@@ -223,9 +211,7 @@ TEST_F(WarpCullBwdTest, ReverseWalkHasZeroBlockFences) {
         << "legacy diagonal reverse walk still present";
 }
 
-// ---------------------------------------------------------------------------
-// Fail-first sensitivity: wrong empty mask differs from cull-off reference.
-// ---------------------------------------------------------------------------
+// A deliberately empty mask must differ from the cull-disabled reference.
 TEST_F(WarpCullBwdTest, WrongMaskDiffersFromReference) {
     auto ref = run_one_step(*camera_, make_synthetic_splat(48), bg_, /*bwd_cull_mode=*/1);
     auto wrong = run_one_step(*camera_, make_synthetic_splat(48), bg_, /*bwd_cull_mode=*/2);

@@ -1,11 +1,6 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Task 4.1 — Kill the ~3x compact peak.
-// TDD: assert (a) compact correctness vs reference index_select and
-// (b) peak device allocation during compact is below the old 3x pattern
-// (index_select exact + reserve max_cap while original lives).
-
 class MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
 
 #include "core/alloc_counter.hpp"
@@ -79,38 +74,12 @@ namespace {
 
 } // namespace
 
-// Analytical concurrent peak (pool-noise free). Old path holds source@cap + exact@new
-// + dest@cap ≈ 2.5–3×; new path holds source@cap + dest@cap = 2×.
-TEST(CompactSplatPeakPattern, OldPathExceedsTwoXBound) {
-    constexpr size_t cols = 3;
-    constexpr size_t max_cap = 256 * 1024;
-    constexpr size_t new_n = max_cap / 2;
-    const size_t tensor_at_cap_bytes = max_cap * cols * sizeof(float);
-    const size_t exact_bytes = new_n * cols * sizeof(float);
-    // Concurrent live under the old algorithm:
-    const size_t old_concurrent = tensor_at_cap_bytes + exact_bytes + tensor_at_cap_bytes;
-
-    EXPECT_GT(old_concurrent, static_cast<size_t>(2.3 * static_cast<double>(tensor_at_cap_bytes)))
-        << "old concurrent=" << old_concurrent << " tensor_at_cap=" << tensor_at_cap_bytes;
-
-    // Also exercise the old path end-to-end so it stays a real regression guard.
-    auto src = make_src(max_cap, max_cap, cols);
-    auto indices = make_indices(new_n);
-    auto exact = src.index_select(0, indices).contiguous();
-    auto third = exact.clone();
-    third.reserve(max_cap);
-    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-    EXPECT_EQ(third.capacity(), max_cap);
-    EXPECT_EQ(third.shape()[0], new_n);
-    (void)src;
-}
-
 TEST(CompactSplatPeakPattern, NewPathStaysWithinTwoX) {
     constexpr size_t cols = 3;
     constexpr size_t max_cap = 256 * 1024;
     constexpr size_t new_n = max_cap / 2;
     const size_t tensor_at_cap_bytes = max_cap * cols * sizeof(float);
-    // Concurrent live under the new algorithm:
+    // Gather-into-reserved pattern.
     const size_t new_concurrent = tensor_at_cap_bytes + tensor_at_cap_bytes;
 
     EXPECT_LE(new_concurrent, static_cast<size_t>(2.01 * static_cast<double>(tensor_at_cap_bytes)))
@@ -119,7 +88,6 @@ TEST(CompactSplatPeakPattern, NewPathStaysWithinTwoX) {
               tensor_at_cap_bytes + (max_cap / 2) * cols * sizeof(float) + tensor_at_cap_bytes)
         << "new path must not need the exact-size intermediate";
 
-    // Functional: gather-into-reserved matches reference index_select.
     auto src = make_src(max_cap, max_cap, cols);
     auto indices = make_indices(new_n);
     auto ref = src.index_select(0, indices).contiguous();
@@ -134,20 +102,6 @@ TEST(CompactSplatPeakPattern, NewPathStaysWithinTwoX) {
     for (size_t i = 0; i < got.numel(); ++i) {
         EXPECT_FLOAT_EQ(got.ptr<float>()[i], exp.ptr<float>()[i]) << "i=" << i;
     }
-}
-
-// Side-by-side analytical gap = the exact-size intermediate.
-TEST(CompactSplatPeakPattern, OldPathPeaksHigherThanNew) {
-    constexpr size_t cols = 3;
-    constexpr size_t max_cap = 256 * 1024;
-    constexpr size_t new_n = max_cap / 2;
-    const size_t tensor_at_cap_bytes = max_cap * cols * sizeof(float);
-    const size_t exact_bytes = new_n * cols * sizeof(float);
-    const size_t old_concurrent = 2 * tensor_at_cap_bytes + exact_bytes;
-    const size_t new_concurrent = 2 * tensor_at_cap_bytes;
-
-    EXPECT_GT(old_concurrent, new_concurrent);
-    EXPECT_EQ(old_concurrent - new_concurrent, exact_bytes);
 }
 
 TEST(MRNFStrategyTest, CompactSplatsCorrectAndPeakBelowThreeX) {
@@ -197,7 +151,6 @@ TEST(MRNFStrategyTest, CompactSplatsCorrectAndPeakBelowThreeX) {
     const auto alloc_delta = alloc_counter::delta_since(alloc_snap);
     const size_t used_after = cuda_used_bytes();
 
-    // (a) Correctness: values/order match reference index_select.
     ASSERT_EQ(static_cast<size_t>(splat_data.size()), keep_n);
     auto got_means = splat_data.means().contiguous().cpu();
     auto exp_means = ref_means.contiguous().cpu();
@@ -218,28 +171,23 @@ TEST(MRNFStrategyTest, CompactSplatsCorrectAndPeakBelowThreeX) {
         EXPECT_FLOAT_EQ(got_op.ptr<float>()[i], exp_op.ptr<float>()[i]) << "opacity i=" << i;
     }
 
-    // Capacity invariant: params remain reserved at max_cap (no silent exact-size fallout).
     EXPECT_EQ(splat_data.means().capacity(), max_cap);
     EXPECT_EQ(splat_data.sh0().capacity(), max_cap);
     EXPECT_EQ(splat_data.scaling_raw().capacity(), max_cap);
     EXPECT_EQ(splat_data.rotation_raw().capacity(), max_cap);
     EXPECT_EQ(splat_data.opacity_raw().capacity(), max_cap);
 
-    // (b) Peak / alloc bound for the production compact path.
-    // Old: index_select (pool zeros) + reserve (direct) per tensor ≈ 2 driver hits each.
-    // New: one zeros_direct per tensor. With SH0 (no shN swizzle) the compact sites are:
-    //   5 params + 5*(exp_avg,exp_avg_sq,scale,sq_scale) + 5 grads + deleted/free/aux
-    // ≈ 5 + 20 + 5 + a few. New path ≈ 1 alloc/site; old ≈ 2.
-    // Bound at ≤ 1.25× a generous site count so the old 2× pattern fails.
+    // The reference pattern requires roughly two allocations per site; the
+    // gather-into-reserved bound permits one allocation per site.
     constexpr uint64_t kSites = 36;
     EXPECT_LE(alloc_delta, kSites)
         << "compact_splats alloc_delta=" << alloc_delta
-        << " exceeds 1-per-site bound (old 3x path does ~2 per site). used_before="
+        << " exceeds 1-per-site bound (reference path does ~2 per site). used_before="
         << used_before << " used_after=" << used_after
-        << " (record this delta for TDD: old path should be well above kSites)";
+        << " (the reference path should be well above kSites)";
 
-    // Residual VRAM after compact should not grow by a full extra max_cap-sized
-    // third buffer per tensor (pool may retain some slack; bound loosely).
+    // Allow allocator-pool slack while excluding a third capacity-sized buffer
+    // for every tensor.
     const size_t one_means_at_cap = max_cap * 3 * sizeof(float);
     if (used_after > used_before) {
         EXPECT_LT(used_after - used_before, 8 * one_means_at_cap)

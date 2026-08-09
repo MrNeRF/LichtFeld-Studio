@@ -28,7 +28,6 @@
 #include "io/loader.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -121,36 +120,23 @@ namespace {
 class SogFormatTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Optional external fixtures (legacy developer machine paths). Never try to
-        // create them — permission errors in SetUp used to fail the whole suite.
-        // Prefer env overrides, then well-known optional locations; otherwise tests
-        // that need fixtures GTEST_SKIP.
-        if (const char* env = std::getenv("LFS_SOG_TEST_DIR"); env && *env) {
-            test_dir = fs::path(env);
-        } else {
-            for (const auto& candidate : {
-                     fs::path("test_formats"),
-                     fs::path("tests/data/sog"),
-                     fs::path("/home/paja/projects/gaussian-splatting-cuda/test_formats"),
-                 }) {
-                if (fs::exists(candidate)) {
-                    test_dir = candidate;
-                    break;
-                }
+        // External fixtures are optional; tests that require unavailable fixtures skip.
+        for (const auto& candidate : {
+                 fs::path("test_formats"),
+                 fs::path("tests/data/sog"),
+             }) {
+            if (fs::exists(candidate)) {
+                test_dir = candidate;
+                break;
             }
         }
         sog_bundle = test_dir.empty() ? fs::path{} : test_dir / "test.sog";
-        if (const char* env = std::getenv("LFS_SOG_ORIGINAL_PLY"); env && *env) {
-            original_ply = fs::path(env);
-        } else {
-            for (const auto& candidate : {
-                     fs::path("output/splat_30000.ply"),
-                     fs::path("/home/paja/projects/gaussian-splatting-cuda/output/splat_30000.ply"),
-                 }) {
-                if (fs::exists(candidate)) {
-                    original_ply = candidate;
-                    break;
-                }
+        for (const auto& candidate : {
+                 fs::path("output/splat_30000.ply"),
+             }) {
+            if (fs::exists(candidate)) {
+                original_ply = candidate;
+                break;
             }
         }
     }

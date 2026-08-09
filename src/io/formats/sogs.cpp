@@ -1754,7 +1754,7 @@ namespace lfs::io {
 
                 // k-means expects 1D float32 swizzled layout. Resident shN may be:
                 //  - Float32 swizzled (training default / legacy)
-                //  - Float16 pad-dropped q16 (Phase 2.1) — must dequant+reswizzle first
+                // Float16 pad-dropped q16 — must dequant+reswizzle first
                 //  - any other dtype/layout is rejected
                 const auto& shN_raw = splat_data.shN_raw();
                 if (!shN_raw.is_valid() || shN_raw.numel() == 0) {

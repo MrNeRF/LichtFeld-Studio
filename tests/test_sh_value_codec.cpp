@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 /**
- * Phase 2.1 — SH-rest 16-bit value codec unit tests (TDD).
+ * SH-rest 16-bit value codec unit tests.
  */
 
 #include "lfs/training/sh_value_codec.hpp"

@@ -37,7 +37,7 @@ namespace lfs::vis {
         // LIVE-CONTROL sub-view — offset/bytes re-resolved from SplatExportableStorage
         // Control on every query. Matches resolve_exportable_device_ptr for CUDA so a
         // capacity grow cannot leave the viewer binding a pre-grow region while FastGS
-        // already reads the live base (WO-FIX-Q16-GUARD1 / M4 corridor).
+        // already reads the live base.
         VulkanExternalTensorStorage(
             std::shared_ptr<VulkanExternalTensorStorage> parent,
             std::shared_ptr<lfs::core::SplatExportableStorage::Control> control,

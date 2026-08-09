@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Phase 4.3–4.8 densify-event kernels: free-slot fuse, packed counts,
+ * Densify-event kernels: free-slot fuse, packed counts,
  * positive-median normalize, workspace growth helpers.
  */
 

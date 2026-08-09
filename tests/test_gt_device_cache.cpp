@@ -434,7 +434,7 @@ TEST_F(GtDeviceCacheTest, InteractivePinnedHitServesBitIdenticalNoDeviceCache) {
     EXPECT_GT(loader.gt_pinned_cache_bytes(), 0u);
 }
 
-// MJ-13: under VRAM pressure, device GT entries must yield so a subsequent
+// under VRAM pressure, device GT entries must yield so a subsequent
 // allocation can retry successfully; eviction stats must be non-zero.
 TEST_F(GtDeviceCacheTest, EvictionUnderPressureReclaimsAndRetries) {
     auto cfg = base_config();

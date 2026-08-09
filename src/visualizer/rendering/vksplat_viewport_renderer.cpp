@@ -3317,7 +3317,7 @@ namespace lfs::vis {
         // thread) to grow the exportable block in place under its stable base
         // address — contents preserved — and returns the new committed size. The
         // render re-imports the larger range into Vulkan on its next frame.
-        // MJ-12: detach Vulkan import before release_physical inside the grow.
+        // detach Vulkan import before release_physical inside the grow.
         const auto make_grow_fn = [this](std::shared_ptr<lfs::core::ExportableBlock> block) {
             return [this, block = std::move(block)](std::size_t need) -> std::size_t {
                 const std::size_t want =
@@ -3374,7 +3374,7 @@ namespace lfs::vis {
         // range into Vulkan. The arena drains all frames + the device before the
         // commit callback runs, so the unmap/recommit is race-free.
         //
-        // MJ-12: detach/retire the Vulkan import BEFORE growExportableDeviceBlock
+        // detach/retire the Vulkan import BEFORE growExportableDeviceBlock
         // (which calls release_physical: unmap + cuMemRelease + close fd). Holding
         // a live VkBuffer/VkDeviceMemory across that is the NVRM "invalid mmap
         // context" pattern — mirror TrainerManager::growExportableForDensify.
@@ -3981,7 +3981,7 @@ namespace lfs::vis {
         // frame serial, not acquisition_serial, so we pin by VkImage handle —
         // which is 1:1 with an acquisition while the entry is Retired. Intent
         // remains "no pool free while a ticket references the image."
-        // F3-1: never re-lock readback_mutex_ when the caller already holds it.
+        // Never re-lock readback_mutex_ when the caller already holds it.
         auto producer_pred = [this, readback_mutex_held](const VulkanContext::ExternalImage& image,
                                                          const std::uint64_t value) {
             if (!renderTimelineValueRetired(value)) {
@@ -4645,7 +4645,7 @@ namespace lfs::vis {
                 wait_info.semaphoreCount = 1;
                 wait_info.pSemaphores = &render_complete_timeline_;
                 wait_info.pValues = &value;
-                // Phase 7C-P3 C7: bounded ring wait. Quarantine flag injected here
+                // Inject the quarantine flag at this bounded ring wait
                 // (not owned by OutputSlotRing). Non-Ready leaves the watermark
                 // intact (no manufactured free slot) — enforced by the ring.
                 lfs::rendering::WaitContext wait_ctx;
@@ -4773,7 +4773,7 @@ namespace lfs::vis {
         // passive preview try-locks and retains the last frame across that window,
         // so the zero-copy path never projects mid-encode rest (no DC-only fallback).
         //
-        // M4 (WO-FIX-Q16-GUARD1): active degree 0 never samples rest SH. Force the
+        // Active degree 0 never samples rest SH. Force the
         // upload-degree-0 (omits_shN) layout so the q16 projection pipeline and
         // codes+bounds descriptors are first installed on the 0→1 flip under the
         // live shared model lock with generation-checked handles — never against a
@@ -4857,22 +4857,8 @@ namespace lfs::vis {
             shN_ok &&
             !shN_float_workspace &&
             (opacity_storage || has_deleted_mask);
-        // D3 counterfactual (M4): LFS_VIEWER_Q16=0 forces the viewport off the
-        // q16 zero-copy SH path (DC-only: upload_layout at degree 0) while
-        // training stays always-commit q16. Predicted clean if the poison is
-        // the viewer's first q16 SH read. Default ON (live-control bind).
-        static const bool kViewerQ16Enabled = [] {
-            if (const char* e = std::getenv("LFS_VIEWER_Q16")) {
-                return e[0] == '1' || e[0] == 'y' || e[0] == 'Y' || e[0] == 't' ||
-                       e[0] == 'T';
-            }
-            return true;
-        }();
-        // At active degree 0 OR viewer-q16 disabled: force omits_shN (upload
-        // layout at degree 0) so the q16 projection pipeline never arms.
-        // At degree ≥1 with exportable q16 and viewer-q16 on: max-layout external.
-        const bool force_viewer_omit_shN =
-            !kViewerQ16Enabled || effective_upload_sh_degree <= 0;
+        // Active degree 0 omits shN so the q16 projection pipeline never arms.
+        const bool force_viewer_omit_shN = effective_upload_sh_degree <= 0;
         std::optional<decltype(upload_layout)> omit_layout_holder;
         if (force_viewer_omit_shN && !upload_layout->omits_shN) {
             omit_layout_holder = vksplat::rawDeviceInputLayout(splat_data, /*upload_sh_degree=*/0);
@@ -5149,7 +5135,7 @@ namespace lfs::vis {
                     if (!q16_pair_ok) {
                         return std::unexpected(
                             "VkSplat q16 SH bind refused: generation-checked codes+bounds "
-                            "pair incomplete (M4 first-enable safety)");
+                            "pair incomplete during first enable");
                     }
                     return std::unexpected(
                         "VkSplat q16 SH requires shaderFloat16+storageBuffer16BitAccess; "
@@ -6127,7 +6113,7 @@ namespace lfs::vis {
     }
 
     std::expected<std::size_t, std::string> VksplatViewportRenderer::acquireReadbackCell() const {
-        // F3-2: reclaim Failed cells whose timeline is already complete before acquire.
+        // Reclaim failed cells whose timeline is already complete before acquire.
         reclaimCompletedFailedReadbackCells();
         if (auto free = readback_ring_.tryAcquireCell(); free.has_value()) {
             return *free;
@@ -6299,7 +6285,7 @@ namespace lfs::vis {
         }
 
         using DeliveryKind = ReadbackTicketRing::DeliveryKind;
-        // F3-3: never memcpy into a cleared / abandoned dest.
+        // Never copy into a cleared or abandoned destination.
         switch (meta.delivery) {
         case DeliveryKind::DepthSample: {
             if (meta.dest == nullptr || meta.byte_count < sizeof(float)) {
@@ -6404,7 +6390,7 @@ namespace lfs::vis {
         std::uint64_t current = 0;
         if (vkGetSemaphoreCounterValue(context_->device(), readback_timeline_, &current) !=
             VK_SUCCESS) {
-            // F3-3: do not leave Outstanding with a host dest that may be cleared.
+            // Do not leave an outstanding cell with a host destination that may be cleared.
             readback_ring_.markFailed(
                 cell, "vkGetSemaphoreCounterValue(readback timeline) failed");
             return std::unexpected(readback_ring_.cell(cell).error);
@@ -6484,7 +6470,7 @@ namespace lfs::vis {
         if (cell >= ReadbackTicketRing::kRingSize) {
             return;
         }
-        // F3-3: clear dest under the ring lock before the host drops storage.
+        // Clear the destination under the ring lock before the host drops storage.
         meta->dest = nullptr;
         if (meta->state == ReadbackTicketRing::State::Outstanding) {
             readback_ring_.markFailed(cell, "readback ticket abandoned by host");
@@ -6913,43 +6899,6 @@ namespace lfs::vis {
             std::move(meta),
             "VkSplat output depth readback submit",
             "VkSplat output depth readback");
-    }
-
-    std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
-    VksplatViewportRenderer::readOutputDepthImage(VulkanContext& context, const OutputSlot output_slot) const {
-        const auto readback_t0 = std::chrono::steady_clock::now();
-        // Need size under lock briefly for allocation; ticket API takes destination.
-        glm::ivec2 size{0, 0};
-        {
-            std::lock_guard<std::mutex> lock(readback_mutex_);
-            if (!context_) {
-                return std::unexpected("VkSplat output depth readback requested before renderer initialization");
-            }
-            const auto& output = ring_.latestSlot(outputSlotIndex(output_slot));
-            size = output.size;
-        }
-        if (size.x <= 0 || size.y <= 0) {
-            return std::unexpected("VkSplat output depth readback requested for an empty output slot");
-        }
-        auto tensor = lfs::core::Tensor::empty(
-            {static_cast<std::size_t>(size.y), static_cast<std::size_t>(size.x)},
-            lfs::core::Device::CPU,
-            lfs::core::DataType::Float32);
-        if (!tensor.is_valid()) {
-            return std::unexpected("VkSplat output depth readback failed to allocate CPU tensor");
-        }
-        const auto ticket = submitReadOutputDepthImageTicket(context, output_slot, tensor);
-        if (!ticket) {
-            return std::unexpected(ticket.error());
-        }
-        if (const auto waited = waitReadbackTicket(*ticket); !waited) {
-            return std::unexpected(waited.error());
-        }
-        LOG_PERF("vksplat.readback.readOutputDepthImage took_us={}",
-                 std::chrono::duration_cast<std::chrono::microseconds>(
-                     std::chrono::steady_clock::now() - readback_t0)
-                     .count());
-        return std::make_shared<lfs::core::Tensor>(std::move(tensor));
     }
 
     std::expected<std::uint64_t, std::string>
@@ -8228,7 +8177,7 @@ namespace lfs::vis {
             }
             gpu_lod_last_miss_count_ = miss_count;
 
-            // Pool utilization is the Phase C (treelet) gate number: the
+            // Pool utilization is the treelet gate metric: the
             // fraction of resident pool nodes the live cut actually renders.
             static std::uint32_t lod_utilization_log_counter = 0;
             if ((++lod_utilization_log_counter % 60u) == 0u && lod_page_cache_.configured()) {

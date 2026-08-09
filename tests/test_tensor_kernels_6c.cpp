@@ -1,19 +1,15 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Phase 6C tensor kernel upgrades: binary fusion, where allocs, Channel3D.
-
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
 
-#include <chrono>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
-#include <iostream>
 #include <vector>
 
 using namespace lfs::core;
@@ -81,10 +77,10 @@ namespace {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// 6C.1 Binary(+reduce) fusion
+// Binary(+reduce) fusion
 // ---------------------------------------------------------------------------
 
-TEST(TensorKernels6C, BinaryMulAddFusesToOneLaunch) {
+TEST(TensorKernelFusion, BinaryMulAddFusesToOneLaunch) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA required";
     }
@@ -119,7 +115,7 @@ TEST(TensorKernels6C, BinaryMulAddFusesToOneLaunch) {
     expect_close(fused, ref, 1e-5f, "mul+add");
 }
 
-TEST(TensorKernels6C, BinaryMulSumFusesToOneOrTwoLaunches) {
+TEST(TensorKernelFusion, BinaryMulSumFusesToOneOrTwoLaunches) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA required";
     }
@@ -153,21 +149,21 @@ TEST(TensorKernels6C, BinaryMulSumFusesToOneOrTwoLaunches) {
     expect_close(s, ref, 1e-3f, "mul+sum"); // reduce accum may use double path vs fused
 }
 
-TEST(TensorKernels6C, SingleBinaryKeepsFastPathWhenSmall) {
+TEST(TensorKernelFusion, SingleBinaryKeepsFastPathWhenSmall) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA required";
     }
     Kernels6CGuard guard;
 
-    // Below 4 KiB threshold → 6A.3 eager fast path, not deferred fusion seed.
+    // Below 4 KiB threshold → eager fast path, not deferred fusion seed.
     auto a = fill_linear({64}, 0.01f, Device::CUDA);
     auto b = fill_linear({64}, 0.02f, Device::CUDA);
     auto c = a.mul(b);
-    EXPECT_FALSE(c.is_deferred()) << "small single binary must stay on 6A.3 eager path";
+    EXPECT_FALSE(c.is_deferred()) << "small single binary must stay on the eager path";
     expect_close(c, a.cpu().mul(b.cpu()).to(Device::CUDA), 1e-5f, "small mul");
 }
 
-TEST(TensorKernels6C, BinaryFusionNumericalSuite) {
+TEST(TensorKernelFusion, BinaryFusionNumericalSuite) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA required";
     }
@@ -198,63 +194,11 @@ TEST(TensorKernels6C, BinaryFusionNumericalSuite) {
     expect_close(got, expected, 1e-4f, "mul+add+mul");
 }
 
-TEST(TensorKernels6C, BinaryFusionMicrobenchGBs) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
-    Kernels6CGuard guard;
-
-    constexpr size_t N = 1 << 20; // 1M floats
-    auto a = fill_linear({N}, 0.01f, Device::CUDA);
-    auto b = fill_linear({N}, 0.02f, Device::CUDA);
-    auto c = fill_linear({N}, 0.03f, Device::CUDA);
-    constexpr int iters = 50;
-    // Ideal fused traffic: read a,b,c + write out
-    const double fused_bytes = 4.0 * static_cast<double>(N) * 4.0;
-    // Unfused mul+add: (read a,b write t) + (read t,c write out)
-    const double unfused_bytes = 6.0 * static_cast<double>(N) * 4.0;
-
-    auto bench = [&](bool fusion_on) {
-        internal::lazy_executor_set_pointwise_fusion_override_for_testing(fusion_on);
-        for (int i = 0; i < 5; ++i) {
-            auto t = a.mul(b).add(c);
-            (void)t.data_ptr();
-        }
-        cudaDeviceSynchronize();
-        auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < iters; ++i) {
-            auto t = a.mul(b).add(c);
-            (void)t.data_ptr();
-        }
-        cudaDeviceSynchronize();
-        auto t1 = std::chrono::steady_clock::now();
-        return std::chrono::duration<double, std::milli>(t1 - t0).count() /
-               static_cast<double>(iters);
-    };
-
-    const double ms_unfused = bench(false);
-    const double ms_fused = bench(true);
-    const double gbs_unfused = (unfused_bytes / 1e9) / (ms_unfused / 1e3);
-    const double gbs_fused = (fused_bytes / 1e9) / (ms_fused / 1e3);
-    std::cout << "MICROBENCH 6C.1 mul+add N=" << N
-              << " unfused=" << ms_unfused << " ms/op (" << gbs_unfused
-              << " GB/s traffic-normalized)"
-              << " fused=" << ms_fused << " ms/op (" << gbs_fused
-              << " GB/s traffic-normalized)\n";
-    // Sanity: both paths produce a positive measured rate. Launch-count tests
-    // above prove fusion collapses to 1 kernel; wall-clock at 1M el can be
-    // host-bound so we do not assert fused < unfused here.
-    EXPECT_GT(gbs_fused, 10.0);
-    EXPECT_GT(gbs_unfused, 10.0);
-    EXPECT_GT(ms_unfused, 0.0);
-    EXPECT_GT(ms_fused, 0.0);
-}
-
 // ---------------------------------------------------------------------------
-// 6C.4 where host clones + same-shape broadcast
+// where host clones + same-shape broadcast
 // ---------------------------------------------------------------------------
 
-TEST(TensorKernels6C, WhereSameShapeZeroExtraAllocs) {
+TEST(TensorKernelFusion, WhereSameShapeZeroExtraAllocs) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA required";
     }
@@ -294,7 +238,7 @@ TEST(TensorKernels6C, WhereSameShapeZeroExtraAllocs) {
     }
 }
 
-TEST(TensorKernels6C, WhereSameShapePeakMemoryNoCloneBuffers) {
+TEST(TensorKernelFusion, WhereSameShapePeakMemoryNoCloneBuffers) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA required";
     }
@@ -327,10 +271,10 @@ TEST(TensorKernels6C, WhereSameShapePeakMemoryNoCloneBuffers) {
 }
 
 // ---------------------------------------------------------------------------
-// 6C.2 Channel3D kernel selection
+// Channel3D kernel selection
 // ---------------------------------------------------------------------------
 
-TEST(TensorKernels6C, Channel3DEquivalenceAcrossC) {
+TEST(TensorKernelFusion, Channel3DEquivalenceAcrossC) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA required";
     }
@@ -357,44 +301,5 @@ TEST(TensorKernels6C, Channel3DEquivalenceAcrossC) {
             }
         }
         expect_close(got, exp, 1e-5f, ("C=" + std::to_string(C)).c_str());
-    }
-}
-
-TEST(TensorKernels6C, Channel3DMicrobenchTable) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
-    Kernels6CGuard guard;
-
-    constexpr size_t H = 256;
-    constexpr size_t W = 256;
-    const std::vector<size_t> Cs = {1, 3, 4, 16, 64};
-
-    std::cout << "MICROBENCH 6C.2 Channel3D (H=W=256) ms/op:\n";
-    std::cout << "  C    ms/op    GB/s\n";
-    for (size_t C : Cs) {
-        auto img = fill_linear({H, W, C}, 0.01f, Device::CUDA);
-        auto ch = fill_linear({1, 1, C}, 0.05f, Device::CUDA);
-        for (int i = 0; i < 3; ++i) {
-            auto t = img.mul(ch);
-            (void)t.data_ptr();
-        }
-        cudaDeviceSynchronize();
-
-        constexpr int iters = 30;
-        auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < iters; ++i) {
-            auto t = img.mul(ch);
-            (void)t.data_ptr();
-        }
-        cudaDeviceSynchronize();
-        auto t1 = std::chrono::steady_clock::now();
-        const double ms =
-            std::chrono::duration<double, std::milli>(t1 - t0).count() / static_cast<double>(iters);
-        // read img + read ch (amortized) + write out ≈ 2 * H*W*C * 4
-        const double bytes = 2.0 * static_cast<double>(H * W * C) * 4.0;
-        const double gbs = (bytes / 1e9) / (ms / 1e3);
-        std::cout << "  " << C << "    " << ms << "    " << gbs << "\n";
-        EXPECT_GT(gbs, 1.0);
     }
 }

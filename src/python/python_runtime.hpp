@@ -154,7 +154,7 @@ namespace lfs::python {
     // Safe Python error extraction - avoids nanobind::python_error::what() crash on Windows
     LFS_PYTHON_RUNTIME_API std::string extract_python_error();
 
-    // Typed Python-error extraction (Phase 9 Section 2.1). Precondition: GIL held
+    // Typed Python-error extraction requires the GIL and
     // AND PyErr_Occurred(). Consumes and clears the pending Python error. Never
     // throws; never leaves a Python error pending. The returned Error owns a
     // formatted traceback string only (in detail()); no PyObject is retained, so
@@ -738,7 +738,6 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void set_invalidate_poll_cache_callback(InvalidatePollCacheCallback cb);
     LFS_PYTHON_RUNTIME_API void invalidate_poll_caches(uint8_t dependency = 7);
 
-    // Signal bridge callbacks - registered by Python module, live push APIs used by visualizer (progress/psnr may be unwired)
     using SignalFlushCallback = void (*)();
     using TrainingProgressCallback = void (*)(int iteration, float loss, std::size_t num_gaussians);
     using TrainingStateCallback = void (*)(bool is_training, const char* state);
@@ -759,7 +758,6 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void set_signal_bridge_callbacks(const SignalBridgeCallbacks& callbacks);
 
-    // Signal update functions - live push APIs used by visualizer (progress/psnr may be unwired), dispatch to Python via callbacks
     LFS_PYTHON_RUNTIME_API void update_training_progress(int iteration, float loss, std::size_t num_gaussians);
     LFS_PYTHON_RUNTIME_API void update_training_state(bool is_training, const char* state);
     LFS_PYTHON_RUNTIME_API void update_trainer_loaded(bool has_trainer, int max_iterations, int initial_iteration = 0);

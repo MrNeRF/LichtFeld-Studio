@@ -84,11 +84,8 @@ TEST_F(GlobalArenaShutdownTest, ShutdownLatchesUntilTestingReconfigure) {
     arena.full_reset();
 }
 
-// ISS-027: training illegal address poisons the CUDA context; ~Trainer must
-// still complete full_reset without throwing into std::terminate.
-// Soft-poison via an intentional host-side last-error latch is not available;
-// instead issue a failing device-side free of a null pointer (sticky last-error
-// without mapping a bad VA), then assert full_reset is noexcept-tolerant.
+// full_reset must remain noexcept with a sticky CUDA error. Trigger a non-success
+// last-error without mapping invalid device memory, then verify teardown completes.
 TEST(MemoryArenaShutdownTest, FullResetToleratesPoisonedCudaContext) {
     ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
     lfs::core::RasterizerMemoryArena arena(test_config());
@@ -98,10 +95,8 @@ TEST(MemoryArenaShutdownTest, FullResetToleratesPoisonedCudaContext) {
     const uint64_t frame = arena.begin_frame(stream);
     arena.end_frame(frame, stream);
 
-    // Leave a sticky non-success last-error without hard-poisoning the device:
-    // cudaFree of a non-null garbage pointer that is not a valid allocation.
-    // On some drivers this only sets last-error; if the context becomes unusable
-    // we still require full_reset not to throw.
+    // Some drivers only set last-error here; full_reset must not throw even if the
+    // context becomes unusable.
     void* garbage = reinterpret_cast<void*>(static_cast<uintptr_t>(0xDEADBEEF0));
     (void)cudaFree(garbage);
     const cudaError_t sticky = cudaGetLastError();

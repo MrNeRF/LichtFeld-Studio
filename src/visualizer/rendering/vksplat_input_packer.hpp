@@ -24,8 +24,8 @@ namespace lfs::vis::vksplat {
     //
     // The LIVE training viewport does NOT use this packer: prepareInputs
     // zero-copies exportable raw tensors (means/rot/scale/opacity/sh) via
-    // Vulkan-external borrow (WO-ATTR-F16 / bet #3 — eliminates the historical
-    // separate 44 B/splat packed non-SH residency ≈ 210 MiB @5M).
+    // a Vulkan-external borrow, avoiding a separate 44 B/splat packed non-SH
+    // residency of approximately 210 MiB at 5M splats.
     //
     // Host packer layouts (tests/test_vksplat_input_packer.cpp):
     //   xyz_ws       : (N*3)  contiguous float32 row-major copy of means_raw

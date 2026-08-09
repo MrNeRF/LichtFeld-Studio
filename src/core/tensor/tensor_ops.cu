@@ -159,7 +159,8 @@ namespace lfs::core::tensor_ops {
         return isnan(value) ? value : fminf(fmaxf(value, min_val), max_val);
     }
 
-    // Vectorized clamp: SM-capped grid-stride, multi float4/thread (6C.3 style).
+    // Vectorized clamp uses an SM-capped grid stride with multiple float4 values
+    // per thread.
     __global__ void clamp_kernel_vectorized(float* __restrict__ data, float min_val, float max_val, size_t n) {
         const size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
         const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
@@ -1427,8 +1428,8 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    // Float16 full-reduce via on-the-fly promote-to-float (CUB). Partial-axis
-    // Float16 reductions fail loud — host gating still needs wiring (6D.5 ISSUES).
+    // Float16 full reduction promotes to float through CUB. Partial-axis
+    // Float16 reductions remain rejected until host dispatch is wired.
     __global__ void half_to_float_scalar_kernel(const float* __restrict__ src,
                                                 __half* __restrict__ dst) {
         if (threadIdx.x == 0 && blockIdx.x == 0)
@@ -2369,7 +2370,7 @@ namespace lfs::core::tensor_ops {
     template LFS_CORE_API void launch_unary_op_generic<int, int, ops::neg_op>(
         const int*, int*, size_t, ops::neg_op, cudaStream_t);
 
-    // Float16 unary (6C.7 Packed128 fast path + 6D.5 API hole fill).
+    // Float16 unary (Packed128 fast path + API hole fill).
     // Generic functors are float-oriented and become ambiguous on __half
     // (ternary / mixed float-half arithmetic). Wrap: promote → float op → half.
     template <typename FloatOp>
@@ -3278,7 +3279,7 @@ namespace lfs::core::tensor_ops {
                 initialized = false;
 
                 if (device_result) {
-                    // ISS-020: pool-liveness-aware free (TLS dtor after pool teardown).
+                    // pool-liveness-aware free (TLS dtor after pool teardown).
                     safe_cuda_pool_deallocate(device_result, nullptr);
                 }
                 if (host_result) {
@@ -3307,7 +3308,7 @@ namespace lfs::core::tensor_ops {
     }
 
     namespace {
-        // ISS-020: main-thread nan-check TLS buffers freed before pool shutdown.
+        // main-thread nan-check TLS buffers freed before pool shutdown.
         const bool g_nan_check_tls_release_hook_registered = [] {
             register_gpu_pre_shutdown_hook([]() noexcept {
                 (void)release_nan_check_thread_buffers();

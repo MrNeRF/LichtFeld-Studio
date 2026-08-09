@@ -17,9 +17,8 @@
  * Designed for always-on release builds: one relaxed atomic increment per
  * real driver alloc site.
  *
- * Phase 0.1 of SPEED_VRAM_OPTIMIZATION_PLAN (gate G2).
  *
- * WO-X: optional per-site attribution. Coarse pool-tier tags are always
+ * optional per-site attribution. Coarse pool-tier tags are always
  * recorded; a TLS logical site (gt_cache / densify / joint_bounds / …) can be
  * stacked via ScopedSite.
  */
@@ -78,10 +77,6 @@ namespace lfs::core::alloc_counter {
 
     /// Current logical site tag ("" when none).
     [[nodiscard]] LFS_CORE_API const char* current_logical_site() noexcept;
-
-    /// Mark that training has left warmup (steady-state alloc accounting).
-    LFS_CORE_API void set_steady_state(bool steady) noexcept;
-    [[nodiscard]] LFS_CORE_API bool steady_state() noexcept;
 
     /// RAII push/pop of a logical site tag.
     class LFS_CORE_API ScopedSite {

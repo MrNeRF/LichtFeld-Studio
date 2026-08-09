@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 /**
- * Theme A (TENSOR_LIB_FINDINGS) — training-reachable strided-op correctness.
+ * Training-reachable strided-operation correctness.
  *
  * Ops under test (materialize-firewall / stride-aware):
  *   - masked_select / masked_fill_ on strided views
@@ -102,7 +102,7 @@ namespace {
 
 } // namespace
 
-class ThemeAStridedOpsTest : public ::testing::Test {
+class StridedTensorOpsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         Tensor::manual_seed(42);
@@ -110,7 +110,6 @@ protected:
 };
 
 // =============================================================================
-// 1) masked_select on a transposed (non-contiguous) view
 // =============================================================================
 //
 // base [2,3] = [[1,2,3],[4,5,6]]
@@ -118,7 +117,7 @@ protected:
 // mask true at logical positions that select {1, 2, 6}
 // Without materialize firewall, linear scan of physical storage yields {1,2,3}.
 
-TEST_F(ThemeAStridedOpsTest, MaskedSelect_TransposedView_CPU) {
+TEST_F(StridedTensorOpsTest, MaskedSelect_TransposedView_CPU) {
     auto base = Tensor::from_vector({1.f, 2.f, 3.f, 4.f, 5.f, 6.f}, {2, 3}, Device::CPU);
     auto view = base.transpose(0, 1); // [3,2]
     ASSERT_FALSE(view.is_contiguous());
@@ -137,7 +136,7 @@ TEST_F(ThemeAStridedOpsTest, MaskedSelect_TransposedView_CPU) {
     expect_vec_eq(got, ref, "MaskedSelect_TransposedView_CPU");
 }
 
-TEST_F(ThemeAStridedOpsTest, MaskedSelect_TransposedView_CUDA) {
+TEST_F(StridedTensorOpsTest, MaskedSelect_TransposedView_CUDA) {
     auto base = Tensor::from_vector({1.f, 2.f, 3.f, 4.f, 5.f, 6.f}, {2, 3}, Device::CUDA);
     auto view = base.transpose(0, 1);
     ASSERT_FALSE(view.is_contiguous());
@@ -152,7 +151,6 @@ TEST_F(ThemeAStridedOpsTest, MaskedSelect_TransposedView_CUDA) {
 }
 
 // =============================================================================
-// 2) masked_fill_ on a transposed view — write only logical cells; no sibling
 //    corruption of physical storage outside the view mapping
 // =============================================================================
 //
@@ -163,7 +161,7 @@ TEST_F(ThemeAStridedOpsTest, MaskedSelect_TransposedView_CUDA) {
 // Wrong linear fill would clobber physical slots 0 and 3 → base becomes
 // [[-1,2,3],[-1,5,6]] (different).
 
-TEST_F(ThemeAStridedOpsTest, MaskedFill_TransposedView_NoSiblingCorruption_CUDA) {
+TEST_F(StridedTensorOpsTest, MaskedFill_TransposedView_NoSiblingCorruption_CUDA) {
     auto base = Tensor::from_vector({1.f, 2.f, 3.f, 4.f, 5.f, 6.f}, {2, 3}, Device::CUDA);
     auto view = base.transpose(0, 1); // [3,2]
     ASSERT_FALSE(view.is_contiguous());
@@ -187,7 +185,7 @@ TEST_F(ThemeAStridedOpsTest, MaskedFill_TransposedView_NoSiblingCorruption_CUDA)
     expect_vec_eq(host_f32(view), ref_view, "MaskedFill_TransposedView_view");
 }
 
-TEST_F(ThemeAStridedOpsTest, MaskedFill_TransposedView_CPU) {
+TEST_F(StridedTensorOpsTest, MaskedFill_TransposedView_CPU) {
     auto base = Tensor::from_vector({1.f, 2.f, 3.f, 4.f, 5.f, 6.f}, {2, 3}, Device::CPU);
     auto view = base.transpose(0, 1);
     ASSERT_FALSE(view.is_contiguous());
@@ -201,14 +199,13 @@ TEST_F(ThemeAStridedOpsTest, MaskedFill_TransposedView_CPU) {
 }
 
 // =============================================================================
-// 3) index_put_ on a contiguous offset view (TENSOR_LIB_FINDINGS classic)
 // =============================================================================
 //
 // base = [0,1,2,3,4,5,6,7]
 // v = base.slice(0, 2, 5) → [2,3,4], storage_offset=2, is_contiguous=true
 // v.index_put_([1], [9]) must set base[3]=9, NOT base[1].
 
-TEST_F(ThemeAStridedOpsTest, IndexPut_OffsetContiguousView_CUDA) {
+TEST_F(StridedTensorOpsTest, IndexPut_OffsetContiguousView_CUDA) {
     auto base = Tensor::from_vector(
         {0.f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 7.f}, {8}, Device::CUDA);
     auto v = base.slice(0, 2, 5); // [2,3,4]
@@ -228,7 +225,7 @@ TEST_F(ThemeAStridedOpsTest, IndexPut_OffsetContiguousView_CUDA) {
     EXPECT_FLOAT_EQ(host_f32(base)[3], 9.f);
 }
 
-TEST_F(ThemeAStridedOpsTest, IndexPut_OffsetContiguousView_CPU) {
+TEST_F(StridedTensorOpsTest, IndexPut_OffsetContiguousView_CPU) {
     auto base = Tensor::from_vector(
         {0.f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 7.f}, {8}, Device::CPU);
     auto v = base.slice(0, 2, 5);
@@ -245,7 +242,7 @@ TEST_F(ThemeAStridedOpsTest, IndexPut_OffsetContiguousView_CPU) {
 // base [4,4] sequential; slice [0:3, 0:3]; put row 1 of the slice with [100,200,300]
 // Must write base row1 cols 0..2, leave base[1,3] untouched.
 
-TEST_F(ThemeAStridedOpsTest, IndexPut_NonContiguousSlice_RowAssign_CUDA) {
+TEST_F(StridedTensorOpsTest, IndexPut_NonContiguousSlice_RowAssign_CUDA) {
     std::vector<float> data(16);
     for (int i = 0; i < 16; ++i)
         data[i] = static_cast<float>(i + 1);
@@ -278,7 +275,7 @@ TEST_F(ThemeAStridedOpsTest, IndexPut_NonContiguousSlice_RowAssign_CUDA) {
 // valid_indices = [1, 3, 5]
 // result must be [2, 3] with columns {1,3,5}.
 
-TEST_F(ThemeAStridedOpsTest, DensificationInfo_IndexSelectDim1_CUDA) {
+TEST_F(StridedTensorOpsTest, DensificationInfo_IndexSelectDim1_CUDA) {
     constexpr size_t N = 8;
     std::vector<float> info_data(2 * N);
     for (size_t i = 0; i < N; ++i) {
@@ -305,7 +302,7 @@ TEST_F(ThemeAStridedOpsTest, DensificationInfo_IndexSelectDim1_CUDA) {
     expect_vec_eq(host_f32(dest), ref, "DensificationInfo_IndexSelectIntoDim1");
 }
 
-TEST_F(ThemeAStridedOpsTest, DensificationInfo_IndexSelectDim1_CPU) {
+TEST_F(StridedTensorOpsTest, DensificationInfo_IndexSelectDim1_CPU) {
     constexpr size_t N = 6;
     std::vector<float> info_data(2 * N);
     for (size_t i = 0; i < N; ++i) {
@@ -322,7 +319,7 @@ TEST_F(ThemeAStridedOpsTest, DensificationInfo_IndexSelectDim1_CPU) {
 
 // Non-contiguous [2,N] source: take a column-range slice of a wider buffer then
 // index_select dim 1 — exercises materialize-then-gather firewall.
-TEST_F(ThemeAStridedOpsTest, DensificationInfo_IndexSelectDim1_StridedSource_CUDA) {
+TEST_F(StridedTensorOpsTest, DensificationInfo_IndexSelectDim1_StridedSource_CUDA) {
     // Wide [2, 10]; logical densify window is columns [2, 8) → shape [2,6] strided?
     // slice dim1 keeps row stride = 10 → non-contiguous.
     std::vector<float> wide(2 * 10);
@@ -350,7 +347,6 @@ TEST_F(ThemeAStridedOpsTest, DensificationInfo_IndexSelectDim1_StridedSource_CUD
 }
 
 // =============================================================================
-// 5) Tensor::multinomial — strided (non-contiguous) weights
 // =============================================================================
 //
 // weights = column 1 of [[1,0,0],[0,100,0],[0,0,1]] → logical [0, 100, 0]
@@ -358,7 +354,7 @@ TEST_F(ThemeAStridedOpsTest, DensificationInfo_IndexSelectDim1_StridedSource_CUD
 // Physical linear scan of the column-strided storage would read a different
 // probability mass → wrong mode.
 
-TEST_F(ThemeAStridedOpsTest, Multinomial_StridedColumnWeights_CUDA) {
+TEST_F(StridedTensorOpsTest, Multinomial_StridedColumnWeights_CUDA) {
     // own [3,2] = [[0, 0],[100,0],[0,0]]; column 0 is logical weights [0,100,0]
     // with physical stride 2 (non-contiguous rank-1 after squeeze).
     auto own = Tensor::from_vector(
@@ -376,10 +372,10 @@ TEST_F(ThemeAStridedOpsTest, Multinomial_StridedColumnWeights_CUDA) {
         EXPECT_FLOAT_EQ(w[1], 100.f);
         EXPECT_FLOAT_EQ(w[2], 0.f);
     }
-    // Prefer non-contiguous (Theme A surface); if squeeze densified, still check
+    // Prefer non-contiguous input; if squeeze densified it, still check the
     // logical distribution (contiguous firewall must preserve values either way).
     if (!strided_w.is_contiguous()) {
-        GTEST_LOG_(INFO) << "multinomial input is non-contiguous (Theme A path)";
+        GTEST_LOG_(INFO) << "multinomial input is non-contiguous";
     }
 
     constexpr int N = 200;
@@ -399,7 +395,7 @@ TEST_F(ThemeAStridedOpsTest, Multinomial_StridedColumnWeights_CUDA) {
                          << count1;
 }
 
-TEST_F(ThemeAStridedOpsTest, Multinomial_StridedColumnWeights_CPU) {
+TEST_F(StridedTensorOpsTest, Multinomial_StridedColumnWeights_CPU) {
     auto own = Tensor::from_vector(
         {0.f, 0.f,
          100.f, 0.f,
@@ -419,7 +415,7 @@ TEST_F(ThemeAStridedOpsTest, Multinomial_StridedColumnWeights_CPU) {
 }
 
 // Sanity: contiguous densification_info dim0 row extract still works (control)
-TEST_F(ThemeAStridedOpsTest, DensificationInfo_RowExtractDim0_Control) {
+TEST_F(StridedTensorOpsTest, DensificationInfo_RowExtractDim0_Control) {
     constexpr size_t N = 5;
     std::vector<float> info_data(2 * N);
     for (size_t i = 0; i < N; ++i) {

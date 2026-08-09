@@ -4,7 +4,7 @@
 #pragma once
 
 /**
- * Core-side SH value quant size helpers + runtime flag (Phase 2.1 / WO-G3).
+ * Core-side SH value quant size helpers + runtime flag.
  * Codec math lives in lfs/training/sh_value_codec.hpp; this header is for SplatData
  * allocation without a core→training dependency.
  */

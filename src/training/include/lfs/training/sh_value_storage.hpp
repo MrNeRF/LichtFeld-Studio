@@ -11,7 +11,7 @@
  * Densify entry points should call ensure_shN_fp32_for_mutation / commit_shN_after_mutation
  * around float-native densify ops.
  *
- * Single-buffer design (owner directive): the exportable block holds pad-dropped q16
+ * The exportable block holds pad-dropped q16
  * SH at all times. densify expands a float workspace under trainer render_mutex
  * exclusive, then commit re-encodes into the same live q16 region before the lock
  * drops. Passive viewport preview acquires the step-boundary lock at a bounded
@@ -33,11 +33,5 @@ namespace lfs::training::sh_value {
     /// After densify mutated float shN, re-encode to u16 + bounds (if quant on).
     /// Uses the model tensor allocator so exportable/GUI lands codes in the live block.
     bool commit_shN_after_mutation(core::SplatData& splat);
-
-    /// Bind device constants for FastGS forward decode (call each step when quant on).
-    void bind_shN_quant_for_raster(const core::SplatData& splat);
-
-    /// Clear device constants (fp32 path / teardown).
-    void clear_shN_quant_for_raster();
 
 } // namespace lfs::training::sh_value
