@@ -98,8 +98,8 @@ forward). Plus grok's WO-FIX-Q16-GUARD1 Parts A (LiveModelMutationGuard 6b95b121
 gate table: PROGRESS.md (deferred: debug-assert sweep, live-GUI crop MCP variant).
 5M acceptance: 30k iters / 5.0M gaussians / 615.7s GUI mrnf images_4, zero errors; VRAM steady
 3482 MiB flat (<4096 ✓), nine 1-second silent ~1.06 GiB transients peak 4546 (ISS-030 minor
-follow-up). Publication policy changed by owner 08-09: **lfs-elite is LOCAL-ONLY** — the 9f84a117 push
-was deleted on owner instruction ("we just keep local"); this also explains the earlier
-"mystery" remote deletions. Do NOT push the branch. .100 verification staged:
-~/lfs-campaign-out/q16m1/verify-100.sh (fetches directly from this machine over ssh;
-supervisor session lacks ssh permission — owner runs it or grants Bash(ssh:*)).
+follow-up). Remote-branch churn is owner-managed (deleted and re-pushed at will; current publish
+fee7aae1 -> origin/lfs-elite from local 6ae1bc89) — never treat a deletion as an incident.
+.100 verification staged: ~/lfs-campaign-out/q16m1/verify-100.sh (fetches origin/lfs-elite
+or directly from this machine; supervisor session lacks ssh permission — owner runs it or
+grants Bash(ssh:*)).
