@@ -4825,12 +4825,14 @@ namespace lfs::vis {
             means_storage && sh0_storage && rotations_storage && scaling_storage;
         // q16-throughout: shN must be exportable pad-dropped codes (+ bounds) for
         // zero-copy. A mid-densify float workspace is excluded by render_mutex_;
-        // if a reader ever observes float shN, fall through to copy upload rather
-        // than binding a non-exportable rest buffer.
+        // if a reader observes a non-external float shN tensor, fall through to
+        // copy upload rather than binding a transient workspace. Static PLY models
+        // legitimately keep float shN in Vulkan-external storage and can bind it.
         const bool shN_float_workspace =
             splat_data.shN_raw().is_valid() &&
             splat_data.shN_raw().dtype() == lfs::core::DataType::Float32 &&
-            !splat_data.shN_value_quantized();
+            !splat_data.shN_value_quantized() &&
+            !shN_storage;
         // Generation-checked q16 pair (same machinery as FastGS bind). Required
         // before the viewer installs zero-copy codes+bounds descriptors.
         const lfs::core::Q16BindPtrs q16_bind =
@@ -4919,6 +4921,9 @@ namespace lfs::vis {
         }
         if (!can_bind_external && has_deleted_mask) {
             input_copy_reasons.emplace_back("soft_deleted_mask");
+        }
+        if (shN_float_workspace) {
+            input_copy_reasons.emplace_back("non_external_float_shN_workspace");
         }
         std::string input_copy_reason = "unknown";
         if (!input_copy_reasons.empty()) {
