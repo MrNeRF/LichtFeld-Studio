@@ -65,6 +65,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # GUI system
         gui/gui_manager.cpp
+        gui/gui_focus_state.cpp
         gui/vulkan_ui_texture.cpp
         gui/global_context_menu.cpp
         gui/gizmo_manager.cpp
