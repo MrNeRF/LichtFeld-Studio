@@ -26,8 +26,10 @@ namespace nvimgcodec {
 
     class ImageGenericDecoder : public ImageGenericCodec<ImageGenericDecoder, IImageDecoderFactory, IImageDecoder> {
     public:
-        explicit ImageGenericDecoder(
-            ILogger* logger, ICodecRegistry* codec_registry, const nvimgcodecExecutionParams_t* exec_params, const char* options = nullptr)
+        ImageGenericDecoder(ILogger* logger,
+                            ICodecRegistry* codec_registry,
+                            const nvimgcodecExecutionParams_t* exec_params,
+                            const char* options = nullptr)
             : Base(logger, codec_registry, exec_params, options) {}
 
         ~ImageGenericDecoder() override = default;
@@ -85,8 +87,6 @@ namespace nvimgcodec {
         bool processBatchImpl(ProcessorEntry& processor) noexcept;
         bool allocateTempBuffers(Entry& sample, int tid);
         void copyToOutputBuffer(const nvimgcodecImageInfo_t& output_info, const nvimgcodecImageInfo_t& info, int tid);
-
-        const nvimgcodecDecodeParams_t* curr_params_ = nullptr;
 
         // to sort
         std::vector<uint8_t> subsampling_score_;

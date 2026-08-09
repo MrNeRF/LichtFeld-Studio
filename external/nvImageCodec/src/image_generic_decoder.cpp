@@ -23,8 +23,10 @@
 #include "iimage.h"
 #include "iimage_decoder.h"
 #include "iimage_decoder_factory.h"
+#include "imgproc/copy_image.h"
 #include "imgproc/device_guard.h"
 #include "imgproc/exception.h"
+#include "imgproc/type_utils.h"
 #include "log.h"
 #include "processing_results.h"
 #include "user_executor.h"
@@ -45,6 +47,7 @@ namespace nvimgcodec {
         nvimgcodecStatus_t ret = NVIMGCODEC_STATUS_IMPLEMENTATION_UNSUPPORTED;
         try {
             NVIMGCODEC_LOG_INFO(logger_, "ImageGenericDecoder::getMetadata");
+            DeviceGuard device_guard(exec_params_.device_id);
             auto codec = code_stream->getCodec();
             auto* processor = initProcessorsAndGetFirstForCodec(codec);
 
@@ -69,8 +72,7 @@ namespace nvimgcodec {
     void ImageGenericDecoder::canDecode(const std::vector<ICodeStream*>& code_streams, const std::vector<IImage*>& images,
                                         const nvimgcodecDecodeParams_t* params, nvimgcodecProcessingStatus_t* processing_status, int force_format) noexcept {
         try {
-            curr_params_ = params;
-            canProcess(code_streams, images, processing_status, force_format);
+            canProcess(code_streams, images, processing_status, force_format, params);
         } catch (const std::exception& e) {
             NVIMGCODEC_LOG_ERROR(logger_, "Exception during canDecode: " << e.what());
             std::fill(processing_status, processing_status + code_streams.size(), NVIMGCODEC_PROCESSING_STATUS_FAIL);
@@ -81,16 +83,19 @@ namespace nvimgcodec {
         const std::vector<ICodeStream*>& code_streams, const std::vector<IImage*>& images, const nvimgcodecDecodeParams_t* params) noexcept {
         try {
             NVIMGCODEC_LOG_INFO(logger_, "ImageGenericDecoder::decode num_samples=" << code_streams.size());
-            curr_params_ = params;
-            return process(code_streams, images);
+            return process(code_streams, images, params);
         } catch (const std::exception& e) {
             NVIMGCODEC_LOG_ERROR(logger_, "Exception during decode: " << e.what());
-            auto promise = std::make_shared<ProcessingResultsPromise>(code_streams.size());
-            for (size_t i = 0; i < code_streams.size(); i++) {
-                promise->set(i, ProcessingResult::failure(NVIMGCODEC_PROCESSING_STATUS_FAIL));
-            }
-            return promise->getFuture();
+        } catch (...) {
+            NVIMGCODEC_LOG_ERROR(logger_, "Unknown exception during decode");
         }
+
+        ProcessingResultsPromise promise(static_cast<int>(code_streams.size()));
+        for (size_t i = 0; i < code_streams.size(); i++) {
+            // coverity[fun_call_w_exception : FALSE]
+            promise.set(i, ProcessingResult::failure(NVIMGCODEC_PROCESSING_STATUS_FAIL));
+        }
+        return promise.getFuture();
     }
 
     void ImageGenericDecoder::sortSamples() {
@@ -147,7 +152,8 @@ namespace nvimgcodec {
         nvimgcodecProcessingStatus_t status;
         try {
             processor->instance_->canDecode(
-                sample.getImageDesc(), sample.code_stream->getCodeStreamDesc(), curr_params_, &status, tid);
+                sample.getImageDesc(), sample.code_stream->getCodeStreamDesc(),
+                static_cast<const nvimgcodecDecodeParams_t*>(sample.params), &status, tid);
             NVIMGCODEC_LOG_DEBUG(
                 this->logger_, tid << ": " << processor->id_ << " canDecode #" << sample.sample_idx << " returned " << status);
             return status;
@@ -161,7 +167,8 @@ namespace nvimgcodec {
         try {
             sample.should_copy = allocateTempBuffers(sample, tid);
             auto decode_ret =
-                sample.processor->instance_->decode(sample.getImageDesc(), sample.code_stream->getCodeStreamDesc(), curr_params_, tid);
+                sample.processor->instance_->decode(sample.getImageDesc(), sample.code_stream->getCodeStreamDesc(),
+                                                    static_cast<const nvimgcodecDecodeParams_t*>(sample.params), tid);
             assert(sample.status != NVIMGCODEC_PROCESSING_STATUS_UNKNOWN);
             bool decode_success = decode_ret && sample.status == NVIMGCODEC_PROCESSING_STATUS_SUCCESS;
 
@@ -191,8 +198,12 @@ namespace nvimgcodec {
             for (auto& sample : batched_processed_) {
                 sample->should_copy = allocateTempBuffers(*sample, tid);
             }
+            // All samples in this submission share the same params (set together
+            // in initState()), so any sample carries the correct pointer.
+            assert(!batched_processed_.empty());
+            auto* batch_params = static_cast<const nvimgcodecDecodeParams_t*>(batched_processed_.front()->params);
             auto ret = processor.instance_->decodeBatch(
-                batched_image_descs_.data(), batched_code_stream_descs_.data(), curr_params_, batched_processed_.size(), 0);
+                batched_image_descs_.data(), batched_code_stream_descs_.data(), batch_params, batched_processed_.size(), 0);
             if (ret != NVIMGCODEC_STATUS_SUCCESS)
                 return false;
 
@@ -217,7 +228,7 @@ namespace nvimgcodec {
 
     bool ImageGenericDecoder::allocateTempBuffers(Entry& sample, int tid) {
         auto backend_kind = sample.processor->backend_kind_;
-        auto& orig_info = sample.orig_image_info;
+        const auto& orig_info = sample.orig_image_info;
         auto& info = sample.image_info;
         bool h2d = orig_info.buffer_kind == NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE &&
                    backend_kind == NVIMGCODEC_BACKEND_KIND_CPU_ONLY;
@@ -226,37 +237,53 @@ namespace nvimgcodec {
         assert(num_threads_ + 1 == per_thread_.size());
         assert(tid >= 0 && tid <= static_cast<int>(num_threads_));
         auto& t = per_thread_[tid];
+        auto& s = per_stream_[t.stream_idx];
         auto& pinned_buffers = t.pinned_buffers;
         auto& device_buffers = t.device_buffers;
         auto& pinned_buffer_idx = t.pinned_buffer_idx;
         auto& device_buffer_idx = t.device_buffer_idx;
 
+        // restore original stride in case we don't need to copy
+        for (unsigned int c = 0; c < info.num_planes; ++c) {
+            info.plane_info[c].row_stride = orig_info.plane_info[c].row_stride;
+        }
+        info.buffer = orig_info.buffer;
+        info.buffer_kind = orig_info.buffer_kind;
+
         if (!h2d && !d2h)
             return false;
+
+        info.buffer = nullptr;
+        for (unsigned int c = 0; c < info.num_planes; ++c) {
+            auto& plane_info = info.plane_info[c];
+            size_t bpp = TypeSize(plane_info.sample_type);
+            plane_info.row_stride = static_cast<size_t>(plane_info.width) * bpp * plane_info.num_channels;
+        }
 
         if (h2d) {
             nvtx3::scoped_range marker{"allocateTempBuffers h2d"};
             assert(pinned_buffers.size() > pinned_buffer_idx);
             auto& pinned_buffer = pinned_buffers[pinned_buffer_idx];
             pinned_buffer_idx = (pinned_buffer_idx + 1) % pinned_buffers.size();
-            assert(pinned_buffer.size == 0 || pinned_buffer.stream == t.stream); // sanity check
+            assert(pinned_buffer.size == 0 || pinned_buffer.stream == s.stream); // sanity check
             CHECK_CUDA(cudaEventSynchronize(t.event));                           // wait for the previous work to complete
-            pinned_buffer.resize(info.buffer_size, t.stream);
-            CHECK_CUDA(cudaEventRecord(t.event, t.stream));
+            pinned_buffer.resize(GetBufferSize(info), s.stream);
+            CHECK_CUDA(cudaEventRecord(t.event, s.stream));
             CHECK_CUDA(cudaEventSynchronize(t.event)); // wait for the allocation to complete
             info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_HOST;
             info.buffer = pinned_buffer.data;
-            assert(info.buffer_size == pinned_buffer.size);
+            assert(GetBufferSize(info) == pinned_buffer.size);
             assert(info.cuda_stream == pinned_buffer.stream);
         } else if (d2h) {
             nvtx3::scoped_range marker{"allocateTempBuffers d2h"};
             assert(device_buffers.size() > device_buffer_idx);
             auto& device_buffer = device_buffers[device_buffer_idx];
             device_buffer_idx = (device_buffer_idx + 1) % device_buffers.size();
-            device_buffer.resize(info.buffer_size, info.cuda_stream);
+            device_buffer.resize(GetBufferSize(info), s.stream);
             info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
             info.buffer = device_buffer.data;
-            assert(info.buffer_size == device_buffer.size);
+            assert(GetBufferSize(info) == device_buffer.size);
+            assert(info.cuda_stream == device_buffer.stream);
         } else {
             assert(false); // should not happen
             return false;
@@ -272,14 +299,19 @@ namespace nvimgcodec {
                    info.buffer_kind == NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_HOST;
         assert((static_cast<int>(d2h) + static_cast<int>(h2d)) == 1);
         (void)h2d;
-        assert(info.buffer_size == output_info.buffer_size);
         auto copy_direction = d2h ? cudaMemcpyDeviceToHost : cudaMemcpyHostToDevice;
         auto& t = per_thread_[tid];
-        NVIMGCODEC_LOG_DEBUG(logger_, "cudaMemcpyAsync " << (d2h ? "D2H" : "H2D") << " stream=" << t.stream);
-        CHECK_CUDA(cudaMemcpyAsync(output_info.buffer, info.buffer, info.buffer_size, copy_direction, t.stream));
-        CHECK_CUDA(cudaEventRecord(t.event, t.stream)); // record event for the next iteration to wait for
-        if (d2h)
-            CHECK_CUDA(cudaStreamSynchronize(t.stream));
+        auto& s = per_stream_[t.stream_idx];
+
+        // input is always continuous (we specify it in that way in allocateTempBuffers());
+        // CopyImage collapses to a single cudaMemcpyAsync when both sides are
+        // contiguous and falls back to per-plane cudaMemcpy2DAsync otherwise.
+        NVIMGCODEC_LOG_DEBUG(logger_, "CopyImage " << (d2h ? "D2H" : "H2D") << " stream=" << s.stream);
+        CopyImage(output_info, info, copy_direction, s.stream);
+        CHECK_CUDA(cudaEventRecord(t.event, s.stream)); // record event for the next iteration to wait for
+        if (d2h) {
+            CHECK_CUDA(cudaStreamSynchronize(s.stream));
+        }
     }
 
 } // namespace nvimgcodec

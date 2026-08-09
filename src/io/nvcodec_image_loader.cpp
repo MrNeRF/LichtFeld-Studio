@@ -883,9 +883,9 @@ namespace lfs::io {
             ~DecoderGuard() { impl->release_decoder(idx); }
         } guard{impl_.get(), decoder_idx};
 
-        nvimgcodecCodeStream_t code_stream;
+        nvimgcodecCodeStream_t code_stream = nullptr;
         auto status = nvimgcodecCodeStreamCreateFromHostMem(
-            impl_->instance, &code_stream, jpeg_data.data(), jpeg_data.size());
+            impl_->instance, &code_stream, jpeg_data.data(), jpeg_data.size(), nullptr);
         if (status != NVIMGCODEC_STATUS_SUCCESS) {
             throw std::runtime_error("Failed to create code stream from memory");
         }
@@ -960,9 +960,8 @@ namespace lfs::io {
         }
 
         void* const gpu_image_buffer = image_tensor_aux.data_ptr();
-        const size_t decoded_size = static_cast<size_t>(src_width) * src_height * num_channels * bytes_per_sample;
 
-        nvimgcodecImage_t nv_image;
+        nvimgcodecImage_t nv_image = nullptr;
         nvimgcodecImageInfo_t output_info{};
         output_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
         output_info.struct_size = sizeof(nvimgcodecImageInfo_t);
@@ -986,7 +985,6 @@ namespace lfs::io {
 
         output_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
         output_info.buffer = gpu_image_buffer;
-        output_info.buffer_size = decoded_size;
         output_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
         nvimgcodecProcessingStatus_t decode_status = NVIMGCODEC_PROCESSING_STATUS_UNKNOWN;
@@ -1194,10 +1192,9 @@ namespace lfs::io {
         image_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
         image_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
         image_info.buffer = hwc_uint8.data_ptr();
-        image_info.buffer_size = height * width * 3;
         image_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
-        nvimgcodecImage_t nv_image;
+        nvimgcodecImage_t nv_image = nullptr;
         auto status = nvimgcodecImageCreate(impl_->instance, &nv_image, &image_info);
         if (status != NVIMGCODEC_STATUS_SUCCESS) {
             throw std::runtime_error("Failed to create image for encoding: " +
@@ -1211,7 +1208,7 @@ namespace lfs::io {
         output_info.struct_size = sizeof(nvimgcodecImageInfo_t);
         std::snprintf(output_info.codec_name, sizeof(output_info.codec_name), "%s", "jpeg");
 
-        nvimgcodecCodeStream_t code_stream;
+        nvimgcodecCodeStream_t code_stream = nullptr;
         status = nvimgcodecCodeStreamCreateToHostMem(
             impl_->instance, &code_stream, &output_buffer,
             [](void* ctx, size_t req_size) -> unsigned char* {
@@ -1311,10 +1308,9 @@ namespace lfs::io {
         image_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16;
         image_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
         image_info.buffer = hwc_uint16.data_ptr();
-        image_info.buffer_size = static_cast<size_t>(height) * width * 3 * sizeof(uint16_t);
         image_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
-        nvimgcodecImage_t nv_image;
+        nvimgcodecImage_t nv_image = nullptr;
         auto status = nvimgcodecImageCreate(impl_->instance, &nv_image, &image_info);
         if (status != NVIMGCODEC_STATUS_SUCCESS) {
             throw std::runtime_error("Failed to create image for encoding: " +
@@ -1332,7 +1328,7 @@ namespace lfs::io {
         output_info.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
         output_info.num_planes = 1;
 
-        nvimgcodecCodeStream_t code_stream;
+        nvimgcodecCodeStream_t code_stream = nullptr;
         status = nvimgcodecCodeStreamCreateToHostMem(
             impl_->instance, &code_stream, &output_buffer,
             [](void* ctx, size_t req_size) -> unsigned char* {
@@ -1441,10 +1437,9 @@ namespace lfs::io {
         image_info.plane_info[0].precision = 16;
         image_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
         image_info.buffer = hw_uint16.data_ptr();
-        image_info.buffer_size = static_cast<size_t>(height) * width * sizeof(uint16_t);
         image_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
-        nvimgcodecImage_t nv_image;
+        nvimgcodecImage_t nv_image = nullptr;
         auto status = nvimgcodecImageCreate(impl_->instance, &nv_image, &image_info);
         if (status != NVIMGCODEC_STATUS_SUCCESS) {
             throw std::runtime_error("Failed to create image for grayscale JPEG2000 encoding: " +
@@ -1462,7 +1457,7 @@ namespace lfs::io {
         output_info.chroma_subsampling = NVIMGCODEC_SAMPLING_GRAY;
         output_info.num_planes = 1;
 
-        nvimgcodecCodeStream_t code_stream;
+        nvimgcodecCodeStream_t code_stream = nullptr;
         status = nvimgcodecCodeStreamCreateToHostMem(
             impl_->instance, &code_stream, &output_buffer,
             [](void* ctx, size_t req_size) -> unsigned char* {
@@ -1538,9 +1533,9 @@ namespace lfs::io {
             ~DecoderGuard() { impl->release_decoder(idx); }
         } guard{impl_.get(), decoder_idx};
 
-        nvimgcodecCodeStream_t code_stream;
+        nvimgcodecCodeStream_t code_stream = nullptr;
         auto status = nvimgcodecCodeStreamCreateFromHostMem(
-            impl_->instance, &code_stream, jpeg2k_data.data(), jpeg2k_data.size());
+            impl_->instance, &code_stream, jpeg2k_data.data(), jpeg2k_data.size(), nullptr);
         if (status != NVIMGCODEC_STATUS_SUCCESS) {
             throw std::runtime_error("Failed to create JPEG2000 code stream from memory: " +
                                      std::string(nvimgcodec_status_to_string(status)));
@@ -1614,10 +1609,9 @@ namespace lfs::io {
         output_info.plane_info[0].precision = 16;
         output_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
         output_info.buffer = uint16_tensor.data_ptr();
-        output_info.buffer_size = height * width * num_components * sizeof(uint16_t);
         output_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
-        nvimgcodecImage_t nv_image;
+        nvimgcodecImage_t nv_image = nullptr;
         {
             ScopedNvCodecVramProbe vram_probe(impl_->vram_account);
             status = nvimgcodecImageCreate(impl_->instance, &nv_image, &output_info);
@@ -1755,7 +1749,7 @@ namespace lfs::io {
                 }
 
                 auto status = nvimgcodecCodeStreamCreateFromHostMem(
-                    impl_->instance, &code_streams[i], data, size);
+                    impl_->instance, &code_streams[i], data, size, nullptr);
                 if (status != NVIMGCODEC_STATUS_SUCCESS) {
                     throw std::runtime_error("Failed to create JPEG2000 batch code stream");
                 }
@@ -1813,7 +1807,6 @@ namespace lfs::io {
                 output_info.plane_info[0].precision = 16;
                 output_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
                 output_info.buffer = uint16_tensors[i].data_ptr();
-                output_info.buffer_size = uint16_tensors[i].bytes();
                 output_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
                 status = nvimgcodecImageCreate(impl_->instance, &nv_images[i], &output_info);
@@ -1939,10 +1932,9 @@ namespace lfs::io {
         image_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
         image_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
         image_info.buffer = hw_uint8.data_ptr();
-        image_info.buffer_size = height * width;
         image_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
-        nvimgcodecImage_t nv_image;
+        nvimgcodecImage_t nv_image = nullptr;
         auto status = nvimgcodecImageCreate(impl_->instance, &nv_image, &image_info);
         if (status != NVIMGCODEC_STATUS_SUCCESS) {
             throw std::runtime_error("Failed to create grayscale image for encoding: " +
@@ -1957,7 +1949,7 @@ namespace lfs::io {
         std::snprintf(output_info.codec_name, sizeof(output_info.codec_name), "%s", "jpeg");
         output_info.chroma_subsampling = NVIMGCODEC_SAMPLING_GRAY;
 
-        nvimgcodecCodeStream_t code_stream;
+        nvimgcodecCodeStream_t code_stream = nullptr;
         status = nvimgcodecCodeStreamCreateToHostMem(
             impl_->instance, &code_stream, &output_buffer,
             [](void* ctx, size_t req_size) -> unsigned char* {
@@ -2024,7 +2016,6 @@ namespace lfs::io {
         std::lock_guard<std::mutex> lock(impl_->encoder_mutex);
 
         const int batch_size = static_cast<int>(gpu_ptrs.size());
-        const size_t frame_size = static_cast<size_t>(width) * height * 3;
 
         std::vector<nvimgcodecImage_t> nv_images(batch_size);
         std::vector<nvimgcodecCodeStream_t> code_streams(batch_size);
@@ -2045,7 +2036,6 @@ namespace lfs::io {
             image_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
             image_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
             image_info.buffer = gpu_ptrs[i];
-            image_info.buffer_size = frame_size;
             image_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
             auto status = nvimgcodecImageCreate(impl_->instance, &nv_images[i], &image_info);

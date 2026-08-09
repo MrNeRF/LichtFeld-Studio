@@ -18,7 +18,8 @@ cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
 include(CMakeDependentOption)
 
 set(NVIMGCODEC_PROJECT_NAME "nvimgcodec")
-set(NVIMGCODEC_VERSION "0.6.0")
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt" NVIMGCODEC_VERSION
+     REGEX "[0-9]+\\.[0-9]+\\.[0-9]+")
 
 if (NVIMGCODEC_FLAVOR)
     set(NVIMGCODEC_FLAVOR "${NVIMGCODEC_FLAVOR}")  # could be nightly, weekly, etc if necessary
@@ -34,7 +35,7 @@ endif()
 
 if (NOT NVIMGCODEC_WHL_PLATFORM_NAME)
     if(UNIX)
-        set(NVIMGCODEC_WHL_PLATFORM_NAME "manylinux2014_${ARCH}")
+        set(NVIMGCODEC_WHL_PLATFORM_NAME "manylinux_2_28_${ARCH}")
     else()
         set(NVIMGCODEC_WHL_PLATFORM_NAME "win_amd64")
     endif()
@@ -72,12 +73,6 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     message(STATUS "Setting build type to 'Debug' as none was specified.")
     set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Choose the type of build." FORCE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "" "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
-endif()
-
-if(WIN32)
-  # XXX: cmake appends /MT after /MD that produces D9025 warnings about overriding flags, hence...
-  string(REGEX REPLACE "/MD " "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
-  string(REGEX REPLACE "/MDd " "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
 endif()
 
 option(BUILD_LIBRARY "Build library" ON)
@@ -151,12 +146,13 @@ option(WITH_DYNAMIC_CUDA "Dynamically loads CUDA driver at runtime (via dlopen) 
 option(WITH_DYNAMIC_NVJPEG "Dynamically loads nvjpeg at runtime (via dlopen) vs. linking with the system libs (static or shared-object)" ON)
 option(WITH_DYNAMIC_NVJPEG2K "Dynamically loads nvjpeg2k at runtime (via dlopen) vs. linking with the system libs (static or shared-object)" ON)
 option(WITH_DYNAMIC_NVTIFF "Dynamically loads nvtiff at runtime (via dlopen) vs. linking with the system libs (static or shared-object)" ON)
+option(WITH_SHARED_CUDA_LIBS "Link CUDA toolkit libraries (cudart, nvjpeg, nvjpeg2k, nvtiff) as shared rather than static when they are direct link dependencies. WITH_DYNAMIC_* still controls dlopen-based dispatch." OFF)
 
 if (NOT WITH_DYNAMIC_LINK)
     set(WITH_DYNAMIC_CUDA OFF CACHE BOOL "Disable WITH_DYNAMIC_CUDA because WITH_DYNAMIC_LINK is disabled" FORCE)
     set(WITH_DYNAMIC_NVJPEG OFF CACHE BOOL "Disable WITH_DYNAMIC_NVJPEG because WITH_DYNAMIC_LINK is disabled" FORCE)
     set(WITH_DYNAMIC_NVJPEG2K OFF CACHE BOOL "Disable WITH_DYNAMIC_NVJPEG2K because WITH_DYNAMIC_LINK is disabled" FORCE)
-    set(WITH_DYNAMIC_NVTIFF OFF CACHE BOOL "Disable WITH_DYNAMIWITH_DYNAMIC_NVTIFFC_CUDA because WITH_DYNAMIC_LINK is disabled" FORCE)
+    set(WITH_DYNAMIC_NVTIFF OFF CACHE BOOL "Disable WITH_DYNAMIC_NVTIFF because WITH_DYNAMIC_LINK is disabled" FORCE)
 else()
     if (NOT BUILD_NVJPEG_EXT)
         set(WITH_DYNAMIC_NVJPEG OFF CACHE BOOL "Disable WITH_DYNAMIC_NVJPEG because BUILD_NVJPEG_EXT is disabled" FORCE)
@@ -183,6 +179,44 @@ expose_via_preprocessor_macro(WITH_DYNAMIC_NVJPEG2K)
 log_option_value(WITH_DYNAMIC_NVTIFF)
 expose_via_preprocessor_macro(WITH_DYNAMIC_NVTIFF)
 
+log_option_value(WITH_SHARED_CUDA_LIBS)
+if (WITH_SHARED_CUDA_LIBS)
+    set(_dynamic_link_ignored_shared_libs)
+    if (WITH_DYNAMIC_CUDA)
+        list(APPEND _dynamic_link_ignored_shared_libs "CUDA driver (WITH_DYNAMIC_CUDA)")
+    endif()
+    if (WITH_DYNAMIC_NVJPEG)
+        list(APPEND _dynamic_link_ignored_shared_libs "nvjpeg (WITH_DYNAMIC_NVJPEG)")
+    endif()
+    if (WITH_DYNAMIC_NVJPEG2K)
+        list(APPEND _dynamic_link_ignored_shared_libs "nvjpeg2k (WITH_DYNAMIC_NVJPEG2K)")
+    endif()
+    if (WITH_DYNAMIC_NVTIFF)
+        list(APPEND _dynamic_link_ignored_shared_libs "nvtiff (WITH_DYNAMIC_NVTIFF)")
+    endif()
+
+    if (_dynamic_link_ignored_shared_libs)
+        list(JOIN _dynamic_link_ignored_shared_libs ", " _dynamic_link_ignored_shared_libs_msg)
+        message(WARNING
+            "WITH_SHARED_CUDA_LIBS=ON only selects shared libraries for direct link dependencies. "
+            "The following libraries are configured for dlopen via WITH_DYNAMIC_* and will ignore "
+            "the shared/static link choice: ${_dynamic_link_ignored_shared_libs_msg}. "
+            "Set the corresponding WITH_DYNAMIC_* option to OFF, or set WITH_DYNAMIC_LINK=OFF, "
+            "if you want them linked as shared libraries.")
+    endif()
+endif()
+if (WITH_SHARED_CUDA_LIBS)
+    set(CUDA_CUDART_LIB CUDA::cudart)
+    set(CUDA_NVJPEG_LIB CUDA::nvjpeg)
+    set(NVJPEG2K_LIB_NAME nvjpeg2k)
+    set(NVTIFF_LIB_NAME nvtiff)
+else()
+    set(CUDA_CUDART_LIB CUDA::cudart_static)
+    set(CUDA_NVJPEG_LIB CUDA::nvjpeg_static)
+    set(NVJPEG2K_LIB_NAME nvjpeg2k_static)
+    set(NVTIFF_LIB_NAME nvtiff_static)
+endif()
+
 string(TOLOWER ${CMAKE_SYSTEM_NAME} SYS_NAME)
 
 # Introduce variables:
@@ -198,14 +232,60 @@ if(NOT DEFINED CMAKE_INSTALL_LIBDIR)
 endif()
 include(GNUInstallDirs)
 
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    if(WIN32)
+        set(CMAKE_INSTALL_PREFIX "C:\\Program Files\\NVIDIA nvImageCodec" CACHE PATH "where nvImageCodec will be installed" FORCE)
+    else()
+        set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "where nvImageCodec will be installed" FORCE)
+    endif()
+endif()
+
+set(NVIMGCODEC_INSTALL_LIBDIR_DEFAULT "${CMAKE_INSTALL_LIBDIR}/libnvimgcodec/${CUDA_VERSION_MAJOR}")
 if(WIN32)
-    if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-        set(CMAKE_INSTALL_PREFIX "C:\\Program Files\\NVIDIA nvImageCodec\\v${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}\\${CUDA_VERSION_MAJOR}" CACHE PATH "where nvImageCodec will be installed" FORCE)
-    endif()
+    set(NVIMGCODEC_INSTALL_BINDIR_DEFAULT "${CMAKE_INSTALL_BINDIR}/${CUDA_VERSION_MAJOR}")
 else()
-    if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-        set(CMAKE_INSTALL_PREFIX "/opt/nvidia/nvimgcodec_cuda${CUDA_VERSION_MAJOR}" CACHE PATH "where nvImageCodec will be installed" FORCE)
+    set(NVIMGCODEC_INSTALL_BINDIR_DEFAULT "${CMAKE_INSTALL_BINDIR}/nvimgcodec/${CUDA_VERSION_MAJOR}")
+endif()
+set(NVIMGCODEC_INSTALL_INCLUDEDIR_DEFAULT "${CMAKE_INSTALL_INCLUDEDIR}")
+if(WIN32)
+    # Runtime extension DLLs must be under bin for package-local discovery.
+    # Import/static extension libraries stay in the CUDA-scoped library tree.
+    set(NVIMGCODEC_INSTALL_EXTENSIONS_DIR_DEFAULT "${NVIMGCODEC_INSTALL_BINDIR_DEFAULT}/extensions")
+    set(NVIMGCODEC_INSTALL_EXTENSION_LIBDIR_DEFAULT "${NVIMGCODEC_INSTALL_LIBDIR_DEFAULT}/extensions")
+else()
+    set(NVIMGCODEC_INSTALL_EXTENSIONS_DIR_DEFAULT "${NVIMGCODEC_INSTALL_LIBDIR_DEFAULT}/extensions")
+    set(NVIMGCODEC_INSTALL_EXTENSION_LIBDIR_DEFAULT "${NVIMGCODEC_INSTALL_EXTENSIONS_DIR_DEFAULT}")
+endif()
+
+set(NVIMGCODEC_INSTALL_LIBDIR "${NVIMGCODEC_INSTALL_LIBDIR_DEFAULT}" CACHE PATH "Install directory for nvImageCodec libraries")
+set(NVIMGCODEC_INSTALL_BINDIR "${NVIMGCODEC_INSTALL_BINDIR_DEFAULT}" CACHE PATH "Install directory for nvImageCodec runtime binaries")
+set(NVIMGCODEC_INSTALL_INCLUDEDIR "${NVIMGCODEC_INSTALL_INCLUDEDIR_DEFAULT}" CACHE PATH "Install directory for nvImageCodec public headers")
+set(NVIMGCODEC_INSTALL_EXTENSIONS_DIR "${NVIMGCODEC_INSTALL_EXTENSIONS_DIR_DEFAULT}" CACHE PATH "Install directory for nvImageCodec extension modules")
+set(NVIMGCODEC_INSTALL_EXTENSION_LIBDIR "${NVIMGCODEC_INSTALL_EXTENSION_LIBDIR_DEFAULT}" CACHE PATH "Install directory for nvImageCodec extension import/static libraries")
+set(NVIMGCODEC_INSTALL_CMAKEDIR_DEFAULT "${NVIMGCODEC_INSTALL_LIBDIR}/cmake/nvimgcodec")
+set(NVIMGCODEC_INSTALL_CMAKEDIR "${NVIMGCODEC_INSTALL_CMAKEDIR_DEFAULT}" CACHE PATH "Install directory for nvImageCodec CMake package files")
+
+function(nvimgcodec_make_absolute_install_path output_var install_path)
+    if(IS_ABSOLUTE "${install_path}")
+        set(_install_path "${install_path}")
+    else()
+        set(_install_path "${CMAKE_INSTALL_PREFIX}/${install_path}")
     endif()
+    file(TO_CMAKE_PATH "${_install_path}" _install_path)
+    set(${output_var} "${_install_path}" PARENT_SCOPE)
+endfunction()
+
+nvimgcodec_make_absolute_install_path(NVIMGCODEC_FINAL_LIBDIR "${NVIMGCODEC_INSTALL_LIBDIR}")
+nvimgcodec_make_absolute_install_path(NVIMGCODEC_FINAL_EXTENSIONS_DIR "${NVIMGCODEC_INSTALL_EXTENSIONS_DIR}")
+set(NVIMGCODEC_DEFAULT_EXTENSIONS_PATH "${NVIMGCODEC_FINAL_EXTENSIONS_DIR}")
+if(WIN32)
+    string(REPLACE "\\" "/" NVIMGCODEC_DEFAULT_EXTENSIONS_PATH "${NVIMGCODEC_DEFAULT_EXTENSIONS_PATH}")
+endif()
+file(RELATIVE_PATH NVIMGCODEC_EXTENSIONS_RPATH_TO_LIBDIR "${NVIMGCODEC_FINAL_EXTENSIONS_DIR}" "${NVIMGCODEC_FINAL_LIBDIR}")
+if(NVIMGCODEC_EXTENSIONS_RPATH_TO_LIBDIR STREQUAL "")
+    set(NVIMGCODEC_EXTENSIONS_TO_LIBDIR_RPATH "$ORIGIN")
+else()
+    set(NVIMGCODEC_EXTENSIONS_TO_LIBDIR_RPATH "$ORIGIN/${NVIMGCODEC_EXTENSIONS_RPATH_TO_LIBDIR}")
 endif()
 
 include(cmake/CUDA_utils.cmake)
@@ -240,8 +320,8 @@ if(WIN32)
         VERSION_PATCH ${CMAKE_PROJECT_VERSION_PATCH}
         VERSION_REVISION ${CMAKE_PROJECT_VERSION_TWEAK}
         COMPANY_NAME NVIDIA Corporation)
-elseif()
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --compiler-options \"-fvisibility=hidden -Wno-free-nonheap-object\" --Wno-deprecated-gpu-targets -Xfatbin -compress-all -t 0")
+else()
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --compiler-options \"-fvisibility=hidden -fvisibility-inlines-hidden -Wno-free-nonheap-object\" --Wno-deprecated-gpu-targets -Xfatbin -compress-all -t 0")
 
 endif()
 
@@ -249,12 +329,21 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(CMAKE_CUDA_STANDARD 14)
+set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_EXTENSIONS OFF)
 
 list(APPEND CMAKE_BUILD_RPATH $ORIGIN)
-list(APPEND CMAKE_INSTALL_RPATH $ORIGIN)
+list(APPEND CMAKE_INSTALL_RPATH $ORIGIN ${NVIMGCODEC_EXTENSIONS_TO_LIBDIR_RPATH})
+
+if(UNIX)
+    # CXX flags
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Wl,--exclude-libs,ALL")
+elseif(MSVC)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
+    message(STATUS "Added parallel build arguments to CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
+endif()
+
 
 include_directories(
     ${PROJECT_SOURCE_DIR}

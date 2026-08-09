@@ -288,8 +288,7 @@ namespace nvimgcodec {
     // Imported from C++20 https://en.cppreference.com/w/cpp/utility/functional/identity
     struct identity {
         template <typename T>
-        NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE T&&
-        operator()(T&& x) const noexcept {
+        NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE T&& operator()(T&& x) const noexcept {
             return std::forward<T>(x);
         }
     };
@@ -313,7 +312,7 @@ namespace nvimgcodec {
 #define IMPL_HAS_UNIQUE_MEMBER_FUNCTION(function_name)            \
     template <typename T>                                         \
     std::is_member_function_pointer<decltype(&T::function_name)>  \
-        HasUniqueMemberFunction_##function_name(T*);              \
+    HasUniqueMemberFunction_##function_name(T*);                  \
     template <typename T>                                         \
     std::false_type HasUniqueMemberFunction_##function_name(...); \
     template <typename T>                                         \
