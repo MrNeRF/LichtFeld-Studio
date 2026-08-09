@@ -232,6 +232,8 @@ namespace lfs::vis {
     // LOD splat-budget multiplier.
     LFS_VIS_API void saveSceneRenderScalePreference(float scale);
     [[nodiscard]] LFS_VIS_API float loadSceneRenderScalePreference();
+    LFS_VIS_API void saveSceneUpscalerPreference(const std::string& backend_id);
+    [[nodiscard]] LFS_VIS_API std::string loadSceneUpscalerPreference();
 
     // Language preference. An empty result means that the user has not chosen
     // a language yet and the first-run startup selector should be shown.

@@ -615,7 +615,7 @@ namespace lfs::python {
         group.id = "render_settings";
         group.name = "Render Settings";
 
-        auto add_color3 = [&](std::array<float, 3> Proxy::*member, const std::string& id, const std::string& name,
+        auto add_color3 = [&](std::array<float, 3> Proxy::* member, const std::string& id, const std::string& name,
                               const std::string& desc, std::array<double, 3> default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -635,7 +635,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_bool = [&](bool Proxy::*member, const std::string& id, const std::string& name, const std::string& desc,
+        auto add_bool = [&](bool Proxy::* member, const std::string& id, const std::string& name, const std::string& desc,
                             bool default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -652,7 +652,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_float = [&](float Proxy::*member, const std::string& id, const std::string& name,
+        auto add_float = [&](float Proxy::* member, const std::string& id, const std::string& name,
                              const std::string& desc, double default_val, double min_val, double max_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -671,7 +671,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_int_enum = [&](int Proxy::*member, const std::string& id, const std::string& name,
+        auto add_int_enum = [&](int Proxy::* member, const std::string& id, const std::string& name,
                                 const std::string& desc, std::vector<EnumItem> items, int default_idx) {
             PropertyMeta meta;
             meta.id = id;
@@ -706,7 +706,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_string = [&](std::string Proxy::*member, const std::string& id, const std::string& name,
+        auto add_string = [&](std::string Proxy::* member, const std::string& id, const std::string& name,
                               const std::string& desc, const std::string& default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -787,6 +787,12 @@ namespace lfs::python {
                      2);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
+        add_int_enum(&Proxy::scene_upscaler,
+                     "scene_upscaler",
+                     "Scene Upscaler",
+                     "Reconstruction filter used when presenting the scene image",
+                     {{"Native", "native", 0}, {"Spatial", "spatial", 1}},
+                     0);
         add_float(&Proxy::depth_view_min, "depth_view_min", "Depth Near", "Depth-map visualization near range",
                   lfs::rendering::DEFAULT_DEPTH_VIEW_MIN, 0.0, lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
         add_float(&Proxy::depth_view_max, "depth_view_max", "Depth Far", "Depth-map visualization far range",
@@ -833,7 +839,7 @@ namespace lfs::python {
                      {{"Manual", "MANUAL", 0}, {"Auto", "AUTO", 1}}, 1);
 
         using PPISP = vis::PPISPOverrides;
-        const auto add_ppisp_float = [&](float PPISP::*member, const char* id, const char* name,
+        const auto add_ppisp_float = [&](float PPISP::* member, const char* id, const char* name,
                                          const char* desc, double def, double min_v, double max_v) {
             PropertyMeta meta;
             meta.id = id;
@@ -852,7 +858,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        const auto add_ppisp_bool = [&](bool PPISP::*member, const char* id, const char* name,
+        const auto add_ppisp_bool = [&](bool PPISP::* member, const char* id, const char* name,
                                         const char* desc, bool def) {
             PropertyMeta meta;
             meta.id = id;

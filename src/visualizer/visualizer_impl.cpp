@@ -228,6 +228,7 @@ namespace lfs::vis {
         RenderSettings initial_settings;
         initial_settings.antialiasing = options.antialiasing;
         initial_settings.render_scale = loadSceneRenderScalePreference();
+        initial_settings.scene_upscaler = loadSceneUpscalerPreference() == "spatial" ? 1 : 0;
         initial_settings.gut = options.gut;
         initial_settings.raster_backend = options.gut
                                               ? lfs::rendering::GaussianRasterBackend::ThreeDgut
@@ -871,11 +872,16 @@ namespace lfs::vis {
                     return;
                 auto s = rendering_manager_->getSettings();
                 const float previous_render_scale = s.render_scale;
+                const int previous_scene_upscaler = s.scene_upscaler;
                 vis::apply_proxy(s, proxy);
+                s.scene_upscaler = s.scene_upscaler == 1 ? 1 : 0;
                 rendering_manager_->updateSettings(s);
                 const float applied_render_scale = rendering_manager_->getSettings().render_scale;
                 if (std::abs(applied_render_scale - previous_render_scale) > 0.0001f)
                     saveSceneRenderScalePreference(applied_render_scale);
+                const int applied_scene_upscaler = rendering_manager_->getSettings().scene_upscaler;
+                if (applied_scene_upscaler != previous_scene_upscaler)
+                    saveSceneUpscalerPreference(applied_scene_upscaler == 1 ? "spatial" : "native");
                 wakeMainLoop();
             });
         callback_cleanup_.add([] { vis::set_render_settings_callbacks(nullptr, nullptr); });

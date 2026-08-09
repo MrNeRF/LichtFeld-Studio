@@ -17,6 +17,20 @@ TEST(RenderSettingsDefaults, CameraFrustumsAreDisabledByDefault) {
     EXPECT_FALSE(proxy_settings.show_camera_frustums);
     EXPECT_FLOAT_EQ(render_settings.camera_frustum_scale, 0.25f);
     EXPECT_FLOAT_EQ(proxy_settings.camera_frustum_scale, 0.25f);
+    EXPECT_EQ(render_settings.scene_upscaler, 0);
+    EXPECT_EQ(proxy_settings.scene_upscaler, 0);
+}
+
+TEST(RenderSettingsProxy, SceneUpscalerRoundTrips) {
+    lfs::vis::RenderSettings settings;
+    settings.scene_upscaler = 1;
+
+    const auto proxy = lfs::vis::to_proxy(settings);
+    EXPECT_EQ(proxy.scene_upscaler, 1);
+
+    lfs::vis::RenderSettings roundtrip;
+    lfs::vis::apply_proxy(roundtrip, proxy);
+    EXPECT_EQ(roundtrip.scene_upscaler, 1);
 }
 
 TEST(RenderSettingsProxy, DepthFilterTransformRoundTrips) {

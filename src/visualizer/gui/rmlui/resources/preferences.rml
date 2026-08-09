@@ -61,6 +61,12 @@
               <option data-for="scale : scene_render_scales" data-attr-value="scale.index">{{ scale.label }}</option>
             </select>
           </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.scene_upscaler</span>
+            <select class="preferences-select" data-value="scene_upscaler_idx">
+              <option data-for="upscaler : scene_upscalers" data-attr-value="upscaler.index">{{ upscaler.label }}</option>
+            </select>
+          </div>
         </div>
       </div>
 

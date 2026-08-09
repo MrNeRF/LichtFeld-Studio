@@ -15,6 +15,7 @@ namespace lfs::vis {
 
     enum class SceneUpscalerBackend : std::uint8_t {
         Native = 0,
+        Spatial,
     };
 
     struct SceneUpscalerRequirements {
@@ -44,6 +45,7 @@ namespace lfs::vis {
 
     [[nodiscard]] LFS_VIS_API std::span<const SceneUpscalerDescriptor> sceneUpscalerDescriptors();
     [[nodiscard]] LFS_VIS_API const SceneUpscalerDescriptor& nativeSceneUpscalerDescriptor();
+    [[nodiscard]] LFS_VIS_API const SceneUpscalerDescriptor& spatialSceneUpscalerDescriptor();
     [[nodiscard]] LFS_VIS_API std::optional<SceneUpscalerBackend> sceneUpscalerBackendFromId(
         std::string_view id);
 

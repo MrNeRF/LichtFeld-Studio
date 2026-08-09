@@ -433,6 +433,9 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TITLE = "preferences.title";
         inline constexpr const char* LANGUAGE = "preferences.language";
         inline constexpr const char* SELECT_LANGUAGE = "preferences.select_language";
+        inline constexpr const char* SCENE_UPSCALER = "preferences.scene_upscaler";
+        inline constexpr const char* SCENE_UPSCALER_NATIVE = "preferences.scene_upscaler_native";
+        inline constexpr const char* SCENE_UPSCALER_SPATIAL = "preferences.scene_upscaler_spatial";
     } // namespace Preferences
 
     namespace MainPanel {

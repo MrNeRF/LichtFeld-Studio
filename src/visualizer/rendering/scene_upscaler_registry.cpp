@@ -17,6 +17,13 @@ namespace lfs::vis {
                 .requires_adapter = false,
                 .available = true,
             },
+            SceneUpscalerDescriptor{
+                .backend = SceneUpscalerBackend::Spatial,
+                .id = "spatial",
+                .requirements = {},
+                .requires_adapter = true,
+                .available = true,
+            },
         };
     } // namespace
 
@@ -26,6 +33,10 @@ namespace lfs::vis {
 
     const SceneUpscalerDescriptor& nativeSceneUpscalerDescriptor() {
         return DESCRIPTORS.front();
+    }
+
+    const SceneUpscalerDescriptor& spatialSceneUpscalerDescriptor() {
+        return DESCRIPTORS[1];
     }
 
     std::optional<SceneUpscalerBackend> sceneUpscalerBackendFromId(const std::string_view id) {

@@ -25,6 +25,7 @@
 #include "viewport/pivot.frag.spv.h"
 #include "viewport/pivot.vert.spv.h"
 #include "viewport/scene.frag.spv.h"
+#include "viewport/scene_spatial.frag.spv.h"
 #include "viewport/screen_quad.vert.spv.h"
 #include "viewport/shape_overlay.frag.spv.h"
 #include "viewport/shape_overlay.vert.spv.h"
@@ -251,6 +252,9 @@ namespace lfs::vis {
 
         VkPipelineLayout scene_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline scene_pipeline = VK_NULL_HANDLE;
+        VkPipelineLayout scene_spatial_pipeline_layout = VK_NULL_HANDLE;
+        VkPipeline scene_spatial_pipeline = VK_NULL_HANDLE;
+        bool scene_spatial_pipeline_attempted = false;
         VkPipelineLayout vignette_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline vignette_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout grid_pipeline_layout = VK_NULL_HANDLE;
@@ -1604,6 +1608,29 @@ namespace lfs::vis {
                                   frustum_descriptor_layout);
         }
 
+        [[nodiscard]] bool ensureSpatialScenePipeline() {
+            if (scene_spatial_pipeline != VK_NULL_HANDLE)
+                return true;
+            if (scene_spatial_pipeline_attempted)
+                return false;
+
+            scene_spatial_pipeline_attempted = true;
+            VkPushConstantRange scene_push{};
+            scene_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            scene_push.offset = 0;
+            scene_push.size = sizeof(ScenePush);
+            using namespace viewport_shaders;
+            return createPipeline(kScreenQuadVertSpv,
+                                  kSceneSpatialFragSpv,
+                                  "scene_spatial",
+                                  scene_descriptor_layout,
+                                  &scene_push,
+                                  true,
+                                  PipelineVertexLayout::ScreenQuad,
+                                  scene_spatial_pipeline_layout,
+                                  scene_spatial_pipeline);
+        }
+
         void updateQuadBuffer(const bool flip_y) {
             if (quad_initialized && quad_flip_y == flip_y) {
                 return;
@@ -1973,6 +2000,8 @@ namespace lfs::vis {
         }
 
         void prepare(const VulkanViewportPassParams& params) {
+            if (params.scene_upscaler == SceneUpscalerBackend::Spatial)
+                static_cast<void>(ensureSpatialScenePipeline());
             auto& frame = resourcesForFrame(params.frame_slot);
             updateQuadBuffer(params.scene_image_flip_y);
             updateGridUniforms(params);
@@ -2193,10 +2222,16 @@ namespace lfs::vis {
                 };
                 split_view_pass.record(command_buffer, panel_rect, adjusted, params.frame_slot);
             } else if (has_scene) {
-                vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_pipeline);
+                const bool use_spatial =
+                    params.scene_upscaler == SceneUpscalerBackend::Spatial &&
+                    scene_spatial_pipeline != VK_NULL_HANDLE;
+                const VkPipeline selected_pipeline = use_spatial ? scene_spatial_pipeline : scene_pipeline;
+                const VkPipelineLayout selected_layout =
+                    use_spatial ? scene_spatial_pipeline_layout : scene_pipeline_layout;
+                vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, selected_pipeline);
                 vkCmdBindDescriptorSets(command_buffer,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        scene_pipeline_layout,
+                                        selected_layout,
                                         0,
                                         1,
                                         &frame.scene_descriptor_set,
@@ -2212,7 +2247,7 @@ namespace lfs::vis {
                     .uv_clamp_max = outputUvClampMax(valid, alloc),
                 };
                 vkCmdPushConstants(command_buffer,
-                                   scene_pipeline_layout,
+                                   selected_layout,
                                    VK_SHADER_STAGE_FRAGMENT_BIT,
                                    0,
                                    sizeof(scene_push),
@@ -2597,6 +2632,8 @@ namespace lfs::vis {
                 split_view_pass.shutdown();
                 if (scene_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_pipeline, nullptr);
+                if (scene_spatial_pipeline != VK_NULL_HANDLE)
+                    vkDestroyPipeline(device, scene_spatial_pipeline, nullptr);
                 if (vignette_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, vignette_pipeline, nullptr);
                 if (grid_pipeline != VK_NULL_HANDLE)
@@ -2613,6 +2650,8 @@ namespace lfs::vis {
                     vkDestroyPipeline(device, frustum_pipeline, nullptr);
                 if (scene_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, scene_pipeline_layout, nullptr);
+                if (scene_spatial_pipeline_layout != VK_NULL_HANDLE)
+                    vkDestroyPipelineLayout(device, scene_spatial_pipeline_layout, nullptr);
                 if (vignette_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, vignette_pipeline_layout, nullptr);
                 if (grid_pipeline_layout != VK_NULL_HANDLE)

@@ -34,6 +34,10 @@ class PreferencesPanel(Panel):
     )
 
     SCENE_RENDER_SCALE_OPTIONS = (0.25, 0.33, 0.5, 0.67, 0.75, 1.0)
+    SCENE_UPSCALER_OPTIONS = (
+        (0, "preferences.scene_upscaler_native"),
+        (1, "preferences.scene_upscaler_spatial"),
+    )
 
     NAVIGATION_OPTIONS = (
         ("orbit", "preferences.navigation_orbit"),
@@ -90,6 +94,7 @@ class PreferencesPanel(Panel):
         model.bind("theme_idx", self._theme_index, self._set_theme_index)
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind("scene_render_scale_idx", self._scene_render_scale_index, self._set_scene_render_scale_index)
+        model.bind("scene_upscaler_idx", self._scene_upscaler_index, self._set_scene_upscaler_index)
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
@@ -121,6 +126,7 @@ class PreferencesPanel(Panel):
         model.bind_record_list("themes")
         model.bind_record_list("scales")
         model.bind_record_list("scene_render_scales")
+        model.bind_record_list("scene_upscalers")
         model.bind_record_list("languages")
         model.bind_record_list("navigation_modes")
         self._handle = model.get_handle()
@@ -156,6 +162,7 @@ class PreferencesPanel(Panel):
             lf.ui.get_theme(),
             float(lf.ui.get_ui_scale_preference()),
             self._scene_render_scale(),
+            self._scene_upscaler(),
             lf.ui.get_current_language(),
             lf.get_camera_navigation_mode(),
             lf.get_camera_view_snap_enabled(),
@@ -193,6 +200,13 @@ class PreferencesPanel(Panel):
             ],
         )
         self._sync_scene_render_scale_records()
+        self._handle.update_record_list(
+            "scene_upscalers",
+            [
+                {"index": str(index), "label": lf.ui.tr(label_key)}
+                for index, (_value, label_key) in enumerate(self.SCENE_UPSCALER_OPTIONS)
+            ],
+        )
         self._handle.update_record_list(
             "languages",
             [
@@ -285,6 +299,30 @@ class PreferencesPanel(Panel):
             settings = lf.get_render_settings()
             if settings is not None:
                 settings.render_scale = self._scene_render_scale_catalog[index]
+            self._refresh_selection()
+
+    def _scene_upscaler(self):
+        settings = lf.get_render_settings()
+        if settings is None:
+            return 0
+        return 1 if int(settings.scene_upscaler) == 1 else 0
+
+    def _scene_upscaler_index(self):
+        current = self._scene_upscaler()
+        for index, (value, _label_key) in enumerate(self.SCENE_UPSCALER_OPTIONS):
+            if value == current:
+                return str(index)
+        return "0"
+
+    def _set_scene_upscaler_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self.SCENE_UPSCALER_OPTIONS):
+            settings = lf.get_render_settings()
+            if settings is not None:
+                settings.scene_upscaler = self.SCENE_UPSCALER_OPTIONS[index][0]
             self._refresh_selection()
 
     def _language_index(self):
@@ -582,6 +620,7 @@ class PreferencesPanel(Panel):
             settings = lf.get_render_settings()
             if settings is not None:
                 settings.render_scale = 1.0
+                settings.scene_upscaler = 0
         elif section == "input":
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
@@ -604,6 +643,7 @@ class PreferencesPanel(Panel):
             self._handle.dirty("theme_idx")
             self._handle.dirty("scale_idx")
             self._handle.dirty("scene_render_scale_idx")
+            self._handle.dirty("scene_upscaler_idx")
             self._handle.dirty("language_idx")
             self._handle.dirty("navigation_idx")
             self._handle.dirty("view_snap")

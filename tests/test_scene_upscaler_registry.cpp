@@ -8,11 +8,21 @@
 
 namespace lfs::vis {
 
-    TEST(SceneUpscalerRegistry, NativeIsTheOnlyRegisteredBackendInitially) {
+    TEST(SceneUpscalerRegistry, RegistersNativeAndInternalSpatialBackends) {
         const auto descriptors = sceneUpscalerDescriptors();
-        ASSERT_EQ(descriptors.size(), 1u);
+        ASSERT_EQ(descriptors.size(), 2u);
         EXPECT_EQ(descriptors.front().backend, SceneUpscalerBackend::Native);
         EXPECT_EQ(descriptors.front().id, "native");
+        EXPECT_EQ(descriptors.back().backend, SceneUpscalerBackend::Spatial);
+        EXPECT_EQ(descriptors.back().id, "spatial");
+    }
+
+    TEST(SceneUpscalerRegistry, SpatialNeedsOnlyItsLazyAdapter) {
+        const auto& spatial = spatialSceneUpscalerDescriptor();
+        EXPECT_TRUE(spatial.available);
+        EXPECT_TRUE(spatial.requires_adapter);
+        EXPECT_FALSE(spatial.requirements.any());
+        EXPECT_FALSE(spatial.requirements.temporal());
     }
 
     TEST(SceneUpscalerRegistry, NativeRequiresNoInputsAdapterOrOptionalRuntime) {
@@ -31,6 +41,7 @@ namespace lfs::vis {
 
     TEST(SceneUpscalerRegistry, LookupRejectsUnknownOrUnavailableIds) {
         EXPECT_EQ(sceneUpscalerBackendFromId("native"), SceneUpscalerBackend::Native);
+        EXPECT_EQ(sceneUpscalerBackendFromId("spatial"), SceneUpscalerBackend::Spatial);
         EXPECT_FALSE(sceneUpscalerBackendFromId("nis").has_value());
         EXPECT_FALSE(sceneUpscalerBackendFromId("fsr").has_value());
         EXPECT_FALSE(sceneUpscalerBackendFromId("xess").has_value());
