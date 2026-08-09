@@ -2172,3 +2172,11 @@ ISSUES.md ISS-029 addendum; receipts `~/lfs-campaign-out/hunt/` (gdb1.log, repro
 
 Float-densify window: nothing left to remove — always-commit q16 is steady state; float
 workspace is barrier-transient inside guarded mutations only (training_setup.cpp:312-338).
+
+### Gate 10 — 5M acceptance RESULT (2026-08-09 02:17)
+Bicycle images_4, GUI, mrnf, DEFAULT reserve, `-i 30000`: **completed all 30000 iters,
+5,000,000 Gaussians, 615.7 s wall, loss 0.0857, zero errors/illegal** — crossed degree-ups,
+stop_refine 25000, 238 densify events, 11 block generations. VRAM (per-second nvidia-smi
+process ledger, accept5m/vram.csv): **steady 3482 MiB flat** (≤4096 ✓, 614 MiB headroom);
+raw peak 4546 MiB from nine 1-second silent transients (ISS-030 follow-up). Former crash
+build: this exact config faulted at iter ~1001, 10/10.
