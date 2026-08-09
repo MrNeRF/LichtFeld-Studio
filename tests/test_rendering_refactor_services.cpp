@@ -30,10 +30,31 @@
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <limits>
 #include <thread>
 #include <vector>
 
 namespace lfs::vis {
+
+    TEST(SceneRenderResolution, ClampsScaleAndRoundsToNearestPixel) {
+        EXPECT_EQ(computeSceneRenderSize({1920, 1080}, 1.0f), glm::ivec2(1920, 1080));
+        EXPECT_EQ(computeSceneRenderSize({1920, 1080}, 0.5f), glm::ivec2(960, 540));
+        EXPECT_EQ(computeSceneRenderSize({101, 51}, 0.5f), glm::ivec2(51, 26));
+        EXPECT_EQ(computeSceneRenderSize({1920, 1080}, 0.0f), glm::ivec2(480, 270));
+        EXPECT_EQ(computeSceneRenderSize({1920, 1080}, 2.0f), glm::ivec2(1920, 1080));
+        EXPECT_EQ(
+            computeSceneRenderSize({1920, 1080}, std::numeric_limits<float>::quiet_NaN()),
+            glm::ivec2(1920, 1080));
+        EXPECT_EQ(
+            computeSceneRenderSize({1920, 1080}, std::numeric_limits<float>::infinity()),
+            glm::ivec2(1920, 1080));
+    }
+
+    TEST(SceneRenderResolution, RejectsNonPositiveViewportDimensions) {
+        EXPECT_EQ(computeSceneRenderSize({0, 1080}, 1.0f), glm::ivec2(0, 0));
+        EXPECT_EQ(computeSceneRenderSize({1920, 0}, 1.0f), glm::ivec2(0, 0));
+        EXPECT_EQ(computeSceneRenderSize({-1, 1080}, 1.0f), glm::ivec2(0, 0));
+    }
 
     namespace {
         std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x) {

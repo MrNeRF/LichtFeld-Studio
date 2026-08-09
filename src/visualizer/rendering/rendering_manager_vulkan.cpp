@@ -9,6 +9,7 @@
 #include "core/memory_pressure.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "model_renderability.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
@@ -45,6 +46,41 @@ namespace lfs::vis {
         constexpr double kGpuLodRenderCapacityOverhead = 1.20;
         constexpr float kInteractiveResizeRenderScale = 0.33f;
         constexpr auto kTrainingOutputResizeStableDelay = std::chrono::milliseconds(500);
+
+        void publishViewportResolutionDiagnostics(
+            const glm::ivec2 viewport_size,
+            const glm::ivec2 render_size,
+            const float requested_scale,
+            const float effective_scale,
+            const bool resize_deferring,
+            const bool interactive_resize,
+            const bool memory_pressure) {
+            const int viewport_width = std::max(viewport_size.x, 0);
+            const int viewport_height = std::max(viewport_size.y, 0);
+            const int render_width = std::max(render_size.x, 0);
+            const int render_height = std::max(render_size.y, 0);
+            const double viewport_pixels =
+                static_cast<double>(viewport_width) * static_cast<double>(viewport_height);
+            const double render_pixels =
+                static_cast<double>(render_width) * static_cast<double>(render_height);
+
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.setGauge("viewer.resolution.viewport.width_px", viewport_width);
+            profiler.setGauge("viewer.resolution.viewport.height_px", viewport_height);
+            profiler.setGauge("viewer.resolution.viewport.pixels", viewport_pixels);
+            profiler.setGauge("viewer.resolution.scene.width_px", render_width);
+            profiler.setGauge("viewer.resolution.scene.height_px", render_height);
+            profiler.setGauge("viewer.resolution.scene.pixels", render_pixels);
+            profiler.setGauge("viewer.resolution.scene.requested_scale", requested_scale);
+            profiler.setGauge("viewer.resolution.scene.effective_scale", effective_scale);
+            profiler.setGauge(
+                "viewer.resolution.scene.pixel_ratio",
+                viewport_pixels > 0.0 ? render_pixels / viewport_pixels : 0.0);
+            profiler.setGauge("viewer.resolution.scene.valid", render_pixels > 0.0 ? 1.0 : 0.0);
+            profiler.setGauge("viewer.resolution.resize_deferring", resize_deferring ? 1.0 : 0.0);
+            profiler.setGauge("viewer.resolution.interactive_resize", interactive_resize ? 1.0 : 0.0);
+            profiler.setGauge("viewer.resolution.memory_pressure", memory_pressure ? 1.0 : 0.0);
+        }
 
         struct LodObjectFrame {
             glm::mat4 object_to_view{1.0f};
@@ -1476,6 +1512,14 @@ namespace lfs::vis {
                 vksplat_viewport_renderer_->setLiveSubmitCallback({});
             }
             releaseResizeTrainingPause();
+            publishViewportResolutionDiagnostics(
+                current_size,
+                {0, 0},
+                frame_settings.render_scale,
+                clampSceneRenderScale(frame_settings.render_scale),
+                false,
+                false,
+                lfs::core::MemoryPressureCoordinator::instance().pressure_active());
             return {.image = vulkan_viewport_image_,
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};
@@ -1588,19 +1632,27 @@ namespace lfs::vis {
             markDirty(resize_result.dirty);
         }
         const bool resize_deferring = frame_lifecycle_service_.isResizeDeferring();
-        float scale = std::clamp(frame_settings.render_scale, 0.25f, 1.0f);
+        const bool memory_pressure_active =
+            lfs::core::MemoryPressureCoordinator::instance().pressure_active();
+        float scale = clampSceneRenderScale(frame_settings.render_scale);
         if (resize_result.render_interactive_frame) {
             scale = std::min(scale, kInteractiveResizeRenderScale);
         }
         // Under an active VRAM pressure lease, halve the viewer render resolution
         // to shrink per-frame output allocation. Restored automatically once the
         // coordinator observes sustained headroom. Does not affect training.
-        if (lfs::core::MemoryPressureCoordinator::instance().pressure_active()) {
-            scale = std::clamp(scale * 0.5f, 0.25f, 1.0f);
+        if (memory_pressure_active) {
+            scale = clampSceneRenderScale(scale * 0.5f);
         }
-        glm::ivec2 render_size(
-            std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * scale)), 1),
-            std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * scale)), 1));
+        const glm::ivec2 render_size = computeSceneRenderSize(current_size, scale);
+        publishViewportResolutionDiagnostics(
+            current_size,
+            render_size,
+            frame_settings.render_scale,
+            scale,
+            resize_deferring,
+            resize_result.render_interactive_frame,
+            memory_pressure_active);
         const DirtyMask pending_dirty = dirty_mask_.load(std::memory_order_relaxed);
         const bool only_split_position_pending =
             (pending_dirty & ~DirtyFlag::SPLIT_POSITION) == 0;

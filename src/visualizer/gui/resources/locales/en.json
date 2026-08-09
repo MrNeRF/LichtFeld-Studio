@@ -776,6 +776,9 @@
     "interface": "Interface",
     "general": "General",
     "appearance": "Appearance",
+    "scene_rendering": "Scene Rendering",
+    "scene_render_scale": "Scene Render Scale",
+    "scene_render_scale_description": "Render the 3D scene at a lower resolution without changing the interface scale.",
     "input": "Input",
     "camera_navigation": "Camera Navigation",
     "navigation_mode": "Navigation Mode",
@@ -808,7 +811,7 @@
     "reset_section_success": "Section reset immediately.",
     "reset_section_failed": "Unable to reset settings.",
     "reset_all_settings": "Reset all settings",
-    "reset_all_settings_confirmation": "Restore language, theme, UI scale, input preferences, MCP server, layout, and window state to their defaults? This applies immediately. Projects, datasets, exports, plugins, and cache are not affected.",
+    "reset_all_settings_confirmation": "Restore language, theme, UI scale, scene render scale, input preferences, MCP server, layout, and window state to their defaults? This applies immediately. Projects, datasets, exports, plugins, and cache are not affected.",
     "reset_all_settings_success": "All preferences, layout, and window state reset immediately."
   },
   "main_panel": {

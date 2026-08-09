@@ -191,6 +191,7 @@ TEST(ThemePreferencesContract, InvalidValuesFallBackToBuiltInDefaults) {
 
     EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "dark");
     EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 1.0f);
     EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
     std::filesystem::remove_all(root, error);
 }
@@ -207,7 +208,30 @@ TEST(ThemePreferencesContract, MalformedJsonFallsBackToBuiltInDefaults) {
 
     EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "dark");
     EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 1.0f);
     EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, SceneRenderScaleRoundTripsAndRejectsInvalidValues) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_scene_render_scale_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    lfs::vis::saveSceneRenderScalePreference(0.5f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 0.5f);
+
+    lfs::vis::saveSceneRenderScalePreference(0.1f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 0.25f);
+    lfs::vis::saveSceneRenderScalePreference(2.0f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 1.0f);
+
+    std::ofstream(paths->preferencesFile()) << R"({"scene_render_scale":"invalid"})";
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 1.0f);
     std::filesystem::remove_all(root, error);
 }
 
@@ -258,6 +282,7 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         const ScopedSafeMode safe_mode;
         EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "dark");
         EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
+        EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 1.0f);
         EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
         const auto mcp = lfs::vis::loadMcpPreferences();
         EXPECT_TRUE(mcp.enabled);
@@ -266,6 +291,7 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         EXPECT_FALSE(mcp.request_logging);
         lfs::vis::saveThemePreferenceName("gruvbox");
         lfs::vis::saveUiScalePreference(2.0f);
+        lfs::vis::saveSceneRenderScalePreference(0.5f);
         lfs::vis::saveLanguagePreference("fr");
         lfs::vis::saveMcpPreferences({.enabled = true, .expose_network = false, .port = 45677, .request_logging = true});
     }

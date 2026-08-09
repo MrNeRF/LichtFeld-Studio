@@ -5256,13 +5256,29 @@ namespace lfs::vis {
         const std::size_t owned_total = buffers_.getTotalOwnedAllocSize();
         const std::size_t pipeline_current = renderer_.getCurrentAllocSize();
         const std::size_t pipeline_peak = renderer_.getPeakAllocSize();
+        const std::size_t input_xyz_bytes = viewBytes(buffers_.xyz_ws);
+        const std::size_t input_sh0_bytes = viewBytes(buffers_.sh0);
+        const std::size_t input_shN_bytes = viewBytes(buffers_.shN);
+        const std::size_t input_rotation_bytes = viewBytes(buffers_.rotations);
+        const std::size_t input_scaling_bytes = viewBytes(buffers_.scaling_raw);
+        const std::size_t input_opacity_bytes = viewBytes(buffers_.opacity_raw);
+        const std::size_t input_page_frame_bytes = viewBytes(buffers_.page_frames);
         const std::size_t input_view_bytes =
-            viewBytes(buffers_.xyz_ws) +
-            viewBytes(buffers_.sh0) +
-            viewBytes(buffers_.shN) +
-            viewBytes(buffers_.rotations) +
-            viewBytes(buffers_.scaling_raw) +
-            viewBytes(buffers_.opacity_raw);
+            input_xyz_bytes +
+            input_sh0_bytes +
+            input_shN_bytes +
+            input_rotation_bytes +
+            input_scaling_bytes +
+            input_opacity_bytes;
+        const std::size_t input_sh_bytes = input_sh0_bytes + input_shN_bytes;
+        const bool compact_sh_resident =
+            buffers_.quant_pool || buffers_.shN_f16 || buffers_.shN_q16;
+        const std::size_t estimated_half_sh_bytes =
+            compact_sh_resident ? input_sh_bytes : input_sh_bytes / 2u;
+        const char* const input_mode = buffers_.quant_pool ? "quantized_pool"
+                                       : buffers_.shN_q16  ? "q16"
+                                       : buffers_.shN_f16  ? "f16"
+                                                           : "float32";
         const std::size_t sort_buffer_bytes =
             buffers_.sorting_keys_1.deviceBuffer.capacity +
             buffers_.sorting_keys_2.deviceBuffer.capacity +
@@ -5297,6 +5313,11 @@ namespace lfs::vis {
         signature = mix(signature, pipeline_current);
         signature = mix(signature, pipeline_peak);
         signature = mix(signature, input_view_bytes);
+        signature = mix(signature, input_page_frame_bytes);
+        signature = mix(signature, buffers_.quant_pool ? 1u : 0u);
+        signature = mix(signature, buffers_.shN_f16 ? 1u : 0u);
+        signature = mix(signature, buffers_.shN_q16 ? 1u : 0u);
+        signature = mix(signature, buffers_.attrs_f16 ? 1u : 0u);
         signature = mix(signature, opacity_copy_bytes);
         signature = mix(signature, overlay_bytes);
         signature = mix(signature, output_image_bytes);
@@ -5307,6 +5328,27 @@ namespace lfs::vis {
             return;
         }
         last_vram_report_signature_ = signature;
+
+        auto& profiler = lfs::diagnostics::VramProfiler::instance();
+        profiler.setGauge("viewer.inputs.total_bytes", static_cast<double>(input_view_bytes));
+        profiler.setGauge("viewer.inputs.xyz_bytes", static_cast<double>(input_xyz_bytes));
+        profiler.setGauge("viewer.inputs.sh0_bytes", static_cast<double>(input_sh0_bytes));
+        profiler.setGauge("viewer.inputs.shN_bytes", static_cast<double>(input_shN_bytes));
+        profiler.setGauge("viewer.inputs.sh_total_bytes", static_cast<double>(input_sh_bytes));
+        profiler.setGauge("viewer.inputs.rotation_bytes", static_cast<double>(input_rotation_bytes));
+        profiler.setGauge("viewer.inputs.scaling_bytes", static_cast<double>(input_scaling_bytes));
+        profiler.setGauge("viewer.inputs.opacity_bytes", static_cast<double>(input_opacity_bytes));
+        profiler.setGauge("viewer.inputs.page_frame_bytes", static_cast<double>(input_page_frame_bytes));
+        profiler.setGauge("viewer.inputs.quantized_pool", buffers_.quant_pool ? 1.0 : 0.0);
+        profiler.setGauge("viewer.inputs.shN_f16", buffers_.shN_f16 ? 1.0 : 0.0);
+        profiler.setGauge("viewer.inputs.shN_q16", buffers_.shN_q16 ? 1.0 : 0.0);
+        profiler.setGauge("viewer.inputs.attrs_f16", buffers_.attrs_f16 ? 1.0 : 0.0);
+        profiler.setGauge(
+            "viewer.inputs.estimated_half_sh_bytes",
+            static_cast<double>(estimated_half_sh_bytes));
+        profiler.setGauge(
+            "viewer.inputs.estimated_half_sh_savings_bytes",
+            static_cast<double>(input_sh_bytes - estimated_half_sh_bytes));
 
         std::vector<std::pair<std::string, std::size_t>> entries;
         for (const auto& [name, bytes] : buffers_.getOwnedVramBreakdown()) {
@@ -5327,12 +5369,15 @@ namespace lfs::vis {
             top += std::format("{}={:.2f}GiB", entries[i].first, gib(entries[i].second));
         }
 
-        LOG_PERF("vksplat.memory reason={} renderer_owned={:.2f}GiB pipeline_current={:.2f}GiB pipeline_peak={:.2f}GiB input_views={:.2f}GiB opacity_copies={:.2f}GiB overlays={:.2f}GiB outputs={:.2f}GiB output_pool_idle={:.2f}GiB sort_buffers={:.2f}GiB shared_scratch={:.2f}GiB sort_capacity={} top=[{}]",
+        LOG_PERF("vksplat.memory reason={} renderer_owned={:.2f}GiB pipeline_current={:.2f}GiB pipeline_peak={:.2f}GiB input_views={:.2f}GiB input_sh={:.2f}GiB input_mode={} estimated_half_sh_savings={:.2f}GiB opacity_copies={:.2f}GiB overlays={:.2f}GiB outputs={:.2f}GiB output_pool_idle={:.2f}GiB sort_buffers={:.2f}GiB shared_scratch={:.2f}GiB sort_capacity={} top=[{}]",
                  reason,
                  gib(owned_total),
                  gib(pipeline_current),
                  gib(pipeline_peak),
                  gib(input_view_bytes),
+                 gib(input_sh_bytes),
+                 input_mode,
+                 gib(input_sh_bytes - estimated_half_sh_bytes),
                  gib(opacity_copy_bytes),
                  gib(overlay_bytes),
                  gib(output_image_bytes),

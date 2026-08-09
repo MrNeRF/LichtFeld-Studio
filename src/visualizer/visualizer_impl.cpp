@@ -34,6 +34,7 @@
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
+#include "theme/theme.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/builtin_tools.hpp"
 #include "tools/selection_tool.hpp"
@@ -226,6 +227,7 @@ namespace lfs::vis {
         // Set initial antialiasing
         RenderSettings initial_settings;
         initial_settings.antialiasing = options.antialiasing;
+        initial_settings.render_scale = loadSceneRenderScalePreference();
         initial_settings.gut = options.gut;
         initial_settings.raster_backend = options.gut
                                               ? lfs::rendering::GaussianRasterBackend::ThreeDgut
@@ -868,8 +870,12 @@ namespace lfs::vis {
                 if (!rendering_manager_)
                     return;
                 auto s = rendering_manager_->getSettings();
+                const float previous_render_scale = s.render_scale;
                 vis::apply_proxy(s, proxy);
                 rendering_manager_->updateSettings(s);
+                const float applied_render_scale = rendering_manager_->getSettings().render_scale;
+                if (std::abs(applied_render_scale - previous_render_scale) > 0.0001f)
+                    saveSceneRenderScalePreference(applied_render_scale);
                 wakeMainLoop();
             });
         callback_cleanup_.add([] { vis::set_render_settings_callbacks(nullptr, nullptr); });

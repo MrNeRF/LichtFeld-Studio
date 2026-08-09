@@ -236,6 +236,9 @@
     "interface": "Interfaz",
     "general": "General",
     "appearance": "Apariencia",
+    "scene_rendering": "Renderizado de escena",
+    "scene_render_scale": "Escala de renderizado de escena",
+    "scene_render_scale_description": "Renderiza la escena 3D a menor resolución sin cambiar la escala de la interfaz.",
     "input": "Entrada",
     "camera_navigation": "Navegación de cámara",
     "navigation_mode": "Modo de navegación",
@@ -268,7 +271,7 @@
     "reset_section_success": "Sección restablecida inmediatamente.",
     "reset_section_failed": "No se pudieron restablecer los ajustes.",
     "reset_all_settings": "Restablecer todos los ajustes",
-    "reset_all_settings_confirmation": "¿Restablecer idioma, tema, escala de interfaz, preferencias de entrada, servidor MCP, diseño y estado de la ventana a sus valores predeterminados? Se aplica inmediatamente. Proyectos, conjuntos de datos, exportaciones, plugins y caché no se verán afectados.",
+    "reset_all_settings_confirmation": "¿Restablecer idioma, tema, escala de interfaz, escala de renderizado de escena, preferencias de entrada, servidor MCP, diseño y estado de la ventana a sus valores predeterminados? Se aplica inmediatamente. Proyectos, conjuntos de datos, exportaciones, plugins y caché no se verán afectados.",
     "reset_all_settings_success": "Todas las preferencias, el diseño y el estado de la ventana se restablecieron inmediatamente."
   },
   "startup": {

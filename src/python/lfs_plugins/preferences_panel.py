@@ -33,6 +33,8 @@ class PreferencesPanel(Panel):
         (2.0, "200%"),
     )
 
+    SCENE_RENDER_SCALE_OPTIONS = (0.25, 0.33, 0.5, 0.67, 0.75, 1.0)
+
     NAVIGATION_OPTIONS = (
         ("orbit", "preferences.navigation_orbit"),
         ("trackball", "preferences.navigation_trackball"),
@@ -43,6 +45,7 @@ class PreferencesPanel(Panel):
     EXPANDABLE_SECTIONS = (
         "language",
         "appearance",
+        "scene_rendering",
         "navigation",
         "view_snap",
         "interface",
@@ -53,6 +56,7 @@ class PreferencesPanel(Panel):
         self._handle = None
         self._theme_catalog = []
         self._language_catalog = []
+        self._scene_render_scale_catalog = []
         self._last_state = None
         self._section = "general"
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
@@ -85,6 +89,7 @@ class PreferencesPanel(Panel):
             )
         model.bind("theme_idx", self._theme_index, self._set_theme_index)
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
+        model.bind("scene_render_scale_idx", self._scene_render_scale_index, self._set_scene_render_scale_index)
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
@@ -115,6 +120,7 @@ class PreferencesPanel(Panel):
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_record_list("themes")
         model.bind_record_list("scales")
+        model.bind_record_list("scene_render_scales")
         model.bind_record_list("languages")
         model.bind_record_list("navigation_modes")
         self._handle = model.get_handle()
@@ -138,6 +144,7 @@ class PreferencesPanel(Panel):
     def on_update(self, doc):
         self._consume_section_request()
         self._sync_mcp_runtime()
+        self._sync_scene_render_scale_records()
         state = self._state()
         if state == self._last_state:
             return
@@ -148,6 +155,7 @@ class PreferencesPanel(Panel):
         return (
             lf.ui.get_theme(),
             float(lf.ui.get_ui_scale_preference()),
+            self._scene_render_scale(),
             lf.ui.get_current_language(),
             lf.get_camera_navigation_mode(),
             lf.get_camera_view_snap_enabled(),
@@ -184,6 +192,7 @@ class PreferencesPanel(Panel):
                 for index, (scale, label) in enumerate(self.SCALE_OPTIONS)
             ],
         )
+        self._sync_scene_render_scale_records()
         self._handle.update_record_list(
             "languages",
             [
@@ -229,6 +238,53 @@ class PreferencesPanel(Panel):
             return
         if 0 <= index < len(self.SCALE_OPTIONS):
             lf.ui.set_ui_scale(self.SCALE_OPTIONS[index][0])
+            self._refresh_selection()
+
+    def _scene_render_scale(self):
+        settings = lf.get_render_settings()
+        if settings is None:
+            return 1.0
+        return max(0.25, min(1.0, float(settings.render_scale)))
+
+    def _scene_render_scale_options(self):
+        current = self._scene_render_scale()
+        options = list(self.SCENE_RENDER_SCALE_OPTIONS)
+        if not any(abs(current - option) < 0.001 for option in options):
+            options.append(current)
+            options.sort()
+        return options
+
+    def _sync_scene_render_scale_records(self):
+        options = self._scene_render_scale_options()
+        if options == self._scene_render_scale_catalog:
+            return
+        self._scene_render_scale_catalog = options
+        if self._handle:
+            self._handle.update_record_list(
+                "scene_render_scales",
+                [
+                    {"index": str(index), "label": f"{round(scale * 100):d}%"}
+                    for index, scale in enumerate(options)
+                ],
+            )
+            self._handle.dirty("scene_render_scale_idx")
+
+    def _scene_render_scale_index(self):
+        current = self._scene_render_scale()
+        for index, scale in enumerate(self._scene_render_scale_catalog):
+            if abs(current - scale) < 0.001:
+                return str(index)
+        return "0"
+
+    def _set_scene_render_scale_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self._scene_render_scale_catalog):
+            settings = lf.get_render_settings()
+            if settings is not None:
+                settings.render_scale = self._scene_render_scale_catalog[index]
             self._refresh_selection()
 
     def _language_index(self):
@@ -523,6 +579,9 @@ class PreferencesPanel(Panel):
         elif section == "appearance":
             lf.ui.set_theme("dark")
             lf.ui.set_ui_scale(0.0)
+            settings = lf.get_render_settings()
+            if settings is not None:
+                settings.render_scale = 1.0
         elif section == "input":
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
@@ -544,6 +603,7 @@ class PreferencesPanel(Panel):
         if self._handle:
             self._handle.dirty("theme_idx")
             self._handle.dirty("scale_idx")
+            self._handle.dirty("scene_render_scale_idx")
             self._handle.dirty("language_idx")
             self._handle.dirty("navigation_idx")
             self._handle.dirty("view_snap")

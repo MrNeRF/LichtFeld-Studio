@@ -189,6 +189,7 @@ namespace lfs::core {
                                                         {"language", "en"},
                                                         {"theme", "dark"},
                                                         {"ui_scale", "auto"},
+                                                        {"scene_render_scale", 1.0},
                                                         {"mcp", {
                                                                     {"enabled", true},
                                                                     {"expose_network", false},

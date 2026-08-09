@@ -783,6 +783,9 @@
     "interface": "界面",
     "general": "常规",
     "appearance": "外观",
+    "scene_rendering": "场景渲染",
+    "scene_render_scale": "场景渲染比例",
+    "scene_render_scale_description": "在不更改界面缩放的情况下，以较低分辨率渲染三维场景。",
     "input": "输入",
     "camera_navigation": "相机导航",
     "navigation_mode": "导航模式",
@@ -815,7 +818,7 @@
     "reset_section_success": "此部分已立即重置。",
     "reset_section_failed": "无法重置设置。",
     "reset_all_settings": "重置所有设置",
-    "reset_all_settings_confirmation": "将语言、主题、界面缩放、输入偏好、MCP 服务器、布局和窗口状态恢复为默认值？将立即应用。项目、数据集、导出、插件和缓存不会受到影响。",
+    "reset_all_settings_confirmation": "将语言、主题、界面缩放、场景渲染比例、输入偏好、MCP 服务器、布局和窗口状态恢复为默认值？将立即应用。项目、数据集、导出、插件和缓存不会受到影响。",
     "reset_all_settings_success": "所有偏好、布局和窗口状态已立即重置。"
   },
   "main_panel": {

@@ -48,6 +48,20 @@
             </select>
           </div>
         </div>
+
+        <div class="section-header text-accent" data-class-is-expanded="scene_rendering_expanded" data-event-click="toggle_section('scene_rendering')">
+          <span class="section-arrow text-accent" data-class-is-expanded="scene_rendering_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.scene_rendering</span>
+        </div>
+        <div class="section-content" data-if="scene_rendering_expanded">
+          <span class="preferences-description">@tr:preferences.scene_render_scale_description</span>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.scene_render_scale</span>
+            <select class="preferences-select" data-value="scene_render_scale_idx">
+              <option data-for="scale : scene_render_scales" data-attr-value="scale.index">{{ scale.label }}</option>
+            </select>
+          </div>
+        </div>
       </div>
 
       <div class="preferences-section" data-if="show_input">
@@ -140,6 +154,7 @@
             <button class="btn" data-event-click="open_mcp_log_folder">@tr:preferences.mcp_open_log_folder</button>
           </div>
         </div>
+
       </div>
 
     </div>

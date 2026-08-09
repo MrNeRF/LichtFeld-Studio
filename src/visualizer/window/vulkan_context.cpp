@@ -4387,6 +4387,11 @@ namespace lfs::vis {
                                          ? pixel_count * image_count * bytes_per_pixel
                                          : 0;
         recordCurrentVulkanBytes("vulkan.external.swapchain", "driver_owned_images_estimate", swapchain_estimated_bytes_);
+        auto& vram_profiler = lfs::diagnostics::VramProfiler::instance();
+        vram_profiler.setGauge("viewer.resolution.output.width_px", extent.width);
+        vram_profiler.setGauge("viewer.resolution.output.height_px", extent.height);
+        vram_profiler.setGauge("viewer.resolution.output.pixels", static_cast<double>(pixel_count));
+        vram_profiler.setGauge("viewer.resolution.output.swapchain_images", image_count);
         swapchain_images_in_flight_.assign(image_count, VK_NULL_HANDLE);
         swapchain_format_ = surface_format.format;
         swapchain_extent_fixed_to_surface_ = extent_fixed_to_surface;
@@ -4905,6 +4910,11 @@ namespace lfs::vis {
             recordCurrentVulkanBytes("vulkan.external.swapchain", "driver_owned_images_estimate", 0);
             swapchain_estimated_bytes_ = 0;
         }
+        auto& vram_profiler = lfs::diagnostics::VramProfiler::instance();
+        vram_profiler.setGauge("viewer.resolution.output.width_px", 0.0);
+        vram_profiler.setGauge("viewer.resolution.output.height_px", 0.0);
+        vram_profiler.setGauge("viewer.resolution.output.pixels", 0.0);
+        vram_profiler.setGauge("viewer.resolution.output.swapchain_images", 0.0);
     }
 
     bool VulkanContext::waitForFrameFences() {

@@ -1153,6 +1153,34 @@ namespace lfs::vis {
         return 0.0f;
     }
 
+    void saveSceneRenderScalePreference(float scale) {
+        try {
+            auto preferences = loadPreferences();
+            const float sanitized = std::isfinite(scale) ? std::clamp(scale, 0.25f, 1.0f) : 1.0f;
+            preferences["scene_render_scale"] = sanitized;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save scene render scale preference: {}", e.what());
+        }
+    }
+
+    float loadSceneRenderScalePreference() {
+        try {
+            if (preferencesDisabled())
+                return 1.0f;
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("scene_render_scale");
+            if (it != preferences.end() && it->is_number()) {
+                const float scale = it->get<float>();
+                if (std::isfinite(scale) && scale >= 0.25f && scale <= 1.0f)
+                    return scale;
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load scene render scale preference: {}", e.what());
+        }
+        return 1.0f;
+    }
+
     void saveLanguagePreference(const std::string& language_code) {
         try {
             if (language_code.empty())

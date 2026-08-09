@@ -776,6 +776,9 @@
     "interface": "Interfejs",
     "general": "Ogólne",
     "appearance": "Wygląd",
+    "scene_rendering": "Renderowanie sceny",
+    "scene_render_scale": "Skala renderowania sceny",
+    "scene_render_scale_description": "Renderuj scenę 3D w niższej rozdzielczości bez zmiany skali interfejsu.",
     "input": "Sterowanie",
     "camera_navigation": "Nawigacja kamery",
     "navigation_mode": "Tryb nawigacji",
@@ -808,7 +811,7 @@
     "reset_section_success": "Sekcja została natychmiast zresetowana.",
     "reset_section_failed": "Nie można zresetować ustawień.",
     "reset_all_settings": "Resetuj wszystkie ustawienia",
-    "reset_all_settings_confirmation": "Przywrócić język, motyw, skalę interfejsu, preferencje wejścia, serwer MCP, układ i stan okna do wartości domyślnych? Zostanie to zastosowane natychmiast. Projekty, zestawy danych, eksporty, wtyczki i pamięć podręczna nie zostaną zmienione.",
+    "reset_all_settings_confirmation": "Przywrócić język, motyw, skalę interfejsu, skalę renderowania sceny, preferencje wejścia, serwer MCP, układ i stan okna do wartości domyślnych? Zostanie to zastosowane natychmiast. Projekty, zestawy danych, eksporty, wtyczki i pamięć podręczna nie zostaną zmienione.",
     "reset_all_settings_success": "Wszystkie preferencje, układ i stan okna zostały natychmiast zresetowane."
   },
   "main_panel": {

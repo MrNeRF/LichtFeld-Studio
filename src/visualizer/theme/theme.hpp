@@ -228,6 +228,11 @@ namespace lfs::vis {
     LFS_VIS_API void saveUiScalePreference(float scale);
     [[nodiscard]] LFS_VIS_API float loadUiScalePreference();
 
+    // Scene render resolution preference, independent from UI scaling and the
+    // LOD splat-budget multiplier.
+    LFS_VIS_API void saveSceneRenderScalePreference(float scale);
+    [[nodiscard]] LFS_VIS_API float loadSceneRenderScalePreference();
+
     // Language preference. An empty result means that the user has not chosen
     // a language yet and the first-run startup selector should be shown.
     LFS_VIS_API void saveLanguagePreference(const std::string& language_code);

@@ -22,6 +22,8 @@ namespace lfs::vis {
     inline constexpr std::size_t DEFAULT_LOD_MAX_SPLATS = 2'500'000;
     inline constexpr float DEFAULT_LOD_PIXEL_SCALE_LIMIT = 0.0001f;
     inline constexpr float DEFAULT_LOD_RENDER_SCALE = 1.0f;
+    inline constexpr float MIN_SCENE_RENDER_SCALE = 0.25f;
+    inline constexpr float MAX_SCENE_RENDER_SCALE = 1.0f;
     inline constexpr float DEFAULT_LOD_BEHIND_CAMERA_FOVEATION = 0.2f;
     inline constexpr float DEFAULT_LOD_CONE_FOVEATION = 0.4f;
     inline constexpr float DEFAULT_LOD_CONE_INNER_DEGREES = 90.0f;
@@ -76,6 +78,26 @@ namespace lfs::vis {
 
     [[nodiscard]] inline bool splitViewUsesIndependentPanels(const SplitViewMode mode) {
         return mode == SplitViewMode::IndependentDual;
+    }
+
+    [[nodiscard]] inline float clampSceneRenderScale(const float scale) {
+        if (!std::isfinite(scale)) {
+            return MAX_SCENE_RENDER_SCALE;
+        }
+        return std::clamp(scale, MIN_SCENE_RENDER_SCALE, MAX_SCENE_RENDER_SCALE);
+    }
+
+    [[nodiscard]] inline glm::ivec2 computeSceneRenderSize(
+        const glm::ivec2 viewport_size,
+        const float scale) {
+        if (viewport_size.x <= 0 || viewport_size.y <= 0) {
+            return {0, 0};
+        }
+
+        const float clamped_scale = clampSceneRenderScale(scale);
+        return {
+            std::max(static_cast<int>(std::lround(static_cast<float>(viewport_size.x) * clamped_scale)), 1),
+            std::max(static_cast<int>(std::lround(static_cast<float>(viewport_size.y) * clamped_scale)), 1)};
     }
 
     struct SplitViewPanelLayout {
@@ -180,7 +202,7 @@ namespace lfs::vis {
         bool antialiasing = false;
         bool mip_filter = false;
         int sh_degree = 3;
-        float render_scale = 1.0f; // Viewer resolution scale (0.25-1.0), does not affect training
+        float render_scale = 1.0f; // Scene resolution scale (0.25-1.0), does not affect UI or training
         CameraMetricsMode camera_metrics_mode = CameraMetricsMode::Off;
 
         // Crop box (data stored in scene graph CropBoxData, these are UI toggles only)
