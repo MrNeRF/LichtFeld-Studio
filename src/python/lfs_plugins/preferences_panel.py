@@ -35,8 +35,8 @@ class PreferencesPanel(Panel):
 
     SCENE_RENDER_SCALE_OPTIONS = (0.25, 0.33, 0.5, 0.67, 0.75, 1.0)
     SCENE_UPSCALER_OPTIONS = (
-        (0, "preferences.scene_upscaler_native"),
-        (1, "preferences.scene_upscaler_spatial"),
+        ("native", "preferences.scene_upscaler_native"),
+        ("spatial", "preferences.scene_upscaler_spatial"),
     )
 
     NAVIGATION_OPTIONS = (
@@ -304,8 +304,9 @@ class PreferencesPanel(Panel):
     def _scene_upscaler(self):
         settings = lf.get_render_settings()
         if settings is None:
-            return 0
-        return 1 if int(settings.scene_upscaler) == 1 else 0
+            return "native"
+        backend = str(settings.scene_upscaler)
+        return backend if backend in {"native", "spatial"} else "native"
 
     def _scene_upscaler_index(self):
         current = self._scene_upscaler()
@@ -620,7 +621,7 @@ class PreferencesPanel(Panel):
             settings = lf.get_render_settings()
             if settings is not None:
                 settings.render_scale = 1.0
-                settings.scene_upscaler = 0
+                settings.scene_upscaler = "native"
         elif section == "input":
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
