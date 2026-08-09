@@ -1464,7 +1464,16 @@ namespace lfs::vis {
         if (context.viewport_region) {
             current_size = framebuffer_region.size;
         }
+        // Minimized / zero-extent: no presentable viewport work. Never hold a
+        // resize training pause, never start model reads, and never publish
+        // new viewer borrows — the trainer continues headless on the existing
+        // handshake fences only. Restore re-enters the normal frame path
+        // (first frame may block once for a stable model, same as cold start).
         if (current_size.x <= 0 || current_size.y <= 0) {
+            if (vksplat_viewport_renderer_) {
+                vksplat_viewport_renderer_->setLiveSubmitCallback({});
+            }
+            releaseResizeTrainingPause();
             return {.image = vulkan_viewport_image_,
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};
@@ -1605,9 +1614,11 @@ namespace lfs::vis {
             return cached_frame_result();
         }
 
-        if (resize_deferring && is_training) {
-            requestResizeTrainingPause(trainer_manager);
-        }
+        // Window resize/minimize must not alter the training schedule. While the
+        // viewport is deferring (interactive drag or settle), skip new model
+        // reads by returning cached output below — no pauseTrainingTemporary.
+        // (VkSplat output-ring recreate still uses a temporary pause until the
+        // Part 2 viewer-side quiesce lands.)
         const auto release_resize_pause_if_idle = [this, resize_deferring]() {
             if (!resize_deferring) {
                 releaseResizeTrainingPause();
@@ -1616,9 +1627,8 @@ namespace lfs::vis {
 
         // Passive training preview: try the step-boundary render lock so densify
         // (exclusive) never stalls the UI frame. On contention, retain the last
-        // splat image and retry on the next cadence tick. Interaction path pauses
-        // training fully (pauseTrainingTemporary) so a blocking lock is fine there.
-        // First frame / no cache falls back to a blocking acquire below.
+        // splat image and retry on the next cadence tick. First frame / no cache
+        // falls back to a blocking acquire below.
         const bool training_try_lock = is_training;
         auto render_lock = acquireLiveModelRenderLock(scene_manager, training_try_lock);
         bool render_lock_contended = training_try_lock && !render_lock.has_value() &&
