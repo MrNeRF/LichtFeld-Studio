@@ -45,6 +45,8 @@ vcpkg_*/**
 vcpkg_*/
 build*/
 build*/**
+!tools/build/
+!tools/build/check_build_deps.sh
 
 *.pt
 !weights/*.pt
@@ -69,4 +71,3 @@ plugInfo.json
 # only creates merge-conflict churn).
 src/rendering/rasterizer/vulkan/shader/generated/*.spv
 src/rendering/rasterizer/vulkan/shader/radix_sort/*.spv
-
