@@ -1077,6 +1077,7 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
             create_optional(pipeline_macro_raster[i], "macro_raster");
             create_optional(pipeline_macro_raster_fp32[i], "macro_raster_fp32");
             create_optional(pipeline_macro_raster_overlays[i], "macro_raster_overlays");
+            create_optional(pipeline_macro_raster_overlays_fp32[i], "macro_raster_overlays_fp32");
             create_optional(pipeline_macro_compose[i], "macro_compose");
             create_optional(pipeline_macro_compose_overlays[i], "macro_compose_overlays");
         }
@@ -2931,9 +2932,12 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                          _CEIL_DIV(_CEIL_DIV(alloc_macro_tiles, kCumsumBlock),
                                    kCumsumBlock)));
 
-    const bool use_fp32 = overlays_active || (uniforms.lod_enabled & 4u) != 0u;
+    // Spark-rad opacity (lod_enabled bit 2) still needs the fp32 blend math;
+    // overlays no longer force fp32 — pick the matching overlay/plain variant.
+    const bool use_fp32 = (uniforms.lod_enabled & 4u) != 0u;
     auto& raster_pipeline = overlays_active
-                                ? pipeline_macro_raster_overlays
+                                ? (use_fp32 ? pipeline_macro_raster_overlays_fp32
+                                            : pipeline_macro_raster_overlays)
                                 : (use_fp32 ? pipeline_macro_raster_fp32
                                             : pipeline_macro_raster);
     auto& compose_pipeline = overlays_active

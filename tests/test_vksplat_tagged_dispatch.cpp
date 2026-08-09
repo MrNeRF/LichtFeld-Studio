@@ -1004,6 +1004,7 @@ namespace {
             forge_pair(pipeline_macro_raster, 0x5610);
             forge_pair(pipeline_macro_raster_fp32, 0x5620);
             forge_pair(pipeline_macro_raster_overlays, 0x5630);
+            forge_pair(pipeline_macro_raster_overlays_fp32, 0x5638);
             forge_pair(pipeline_macro_compose, 0x5640);
             forge_pair(pipeline_macro_compose_overlays, 0x5650);
             forge_pair(pipeline_rasterize_forward, 0x5660);

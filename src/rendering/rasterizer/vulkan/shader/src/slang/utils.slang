@@ -1125,12 +1125,100 @@ int read_int32(ByteAddressBuffer buffer, uint idx)
     return int(buffer.Load(idx * 4u));
 }
 
+// Uniform overlay scalars loaded once per thread (or workgroup) before any
+// per-splat/per-pixel loop. Keeps the hot raster loops free of overlay_params
+// buffer traffic.
+struct OverlayUniformState {
+    bool cursor_enabled;
+    bool saturation_preview;
+    float saturation_amount;
+    float ring_width;
+    bool show_rings;
+    bool show_center_markers;
+    float2 cursor_xy;
+    float cursor_radius;
+    bool cursor_selection_enabled;
+    bool selection_mask_enabled;
+    bool preview_mask_enabled;
+    bool add_mode;
+    int focused_gaussian_id;
+    float flash_intensity;
+};
+
 [ForceInline]
-bool overlay_cursor_hit(float2 gaussian_xy, StructuredBuffer<float4> overlay_params)
+OverlayUniformState load_overlay_uniform_state(StructuredBuffer<float4> overlay_params)
 {
-    float4 cursor = overlay_params[OVERLAY_PARAM_SELECTION_CURSOR];
-    float2 delta = gaussian_xy - cursor.xy;
-    return dot(delta, delta) <= cursor.z * cursor.z;
+    float4 cursor_flags = overlay_params[OVERLAY_PARAM_CURSOR_FLAGS];
+    float4 marker_flags = overlay_params[OVERLAY_PARAM_MARKER_FLAGS];
+    float4 selection_cursor = overlay_params[OVERLAY_PARAM_SELECTION_CURSOR];
+    float4 selection_flags = overlay_params[OVERLAY_PARAM_SELECTION_FLAGS];
+    float4 emphasis_flags = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS];
+
+    OverlayUniformState state;
+    state.cursor_enabled = overlay_enabled(cursor_flags.x);
+    state.saturation_preview = overlay_enabled(cursor_flags.y);
+    state.saturation_amount = cursor_flags.z;
+    state.ring_width = cursor_flags.w;
+    state.show_rings = overlay_enabled(marker_flags.x);
+    state.show_center_markers = overlay_enabled(marker_flags.y);
+    state.cursor_xy = selection_cursor.xy;
+    state.cursor_radius = selection_cursor.z;
+    state.cursor_selection_enabled = overlay_enabled(selection_cursor.w);
+    state.selection_mask_enabled = overlay_enabled(selection_flags.x);
+    state.preview_mask_enabled = overlay_enabled(selection_flags.y);
+    state.add_mode = overlay_enabled(selection_flags.z);
+    state.focused_gaussian_id = overlay_int(selection_flags.w);
+    state.flash_intensity = emphasis_flags.w;
+    return state;
+}
+
+// Pack per-splat overlay payload for groupshared staging: flags | sel | preview.
+// Flags currently use 3 bits; 16 bits leave headroom without a second shared slot.
+[ForceInline]
+uint pack_overlay_per_splat(uint flags, uint selection_byte, uint preview_byte)
+{
+    return (flags & 0xffffu) |
+           ((selection_byte & 0xffu) << 16) |
+           ((preview_byte & 0xffu) << 24);
+}
+
+[ForceInline]
+uint unpack_overlay_flags(uint packed)
+{
+    return packed & 0xffffu;
+}
+
+[ForceInline]
+uint unpack_overlay_selection_byte(uint packed)
+{
+    return (packed >> 16) & 0xffu;
+}
+
+[ForceInline]
+uint unpack_overlay_preview_byte(uint packed)
+{
+    return (packed >> 24) & 0xffu;
+}
+
+[ForceInline]
+uint load_overlay_per_splat_pack(
+    uint splat_id,
+    StructuredBuffer<uint> gaussian_overlay_flags,
+    ByteAddressBuffer selection_mask,
+    ByteAddressBuffer preview_mask,
+    OverlayUniformState state)
+{
+    uint flags = gaussian_overlay_flags[splat_id];
+    uint selection_byte = state.selection_mask_enabled ? read_byte(selection_mask, splat_id) : 0u;
+    uint preview_byte = state.preview_mask_enabled ? read_byte(preview_mask, splat_id) : 0u;
+    return pack_overlay_per_splat(flags, selection_byte, preview_byte);
+}
+
+[ForceInline]
+bool overlay_cursor_hit(float2 gaussian_xy, float2 cursor_xy, float cursor_radius)
+{
+    float2 delta = gaussian_xy - cursor_xy;
+    return dot(delta, delta) <= cursor_radius * cursor_radius;
 }
 
 [ForceInline]
@@ -1145,35 +1233,36 @@ float3 unpremultiplied_color(float4 gauss_rgba)
     return gauss_rgba.a > eps ? gauss_rgba.rgb / gauss_rgba.a : float3(0.0f);
 }
 
+// selection_byte / preview_byte are the already-fetched mask values for splat_id
+// (from groupshared or a prior global load). No mask buffer access here.
 [ForceInline]
 uint selection_status(
     float2 gaussian_xy,
     uint splat_id,
     uint flags,
-    ByteAddressBuffer selection_mask,
-    ByteAddressBuffer preview_mask,
-    StructuredBuffer<float4> overlay_params)
+    uint selection_byte,
+    uint preview_byte,
+    OverlayUniformState state)
 {
-    if (overlay_enabled(overlay_params[OVERLAY_PARAM_CURSOR_FLAGS].y)) {
+    if (state.saturation_preview) {
         return 0u;
     }
     bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
-    float4 selection_flags = overlay_params[OVERLAY_PARAM_SELECTION_FLAGS];
     uint group_id = 0;
-    if (overlay_enabled(selection_flags.x)) {
-        group_id = read_byte(selection_mask, splat_id) & SELECTION_GROUP_MASK;
+    if (state.selection_mask_enabled) {
+        group_id = selection_byte & SELECTION_GROUP_MASK;
     }
     bool is_committed = group_id > 0;
     bool is_in_preview = false;
-    if (overlay_enabled(selection_flags.y)) {
-        is_in_preview = read_byte(preview_mask, splat_id) != 0;
+    if (state.preview_mask_enabled) {
+        is_in_preview = preview_byte != 0;
     }
     bool under_brush = false;
-    if (overlay_enabled(overlay_params[OVERLAY_PARAM_SELECTION_CURSOR].w) && selectable) {
-        under_brush = overlay_cursor_hit(gaussian_xy, overlay_params);
+    if (state.cursor_selection_enabled && selectable) {
+        under_brush = overlay_cursor_hit(gaussian_xy, state.cursor_xy, state.cursor_radius);
     }
-    bool add_mode = overlay_enabled(selection_flags.z);
-    bool is_ring_highlight = selectable && overlay_int(selection_flags.w) == int(splat_id);
+    bool add_mode = state.add_mode;
+    bool is_ring_highlight = selectable && state.focused_gaussian_id == int(splat_id);
     bool is_preview = (is_in_preview && !is_committed && add_mode) ||
                       (is_in_preview && is_committed && !add_mode) ||
                       (under_brush && selectable && add_mode && !is_committed) ||
@@ -1188,15 +1277,14 @@ float4 apply_projection_overlay_color(
     float4 gauss_rgba,
     float2 gaussian_xy,
     uint flags,
-    StructuredBuffer<float4> overlay_params)
+    OverlayUniformState state)
 {
     float3 color = unpremultiplied_color(gauss_rgba);
     bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
-    float4 cursor_flags = overlay_params[OVERLAY_PARAM_CURSOR_FLAGS];
-    if (overlay_enabled(cursor_flags.x) && overlay_enabled(cursor_flags.y) && selectable &&
-        overlay_cursor_hit(gaussian_xy, overlay_params)) {
+    if (state.cursor_enabled && state.saturation_preview && selectable &&
+        overlay_cursor_hit(gaussian_xy, state.cursor_xy, state.cursor_radius)) {
         float lum = 0.2126f * color.x + 0.7152f * color.y + 0.0722f * color.z;
-        float sat = 1.0f + cursor_flags.z;
+        float sat = 1.0f + state.saturation_amount;
         color = clamp(lum + sat * (color - lum), 0.0f, 1.0f);
     }
     if ((flags & OVERLAY_FLAG_DIM) != 0u) {
@@ -1224,6 +1312,8 @@ float3 selection_overlay_target_color(uint sel_status, StructuredBuffer<float4> 
     return selection_colors[0].xyz;
 }
 
+// show_rings / ring_width come from hoisted OverlayUniformState — no buffer
+// loads and no exp() until the cheap enable gates pass.
 [ForceInline]
 float4 apply_ring_overlay(
     float4 gauss_rgba,
@@ -1231,15 +1321,14 @@ float4 apply_ring_overlay(
     float2 pix_coord,
     uint sel_status,
     uint flags,
-    StructuredBuffer<float4> overlay_params,
+    bool show_rings,
+    float ring_width,
     StructuredBuffer<float4> selection_colors)
 {
-    bool show_rings = overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].x);
     bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
     if (!show_rings || !selectable) {
         return gauss_rgba;
     }
-    float ring_width = overlay_params[OVERLAY_PARAM_CURSOR_FLAGS].w;
     float2 d = pix_coord - g.xy_vs;
     float3 inv_cov = g.inv_cov_vs_opacity.xyz;
     float sigma_over_2 = 0.5f * (inv_cov.x * d.x * d.x + inv_cov.z * d.y * d.y) + inv_cov.y * d.x * d.y;
@@ -1285,18 +1374,17 @@ float4 apply_selection_overlay(
 float4 apply_flash_overlay(
     float4 gauss_rgba,
     uint flags,
-    StructuredBuffer<float4> overlay_params)
+    float flash_intensity)
 {
     if ((flags & OVERLAY_FLAG_FLASH) == 0u) {
         return gauss_rgba;
     }
-    float intensity = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS].w;
-    if (intensity <= 0.0f) {
+    if (flash_intensity <= 0.0f) {
         return gauss_rgba;
     }
     float3 color = unpremultiplied_color(gauss_rgba);
     const float3 flash_color = float3(1.0f, 0.95f, 0.6f);
-    color = lerp(color, flash_color, intensity * 0.5f);
+    color = lerp(color, flash_color, flash_intensity * 0.5f);
     return replace_unpremultiplied_color(gauss_rgba, color);
 }
 

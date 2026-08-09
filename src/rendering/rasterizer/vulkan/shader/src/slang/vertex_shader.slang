@@ -198,10 +198,13 @@ struct SplatActiveState {
     uint model_transform_base;
     bool model_transform_enabled;
 };
+// crop_flags must already be loaded; callers gate on the enable bit before
+// any transform/min/max loads (and skip whole slot groups when none are active).
 [ForceInline]
 void apply_crop_box_filter(
     StructuredBuffer<float4> overlay_params,
     uint flags_idx,
+    float4 crop_flags,
     bool node_data_enabled,
     int node_idx,
     float3 mean_ws,
@@ -209,7 +212,6 @@ void apply_crop_box_filter(
     inout uint overlay_flags)
 {
     if (!active) return;
-    float4 crop_flags = overlay_params[flags_idx];
     if (!overlay_enabled(crop_flags.x)) return;
 
     int parent_node_idx = overlay_int(crop_flags.w);
@@ -233,10 +235,12 @@ void apply_crop_box_filter(
     }
 }
 
+// ellipsoid_flags must already be loaded; enable is checked before radii/transform.
 [ForceInline]
 void apply_ellipsoid_filter(
     StructuredBuffer<float4> overlay_params,
     uint flags_idx,
+    float4 ellipsoid_flags,
     bool node_data_enabled,
     int node_idx,
     float3 mean_ws,
@@ -244,7 +248,6 @@ void apply_ellipsoid_filter(
     inout uint overlay_flags)
 {
     if (!active) return;
-    float4 ellipsoid_flags = overlay_params[flags_idx];
     if (!overlay_enabled(ellipsoid_flags.x)) return;
 
     int parent_node_idx = overlay_int(ellipsoid_flags.w);
@@ -291,24 +294,45 @@ SplatActiveState compute_splat_active_state(
                          ? transform_point_rows(model_transforms, model_transform_base, xyz_ws_in)
                          : xyz_ws_in;
 
-    apply_crop_box_filter(overlay_params, OVERLAY_PARAM_CROP_FLAGS,
-                          node_data_enabled, node_idx, mean_ws,
-                          active, overlay_flags);
-    for (uint crop_i = 0u; crop_i < OVERLAY_PARAM_CROP_EXTRA_COUNT; ++crop_i) {
-        apply_crop_box_filter(overlay_params,
-                              OVERLAY_PARAM_CROP_EXTRA_BASE + crop_i * OVERLAY_PARAM_CROP_STRIDE,
-                              node_data_enabled, node_idx, mean_ws,
-                              active, overlay_flags);
+    // Host packs crop boxes densely: primary at CROP_FLAGS, then extras. If the
+    // primary enable bit is off, no crop is active — skip the whole 16-slot walk.
+    // When extras exist they are contiguous; stop at the first disabled slot.
+    {
+        float4 crop_flags = overlay_params[OVERLAY_PARAM_CROP_FLAGS];
+        if (overlay_enabled(crop_flags.x)) {
+            apply_crop_box_filter(overlay_params, OVERLAY_PARAM_CROP_FLAGS, crop_flags,
+                                  node_data_enabled, node_idx, mean_ws,
+                                  active, overlay_flags);
+            for (uint crop_i = 0u; crop_i < OVERLAY_PARAM_CROP_EXTRA_COUNT; ++crop_i) {
+                const uint flags_idx =
+                    OVERLAY_PARAM_CROP_EXTRA_BASE + crop_i * OVERLAY_PARAM_CROP_STRIDE;
+                float4 extra_flags = overlay_params[flags_idx];
+                if (!overlay_enabled(extra_flags.x))
+                    break;
+                apply_crop_box_filter(overlay_params, flags_idx, extra_flags,
+                                      node_data_enabled, node_idx, mean_ws,
+                                      active, overlay_flags);
+            }
+        }
     }
 
-    apply_ellipsoid_filter(overlay_params, OVERLAY_PARAM_ELLIPSOID_FLAGS,
-                           node_data_enabled, node_idx, mean_ws,
-                           active, overlay_flags);
-    for (uint ellipsoid_i = 0u; ellipsoid_i < OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT; ++ellipsoid_i) {
-        apply_ellipsoid_filter(overlay_params,
-                               OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + ellipsoid_i * OVERLAY_PARAM_ELLIPSOID_STRIDE,
-                               node_data_enabled, node_idx, mean_ws,
-                               active, overlay_flags);
+    {
+        float4 ellipsoid_flags = overlay_params[OVERLAY_PARAM_ELLIPSOID_FLAGS];
+        if (overlay_enabled(ellipsoid_flags.x)) {
+            apply_ellipsoid_filter(overlay_params, OVERLAY_PARAM_ELLIPSOID_FLAGS, ellipsoid_flags,
+                                   node_data_enabled, node_idx, mean_ws,
+                                   active, overlay_flags);
+            for (uint ellipsoid_i = 0u; ellipsoid_i < OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT; ++ellipsoid_i) {
+                const uint flags_idx =
+                    OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + ellipsoid_i * OVERLAY_PARAM_ELLIPSOID_STRIDE;
+                float4 extra_flags = overlay_params[flags_idx];
+                if (!overlay_enabled(extra_flags.x))
+                    break;
+                apply_ellipsoid_filter(overlay_params, flags_idx, extra_flags,
+                                       node_data_enabled, node_idx, mean_ws,
+                                       active, overlay_flags);
+            }
+        }
     }
 
     float4 view_flags = overlay_params[OVERLAY_PARAM_VIEW_FLAGS];

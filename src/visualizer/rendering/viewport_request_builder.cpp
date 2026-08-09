@@ -331,7 +331,9 @@ namespace lfs::vis {
                       .flash_intensity = selection_overlay_enabled ? ctx.selection_flash_intensity : 0.0f,
                       .focused_gaussian_id = (selection_overlay_enabled && ring_selection_mode && overlay_visible)
                                                  ? ctx.cursor_preview.focused_gaussian_id
-                                                 : -1}},
+                                                 : -1},
+                 // Same FrameContext snapshot as emphasis.mask — no cross-frame lag.
+                 .has_selection = selection_overlay_enabled && ctx.scene_state.has_selection},
             .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings),
             .depth_view = ctx.settings.depth_view,
             .depth_view_min = ctx.settings.depth_view_min,

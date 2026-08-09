@@ -1703,8 +1703,16 @@ namespace lfs::core {
         {
             std::unique_lock lock(selection_mutex_);
             selection_mask_ = std::move(normalized);
-            has_selection_ = selection_mask_ && selection_mask_->is_valid();
+            // Match setSelectionMask: empty index lists must clear selection so a
+            // size-matched all-zero mask cannot keep has_selection_ stuck true.
+            const bool valid =
+                selection_mask_ && selection_mask_->is_valid() && selection_mask_->numel() > 0;
+            has_selection_ = valid && selected_count > 0;
             has_selection = has_selection_;
+            if (!has_selection_) {
+                selection_mask_.reset();
+                selected_count = 0;
+            }
             selection_group_counts_dirty_ = true;
         }
         events::state::SelectionChanged{

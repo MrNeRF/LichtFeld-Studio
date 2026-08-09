@@ -3305,7 +3305,11 @@ namespace lfs::vis {
             state.selection_mask->numel() != render_splat_count) {
             state.selection_mask.reset();
         }
-        state.has_selection = state.selection_mask && state.selection_mask->is_valid();
+        // Authoritative non-empty selection (Scene::has_selection_ / hasSelection()).
+        // Mask pointer validity alone is not enough: a size-matched all-zero tensor
+        // must not report has_selection (see uploadOverlayBindings gate).
+        state.has_selection = scene_.hasSelection() && state.selection_mask &&
+                              state.selection_mask->is_valid();
 
         // Get cropboxes (before lock — no selection dependency)
         state.cropboxes = scene_.getRenderableCropBoxes();

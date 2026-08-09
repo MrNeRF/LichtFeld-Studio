@@ -786,6 +786,8 @@ namespace lfs::vis {
                 {"macro_raster", (root / "generated/macro_raster.spv").string()},
                 {"macro_raster_fp32", (root / "generated/macro_raster_fp32.spv").string()},
                 {"macro_raster_overlays", (root / "generated/macro_raster_overlays.spv").string()},
+                {"macro_raster_overlays_fp32",
+                 (root / "generated/macro_raster_overlays_fp32.spv").string()},
                 {"macro_compose", (root / "generated/macro_compose.spv").string()},
                 {"macro_compose_overlays", (root / "generated/macro_compose_overlays.spv").string()},
             };
@@ -4085,8 +4087,13 @@ namespace lfs::vis {
         // selection flicker seen with a detached upload stream.
         auto& slot = cuda_overlays_[ring_slot];
 
+        // Gate on both tensor presence and the host non-empty selection flag from
+        // the same request snapshot. A stale all-zero mask must not pin the slow
+        // overlay raster path; preview/cursor still engage via preview_enabled /
+        // cursor.enabled independently of has_selection.
         const bool selection_enabled =
             !request.overlay.cursor.saturation_preview &&
+            request.overlay.has_selection &&
             hasOverlayTensor(request.overlay.emphasis.mask, num_splats);
         const bool preview_enabled =
             !request.overlay.cursor.saturation_preview &&

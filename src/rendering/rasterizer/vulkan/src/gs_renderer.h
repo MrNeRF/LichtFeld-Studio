@@ -418,6 +418,7 @@ protected:
     _ComputePipelinePair pipeline_macro_raster = _ComputePipelinePair(8);
     _ComputePipelinePair pipeline_macro_raster_fp32 = _ComputePipelinePair(8);
     _ComputePipelinePair pipeline_macro_raster_overlays = _ComputePipelinePair(14);
+    _ComputePipelinePair pipeline_macro_raster_overlays_fp32 = _ComputePipelinePair(14);
     _ComputePipelinePair pipeline_macro_compose = _ComputePipelinePair(12);
     _ComputePipelinePair pipeline_macro_compose_overlays = _ComputePipelinePair(18);
     bool supports_float16_storage_ = false;

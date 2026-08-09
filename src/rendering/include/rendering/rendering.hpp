@@ -164,6 +164,10 @@ namespace lfs::rendering {
         GaussianMarkerOverlayState markers;
         GaussianCursorOverlayState cursor;
         GaussianEmphasisOverlayState emphasis;
+        // Host-side non-empty committed selection for this frame snapshot.
+        // Independent of emphasis.mask pointer validity so an empty/stale mask
+        // tensor cannot keep the slow overlay raster path pinned.
+        bool has_selection = false;
         std::array<glm::vec4, kSelectionColorTableCount> selection_colors = defaultSelectionColorTable();
     };
 
