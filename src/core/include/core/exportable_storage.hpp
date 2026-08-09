@@ -17,6 +17,15 @@ namespace lfs::core {
     using ExportNativeHandle = int;
 #endif
 
+    // Ownership contract (ISS-031): `native` is the CUDA-side OPAQUE_FD /
+    // WIN32 shareable handle for the *current* committed physical. Exactly one
+    // live export exists per block. growExportableDeviceBlock() closes the old
+    // fd (release_physical) and installs a fresh export into both OwnedAllocation
+    // and this handle atomically before returning. Vulkan import must:
+    //   1. destroy any prior VkDeviceMemory import first (MJ-12),
+    //   2. dup()+import the *current* handle.native (importer never owns/closes it),
+    //   3. re-import after every successful grow (handle.size changed).
+    // Closing handle.native is solely the exportable block's job on release/teardown.
     struct ExportHandle {
         ExportNativeHandle native = ExportNativeHandle{};
         std::size_t size = 0;
