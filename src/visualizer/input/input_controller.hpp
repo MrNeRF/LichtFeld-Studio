@@ -199,7 +199,7 @@ namespace lfs::vis {
         void applyCameraTrainingStateToSelection(const std::vector<std::string>& selected_names, bool enabled);
         bool snapViewportToNearestAxis(Viewport& target_viewport, SplitViewPanelId panel);
 
-        // Training pause/resume helpers
+        // Camera motion tracking (flag + idle timeout; does not pause training)
         void onCameraMovementStart();
         void onCameraMovementEnd();
         void checkCameraMovementTimeout();
@@ -302,9 +302,8 @@ namespace lfs::vis {
         std::chrono::steady_clock::time_point last_camera_publish_;
         static constexpr auto camera_publish_interval_ = std::chrono::milliseconds(100);
 
-        // Camera movement tracking for training pause/resume
+        // Camera movement tracking (motion flag + idle timeout; does not pause training)
         bool camera_is_moving_ = false;
-        bool training_was_paused_by_camera_ = false;
         std::chrono::steady_clock::time_point last_camera_movement_time_;
         static constexpr auto camera_movement_timeout_ = std::chrono::milliseconds(500);
 
