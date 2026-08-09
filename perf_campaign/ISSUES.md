@@ -425,3 +425,12 @@ misaligned interval 700 clean past 2 degree-ups; steps-scaler 0.1 run crossed st
 ms/iter, 307.4 B/splat, 0.1 allocs/iter. Quality note: pre-fix headless runs took garbage
 SH gradients on exactly the bump iterations — plausible contributor to bonsai PSNR
 "variance"; post-fix A/B pending at 5M acceptance.
+
+## ISS-030 — 5M GUI: silent ~1.06 GiB 1-second VRAM transients (follow-up, minor)
+5M acceptance (accept5m receipts): steady flat 3482 MiB, but ~9 one-second spikes to
+4366-4546 MiB across the 30k run (5% of seconds >4096). No logged event coincides
+(not densify barriers/grows). Cadence ≈ every ~3000 iters → suspect opacity-reset /
+reset_state_at_indices maintenance or an unlogged eval/decode burst. Impact: strict
+per-second peak breaches the ≤4096 MiB 5M bar by 450 MiB while steady passes with
+614 MiB headroom. Next: instrument arena/pool high-water around reset_every events,
+name the allocator, and cap or stream-chunk it.
