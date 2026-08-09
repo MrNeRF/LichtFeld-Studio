@@ -447,3 +447,14 @@ the dev box (validation layers off). Fix direction: on re-import after grow, sup
 size/memoryTypeIndex consistent with the exported payload (vkGetMemoryFdPropertiesKHR /
 track creation params per handle), or re-export a fresh handle per committed size.
 Receipts: ~/lfs-campaign-out/from-100/{error.log,lichtfeld.log}.
+
+### ISS-031 CLOSED (2026-08-09, f2b11f82) — H3: validation-layer fd-number aliasing, proven
+D1 fd-identity instrumentation (kcmp/fstat) proved the imported fd IS the fresh CUDA export;
+the flagged number was recycled from a closed pre-grow export while VVL kept a phantom
+"Vulkan-created, size 0" record keyed on the bare fd number. Driver import succeeds; app was
+correct. Containment: scope-guarded suppression of exactly VUID-01742 during CUDA-foreign
+imports (all other validation intact) + debug fd-identity self-check so a real H1/H2
+regression cannot hide + ExportHandle ownership contract documented. Gates: pre-fix repro ×2
+hits, post-fix 0 across grow to 872 MiB / 30k-iter hammer (1952 resizes) under validation,
+suite 3442 PASS (13 known env), bench 2.603 ms/iter. Upstream VVL issue text in
+~/lfs-campaign-out/iss031/REPORT.md for owner to file.
