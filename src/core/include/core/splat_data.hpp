@@ -396,7 +396,7 @@ namespace lfs::core {
         // Allocate a named param tensor via the active backing allocator when set
         // (exportable / Vulkan-external), otherwise zeros_direct. Used by SH q16
         // encode to keep codes+bounds inside the exportable block.
-        [[nodiscard]] LFS_CORE_API Tensor allocate_named_param(
+        [[nodiscard]] Tensor allocate_named_param(
             const TensorShape& shape,
             std::size_t capacity,
             DataType dtype,
