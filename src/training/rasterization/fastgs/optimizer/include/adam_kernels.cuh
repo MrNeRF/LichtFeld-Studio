@@ -664,11 +664,11 @@ namespace fast_lfs::optimizer::kernels::adam {
         float4* mm_ptr = reinterpret_cast<float4*>(bounds + 4 * bidx);
         const float4 old_mm = *mm_ptr;
         const float4 new_mm = joint_expand_bounds_include_zero(old_mm);
-        const uint slots = static_cast<uint>(slots_per_primitive);
-        constexpr uint R = 32u;
+        const uint32_t slots = static_cast<uint32_t>(slots_per_primitive);
+        constexpr uint32_t R = 32u;
 
-        auto sh_cell = [&](const uint p, const uint k, const int c) -> int64_t {
-            const uint slot = (p / R) * (slots * R) + k * R + (p % R);
+        auto sh_cell = [&](const uint32_t p, const uint32_t k, const int c) -> int64_t {
+            const uint32_t slot = (p / R) * (slots * R) + k * R + (p % R);
             return static_cast<int64_t>(slot) * 4 + c;
         };
 
@@ -677,9 +677,9 @@ namespace fast_lfs::optimizer::kernels::adam {
             const int block_end = (n_prims > 0) ? min(block_begin + 256, n_prims)
                                                 : (block_begin + 256);
             for (int p = block_begin; p < block_end; ++p) {
-                for (uint k = 0; k < slots; ++k) {
+                for (uint32_t k = 0; k < slots; ++k) {
                     for (int c = 0; c < 4; ++c) {
-                        const int64_t cell = sh_cell(static_cast<uint>(p), k, c);
+                        const int64_t cell = sh_cell(static_cast<uint32_t>(p), k, c);
                         const float2 us = C::decode_us(packed, cell, old_mm);
                         C::encode_us(packed, cell, us.x, us.y, new_mm);
                     }
@@ -687,9 +687,9 @@ namespace fast_lfs::optimizer::kernels::adam {
             }
             *mm_ptr = new_mm;
         }
-        for (uint k = 0; k < slots; ++k) {
+        for (uint32_t k = 0; k < slots; ++k) {
             for (int c = 0; c < 4; ++c) {
-                C::encode_us(packed, sh_cell(static_cast<uint>(prim), k, c),
+                C::encode_us(packed, sh_cell(static_cast<uint32_t>(prim), k, c),
                              0.0f, 0.0f, new_mm);
             }
         }
