@@ -4828,8 +4828,12 @@ namespace lfs::vis {
         // if a reader observes a non-external float shN tensor, fall through to
         // copy upload rather than binding a transient workspace. Static PLY models
         // legitimately keep float shN in Vulkan-external storage and can bind it.
+        // Models without the exportable allocator declare float shN as final and
+        // bind it externally.
         const bool shN_float_workspace =
+            splat_data.has_tensor_allocator() &&
             splat_data.shN_raw().is_valid() &&
+            splat_data.shN_raw().numel() > 0 &&
             splat_data.shN_raw().dtype() == lfs::core::DataType::Float32 &&
             !splat_data.shN_value_quantized() &&
             !shN_storage;
@@ -4924,6 +4928,11 @@ namespace lfs::vis {
         }
         if (shN_float_workspace) {
             input_copy_reasons.emplace_back("non_external_float_shN_workspace");
+        }
+        if (!upload_layout->omits_shN && shN_storage && upload_layout->shN_q16 &&
+            !(shN_bounds_storage && q16_pair_ok)) {
+            input_copy_reasons.emplace_back(
+                shN_bounds_storage ? "shN_q16_pair_unresolved" : "missing_shN_bounds");
         }
         std::string input_copy_reason = "unknown";
         if (!input_copy_reasons.empty()) {
