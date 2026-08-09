@@ -434,3 +434,16 @@ reset_state_at_indices maintenance or an unlogged eval/decode burst. Impact: str
 per-second peak breaches the ≤4096 MiB 5M bar by 450 MiB while steady passes with
 614 MiB headroom. Next: instrument arena/pool high-water around reset_every events,
 name the allocator, and cap or stream-chunk it.
+
+## ISS-031 — Vulkan validation: scratch-arena in-place grow re-import violates VUID-01742 (.100, follow-up)
+Owner's .100 session log (2026-08-09, fixed build 27edf94b, validation layers ON): every
+in-place grow of the VkSplat shared scratch arena re-imports the CUDA-exported block and
+vkAllocateMemory+VkImportMemoryFdInfoKHR is flagged: allocationSize (e.g. 249561088) and
+memoryTypeIndex (1) do not match the fd's recorded creation values (0/0) — 75 hits today,
+9 on 08-08 (VUID-VkMemoryAllocateInfo-allocationSize-01742). Import SUCCEEDS on this driver
+(RTX 4090, run continued past iter 11k, no crash) — benign here, but spec-violating and a
+real risk on stricter drivers/WDDM (Windows port is in the deferred backlog). Not visible on
+the dev box (validation layers off). Fix direction: on re-import after grow, supply
+size/memoryTypeIndex consistent with the exported payload (vkGetMemoryFdPropertiesKHR /
+track creation params per handle), or re-export a fresh handle per committed size.
+Receipts: ~/lfs-campaign-out/from-100/{error.log,lichtfeld.log}.
