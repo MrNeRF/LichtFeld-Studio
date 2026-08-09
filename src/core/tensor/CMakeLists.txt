@@ -63,11 +63,11 @@ if(LFS_TENSOR_CUDA_SOURCES)
         )
     endif()
 
-    # Windows NVCC 12.8 ICE workaround
+    # Windows nvcc 12.8 ICE workarounds: tensor_broadcast_ops.cu keeps the legacy
+    # -O0 pin; tensor_ops.cu ICEs at -O0 (aggregate codegen) and must build at -O3.
     if(WIN32)
         set_source_files_properties(
             tensor_broadcast_ops.cu
-            tensor_ops.cu
             PROPERTIES
             COMPILE_FLAGS "-O0"
         )
