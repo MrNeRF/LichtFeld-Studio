@@ -2136,3 +2136,39 @@ Float-densify window **not removed** (exit criterion requires C green).
 ### Status
 **PARTIAL / STOPPED on red gate 2.** Parts A+B landed and unit-tested for B. Part C
 mechanism refined by D3; full fix still open. Do not claim always-commit GUI clean.
+
+## WO-FIX-Q16-GUARD1 — COMPLETE (2026-08-09, grok worker + supervisor)
+
+- **Branch:** `lfs-elite`  **Commits:** `fc088459` (Part B bucket-127), `6b95b121` (Part A
+  LiveModelMutationGuard + one degree-bump site), `fcb44cf5` (viewer live-control sub-views,
+  degree in snapshot), `9806cd89` (**Part C root cause fix**), `556d7f33` (ISSUES).
+
+### ISS-029 mechanism (named per rock-solid bar)
+Backward preprocess decoded `sh_coefficients_rest` via `fused_adam.shN.sh_value_*`, which is
+**enablement-gated** (null through SH warmup ≤1000 / whenever ShN Adam disabled) while the
+buffer is already always-commit q16. First `ACTIVE_SH_BASES>1` backward = the degree-up
+iteration (default interval 1000 == warmup end) → u16 codes decoded as fp32 float4-swizzle →
+~3x overread past ShN/ShNBounds (last regions of the exportable block) → Warp MMU fault →
+sticky 700. Headless: overread stayed mapped → silent garbage SH gradients on bump steps
+(no crash). Fix: explicit model-truth decode binds through `backward_raw`, mirrored from the
+forward; fused copy remains update-path-only. Full localization chain + falsification ledger:
+ISSUES.md ISS-029 addendum; receipts `~/lfs-campaign-out/hunt/` (gdb1.log, repro6-12) and
+`~/lfs-campaign-out/q16m1/`.
+
+### Gate table
+| # | Gate | Result |
+|---|---|---|
+| 1 | Debug assert sweep | **DEFERRED** (no debug build tonight; guard asserts unexercised — release acquire path exercised everywhere) |
+| 2 | GUI densify+degree-up ×2 (default cadence, was 10/10 crash @1001) | **GREEN** ×2, trace to 1500 (repro12a/b) |
+| 3 | SH degrees 0-3 | **GREEN** 4/4 (deg0/repro11=deg1/deg2/repro12=deg3) |
+| 4 | Misaligned cadence interval=700 | **GREEN** past 2 degree-ups to 1600 |
+| 4b | steps-scaler 0.1 variant | **GREEN** (see 5) |
+| 5 | stop_refine crossing | **GREEN** — scaled stop_refine=2500 crossed, ran to 23855, 0 illegal (gate5-scaled.log; note: CLI -i is not steps-scaled) |
+| 6 | Crop-collision during training | **suite-covered** (forced-collision permanent tests green); live-GUI MCP variant deferred |
+| 7 | compute-sanitizer memcheck across bump | **GREEN** 0 errors, completed 1300 (gate7-san.log) |
+| 8 | Full suite (serial bundles) | **GREEN** — only known env reds (fast: 3270 OK/6 known; slow+nightly: known fixtures), python = no-pytest env |
+| 9 | Dual bench | **GREEN** bonsai 2.62 ms/iter ≤2.65, bicycle 1.73, 307.4 B/splat, 0.1 allocs/iter, peak 1650 MiB |
+| 10 | VRAM 5M acceptance | IN FLIGHT (bicycle images_4 GUI mrnf -i 30000, per-second ledger, target <4096 MiB) |
+
+Float-densify window: nothing left to remove — always-commit q16 is steady state; float
+workspace is barrier-transient inside guarded mutations only (training_setup.cpp:312-338).
