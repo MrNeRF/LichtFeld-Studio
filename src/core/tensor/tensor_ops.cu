@@ -1531,10 +1531,9 @@ namespace lfs::core::tensor_ops {
                     output_dtype, stream);
             } else {
                 LFS_ASSERT_MSG(false,
-                               std::format("reduction unsupported for input dtype {} "
-                                           "(supported: Float32, Float16 full-reduce, "
-                                           "Int32, Bool)",
-                                           dtype_name(input_dtype)));
+                               std::string("reduction unsupported for input dtype ") +
+                                   dtype_name(input_dtype) +
+                                   " (supported: Float32, Float16 full-reduce, Int32, Bool)");
             }
         });
     }
