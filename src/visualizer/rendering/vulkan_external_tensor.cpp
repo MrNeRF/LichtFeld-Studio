@@ -285,7 +285,10 @@ namespace lfs::vis {
         for (std::size_t i = 0; i < lfs::core::SplatExportableStorage::Count; ++i) {
             const std::size_t offset = storage.region_offsets[i];
             const std::size_t bytes = storage.region_bytes[i];
-            if (bytes == 0 || offset > storage.block->size || bytes > storage.block->size - offset) {
+            // Degree-0 layouts leave ShN/ShNBounds empty; nothing binds an empty region.
+            if (bytes == 0)
+                continue;
+            if (offset > storage.block->size || bytes > storage.block->size - offset) {
                 return std::unexpected(std::format(
                     "SplatExportableStorage region must fit inside the exported Vulkan/CUDA block (region={}, offset={}, bytes={}, block_bytes={})",
                     i,
