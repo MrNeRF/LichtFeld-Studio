@@ -1608,22 +1608,13 @@ namespace lfs::vis {
             update_cached_split_position(!only_split_position_pending)) {
             dirty_mask_.fetch_and(~DirtyFlag::SPLIT_POSITION, std::memory_order_relaxed);
             LOG_PERF("renderVulkanFrame: split-position early cache HIT (returning cached image)");
-            if (!resize_deferring) {
-                releaseResizeTrainingPause();
-            }
             return cached_frame_result();
         }
 
-        // Window resize/minimize must not alter the training schedule. While the
-        // viewport is deferring (interactive drag or settle), skip new model
-        // reads by returning cached output below — no pauseTrainingTemporary.
-        // (VkSplat output-ring recreate still uses a temporary pause until the
-        // Part 2 viewer-side quiesce lands.)
-        const auto release_resize_pause_if_idle = [this, resize_deferring]() {
-            if (!resize_deferring) {
-                releaseResizeTrainingPause();
-            }
-        };
+        // Window resize/minimize must never alter the training schedule. Viewer
+        // work quiesces itself (cached frames while deferring; output-ring
+        // recreate waits ring watermarks only). pauseTrainingTemporary is not
+        // used on this path — other interactive wait sites keep it.
 
         // Passive training preview: try the step-boundary render lock so densify
         // (exclusive) never stalls the UI frame. On contention, retain the last
@@ -1782,7 +1773,6 @@ namespace lfs::vis {
             }
             LOG_PERF("renderVulkanFrame: step-boundary lock contended (retaining cached splat)");
             render_lock.reset();
-            release_resize_pause_if_idle();
             return cached_frame_result();
         }
         if (render_lock_contended && !has_cached_viewport_output) {
@@ -1803,7 +1793,6 @@ namespace lfs::vis {
             viewport_artifact_service_.clearViewportOutput();
             clearVulkanMeshFrame();
             render_lock.reset();
-            release_resize_pause_if_idle();
             return {};
         }
         if (!has_render_content && has_cached_viewport_output) {
@@ -1811,7 +1800,6 @@ namespace lfs::vis {
                 dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
             }
             render_lock.reset();
-            release_resize_pause_if_idle();
             return cached_frame_result();
         }
 
@@ -1826,7 +1814,6 @@ namespace lfs::vis {
             LOG_PERF("renderVulkanFrame: split-position cache HIT (returning cached image, deferred_dirty=0x{:x})",
                      deferred_dirty);
             render_lock.reset();
-            release_resize_pause_if_idle();
             return cached_frame_result();
         }
 
@@ -1854,38 +1841,38 @@ namespace lfs::vis {
                 VksplatViewportRenderer::OutputSlot::Main) &&
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
         if (vksplat_viewport_resize) {
-            const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
-            if (!trainer || !trainer->is_paused()) {
-                requestResizeTrainingPause(trainer_manager);
-                dirty_mask_.fetch_or(vksplatOutputResizeRetryDirty(frame_dirty),
-                                     std::memory_order_relaxed);
-                render_lock.reset();
-                return cached_frame_result();
-            }
+            // Viewer-side quiesce (no trainer pause):
+            // 1) While size is still moving, return cached frames so this path
+            //    starts no model reads and publishes no new viewer borrows.
+            // 2) Once quiet, fall through: ensureOutputImages retires prior
+            //    rings via producer/consumer watermarks; the exportable model
+            //    block import is viewport-size-independent and is not rebuilt.
+            // 3) Handshake re-arms on the normal live-submit path below.
             if (has_cached_viewport_output &&
                 frame_lifecycle_service_.resizeRecentlyChanged(kTrainingOutputResizeStableDelay)) {
                 dirty_mask_.fetch_or(vksplatOutputResizeRetryDirty(frame_dirty),
                                      std::memory_order_relaxed);
+                if (vksplat_viewport_renderer_) {
+                    vksplat_viewport_renderer_->setLiveSubmitCallback({});
+                }
                 render_lock.reset();
                 return cached_frame_result();
             }
-            LOG_DEBUG("Training paused for VkSplat output resize to {}x{}", render_size.x, render_size.y);
-        }
-        const auto release_resize_pause_on_return = [this, resize_deferring]() {
-            if (!resize_deferring) {
-                releaseResizeTrainingPause();
-            }
-        };
-        struct ResizePauseReleaseOnReturn {
-            const decltype(release_resize_pause_on_return)& release;
-            bool active = false;
-            ~ResizePauseReleaseOnReturn() {
-                if (active) {
-                    release();
+            // Drain in-flight viewer CUDA work before output-ring recreate so
+            // the trainer's waitForModelReaders has at most one residual frame.
+            if (vksplat_viewport_renderer_ && vksplat_viewport_renderer_->renderStream()) {
+                const cudaError_t drain =
+                    cudaStreamSynchronize(vksplat_viewport_renderer_->renderStream());
+                if (drain != cudaSuccess) {
+                    LOG_WARN("Viewer resize quiesce: render-stream sync failed: {} ({})",
+                             cudaGetErrorName(drain),
+                             cudaGetErrorString(drain));
                 }
             }
-        } resize_pause_release_on_return{release_resize_pause_on_return,
-                                         resize_training_pause_active_ && !resize_deferring};
+            LOG_DEBUG("VkSplat output resize to {}x{} (viewer-side quiesce; training continues)",
+                      render_size.x,
+                      render_size.y);
+        }
 
         if (!vksplat_viewport_resize && frame_dirty == 0 && has_cached_viewport_output) {
             LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
@@ -1934,7 +1921,6 @@ namespace lfs::vis {
                     }
                     LOG_PERF("renderVulkanFrame: model-access lock contended (retaining cached splat)");
                     render_lock.reset();
-                    release_resize_pause_if_idle();
                     return cached_frame_result();
                 }
                 // No cache yet — block once for the first published frame.
