@@ -1,0 +1,113 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "rendering/temporal_frame_tracker.hpp"
+
+#include <cmath>
+
+namespace lfs::vis {
+    namespace {
+        constexpr float EPSILON = 1e-6f;
+
+        bool finite(const lfs::rendering::FrameView& view, const float scale) {
+            const auto finite_vec3 = [](const glm::vec3& value) {
+                return std::isfinite(value.x) && std::isfinite(value.y) &&
+                       std::isfinite(value.z);
+            };
+            bool valid = view.size.x > 0 && view.size.y > 0 && finite_vec3(view.translation) &&
+                         std::isfinite(view.focal_length_mm) && std::isfinite(view.near_plane) &&
+                         std::isfinite(view.far_plane) && std::isfinite(view.ortho_scale) &&
+                         std::isfinite(scale);
+            for (int column = 0; column < 3; ++column)
+                valid = valid && finite_vec3(view.rotation[column]);
+            return valid;
+        }
+
+        bool different(const float lhs, const float rhs) {
+            return std::abs(lhs - rhs) > EPSILON;
+        }
+
+        bool projectionChanged(const lfs::rendering::FrameView& lhs,
+                               const lfs::rendering::FrameView& rhs) {
+            if (lhs.orthographic != rhs.orthographic ||
+                different(lhs.focal_length_mm, rhs.focal_length_mm) ||
+                different(lhs.near_plane, rhs.near_plane) ||
+                different(lhs.far_plane, rhs.far_plane) ||
+                different(lhs.ortho_scale, rhs.ortho_scale) ||
+                lhs.intrinsics_override.has_value() != rhs.intrinsics_override.has_value())
+                return true;
+            if (!lhs.intrinsics_override)
+                return false;
+            const auto& a = *lhs.intrinsics_override;
+            const auto& b = *rhs.intrinsics_override;
+            return different(a.focal_x, b.focal_x) || different(a.focal_y, b.focal_y) ||
+                   different(a.center_x, b.center_x) || different(a.center_y, b.center_y);
+        }
+    } // namespace
+
+    std::size_t TemporalFrameTracker::index(const TemporalViewId id) {
+        return static_cast<std::size_t>(id);
+    }
+
+    TemporalFrameState TemporalFrameTracker::prepare(const TemporalViewId id,
+                                                     const TemporalFrameInput& input) const {
+        const auto& entry = entries_.at(index(id));
+        TemporalFrameState result{.current = input.view,
+                                  .previous = input.view,
+                                  .sequence = entry.sequence,
+                                  .reset_reasons = entry.pending_reset};
+        if (!finite(input.view, input.render_scale)) {
+            result.reset_reasons |= TemporalResetReason::InvalidInput;
+            return result;
+        }
+        if (!entry.committed) {
+            result.reset_reasons |= TemporalResetReason::FirstFrame;
+            return result;
+        }
+
+        const auto& previous = *entry.committed;
+        result.previous = previous.view;
+        if (input.camera_cut)
+            result.reset_reasons |= TemporalResetReason::CameraCut;
+        if (input.view.size != previous.view.size)
+            result.reset_reasons |= TemporalResetReason::RenderSize;
+        if (different(input.render_scale, previous.render_scale))
+            result.reset_reasons |= TemporalResetReason::RenderScale;
+        if (projectionChanged(input.view, previous.view))
+            result.reset_reasons |= TemporalResetReason::Projection;
+        if (input.scene_generation != previous.scene_generation)
+            result.reset_reasons |= TemporalResetReason::Scene;
+        if (input.backend_key != previous.backend_key)
+            result.reset_reasons |= TemporalResetReason::Backend;
+        result.history_valid = result.reset_reasons == TemporalResetReason::None;
+        if (!result.history_valid)
+            result.previous = input.view;
+        return result;
+    }
+
+    void TemporalFrameTracker::commit(const TemporalViewId id, const TemporalFrameInput& input) {
+        auto& entry = entries_.at(index(id));
+        if (!finite(input.view, input.render_scale)) {
+            entry.committed.reset();
+            entry.pending_reset = TemporalResetReason::InvalidInput;
+            return;
+        }
+        entry.committed = input;
+        ++entry.sequence;
+        entry.pending_reset = TemporalResetReason::None;
+    }
+
+    void TemporalFrameTracker::reset(const TemporalViewId id, const TemporalResetReason reason) {
+        auto& entry = entries_.at(index(id));
+        entry.committed.reset();
+        entry.pending_reset = reason;
+    }
+
+    void TemporalFrameTracker::resetAll(const TemporalResetReason reason) {
+        for (auto& entry : entries_) {
+            entry.committed.reset();
+            entry.pending_reset = reason;
+        }
+    }
+} // namespace lfs::vis
