@@ -388,3 +388,40 @@ any publish.
 - `fc088459` fix(core): bucket-127 bypass
 - `6b95b121` fix(q16): LiveModelMutationGuard + one degree bump
 - `fcb44cf5` fix(viewer): live-control sub-views + degree snapshot (C infra only)
+
+### ISS-029 ROOT CAUSE FOUND + FIXED (2026-08-09 ~01:20, supervisor session)
+**Mechanism (named, receipts in ~/lfs-campaign-out/hunt/):** the backward preprocess kernel
+decoded `sh_coefficients_rest` using `fused_adam.shN.sh_value_{bounds,n_cells,bits}` — which
+are **enablement-gated**: null/0 through SH warmup (`iteration <= SH_WARMUP_ITERATIONS
+= 1000`, compile constant) and whenever ShN Adam is disabled. The first `ACTIVE_SH_BASES>1`
+backward runs on the degree-up iteration; at default cadence sh_degree_interval (1000) ==
+warmup end, so the always-commit q16 u16 codes were decoded as **fp32 float4-swizzle** — a
+~3x overread past the ShN region. ShN/ShNBounds are the last regions of the GUI exportable
+VMM block → overread crosses the committed-page edge → **Warp MMU fault** → sticky CUDA 700
+in arbitrary victims. Headless: overread stays inside mapped arena → **silent garbage SH
+color-chain gradients on the bump step** (no crash — why headless "was clean").
+
+Localization chain: cuda-gdb api_failures stop + CUDA_LAUNCH_BLOCKING pinned
+`preprocess_backward_cu<false,4>` Warp MMU fault (gdb1.log); kernel dmesg Xid 31 fault
+@0x0_00000000 window; E4 (viewer snapshot degree freeze → no rebind) still crashed,
+exonerating all viewer machinery; decode-args audit found the enablement-gated source.
+
+Why every prior mechanism died: not a race (locks irrelevant), not viewer (D3/E4), not
+sizing (binds correct), not the encode stores (repro5: reads faulted, not writes), not
+headless-reachable as a *fault* (mapped-arena masking). Fault followed the degree-up cadence
+because that is when bases>1 first runs; ≤ warmup ⇒ misread.
+
+**Fix `9806cd89`:** `backward_raw` takes explicit shN value decode binds
+(bounds/n_cells/bits), resolved generation-checked exactly like the forward; kernel decode
+uses only those. `fused_adam.shN.sh_value_*` remains the update/re-encode path (its
+block-bounds WRITE must stay enablement-gated — a blind override would zero live bounds
+during warmup; caught in review before build).
+
+**Gates (receipts ~/lfs-campaign-out/q16m1/):** interval-600 repro (was 10/10 crash @601):
+clean to 1200; default cadence ×2 (was @1001): clean to 1500; SH degrees 0-3 clean;
+misaligned interval 700 clean past 2 degree-ups; steps-scaler 0.1 run crossed stop_refine
+2500 and ran to 23855 with 0 illegal; compute-sanitizer headless memcheck across the bump:
+0 errors, completed 1300; suite serial: only known env reds (no new); bench bonsai 2.62
+ms/iter, 307.4 B/splat, 0.1 allocs/iter. Quality note: pre-fix headless runs took garbage
+SH gradients on exactly the bump iterations — plausible contributor to bonsai PSNR
+"variance"; post-fix A/B pending at 5M acceptance.
