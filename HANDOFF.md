@@ -86,3 +86,18 @@ incl. stop_refine-crossing run + sanitizer reaching iter 1001+ + SH degrees 0-3.
    experiments; every "obvious" fix would have shipped still-broken.
 9. When two independent analyses converge (static + dynamic), act; when they diverge, the
    experiment is under-specified.
+
+## 6. 2026-08-09 ~02:20 — ISS-029 CLOSED; branch published
+The §2 critical path is DONE. Root cause was none of the §2 corridors: the backward kernel
+decoded shN-rest with fused-Adam's enablement-gated sh_value_* (null through SH warmup 1000 ==
+default degree interval) → q16 u16 codes read as fp32 float4-swizzle → ~3x overread off the
+exportable block's committed pages → Warp MMU fault (GUI) / silent bad SH gradients (headless,
+mapped arena). Fix 9806cd89 (explicit model-truth decode binds through backward_raw, mirroring
+forward). Plus grok's WO-FIX-Q16-GUARD1 Parts A (LiveModelMutationGuard 6b95b121) and B
+(bucket-127 fc088459). Full mechanism + falsification history: ISSUES.md ISS-029 addendum;
+gate table: PROGRESS.md (deferred: debug-assert sweep, live-GUI crop MCP variant).
+5M acceptance: 30k iters / 5.0M gaussians / 615.7s GUI mrnf images_4, zero errors; VRAM steady
+3482 MiB flat (<4096 ✓), nine 1-second silent ~1.06 GiB transients peak 4546 (ISS-030 minor
+follow-up). Published 9f84a117 -> origin/lfs-elite (remote had been deleted again — re-pushed
+per runbook). .100 verification staged: ~/lfs-campaign-out/q16m1/verify-100.sh (supervisor
+session lacks ssh permission; owner runs it or grants Bash(ssh:*)).
