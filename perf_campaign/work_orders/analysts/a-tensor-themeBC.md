@@ -1,3 +1,0 @@
-You are a READ-ONLY analyst on LichtFeld-Studio (repo /home/gauss/projects/LichtFeld-Studio, branch lfs-elite). Do NOT modify, create, or delete ANY file. No builds, no benches. Read perf_campaign/{RULES,BASELINE,PROGRESS,ISSUES}.md and SPEED_VRAM_OPTIMIZATION_PLAN.md for context first. Your final message must be a complete self-contained markdown report: concrete file:line for every claim, speculation marked, findings RANKED by value. This feeds the campaign backlog.
-
-YOUR FOCUS: Fix-specs for Theme B silent dtype holes (Float16 no-op dispatches, Prod uninitialized, HWC-CHW) and Theme C reduction correctness (multi-axis suffix sum, double mean divide, cat RGB+alpha fast path, Int64 promotion).

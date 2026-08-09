@@ -1,66 +1,0 @@
-Crash diagnostics: /tmp/lichtfeld-studio-crash-337672.log
-[00:53:06.578] [32m[info][0m main.cpp:224  LichtFeld Studio
-[00:53:06.578] [32m[info][0m main.cpp:225  version v0.5.3-270-g4ae56159-dirty | tag 4ae56159
-[00:53:06.670] [32m[info][0m application.cpp:549  CUDA driver version: 13.2
-[00:53:06.670] [32m[info][0m application.cpp:572  GPU: NVIDIA GeForce RTX 4080 (SM 8.9, 15943 MB)
-[00:53:06.817] [32m[info][0m application.cpp:321  Starting headless training...
-[00:53:06.817] [32m[info][0m training_setup.cpp:410  Loading dataset from: /home/gauss/data/360_v2/bicycle
-[00:53:06.817] [32m[info][0m loader_service.cpp:182  Using COLMAP loader for: /home/gauss/data/360_v2/bicycle
-[00:53:06.817] [32m[info][0m colmap_loader.cpp:82  [COLMAP_LOAD] discovery path='/home/gauss/data/360_v2/bicycle' cameras_bin=true images_bin=true points_bin=true cameras_txt=false images_txt=false points_txt=false points_ply=false
-[00:53:06.817] [32m[info][0m colmap_loader.cpp:98  Loading COLMAP in binary format
-[00:53:06.940] [32m[info][0m colmap.cpp:3656  Read 1 cameras and 194 images from COLMAP
-[00:53:06.940] [32m[info][0m colmap.cpp:880  [COLMAP_LOAD] validate_layout images=194 images_path='/home/gauss/data/360_v2/bicycle/images_4'
-[00:53:06.971] [32m[info][0m colmap.cpp:2545  Training with 194 images
-[00:53:06.994] [32m[info][0m colmap_loader.cpp:321  Loaded 54275 points from COLMAP
-[00:53:06.994] [32m[info][0m colmap_loader.cpp:390  COLMAP dataset loaded successfully in 177ms
-[00:53:06.994] [32m[info][0m colmap_loader.cpp:391    - 194 cameras
-[00:53:06.994] [32m[info][0m training_setup.cpp:416  Dataset loaded successfully using COLMAP loader
-[00:53:06.995] [32m[info][0m training_setup.cpp:494  Adding 54275 points to scene
-[00:53:06.995] [32m[info][0m training_setup.cpp:550  Loaded dataset 'bicycle' into scene: 194 train cameras
-[00:53:07.251] [32m[info][0m splat_data.cpp:1685  Scene scale: 5.6350017
-[00:53:07.252] [32m[info][0m splat_data.cpp:1686  Initialized SplatData: 54275 points, max SH degree: 3, SH coefficients: 16, sh0 shape: [54275, 1, 3], shN shape: [2606592]
-[00:53:07.255] [32m[info][0m training_setup.cpp:102  Training SH schedule active degree: 3 -> 0 (max 3)
-[00:53:07.255] [32m[info][0m training_setup.cpp:756  Created training model with 54275 gaussians
-[00:53:07.255] [32m[info][0m trainer.cpp:2734  Initializing trainer with 1720 iterations
-[00:53:07.257] [32m[info][0m dataset.hpp:241  Dataset created with 194 images (split: 2)
-[00:53:07.257] [32m[info][0m trainer.cpp:2823  Using all 194 images for training (no evaluation)
-[00:53:07.257] [32m[info][0m mrnf.cpp:430  MRNF: pre-allocating capacity for 500000 Gaussians (current: 54275, utilization: 10.9%)
-[00:53:07.257] [32m[info][0m strategy_utils.cpp:115  AdamOptimizer: pre-allocating capacity for 500000 Gaussians (optimizer states)
-[00:53:07.261] [32m[info][0m mrnf.cpp:505  MRNF strategy initialized with 54275 Gaussians
-[00:53:07.263] [32m[info][0m trainer.cpp:2941  Background color set to RGB(0.00, 0.00, 0.00)
-[00:53:07.263] [32m[info][0m trainer.cpp:3035  Visualization: disabled
-[00:53:07.263] [32m[info][0m trainer.cpp:3036  Strategy: mrnf
-[00:53:07.263] [32m[info][0m trainer.cpp:3070  Trainer initialization complete
-[00:53:07.276] [32m[info][0m trainer.cpp:5794  Starting training loop
-[00:53:07.276] [32m[info][0m trainer.cpp:1111  Reducing JPEG image ready queue 4 -> 2 (hot path keeps compressed prefetch)
-[00:53:07.276] [32m[info][0m trainer.cpp:1118  Reducing nvImageCodec decoder pool 8 -> 2 for JPEG hot path
-[00:53:07.276] [32m[info][0m pipelined_image_loader.cpp:305  [PipelinedImageLoader] batch_size=8, prefetch=8, output_queue=2, io_threads=2, cold_threads=2, 16bit_color=false
-[00:53:07.294] [32m[info][0m pipelined_image_loader.cpp:315  [PipelinedImageLoader] compressed cache budget: 8.0 GiB shared by RGB, masks, and J2K sidecars
-[00:53:07.298] [32m[info][0m pipelined_image_loader.cpp:328  [PipelinedImageLoader] filesystem cache: /tmp/LichtFeld/pipeline_cache/ppl_j2k_unified_v1
-[00:53:07.299] [32m[info][0m pipelined_image_loader.cpp:364  [PipelinedImageLoader] Started 2 I/O, 1 GPU, 2 cold threads
-[00:53:07.346] [32m[info][0m nvcodec_image_loader.cpp:737  [NvCodecImageLoader] Initializing: device=0, pool=2, fallback=true
-[00:53:07.371] [32m[info][0m nvcodec_image_loader.cpp:785  [NvCodecImageLoader] 2 decoders ready
-[00:53:07.373] [32m[info][0m nvcodec_image_loader.cpp:799  [NvCodecImageLoader] Accounted nvImageCodec init VRAM: 12.0 MiB
-[00:53:07.415] [32m[info][0m memory_arena.cu:1010  VMM initialized: device=0, virtual=32 GB
-Training [██▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 5% [00m:00s<00m:00s] Initializing...Training [████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 11% [00m:00s<00m:05s] 100/1720 | Loss: 0.2636 | Splats: 54275 Training [██████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 17% [00m:01s<00m:05s] 200/1720 | Loss: 0.1885 | Splats: 58074 (+)[00:53:09.788] [32m[info][0m trainer.cpp:6119  [PipelinedImageLoader] after epoch 2: 194 compressed entries, 107.4 MiB RAM, 395 hits, 0 misses
-Training [█████████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 23% [00m:01s<00m:05s] 300/1720 | Loss: 0.1911 | Splats: 58074 Training [███████████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 29% [00m:02s<00m:05s] 400/1720 | Loss: 0.2136 | Splats: 62139 (+)Training [█████████████▌░░░░░░░░░░░░░░░░░░░░░░░░░░] 34% [00m:02s<00m:05s] 500/1720 | Loss: 0.1328 | Splats: 62139 Training [████████████████▌░░░░░░░░░░░░░░░░░░░░░░░] 40% [00m:03s<00m:05s] 600/1720 | Loss: 0.1409 | Splats: 66489 (+)Training [██████████████████▌░░░░░░░░░░░░░░░░░░░░░] 46% [00m:04s<00m:04s] 700/1720 | Loss: 0.1542 | Splats: 66489 Training [████████████████████▌░░░░░░░░░░░░░░░░░░░] 52% [00m:04s<00m:04s] 800/1720 | Loss: 0.1488 | Splats: 71143 (+)Training [███████████████████████▌░░░░░░░░░░░░░░░░] 58% [00m:05s<00m:03s] 900/1720 | Loss: 0.1593 | Splats: 71143 Training [█████████████████████████▌░░░░░░░░░░░░░░] 63% [00m:05s<00m:03s] 1000/1720 | Loss: 0.1886 | Splats: 76105 (+)Training [███████████████████████████▌░░░░░░░░░░░░] 69% [00m:06s<00m:02s] 1100/1720 | Loss: 0.1929 | Splats: 76105 Training [██████████████████████████████▌░░░░░░░░░] 75% [00m:06s<00m:02s] 1200/1720 | Loss: 0.1470 | Splats: 81408 (+)Training [████████████████████████████████▌░░░░░░░] 81% [00m:07s<00m:01s] 1300/1720 | Loss: 0.1379 | Splats: 81408 Training [██████████████████████████████████▌░░░░░] 87% [00m:07s<00m:01s] 1400/1720 | Loss: 0.1864 | Splats: 87054 (+)Training [█████████████████████████████████████▌░░] 93% [00m:08s<00m:00s] 1500/1720 | Loss: 0.1512 | Splats: 87054 [BWD-A T_eff hist] tiles=4056  mean_tile_n=75.0  mean_T_eff=75.0  mean_waste_frac=0.001  (skipped_tail = tile_n - T_eff)
-[BWD-A T_eff hist] tile_n bins: <=16=2 <=32=168 <=64=2511 <=128=878 <=256=373 <=512=124 <=1024=0 >1024=0
-[BWD-A T_eff hist] T_eff  bins: <=16=2 <=32=169 <=64=2510 <=128=878 <=256=373 <=512=124 <=1024=0 >1024=0
-[BWD-A T_eff hist] waste_pct bins (0=0-10% .. 10=100%): 0=4054 10=2 20=0 30=0 40=0 50=0 60=0 70=0 80=0 90=0 100=0
-Training [███████████████████████████████████████▌] 98% [00m:09s<00m:00s] 1600/1720 | Loss: 0.1512 | Splats: 93116 (+)[00:53:17.352] [32m[info][0m pipelined_image_loader.cpp:376  [PipelinedImageLoader] Shutting down...
-[00:53:17.381] [32m[info][0m pipelined_image_loader.cpp:1483  [PipelinedImageLoader] shutdown reconciliation: accepted=1727 succeeded=1726 failed=0 cancelled=1 mask=0/0/0 depth=0/0/0 normal=0/0/0
-[00:53:17.385] [32m[info][0m pipelined_image_loader.cpp:416  [PipelinedImageLoader] Done: 1726 loaded, 1727 hits, 0 misses
-[00:53:17.385] [32m[info][0m pipelined_image_loader.cpp:420  [PipelinedImageLoader] compressed cache retained: 194 entries, 107.4 MiB RAM, fs=/tmp/LichtFeld/pipeline_cache/ppl_j2k_unified_v1
-[00:53:17.390] [32m[info][0m trainer.cpp:6215  Saving final model at iteration 1720...
-[00:53:17.846] [32m[info][0m checkpoint.cpp:240  Checkpoint saved: /home/gauss/lfs-campaign-out/bwd-a/hist1700_bicycle/checkpoints/checkpoint.resume (93116 Gaussians, iter 1720)
-Training [████████████████████████████████████████] 100% [00m:09s<00m:00s] 1700/1720 | Loss: 0.1250 | Splats: 93116 
-Training [████████████████████████████████████████] 100% [00m:09s<00m:00s] 1700/1720 | Loss: 0.1250 | Splats: 93116 
-
-
-✓ Training completed in 10.583s (avg 162.5 iter/s)
-✓ Final splats: 93116
-[00:53:17.846] [32m[info][0m trainer.cpp:6311  Training completed successfully
-[00:53:17.849] [32m[info][0m application.cpp:365  Headless training completed
-[00:53:17.849] [32m[info][0m memory_arena.cu:1728  Arena stats: committed=128 MB, peak=17 MB (13.7%), frames=1860, reallocs=1, runtime=10s
-[00:53:17.850] [32m[info][0m memory_pool.hpp:78  Shutting down CudaMemoryPool...
-[00:53:17.854] [32m[info][0m pinned_memory_allocator.cpp:140  Pinned memory stats at shutdown: active=0.01 MiB, cached=118.89 MiB, peak=118.90 MiB, cuda_host=858/24, fallback=0/0, evicted=0.00 MiB/0 blocks

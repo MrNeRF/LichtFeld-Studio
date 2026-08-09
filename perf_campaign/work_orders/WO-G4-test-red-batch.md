@@ -1,6 +1,0 @@
-Implementation engineer, LichtFeld-Studio. Dir: /home/gauss/projects/LichtFeld-Studio, branch lfs-elite (verify; NEVER checkout). Session under flock /home/gauss/lfs-campaign-out/main-checkout.lock. Reads: RULES.md, ISSUES.md (ISS-013/ISS-014 — repros + backtrace there).
-TASK — fix the red test batch, TDD (these tests ARE the failing tests; make them pass):
-1. ISS-014 (priority): checkpoint-load segfault in AdamOptimizer::set_frozen_lr_scale. gdb the repro; suspicion: load path touches the optimizer before construction/joint-state init (joint codec changed init ordering), or stale frozen-mask tensor use. Fix resume properly for BOTH codec modes; add a resume round-trip test incl. joint state + q16 shN.
-2. SogFormatTest 6+ failures: shN export path with the new storage (likely reading swizzled/q16 as fp32). Fix export to dequantize/reformat correctly; roundtrip test.
-3. ISS-013: DeviceFaultTest.GraphCaptureYieldsUnsupported SIGSEGV — fix the fault-check-during-capture path (or the test's capture teardown); must pass in-suite.
-GATE: full lichtfeld_tests green WITHOUT any exclusions (the current excluded set becomes empty); tensor_hardening green; dual-workload bench unchanged. Commit per fix with fail->pass evidence.

@@ -1,6 +1,0 @@
-Implementation engineer, LichtFeld-Studio. Dir: /home/gauss/projects/LichtFeld-Studio, branch lfs-elite (verify; NEVER checkout). Session under flock /home/gauss/lfs-campaign-out/main-checkout.lock. Reads: RULES.md (incl. full-suite gate), ISSUES.md ISS-2.1 (G3's densify re-encode analysis), PROGRESS.md G3 section, WO-G3 gates.
-PRECONDITION: run only after WO-G5 (gradient bisect) completed — gradients must be trusted before quantization A/Bs mean anything. Check /home/gauss/lfs-campaign-out/workerG5.done exists; poll-sleep otherwise.
-TASK — finish the −102 B/splat prize (ISS-2.1):
-1. Fix the post-densify re-encode under quant ON: bounds table + packed storage must grow with capacity (not exact-N), Adam moment sizing must match the quantized layout after grow/relocate/compact; heal-vs-rebuild decision documented. TDD: the crash repro from G3 becomes the failing test first.
-2. Then run G3's FULL gate list: bicycle 7k A/B loss curves (flag on/off overlap), bonsai late-window steady_ms parity (LFS_PROF_START=1600 protocol), B/splat <= 307 (ledger + bench), full lichtfeld_tests delta, tensor_hardening green.
-3. Flip default ON only if ALL pass; else leave OFF and document precisely what failed with numbers.

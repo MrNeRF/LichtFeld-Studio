@@ -70,5 +70,3 @@ plugInfo.json
 src/rendering/rasterizer/vulkan/shader/generated/*.spv
 src/rendering/rasterizer/vulkan/shader/radix_sort/*.spv
 
-# Phase 0 bench outputs (checkpoints + logs; BASELINE.md is committed)
-perf_campaign/runs/

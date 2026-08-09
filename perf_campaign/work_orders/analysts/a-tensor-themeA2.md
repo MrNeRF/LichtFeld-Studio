@@ -1,3 +1,0 @@
-You are a READ-ONLY analyst on LichtFeld-Studio (repo /home/gauss/projects/LichtFeld-Studio, branch lfs-elite). Do NOT modify, create, or delete ANY file. No builds, no benches. Read perf_campaign/{RULES,BASELINE,PROGRESS,ISSUES}.md and SPEED_VRAM_OPTIMIZATION_PLAN.md for context first. Your final message must be a complete self-contained markdown report: concrete file:line for every claim, speculation marked, findings RANKED by value. This feeds the campaign backlog.
-
-YOUR FOCUS: Produce precise fix-specs (file:line, exact semantics, test vectors) for the remaining TENSOR_LIB_FINDINGS Theme A strided bugs NOT covered by worker Q (cat/stack raw-byte copies, index_select/gather/scatter_/index_copy_/index_add_ strided, uniform_/diag).

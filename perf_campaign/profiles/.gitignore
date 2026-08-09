@@ -1,9 +1,0 @@
-# Raw profiler artifacts stay on disk, never in git.
-*.nsys-rep
-*.sqlite
-*.ncu-rep
-*.qdstrm
-stats_cuda_gpu_trace.csv
-train.log
-nsys_stats.log
-train_out/
