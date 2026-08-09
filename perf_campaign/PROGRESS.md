@@ -2180,3 +2180,15 @@ stop_refine 25000, 238 densify events, 11 block generations. VRAM (per-second nv
 process ledger, accept5m/vram.csv): **steady 3482 MiB flat** (≤4096 ✓, 614 MiB headroom);
 raw peak 4546 MiB from nine 1-second silent transients (ISS-030 follow-up). Former crash
 build: this exact config faulted at iter ~1001, 10/10.
+
+## WO-NAV-NOPAUSE + WO-RESIZE-NOPAUSE (#1403) — DONE (2026-08-09 morning, grok + supervisor review)
+- `1d46dbfc` camera navigation no longer pauses training (schedule-invariant; +5-6.5% wall
+  during scripted motion; receipts ~/lfs-campaign-out/nav1/).
+- `69e1a022` minimize keeps training (viewer publishes no borrows while minimized).
+- `eca72e5e` live resize keeps training (viewer-only quiesce: cached frames while size moves,
+  render-stream drain, output-ring-only recreate; model-block import untouched;
+  requestResizeTrainingPause now has zero callers).
+- Supervisor extended hammer (grok's 2s windows were too thin): 30k-iter images_4 run,
+  **881 WM resizes + 29 minimize/restore cycles over 3 min**, past iter 7000 / 505k
+  gaussians / 83 densify barriers / 3 degree-ups — 0 errors, 0 Xid, clean shutdown
+  (resize1/supervisor-hammer2/). Owner mouse feel-test pending.
