@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Persistent high-water sort buffers in FastGS forward.
+ * Persistent retained sort buffers in FastGS forward.
  * Remove n_instances hard sync (async + capacity path).
  */
 
@@ -109,7 +109,7 @@ TEST_F(FastGSSortBufferTest, SteadyStateSecondForwardHasZeroSortAllocs) {
         << "the retained consolidated sort block must be byte-exact";
 
     // First measured forward at steady size — may still grow if warm n_instances
-    // differed; with fixed scene it should already be at high-water after warm.
+    // differed; with fixed scene it should already be at retained capacity.
     {
         const auto snap = alloc_counter::snapshot();
         auto r1 = fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false);
@@ -189,7 +189,7 @@ TEST_F(FastGSSortBufferTest, AsyncPathMatchesSyncPathPixels) {
     }
 }
 
-// Resetting the high-water mark must exercise the capacity-growth fallback.
+// Resetting retained capacity must exercise the capacity-growth fallback.
 TEST_F(FastGSSortBufferTest, CapacityGrowthTakesFallbackSync) {
     using fast_lfs::rasterization::n_instances_fallback_sync_count;
     using fast_lfs::rasterization::reset_n_instances_fallback_sync_count;
@@ -263,7 +263,7 @@ TEST_F(FastGSSortBufferTest, ReleasePreflightPointerAttrsAreSkipped) {
 // ---------------------------------------------------------------------------
 // VRAM audit — thread-local sort + raster output buffers release on join.
 // Spawn N worker threads that each run a few FastGS forwards (building
-// high-water sort + image TLS caches), explicitly release, then join.
+// retained sort + image TLS caches), explicitly release, then join.
 // cudaMemGetInfo free must return near the pre-spawn baseline.
 // ---------------------------------------------------------------------------
 TEST(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {

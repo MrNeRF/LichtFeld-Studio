@@ -4,6 +4,7 @@
 
 #include "buffer_utils.h"
 #include "core/crash_handler.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "forward.h"
 #include "helper_math.h"
@@ -25,6 +26,17 @@ namespace {
     namespace raster = fast_lfs::rasterization;
     static_assert(sizeof(raster::InstanceKey) == sizeof(uint));
     static_assert(sizeof(raster::InstanceKey) == 4);
+
+    constexpr size_t kCubWorkspaceAlignment = 256;
+    static_assert((kCubWorkspaceAlignment & (kCubWorkspaceAlignment - 1)) == 0);
+
+    [[nodiscard]] size_t aligned_cub_workspace_offset(const size_t data_bytes) {
+        constexpr size_t padding = kCubWorkspaceAlignment - 1;
+        if (data_bytes > std::numeric_limits<size_t>::max() - padding) {
+            throw std::overflow_error("FastGS CUB workspace alignment overflow");
+        }
+        return (data_bytes + padding) & ~padding;
+    }
 
     class ExactAsyncDeviceBuffer {
     public:
@@ -100,6 +112,7 @@ namespace {
         ExactAsyncDeviceBuffer workspace{"rasterizer.fastgs.sort_workspace"};
         size_t required_bytes = 0;
         size_t cub_workspace_bytes = 0;
+        size_t cub_workspace_offset_bytes = 0;
         int capacity_n_instances = 0;
         std::uint64_t* h_n_instances_pinned = nullptr;
         bool h_n_instances_is_pinned = false;
@@ -181,7 +194,7 @@ namespace {
 
         [[nodiscard]] void* cub_workspace() const noexcept {
             auto* const base = static_cast<char*>(workspace.raw());
-            return base + 4 * per_buffer_bytes();
+            return base ? base + cub_workspace_offset_bytes : nullptr;
         }
 
         bool owns_sorted_indices(const void* ptr) const noexcept {
@@ -190,27 +203,83 @@ namespace {
                     ptr == primitive_indices_alternate());
         }
 
-        void replace_workspace(int n_instances, size_t cub_bytes, size_t total_bytes) {
+        void bind_layout(int n_instances,
+                         size_t cub_bytes,
+                         size_t cub_offset_bytes,
+                         size_t total_bytes) {
+            LFS_ASSERT_MSG(workspace.size() == total_bytes,
+                           "FastGS sort layout must cover the exact allocation");
+            capacity_n_instances = n_instances;
+            cub_workspace_bytes = cub_bytes;
+            cub_workspace_offset_bytes = cub_offset_bytes;
+            required_bytes = total_bytes;
+            LFS_ASSERT_MSG(
+                cub_workspace_offset_bytes % kCubWorkspaceAlignment == 0,
+                "FastGS CUB workspace offset must be 256-byte aligned");
+            LFS_ASSERT_MSG(
+                reinterpret_cast<std::uintptr_t>(cub_workspace()) %
+                        kCubWorkspaceAlignment ==
+                    0,
+                "FastGS CUB workspace address must be 256-byte aligned");
+        }
+
+        void replace_workspace(int n_instances,
+                               size_t cub_bytes,
+                               size_t cub_offset_bytes,
+                               size_t total_bytes) {
             workspace.reset();
             required_bytes = 0;
             cub_workspace_bytes = 0;
+            cub_workspace_offset_bytes = 0;
             capacity_n_instances = 0;
             workspace.allocate_exact(total_bytes);
-            capacity_n_instances = n_instances;
-            cub_workspace_bytes = cub_bytes;
-            required_bytes = total_bytes;
+            bind_layout(n_instances, cub_bytes, cub_offset_bytes, total_bytes);
         }
 
         void release_workspace() noexcept {
             workspace.reset();
             required_bytes = 0;
             cub_workspace_bytes = 0;
+            cub_workspace_offset_bytes = 0;
             capacity_n_instances = 0;
         }
     };
 
+    thread_local FastGSSortBufferCache* g_current_sort_buffer_cache = nullptr;
+
+    void register_sort_workspace_pressure_client_once() {
+        // The sort block is TLS-owned. Immediate pressure runs on the allocating
+        // thread, so this client can reclaim only that thread's existing block
+        // without constructing caches on unrelated threads. Run before the
+        // tensor-pool trim so cudaFreeAsync is followed by a pool trim in the
+        // same pressure episode.
+        static const bool registered = [] {
+            lfs::core::MemoryPressureCoordinator::instance().register_client(
+                lfs::core::PressureClient{
+                    .name = "fastgs-sort-workspace",
+                    .priority = 5,
+                    .domain = lfs::core::MemoryDomain::CudaDevice,
+                    .affinity = lfs::core::PressureAffinity::ImmediateThreadSafe,
+                    .estimate = [](const lfs::core::PressureRequest&) -> size_t {
+                        return fast_lfs::rasterization::sort_workspace_allocated_bytes();
+                    },
+                    .shrink = [](const lfs::core::PressureRequest&) {
+                        const size_t before =
+                            fast_lfs::rasterization::sort_workspace_allocated_bytes();
+                        fast_lfs::rasterization::release_sort_workspace_buffers();
+                        return lfs::core::ReclaimResult{
+                            .logical_bytes_released = before,
+                        }; },
+                });
+            return true;
+        }();
+        (void)registered;
+    }
+
     FastGSSortBufferCache& sort_buffer_cache() {
+        register_sort_workspace_pressure_client_once();
         thread_local FastGSSortBufferCache cache;
+        g_current_sort_buffer_cache = &cache;
         return cache;
     }
 
@@ -234,12 +303,14 @@ void fast_lfs::rasterization::release_sorted_primitive_indices(
 }
 
 void fast_lfs::rasterization::release_sort_workspace_buffers() noexcept {
-    auto& cache = sort_buffer_cache();
-    // Device high-water only. Host pinned slot + n_instances event stay alive
+    auto* const cache = g_current_sort_buffer_cache;
+    // Device workspace only. Host pinned slot + n_instances event stay alive
     // for the TLS object's lifetime so mid-process release (training-thread
     // shutdown, VRAM tests) does not break a later FastGS forward on the same
     // thread. The TLS dtor frees host/event (or no-ops after process teardown).
-    cache.release_workspace();
+    if (cache) {
+        cache->release_workspace();
+    }
 }
 
 std::uint64_t fast_lfs::rasterization::n_instances_fallback_sync_count() noexcept {
@@ -276,20 +347,19 @@ void fast_lfs::rasterization::reset_sort_capacity_for_testing() noexcept {
     cache.force_sync_next = true;
 }
 
-std::size_t fast_lfs::rasterization::sort_workspace_high_water_bytes() noexcept {
-    return sort_workspace_allocated_bytes();
-}
-
 std::size_t fast_lfs::rasterization::sort_workspace_required_bytes() noexcept {
-    return sort_buffer_cache().required_bytes;
+    const auto* const cache = g_current_sort_buffer_cache;
+    return cache ? cache->required_bytes : 0;
 }
 
 std::size_t fast_lfs::rasterization::sort_workspace_allocated_bytes() noexcept {
-    return sort_buffer_cache().workspace.size();
+    const auto* const cache = g_current_sort_buffer_cache;
+    return cache ? cache->workspace.size() : 0;
 }
 
 int fast_lfs::rasterization::sort_workspace_capacity_n_instances() noexcept {
-    return sort_buffer_cache().capacity_n_instances;
+    const auto* const cache = g_current_sort_buffer_cache;
+    return cache ? cache->capacity_n_instances : 0;
 }
 
 fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
@@ -487,15 +557,24 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         constexpr size_t bytes_per_instance =
             2 * sizeof(InstanceKey) + 2 * sizeof(uint);
         const size_t n = static_cast<size_t>(sort_n);
-        if (n > (std::numeric_limits<size_t>::max() - cub_bytes) /
-                    bytes_per_instance) {
+        if (n > std::numeric_limits<size_t>::max() / bytes_per_instance) {
             throw std::overflow_error("FastGS exact sort workspace size overflow");
         }
-        const size_t required_bytes = n * bytes_per_instance + cub_bytes;
-        LFS_ASSERT_MSG(
-            required_bytes > sort_cache.workspace.size(),
-            "FastGS sort capacity grew without increasing its exact byte requirement");
-        sort_cache.replace_workspace(sort_n, cub_bytes, required_bytes);
+        const size_t data_bytes = n * bytes_per_instance;
+        const size_t cub_offset_bytes = aligned_cub_workspace_offset(data_bytes);
+        if (cub_bytes > std::numeric_limits<size_t>::max() - cub_offset_bytes) {
+            throw std::overflow_error("FastGS exact sort workspace size overflow");
+        }
+        const size_t required_bytes = cub_offset_bytes + cub_bytes;
+        if (required_bytes == sort_cache.workspace.size()) {
+            // Alignment padding may absorb a small instance-count increase.
+            // Rebind the four slices without issuing a redundant allocation.
+            sort_cache.bind_layout(
+                sort_n, cub_bytes, cub_offset_bytes, required_bytes);
+        } else {
+            sort_cache.replace_workspace(
+                sort_n, cub_bytes, cub_offset_bytes, required_bytes);
+        }
     };
 
     // Run create → sort → extract for a known host sort count (exact or capacity).
@@ -597,7 +676,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                 static_cast<uint>(n_instances));
         }
     } else {
-        // Create runs against the exact measured high-water already retained.
+        // Create runs against the exact measured capacity already retained.
         // The D2H event is synchronized only after this launch. A new record
         // drains the stream, grows exactly, and re-runs the path below.
         const int capacity = sort_cache.capacity_n_instances;

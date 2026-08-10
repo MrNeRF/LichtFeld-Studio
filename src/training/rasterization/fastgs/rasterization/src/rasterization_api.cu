@@ -32,7 +32,7 @@ namespace fast_lfs::rasterization {
         std::atomic<std::uint64_t> g_preflight_pointer_attr_calls{0};
 
         void free_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept {
-            // persistent high-water sort buffers — no cudaFree.
+            // persistent retained sort buffers — no cudaFree.
             release_sorted_primitive_indices(ptr, stream);
         }
 

@@ -168,7 +168,6 @@ namespace lfs::training {
         peak_arena_capacity_ = 0;
         peak_fastgs_sort_required_ = 0;
         peak_fastgs_sort_allocated_ = 0;
-        peak_fastgs_sort_hwm_ = 0;
         peak_fastgs_raster_live_ = 0;
         peak_fastgs_raster_arena_live_ = 0;
         peak_fastgs_raster_sort_live_ = 0;
@@ -235,8 +234,6 @@ namespace lfs::training {
             std::max(peak_fastgs_sort_required_, sort_required);
         peak_fastgs_sort_allocated_ =
             std::max(peak_fastgs_sort_allocated_, sort_allocated);
-        peak_fastgs_sort_hwm_ =
-            std::max(peak_fastgs_sort_hwm_, sort_allocated);
         peak_fastgs_raster_live_ =
             std::max(peak_fastgs_raster_live_, fastgs_raster_live_bytes_);
         peak_fastgs_raster_arena_live_ =
@@ -327,7 +324,8 @@ namespace lfs::training {
         if (used > peak_cuda_used_) {
             capture_peak_snapshot(iter, used, total);
         } else {
-            // Still track pool / sort high-water even when device-wide free dips.
+            // Still track pool peaks and retained sort allocation when
+            // device-wide free dips.
             std::size_t used_high = 0;
             std::size_t reserved_high = 0;
             std::size_t used_cur = 0;
@@ -336,9 +334,6 @@ namespace lfs::training {
             peak_pool_used_ = std::max(peak_pool_used_, std::max(used_high, used_cur));
             peak_pool_reserved_ =
                 std::max(peak_pool_reserved_, std::max(reserved_high, reserved_cur));
-            peak_fastgs_sort_hwm_ = std::max(
-                peak_fastgs_sort_hwm_,
-                fast_lfs::rasterization::sort_workspace_allocated_bytes());
             peak_fastgs_sort_required_ = std::max(
                 peak_fastgs_sort_required_,
                 fast_lfs::rasterization::sort_workspace_required_bytes());
@@ -456,7 +451,6 @@ namespace lfs::training {
         out.pool_bucket_live_rounding_waste_bytes = peak_pool_bucket_live_waste_;
         out.fastgs_sort_required_bytes = peak_fastgs_sort_required_;
         out.fastgs_sort_allocated_bytes = peak_fastgs_sort_allocated_;
-        out.fastgs_sort_hwm_bytes = peak_fastgs_sort_hwm_;
         out.fastgs_raster_live_bytes = peak_fastgs_raster_live_;
         out.fastgs_raster_arena_live_bytes = peak_fastgs_raster_arena_live_;
         out.fastgs_raster_sort_live_bytes = peak_fastgs_raster_sort_live_;
@@ -550,12 +544,13 @@ namespace lfs::training {
             AttributionState::Justified);
         add("fastgs_sort_required", "fastgs_sort",
             out.fastgs_sort_required_bytes, AttributionState::Nested,
-            "disclosure component of fastgs_sort_hwm");
-        add("fastgs_sort_hwm", "fastgs_sort", out.fastgs_sort_hwm_bytes,
+            "disclosure component of fastgs_sort_allocated");
+        add("fastgs_sort_allocated", "fastgs_sort",
+            out.fastgs_sort_allocated_bytes,
             AttributionState::Justified);
         add("fastgs_sort_slack", "fastgs_sort", fastgs_sort_slack,
             AttributionState::Nested,
-            "disclosure component already included in fastgs_sort_hwm");
+            "disclosure component already included in fastgs_sort_allocated");
         add("fastgs_raster_live", "FastGS", out.fastgs_raster_live_bytes,
             AttributionState::Nested,
             "aggregate of raster arena live and sort workspace");
@@ -563,7 +558,7 @@ namespace lfs::training {
             AttributionState::Justified);
         add("fastgs_raster_sort_live", "FastGS", out.fastgs_raster_sort_live_bytes,
             AttributionState::Nested,
-            "selected sort slice already included in fastgs_sort_hwm");
+            "selected sort slice already included in fastgs_sort_allocated");
         add("rasterizer_arena", "rasterizer", out.arena_capacity_bytes,
             AttributionState::Nested,
             "backing container; live FastGS arena bytes are covered separately");
@@ -581,10 +576,11 @@ namespace lfs::training {
 
         // Cover excess only with disjoint, measured retained allocations. The
         // decoded-frame ring is already inside io.external_codec_and_bucketed,
-        // and the selected sorted-index slice is already inside fastgs_sort_hwm;
-        // both remain visible above but are not counted twice here. Raster arena
-        // capacity likewise contains fastgs_raster_arena_live, so only the live
-        // suballocation is eligible. Transient q16 expansion is excluded.
+        // and the selected sorted-index slice is already inside
+        // fastgs_sort_allocated; both remain visible above but are not counted
+        // twice here. Raster arena capacity likewise contains
+        // fastgs_raster_arena_live, so only the live suballocation is eligible.
+        // Transient q16 expansion is excluded.
         const std::size_t new_justified = out.justified_excess_bytes;
 
         // Honest residual: do NOT auto-justify the remainder as "no_trim".
@@ -622,15 +618,12 @@ namespace lfs::training {
             ledger_ = diagnostics::VramProfiler::instance().trainingStateLedger();
         }
 
-        // Final sort HWM (TLS still alive on this thread at finalize).
+        // Final retained sort allocation (TLS still alive on this thread).
         peak_fastgs_sort_required_ = std::max(
             peak_fastgs_sort_required_,
             fast_lfs::rasterization::sort_workspace_required_bytes());
         peak_fastgs_sort_allocated_ = std::max(
             peak_fastgs_sort_allocated_,
-            fast_lfs::rasterization::sort_workspace_allocated_bytes());
-        peak_fastgs_sort_hwm_ = std::max(
-            peak_fastgs_sort_hwm_,
             fast_lfs::rasterization::sort_workspace_allocated_bytes());
 
         const double wall_s =
@@ -833,8 +826,6 @@ namespace lfs::training {
             << peak_ledger.arena_capacity_bytes << ",\n";
         out << "    \"steady_pinned_active_cached_bytes\": "
             << peak_steady_pinned_host_bytes_ << ",\n";
-        // Legacy field retained for existing consumers; it is the allocated peak.
-        out << "    \"fastgs_sort_hwm_bytes\": " << peak_ledger.fastgs_sort_hwm_bytes << ",\n";
         out << "    \"fastgs_raster_live_bytes\": " << peak_ledger.fastgs_raster_live_bytes
             << ",\n";
         out << "    \"notes\": [\n";
@@ -869,7 +860,7 @@ namespace lfs::training {
                  "{:.1f} allocs/iter, peak VRAM {:.1f} MiB, baseline {:.1f} MiB, "
                  "ex_cache {:.1f} MiB / net {:.1f} MiB "
                  "(excess {:.1f} vs baseline, signed residual {:+.1f} justified-minus-excess), "
-                 "sort_hwm {:.1f} MiB, {:.1f} B/splat)",
+                 "sort_allocated {:.1f} MiB, {:.1f} B/splat)",
                  path.string(),
                  steady_ms_iter,
                  steady_dataloader_wait_ms_per_iter,
@@ -880,7 +871,8 @@ namespace lfs::training {
                  static_cast<double>(peak_ledger.ex_cache_net_bytes) / (1024.0 * 1024.0),
                  excess_mib,
                  signed_residual_mib,
-                 static_cast<double>(peak_ledger.fastgs_sort_hwm_bytes) / (1024.0 * 1024.0),
+                 static_cast<double>(peak_ledger.fastgs_sort_allocated_bytes) /
+                     (1024.0 * 1024.0),
                  ledger_.bytes_per_splat);
     }
 

@@ -33,12 +33,11 @@ namespace fast_lfs::rasterization {
     void reset_n_instances_fallback_sync_count() noexcept;
     /// Testing: force the next forward(s) onto the mid-pipeline sync path.
     void set_force_n_instances_sync_for_testing(bool force) noexcept;
-    /// Testing: drop high-water capacity so the next forward must grow+sync.
+    /// Testing: drop retained capacity so the next forward must grow+sync.
     void reset_sort_capacity_for_testing() noexcept;
 
-    /// Process-peak attribution (ex-cache ledger): exact retained sort TLS
-    /// residency on the calling thread (keys×2 + indices×2 + CUB WS).
-    [[nodiscard]] std::size_t sort_workspace_high_water_bytes() noexcept;
+    /// Exact retained sort TLS residency on the calling thread
+    /// (keys×2 + indices×2 + alignment padding + CUB WS).
     [[nodiscard]] std::size_t sort_workspace_required_bytes() noexcept;
     [[nodiscard]] std::size_t sort_workspace_allocated_bytes() noexcept;
     [[nodiscard]] int sort_workspace_capacity_n_instances() noexcept;

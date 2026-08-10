@@ -152,7 +152,6 @@ namespace lfs::diagnostics {
         std::size_t exportable_splat_bytes = 0;
         std::size_t fastgs_sort_required_bytes = 0;
         std::size_t fastgs_sort_allocated_bytes = 0;
-        std::size_t fastgs_sort_hwm_bytes = 0;    // legacy alias of allocated peak
         std::size_t fastgs_raster_live_bytes = 0; // per_prim+tile+sorted at peak
         std::size_t fastgs_raster_arena_live_bytes = 0;
         std::size_t fastgs_raster_sort_live_bytes = 0;
