@@ -131,6 +131,7 @@ TEST_F(ArenaMetricsContentionTest, FullResetDecommitsVmmHighWater) {
     const auto grown = arena.get_statistics();
     ASSERT_EQ(grown.capacity, 192 * MiB);
     const auto grown_info = arena.get_memory_info();
+    EXPECT_EQ(grown_info.required_bytes, grown_info.peak_usage);
     EXPECT_EQ(grown_info.required_bytes, grown_info.arena_capacity);
 
     arena.full_reset();
@@ -138,6 +139,10 @@ TEST_F(ArenaMetricsContentionTest, FullResetDecommitsVmmHighWater) {
     const auto reset = arena.get_statistics();
     EXPECT_EQ(reset.current_usage, 0u);
     EXPECT_EQ(reset.capacity, 0u);
+    const auto reset_info = arena.get_memory_info();
+    EXPECT_EQ(reset_info.peak_usage, 0u);
+    EXPECT_EQ(reset_info.required_bytes, 0u);
+    EXPECT_EQ(reset_info.arena_capacity, 0u);
 }
 
 TEST_F(ArenaMetricsContentionTest, FallbackGrowthUsesExactMeasuredRequirement) {
@@ -154,6 +159,37 @@ TEST_F(ArenaMetricsContentionTest, FallbackGrowthUsesExactMeasuredRequirement) {
     const auto grown = arena.get_statistics();
     EXPECT_EQ(grown.capacity, 128 * MiB);
     const auto grown_info = arena.get_memory_info();
+    EXPECT_EQ(grown_info.required_bytes, grown_info.peak_usage);
     EXPECT_EQ(grown_info.required_bytes, grown_info.arena_capacity);
     arena.end_frame(frame, nullptr, false);
+}
+
+TEST_F(ArenaMetricsContentionTest, RetainedFallbackPublishesLogicalRequiredAndClassCSlack) {
+    constexpr size_t MiB = 1024 * 1024;
+    RasterizerMemoryArena::Config config;
+    config.max_physical = 512 * MiB;
+    config.enable_vmm = false;
+    RasterizerMemoryArena arena(config);
+
+    const uint64_t large_frame = arena.begin_frame(nullptr, false);
+    auto allocate_large = arena.get_allocator(large_frame);
+    ASSERT_NE(allocate_large(64 * MiB), nullptr);
+    arena.end_frame(large_frame, nullptr, false);
+
+    const auto large = arena.get_memory_info();
+    ASSERT_EQ(large.required_bytes, 64 * MiB);
+    ASSERT_EQ(large.arena_capacity, 64 * MiB);
+
+    const uint64_t small_frame = arena.begin_frame(nullptr, false);
+    auto allocate_small = arena.get_allocator(small_frame);
+    ASSERT_NE(allocate_small(10 * MiB), nullptr);
+    arena.end_frame(small_frame, nullptr, false);
+    ASSERT_TRUE(arena.shrink_to_current_at_boundary());
+
+    const auto retained = arena.get_memory_info();
+    EXPECT_EQ(retained.current_usage, 10 * MiB);
+    EXPECT_EQ(retained.peak_usage, 10 * MiB);
+    EXPECT_EQ(retained.required_bytes, 10 * MiB);
+    EXPECT_EQ(retained.arena_capacity, 64 * MiB);
+    EXPECT_EQ(retained.arena_capacity - retained.required_bytes, 54 * MiB);
 }

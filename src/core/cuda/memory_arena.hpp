@@ -117,14 +117,11 @@ namespace lfs::core {
             std::function<size_t(size_t)> external_grow;
             std::atomic<size_t> offset{0}; // Current allocation offset
             size_t capacity = 0;           // Same as committed_size for compatibility
-            // Exact physical requirement represented by the retained backing.
-            // This equals capacity for internal VMM/cudaMalloc arenas; logical
-            // usage remains separately visible through offset/peak_usage.
-            size_t required_size = 0;
             uint64_t generation = 0;
             int device = -1;
 
             // Statistics
+            // Logical high-water since the last explicit shrink/reset boundary.
             std::atomic<size_t> peak_usage{0};
             std::atomic<size_t> peak_usage_period{0};
             std::atomic<size_t> total_allocated{0};

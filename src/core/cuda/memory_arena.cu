@@ -727,8 +727,9 @@ namespace lfs::core {
         arena.external_grow = nullptr;
         arena.committed_size = 0;
         arena.capacity = 0;
-        arena.required_size = 0;
         arena.offset.store(0, std::memory_order_release);
+        arena.peak_usage.store(0, std::memory_order_release);
+        arena.peak_usage_period.store(0, std::memory_order_release);
     }
 
     void RasterizerMemoryArena::full_reset() {
@@ -896,11 +897,11 @@ namespace lfs::core {
         arena.external_grow = std::move(backing.grow);
         arena.committed_size = backing.size;
         arena.capacity = backing.size;
-        arena.required_size = backing.size;
         arena.granularity = std::max(config_.alignment, config_.granularity);
         arena.generation = generation_counter_.fetch_add(1, std::memory_order_relaxed);
         arena.last_log_time = std::chrono::steady_clock::now();
         arena.offset.store(0, std::memory_order_release);
+        arena.peak_usage.store(0, std::memory_order_release);
         arena.peak_usage_period.store(0, std::memory_order_release);
         arena.total_allocated.store(0, std::memory_order_release);
         arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
@@ -1002,7 +1003,6 @@ namespace lfs::core {
 
         target->committed_size = new_size;
         target->capacity = new_size;
-        target->required_size = new_size;
         target->realloc_count.fetch_add(1, std::memory_order_relaxed);
         target->offset.store(0, std::memory_order_release);
         frame_contexts_.clear();
@@ -1219,7 +1219,6 @@ namespace lfs::core {
             if (total_allocated > 0) {
                 arena.committed_size += total_allocated;
                 arena.capacity = arena.committed_size;
-                arena.required_size = arena.committed_size;
                 arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
                 LOG_DEBUG("Committed %zu MB via chunks (total: %zu MB)", total_allocated >> 20, arena.committed_size >> 20);
                 record_timing(true);
@@ -1274,7 +1273,6 @@ namespace lfs::core {
 
         arena.committed_size = map_offset + commit_size;
         arena.capacity = arena.committed_size;
-        arena.required_size = arena.committed_size;
         arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
 
         LOG_DEBUG("Committed %zu MB (total: %zu MB)", commit_size >> 20, arena.committed_size >> 20);
@@ -1287,11 +1285,16 @@ namespace lfs::core {
         // Called with arena_mutex_ held
         // The caller must additionally own the global frame gate and have
         // synchronized the device. cuMemUnmap/cudaFree are not stream ordered.
+        const size_t current_offset = arena.offset.load(std::memory_order_acquire);
+        const auto reset_logical_peak = [&arena, current_offset]() {
+            arena.peak_usage.store(current_offset, std::memory_order_release);
+            arena.peak_usage_period.store(0, std::memory_order_release);
+        };
+
         if (arena.external_backing) {
+            reset_logical_peak();
             return;
         }
-
-        const size_t current_offset = arena.offset.load(std::memory_order_acquire);
 
         if (arena.d_ptr == 0) {
             if (current_offset == 0 && arena.fallback_buffer && arena.owns_fallback_buffer) {
@@ -1309,12 +1312,10 @@ namespace lfs::core {
                 arena.fallback_buffer = nullptr;
                 arena.committed_size = 0;
                 arena.capacity = 0;
-                arena.required_size = 0;
                 LOG_DEBUG("Released %zu MB fallback arena backing at boundary",
                           released_bytes >> 20);
             }
-            arena.required_size = arena.committed_size;
-            arena.peak_usage_period.store(0, std::memory_order_release);
+            reset_logical_peak();
             return;
         }
 
@@ -1354,7 +1355,6 @@ namespace lfs::core {
                                          : arena.chunks.back().offset + arena.chunks.back().size;
         arena.committed_size = retained_size;
         arena.capacity = retained_size;
-        arena.required_size = retained_size;
 
         if (chunks_removed > 0) {
             LOG_DEBUG("Decommitted %zu MB (%zu chunks), arena now at %zu MB",
@@ -1363,8 +1363,7 @@ namespace lfs::core {
             LOG_TRACE("No unused chunks to decommit");
         }
 
-        // Reset peak usage tracking
-        arena.peak_usage_period.store(0, std::memory_order_release);
+        reset_logical_peak();
     }
 
     void RasterizerMemoryArena::record_commit_timing(uint64_t frame_id,
@@ -1558,7 +1557,6 @@ namespace lfs::core {
             }
             arena.committed_size = new_committed;
             arena.capacity = new_committed;
-            arena.required_size = new_committed;
             arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
             LOG_INFO("External rasterizer arena '%s' grew in place to %zu MiB (need %zu MiB)",
                      arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
@@ -1802,7 +1800,6 @@ namespace lfs::core {
         arena.fallback_buffer = new_buffer;
         arena.capacity = new_capacity;
         arena.committed_size = new_capacity;
-        arena.required_size = new_capacity;
         arena.generation = generation_counter_.fetch_add(1, std::memory_order_relaxed);
         arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
 
@@ -1866,11 +1863,15 @@ namespace lfs::core {
             std::lock_guard<std::mutex> lock(arena_mutex_);
             auto it = device_arenas_.find(device);
             if (it != device_arenas_.end() && it->second) {
-                info.arena_capacity = it->second->committed_size;
-                info.required_bytes = it->second->required_size;
-                info.current_usage = it->second->offset.load(std::memory_order_relaxed);
-                info.peak_usage = it->second->peak_usage.load(std::memory_order_relaxed);
-                info.num_reallocations = it->second->realloc_count.load(std::memory_order_relaxed);
+                const auto& arena = *it->second;
+                info.arena_capacity = arena.committed_size;
+                info.current_usage = arena.offset.load(std::memory_order_relaxed);
+                info.peak_usage = arena.peak_usage.load(std::memory_order_relaxed);
+                // Physical backing stays disclosed as allocated; required is the
+                // logical high-water rounded only to this arena's granularity.
+                info.required_bytes = align_up(
+                    info.peak_usage, std::max<size_t>(arena.granularity, 1));
+                info.num_reallocations = arena.realloc_count.load(std::memory_order_relaxed);
                 info.utilization_percent = info.arena_capacity > 0 ? (100.0f * info.peak_usage / info.arena_capacity) : 0.0f;
             }
         } else {
