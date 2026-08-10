@@ -85,6 +85,50 @@ namespace lfs::vis {
         EXPECT_NEAR((pair.previous * point).x, -0.25f, 1e-6f);
     }
 
+    TEST(TemporalFrameTracker, SceneViewJitterPreservesExplicitFocalLength) {
+        auto input = frameInput();
+        input.view.intrinsics_override = lfs::rendering::CameraIntrinsics{
+            .focal_x = 900.0f,
+            .focal_y = 880.0f,
+            .center_x = 640.0f,
+            .center_y = 360.0f,
+        };
+        const auto jittered = applySceneViewJitter(input.view, {0.25f, -0.125f});
+        ASSERT_TRUE(jittered.intrinsics_override);
+        EXPECT_FLOAT_EQ(jittered.intrinsics_override->focal_x, 900.0f);
+        EXPECT_FLOAT_EQ(jittered.intrinsics_override->focal_y, 880.0f);
+        EXPECT_FLOAT_EQ(jittered.intrinsics_override->center_x, 640.25f);
+        EXPECT_FLOAT_EQ(jittered.intrinsics_override->center_y, 359.875f);
+        EXPECT_FLOAT_EQ(input.view.intrinsics_override->center_x, 640.0f);
+    }
+
+    TEST(TemporalFrameTracker, SceneViewJitterSynthesizesTileStableIntrinsics) {
+        auto input = frameInput();
+        input.view.size = {320, 180};
+        input.view.subregion_origin = {320, 180};
+        input.view.subregion_full_size = {1280, 720};
+        const auto jittered = applySceneViewJitter(input.view, {-0.25f, 0.25f});
+        ASSERT_TRUE(jittered.intrinsics_override);
+        EXPECT_FLOAT_EQ(jittered.intrinsics_override->center_x, 639.75f);
+        EXPECT_FLOAT_EQ(jittered.intrinsics_override->center_y, 360.25f);
+        const auto focal = lfs::rendering::computePixelFocalLengths(
+            glm::ivec2(1280, 720), input.view.focal_length_mm);
+        EXPECT_FLOAT_EQ(jittered.intrinsics_override->focal_x, focal.first);
+        EXPECT_FLOAT_EQ(jittered.intrinsics_override->focal_y, focal.second);
+    }
+
+    TEST(TemporalFrameTracker, SceneViewJitterIsNoOpWhenUnsupported) {
+        const auto input = frameInput();
+        EXPECT_FALSE(applySceneViewJitter(input.view, {}).intrinsics_override);
+        EXPECT_FALSE(applySceneViewJitter(
+                         input.view,
+                         {std::numeric_limits<float>::quiet_NaN(), 0.0f})
+                         .intrinsics_override);
+        auto orthographic = input.view;
+        orthographic.orthographic = true;
+        EXPECT_FALSE(applySceneViewJitter(orthographic, {0.25f, 0.25f}).intrinsics_override);
+    }
+
     TEST(TemporalFrameTracker, CameraMotionPreservesHistoryButExplicitCutResetsIt) {
         TemporalFrameTracker tracker;
         auto input = frameInput();

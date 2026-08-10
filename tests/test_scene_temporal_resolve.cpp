@@ -66,6 +66,7 @@ namespace lfs::vis {
                                                     1080,
                                                     1),
                 .jitter_applied = true,
+                .history_expected = true,
                 .reactive_mask_available = true,
                 .exposure_available = true,
             };
@@ -86,7 +87,9 @@ namespace lfs::vis {
     TEST(SceneUpscalerInputs, ReportsEveryMissingTemporalInput) {
         const auto plan = makeSceneTemporalPlan(
             temporalRequirements(), {1280, 720}, {1920, 1080});
-        const auto validation = validateSceneUpscalerInputs(plan, {});
+        SceneUpscalerInputs inputs;
+        inputs.history_expected = true;
+        const auto validation = validateSceneUpscalerInputs(plan, inputs);
 
         EXPECT_TRUE(hasSceneUpscalerInputIssue(validation.issues,
                                                SceneUpscalerInputIssue::MissingDepth));
@@ -100,6 +103,22 @@ namespace lfs::vis {
                                                SceneUpscalerInputIssue::MissingReactiveMask));
         EXPECT_TRUE(hasSceneUpscalerInputIssue(validation.issues,
                                                SceneUpscalerInputIssue::MissingExposure));
+    }
+
+    TEST(SceneUpscalerInputs, FirstFrameMayInitializeHistoryFromCurrentColor) {
+        auto requirements = temporalRequirements();
+        requirements.reactive_mask = false;
+        requirements.exposure = false;
+        const auto plan = makeSceneTemporalPlan(requirements, {1280, 720}, {1920, 1080});
+        auto inputs = validInputs();
+        inputs.history = {};
+        inputs.history_expected = false;
+
+        EXPECT_TRUE(validateSceneUpscalerInputs(plan, inputs).valid());
+        inputs.history_expected = true;
+        EXPECT_TRUE(hasSceneUpscalerInputIssue(
+            validateSceneUpscalerInputs(plan, inputs).issues,
+            SceneUpscalerInputIssue::MissingHistory));
     }
 
     TEST(SceneUpscalerInputs, AcceptsACompleteTemporalContract) {

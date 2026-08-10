@@ -117,6 +117,81 @@ namespace lfs::vis {
         EXPECT_FALSE(coordinator.commit(malformed, coordinator.prepare(malformed)));
     }
 
+    TEST(SceneTemporalCoordinator, FailedHistoryCommitCannotPartiallyAdvanceFrameState) {
+        SceneTemporalCoordinator coordinator;
+        auto request = requestFor(TemporalViewId::Main, temporalRequirements());
+        const auto first = coordinator.prepare(request);
+
+        EXPECT_FALSE(coordinator.commit(request,
+                                        first,
+                                        SceneHistoryStorage::VulkanImage,
+                                        SceneHistoryStorage::None));
+        const auto retry = coordinator.prepare(request);
+        EXPECT_FALSE(retry.frame.history_valid);
+        EXPECT_FALSE(retry.history.available());
+        EXPECT_EQ(retry.frame.sequence, 0u);
+        EXPECT_TRUE(hasTemporalResetReason(retry.frame.reset_reasons,
+                                           TemporalResetReason::InvalidInput));
+    }
+
+    TEST(SceneTemporalCoordinator, InvalidatesHistoryAcrossEveryRuntimeBoundary) {
+        const auto verify_reset = [](const auto mutate,
+                                     const TemporalResetReason expected) {
+            SceneTemporalCoordinator coordinator;
+            auto request = requestFor(TemporalViewId::Main, temporalRequirements());
+            const auto first = coordinator.prepare(request);
+            EXPECT_TRUE(coordinator.commit(request,
+                                           first,
+                                           SceneHistoryStorage::VulkanImage,
+                                           SceneHistoryStorage::VulkanImage));
+            mutate(request);
+            const auto changed = coordinator.prepare(request);
+            EXPECT_FALSE(changed.frame.history_valid);
+            EXPECT_FALSE(changed.history.available());
+            EXPECT_TRUE(hasTemporalResetReason(changed.frame.reset_reasons, expected));
+        };
+
+        verify_reset([](auto& request) {
+            request.render_extent = {960, 540};
+            request.frame.view.size = request.render_extent;
+        },
+                     TemporalResetReason::RenderSize);
+        verify_reset([](auto& request) { request.frame.render_scale = 0.5f; },
+                     TemporalResetReason::RenderScale);
+        verify_reset([](auto& request) { ++request.frame.scene_generation; },
+                     TemporalResetReason::Scene);
+        verify_reset([](auto& request) { ++request.frame.backend_key; },
+                     TemporalResetReason::Backend);
+        verify_reset([](auto& request) { request.frame.camera_cut = true; },
+                     TemporalResetReason::CameraCut);
+    }
+
+    TEST(SceneTemporalCoordinator, ResetAllInvalidatesEveryViewWithoutCrossContamination) {
+        SceneTemporalCoordinator coordinator;
+        for (const auto view : {TemporalViewId::Main,
+                                TemporalViewId::SplitLeft,
+                                TemporalViewId::SplitRight}) {
+            auto request = requestFor(view, temporalRequirements());
+            const auto first = coordinator.prepare(request);
+            ASSERT_TRUE(coordinator.commit(request,
+                                           first,
+                                           SceneHistoryStorage::VulkanImage,
+                                           SceneHistoryStorage::VulkanImage));
+        }
+
+        coordinator.resetAll(TemporalResetReason::Scene);
+        for (const auto view : {TemporalViewId::Main,
+                                TemporalViewId::SplitLeft,
+                                TemporalViewId::SplitRight}) {
+            const auto reset = coordinator.prepare(
+                requestFor(view, temporalRequirements()));
+            EXPECT_FALSE(reset.frame.history_valid);
+            EXPECT_FALSE(reset.history.available());
+            EXPECT_TRUE(hasTemporalResetReason(reset.frame.reset_reasons,
+                                               TemporalResetReason::Scene));
+        }
+    }
+
     TEST(SceneUpscalerRegistry, DescriptorLookupFallsBackSafelyForUnknownEnum) {
         EXPECT_EQ(sceneUpscalerDescriptor(SceneUpscalerBackend::Native).id, "native");
         EXPECT_EQ(sceneUpscalerDescriptor(SceneUpscalerBackend::Spatial).id, "spatial");

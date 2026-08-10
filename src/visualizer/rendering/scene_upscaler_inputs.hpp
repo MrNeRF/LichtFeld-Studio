@@ -51,6 +51,9 @@ namespace lfs::vis {
         SceneMotionContract motion;
         SceneHistoryContract history;
         bool jitter_applied = false;
+        // False on the first valid frame: the resolve initializes history from
+        // current color. True only after the coordinator advertises history.
+        bool history_expected = false;
         bool reactive_mask_available = false;
         bool exposure_available = false;
     };

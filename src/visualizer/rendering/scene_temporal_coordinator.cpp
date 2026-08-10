@@ -40,8 +40,12 @@ namespace lfs::vis {
             history_ready = histories_.commit(
                 request.view, prepared.plan, prepared.frame, color_storage, depth_storage);
         }
+        if (!history_ready) {
+            reset(request.view, TemporalResetReason::InvalidInput);
+            return false;
+        }
         frames_.commit(request.view, request.frame);
-        return history_ready;
+        return true;
     }
 
     void SceneTemporalCoordinator::reset(const TemporalViewId view,

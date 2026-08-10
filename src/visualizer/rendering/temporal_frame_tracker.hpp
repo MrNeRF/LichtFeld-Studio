@@ -79,6 +79,8 @@ namespace lfs::vis {
 
     [[nodiscard]] LFS_VIS_API glm::mat4 applySceneProjectionJitter(
         const glm::mat4& projection, glm::vec2 jitter_ndc);
+    [[nodiscard]] LFS_VIS_API lfs::rendering::FrameView applySceneViewJitter(
+        const lfs::rendering::FrameView& view, glm::vec2 jitter_pixels);
     [[nodiscard]] LFS_VIS_API TemporalProjectionPair makeTemporalProjectionPair(
         const TemporalFrameState& state,
         const glm::mat4& current_projection,

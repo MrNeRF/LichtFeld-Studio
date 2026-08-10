@@ -45,7 +45,7 @@ namespace lfs::vis {
         if (plan.requirements.jitter && !inputs.jitter_applied) {
             result.issues |= SceneUpscalerInputIssue::MissingJitter;
         }
-        if (plan.requirements.history) {
+        if (plan.requirements.history && inputs.history_expected) {
             if (!inputs.history.available() || !inputs.history.valid()) {
                 result.issues |= SceneUpscalerInputIssue::MissingHistory;
             } else if (!inputs.history.matchesOutputExtent(plan.output_extent.x,

@@ -87,6 +87,37 @@ namespace lfs::vis {
         return jittered;
     }
 
+    lfs::rendering::FrameView applySceneViewJitter(
+        const lfs::rendering::FrameView& view, const glm::vec2 jitter_pixels) {
+        if (!std::isfinite(jitter_pixels.x) || !std::isfinite(jitter_pixels.y) ||
+            view.orthographic || jitter_pixels == glm::vec2(0.0f)) {
+            return view;
+        }
+
+        lfs::rendering::FrameView jittered = view;
+        const glm::ivec2 camera_size =
+            view.subregion_full_size.x > 0 && view.subregion_full_size.y > 0
+                ? view.subregion_full_size
+                : view.size;
+        if (camera_size.x <= 0 || camera_size.y <= 0) {
+            return view;
+        }
+
+        if (!jittered.intrinsics_override) {
+            const auto [focal_x, focal_y] = lfs::rendering::computePixelFocalLengths(
+                camera_size, view.focal_length_mm);
+            jittered.intrinsics_override = lfs::rendering::CameraIntrinsics{
+                .focal_x = focal_x,
+                .focal_y = focal_y,
+                .center_x = static_cast<float>(camera_size.x) * 0.5f,
+                .center_y = static_cast<float>(camera_size.y) * 0.5f,
+            };
+        }
+        jittered.intrinsics_override->center_x += jitter_pixels.x;
+        jittered.intrinsics_override->center_y += jitter_pixels.y;
+        return jittered;
+    }
+
     TemporalProjectionPair makeTemporalProjectionPair(
         const TemporalFrameState& state,
         const glm::mat4& current_projection,
