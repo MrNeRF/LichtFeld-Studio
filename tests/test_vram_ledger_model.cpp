@@ -223,3 +223,52 @@ TEST(VramLedger, NineRootsPresentWhenVulkanIncluded) {
     // A–H + Unattributed = 9
     EXPECT_EQ(tree.roots.size(), 9u);
 }
+
+TEST(VramLedger, ShaderBytecodeCollapsedUnderRootH) {
+    VramProfilerSnapshot snap;
+    snap.process.process_memory_valid = true;
+    snap.process.process_used = 64ull * 1024ull * 1024ull;
+    snap.process.cuda_context_baseline = 32ull * 1024ull * 1024ull;
+    snap.process.vulkan_vma_block_bytes = 16ull * 1024ull * 1024ull;
+    snap.rows.push_back(make_row("vksplat.shaders.slang.spirv.projection_forward", "",
+                                 200ull * 1024ull, VramRowKind::Static));
+    snap.rows.push_back(make_row("vksplat.shaders.slang.spirv.rasterize_forward", "",
+                                 300ull * 1024ull, VramRowKind::Static));
+    snap.rows.push_back(make_row("vksplat.shaders.glsl.spirv.radix_sort_visible", "",
+                                 100ull * 1024ull, VramRowKind::Static));
+    // A real VMA-named row must still appear under root F.
+    snap.rows.push_back(make_row("vulkan.image.color", "", 1024ull * 1024ull,
+                                 VramRowKind::Hooked, VramAllocationMethod::External));
+
+    VramLedgerPolicy policy;
+    policy.include_vulkan_in_sum = true;
+    const auto tree = buildLiveLedger(snap, policy);
+
+    const VramLedgerNode* root_f = nullptr;
+    const VramLedgerNode* root_h = nullptr;
+    for (const auto& r : tree.roots) {
+        if (r.root_id == VramLedgerRootId::VulkanVma)
+            root_f = &r;
+        if (r.root_id == VramLedgerRootId::CudaContextDriver)
+            root_h = &r;
+    }
+    ASSERT_NE(root_f, nullptr);
+    ASSERT_NE(root_h, nullptr);
+
+    // No per-module shader flood under VMA.
+    for (const auto& c : root_f->children) {
+        EXPECT_EQ(c.name.find("shaders."), std::string::npos) << c.name;
+        EXPECT_EQ(c.name.find("shader bytecode"), std::string::npos) << c.name;
+    }
+
+    int shader_groups = 0;
+    for (const auto& c : root_h->children) {
+        if (c.name.find("shader bytecode") != std::string::npos) {
+            ++shader_groups;
+            EXPECT_NE(c.name.find("3 modules"), std::string::npos) << c.name;
+            EXPECT_EQ(c.measured_bytes, 600ull * 1024ull);
+            EXPECT_EQ(c.state, AttributionState::Nested);
+        }
+    }
+    EXPECT_EQ(shader_groups, 1);
+}

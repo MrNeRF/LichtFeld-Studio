@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -29,6 +30,21 @@ namespace lfs::diagnostics {
         [[nodiscard]] bool is_vulkan_external_row(const VramMetricSnapshot& row) {
             return starts_with(row.scope, "vulkan.external") ||
                    starts_with(row.label, "vulkan.external");
+        }
+
+        // recordStaticBytes SPIR-V estimates — not VMA allocations. Group under root H.
+        [[nodiscard]] bool is_shader_bytecode_row(const VramMetricSnapshot& row) {
+            return starts_with(row.scope, "vksplat.shaders.") ||
+                   starts_with(row.scope, "vksplat.shaders");
+        }
+
+        [[nodiscard]] std::string format_mib(const std::size_t bytes) {
+            const double mib = static_cast<double>(bytes) / (1024.0 * 1024.0);
+            if (mib >= 10.0)
+                return std::format("{:.0f} MiB", mib);
+            if (mib >= 1.0)
+                return std::format("{:.1f} MiB", mib);
+            return std::format("{:.2f} MiB", mib);
         }
 
         void apply_closure(VramLedgerNode& node, const std::size_t epsilon) {
@@ -372,8 +388,7 @@ namespace lfs::diagnostics {
             }
             if (used > justified_used) {
                 add_child(root_a, "untracked_pool_used", used - justified_used,
-                          AttributionState::Justified, VramRowKind::Hooked,
-                          "includes unhooked gsplat async when gut is on");
+                          AttributionState::Justified, VramRowKind::Hooked, "untracked");
             }
             // Recompute attributed from Justified children only
             root_a.attributed_bytes = 0;
@@ -445,7 +460,8 @@ namespace lfs::diagnostics {
         auto root_f = make_root(VramLedgerRootId::VulkanVma, vma_blocks, "vulkan_vma");
         std::size_t vulkan_named = 0;
         for (const auto& row : snapshot.rows) {
-            if (row.live_bytes == 0 || !is_vulkan_named_row(row) || is_vulkan_external_row(row)) {
+            if (row.live_bytes == 0 || !is_vulkan_named_row(row) || is_vulkan_external_row(row) ||
+                is_shader_bytecode_row(row)) {
                 continue;
             }
             add_child(root_f,
@@ -496,6 +512,25 @@ namespace lfs::diagnostics {
         if (proc.cuda_warmup_bytes > 0) {
             add_child(root_h, "module_warmup", proc.cuda_warmup_bytes,
                       AttributionState::Justified, VramRowKind::Static);
+        }
+        {
+            std::size_t shader_bytes = 0;
+            std::size_t shader_modules = 0;
+            for (const auto& row : snapshot.rows) {
+                if (row.live_bytes == 0 || !is_shader_bytecode_row(row)) {
+                    continue;
+                }
+                shader_bytes += row.live_bytes;
+                ++shader_modules;
+            }
+            if (shader_modules > 0) {
+                // One grouped row under root H (design: no decision-value per-module flood).
+                // Nested: bytecode estimates must not inflate root H attribution.
+                add_child(root_h,
+                          std::format("shader bytecode, {} modules, {}", shader_modules,
+                                      format_mib(shader_bytes)),
+                          shader_bytes, AttributionState::Nested, VramRowKind::Static);
+            }
         }
         root_h.attributed_bytes = 0;
         for (const auto& c : root_h.children) {
