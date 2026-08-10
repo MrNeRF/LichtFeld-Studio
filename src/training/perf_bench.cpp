@@ -88,6 +88,35 @@ namespace lfs::training {
 #endif
         }
 
+        struct MrnfTransientPeaks {
+            std::size_t refine_required_bytes = 0;
+            std::size_t grow_required_bytes = 0;
+        };
+
+        [[nodiscard]] MrnfTransientPeaks mrnf_transient_peaks(
+            const diagnostics::VramProfilerSnapshot& snapshot) {
+            MrnfTransientPeaks peaks;
+            for (const auto& row : snapshot.rows) {
+                if (row.kind != diagnostics::VramRowKind::Hooked || row.peak_bytes == 0 ||
+                    row.method != diagnostics::VramAllocationMethod::Bucketed ||
+                    row.scope.find("MRNF::refine") == std::string::npos) {
+                    continue;
+                }
+                // Durable child/N scratch (and any retained model storage) is
+                // published by its owner.  Only the bucketed high-water above
+                // the retained bytes is an exclusive refine transient; the
+                // allocator cache/rounding roots cover backing overhead.
+                const std::size_t transient_bytes =
+                    row.peak_bytes > row.live_bytes ? row.peak_bytes - row.live_bytes : 0;
+                if (row.scope.find("MRNF::grow_and_split") != std::string::npos) {
+                    peaks.grow_required_bytes += transient_bytes;
+                } else {
+                    peaks.refine_required_bytes += transient_bytes;
+                }
+            }
+            return peaks;
+        }
+
     } // namespace
 
     PerfBenchCollector& PerfBenchCollector::instance() {
@@ -165,6 +194,12 @@ namespace lfs::training {
         loss_workspace_required_bytes_ = 0;
         loss_workspace_allocated_bytes_ = 0;
         densify_workspace_bytes_ = 0;
+        mrnf_strategy_required_bytes_ = 0;
+        mrnf_strategy_allocated_bytes_ = 0;
+        mrnf_densify_n_required_bytes_ = 0;
+        mrnf_densify_n_allocated_bytes_ = 0;
+        mrnf_densify_child_required_bytes_ = 0;
+        mrnf_densify_child_allocated_bytes_ = 0;
         training_state_reserved_bytes_ = 0;
         fastgs_raster_live_bytes_ = 0;
         fastgs_raster_arena_live_bytes_ = 0;
@@ -357,7 +392,9 @@ namespace lfs::training {
         if (!started_) {
             return;
         }
-        ledger_ = ledger;
+        if (ledger.total_bytes >= ledger_.total_bytes) {
+            ledger_ = ledger;
+        }
     }
 
     void PerfBenchCollector::set_psnr(const double psnr) {
@@ -398,6 +435,40 @@ namespace lfs::training {
         densify_workspace_bytes_ = std::max(densify_workspace_bytes_, bytes);
     }
 
+    void PerfBenchCollector::set_mrnf_strategy_bytes(const std::size_t required_bytes,
+                                                     const std::size_t allocated_bytes) {
+        if (!started_) {
+            return;
+        }
+        mrnf_strategy_required_bytes_ =
+            std::max(mrnf_strategy_required_bytes_, required_bytes);
+        mrnf_strategy_allocated_bytes_ =
+            std::max(mrnf_strategy_allocated_bytes_, allocated_bytes);
+    }
+
+    void PerfBenchCollector::set_mrnf_densify_n_bytes(const std::size_t required_bytes,
+                                                      const std::size_t allocated_bytes) {
+        if (!started_) {
+            return;
+        }
+        mrnf_densify_n_required_bytes_ =
+            std::max(mrnf_densify_n_required_bytes_, required_bytes);
+        mrnf_densify_n_allocated_bytes_ =
+            std::max(mrnf_densify_n_allocated_bytes_, allocated_bytes);
+    }
+
+    void PerfBenchCollector::set_mrnf_densify_child_bytes(
+        const std::size_t required_bytes,
+        const std::size_t allocated_bytes) {
+        if (!started_) {
+            return;
+        }
+        mrnf_densify_child_required_bytes_ =
+            std::max(mrnf_densify_child_required_bytes_, required_bytes);
+        mrnf_densify_child_allocated_bytes_ =
+            std::max(mrnf_densify_child_allocated_bytes_, allocated_bytes);
+    }
+
     void PerfBenchCollector::set_training_state_reserved_bytes(const std::size_t bytes) {
         if (!started_) {
             return;
@@ -423,6 +494,17 @@ namespace lfs::training {
 
     diagnostics::PeakExCacheLedger PerfBenchCollector::peak_ex_cache_ledger() const {
         const auto snap = diagnostics::VramProfiler::instance().snapshot();
+        const auto mrnf_transient = mrnf_transient_peaks(snap);
+
+        auto& profiler = diagnostics::VramProfiler::instance();
+        profiler.setGauge("vram.audit.mrnf.refine_peak.required_bytes",
+                          static_cast<double>(mrnf_transient.refine_required_bytes));
+        profiler.setGauge("vram.audit.mrnf.refine_peak.allocated_bytes",
+                          static_cast<double>(mrnf_transient.refine_required_bytes));
+        profiler.setGauge("vram.audit.mrnf.grow_peak_exclusive.required_bytes",
+                          static_cast<double>(mrnf_transient.grow_required_bytes));
+        profiler.setGauge("vram.audit.mrnf.grow_peak_exclusive.allocated_bytes",
+                          static_cast<double>(mrnf_transient.grow_required_bytes));
 
         diagnostics::PeakExCacheInputs in;
         in.peak_cuda_used_bytes = peak_cuda_used_;
@@ -430,9 +512,21 @@ namespace lfs::training {
         in.baseline_ex_cache_bytes = diagnostics::PeakExCacheLedger::kExCacheBaselineBytes;
         in.training_state_bytes = ledger_.total_bytes;
         in.training_state_reserved_bytes = training_state_reserved_bytes_;
+        in.training_state_baseline_bytes =
+            diagnostics::PeakExCacheLedger::kTrainingStateBaselineBytes;
         in.loss_workspace_required_bytes = loss_workspace_required_bytes_;
         in.loss_workspace_allocated_bytes = loss_workspace_allocated_bytes_;
         in.densify_workspace_bytes = densify_workspace_bytes_;
+        in.mrnf_strategy_required_bytes = mrnf_strategy_required_bytes_;
+        in.mrnf_strategy_allocated_bytes = mrnf_strategy_allocated_bytes_;
+        in.mrnf_densify_n_required_bytes = mrnf_densify_n_required_bytes_;
+        in.mrnf_densify_n_allocated_bytes = mrnf_densify_n_allocated_bytes_;
+        in.mrnf_densify_child_required_bytes = mrnf_densify_child_required_bytes_;
+        in.mrnf_densify_child_allocated_bytes = mrnf_densify_child_allocated_bytes_;
+        in.mrnf_refine_peak_required_bytes = mrnf_transient.refine_required_bytes;
+        in.mrnf_refine_peak_allocated_bytes = mrnf_transient.refine_required_bytes;
+        in.mrnf_grow_peak_required_bytes = mrnf_transient.grow_required_bytes;
+        in.mrnf_grow_peak_allocated_bytes = mrnf_transient.grow_required_bytes;
         in.pool_bucket_live_rounding_waste_bytes = peak_pool_bucket_live_waste_;
         in.pool_bucket_cache_bytes =
             peak_pool_bucket_cache_ > 0 ? peak_pool_bucket_cache_
@@ -596,7 +690,31 @@ namespace lfs::training {
         out << "    \"training_state_required_bytes\": " << ledger_.total_bytes << ",\n";
         out << "    \"training_state_allocated_bytes\": "
             << training_state_reserved_bytes_ << ",\n";
+        out << "    \"training_state_baseline_bytes\": "
+            << diagnostics::PeakExCacheLedger::kTrainingStateBaselineBytes << ",\n";
+        out << "    \"training_state_growth_bytes\": "
+            << peak_ledger.training_state_growth_bytes << ",\n";
         out << "    \"training_state_reserved_bytes\": " << training_state_reserved_bytes_ << ",\n";
+        out << "    \"mrnf_strategy_required_bytes\": "
+            << peak_ledger.mrnf_strategy_required_bytes << ",\n";
+        out << "    \"mrnf_strategy_allocated_bytes\": "
+            << peak_ledger.mrnf_strategy_allocated_bytes << ",\n";
+        out << "    \"mrnf_densify_n_required_bytes\": "
+            << peak_ledger.mrnf_densify_n_required_bytes << ",\n";
+        out << "    \"mrnf_densify_n_allocated_bytes\": "
+            << peak_ledger.mrnf_densify_n_allocated_bytes << ",\n";
+        out << "    \"mrnf_densify_child_required_bytes\": "
+            << peak_ledger.mrnf_densify_child_required_bytes << ",\n";
+        out << "    \"mrnf_densify_child_allocated_bytes\": "
+            << peak_ledger.mrnf_densify_child_allocated_bytes << ",\n";
+        out << "    \"mrnf_refine_peak_required_bytes\": "
+            << peak_ledger.mrnf_refine_peak_required_bytes << ",\n";
+        out << "    \"mrnf_refine_peak_allocated_bytes\": "
+            << peak_ledger.mrnf_refine_peak_allocated_bytes << ",\n";
+        out << "    \"mrnf_grow_peak_required_bytes\": "
+            << peak_ledger.mrnf_grow_peak_required_bytes << ",\n";
+        out << "    \"mrnf_grow_peak_allocated_bytes\": "
+            << peak_ledger.mrnf_grow_peak_allocated_bytes << ",\n";
         out << "    \"pool_bucket_cache_required_bytes\": 0,\n";
         out << "    \"pool_bucket_cache_allocated_bytes\": "
             << peak_ledger.pool_bucket_cache_bytes << ",\n";
@@ -645,10 +763,34 @@ namespace lfs::training {
             << peak_ledger.training_state_bytes << ",\n";
         out << "    \"training_state_allocated_bytes\": "
             << peak_ledger.training_state_reserved_bytes << ",\n";
+        out << "    \"training_state_baseline_bytes\": "
+            << peak_ledger.training_state_baseline_bytes << ",\n";
+        out << "    \"training_state_growth_bytes\": "
+            << peak_ledger.training_state_growth_bytes << ",\n";
         out << "    \"loss_workspace_required_bytes\": "
             << peak_ledger.loss_workspace_required_bytes << ",\n";
         out << "    \"loss_workspace_allocated_bytes\": "
             << peak_ledger.loss_workspace_allocated_bytes << ",\n";
+        out << "    \"mrnf_strategy_required_bytes\": "
+            << peak_ledger.mrnf_strategy_required_bytes << ",\n";
+        out << "    \"mrnf_strategy_allocated_bytes\": "
+            << peak_ledger.mrnf_strategy_allocated_bytes << ",\n";
+        out << "    \"mrnf_densify_n_required_bytes\": "
+            << peak_ledger.mrnf_densify_n_required_bytes << ",\n";
+        out << "    \"mrnf_densify_n_allocated_bytes\": "
+            << peak_ledger.mrnf_densify_n_allocated_bytes << ",\n";
+        out << "    \"mrnf_densify_child_required_bytes\": "
+            << peak_ledger.mrnf_densify_child_required_bytes << ",\n";
+        out << "    \"mrnf_densify_child_allocated_bytes\": "
+            << peak_ledger.mrnf_densify_child_allocated_bytes << ",\n";
+        out << "    \"mrnf_refine_peak_required_bytes\": "
+            << peak_ledger.mrnf_refine_peak_required_bytes << ",\n";
+        out << "    \"mrnf_refine_peak_allocated_bytes\": "
+            << peak_ledger.mrnf_refine_peak_allocated_bytes << ",\n";
+        out << "    \"mrnf_grow_peak_required_bytes\": "
+            << peak_ledger.mrnf_grow_peak_required_bytes << ",\n";
+        out << "    \"mrnf_grow_peak_allocated_bytes\": "
+            << peak_ledger.mrnf_grow_peak_allocated_bytes << ",\n";
         out << "    \"pool_bucket_cache_required_bytes\": 0,\n";
         out << "    \"pool_bucket_cache_allocated_bytes\": "
             << peak_ledger.pool_bucket_cache_bytes << ",\n";

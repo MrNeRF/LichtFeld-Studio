@@ -110,9 +110,21 @@ namespace lfs::diagnostics {
         std::size_t baseline_ex_cache_bytes = PeakExCacheLedger::kExCacheBaselineBytes;
         std::size_t training_state_bytes = 0;
         std::size_t training_state_reserved_bytes = 0;
+        std::size_t training_state_baseline_bytes =
+            PeakExCacheLedger::kTrainingStateBaselineBytes;
         std::size_t loss_workspace_required_bytes = 0;
         std::size_t loss_workspace_allocated_bytes = 0;
         std::size_t densify_workspace_bytes = 0;
+        std::size_t mrnf_strategy_required_bytes = 0;
+        std::size_t mrnf_strategy_allocated_bytes = 0;
+        std::size_t mrnf_densify_n_required_bytes = 0;
+        std::size_t mrnf_densify_n_allocated_bytes = 0;
+        std::size_t mrnf_densify_child_required_bytes = 0;
+        std::size_t mrnf_densify_child_allocated_bytes = 0;
+        std::size_t mrnf_refine_peak_required_bytes = 0;
+        std::size_t mrnf_refine_peak_allocated_bytes = 0;
+        std::size_t mrnf_grow_peak_required_bytes = 0;
+        std::size_t mrnf_grow_peak_allocated_bytes = 0;
         std::size_t pool_bucket_cache_bytes = 0;
         std::size_t pool_bucket_live_rounding_waste_bytes = 0;
         std::size_t exportable_splat_bytes = 0;

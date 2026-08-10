@@ -105,6 +105,8 @@ namespace lfs::training {
         lfs::core::Tensor i64_b;
         size_t n_capacity = 0;
         size_t k_capacity = 0;
+        size_t n_required = 0;
+        size_t k_required = 0;
 
         void ensure_n(size_t n, lfs::core::Device device);
         void ensure_k(size_t k, lfs::core::Device device);
@@ -121,6 +123,12 @@ namespace lfs::training {
             return bytes;
         }
 
+        /// Peak logical rows requested from the grow-only backing buffers.
+        [[nodiscard]] std::size_t required_bytes() const noexcept {
+            return n_required * (sizeof(float) + sizeof(bool)) +
+                   k_required * 2 * sizeof(std::int64_t);
+        }
+
         // Drop all storage. Not process-static (lives on the strategy), but
         // zeros_direct f32/bool + pool-backed i64 free paths are teardown-safe
         // Call when the owning strategy is reset early.
@@ -131,6 +139,8 @@ namespace lfs::training {
             i64_b = {};
             n_capacity = 0;
             k_capacity = 0;
+            n_required = 0;
+            k_required = 0;
         }
 
         [[nodiscard]] lfs::core::Tensor f32_a_view(size_t n) const;
@@ -153,12 +163,16 @@ namespace lfs::training {
         lfs::core::Tensor shN;       // [cap, sh_rest, 3]
         lfs::core::Tensor opacities; // [cap]
         size_t capacity = 0;
+        size_t required_bytes_high_water = 0;
         size_t sh_rest = 0;
         bool sh0_as_flat = false;
 
         /// Ensure workspace holds at least K rows (×1.2 growth). Returns views of size K.
         void ensure(size_t K, size_t sh_rest_in, bool use_shN, bool sh0_flat_layout,
                     lfs::core::Device device);
+
+        [[nodiscard]] std::size_t required_bytes() const noexcept;
+        [[nodiscard]] std::size_t resident_bytes() const noexcept;
 
         [[nodiscard]] lfs::core::Tensor means_view(size_t K) const;
         [[nodiscard]] lfs::core::Tensor rotations_view(size_t K) const;

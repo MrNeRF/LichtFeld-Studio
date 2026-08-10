@@ -375,6 +375,7 @@ namespace lfs::training {
         if (n == 0) {
             return;
         }
+        n_required = std::max(n_required, n);
         if (n_capacity >= n) {
             return;
         }
@@ -391,6 +392,7 @@ namespace lfs::training {
         if (k == 0) {
             return;
         }
+        k_required = std::max(k_required, k);
         if (k_capacity >= k) {
             return;
         }
@@ -426,6 +428,10 @@ namespace lfs::training {
             return;
 
         const size_t need = K;
+        constexpr std::size_t base_floats_per_row = 3 + 4 + 3 + 1 + 3;
+        required_bytes_high_water = std::max(
+            required_bytes_high_water,
+            K * (base_floats_per_row + (use_shN ? sh_rest_in * 3 : 0)) * sizeof(float));
         const bool layout_changed =
             (sh0_as_flat != sh0_flat_layout) ||
             (use_shN && sh_rest != sh_rest_in) ||
@@ -459,6 +465,24 @@ namespace lfs::training {
             sh_rest = sh_rest_in;
             shN = Tensor::empty({capacity, sh_rest_in, 3}, device);
         }
+    }
+
+    namespace {
+        [[nodiscard]] std::size_t densify_child_bytes(
+            const std::size_t rows,
+            const std::size_t sh_rest) noexcept {
+            // means + rotations + scales + opacity + sh0 + optional rest SH.
+            constexpr std::size_t base_floats_per_row = 3 + 4 + 3 + 1 + 3;
+            return rows * (base_floats_per_row + sh_rest * 3) * sizeof(float);
+        }
+    } // namespace
+
+    std::size_t DensifyChildWorkspace::required_bytes() const noexcept {
+        return required_bytes_high_water;
+    }
+
+    std::size_t DensifyChildWorkspace::resident_bytes() const noexcept {
+        return densify_child_bytes(capacity, shN.is_valid() ? sh_rest : 0);
     }
 
     lfs::core::Tensor DensifyChildWorkspace::means_view(const size_t K) const {

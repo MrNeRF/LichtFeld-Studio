@@ -31,6 +31,7 @@
 #include <numeric>
 #include <random>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -42,6 +43,38 @@ namespace lfs::training {
         constexpr int MRNF_BOUNDS_RECOMPUTE_INTERVAL_REFINES = 5;
         constexpr float MRNF_RAW_OPACITY_PRUNE_THRESHOLD = -5.54126358f; // logit(1 / 255)
         constexpr float MRNF_LOG_MIN_SCALE_THRESHOLD = -23.0258509f;     // log(1e-10)
+
+        [[nodiscard]] std::size_t tensor_vram_required_bytes(
+            const lfs::core::Tensor& tensor) noexcept {
+            return tensor.is_valid() && tensor.device() == lfs::core::Device::CUDA
+                       ? tensor.bytes()
+                       : 0;
+        }
+
+        [[nodiscard]] std::size_t tensor_vram_allocated_bytes(
+            const lfs::core::Tensor& tensor) noexcept {
+            if (!tensor.is_valid() || tensor.device() != lfs::core::Device::CUDA) {
+                return 0;
+            }
+            if (tensor.capacity() == 0 || tensor.ndim() == 0) {
+                return tensor.bytes();
+            }
+            std::size_t row_elements = 1;
+            for (std::size_t dim = 1; dim < tensor.ndim(); ++dim) {
+                row_elements *= tensor.shape()[dim];
+            }
+            return tensor.capacity() * row_elements * lfs::core::dtype_size(tensor.dtype());
+        }
+
+        void publish_required_allocated_pair(
+            lfs::diagnostics::VramProfiler& profiler,
+            const std::string_view name,
+            const std::size_t required_bytes,
+            const std::size_t allocated_bytes) {
+            const std::string prefix = std::string("vram.audit.mrnf.") + std::string(name);
+            profiler.setGauge(prefix + ".required_bytes", static_cast<double>(required_bytes));
+            profiler.setGauge(prefix + ".allocated_bytes", static_cast<double>(allocated_bytes));
+        }
 
         [[nodiscard]] double compute_decay_gamma(const double start, const double end, const size_t steps) {
             if (steps == 0 || start <= 0.0 || end <= 0.0) {
@@ -485,6 +518,12 @@ namespace lfs::training {
     void MRNF::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
         using namespace lfs::core;
 
+        _strategy_required_peak_bytes = 0;
+        _strategy_allocated_peak_bytes = 0;
+        _densify_n_required_peak_bytes = 0;
+        _densify_n_allocated_peak_bytes = 0;
+        _densify_child_required_peak_bytes = 0;
+        _densify_child_allocated_peak_bytes = 0;
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(optimParams);
 
         if (_params->max_cap > 0) {
@@ -597,17 +636,20 @@ namespace lfs::training {
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
 
+        publish_vram_attribution();
         compute_bounds();
 
         LOG_INFO("MRNF strategy initialized with {} Gaussians", n);
     }
 
     void MRNF::pre_step(int iter, RenderOutput& render_output) {
+        publish_vram_attribution();
         _precomputed_edge_scores = lfs::core::Tensor();
         _edge_precompute_valid = false;
 
         if (!_params || !_params->use_edge_map || iter >= static_cast<int>(_params->stop_refine)) {
             reset_edge_accumulator();
+            publish_vram_attribution();
             return;
         }
 
@@ -624,6 +666,7 @@ namespace lfs::training {
             _edge_score_sum.ndim() != 1 ||
             _edge_score_sum.numel() != static_cast<size_t>(_splat_data->size())) {
             reset_edge_accumulator();
+            publish_vram_attribution();
             return;
         }
 
@@ -631,7 +674,10 @@ namespace lfs::training {
         _precomputed_edge_scores.div_(static_cast<float>(_edge_sample_count));
         zero_frozen_scores_inplace(*_splat_data, _precomputed_edge_scores);
         _edge_precompute_valid = true;
+        // Capture the short, real overlap before score_sum is released.
+        publish_vram_attribution();
         reset_edge_accumulator();
+        publish_vram_attribution();
     }
 
     void MRNF::ensure_densification_info_shape() {
@@ -682,6 +728,77 @@ namespace lfs::training {
         _edge_last_sample_iter = -1;
     }
 
+    void MRNF::publish_vram_attribution() noexcept {
+        try {
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            const bool publish_live = profiler.enabled();
+            const bool publish_bench = PerfBenchCollector::enabled();
+            if (!publish_live && !publish_bench) {
+                return;
+            }
+
+            std::size_t strategy_required = 0;
+            std::size_t strategy_allocated = 0;
+            const auto account_tensor = [&](const std::string_view name,
+                                            const lfs::core::Tensor& tensor) {
+                const auto required = tensor_vram_required_bytes(tensor);
+                const auto allocated = tensor_vram_allocated_bytes(tensor);
+                strategy_required += required;
+                strategy_allocated += allocated;
+                if (publish_live) {
+                    publish_required_allocated_pair(profiler, name, required, allocated);
+                }
+            };
+
+            account_tensor("refine_weight_max", _refine_weight_max);
+            account_tensor("vis_count", _vis_count);
+            account_tensor("free_mask", _free_mask);
+            account_tensor("refine_counts_device", _refine_counts_dev);
+            account_tensor("refine_counts_host_device", _refine_counts_host);
+            account_tensor("edge.precomputed_scores", _precomputed_edge_scores);
+            account_tensor("edge.score_sum", _edge_score_sum);
+            account_tensor("edge.canny_nms", _edge_canny_nms_output);
+
+            _strategy_required_peak_bytes =
+                std::max(_strategy_required_peak_bytes, strategy_required);
+            _strategy_allocated_peak_bytes =
+                std::max(_strategy_allocated_peak_bytes, strategy_allocated);
+
+            _densify_n_required_peak_bytes = std::max(
+                _densify_n_required_peak_bytes, _densify_n_scratch.required_bytes());
+            _densify_n_allocated_peak_bytes = std::max(
+                _densify_n_allocated_peak_bytes, _densify_n_scratch.resident_bytes());
+            _densify_child_required_peak_bytes = std::max(
+                _densify_child_required_peak_bytes, _densify_ws.required_bytes());
+            _densify_child_allocated_peak_bytes = std::max(
+                _densify_child_allocated_peak_bytes, _densify_ws.resident_bytes());
+
+            if (publish_live) {
+                publish_required_allocated_pair(
+                    profiler, "strategy_peak", _strategy_required_peak_bytes,
+                    _strategy_allocated_peak_bytes);
+                publish_required_allocated_pair(
+                    profiler, "densify_n_scratch", _densify_n_required_peak_bytes,
+                    _densify_n_allocated_peak_bytes);
+                publish_required_allocated_pair(
+                    profiler, "densify_child", _densify_child_required_peak_bytes,
+                    _densify_child_allocated_peak_bytes);
+            }
+
+            if (publish_bench) {
+                auto& bench = PerfBenchCollector::instance();
+                bench.set_mrnf_strategy_bytes(_strategy_required_peak_bytes,
+                                              _strategy_allocated_peak_bytes);
+                bench.set_mrnf_densify_n_bytes(_densify_n_required_peak_bytes,
+                                               _densify_n_allocated_peak_bytes);
+                bench.set_mrnf_densify_child_bytes(_densify_child_required_peak_bytes,
+                                                   _densify_child_allocated_peak_bytes);
+            }
+        } catch (...) {
+            // Attribution must never alter the training control path.
+        }
+    }
+
     void MRNF::accumulate_edge_sample(int iter, const RenderOutput& render_output) {
         using namespace lfs::core;
 
@@ -717,6 +834,7 @@ namespace lfs::training {
         _edge_score_sum.add_(zero_frozen_scores(*_splat_data, score_render.edges_score));
         ++_edge_sample_count;
         _edge_last_sample_iter = iter;
+        publish_vram_attribution();
     }
 
     void MRNF::post_backward(int iter, RenderOutput& /*render_output*/) {
@@ -752,6 +870,7 @@ namespace lfs::training {
             if (degree_bump_due) {
                 _splat_data->increment_sh_degree();
             }
+            publish_vram_attribution();
             return;
         }
 
@@ -789,6 +908,7 @@ namespace lfs::training {
         if (degree_bump_due) {
             _splat_data->increment_sh_degree();
         }
+        publish_vram_attribution();
     }
 
     bool MRNF::is_refining(int iter) const {
@@ -912,6 +1032,8 @@ namespace lfs::training {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
         }
 
+        publish_vram_attribution();
+
         // MRNF trim_memory_pool parity with MCMC/IGS+ after refine.
         // Epoch-pinned release: trim runs under the same render_mutex_ exclusive
         // that bars Scene rebuild / preview from holding the float workspace
@@ -937,6 +1059,7 @@ namespace lfs::training {
             PerfBenchCollector::instance().set_densify_workspace_bytes(
                 _densify_n_scratch.resident_bytes());
         }
+        publish_vram_attribution();
 
         lfs::core::Tensor active_mask;
         if (_free_mask.is_valid() && n > 0) {
@@ -1080,8 +1203,10 @@ namespace lfs::training {
             split_indices = growth_inds;
         }
 
-        if (!split_indices.is_valid() || split_indices.numel() == 0)
+        if (!split_indices.is_valid() || split_indices.numel() == 0) {
+            publish_vram_attribution();
             return;
+        }
 
         assert(_params->max_cap <= 0 ||
                current_active + split_indices.numel() <= static_cast<size_t>(_params->max_cap));
@@ -1094,6 +1219,7 @@ namespace lfs::training {
                              _splat_data->shN().numel() > 0;
 
         _densify_ws.ensure(K, sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::CUDA);
+        publish_vram_attribution();
         auto child_means = _densify_ws.means_view(K);
         auto child_log_scales = _densify_ws.scales_view(K);
         auto child_raw_opacities = _densify_ws.opacities_view(K);
@@ -1252,6 +1378,7 @@ namespace lfs::training {
         LFS_COUNTER_ADD("strategy.mrnf.appended", n_append);
         LFS_GAUGE("model.gaussians.live", active_count());
         LFS_GAUGE("model.gaussians.capacity", static_cast<double>(_splat_data->size()));
+        publish_vram_attribution();
     }
 
     lfs::core::Tensor MRNF::compute_refine_candidates() const {
@@ -2006,6 +2133,7 @@ namespace lfs::training {
                 _optimizer->set_param_lr(ParamType::Means, _mean_lr_unscaled * _bounds.median_size);
             }
         }
+        publish_vram_attribution();
     }
 
     bool MRNF::can_adopt_checkpoint_state(const IStrategy& loaded) const noexcept {
@@ -2037,6 +2165,7 @@ namespace lfs::training {
         std::swap(_scale_lr_current, source._scale_lr_current);
         std::swap(_mean_lr_gamma, source._mean_lr_gamma);
         std::swap(_scale_lr_gamma, source._scale_lr_gamma);
+        publish_vram_attribution();
     }
 
     void MRNF::reserve_optimizer_capacity(size_t capacity) {

@@ -659,9 +659,20 @@ namespace lfs::diagnostics {
         out.baseline_ex_cache_bytes = in.baseline_ex_cache_bytes;
         out.training_state_bytes = in.training_state_bytes;
         out.training_state_reserved_bytes = in.training_state_reserved_bytes;
+        out.training_state_baseline_bytes = in.training_state_baseline_bytes;
         out.loss_workspace_required_bytes = in.loss_workspace_required_bytes;
         out.loss_workspace_allocated_bytes = in.loss_workspace_allocated_bytes;
         out.densify_workspace_bytes = in.densify_workspace_bytes;
+        out.mrnf_strategy_required_bytes = in.mrnf_strategy_required_bytes;
+        out.mrnf_strategy_allocated_bytes = in.mrnf_strategy_allocated_bytes;
+        out.mrnf_densify_n_required_bytes = in.mrnf_densify_n_required_bytes;
+        out.mrnf_densify_n_allocated_bytes = in.mrnf_densify_n_allocated_bytes;
+        out.mrnf_densify_child_required_bytes = in.mrnf_densify_child_required_bytes;
+        out.mrnf_densify_child_allocated_bytes = in.mrnf_densify_child_allocated_bytes;
+        out.mrnf_refine_peak_required_bytes = in.mrnf_refine_peak_required_bytes;
+        out.mrnf_refine_peak_allocated_bytes = in.mrnf_refine_peak_allocated_bytes;
+        out.mrnf_grow_peak_required_bytes = in.mrnf_grow_peak_required_bytes;
+        out.mrnf_grow_peak_allocated_bytes = in.mrnf_grow_peak_allocated_bytes;
         out.pool_bucket_cache_bytes = in.pool_bucket_cache_bytes;
         out.pool_bucket_live_rounding_waste_bytes = in.pool_bucket_live_rounding_waste_bytes;
         out.exportable_splat_bytes = in.exportable_splat_bytes;
@@ -712,6 +723,13 @@ namespace lfs::diagnostics {
             in.training_state_reserved_bytes > in.training_state_bytes
                 ? in.training_state_reserved_bytes - in.training_state_bytes
                 : 0;
+        const std::size_t training_state_growth =
+            in.training_state_bytes > in.training_state_baseline_bytes
+                ? in.training_state_bytes - in.training_state_baseline_bytes
+                : 0;
+        const std::size_t training_state_baseline_inventory =
+            std::min(in.training_state_bytes, in.training_state_baseline_bytes);
+        out.training_state_growth_bytes = training_state_growth;
         const std::size_t fastgs_sort_slack =
             in.fastgs_sort_allocated_bytes > in.fastgs_sort_required_bytes
                 ? in.fastgs_sort_allocated_bytes - in.fastgs_sort_required_bytes
@@ -721,7 +739,13 @@ namespace lfs::diagnostics {
             AttributionState::Nested,
             "subtracted before process-net excess; not justified cover");
         add("training_state", "optimizer", in.training_state_bytes, AttributionState::Nested,
-            "baseline-accounted inventory; only capacity overhead covers new excess");
+            "aggregate inventory; baseline, growth, and capacity are disclosed below");
+        add("training_state_baseline", "optimizer", training_state_baseline_inventory,
+            AttributionState::Nested,
+            "canonical 1.5M inventory already included in the ex-cache baseline");
+        add("training_state_growth", "optimizer", training_state_growth,
+            AttributionState::Justified,
+            "logical inventory above the canonical 1.5M baseline");
         add("training_state_capacity_overhead", "capacity", capacity_overhead,
             AttributionState::Justified);
         add("loss_workspace_required", "loss_workspace", in.loss_workspace_required_bytes,
@@ -731,8 +755,44 @@ namespace lfs::diagnostics {
             "aggregate of loss_workspace_required and loss_workspace_slack");
         add("loss_workspace_slack", "loss_workspace", loss_workspace_slack,
             AttributionState::Justified);
-        add("densify_child_workspace", "densification", in.densify_workspace_bytes,
-            AttributionState::Justified);
+        const bool has_named_mrnf_densify =
+            in.mrnf_densify_n_allocated_bytes > 0 ||
+            in.mrnf_densify_child_allocated_bytes > 0;
+        add("densify_workspace_legacy", "densification",
+            has_named_mrnf_densify ? 0 : in.densify_workspace_bytes,
+            AttributionState::Justified,
+            "legacy aggregate used only when named densify owners are absent");
+
+        const auto add_required_allocated = [&](const char* prefix,
+                                                const char* owner,
+                                                const std::size_t required,
+                                                const std::size_t allocated) {
+            const std::string required_name = std::string(prefix) + "_required";
+            const std::string allocated_name = std::string(prefix) + "_allocated";
+            const std::string slack_name = std::string(prefix) + "_slack";
+            add(required_name.c_str(), owner, required, AttributionState::Nested,
+                "logical requirement; disclosed inside allocated backing");
+            add(allocated_name.c_str(), owner, allocated, AttributionState::Justified);
+            add(slack_name.c_str(), owner,
+                allocated > required ? allocated - required : 0,
+                AttributionState::Nested,
+                "disclosure component already included in allocated backing");
+        };
+        add_required_allocated("mrnf_strategy", "MRNF",
+                               in.mrnf_strategy_required_bytes,
+                               in.mrnf_strategy_allocated_bytes);
+        add_required_allocated("mrnf_densify_n", "MRNF",
+                               in.mrnf_densify_n_required_bytes,
+                               in.mrnf_densify_n_allocated_bytes);
+        add_required_allocated("mrnf_densify_child", "MRNF",
+                               in.mrnf_densify_child_required_bytes,
+                               in.mrnf_densify_child_allocated_bytes);
+        add_required_allocated("mrnf_refine_peak", "MRNF",
+                               in.mrnf_refine_peak_required_bytes,
+                               in.mrnf_refine_peak_allocated_bytes);
+        add_required_allocated("mrnf_grow_peak_exclusive", "MRNF",
+                               in.mrnf_grow_peak_required_bytes,
+                               in.mrnf_grow_peak_allocated_bytes);
         add("pool_bucket_cache", "allocator", in.pool_bucket_cache_bytes,
             AttributionState::Justified);
         add("pool_bucket_live_rounding_waste", "allocator",

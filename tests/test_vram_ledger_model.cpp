@@ -213,6 +213,58 @@ TEST(VramLedger, PeakExCacheIdenticalGateNumbersFromMyConfirm3Inputs) {
     EXPECT_EQ(out.justified_excess_bytes, 446221888ull);
 }
 
+TEST(VramLedger, PeakExCacheNamesTrainingGrowthAndDisjointMrnfWorkspaces) {
+    PeakExCacheInputs in;
+    in.baseline_cuda_used_bytes = 1000;
+    in.baseline_ex_cache_bytes = PeakExCacheLedger::kExCacheBaselineBytes;
+    in.training_state_baseline_bytes = 400;
+    in.training_state_bytes = 1000;
+    in.training_state_reserved_bytes = 1100;
+    in.mrnf_strategy_required_bytes = 80;
+    in.mrnf_strategy_allocated_bytes = 100;
+    in.mrnf_densify_n_required_bytes = 20;
+    in.mrnf_densify_n_allocated_bytes = 30;
+    in.mrnf_densify_child_required_bytes = 40;
+    in.mrnf_densify_child_allocated_bytes = 50;
+    in.mrnf_refine_peak_required_bytes = 60;
+    in.mrnf_refine_peak_allocated_bytes = 60;
+    in.mrnf_grow_peak_required_bytes = 70;
+    in.mrnf_grow_peak_allocated_bytes = 70;
+
+    constexpr std::size_t justified = 600 + 100 + 100 + 30 + 50 + 60 + 70;
+    in.peak_cuda_used_bytes =
+        in.baseline_cuda_used_bytes + in.baseline_ex_cache_bytes + justified;
+
+    const auto out = buildPeakExCacheLedger(in);
+    EXPECT_EQ(out.training_state_growth_bytes, 600u);
+    EXPECT_EQ(out.justified_excess_bytes, justified);
+    EXPECT_EQ(out.signed_residual_bytes, 0);
+
+    const auto find_line = [&](const std::string& name) -> const PeakSubsystemLine* {
+        for (const auto& line : out.lines) {
+            if (line.name == name) {
+                return &line;
+            }
+        }
+        return nullptr;
+    };
+
+    const auto* growth = find_line("training_state_growth");
+    ASSERT_NE(growth, nullptr);
+    EXPECT_EQ(growth->bytes, 600u);
+    EXPECT_EQ(growth->state, AttributionState::Justified);
+
+    const auto* child = find_line("mrnf_densify_child_allocated");
+    ASSERT_NE(child, nullptr);
+    EXPECT_EQ(child->bytes, 50u);
+    EXPECT_EQ(child->state, AttributionState::Justified);
+
+    const auto* grow = find_line("mrnf_grow_peak_exclusive_allocated");
+    ASSERT_NE(grow, nullptr);
+    EXPECT_EQ(grow->bytes, 70u);
+    EXPECT_EQ(grow->state, AttributionState::Justified);
+}
+
 TEST(VramLedger, NineRootsPresentWhenVulkanIncluded) {
     VramProfilerSnapshot snap;
     snap.process.process_memory_valid = true;
@@ -455,8 +507,8 @@ TEST(VramLedger, IncompleteNamedVmaCoverageYieldsGap) {
     constexpr std::size_t MiB = 1024ull * 1024ull;
     // Live idle shape: blocks >> named used; driver free is the true free authority.
     constexpr std::size_t kBlocks = 23 * MiB;
-    constexpr std::size_t kNamed = 5 * MiB;       // incomplete instrumentation
-    constexpr std::size_t kDriverFree = 4 * MiB;  // allocator_free_in_blocks
+    constexpr std::size_t kNamed = 5 * MiB;      // incomplete instrumentation
+    constexpr std::size_t kDriverFree = 4 * MiB; // allocator_free_in_blocks
     constexpr std::size_t kResidual = kBlocks - kNamed;
     constexpr std::size_t kFreeInside = kDriverFree; // min(residual, driver_free)
     constexpr std::size_t kUnattributed = kResidual - kFreeInside;

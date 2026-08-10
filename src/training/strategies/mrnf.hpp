@@ -105,6 +105,7 @@ namespace lfs::training {
         [[nodiscard]] bool should_accumulate_edge_sample(int iter) const;
         [[nodiscard]] int edge_target_samples_per_refine_window() const;
         void reset_edge_accumulator();
+        void publish_vram_attribution() noexcept;
         size_t active_count() const;
         size_t free_count() const;
         [[nodiscard]] lfs::core::Tensor get_active_indices() const;
@@ -142,6 +143,13 @@ namespace lfs::training {
         DensifyNScratch _densify_n_scratch;
         lfs::core::Tensor _refine_counts_dev;
         lfs::core::Tensor _refine_counts_host; // pinned staging optional; use vector
+
+        std::size_t _strategy_required_peak_bytes = 0;
+        std::size_t _strategy_allocated_peak_bytes = 0;
+        std::size_t _densify_n_required_peak_bytes = 0;
+        std::size_t _densify_n_allocated_peak_bytes = 0;
+        std::size_t _densify_child_required_peak_bytes = 0;
+        std::size_t _densify_child_allocated_peak_bytes = 0;
 
         mrnf_strategy::MRNFBounds _bounds = {};
         bool _bounds_valid = false;

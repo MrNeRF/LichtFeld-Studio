@@ -50,6 +50,13 @@ namespace lfs::training {
         // Densify child / N-scratch high-water for peak attribution.
         void set_densify_workspace_bytes(std::size_t bytes);
 
+        void set_mrnf_strategy_bytes(std::size_t required_bytes,
+                                     std::size_t allocated_bytes);
+        void set_mrnf_densify_n_bytes(std::size_t required_bytes,
+                                      std::size_t allocated_bytes);
+        void set_mrnf_densify_child_bytes(std::size_t required_bytes,
+                                          std::size_t allocated_bytes);
+
         /// Capacity-backed training-state high-water (params+optim reserved, not logical N).
         void set_training_state_reserved_bytes(std::size_t bytes);
 
@@ -118,6 +125,12 @@ namespace lfs::training {
         std::size_t loss_workspace_required_bytes_ = 0;
         std::size_t loss_workspace_allocated_bytes_ = 0;
         std::size_t densify_workspace_bytes_ = 0;
+        std::size_t mrnf_strategy_required_bytes_ = 0;
+        std::size_t mrnf_strategy_allocated_bytes_ = 0;
+        std::size_t mrnf_densify_n_required_bytes_ = 0;
+        std::size_t mrnf_densify_n_allocated_bytes_ = 0;
+        std::size_t mrnf_densify_child_required_bytes_ = 0;
+        std::size_t mrnf_densify_child_allocated_bytes_ = 0;
         std::size_t training_state_reserved_bytes_ = 0;
         std::size_t fastgs_raster_live_bytes_ = 0;
         std::size_t fastgs_raster_arena_live_bytes_ = 0;
