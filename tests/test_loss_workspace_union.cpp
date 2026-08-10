@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "training/losses/photometric_loss.hpp"
@@ -120,7 +121,7 @@ TEST_F(LossWorkspaceUnionTest, IndependentWorkspacesRetainSum) {
         << "sum should be well above a single variant";
 }
 
-// Sequential activation must resize in both directions to the active layout.
+// Variant switches resize in both directions to the active layout exactly.
 TEST_F(LossWorkspaceUnionTest, SequentialModesThroughArenaTrackActiveVariantExactly) {
     const std::vector<size_t> shape = {1, 3, 64, 96};
 
@@ -140,6 +141,50 @@ TEST_F(LossWorkspaceUnionTest, SequentialModesThroughArenaTrackActiveVariantExac
     arena.ensure_masked_decoupled(shape);
     expect_exact_active_allocation(
         arena, LossWorkspaceArena::masked_decoupled_layout_bytes(shape));
+}
+
+TEST_F(LossWorkspaceUnionTest, MixedResolutionSameVariantIsGrowOnly) {
+    const std::vector<size_t> small_shape = {1, 3, 32, 48};
+    const std::vector<size_t> large_shape = {1, 3, 96, 128};
+
+    LossWorkspaceArena arena;
+    arena.ensure_fused(small_shape);
+    expect_exact_active_allocation(
+        arena, LossWorkspaceArena::fused_layout_bytes(small_shape));
+
+    arena.ensure_fused(large_shape);
+    const size_t large_required = LossWorkspaceArena::fused_layout_bytes(large_shape);
+    const size_t high_water = align_arena_bytes(large_required);
+    ASSERT_EQ(arena.required_bytes(), large_required);
+    ASSERT_EQ(arena.allocated_bytes(), high_water);
+
+    const auto alloc_snapshot = lfs::core::alloc_counter::snapshot();
+    for (int i = 0; i < 16; ++i) {
+        arena.ensure_fused(small_shape);
+        EXPECT_EQ(arena.required_bytes(),
+                  LossWorkspaceArena::fused_layout_bytes(small_shape));
+        EXPECT_EQ(arena.allocated_bytes(), high_water);
+
+        arena.ensure_fused(large_shape);
+        EXPECT_EQ(arena.required_bytes(), large_required);
+        EXPECT_EQ(arena.allocated_bytes(), high_water);
+    }
+    EXPECT_EQ(lfs::core::alloc_counter::delta_since(alloc_snapshot), 0u)
+        << "same-variant mixed-resolution rebinding must not commit device memory";
+
+    arena.ensure_fused(small_shape);
+    ASSERT_LT(arena.required_bytes(), arena.allocated_bytes());
+    arena.shrink_to_required();
+    expect_exact_active_allocation(
+        arena, LossWorkspaceArena::fused_layout_bytes(small_shape));
+
+    arena.reset();
+    EXPECT_EQ(arena.active_kind(), LossWorkspaceArena::Kind::None);
+    EXPECT_EQ(arena.required_bytes(), 0u);
+    EXPECT_EQ(arena.allocated_bytes(), 0u);
+    arena.fused().ensure_size(small_shape);
+    expect_exact_active_allocation(
+        arena, LossWorkspaceArena::fused_layout_bytes(small_shape));
 }
 
 TEST_F(LossWorkspaceUnionTest, ActiveVariantAllocationMatchesRequiredAtTwoShapes) {

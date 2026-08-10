@@ -2673,11 +2673,10 @@ namespace lfs::training::kernels {
         return 0;
     }
 
-    void LossWorkspaceArena::ensure_capacity(size_t bytes) {
+    void LossWorkspaceArena::replace_storage_exact(const size_t bytes) {
         const size_t required_capacity = align_up_bytes(bytes);
-        if (required_capacity == capacity_bytes_ && storage_.is_valid()) {
-            return;
-        }
+        LFS_ASSERT_MSG(required_capacity > 0,
+                       "LossWorkspaceArena cannot allocate an empty active layout");
 
         auto new_storage = lfs::core::Tensor::empty(
             {required_capacity}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
@@ -2686,13 +2685,24 @@ namespace lfs::training::kernels {
             new_storage.set_stream(lfs::core::getCurrentCUDAStream());
         }
 
-        // A size change is an active-variant/shape boundary. Replace the backing
-        // storage exactly (growing or shrinking) and invalidate every old view.
         clear_all_views();
         storage_ = std::move(new_storage);
         capacity_bytes_ = required_capacity;
         active_kind_ = Kind::None;
         active_shape_.clear();
+    }
+
+    void LossWorkspaceArena::ensure_capacity_for(const Kind kind, const size_t bytes) {
+        const size_t required_capacity = align_up_bytes(bytes);
+        const bool variant_changed = active_kind_ != Kind::None && active_kind_ != kind;
+        const bool must_allocate = !storage_.is_valid() || variant_changed ||
+                                   required_capacity > capacity_bytes_;
+        if (!must_allocate) {
+            return;
+        }
+        // Variant switches are exact in either direction. Within one variant,
+        // shape changes only grow; smaller shapes rebind into the retained block.
+        replace_storage_exact(required_capacity);
     }
 
     void LossWorkspaceArena::clear_all_views() {
@@ -2866,7 +2876,7 @@ namespace lfs::training::kernels {
     }
 
     FusedL1SSIMWorkspace& LossWorkspaceArena::ensure_fused(const std::vector<size_t>& shape) {
-        ensure_capacity(fused_layout_bytes(shape));
+        ensure_capacity_for(Kind::Fused, fused_layout_bytes(shape));
         if (active_kind_ == Kind::Fused && active_shape_ == shape && fused_.ssim_map.is_valid()) {
             return fused_;
         }
@@ -2878,7 +2888,7 @@ namespace lfs::training::kernels {
     }
 
     SSIMWorkspace& LossWorkspaceArena::ensure_pure_ssim(const std::vector<size_t>& shape) {
-        ensure_capacity(pure_ssim_layout_bytes(shape));
+        ensure_capacity_for(Kind::PureSSIM, pure_ssim_layout_bytes(shape));
         if (active_kind_ == Kind::PureSSIM && active_shape_ == shape && pure_ssim_.ssim_map.is_valid()) {
             return pure_ssim_;
         }
@@ -2890,7 +2900,7 @@ namespace lfs::training::kernels {
     }
 
     DecoupledFusedL1SSIMWorkspace& LossWorkspaceArena::ensure_decoupled(const std::vector<size_t>& shape) {
-        ensure_capacity(decoupled_layout_bytes(shape));
+        ensure_capacity_for(Kind::Decoupled, decoupled_layout_bytes(shape));
         if (active_kind_ == Kind::Decoupled && active_shape_ == shape && decoupled_.ssim_map.is_valid()) {
             return decoupled_;
         }
@@ -2902,7 +2912,7 @@ namespace lfs::training::kernels {
     }
 
     MaskedFusedL1SSIMWorkspace& LossWorkspaceArena::ensure_masked_fused(const std::vector<size_t>& shape) {
-        ensure_capacity(masked_fused_layout_bytes(shape));
+        ensure_capacity_for(Kind::MaskedFused, masked_fused_layout_bytes(shape));
         if (active_kind_ == Kind::MaskedFused && active_shape_ == shape &&
             masked_fused_.ssim_map.is_valid()) {
             return masked_fused_;
@@ -2916,7 +2926,7 @@ namespace lfs::training::kernels {
 
     MaskedDecoupledFusedL1SSIMWorkspace&
     LossWorkspaceArena::ensure_masked_decoupled(const std::vector<size_t>& shape) {
-        ensure_capacity(masked_decoupled_layout_bytes(shape));
+        ensure_capacity_for(Kind::MaskedDecoupled, masked_decoupled_layout_bytes(shape));
         if (active_kind_ == Kind::MaskedDecoupled && active_shape_ == shape &&
             masked_decoupled_.ssim_map.is_valid()) {
             return masked_decoupled_;
@@ -2928,17 +2938,49 @@ namespace lfs::training::kernels {
         return masked_decoupled_;
     }
 
+    void LossWorkspaceArena::shrink_to_required() {
+        if (active_kind_ == Kind::None || active_shape_.empty()) {
+            reset();
+            return;
+        }
+
+        const Kind kind = active_kind_;
+        const std::vector<size_t> shape = active_shape_;
+        const size_t required_capacity = align_up_bytes(required_bytes());
+        if (storage_.is_valid() && capacity_bytes_ == required_capacity) {
+            return;
+        }
+
+        replace_storage_exact(required_capacity);
+        switch (kind) {
+        case Kind::Fused:
+            bind_fused(shape);
+            break;
+        case Kind::PureSSIM:
+            bind_pure_ssim(shape);
+            break;
+        case Kind::Decoupled:
+            bind_decoupled(shape);
+            break;
+        case Kind::MaskedFused:
+            bind_masked_fused(shape);
+            break;
+        case Kind::MaskedDecoupled:
+            bind_masked_decoupled(shape);
+            break;
+        case Kind::None:
+            return;
+        }
+        active_kind_ = kind;
+        active_shape_ = shape;
+    }
+
     void LossWorkspaceArena::reset() {
         clear_all_views();
         storage_ = {};
         capacity_bytes_ = 0;
         active_kind_ = Kind::None;
         active_shape_.clear();
-        fused_.arena = nullptr;
-        pure_ssim_.arena = nullptr;
-        decoupled_.arena = nullptr;
-        masked_fused_.arena = nullptr;
-        masked_decoupled_.arena = nullptr;
     }
 
 } // namespace lfs::training::kernels

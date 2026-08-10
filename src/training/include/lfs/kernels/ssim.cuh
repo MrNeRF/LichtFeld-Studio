@@ -15,8 +15,8 @@ namespace lfs::training::kernels {
     inline constexpr float SSIM_EPSILON = 1e-8f;
 
     // The five loss-workspace variants are mutually exclusive per step. One arena
-    // region sized to the largest variant, with per-variant views rebuilt on mode
-    // switch, keeps process peak at a single variant.
+    // holds the active variant exactly on mode switches and keeps a measured
+    // same-variant shape high-water until a named shrink boundary.
     class LossWorkspaceArena;
 
     // Pre-allocated workspace for SSIM computation
@@ -336,6 +336,7 @@ namespace lfs::training::kernels {
                 masked_decoupled_.arena = this;
                 other.capacity_bytes_ = 0;
                 other.active_kind_ = Kind::None;
+                other.active_shape_.clear();
                 other.fused_.arena = nullptr;
                 other.pure_ssim_.arena = nullptr;
                 other.decoupled_.arena = nullptr;
@@ -377,6 +378,9 @@ namespace lfs::training::kernels {
             return masked_decoupled_;
         }
 
+        // EXACT-3 boundary: resize the active variant to its current requirement,
+        // or release the arena when no variant is active.
+        void shrink_to_required();
         void reset();
 
     private:
@@ -386,7 +390,8 @@ namespace lfs::training::kernels {
         friend struct MaskedFusedL1SSIMWorkspace;
         friend struct MaskedDecoupledFusedL1SSIMWorkspace;
 
-        void ensure_capacity(size_t bytes);
+        void ensure_capacity_for(Kind kind, size_t bytes);
+        void replace_storage_exact(size_t bytes);
         void clear_all_views();
         [[nodiscard]] lfs::core::Tensor make_view(size_t& offset,
                                                   const std::vector<size_t>& shape,
@@ -397,7 +402,8 @@ namespace lfs::training::kernels {
         void bind_masked_fused(const std::vector<size_t>& shape);
         void bind_masked_decoupled(const std::vector<size_t>& shape);
 
-        lfs::core::Tensor storage_; // UInt8 blob sized to the aligned active layout
+        // UInt8 blob: exact on variant switches, same-variant shape high-water.
+        lfs::core::Tensor storage_;
         size_t capacity_bytes_ = 0;
         Kind active_kind_ = Kind::None;
         std::vector<size_t> active_shape_;

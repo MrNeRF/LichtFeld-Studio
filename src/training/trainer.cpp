@@ -3528,6 +3528,8 @@ namespace lfs::training {
             if (progress_) {
                 progress_->pause();
             }
+            // B3: the previous step is complete; release the production loss arena.
+            photometric_loss_.arena().reset();
             LOG_INFO("Training paused at iteration {}", iter);
             LOG_DEBUG("Click 'Resume Training' to continue.");
         } else if (!pause_requested_.load() && is_paused_.load()) {
@@ -3559,10 +3561,14 @@ namespace lfs::training {
             } else {
                 LOG_ERROR("Failed to save checkpoint: {}", result.error());
             }
+            // B2: checkpoint boundaries collapse any mixed-resolution high-water.
+            photometric_loss_.arena().shrink_to_required();
         }
 
         // Handle stop request - this permanently stops training
         if (stop_requested_.load()) {
+            // B3: no new forward work will consume these views.
+            photometric_loss_.arena().reset();
             LOG_INFO("Stopping training permanently at iteration {}...", iter);
         }
     }
@@ -5693,6 +5699,8 @@ namespace lfs::training {
                                                             val_dataset_,
                                                             background_);
                         LOG_INFO("{}", metrics.to_string());
+                        // B2: retain only the current active shape after evaluation.
+                        photometric_loss_.arena().shrink_to_required();
                     }
 
                     const bool save_regular_phase_output = get_active_sparsify_steps() > 0 &&
@@ -5708,6 +5716,7 @@ namespace lfs::training {
                         if (auto result = save_checkpoint(iter); !result) {
                             LOG_WARN("Failed to save regular-phase checkpoint at iteration {}: {}", iter, result.error());
                         }
+                        photometric_loss_.arena().shrink_to_required();
                     }
 
                     // Save checkpoint at specified steps unless the sparsity boundary save already handled it
@@ -5719,6 +5728,7 @@ namespace lfs::training {
                             if (!result) {
                                 LOG_WARN("Failed to save checkpoint at iteration {}: {}", iter, result.error());
                             }
+                            photometric_loss_.arena().shrink_to_required();
                         }
                     }
 
@@ -6389,6 +6399,9 @@ namespace lfs::training {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }
+
+        // B3: training has stopped or completed; the editor may remain alive.
+        photometric_loss_.arena().reset();
 
         auto& command_center = lfs::training::CommandCenter::instance();
         auto snapshot_guard = makeScopeGuard([&command_center, this]() {
