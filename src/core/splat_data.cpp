@@ -1370,13 +1370,28 @@ namespace lfs::core {
         _opacity = std::move(new_opacity);
 
         // shN is in swizzled layout — block-aware gather of kept primitives.
+        // q16 / IEEE-f16 cannot use ptr<float>() gather; filter via canonical float.
         const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
         if (_shN.is_valid() && _shN.numel() > 0 && layout_rest > 0) {
-            auto new_shN = allocate_swizzled_shN(new_size, new_size, layout_rest,
-                                                 _tensor_allocator, "SplatData.shN");
-            shN_swizzled_gather_self(_shN.ptr<float>(), new_shN.ptr<float>(),
-                                     kept_indices.ptr<int>(), new_size, 0, layout_rest);
-            _shN = std::move(new_shN);
+            if (_shN.dtype() != DataType::Float32 || shN_value_quantized() || shN_ieee_f16()) {
+                Tensor canon = shN_canonical();
+                if (canon.device() != _means.device()) {
+                    canon = canon.to(_means.device());
+                }
+                Tensor kept_canon = canon.index_select(0, kept_indices).contiguous();
+                // Drop q16 bounds: storage is rebuilt as float4-swizzle.
+                _shN_value_bounds = Tensor{};
+                _shN = allocate_swizzled_shN(new_size, new_size, layout_rest,
+                                             _tensor_allocator, "SplatData.shN");
+                reorder_canonical_into_swizzled(kept_canon, _shN, new_size,
+                                                layout_rest, layout_rest);
+            } else {
+                auto new_shN = allocate_swizzled_shN(new_size, new_size, layout_rest,
+                                                     _tensor_allocator, "SplatData.shN");
+                shN_swizzled_gather_self(_shN.ptr<float>(), new_shN.ptr<float>(),
+                                         kept_indices.ptr<int>(), new_size, 0, layout_rest);
+                _shN = std::move(new_shN);
+            }
         }
 
         // Clear densification info
