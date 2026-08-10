@@ -297,13 +297,12 @@ namespace lfs::diagnostics {
         const std::size_t vma_blocks =
             policy.include_vulkan_in_sum ? proc.vulkan_vma_block_bytes : 0;
 
-        std::size_t vulkan_external = 0;
-        // VK_EXT_memory_budget includes swap-chain/render-target and driver-owned
-        // allocations that are not VMA blocks.  Keep that measured remainder in
-        // the external root instead of leaving the viewer path as a process gap.
+        std::size_t vulkan_named_external = 0;
+        // VK_EXT_memory_budget is a whole-process heap estimate. After subtracting
+        // VMA blocks it still overlaps CUDA and exportable roots, so it is only a
+        // coverage ceiling for root G, never an independently summable reservation.
         const std::size_t vulkan_budget_external =
             proc.vulkan_vma_used > vma_blocks ? proc.vulkan_vma_used - vma_blocks : 0;
-        std::size_t vulkan_named_external = 0;
         std::size_t viewer_cuda_external = 0;
         std::size_t hooked_pool_bytes = 0;
         std::size_t hooked_slab_bytes = 0;
@@ -317,8 +316,7 @@ namespace lfs::diagnostics {
             }
             if (is_vulkan_external_row(row)) {
                 // recordCurrentBytes rows are Sampled, while direct Vulkan imports
-                // may be Hooked. Both are measured by the external root.
-                vulkan_external += row.live_bytes;
+                // may be Hooked. Both are genuine root-G attribution.
                 vulkan_named_external += row.live_bytes;
             }
             if (is_viewer_cuda_external_row(row)) {
@@ -572,13 +570,15 @@ namespace lfs::diagnostics {
         }
         apply_closure(root_f, ledger_epsilon(root_f.measured_bytes, policy));
 
-        const std::size_t budget_unlisted_external =
+        const std::size_t budget_unattributed_process =
             vulkan_budget_external > vulkan_named_external
                 ? vulkan_budget_external - vulkan_named_external
                 : 0;
-        vulkan_external += budget_unlisted_external;
-        auto root_g = make_root(VramLedgerRootId::VulkanExternal, vulkan_external, "vulkan_raw");
-        if (vulkan_external > 0) {
+        const std::size_t vulkan_external_coverage =
+            std::max(vulkan_budget_external, vulkan_named_external);
+        auto root_g =
+            make_root(VramLedgerRootId::VulkanExternal, vulkan_external_coverage, "vulkan_raw");
+        if (vulkan_named_external > 0) {
             for (const auto& row : snapshot.rows) {
                 if (row.live_bytes == 0 || !is_vulkan_external_row(row)) {
                     continue;
@@ -591,15 +591,15 @@ namespace lfs::diagnostics {
                           "viewer interop external allocation");
             }
         }
-        if (budget_unlisted_external > 0) {
+        if (budget_unattributed_process > 0) {
             add_child(root_g,
-                      "vulkan.memory_budget.render_targets_and_driver",
-                      budget_unlisted_external,
-                      AttributionState::Justified,
+                      "vulkan.memory_budget.unattributed_process_usage",
+                      budget_unattributed_process,
+                      AttributionState::Unjustified,
                       VramRowKind::Sampled,
-                      "VK_EXT_memory_budget remainder outside VMA blocks");
+                      "whole-process budget remainder overlaps CUDA roots");
         }
-        root_g.attributed_bytes = vulkan_external;
+        root_g.attributed_bytes = vulkan_named_external;
         apply_closure(root_g, ledger_epsilon(root_g.measured_bytes, policy));
 
         // Root H: context baseline minus phases that belong to other roots.
@@ -673,9 +673,13 @@ namespace lfs::diagnostics {
 
         tree.attributed_bytes = 0;
         for (const auto& r : tree.roots) {
-            // Sum root measured sizes (independent reservations), not child attributed.
+            // Sum independent root measurements. Root G's memory-budget coverage is
+            // process-wide and overlaps the CUDA roots, so only its named external
+            // attribution is independent.
             if (r.root_id != VramLedgerRootId::Unattributed) {
-                tree.attributed_bytes += r.measured_bytes;
+                tree.attributed_bytes += r.root_id == VramLedgerRootId::VulkanExternal
+                                             ? r.attributed_bytes
+                                             : r.measured_bytes;
             }
         }
 

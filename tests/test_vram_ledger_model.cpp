@@ -173,6 +173,52 @@ TEST(VramLedger, ViewerExternalRowsLandInTheirMeasuredRoots) {
     EXPECT_EQ(vulkan_external->closure, LedgerClosureState::Closed);
 }
 
+TEST(VramLedger, WholeProcessVulkanBudgetRemainderStaysUnjustified) {
+    constexpr std::size_t MiB = 1024ull * 1024ull;
+    VramProfilerSnapshot snap;
+    snap.process.process_memory_valid = true;
+    snap.process.process_used = 200 * MiB;
+    snap.process.cuda_pool_valid = true;
+    snap.process.cuda_pool_reserved = 100 * MiB;
+    snap.process.vulkan_vma_block_bytes = 20 * MiB;
+    snap.process.vulkan_vma_used = 200 * MiB; // Whole-process heap usage, not VMA-only.
+    snap.process.cuda_context_baseline = 30 * MiB;
+    snap.rows.push_back(make_row("vulkan.external.viewport_interop", "color", 10 * MiB,
+                                 VramRowKind::Sampled, VramAllocationMethod::External));
+
+    const auto tree = buildLiveLedger(snap);
+    const VramLedgerNode* vulkan_external = nullptr;
+    for (const auto& root : tree.roots) {
+        if (root.root_id == VramLedgerRootId::VulkanExternal) {
+            vulkan_external = &root;
+            break;
+        }
+    }
+
+    ASSERT_NE(vulkan_external, nullptr);
+    EXPECT_EQ(vulkan_external->measured_bytes, 180 * MiB);
+    EXPECT_EQ(vulkan_external->attributed_bytes, 10 * MiB);
+    EXPECT_EQ(vulkan_external->closure, LedgerClosureState::Gap);
+
+    bool saw_unattributed_budget = false;
+    for (const auto& child : vulkan_external->children) {
+        EXPECT_EQ(child.name.find("render_targets_and_driver"), std::string::npos);
+        if (child.name == "vulkan.memory_budget.unattributed_process_usage") {
+            saw_unattributed_budget = true;
+            EXPECT_EQ(child.measured_bytes, 170 * MiB);
+            EXPECT_EQ(child.state, AttributionState::Unjustified);
+        }
+    }
+    EXPECT_TRUE(saw_unattributed_budget);
+
+    // Independent cover is pool + VMA + named external + context. The ambiguous
+    // budget remainder must become a 40 MiB honest gap, never a false OVER.
+    EXPECT_EQ(tree.attributed_bytes, 160 * MiB);
+    EXPECT_EQ(tree.residual.under_claim_bytes, 40 * MiB);
+    EXPECT_EQ(tree.residual.over_claim_bytes, 0u);
+    EXPECT_EQ(tree.closure, LedgerClosureState::Gap);
+}
+
 TEST(VramLedger, C2SlabNotInPoolAccounted) {
     // Simulator of snapshot post-C2: slab live is separate from pool accounted.
     VramProfilerSnapshot snap;

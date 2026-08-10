@@ -3862,9 +3862,11 @@ namespace lfs::vis {
             retireSharedScratchBuffer(std::move(shared_scratch_.imported_buffer));
         }
         if (shared_scratch_.bytes != 0) {
-            lfs::diagnostics::VramProfiler::instance().clearScope("shared.scratch");
-            lfs::diagnostics::VramProfiler::instance().setGauge("vram.audit.shared_scratch.capacity", 0.0);
-            lfs::diagnostics::VramProfiler::instance().setGauge("vram.audit.shared_scratch.vksplat_view_bytes", 0.0);
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.clearScope("shared.scratch");
+            profiler.setGauge("vram.audit.shared_scratch.capacity", 0.0);
+            profiler.setGauge("vram.audit.shared_scratch.vksplat_view_bytes", 0.0);
+            profiler.setSharedScratchBytes(0);
         }
         shared_scratch_ = {};
     }
