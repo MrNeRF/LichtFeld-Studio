@@ -246,6 +246,13 @@ namespace lfs::vis {
         EXPECT_FALSE(temporalHistoryRequiresReset(true, 10, 10, 3, 3));
         EXPECT_TRUE(temporalHistoryRequiresReset(true, 10, 11, 3, 3));
         EXPECT_TRUE(temporalHistoryRequiresReset(true, 10, 10, 3, 4));
+        EXPECT_TRUE(temporalHistoryRequiresReset(true,
+                                                 10,
+                                                 10,
+                                                 3,
+                                                 3,
+                                                 SceneTemporalQuality::Balanced,
+                                                 SceneTemporalQuality::Quality));
     }
 
 } // namespace lfs::vis

@@ -254,6 +254,7 @@ namespace lfs::vis {
         bool temporal_previous_valid = false;
         std::uint64_t temporal_scene_identity = 0;
         std::uint64_t temporal_reset_generation = 0;
+        SceneTemporalQuality temporal_quality = SceneTemporalQuality::Balanced;
         VkImage temporal_source_image = VK_NULL_HANDLE;
         std::uint64_t temporal_source_generation = 0;
 
@@ -2101,6 +2102,10 @@ namespace lfs::vis {
                               temporal_requested
                                   ? static_cast<double>(params.scene_temporal_reset_generation)
                                   : 0.0);
+            profiler.setGauge("viewer.temporal.quality",
+                              temporal_requested
+                                  ? static_cast<double>(params.scene_temporal_quality)
+                                  : 0.0);
             if (!params.scene_motion.enabled && !temporal_requested) {
                 profiler.setGauge("viewer.motion.available", 0.0);
                 profiler.setGauge("viewer.motion.width_px", 0.0);
@@ -2137,7 +2142,9 @@ namespace lfs::vis {
                                                  temporal_scene_identity,
                                                  params.scene_identity,
                                                  temporal_reset_generation,
-                                                 params.scene_temporal_reset_generation)) {
+                                                 params.scene_temporal_reset_generation,
+                                                 temporal_quality,
+                                                 params.scene_temporal_quality)) {
                     scene_temporal_resolve_pass.reset(TemporalViewId::Main);
                     temporal_previous_valid = false;
                     temporal_source_image = VK_NULL_HANDLE;
@@ -2258,6 +2265,8 @@ namespace lfs::vis {
                                           params.viewport_size.y * params.framebuffer_scale.y)))};
             const auto prior_history =
                 scene_temporal_resolve_pass.contract(TemporalViewId::Main);
+            const auto temporal_settings =
+                sceneTemporalQualitySettings(params.scene_temporal_quality);
             const VulkanSceneTemporalResolveParams resolve{
                 .enabled = true,
                 .view = TemporalViewId::Main,
@@ -2273,6 +2282,8 @@ namespace lfs::vis {
                                                  : params.scene_image_size,
                 .sequence = prior_history.available() ? prior_history.sequence : 0,
                 .history_valid = temporal_previous_valid && prior_history.available(),
+                .history_weight = temporal_settings.history_weight,
+                .motion_rejection_pixels = temporal_settings.motion_rejection_pixels,
             };
             if (!scene_temporal_resolve_pass.record(command_buffer, resolve)) {
                 scene_temporal_resolve_pass.reset(TemporalViewId::Main);
@@ -2298,6 +2309,7 @@ namespace lfs::vis {
             temporal_previous_valid = true;
             temporal_scene_identity = params.scene_identity;
             temporal_reset_generation = params.scene_temporal_reset_generation;
+            temporal_quality = params.scene_temporal_quality;
             temporal_source_image = params.external_scene_image;
             temporal_source_generation = params.external_scene_image_generation;
             const auto history = scene_temporal_resolve_pass.contract(TemporalViewId::Main);

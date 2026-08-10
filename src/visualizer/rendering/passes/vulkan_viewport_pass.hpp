@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "rendering/scene_temporal_resolve.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 #include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
@@ -54,10 +55,13 @@ namespace lfs::vis {
         const std::uint64_t previous_scene_identity,
         const std::uint64_t current_scene_identity,
         const std::uint64_t previous_reset_generation,
-        const std::uint64_t current_reset_generation) {
+        const std::uint64_t current_reset_generation,
+        const SceneTemporalQuality previous_quality = SceneTemporalQuality::Balanced,
+        const SceneTemporalQuality current_quality = SceneTemporalQuality::Balanced) {
         return history_valid &&
                (previous_scene_identity != current_scene_identity ||
-                previous_reset_generation != current_reset_generation);
+                previous_reset_generation != current_reset_generation ||
+                previous_quality != current_quality);
     }
 
     struct VulkanViewportOverlayVertex {
@@ -156,6 +160,7 @@ namespace lfs::vis {
         // incompletely prepared image during the deferral window.
         bool preserve_scene_image_binding = false;
         SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
+        SceneTemporalQuality scene_temporal_quality = SceneTemporalQuality::Balanced;
         bool scene_temporal_projection_supported = true;
         bool scene_temporal_stable = true;
         std::uint64_t scene_identity = 0;

@@ -12,6 +12,27 @@
 
 namespace lfs::vis {
     namespace {
+        TEST(SceneTemporalResolve, QualityPresetsAreOrderedAndUnknownValuesAreSafe) {
+            const auto performance =
+                sceneTemporalQualitySettings(SceneTemporalQuality::Performance);
+            const auto balanced = sceneTemporalQualitySettings(SceneTemporalQuality::Balanced);
+            const auto quality = sceneTemporalQualitySettings(SceneTemporalQuality::Quality);
+            const auto fallback =
+                sceneTemporalQualitySettings(static_cast<SceneTemporalQuality>(255));
+
+            EXPECT_LT(performance.history_weight, balanced.history_weight);
+            EXPECT_LT(balanced.history_weight, quality.history_weight);
+            EXPECT_GT(performance.depth_threshold, balanced.depth_threshold);
+            EXPECT_GT(balanced.depth_threshold, quality.depth_threshold);
+            EXPECT_LT(performance.motion_rejection_pixels,
+                      balanced.motion_rejection_pixels);
+            EXPECT_LT(balanced.motion_rejection_pixels, quality.motion_rejection_pixels);
+            EXPECT_FLOAT_EQ(fallback.history_weight, balanced.history_weight);
+            EXPECT_FLOAT_EQ(fallback.depth_threshold, balanced.depth_threshold);
+            EXPECT_FLOAT_EQ(fallback.motion_rejection_pixels,
+                            balanced.motion_rejection_pixels);
+        }
+
         SceneUpscalerRequirements temporalRequirements() {
             return {
                 .depth = true,

@@ -11,6 +11,12 @@
 
 namespace lfs::vis {
 
+    enum class SceneTemporalQuality : std::uint8_t {
+        Performance = 0,
+        Balanced = 1,
+        Quality = 2,
+    };
+
     enum class SceneHistoryRejection : std::uint32_t {
         None = 0,
         NoHistory = 1u << 0u,
@@ -25,6 +31,9 @@ namespace lfs::vis {
         float depth_threshold = 0.01f;
         float motion_rejection_pixels = 128.0f;
     };
+
+    [[nodiscard]] LFS_VIS_API SceneTemporalResolveSettings sceneTemporalQualitySettings(
+        SceneTemporalQuality quality);
 
     struct SceneTemporalResolveSample {
         glm::vec4 current{0.0f};

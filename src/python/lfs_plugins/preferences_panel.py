@@ -39,6 +39,11 @@ class PreferencesPanel(Panel):
         ("spatial", "preferences.scene_upscaler_spatial"),
         ("temporal", "preferences.scene_upscaler_temporal"),
     )
+    TEMPORAL_QUALITY_OPTIONS = (
+        ("performance", "preferences.temporal_quality_performance"),
+        ("balanced", "preferences.temporal_quality_balanced"),
+        ("quality", "preferences.temporal_quality_quality"),
+    )
 
     NAVIGATION_OPTIONS = (
         ("orbit", "preferences.navigation_orbit"),
@@ -96,6 +101,7 @@ class PreferencesPanel(Panel):
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind("scene_render_scale_idx", self._scene_render_scale_index, self._set_scene_render_scale_index)
         model.bind("scene_upscaler_idx", self._scene_upscaler_index, self._set_scene_upscaler_index)
+        model.bind("temporal_quality_idx", self._temporal_quality_index, self._set_temporal_quality_index)
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
@@ -128,6 +134,7 @@ class PreferencesPanel(Panel):
         model.bind_record_list("scales")
         model.bind_record_list("scene_render_scales")
         model.bind_record_list("scene_upscalers")
+        model.bind_record_list("temporal_qualities")
         model.bind_record_list("languages")
         model.bind_record_list("navigation_modes")
         self._handle = model.get_handle()
@@ -164,6 +171,7 @@ class PreferencesPanel(Panel):
             float(lf.ui.get_ui_scale_preference()),
             self._scene_render_scale(),
             self._scene_upscaler(),
+            self._temporal_quality(),
             lf.ui.get_current_language(),
             lf.get_camera_navigation_mode(),
             lf.get_camera_view_snap_enabled(),
@@ -206,6 +214,13 @@ class PreferencesPanel(Panel):
             [
                 {"index": str(index), "label": lf.ui.tr(label_key)}
                 for index, (_value, label_key) in enumerate(self.SCENE_UPSCALER_OPTIONS)
+            ],
+        )
+        self._handle.update_record_list(
+            "temporal_qualities",
+            [
+                {"index": str(index), "label": lf.ui.tr(label_key)}
+                for index, (_value, label_key) in enumerate(self.TEMPORAL_QUALITY_OPTIONS)
             ],
         )
         self._handle.update_record_list(
@@ -327,10 +342,44 @@ class PreferencesPanel(Panel):
                 settings.scene_upscaler = self.SCENE_UPSCALER_OPTIONS[index][0]
             self._refresh_selection()
 
+    def _temporal_quality(self):
+        settings = lf.get_render_settings()
+        if settings is None:
+            return "balanced"
+        # Resource hot reload can update this Python panel before the rebuilt
+        # extension module is loaded. Keep the whole Preferences document
+        # mountable instead of leaving unrelated selects at their first item.
+        quality = str(getattr(settings, "scene_temporal_quality", "balanced"))
+        return quality if quality in {"performance", "balanced", "quality"} else "balanced"
+
+    def _temporal_quality_index(self):
+        current = self._temporal_quality()
+        for index, (value, _label_key) in enumerate(self.TEMPORAL_QUALITY_OPTIONS):
+            if value == current:
+                return str(index)
+        return "1"
+
+    def _set_temporal_quality_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self.TEMPORAL_QUALITY_OPTIONS):
+            settings = lf.get_render_settings()
+            if settings is not None:
+                try:
+                    settings.scene_temporal_quality = self.TEMPORAL_QUALITY_OPTIONS[index][0]
+                except AttributeError:
+                    return
+            self._refresh_selection()
+
     def _language_index(self):
         current = lf.ui.get_current_language()
         for index, (code, _name) in enumerate(self._language_catalog):
             if code == current:
+                return str(index)
+        for index, (code, _name) in enumerate(self._language_catalog):
+            if code == "en":
                 return str(index)
         return "0"
 
@@ -623,6 +672,10 @@ class PreferencesPanel(Panel):
             if settings is not None:
                 settings.render_scale = 1.0
                 settings.scene_upscaler = "native"
+                try:
+                    settings.scene_temporal_quality = "balanced"
+                except AttributeError:
+                    pass
         elif section == "input":
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
@@ -646,6 +699,7 @@ class PreferencesPanel(Panel):
             self._handle.dirty("scale_idx")
             self._handle.dirty("scene_render_scale_idx")
             self._handle.dirty("scene_upscaler_idx")
+            self._handle.dirty("temporal_quality_idx")
             self._handle.dirty("language_idx")
             self._handle.dirty("navigation_idx")
             self._handle.dirty("view_snap")

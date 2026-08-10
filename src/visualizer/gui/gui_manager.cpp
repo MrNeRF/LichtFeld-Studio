@@ -4032,6 +4032,11 @@ namespace lfs::vis::gui {
                                     : settings.scene_upscaler == 2
                                         ? SceneUpscalerBackend::Temporal
                                         : SceneUpscalerBackend::Native;
+            params.scene_temporal_quality =
+                settings.scene_temporal_quality == 0
+                    ? SceneTemporalQuality::Performance
+                : settings.scene_temporal_quality == 2 ? SceneTemporalQuality::Quality
+                                                       : SceneTemporalQuality::Balanced;
             params.scene_temporal_projection_supported =
                 !settings.orthographic && !settings.equirectangular;
             params.background_color = settings.background_color;

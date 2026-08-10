@@ -19,6 +19,23 @@ namespace lfs::vis {
         }
     } // namespace
 
+    SceneTemporalResolveSettings sceneTemporalQualitySettings(
+        const SceneTemporalQuality quality) {
+        switch (quality) {
+        case SceneTemporalQuality::Performance:
+            return {.history_weight = 0.75f,
+                    .depth_threshold = 0.02f,
+                    .motion_rejection_pixels = 96.0f};
+        case SceneTemporalQuality::Quality:
+            return {.history_weight = 0.95f,
+                    .depth_threshold = 0.005f,
+                    .motion_rejection_pixels = 192.0f};
+        case SceneTemporalQuality::Balanced:
+        default:
+            return {};
+        }
+    }
+
     SceneTemporalResolveResult resolveSceneTemporalSample(
         const SceneTemporalResolveSample& sample,
         const SceneTemporalResolveSettings& settings) {

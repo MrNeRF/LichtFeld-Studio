@@ -233,6 +233,11 @@ namespace lfs::vis {
                                               ? 1
                                           : scene_upscaler_preference == "temporal" ? 2
                                                                                     : 0;
+        const auto temporal_quality_preference = loadSceneTemporalQualityPreference();
+        initial_settings.scene_temporal_quality = temporal_quality_preference == "performance"
+                                                      ? 0
+                                                  : temporal_quality_preference == "quality" ? 2
+                                                                                             : 1;
         initial_settings.gut = options.gut;
         initial_settings.raster_backend = options.gut
                                               ? lfs::rendering::GaussianRasterBackend::ThreeDgut
@@ -877,8 +882,10 @@ namespace lfs::vis {
                 auto s = rendering_manager_->getSettings();
                 const float previous_render_scale = s.render_scale;
                 const int previous_scene_upscaler = s.scene_upscaler;
+                const int previous_temporal_quality = s.scene_temporal_quality;
                 vis::apply_proxy(s, proxy);
                 s.scene_upscaler = std::clamp(s.scene_upscaler, 0, 2);
+                s.scene_temporal_quality = std::clamp(s.scene_temporal_quality, 0, 2);
                 rendering_manager_->updateSettings(s);
                 const float applied_render_scale = rendering_manager_->getSettings().render_scale;
                 if (std::abs(applied_render_scale - previous_render_scale) > 0.0001f)
@@ -888,6 +895,12 @@ namespace lfs::vis {
                     saveSceneUpscalerPreference(applied_scene_upscaler == 1   ? "spatial"
                                                 : applied_scene_upscaler == 2 ? "temporal"
                                                                               : "native");
+                const int applied_temporal_quality =
+                    rendering_manager_->getSettings().scene_temporal_quality;
+                if (applied_temporal_quality != previous_temporal_quality)
+                    saveSceneTemporalQualityPreference(applied_temporal_quality == 0   ? "performance"
+                                                       : applied_temporal_quality == 2 ? "quality"
+                                                                                       : "balanced");
                 wakeMainLoop();
             });
         callback_cleanup_.add([] { vis::set_render_settings_callbacks(nullptr, nullptr); });

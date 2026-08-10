@@ -67,6 +67,12 @@
               <option data-for="upscaler : scene_upscalers" data-attr-value="upscaler.index">{{ upscaler.label }}</option>
             </select>
           </div>
+          <div class="preferences-row" data-if="scene_upscaler_idx == '2'">
+            <span class="preferences-label">@tr:preferences.temporal_quality</span>
+            <select class="preferences-select" data-value="temporal_quality_idx">
+              <option data-for="quality : temporal_qualities" data-attr-value="quality.index">{{ quality.label }}</option>
+            </select>
+          </div>
         </div>
       </div>
 

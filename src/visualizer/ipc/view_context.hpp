@@ -72,6 +72,7 @@ namespace lfs::vis {
         int sh_degree = 3;
         float render_scale = 1.0f;
         int scene_upscaler = 0;
+        int scene_temporal_quality = 1;
         int camera_metrics_mode = 0;
         bool show_crop_box = false;
         bool use_crop_box = false;

@@ -795,6 +795,14 @@ namespace lfs::python {
                       {"Spatial", "spatial", 1},
                       {"Temporal", "temporal", 2}},
                      0);
+        add_int_enum(&Proxy::scene_temporal_quality,
+                     "scene_temporal_quality",
+                     "Temporal Quality",
+                     "History quality used by the native temporal scene upscaler",
+                     {{"Performance", "performance", 0},
+                      {"Balanced", "balanced", 1},
+                      {"Quality", "quality", 2}},
+                     1);
         add_float(&Proxy::depth_view_min, "depth_view_min", "Depth Near", "Depth-map visualization near range",
                   lfs::rendering::DEFAULT_DEPTH_VIEW_MIN, 0.0, lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
         add_float(&Proxy::depth_view_max, "depth_view_max", "Depth Far", "Depth-map visualization far range",

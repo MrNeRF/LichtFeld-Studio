@@ -1209,6 +1209,34 @@ namespace lfs::vis {
         return "native";
     }
 
+    void saveSceneTemporalQualityPreference(const std::string& quality_id) {
+        try {
+            auto preferences = loadPreferences();
+            preferences["scene_temporal_quality"] =
+                quality_id == "performance" || quality_id == "quality" ? quality_id : "balanced";
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save scene temporal quality preference: {}", e.what());
+        }
+    }
+
+    std::string loadSceneTemporalQualityPreference() {
+        try {
+            if (preferencesDisabled())
+                return "balanced";
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("scene_temporal_quality");
+            if (it != preferences.end() && it->is_string()) {
+                const auto value = it->get<std::string>();
+                if (value == "performance" || value == "quality")
+                    return value;
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load scene temporal quality preference: {}", e.what());
+        }
+        return "balanced";
+    }
+
     void saveLanguagePreference(const std::string& language_code) {
         try {
             if (language_code.empty())

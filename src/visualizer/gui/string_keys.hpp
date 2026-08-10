@@ -437,6 +437,13 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SCENE_UPSCALER_NATIVE = "preferences.scene_upscaler_native";
         inline constexpr const char* SCENE_UPSCALER_SPATIAL = "preferences.scene_upscaler_spatial";
         inline constexpr const char* SCENE_UPSCALER_TEMPORAL = "preferences.scene_upscaler_temporal";
+        inline constexpr const char* TEMPORAL_QUALITY = "preferences.temporal_quality";
+        inline constexpr const char* TEMPORAL_QUALITY_PERFORMANCE =
+            "preferences.temporal_quality_performance";
+        inline constexpr const char* TEMPORAL_QUALITY_BALANCED =
+            "preferences.temporal_quality_balanced";
+        inline constexpr const char* TEMPORAL_QUALITY_QUALITY =
+            "preferences.temporal_quality_quality";
     } // namespace Preferences
 
     namespace MainPanel {

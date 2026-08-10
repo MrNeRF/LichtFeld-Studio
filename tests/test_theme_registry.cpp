@@ -258,6 +258,28 @@ TEST(ThemePreferencesContract, SceneUpscalerRoundTripsAndRejectsUnknownValues) {
     std::filesystem::remove_all(root, error);
 }
 
+TEST(ThemePreferencesContract, TemporalQualityRoundTripsAndRejectsUnknownValues) {
+    const auto root =
+        std::filesystem::temp_directory_path() / "lfs_temporal_quality_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    lfs::vis::saveSceneTemporalQualityPreference("performance");
+    EXPECT_EQ(lfs::vis::loadSceneTemporalQualityPreference(), "performance");
+    lfs::vis::saveSceneTemporalQualityPreference("quality");
+    EXPECT_EQ(lfs::vis::loadSceneTemporalQualityPreference(), "quality");
+    lfs::vis::saveSceneTemporalQualityPreference("unknown");
+    EXPECT_EQ(lfs::vis::loadSceneTemporalQualityPreference(), "balanced");
+
+    std::ofstream(paths->preferencesFile()) << R"({"scene_temporal_quality":42})";
+    EXPECT_EQ(lfs::vis::loadSceneTemporalQualityPreference(), "balanced");
+    std::filesystem::remove_all(root, error);
+}
+
 TEST(ThemePreferencesContract, McpPreferencesRoundTripAndValidateInput) {
     const auto root = std::filesystem::temp_directory_path() / "lfs_mcp_preferences";
     std::error_code error;
