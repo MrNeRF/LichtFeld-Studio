@@ -1535,25 +1535,62 @@ namespace lfs::core {
             return nullptr;
         }
 
+        enum class ExternalGrowResult {
+            Grown,
+            Retry,
+            Failed,
+        };
+
         // Grows the shared exportable backing in place under its stable virtual
-        // address (existing contents preserved), so training never fails when its
-        // scratch demand outgrows the render's initial sizing. The base pointer is
-        // unchanged; the render re-imports the larger range into Vulkan on its next
-        // frame. Caller must hold arena_mutex_.
-        const auto try_grow_external = [&](size_t need) -> bool {
-            if (!arena.external_backing || !arena.external_grow) {
-                return false;
+        // address. This path runs inside the current training frame, so that one
+        // frame is the sole permitted owner. Taking sync_mutex_ first prevents a
+        // render frame from entering while the callback detaches the Vulkan import
+        // and changes the CUDA physical mapping. arena_mutex_ is acquired second,
+        // matching the arena's boundary operations and avoiding lock inversion.
+        const auto try_grow_external = [&]() -> ExternalGrowResult {
+            std::unique_lock<std::mutex> sync_lock(sync_mutex_, std::try_to_lock);
+            if (!sync_lock.owns_lock() || pending_render_frames_ != 0) {
+                return ExternalGrowResult::Retry;
             }
-            // external_grow performs the in-place physical grow (stable base
-            // address, contents preserved) and returns the new committed size, or
-            // 0 on failure. The Vulkan side re-imports the larger range later.
+            if (active_frames_ != 1 || active_training_frames_ != 1) {
+                LOG_ERROR("External rasterizer arena grow requires the sole active training frame "
+                          "(active=%zu training=%zu)",
+                          static_cast<size_t>(active_frames_),
+                          static_cast<size_t>(active_training_frames_));
+                return ExternalGrowResult::Failed;
+            }
+
+            std::lock_guard<std::mutex> arena_lock(arena_mutex_);
+            const size_t current_offset = arena.offset.load(std::memory_order_acquire);
+            const size_t need = current_offset + aligned_size;
+            if (need <= arena.committed_size) {
+                return ExternalGrowResult::Grown;
+            }
+            if (!arena.external_backing || !arena.external_grow) {
+                return ExternalGrowResult::Failed;
+            }
+
+            // The grow callback changes CUDA physical mappings and invalidates the
+            // old Vulkan import. Drain all CUDA work while the frame gate excludes
+            // render entry, matching grow_external_backing's render-side contract.
+            const cudaError_t sync_status = cudaDeviceSynchronize();
+            if (sync_status != cudaSuccess) {
+                ensure_cuda_success(
+                    sync_status, "cudaDeviceSynchronize(external arena training growth)",
+                    detail::format_cuda_safe("requested_bytes={}", need),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                return ExternalGrowResult::Failed;
+            }
+
+            // external_grow preserves the stable virtual base and returns the new
+            // committed size. The Vulkan side re-imports its new handle later.
             const size_t new_committed = arena.external_grow(need);
             if (new_committed < need) {
                 LOG_ERROR("External rasterizer arena '%s' grow failed (need=%zu MiB, capacity=%zu MiB)",
                           arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
                           static_cast<size_t>(need >> 20),
                           static_cast<size_t>(new_committed >> 20));
-                return false;
+                return ExternalGrowResult::Failed;
             }
             arena.committed_size = new_committed;
             arena.capacity = new_committed;
@@ -1562,7 +1599,7 @@ namespace lfs::core {
                      arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
                      static_cast<size_t>(new_committed >> 20),
                      static_cast<size_t>(need >> 20));
-            return true;
+            return ExternalGrowResult::Grown;
         };
 
         // Retry loop - keep trying until we succeed or hit max retries
@@ -1609,6 +1646,37 @@ namespace lfs::core {
             // Allocation failed - revert the offset
             arena.offset.fetch_sub(aligned_size, std::memory_order_acq_rel);
 
+            if (arena.external_backing) {
+                // A render request queued behind this training frame clears its
+                // pending flag after the renderer's bounded 15 ms acquisition.
+                // Retry past that window instead of invoking the grow callback
+                // while Vulkan may be about to claim the arena.
+                constexpr auto EXTERNAL_GROW_CONTENTION_BUDGET = std::chrono::milliseconds(50);
+                const auto deadline = std::chrono::steady_clock::now() +
+                                      EXTERNAL_GROW_CONTENTION_BUDGET;
+                while (true) {
+                    const ExternalGrowResult result = try_grow_external();
+                    if (result == ExternalGrowResult::Grown) {
+                        break;
+                    }
+                    if (result == ExternalGrowResult::Failed) {
+                        LOG_ERROR("External rasterizer arena '%s' exhausted and could not grow: "
+                                  "capacity=%zu MiB request=%zu MiB",
+                                  arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
+                                  static_cast<size_t>(arena.committed_size >> 20),
+                                  static_cast<size_t>(aligned_size >> 20));
+                        return nullptr;
+                    }
+                    if (std::chrono::steady_clock::now() >= deadline) {
+                        LOG_ERROR("External rasterizer arena '%s' grow timed out waiting for the render gate",
+                                  arena.external_label.empty() ? "unnamed" : arena.external_label.c_str());
+                        return nullptr;
+                    }
+                    std::this_thread::yield();
+                }
+                continue; // retry allocation against the grown capacity
+            }
+
             // Try to grow the arena
             std::lock_guard<std::mutex> lock(arena_mutex_);
 
@@ -1619,18 +1687,6 @@ namespace lfs::core {
             // Check if someone else already grew it
             if (total_needed <= arena.committed_size) {
                 continue; // Retry allocation
-            }
-
-            if (arena.external_backing) {
-                if (try_grow_external(total_needed)) {
-                    continue; // retry allocation against the grown capacity
-                }
-                LOG_ERROR("External rasterizer arena '%s' exhausted and could not grow: need=%zu MiB capacity=%zu MiB request=%zu MiB",
-                          arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
-                          static_cast<size_t>(total_needed >> 20),
-                          static_cast<size_t>(arena.committed_size >> 20),
-                          static_cast<size_t>(aligned_size >> 20));
-                return nullptr;
             }
 
             // We need to grow - calculate how much

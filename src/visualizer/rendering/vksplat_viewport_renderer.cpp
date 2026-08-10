@@ -3371,6 +3371,21 @@ namespace lfs::vis {
             return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
         }
 
+        // Training growth deliberately detaches the stale Vulkan import before
+        // replacing the CUDA physical handle. Keep using that same block and let
+        // reimportSharedScratchIfGrown() recreate the import after the render owns
+        // the arena frame. Falling through to first allocation here would try to
+        // install a second reserve while the grown block is still authoritative.
+        if (shared_scratch_.block &&
+            shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE &&
+            shared_scratch_.bytes >= required_bytes) {
+            if (shared_scratch_.installed_in_training_arena || try_install_existing()) {
+                shared_scratch_.installed_in_training_arena = true;
+                return {};
+            }
+            return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
+        }
+
         // Grow path: a block exists but is too small. Grow the committed physical
         // IN PLACE under the stable virtual address so training's arena base
         // pointer never changes (no use-after-free), then re-import the larger
@@ -3381,8 +3396,7 @@ namespace lfs::vis {
         // (which calls release_physical: unmap + cuMemRelease + close fd). Holding
         // a live VkBuffer/VkDeviceMemory across that is the NVRM "invalid mmap
         // context" pattern — mirror TrainerManager::growExportableForDensify.
-        if (shared_scratch_.block && shared_scratch_.installed_in_training_arena &&
-            shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
+        if (shared_scratch_.block && shared_scratch_.installed_in_training_arena) {
             void* const device_ptr = shared_scratch_.block->device_ptr;
             std::string commit_error;
             const auto commit = [&](std::size_t new_size) -> bool {
@@ -3494,10 +3508,11 @@ namespace lfs::vis {
 
     std::expected<void, std::string>
     VksplatViewportRenderer::reimportSharedScratchIfGrown(VulkanContext& context) {
-        if (!shared_scratch_.block || shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE) {
+        if (!shared_scratch_.block) {
             return {};
         }
-        if (shared_scratch_.bytes == shared_scratch_.block->size) {
+        if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE &&
+            shared_scratch_.bytes == shared_scratch_.block->size) {
             return {}; // not grown since last import
         }
         // Precondition: caller owns the arena render-frame, so training cannot grow
@@ -3518,7 +3533,9 @@ namespace lfs::vis {
                                                context.lastError()));
         }
         detachSharedScratchBuffers();
-        retireSharedScratchBuffer(std::move(shared_scratch_.imported_buffer));
+        if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
+            retireSharedScratchBuffer(std::move(shared_scratch_.imported_buffer));
+        }
         shared_scratch_.imported_buffer = reimported;
         shared_scratch_.bytes = shared_scratch_.block->size;
         ++shared_scratch_.generation;
