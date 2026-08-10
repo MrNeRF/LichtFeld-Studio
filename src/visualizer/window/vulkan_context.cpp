@@ -1420,6 +1420,25 @@ namespace lfs::vis {
         return true;
     }
 
+    bool VulkanContext::suspendFrameRendering(const Frame& frame) {
+        if (!frame_active_ || active_frame_index_ >= command_buffers_.size() ||
+            frame.command_buffer == VK_NULL_HANDLE ||
+            frame.command_buffer != command_buffers_[active_frame_index_]) {
+            return fail("Cannot suspend Vulkan rendering for an inactive or mismatched frame");
+        }
+        return finishActiveRendering(frame.command_buffer);
+    }
+
+    bool VulkanContext::resumeFrameRendering(const Frame& frame) {
+        if (!frame_active_ || frame_rendering_active_ ||
+            active_frame_index_ >= command_buffers_.size() ||
+            frame.command_buffer == VK_NULL_HANDLE ||
+            frame.command_buffer != command_buffers_[active_frame_index_]) {
+            return fail("Cannot resume Vulkan rendering for an inactive, active, or mismatched frame");
+        }
+        return restartActiveRendering(frame.command_buffer, frame);
+    }
+
     bool VulkanContext::endFrame() {
         if (!frame_active_) {
             return fail(std::format(

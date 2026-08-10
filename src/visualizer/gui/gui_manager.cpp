@@ -5741,36 +5741,6 @@ namespace lfs::vis::gui {
                            vulkan_context->beginFrame(clear_value, frame);
             }
             if (begin_ok) {
-                if (rendering) {
-                    // #1575: GENERAL→READ_ONLY barriers + CUDA S2 waits on the frame
-                    // submit, before any sampling of interop images (slot B).
-                    // beginFrame opens dynamic rendering, while image layout
-                    // transitions are forbidden inside that scope. Bracket
-                    // the interop barrier recording with an explicit end/restart.
-                    if (!vulkan_context->finishActiveRendering(frame.command_buffer)) {
-                        LOG_ERROR("Unable to close dynamic rendering before viewport interop barriers: {}",
-                                  vulkan_context->lastError());
-                    }
-                    rendering->viewportInterop().recordFrameBarriers(frame.command_buffer,
-                                                                     *vulkan_context);
-                    if (!vulkan_context->restartActiveRendering(frame.command_buffer, frame)) {
-                        LOG_ERROR("Unable to restart dynamic rendering after viewport interop barriers: {}",
-                                  vulkan_context->lastError());
-                    }
-                    const auto completion = rendering->viewportInterop().frameCompletion();
-                    if (completion.semaphore != VK_NULL_HANDLE && completion.value != 0) {
-                        LOG_TIMER_THRESHOLD("gui_render.vksplat_completion_wait_submit", 0.25);
-                        // VkSplat color/split/depth outputs are first consumed only by
-                        // fragment sampling in the viewport pass graph. Earlier graphics
-                        // work can proceed while the async compute submission finishes.
-                        if (!vulkan_context->addFrameTimelineWait(completion.semaphore,
-                                                                  completion.value,
-                                                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)) {
-                            LOG_ERROR("Unable to wait on VkSplat frame completion timeline: {}",
-                                      vulkan_context->lastError());
-                        }
-                    }
-                }
                 VulkanViewportPassParams viewport_params{};
                 {
                     LOG_TIMER_THRESHOLD("gui_render.buildVulkanViewportParams", 0.25);
@@ -5784,7 +5754,43 @@ namespace lfs::vis::gui {
                 if (viewport_pass_ready) {
                     LOG_TIMER_THRESHOLD("gui_render.viewport_pass_prepare_record", 0.25);
                     vulkan_viewport_pass_->prepare(*vulkan_context, viewport_params);
-                    recordVulkanViewport(frame.command_buffer, frame.extent, viewport_params);
+                    const bool temporal_pre_render =
+                        vulkan_viewport_pass_->hasPreRenderWork(viewport_params);
+                    bool render_scope_ready = true;
+                    if (temporal_pre_render) {
+                        render_scope_ready = vulkan_context->suspendFrameRendering(frame);
+                    }
+                    if (rendering && (!temporal_pre_render || render_scope_ready)) {
+                        // #1575: GENERAL→READ_ONLY barriers + CUDA S2 waits before the
+                        // first consumer. Temporal compute runs outside dynamic rendering;
+                        // Native/Spatial retain the original fragment-only path.
+                        rendering->viewportInterop().recordFrameBarriers(frame.command_buffer,
+                                                                         *vulkan_context);
+                        const auto completion = rendering->viewportInterop().frameCompletion();
+                        if (completion.semaphore != VK_NULL_HANDLE && completion.value != 0) {
+                            LOG_TIMER_THRESHOLD("gui_render.vksplat_completion_wait_submit", 0.25);
+                            const VkPipelineStageFlags wait_stage =
+                                temporal_pre_render
+                                    ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                    : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+                            vulkan_context->addFrameTimelineWait(
+                                completion.semaphore, completion.value, wait_stage);
+                        }
+                    }
+                    if (temporal_pre_render) {
+                        if (render_scope_ready) {
+                            static_cast<void>(vulkan_viewport_pass_->recordPreRenderWork(
+                                frame.command_buffer, viewport_params));
+                            render_scope_ready = vulkan_context->resumeFrameRendering(frame);
+                        }
+                    }
+                    if (render_scope_ready) {
+                        recordVulkanViewport(frame.command_buffer, frame.extent, viewport_params);
+                    } else {
+                        LOG_ERROR("Vulkan temporal pre-render boundary failed: {}",
+                                  vulkan_context->lastError());
+                    }
                 }
                 {
                     LOG_TIMER("gui_render.rmlui_record");

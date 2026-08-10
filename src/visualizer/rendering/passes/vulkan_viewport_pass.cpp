@@ -243,6 +243,7 @@ namespace lfs::vis {
         VulkanMeshPass mesh_pass;
         VulkanEnvironmentPass environment_pass;
         VulkanDepthBlitPass depth_blit_pass;
+        VulkanSceneMotionPass scene_motion_pass;
         VulkanSplitViewPass split_view_pass;
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
@@ -2048,12 +2049,19 @@ namespace lfs::vis {
             depth_blit_pass.prepare(params.depth_blit, params.frame_slot);
             split_view_pass.prepare(params.split_view, params.frame_slot);
 
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.setGauge("viewer.motion.requested", params.scene_motion.enabled ? 1.0 : 0.0);
+            if (!params.scene_motion.enabled) {
+                profiler.setGauge("viewer.motion.available", 0.0);
+                profiler.setGauge("viewer.motion.width_px", 0.0);
+                profiler.setGauge("viewer.motion.height_px", 0.0);
+            }
+
             const bool split_spatial_available =
                 params.split_view.enabled && split_view_pass.ready(params.frame_slot);
             scene_upscaler_selection = resolveSceneUpscalerSelection(
                 params.scene_upscaler,
                 scene_spatial_pipeline != VK_NULL_HANDLE || split_spatial_available);
-            auto& profiler = lfs::diagnostics::VramProfiler::instance();
             profiler.setGauge("viewer.upscaler.requested",
                               static_cast<double>(scene_upscaler_selection.requested));
             profiler.setGauge("viewer.upscaler.effective",
@@ -2076,6 +2084,35 @@ namespace lfs::vis {
                 }
                 logged_scene_upscaler_selection = scene_upscaler_selection;
             }
+        }
+
+        [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const {
+            return needsVulkanSceneMotionPreRender(
+                params.scene_motion, depth_blit_pass.hasDepth(params.frame_slot));
+        }
+
+        [[nodiscard]] bool recordPreRenderWork(const VkCommandBuffer command_buffer,
+                                               const VulkanViewportPassParams& params) {
+            if (!hasPreRenderWork(params) || command_buffer == VK_NULL_HANDLE) {
+                return false;
+            }
+            if (!scene_motion_pass.initialized() && !scene_motion_pass.init(*context)) {
+                return false;
+            }
+
+            VulkanSceneMotionParams motion = params.scene_motion;
+            if (motion.depth_view == VK_NULL_HANDLE) {
+                motion.depth_view = depth_blit_pass.depthView(params.frame_slot);
+            }
+            const bool recorded = scene_motion_pass.record(command_buffer, motion, params.frame_slot);
+            const auto contract = scene_motion_pass.contract(params.frame_slot);
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.setGauge("viewer.motion.available", contract.available() ? 1.0 : 0.0);
+            profiler.setGauge("viewer.motion.width_px", static_cast<double>(contract.width));
+            profiler.setGauge("viewer.motion.height_px", static_cast<double>(contract.height));
+            profiler.setGauge("viewer.motion.includes_jitter",
+                              contract.includes_jitter ? 1.0 : 0.0);
+            return recorded && contract.valid();
         }
 
         void bindViewport(VkCommandBuffer command_buffer, const FramebufferRect& rect) const {
@@ -2683,6 +2720,7 @@ namespace lfs::vis {
                 mesh_pass.shutdown();
                 environment_pass.shutdown();
                 depth_blit_pass.shutdown();
+                scene_motion_pass.shutdown();
                 split_view_pass.shutdown();
                 if (scene_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_pipeline, nullptr);
@@ -2785,6 +2823,19 @@ namespace lfs::vis {
             return;
         }
         impl_->prepare(params);
+    }
+
+    bool VulkanViewportPass::hasPreRenderWork(const VulkanViewportPassParams& params) const {
+        return impl_ && impl_->hasPreRenderWork(params);
+    }
+
+    bool VulkanViewportPass::recordPreRenderWork(const VkCommandBuffer command_buffer,
+                                                 const VulkanViewportPassParams& params) {
+        return impl_ && impl_->recordPreRenderWork(command_buffer, params);
+    }
+
+    SceneMotionContract VulkanViewportPass::sceneMotionContract(const std::size_t frame_slot) const {
+        return impl_ ? impl_->scene_motion_pass.contract(frame_slot) : SceneMotionContract{};
     }
 
     void VulkanViewportPass::record(VkCommandBuffer command_buffer,

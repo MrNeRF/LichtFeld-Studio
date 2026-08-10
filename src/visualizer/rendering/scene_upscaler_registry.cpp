@@ -39,6 +39,12 @@ namespace lfs::vis {
         return DESCRIPTORS[1];
     }
 
+    const SceneUpscalerDescriptor& sceneUpscalerDescriptor(const SceneUpscalerBackend backend) {
+        const auto descriptor = std::ranges::find(DESCRIPTORS, backend,
+                                                  &SceneUpscalerDescriptor::backend);
+        return descriptor != DESCRIPTORS.end() ? *descriptor : nativeSceneUpscalerDescriptor();
+    }
+
     std::optional<SceneUpscalerBackend> sceneUpscalerBackendFromId(const std::string_view id) {
         const auto descriptor = std::ranges::find(DESCRIPTORS, id, &SceneUpscalerDescriptor::id);
         if (descriptor == DESCRIPTORS.end())

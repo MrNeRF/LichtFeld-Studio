@@ -49,6 +49,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/split_view_composition.cpp
         rendering/split_view_service.cpp
         rendering/temporal_frame_tracker.cpp
+        rendering/scene_temporal_coordinator.cpp
         rendering/viewport_artifact_service.cpp
         rendering/viewport_frame_lifecycle_service.cpp
         rendering/viewport_interop_service.cpp

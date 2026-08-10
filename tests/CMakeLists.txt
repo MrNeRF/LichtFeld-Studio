@@ -311,6 +311,7 @@ set(TEST_FILES
     test_scene_depth_contract.cpp
     test_scene_motion_contract.cpp
     test_scene_temporal_plan.cpp
+    test_scene_temporal_coordinator.cpp
     test_status_bar_fit.cpp
     test_temporal_frame_tracker.cpp
     test_rotated_sh_correctness.cpp

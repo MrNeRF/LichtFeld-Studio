@@ -27,6 +27,12 @@ namespace lfs::vis {
         bool flip_y = false;
     };
 
+    [[nodiscard]] constexpr bool needsVulkanSceneMotionPreRender(
+        const VulkanSceneMotionParams& params, const bool depth_available) {
+        return params.enabled && depth_available && params.render_extent.x > 0 &&
+               params.render_extent.y > 0;
+    }
+
     class VulkanSceneMotionPass {
     public:
         VulkanSceneMotionPass();

@@ -33,6 +33,8 @@ namespace lfs::vis {
         [[nodiscard]] constexpr bool temporal() const {
             return motion_vectors || jitter || history;
         }
+
+        constexpr bool operator==(const SceneUpscalerRequirements&) const = default;
     };
 
     struct SceneUpscalerDescriptor {
@@ -54,6 +56,8 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API std::span<const SceneUpscalerDescriptor> sceneUpscalerDescriptors();
     [[nodiscard]] LFS_VIS_API const SceneUpscalerDescriptor& nativeSceneUpscalerDescriptor();
     [[nodiscard]] LFS_VIS_API const SceneUpscalerDescriptor& spatialSceneUpscalerDescriptor();
+    [[nodiscard]] LFS_VIS_API const SceneUpscalerDescriptor& sceneUpscalerDescriptor(
+        SceneUpscalerBackend backend);
     [[nodiscard]] LFS_VIS_API std::optional<SceneUpscalerBackend> sceneUpscalerBackendFromId(
         std::string_view id);
     [[nodiscard]] LFS_VIS_API SceneUpscalerSelection resolveSceneUpscalerSelection(

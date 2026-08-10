@@ -9,6 +9,7 @@
 #include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
+#include "vulkan_scene_motion_pass.hpp"
 #include "vulkan_split_view_pass.hpp"
 
 #include <array>
@@ -119,6 +120,9 @@ namespace lfs::vis {
         // incompletely prepared image during the deferral window.
         bool preserve_scene_image_binding = false;
         SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
+        // Dormant unless the effective backend explicitly requests motion vectors.
+        // The depth view is filled from depth_blit after prepare when omitted here.
+        VulkanSceneMotionParams scene_motion;
 
         bool grid_enabled = false;
         glm::mat4 grid_view{1.0f};
@@ -178,6 +182,10 @@ namespace lfs::vis {
 
         [[nodiscard]] bool init(VulkanContext& context);
         void prepare(VulkanContext& context, const VulkanViewportPassParams& params);
+        [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const;
+        [[nodiscard]] bool recordPreRenderWork(VkCommandBuffer command_buffer,
+                                               const VulkanViewportPassParams& params);
+        [[nodiscard]] SceneMotionContract sceneMotionContract(std::size_t frame_slot) const;
         void record(VkCommandBuffer command_buffer,
                     VkExtent2D framebuffer_extent,
                     const VulkanViewportPassParams& params);

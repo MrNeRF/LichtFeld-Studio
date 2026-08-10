@@ -260,6 +260,8 @@ namespace lfs::vis {
         [[nodiscard]] bool finishActiveRendering(VkCommandBuffer command_buffer);
         [[nodiscard]] bool restartActiveRendering(VkCommandBuffer command_buffer,
                                                   const Frame& frame);
+        [[nodiscard]] bool suspendFrameRendering(const Frame& frame);
+        [[nodiscard]] bool resumeFrameRendering(const Frame& frame);
         [[nodiscard]] bool endFrame();
         [[nodiscard]] bool hasActiveFrame() const noexcept { return frame_active_; }
         [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba();
