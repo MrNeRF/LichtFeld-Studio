@@ -2876,10 +2876,12 @@ namespace lfs::io {
                     if (!force && bytes_written < next_report_bytes)
                         return {};
                     next_report_bytes = bytes_written + 16 * 1024 * 1024;
-                    const float ratio = static_cast<float>(std::min(
-                        1.0,
-                        static_cast<double>(bytes_written) /
-                            static_cast<double>(std::max<size_t>(estimated_write_bytes, 1))));
+                    const float ratio = force
+                                            ? 1.0f
+                                            : static_cast<float>(std::min(
+                                                  1.0,
+                                                  static_cast<double>(bytes_written) /
+                                                      static_cast<double>(std::max<size_t>(estimated_write_bytes, 1))));
                     if (!progress_callback(ratio, "Writing PLY")) {
                         return make_error(ErrorCode::CANCELLED,
                                           "Export cancelled by user", output_path);
