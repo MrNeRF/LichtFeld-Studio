@@ -15,7 +15,9 @@
 #include <chrono>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 
 namespace lfs::training {
@@ -23,6 +25,34 @@ namespace lfs::training {
 
         std::atomic<bool> g_perf_bench_enabled{false};
         std::atomic<int> g_perf_bench_warmup{200};
+
+        [[nodiscard]] const char* attribution_state_name(
+            const diagnostics::AttributionState state) noexcept {
+            switch (state) {
+            case diagnostics::AttributionState::Justified:
+                return "justified";
+            case diagnostics::AttributionState::Nested:
+                return "nested";
+            case diagnostics::AttributionState::Unjustified:
+                return "unjustified";
+            }
+            return "unjustified";
+        }
+
+        [[nodiscard]] std::int64_t signed_byte_difference(const std::size_t lhs,
+                                                          const std::size_t rhs) {
+            constexpr auto kMaxSignedBytes =
+                static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max());
+            if (lhs > kMaxSignedBytes || rhs > kMaxSignedBytes) {
+                throw std::overflow_error("VRAM ledger byte count exceeds signed residual range");
+            }
+            return static_cast<std::int64_t>(lhs) - static_cast<std::int64_t>(rhs);
+        }
+
+        [[nodiscard]] std::size_t signed_byte_magnitude(const std::int64_t bytes) noexcept {
+            return bytes >= 0 ? static_cast<std::size_t>(bytes)
+                              : static_cast<std::size_t>(-(bytes + 1)) + 1;
+        }
 
         [[nodiscard]] std::int64_t now_ns() {
             return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -263,7 +293,7 @@ namespace lfs::training {
             line.name = row.scope.empty() ? row.label : (row.scope + "." + row.label);
             line.owner = "vram_profiler";
             line.bytes = std::max(row.live_bytes, row.peak_bytes);
-            line.justified = true;
+            line.state = diagnostics::AttributionState::Nested;
             peak_rows_.push_back(std::move(line));
         }
         peak_arena_capacity_ = std::max(peak_arena_capacity_, arena_cap);
@@ -418,10 +448,6 @@ namespace lfs::training {
         out.peak_pool_used_bytes = peak_pool_used_;
         out.pool_reserved_at_peak_bytes = pool_reserved_at_peak_;
         out.pool_used_at_peak_bytes = pool_used_at_peak_;
-        out.pool_driver_retained_bytes =
-            pool_reserved_at_peak_ > pool_used_at_peak_
-                ? pool_reserved_at_peak_ - pool_used_at_peak_
-                : 0;
         out.training_state_bytes = ledger_.total_bytes;
         out.training_state_reserved_bytes = training_state_reserved_bytes_;
         out.loss_workspace_required_bytes = loss_workspace_required_bytes_;
@@ -462,7 +488,11 @@ namespace lfs::training {
                 ? out.ex_cache_net_bytes - out.baseline_ex_cache_bytes
                 : 0;
 
-        auto add = [&](const char* name, const char* owner, std::size_t bytes, bool justified) {
+        auto add = [&](const char* name,
+                       const char* owner,
+                       const std::size_t bytes,
+                       const diagnostics::AttributionState state,
+                       const char* note = "") {
             if (bytes == 0) {
                 return;
             }
@@ -470,12 +500,15 @@ namespace lfs::training {
             line.name = name;
             line.owner = owner;
             line.bytes = bytes;
-            line.justified = justified;
+            line.state = state;
+            line.note = note;
             out.lines.push_back(std::move(line));
-            if (justified) {
+            if (state == diagnostics::AttributionState::Justified) {
                 out.justified_excess_bytes += bytes;
             }
         };
+
+        using diagnostics::AttributionState;
 
         const std::size_t loss_workspace_slack =
             loss_workspace_allocated_bytes_ > loss_workspace_required_bytes_
@@ -492,49 +525,59 @@ namespace lfs::training {
 
         // Attribute retained allocations to their owning subsystem.
         add("baseline_cuda_context", "desktop+ctx", baseline_cuda_used_,
-            /*justified=*/true);
-        add("training_state", "optimizer", ledger_.total_bytes, /*justified=*/true);
+            AttributionState::Nested,
+            "subtracted before process-net excess; not justified cover");
+        add("training_state", "optimizer", ledger_.total_bytes, AttributionState::Nested,
+            "baseline-accounted inventory; only capacity overhead covers new excess");
         add("training_state_capacity_overhead",
             "capacity",
-            training_state_reserved_bytes_ > ledger_.total_bytes
-                ? training_state_reserved_bytes_ - ledger_.total_bytes
-                : 0,
-            /*justified=*/true);
+            capacity_overhead,
+            AttributionState::Justified);
         add("loss_workspace_required", "loss_workspace",
-            loss_workspace_required_bytes_, /*justified=*/true);
+            loss_workspace_required_bytes_, AttributionState::Justified);
         add("loss_workspace_arena", "loss_workspace",
-            loss_workspace_allocated_bytes_, /*justified=*/true);
+            loss_workspace_allocated_bytes_, AttributionState::Nested,
+            "aggregate of loss_workspace_required and loss_workspace_slack");
         add("loss_workspace_slack", "loss_workspace", loss_workspace_slack,
-            /*justified=*/true);
+            AttributionState::Justified);
         add("densify_child_workspace", "densification", densify_workspace_bytes_,
-            /*justified=*/true);
+            AttributionState::Justified);
         add("pool_bucket_cache", "allocator", out.pool_bucket_cache_bytes,
-            /*justified=*/true);
+            AttributionState::Justified);
         add("pool_bucket_live_rounding_waste", "allocator",
-            out.pool_bucket_live_rounding_waste_bytes, /*justified=*/true);
-        add("pool_driver_retained", "allocator", out.pool_driver_retained_bytes,
-            /*justified=*/true);
+            out.pool_bucket_live_rounding_waste_bytes, AttributionState::Justified);
         add("exportable_splat", "viewport", out.exportable_splat_bytes,
-            /*justified=*/true);
+            AttributionState::Justified);
         add("fastgs_sort_required", "fastgs_sort",
-            out.fastgs_sort_required_bytes, /*justified=*/true);
-        add("fastgs_sort_hwm", "fastgs_sort", out.fastgs_sort_hwm_bytes, /*justified=*/true);
+            out.fastgs_sort_required_bytes, AttributionState::Nested,
+            "disclosure component of fastgs_sort_hwm");
+        add("fastgs_sort_hwm", "fastgs_sort", out.fastgs_sort_hwm_bytes,
+            AttributionState::Justified);
         add("fastgs_sort_slack", "fastgs_sort", fastgs_sort_slack,
-            /*justified=*/true);
+            AttributionState::Nested,
+            "disclosure component already included in fastgs_sort_hwm");
         add("fastgs_raster_live", "FastGS", out.fastgs_raster_live_bytes,
-            /*justified=*/true);
+            AttributionState::Nested,
+            "aggregate of raster arena live and sort workspace");
         add("fastgs_raster_arena_live", "FastGS", out.fastgs_raster_arena_live_bytes,
-            /*justified=*/true);
+            AttributionState::Justified);
         add("fastgs_raster_sort_live", "FastGS", out.fastgs_raster_sort_live_bytes,
-            /*justified=*/true);
+            AttributionState::Nested,
+            "selected sort slice already included in fastgs_sort_hwm");
         add("rasterizer_arena", "rasterizer", out.arena_capacity_bytes,
-            /*justified=*/true);
+            AttributionState::Nested,
+            "backing container; live FastGS arena bytes are covered separately");
         add("rasterizer_arena_required", "rasterizer", out.arena_required_bytes,
-            /*justified=*/true);
-        add("io.decoded_frame_ring", "image_loader", peak_io_ring_bytes_, true);
-        add("io.external_codec_and_bucketed", "image_loader", peak_io_external_bytes_, true);
+            AttributionState::Nested,
+            "required portion of the rasterizer arena container");
+        add("io.decoded_frame_ring", "image_loader", peak_io_ring_bytes_,
+            AttributionState::Nested,
+            "already included in io.external_codec_and_bucketed");
+        add("io.external_codec_and_bucketed", "image_loader", peak_io_external_bytes_,
+            AttributionState::Justified);
         add("pinned_host_active_cached_steady", "pinned_allocator",
-            peak_steady_pinned_host_bytes_, false);
+            peak_steady_pinned_host_bytes_, AttributionState::Unjustified,
+            "host memory; visible inventory outside the VRAM cover sum");
 
         // Cover excess only with disjoint, measured retained allocations. The
         // decoded-frame ring is already inside io.external_codec_and_bucketed,
@@ -542,25 +585,25 @@ namespace lfs::training {
         // both remain visible above but are not counted twice here. Raster arena
         // capacity likewise contains fastgs_raster_arena_live, so only the live
         // suballocation is eligible. Transient q16 expansion is excluded.
-        const std::size_t new_justified =
-            loss_workspace_required_bytes_ + loss_workspace_slack +
-            densify_workspace_bytes_ + out.pool_bucket_cache_bytes +
-            out.pool_bucket_live_rounding_waste_bytes + out.pool_driver_retained_bytes +
-            out.fastgs_sort_allocated_bytes + out.fastgs_raster_arena_live_bytes +
-            out.exportable_splat_bytes + capacity_overhead + peak_io_external_bytes_;
+        const std::size_t new_justified = out.justified_excess_bytes;
 
         // Honest residual: do NOT auto-justify the remainder as "no_trim".
         // MRNF currently trims after refine; free-list residual is the
         // measured pool_bucket_cache line above. Anything left is unattributed.
-        out.unjustified_excess_bytes =
-            out.excess_over_baseline_bytes > new_justified
-                ? out.excess_over_baseline_bytes - new_justified
-                : 0;
-        if (out.unjustified_excess_bytes > 0) {
-            add("unattributed_residual",
+        out.signed_residual_bytes =
+            signed_byte_difference(new_justified, out.excess_over_baseline_bytes);
+        out.unjustified_excess_bytes = out.signed_residual_bytes < 0
+                                           ? signed_byte_magnitude(out.signed_residual_bytes)
+                                           : 0;
+        out.over_attributed_bytes = out.signed_residual_bytes > 0
+                                        ? signed_byte_magnitude(out.signed_residual_bytes)
+                                        : 0;
+        if (out.signed_residual_bytes != 0) {
+            add("signed_residual",
                 "audit",
-                out.unjustified_excess_bytes,
-                /*justified=*/false);
+                signed_byte_magnitude(out.signed_residual_bytes),
+                AttributionState::Unjustified,
+                "magnitude only; signed value is in signed_residual_bytes");
         }
         // justified_excess_bytes already sums all justified inventory lines;
         // for the gate, track post-baseline cover separately via new_justified.
@@ -622,6 +665,8 @@ namespace lfs::training {
             static_cast<double>(peak_ledger.excess_over_baseline_bytes) / (1024.0 * 1024.0);
         const double unjustified_mib =
             static_cast<double>(peak_ledger.unjustified_excess_bytes) / (1024.0 * 1024.0);
+        const double signed_residual_mib =
+            static_cast<double>(peak_ledger.signed_residual_bytes) / (1024.0 * 1024.0);
 
         std::error_code ec;
         std::filesystem::create_directories(path.parent_path(), ec);
@@ -665,6 +710,9 @@ namespace lfs::training {
         out << "  \"ex_cache_unjustified_excess_bytes\": " << peak_ledger.unjustified_excess_bytes
             << ",\n";
         out << "  \"ex_cache_unjustified_excess_mib\": " << unjustified_mib << ",\n";
+        out << "  \"ex_cache_signed_residual_bytes\": "
+            << peak_ledger.signed_residual_bytes << ",\n";
+        out << "  \"ex_cache_signed_residual_mib\": " << signed_residual_mib << ",\n";
         out << "  \"last_loss\": " << last_loss_ << ",\n";
         out << "  \"last_psnr\": " << last_psnr_ << ",\n";
         out << "  \"last_live_splats\": " << last_live_splats_ << ",\n";
@@ -733,6 +781,11 @@ namespace lfs::training {
         out << "    \"justified_new_bytes\": " << peak_ledger.justified_excess_bytes << ",\n";
         out << "    \"unjustified_excess_bytes\": " << peak_ledger.unjustified_excess_bytes
             << ",\n";
+        out << "    \"over_attributed_bytes\": " << peak_ledger.over_attributed_bytes
+            << ",\n";
+        out << "    \"signed_residual_bytes\": " << peak_ledger.signed_residual_bytes
+            << ",\n";
+        out << "    \"signed_residual_mib\": " << signed_residual_mib << ",\n";
         out << "    \"peak_iter\": " << peak_ledger.peak_iter << ",\n";
         out << "    \"peak_pool_reserved_bytes\": " << peak_ledger.peak_pool_reserved_bytes
             << ",\n";
@@ -741,8 +794,6 @@ namespace lfs::training {
             << peak_ledger.pool_reserved_at_peak_bytes << ",\n";
         out << "    \"pool_used_at_peak_bytes\": "
             << peak_ledger.pool_used_at_peak_bytes << ",\n";
-        out << "    \"pool_driver_retained_bytes\": "
-            << peak_ledger.pool_driver_retained_bytes << ",\n";
         out << "    \"training_state_required_bytes\": "
             << peak_ledger.training_state_bytes << ",\n";
         out << "    \"training_state_allocated_bytes\": "
@@ -786,12 +837,20 @@ namespace lfs::training {
         out << "    \"fastgs_sort_hwm_bytes\": " << peak_ledger.fastgs_sort_hwm_bytes << ",\n";
         out << "    \"fastgs_raster_live_bytes\": " << peak_ledger.fastgs_raster_live_bytes
             << ",\n";
+        out << "    \"notes\": [\n";
+        out << "      \"baseline_cuda_context varies by roughly 234 MiB across observed runs; "
+               "signed_residual inherits that cross-run wobble\"\n";
+        out << "    ],\n";
         out << "    \"lines\": [\n";
         for (std::size_t i = 0; i < peak_ledger.lines.size(); ++i) {
             const auto& L = peak_ledger.lines[i];
             out << "      {\"name\": \"" << L.name << "\", \"owner\": \"" << L.owner
                 << "\", \"bytes\": " << L.bytes
-                << ", \"justified\": " << (L.justified ? "true" : "false") << "}";
+                << ", \"state\": \"" << attribution_state_name(L.state) << "\"";
+            if (!L.note.empty()) {
+                out << ", \"note\": \"" << L.note << "\"";
+            }
+            out << "}";
             out << (i + 1 < peak_ledger.lines.size() ? ",\n" : "\n");
         }
         out << "    ],\n";
@@ -809,7 +868,7 @@ namespace lfs::training {
         LOG_INFO("PerfBench: wrote {} (steady {:.2f} ms/iter, dl_wait {:.2f} ms/iter steady, "
                  "{:.1f} allocs/iter, peak VRAM {:.1f} MiB, baseline {:.1f} MiB, "
                  "ex_cache {:.1f} MiB / net {:.1f} MiB "
-                 "(excess {:.1f} vs baseline, unjustified {:.1f}), "
+                 "(excess {:.1f} vs baseline, signed residual {:+.1f} justified-minus-excess), "
                  "sort_hwm {:.1f} MiB, {:.1f} B/splat)",
                  path.string(),
                  steady_ms_iter,
@@ -820,7 +879,7 @@ namespace lfs::training {
                  ex_cache_mib,
                  static_cast<double>(peak_ledger.ex_cache_net_bytes) / (1024.0 * 1024.0),
                  excess_mib,
-                 unjustified_mib,
+                 signed_residual_mib,
                  static_cast<double>(peak_ledger.fastgs_sort_hwm_bytes) / (1024.0 * 1024.0),
                  ledger_.bytes_per_splat);
     }

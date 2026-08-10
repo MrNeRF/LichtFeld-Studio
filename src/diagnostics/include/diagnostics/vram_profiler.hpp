@@ -114,11 +114,18 @@ namespace lfs::diagnostics {
     /// Process-peak attribution. Every residual above the 938 MiB ex-cache
     /// baseline must be eliminated or listed with an owner; justified entries
     /// are budget-gated or required by design.
+    enum class AttributionState : std::uint8_t {
+        Unjustified = 0,
+        Justified = 1,
+        Nested = 2,
+    };
+
     struct PeakSubsystemLine {
         std::string name;
         std::string owner;
         std::size_t bytes = 0;
-        bool justified = false; // true ⇒ documented design residual, not a leak
+        AttributionState state = AttributionState::Unjustified;
+        std::string note;
     };
 
     struct PeakExCacheLedger {
@@ -134,7 +141,6 @@ namespace lfs::diagnostics {
         std::size_t peak_pool_used_bytes = 0;
         std::size_t pool_reserved_at_peak_bytes = 0;
         std::size_t pool_used_at_peak_bytes = 0;
-        std::size_t pool_driver_retained_bytes = 0;
         std::size_t ex_cache_net_bytes = 0;
         std::size_t training_state_bytes = 0;          // params+optim+densify (logical)
         std::size_t training_state_reserved_bytes = 0; // capacity-backed
@@ -156,7 +162,9 @@ namespace lfs::diagnostics {
         std::size_t baseline_ex_cache_bytes = kExCacheBaselineBytes;
         std::size_t excess_over_baseline_bytes = 0;
         std::size_t justified_excess_bytes = 0;
+        std::int64_t signed_residual_bytes = 0; // justified - excess, no clamp
         std::size_t unjustified_excess_bytes = 0;
+        std::size_t over_attributed_bytes = 0;
         int peak_iter = 0;
         std::vector<PeakSubsystemLine> lines;
         std::vector<PeakSubsystemLine> peak_rows; // top VramProfiler rows at peak
