@@ -84,6 +84,11 @@ class PreferencesPanel(Panel):
         if model is None:
             return
 
+        # A data model is recreated after the floating panel is remounted.  The
+        # record list itself belongs to that model, so never reuse the previous
+        # catalog's "already synchronized" marker across model lifetimes.
+        self._scene_render_scale_catalog = []
+
         model.bind_func("panel_label", lambda: lf.ui.tr("preferences.title"))
         model.bind_func("show_general", lambda: self._section == "general")
         model.bind_func("show_appearance", lambda: self._section == "appearance")
@@ -153,6 +158,7 @@ class PreferencesPanel(Panel):
     def on_unmount(self, doc):
         self._document = None
         self._handle = None
+        self._scene_render_scale_catalog = []
         doc.remove_data_model("preferences")
 
     def on_update(self, doc):
