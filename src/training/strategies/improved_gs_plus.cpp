@@ -440,14 +440,8 @@ namespace lfs::training {
         // window (mirrors MCMC ensure_shN_fp32_for_mutation).
         const bool shN_expanded =
             lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
-        struct ShNCommitGuard {
-            lfs::core::SplatData* splat;
-            bool expanded;
-            ~ShNCommitGuard() {
-                if (expanded && splat)
-                    lfs::training::sh_value::commit_shN_after_mutation(*splat);
-            }
-        } shn_guard{_splat_data, shN_expanded};
+        lfs::training::sh_value::ShNCommitGuard shn_guard(
+            *_splat_data, shN_expanded, "ImprovedGSPlus::LAS_densify");
 
         // Sample without replacement through the same Gumbel-top-k path as MCMC.
         const size_t n_scores = scores.numel();

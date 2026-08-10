@@ -20,6 +20,8 @@
 
 #include "core/splat_data.hpp"
 
+#include <string_view>
+
 namespace lfs::training::sh_value {
 
     /// If quant is enabled and shN is still fp32, convert to Float16 u16 + bounds.
@@ -33,5 +35,23 @@ namespace lfs::training::sh_value {
     /// After densify mutated float shN, re-encode to u16 + bounds (if quant on).
     /// Uses the model tensor allocator so exportable/GUI lands codes in the live block.
     bool commit_shN_after_mutation(core::SplatData& splat);
+
+    /// Scope-exit commit for densify helpers with early-return paths. Commit can
+    /// allocate and throw; the destructor contains and logs failures so unwinding
+    /// never escalates to std::terminate.
+    class ShNCommitGuard final {
+    public:
+        ShNCommitGuard(core::SplatData& splat, bool expanded, std::string_view site) noexcept
+            : splat_(&splat), expanded_(expanded), site_(site) {}
+        ~ShNCommitGuard() noexcept;
+
+        ShNCommitGuard(const ShNCommitGuard&) = delete;
+        ShNCommitGuard& operator=(const ShNCommitGuard&) = delete;
+
+    private:
+        core::SplatData* splat_ = nullptr;
+        bool expanded_ = false;
+        std::string_view site_;
+    };
 
 } // namespace lfs::training::sh_value

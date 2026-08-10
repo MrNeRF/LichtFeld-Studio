@@ -209,14 +209,8 @@ namespace lfs::training {
         LOG_TIMER("MCMC::relocate_gs");
         LFS_TRACE("kernel.mcmc.relocate");
         const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
-        struct ShNCommitGuard {
-            lfs::core::SplatData* splat;
-            bool expanded;
-            ~ShNCommitGuard() {
-                if (expanded && splat)
-                    lfs::training::sh_value::commit_shN_after_mutation(*splat);
-            }
-        } shn_guard{_splat_data, shN_expanded};
+        lfs::training::sh_value::ShNCommitGuard shn_guard(
+            *_splat_data, shN_expanded, "MCMC::relocate_gs");
         using namespace lfs::core;
 
         // Get opacities (handle both [N] and [N, 1] shapes)
@@ -422,14 +416,8 @@ namespace lfs::training {
         LFS_TRACE("kernel.densify.duplicate");
         using namespace lfs::core;
         const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
-        struct ShNCommitGuard {
-            lfs::core::SplatData* splat;
-            bool expanded;
-            ~ShNCommitGuard() {
-                if (expanded && splat)
-                    lfs::training::sh_value::commit_shN_after_mutation(*splat);
-            }
-        } shn_guard{_splat_data, shN_expanded};
+        lfs::training::sh_value::ShNCommitGuard shn_guard(
+            *_splat_data, shN_expanded, "MCMC::add_new_gs");
 
         if (!_optimizer) {
             LOG_ERROR("MCMC::add_new_gs: optimizer not initialized");
@@ -588,14 +576,8 @@ namespace lfs::training {
         LOG_TIMER("MCMC::add_new_gs_with_indices_test");
         using namespace lfs::core;
         const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
-        struct ShNCommitGuard {
-            lfs::core::SplatData* splat;
-            bool expanded;
-            ~ShNCommitGuard() {
-                if (expanded && splat)
-                    lfs::training::sh_value::commit_shN_after_mutation(*splat);
-            }
-        } shn_guard{_splat_data, shN_expanded};
+        lfs::training::sh_value::ShNCommitGuard shn_guard(
+            *_splat_data, shN_expanded, "MCMC::add_new_gs_with_indices_test");
 
         if (!_optimizer) {
             LOG_ERROR("add_new_gs_with_indices_test called but optimizer not initialized");

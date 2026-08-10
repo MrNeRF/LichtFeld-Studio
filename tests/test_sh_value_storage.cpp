@@ -10,6 +10,7 @@
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_quant_kernels.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
@@ -21,6 +22,7 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <random>
+#include <stdexcept>
 #include <vector>
 
 using namespace lfs::core;
@@ -142,6 +144,28 @@ TEST(ShValueStorageTest, DensifyExpandCommitPreservesValues) {
     EXPECT_LT(mse, 1e-6);
     EXPECT_GT(psnr_from_mse(mse), 55.0);
 
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, ScopeExitCommitContainsAllocatorFailure) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto splat = make_random_sh3(16);
+    int allocation_attempts = 0;
+    splat.set_tensor_allocator(
+        [&](TensorShape, size_t, DataType, std::string_view) -> Tensor {
+            ++allocation_attempts;
+            throw std::runtime_error("injected SH commit allocation failure");
+        });
+
+    {
+        LiveModelMutationGuard mutation_scope("ScopeExitCommitContainsAllocatorFailure");
+        sh_value::ShNCommitGuard commit_guard(
+            splat, /*expanded=*/true, "ScopeExitCommitContainsAllocatorFailure");
+    }
+
+    EXPECT_EQ(allocation_attempts, 1);
+    EXPECT_EQ(splat.shN().dtype(), DataType::Float32);
+    EXPECT_FALSE(splat.shN_value_quantized());
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 

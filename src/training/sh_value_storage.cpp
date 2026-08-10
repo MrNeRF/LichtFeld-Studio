@@ -228,4 +228,23 @@ namespace lfs::training::sh_value {
         return apply_shN_value_quant(splat);
     }
 
+    ShNCommitGuard::~ShNCommitGuard() noexcept {
+        if (!expanded_ || !splat_) {
+            return;
+        }
+        try {
+            (void)commit_shN_after_mutation(*splat_);
+        } catch (const std::exception& e) {
+            try {
+                LOG_ERROR("{}: SH value commit failed during scope exit: {}", site_, e.what());
+            } catch (...) {
+            }
+        } catch (...) {
+            try {
+                LOG_ERROR("{}: SH value commit failed during scope exit with unknown exception", site_);
+            } catch (...) {
+            }
+        }
+    }
+
 } // namespace lfs::training::sh_value
