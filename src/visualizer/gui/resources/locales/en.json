@@ -1762,6 +1762,7 @@
     "secondary_view": "Secondary View",
     "split": "Split:",
     "gpu": "GPU",
+    "ui_fps": "UI FPS",
     "strategy_default": "Default"
   },
   "plugin_manager": {

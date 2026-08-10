@@ -36,6 +36,7 @@ _GAP_LENGTH = 8.0
 _BORDER_THICKNESS = 2.0
 _ICON_SIZE = 48.0
 _ANIM_SPEED = 30.0
+_EMPTY_STATE_REDRAW_INTERVAL = 1.0 / 15.0  # marching-ants pacing; ~2px/frame at _ANIM_SPEED=30
 _MIN_VIEWPORT_SIZE = 200.0
 _AUTO_DISMISS_DELAY = 3.0
 
@@ -430,7 +431,7 @@ def _draw_empty_state_overlay(layout):
     layout.draw_window_text(center_x - hint_w * 0.5, center_y + 70.0, hint, hint_color)
 
     layout.end_window()
-    lf.ui.request_redraw()
+    lf.ui.request_redraw(delay=_EMPTY_STATE_REDRAW_INTERVAL)
 
 
 def _draw_drag_drop_overlay(layout):

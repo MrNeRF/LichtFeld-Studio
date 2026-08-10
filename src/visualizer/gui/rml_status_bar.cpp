@@ -1215,14 +1215,22 @@ namespace lfs::vis::gui {
                        std::format("{} {:.2f}/{:.2f} GiB", LOC("status_bar.gpu"), used_gib, total_gib));
         setModelString("gpu_mem_color", model_.gpu_mem_color, colorToRml(mem_color));
 
-        // FPS
-        float fps = reactive_fps_available_ ? reactive_fps_value_
-                                            : (rm ? rm->getAverageFPS() : 0.0f);
-        ThemeColor fps_col = fps >= 30.0f ? p.success : (fps >= 15.0f ? p.warning : p.error);
+        // FPS: prefer scene-render rate when scene frames are in the measurement
+        // window; when only GUI frames are presented, show that rate as ui-fps
+        // so a GUI-only spin is not invisible. True idle (no samples) stays 0.
+        const float scene_fps = reactive_fps_available_ ? reactive_fps_value_
+                                                        : (rm ? rm->getAverageFPS() : 0.0f);
+        const float presented_fps = rm ? rm->getPresentedAverageFPS() : 0.0f;
+        const bool ui_only_fps = scene_fps <= 0.0f && presented_fps > 0.0f;
+        const float fps = ui_only_fps ? presented_fps : scene_fps;
+        ThemeColor fps_col = ui_only_fps
+                                 ? p.text_dim
+                                 : (fps >= 30.0f ? p.success : (fps >= 15.0f ? p.warning : p.error));
         setModelString("fps_value", model_.fps_value, std::format("{:.0f}", fps));
         setModelString("fps_color", model_.fps_color, colorToRml(fps_col));
         setModelString("fps_label", model_.fps_label,
-                       std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
+                       ui_only_fps ? std::format(" {}", LOC("status_bar.ui_fps"))
+                                   : std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
         setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
 
         section_signature_ =

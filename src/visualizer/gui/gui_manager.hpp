@@ -100,6 +100,9 @@ namespace lfs::vis {
 
             // State queries
             bool needsAnimationFrame() const;
+            // Min finite scheduled GUI animation/update delay (seconds). Used by the
+            // idle wait path so CSS transitions / timers wake on time without spinning.
+            [[nodiscard]] std::optional<double> secondsUntilNextAnimationFrame() const;
             [[nodiscard]] bool isViewportExportLocked() const;
 
             // Window visibility

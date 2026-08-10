@@ -1769,6 +1769,7 @@
     "secondary_view": "副视图",
     "split": "分割：",
     "gpu": "GPU",
+    "ui_fps": "UI FPS",
     "strategy_default": "默认"
   },
   "plugin_manager": {

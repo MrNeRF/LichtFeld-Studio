@@ -245,6 +245,18 @@ namespace lfs::vis::gui {
         return ops.needs_animation ? ops.needs_animation(host_) : false;
     }
 
+    std::optional<double> RmlImModePanelAdapter::nextScheduledAnimationDelay() const {
+        if (!host_)
+            return std::nullopt;
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        if (!ops.next_scheduled_update_delay)
+            return std::nullopt;
+        double host_delay = 0.0;
+        if (!ops.next_scheduled_update_delay(host_, &host_delay))
+            return std::nullopt;
+        return host_delay;
+    }
+
     void RmlImModePanelAdapter::reloadRmlResources() {
         if (!host_)
             return;

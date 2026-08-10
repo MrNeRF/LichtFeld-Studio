@@ -1830,6 +1830,7 @@
     "secondary_view": "Sekundäre Ansicht",
     "split": "Teilung:",
     "gpu": "GPU",
+    "ui_fps": "UI FPS",
     "strategy_default": "Standard"
   },
   "plugin_manager": {

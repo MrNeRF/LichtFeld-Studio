@@ -905,8 +905,10 @@ def input_dialog(title: str, message: str, default_value: str = '', callback: ob
 def message_dialog(title: str, message: str, style: str = 'info', callback: object | None = None) -> None:
     """Show a message dialog (style: 'info', 'warning', or 'error')"""
 
-def request_redraw() -> None:
-    """Request a UI redraw on next frame"""
+def request_redraw(delay: float = 0.0) -> None:
+    """
+    Request a UI redraw; with delay > 0, schedule it no later than that many seconds from now.
+    """
 
 def consume_redraw_request() -> bool:
     """Consume and return pending redraw request flag"""

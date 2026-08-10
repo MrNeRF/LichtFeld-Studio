@@ -11,6 +11,7 @@
 
 #include <RmlUi/Core/EventListener.h>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace Rml {
@@ -46,6 +47,9 @@ namespace lfs::vis::gui {
         }
         bool wantsKeyboard() const override { return host_.wantsKeyboard(); }
         bool needsAnimationFrame() const override { return host_.needsAnimationFrame(); }
+        std::optional<double> nextScheduledAnimationDelay() const override {
+            return host_.nextScheduledUpdateDelay();
+        }
         void reloadRmlResources() override;
         void releaseRendererResources() override { host_.releaseRendererResources(); }
 
@@ -169,6 +173,7 @@ namespace lfs::vis::gui {
         std::string logging_feedback_text_;
         FeedbackTone logging_feedback_tone_ = FeedbackTone::Info;
         bool logging_feedback_dirty_ = false;
+        bool syncing_logging_selection_ = false;
     };
 
 } // namespace lfs::vis::gui

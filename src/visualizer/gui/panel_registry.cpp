@@ -1185,59 +1185,95 @@ namespace lfs::vis::gui {
         return false;
     }
 
-    PanelAnimationDemand PanelRegistry::animationDemandForVisiblePanels(
-        const PanelAnimationVisibility visibility) const {
-        auto mark_visible_demand = [&](PanelAnimationDemand& demand, const PanelInfo& p) {
+    namespace {
+        // Shared visibility predicate for animation demand and scheduled delays.
+        // Must stay in lockstep: a mismatch causes either pinned frames or stalled wakes.
+        [[nodiscard]] bool isPanelVisibleForAnimation(
+            const PanelInfo& p, const PanelAnimationVisibility& visibility) {
             if (!p.parent_id.empty()) {
-                if (visibility.right_panel_visible &&
-                    std::string_view(p.parent_id) == visibility.active_main_tab)
-                    demand.main_panel_tab = true;
+                return visibility.right_panel_visible &&
+                       std::string_view(p.parent_id) == visibility.active_main_tab;
+            }
+
+            switch (p.space) {
+            case PanelSpace::Floating:
+                return visibility.ui_visible;
+            case PanelSpace::SidePanel:
+                return visibility.ui_visible;
+            case PanelSpace::StatusBar:
+                return visibility.ui_visible;
+            case PanelSpace::ViewportOverlay:
+                return true;
+            case PanelSpace::SceneHeader:
+                return visibility.right_panel_visible;
+            case PanelSpace::MainPanelTab:
+                return visibility.right_panel_visible &&
+                       std::string_view(p.id) == visibility.active_main_tab;
+            case PanelSpace::BottomDock:
+                return visibility.ui_visible && visibility.bottom_dock_visible;
+            case PanelSpace::LeftDock:
+                return visibility.ui_visible && visibility.left_dock_visible;
+            }
+            return false;
+        }
+
+        void markVisibleAnimationDemand(PanelAnimationDemand& demand, const PanelInfo& p,
+                                        const PanelAnimationVisibility& visibility) {
+            if (!isPanelVisibleForAnimation(p, visibility))
+                return;
+
+            if (!p.parent_id.empty()) {
+                demand.main_panel_tab = true;
                 return;
             }
 
             switch (p.space) {
             case PanelSpace::Floating:
-                if (visibility.ui_visible)
-                    demand.floating = true;
+                demand.floating = true;
                 return;
             case PanelSpace::SidePanel:
-                if (visibility.ui_visible)
-                    demand.side_panel = true;
+                demand.side_panel = true;
                 return;
             case PanelSpace::StatusBar:
-                if (visibility.ui_visible)
-                    demand.status_bar = true;
+                demand.status_bar = true;
                 return;
             case PanelSpace::ViewportOverlay:
                 demand.viewport_overlay = true;
                 return;
             case PanelSpace::SceneHeader:
-                if (visibility.right_panel_visible)
-                    demand.scene_header = true;
+                demand.scene_header = true;
                 return;
             case PanelSpace::MainPanelTab:
-                if (visibility.right_panel_visible &&
-                    std::string_view(p.id) == visibility.active_main_tab)
-                    demand.main_panel_tab = true;
+                demand.main_panel_tab = true;
                 return;
             case PanelSpace::BottomDock:
-                if (visibility.ui_visible && visibility.bottom_dock_visible)
-                    demand.bottom_dock = true;
+                demand.bottom_dock = true;
                 return;
             case PanelSpace::LeftDock:
-                if (visibility.ui_visible && visibility.left_dock_visible)
-                    demand.left_dock = true;
+                demand.left_dock = true;
                 return;
             }
-        };
+        }
 
+        [[nodiscard]] std::optional<double> minOptionalDelay(std::optional<double> a,
+                                                             std::optional<double> b) {
+            if (!a)
+                return b;
+            if (!b)
+                return a;
+            return std::min(*a, *b);
+        }
+    } // namespace
+
+    PanelAnimationDemand PanelRegistry::animationDemandForVisiblePanels(
+        const PanelAnimationVisibility visibility) const {
         PanelAnimationDemand demand;
         std::lock_guard lock(mutex_);
         for (const auto& p : panels_) {
             if (!p.enabled || p.error_disabled || !p.panel)
                 continue;
             if (p.panel->needsAnimationFrame())
-                mark_visible_demand(demand, p);
+                markVisibleAnimationDemand(demand, p, visibility);
         }
         return demand;
     }
@@ -1245,6 +1281,20 @@ namespace lfs::vis::gui {
     bool PanelRegistry::needsAnimationFrameForVisiblePanels(
         const PanelAnimationVisibility visibility) const {
         return animationDemandForVisiblePanels(visibility).any();
+    }
+
+    std::optional<double> PanelRegistry::nextScheduledAnimationDelayForVisiblePanels(
+        const PanelAnimationVisibility visibility) const {
+        std::optional<double> min_delay;
+        std::lock_guard lock(mutex_);
+        for (const auto& p : panels_) {
+            if (!p.enabled || p.error_disabled || !p.panel)
+                continue;
+            if (!isPanelVisibleForAnimation(p, visibility))
+                continue;
+            min_delay = minOptionalDelay(min_delay, p.panel->nextScheduledAnimationDelay());
+        }
+        return min_delay;
     }
 
     bool PanelRegistry::set_panel_label(const std::string& id, const std::string& new_label) {

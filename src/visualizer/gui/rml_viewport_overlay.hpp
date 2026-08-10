@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -99,6 +100,9 @@ namespace lfs::vis::gui {
             return render_needed_ || document_sync_dirty_ || animation_active_ || tooltip_.revealDue() ||
                    (vram_hud_ && vram_hud_->needsAnimationFrame());
         }
+        // Finite RmlUi scheduled update delay (seconds) when > 0; nullopt for
+        // continuous demand (0) or idle (infinity).
+        [[nodiscard]] std::optional<double> nextScheduledUpdateDelay() const;
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
 
     private:
@@ -173,6 +177,7 @@ namespace lfs::vis::gui {
         bool document_sync_dirty_ = true;
         bool data_model_binding_dirty_ = true;
         bool animation_active_ = false;
+        double next_update_delay_ = std::numeric_limits<double>::infinity();
         bool hovered_interactive_ = false;
         Rml::Element* last_hover_element_ = nullptr;
         bool mouse_pos_valid_ = false;

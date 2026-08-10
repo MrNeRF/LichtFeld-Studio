@@ -128,6 +128,9 @@ namespace lfs::vis::gui {
         virtual void setForcedHeight(float h) { (void)h; }
         virtual bool wantsKeyboard() const { return false; }
         virtual bool needsAnimationFrame() const { return false; }
+        // Finite scheduled animation/update delay in seconds (> 0). nullopt means
+        // no scheduled wake (either continuous demand via needsAnimationFrame or idle).
+        virtual std::optional<double> nextScheduledAnimationDelay() const { return std::nullopt; }
         virtual bool wantsExternalFloatingShadow() const { return true; }
         virtual void setPanelSpace(PanelSpace space) { (void)space; }
         virtual void reloadRmlResources() {}
@@ -327,6 +330,10 @@ namespace lfs::vis::gui {
         PanelAnimationDemand animationDemandForVisiblePanels(
             PanelAnimationVisibility visibility) const;
         bool needsAnimationFrameForVisiblePanels(PanelAnimationVisibility visibility) const;
+        // Min finite scheduled delay across visible panels (same visibility rules as
+        // needsAnimationFrameForVisiblePanels). nullopt if none are scheduled.
+        std::optional<double> nextScheduledAnimationDelayForVisiblePanels(
+            PanelAnimationVisibility visibility) const;
         bool set_panel_label(const std::string& id, const std::string& new_label);
         bool set_panel_order(const std::string& id, int new_order);
         bool set_panel_space(const std::string& id, PanelSpace new_space);
