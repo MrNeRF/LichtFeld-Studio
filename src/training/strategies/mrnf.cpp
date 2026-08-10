@@ -854,9 +854,10 @@ namespace lfs::training {
             _precomputed_edge_scores = Tensor();
             _edge_precompute_valid = false;
             reset_edge_accumulator();
-            // Topology freeze safety net: re-encode if a non-refining stop_refine
-            // step still holds float SH (every refine already commits). Self-guards
-            // via LiveModelMutationGuard inside commit_shN_after_mutation.
+            // Topology freeze safety net: re-encode if the stop_refine step still
+            // holds float SH (every regular refine already commits). is_refining()
+            // classifies this boundary as an exclusive mutation step even when it
+            // is off cadence, so Trainer holds render_mutex_ across this commit.
             if (lfs::core::sh_value_quant::enabled() &&
                 _splat_data->shN().is_valid() &&
                 _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
@@ -912,7 +913,11 @@ namespace lfs::training {
     }
 
     bool MRNF::is_refining(int iter) const {
-        return (iter < static_cast<int>(_params->stop_refine) &&
+        const int stop_refine = static_cast<int>(_params->stop_refine);
+        if (iter == stop_refine) {
+            return true;
+        }
+        return (iter < stop_refine &&
                 iter > static_cast<int>(_params->start_refine) &&
                 iter % _params->refine_every == 0);
     }

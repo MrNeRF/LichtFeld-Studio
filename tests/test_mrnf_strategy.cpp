@@ -499,6 +499,23 @@ TEST(MRNFStrategyTest, StepScalingDoesNotScaleSparsifySteps) {
     EXPECT_EQ(params.stop_refine, 14250u);
 }
 
+TEST(MRNFStrategyTest, StopRefineBoundaryRequestsExclusiveMutation) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+
+    auto params = param::OptimizationParameters::mrnf_defaults();
+    params.start_refine = 10;
+    params.refine_every = 100;
+    params.stop_refine = 150; // deliberately off the regular refine cadence
+    params.max_cap = 32;
+    strategy.initialize(params);
+
+    EXPECT_TRUE(strategy.is_refining(100));
+    EXPECT_FALSE(strategy.is_refining(149));
+    EXPECT_TRUE(strategy.is_refining(150));
+    EXPECT_FALSE(strategy.is_refining(151));
+}
+
 TEST(MRNFStrategyTest, GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);

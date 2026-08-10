@@ -123,8 +123,8 @@ namespace lfs::training::sh_value {
     }
 
     bool ensure_shN_fp32_for_mutation(core::SplatData& splat) {
-        LiveModelMutationGuard mutation_guard("ensure_shN_fp32_for_mutation");
         LFS_ASSERT_LIVE_MODEL_MUTATION_LOCK_HELD();
+        LiveModelMutationGuard mutation_guard("ensure_shN_fp32_for_mutation");
         auto& shN = splat.shN();
         if (!shN.is_valid() || shN.dtype() != DataType::Float16)
             return false;
@@ -214,8 +214,8 @@ namespace lfs::training::sh_value {
     }
 
     bool commit_shN_after_mutation(core::SplatData& splat) {
-        LiveModelMutationGuard mutation_guard("commit_shN_after_mutation");
         LFS_ASSERT_LIVE_MODEL_MUTATION_LOCK_HELD();
+        LiveModelMutationGuard mutation_guard("commit_shN_after_mutation");
         auto& shN = splat.shN();
         if (!shN.is_valid() || shN.dtype() != DataType::Float32)
             return false;
@@ -223,8 +223,8 @@ namespace lfs::training::sh_value {
         if (!sh_value_quant_enabled())
             return false;
         // Single-buffer: rebuild codes+bounds into the live exportable q16 region
-        // (allocate_named_param). Guard acquires render exclusive when the caller
-        // did not (crop/python/stop_refine); refining block re-enters as no-op.
+        // (allocate_named_param). The caller must already own the mutation guard or
+        // trainer render exclusive; this helper's marker only covers nested work.
         return apply_shN_value_quant(splat);
     }
 
