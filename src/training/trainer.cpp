@@ -3738,17 +3738,9 @@ namespace lfs::training {
         }
 
         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
+        if (auto loader = getActiveImageLoader())
+            loader->reclaim_idle_decoded_frames();
         lfs::core::Tensor::trim_memory_pool();
-
-        // GT device cache is optional and invisible to densify/viewer peak
-        // unless reclaimed here. Pressure client also covers the allocator path;
-        // this is the training-safe explicit drop.
-        if (auto loader = getActiveImageLoader()) {
-            const size_t evicted = loader->clear_gt_cache();
-            if (evicted > 0) {
-                LOG_WARN("OOM recovery: evicted {} GT cache entries", evicted);
-            }
-        }
 
         const cudaError_t final_status = synchronize();
         if (final_status != cudaSuccess) {
@@ -6085,40 +6077,7 @@ namespace lfs::training {
             setActiveImageLoader(train_dataloader->get_loader_shared());
             strategy_->set_image_loader(train_dataloader->get_loader());
 
-            // Budget decoded GT caching from dataset size and first-camera
-            // dimensions (u8 CHW RGB is approximately 3*W*H bytes).
             if (train_dataset_ && train_dataloader->get_loader()) {
-                const size_t n_images = train_dataset_->size();
-                size_t bytes_per = 0;
-                if (n_images > 0) {
-                    auto& cams = train_dataset_->get_cameras();
-                    if (!cams.empty() && cams[0]) {
-                        auto& cam = cams[0];
-                        if (!cam->image_size_loaded()) {
-                            cam->load_image_size(train_dataset_->get_resize_factor(),
-                                                 train_dataset_->get_max_width());
-                        }
-                        const int w = cam->image_width();
-                        const int h = cam->image_height();
-                        if (w > 0 && h > 0) {
-                            // Training default is u8 CHW RGB when not 16-bit.
-                            bytes_per = static_cast<size_t>(3) * static_cast<size_t>(w) *
-                                        static_cast<size_t>(h);
-                        }
-                    }
-                }
-                // Interactive (GUI/viewer): device GT tier = 0 (pinned + H2D
-                // staging). Headless keeps free−headroom device cache so
-                // dl_wait_ms / steady numbers hold. Session context only — no
-                // env knobs; loader also upgrades if external shared-scratch is
-                // already installed.
-                const bool interactive_session = !params_.optimization.headless;
-                train_dataloader->get_loader()->configure_gt_cache(
-                    n_images, bytes_per, interactive_session);
-                // Fill decoded-GT tiers before the timed loop so first-epoch
-                // inserts do not pollute steady_allocs/iter. Interactive warms
-                // pinned only; headless warms the device tier.
-                train_dataloader->warm_gt_device_cache();
                 train_dataloader->reset();
             }
 
@@ -6148,11 +6107,10 @@ namespace lfs::training {
                 const auto dl_wait_t0 = std::chrono::steady_clock::now();
                 auto example_opt = train_dataloader->next();
                 const auto dl_wait_t1 = std::chrono::steady_clock::now();
+                const double dl_wait_ms =
+                    std::chrono::duration<double, std::milli>(dl_wait_t1 - dl_wait_t0).count();
                 if (PerfBenchCollector::enabled()) {
-                    const double wait_ms =
-                        std::chrono::duration<double, std::milli>(dl_wait_t1 - dl_wait_t0)
-                            .count();
-                    PerfBenchCollector::instance().record_dataloader_wait(iter, wait_ms);
+                    PerfBenchCollector::instance().record_dataloader_wait(iter, dl_wait_ms);
                 }
                 if (!example_opt) {
                     const std::string detail = std::format(
@@ -6224,11 +6182,16 @@ namespace lfs::training {
                 }
 
                 train_phase = StepPhase::Forward;
+                const auto train_t0 = std::chrono::steady_clock::now();
                 auto step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
                 if (!step_result) {
                     terminal_error = std::move(step_result).error();
                     break;
                 }
+                const double train_ms =
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - train_t0)
+                        .count();
+                train_dataloader->observe_training_iteration(train_ms, dl_wait_ms, iter);
 
                 // Transition to safe control phase and execute deferred Python callbacks
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
@@ -6258,13 +6221,6 @@ namespace lfs::training {
                 }
 
                 ++iter;
-            }
-
-            // Capture GT-cache footprint before the loader is torn down so
-            // perf_bench.json can report the explicit gt_cache_MiB ledger line.
-            if (PerfBenchCollector::enabled()) {
-                const auto stats = train_dataloader->get_stats();
-                PerfBenchCollector::instance().set_gt_cache_bytes(stats.gt_device_cache_bytes);
             }
 
             clearActiveImageLoader();

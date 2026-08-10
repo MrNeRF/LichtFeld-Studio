@@ -1,14 +1,23 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/image_io.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include "training/dataset.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <vector>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 using namespace lfs::core;
 using namespace lfs::io;
@@ -17,11 +26,54 @@ namespace {
 
     class PipelinedImageLoaderTest : public ::testing::Test {
     protected:
-        void SetUp() override {
+        static std::uint64_t process_id() {
+#ifdef _WIN32
+            return static_cast<std::uint64_t>(_getpid());
+#else
+            return static_cast<std::uint64_t>(getpid());
+#endif
+        }
+
+        static void SetUpTestSuite() {
             image_path_ = std::filesystem::path(TEST_DATA_DIR) /
                           "bicycle/images_4/_DSC8744.JPG";
-            mask_path_ = std::filesystem::path(TEST_DATA_DIR) /
-                         "bicycle/masks/_DSC8744.png";
+            ASSERT_TRUE(std::filesystem::is_regular_file(image_path_)) << image_path_;
+            mask_path_ = std::filesystem::temp_directory_path() /
+                         ("lfs_pipelined_loader_bicycle_mask_" +
+                          std::to_string(process_id()) + ".png");
+            if (!std::filesystem::is_regular_file(mask_path_)) {
+                auto [pixels, width, height, channels] = lfs::core::load_image(image_path_);
+                const bool valid = pixels != nullptr && width > 0 && height > 0 && channels > 0;
+                lfs::core::Tensor mask;
+                if (valid) {
+                    mask = lfs::core::Tensor::empty(
+                        {static_cast<size_t>(height), static_cast<size_t>(width), size_t{1}},
+                        lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+                    const auto* source = pixels;
+                    auto* target = mask.ptr<uint8_t>();
+                    for (size_t i = 0; i < static_cast<size_t>(width) * height; ++i) {
+                        const size_t source_index = i * static_cast<size_t>(channels);
+                        const unsigned luminance =
+                            static_cast<unsigned>(source[source_index]) +
+                            static_cast<unsigned>(source[source_index + std::min(channels - 1, 1)]) +
+                            static_cast<unsigned>(source[source_index + std::min(channels - 1, 2)]);
+                        target[i] = luminance >= 3u * 64u ? 255u : 0u;
+                    }
+                }
+                if (pixels)
+                    lfs::core::free_image(pixels);
+                ASSERT_TRUE(valid) << image_path_;
+                ASSERT_NO_THROW(lfs::core::save_image(mask_path_, std::move(mask)));
+            }
+            ASSERT_TRUE(std::filesystem::is_regular_file(mask_path_)) << mask_path_;
+        }
+
+        static void TearDownTestSuite() {
+            std::error_code ec;
+            std::filesystem::remove(mask_path_, ec);
+        }
+
+        void SetUp() override {
             ASSERT_TRUE(std::filesystem::is_regular_file(image_path_)) << image_path_;
             ASSERT_TRUE(std::filesystem::is_regular_file(mask_path_)) << mask_path_;
         }
@@ -53,9 +105,12 @@ namespace {
             return result;
         }
 
-        std::filesystem::path image_path_;
-        std::filesystem::path mask_path_;
+        static std::filesystem::path image_path_;
+        static std::filesystem::path mask_path_;
     };
+
+    std::filesystem::path PipelinedImageLoaderTest::image_path_;
+    std::filesystem::path PipelinedImageLoaderTest::mask_path_;
 
     std::vector<float> mask_values(const ReadyImage& ready) {
         EXPECT_TRUE(ready.mask.has_value());
@@ -108,19 +163,19 @@ TEST_F(PipelinedImageLoaderTest, ResizeAndMaxWidthKeepImageAndMaskAligned) {
               large.tensor.shape()[1] * large.tensor.shape()[2]);
 }
 
-TEST_F(PipelinedImageLoaderTest, CacheKeySeparatesInvertAndThresholdSemantics) {
+TEST_F(PipelinedImageLoaderTest, MaskCacheHitPreservesInvertAndThresholdSemantics) {
     PipelinedImageLoader loader(config());
 
-    auto normal_request = request(1, 96);
-    loader.prefetch({normal_request});
-    const auto normal = loader.get();
-
-    auto inverted_request = request(2, 96);
+    auto inverted_request = request(2, 0);
     inverted_request.mask_params.invert = true;
     loader.prefetch({inverted_request});
     const auto inverted = loader.get();
 
-    auto threshold_request = request(3, 96);
+    auto normal_request = request(1, 0);
+    loader.prefetch({normal_request});
+    const auto normal = loader.get();
+
+    auto threshold_request = request(3, 0);
     threshold_request.mask_params.threshold = 0.5f;
     loader.prefetch({threshold_request});
     const auto thresholded = loader.get();
@@ -134,7 +189,8 @@ TEST_F(PipelinedImageLoaderTest, CacheKeySeparatesInvertAndThresholdSemantics) {
     size_t zeros = 0;
     size_t ones = 0;
     for (size_t i = 0; i < normal_values.size(); ++i) {
-        EXPECT_NEAR(inverted_values[i], 1.0f - normal_values[i], 1e-5f);
+        // UINT8 lossless J2K quantization is 1/255.
+        EXPECT_NEAR(inverted_values[i], 1.0f - normal_values[i], 0.01f);
         const float expected = normal_values[i] >= 0.5f ? 1.0f : 0.0f;
         EXPECT_FLOAT_EQ(thresholded_values[i], expected);
         zeros += thresholded_values[i] == 0.0f;

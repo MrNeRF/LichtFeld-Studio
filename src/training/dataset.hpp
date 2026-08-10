@@ -185,6 +185,8 @@ namespace lfs::training {
         std::optional<lfs::core::Tensor> normal = {}; // Optional normals [3,H,W], float32 in [-1,1]
         CUevent_st* depth_ready_event = nullptr;
         CUevent_st* normal_ready_event = nullptr;
+        // Ring-backed tensors must never outlive this keepalive handle.
+        std::shared_ptr<void> decoded_frame_keepalive;
     };
 
     /// Camera dataset configuration
@@ -264,10 +266,10 @@ namespace lfs::training {
             // Load image using the new LibTorch-free Camera
             lfs::core::Tensor image = cam->load_and_get_image(config_.resize_factor, config_.max_width, true);
 
-            return {
-                {cam.get(), std::move(image)},
-                lfs::core::Tensor(), // Empty target
-                std::nullopt};
+            return CameraExample{
+                .data = {cam.get(), std::move(image)},
+                .target = lfs::core::Tensor(),
+            };
         }
 
         /// Get batch of examples by indices
@@ -606,13 +608,13 @@ namespace lfs::training {
                 cam->set_image_dimensions(static_cast<int>(shape[2]), static_cast<int>(shape[1]));
 
                 CameraExample example{
-                    CameraWithImage{cam.get(), std::move(ready.tensor)},
-                    lfs::core::Tensor(),
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    ready.depth_ready_event,
-                    ready.normal_ready_event};
+                    .data = {cam.get(), std::move(ready.tensor)},
+                    .target = lfs::core::Tensor(),
+                    .depth_ready_event = ready.depth_ready_event,
+                    .normal_ready_event = ready.normal_ready_event,
+                };
+                example.decoded_frame_keepalive = std::make_shared<
+                    std::vector<std::shared_ptr<void>>>(std::move(ready.decoded_frame_leases));
                 ready.depth_ready_event = nullptr;
                 ready.normal_ready_event = nullptr;
 
@@ -663,94 +665,6 @@ namespace lfs::training {
             prefetch_next_batch();
         }
 
-        /// decode every unique camera once so the GT device cache is full
-        /// before the timed training loop. clear() preserves the cache.
-        /// Call after configure_gt_cache(); then reset() for a clean sampler.
-        void warm_gt_device_cache() {
-            if (shutdown_ || !dataset_ || !loader_) {
-                return;
-            }
-            lfs::core::alloc_counter::ScopedSite site("gt_cache_warm");
-            // Drain any in-flight training prefetches first (preserve GT cache).
-            while (loader_->in_flight_count() > 0) {
-                try {
-                    auto ready = loader_->get();
-                    sequence_to_camera_.erase(ready.sequence_id);
-                    (void)ready;
-                } catch (...) {
-                    break;
-                }
-            }
-            sequence_to_camera_.clear();
-
-            const auto& cams = dataset_->get_cameras();
-            const size_t n = cams.size();
-            if (n == 0) {
-                return;
-            }
-            // Submit unique-path requests with high sequence ids to avoid clashing
-            // with the training sequence counter (reset afterward).
-            constexpr size_t kWarmSeqBase = 1'000'000'000ull;
-            std::vector<lfs::io::ImageRequest> batch;
-            batch.reserve(n);
-            for (size_t i = 0; i < n; ++i) {
-                auto& cam = cams[i];
-                if (!cam) {
-                    continue;
-                }
-                lfs::io::ImageRequest request;
-                request.sequence_id = kWarmSeqBase + i;
-                request.path = cam->image_path();
-                request.params.resize_factor = dataset_->get_resize_factor();
-                request.params.max_width = dataset_->get_max_width();
-                request.params.output_uint8 = !config_.use_16bit_color;
-                if (!cam->image_size_loaded() ||
-                    (dataset_->get_max_width() > 0 &&
-                     (cam->image_height() > dataset_->get_max_width() ||
-                      cam->image_width() > dataset_->get_max_width()))) {
-                    cam->load_image_size(dataset_->get_resize_factor(), dataset_->get_max_width());
-                }
-                batch.push_back(std::move(request));
-            }
-            if (batch.empty()) {
-                return;
-            }
-            // Prefetch in chunks so the pipeline stays bounded.
-            size_t submitted = 0;
-            size_t completed = 0;
-            const size_t total = batch.size();
-            const size_t chunk = std::max<size_t>(1, config_.prefetch_count);
-            while (completed < total) {
-                if (submitted < total && loader_->in_flight_count() < chunk) {
-                    const size_t end = std::min(submitted + chunk, total);
-                    std::vector<lfs::io::ImageRequest> slice(
-                        batch.begin() + static_cast<std::ptrdiff_t>(submitted),
-                        batch.begin() + static_cast<std::ptrdiff_t>(end));
-                    loader_->prefetch(slice);
-                    submitted = end;
-                }
-                try {
-                    auto ready = loader_->get();
-                    (void)ready; // tensor retained in GT cache by maybe_store
-                    ++completed;
-                } catch (const std::exception& e) {
-                    LOG_WARN("[PipelinedDataLoader] GT warm decode failed: {}", e.what());
-                    ++completed;
-                }
-            }
-            // Keep GT cache; drop queues / sequence map for a clean training start.
-            loader_->clear();
-            sequence_to_camera_.clear();
-            next_sequence_id_ = 0;
-            const auto stats = loader_->get_stats();
-            LOG_INFO("[PipelinedDataLoader] GT cache warm: {} device entries / {:.1f} MiB  "
-                     "{} pinned entries / {:.1f} MiB",
-                     stats.gt_device_cache_entries,
-                     stats.gt_device_cache_bytes / (1024.0 * 1024.0),
-                     stats.gt_pinned_cache_entries,
-                     stats.gt_pinned_cache_bytes / (1024.0 * 1024.0));
-        }
-
         void shutdown() {
             if (shutdown_)
                 return;
@@ -760,12 +674,18 @@ namespace lfs::training {
 
         auto get_stats() const { return loader_->get_stats(); }
 
+        void observe_training_iteration(const double train_ms,
+                                        const double dl_wait_ms,
+                                        const std::size_t iter) {
+            loader_->observe_training_iteration(train_ms, dl_wait_ms, iter);
+        }
+
         lfs::io::PipelinedImageLoader* get_loader() const { return loader_.get(); }
         std::shared_ptr<lfs::io::PipelinedImageLoader> get_loader_shared() const { return loader_; }
 
     private:
         void prefetch_next_batch() {
-            while (loader_->in_flight_count() < config_.prefetch_count) {
+            while (loader_->in_flight_count() < loader_->adaptive_prefetch_target()) {
                 const auto indices = sampler_.next(1);
                 if (!indices || indices->empty())
                     break;

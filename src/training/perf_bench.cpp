@@ -5,6 +5,7 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/logger.hpp"
+#include "core/pinned_memory_allocator.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 
 #include <cuda_runtime.h>
@@ -133,9 +134,11 @@ namespace lfs::training {
         peak_arena_capacity_ = 0;
         peak_fastgs_sort_hwm_ = 0;
         peak_fastgs_raster_live_ = 0;
+        peak_io_ring_bytes_ = 0;
+        peak_io_external_bytes_ = 0;
+        peak_steady_pinned_host_bytes_ = 0;
         peak_iter_ = 0;
         peak_rows_.clear();
-        gt_cache_bytes_ = 0;
         loss_workspace_bytes_ = 0;
         densify_workspace_bytes_ = 0;
         training_state_reserved_bytes_ = 0;
@@ -194,9 +197,14 @@ namespace lfs::training {
             std::max(peak_pool_bucket_cache_, snap.process.cuda_pool_bucket_cache_bytes);
         peak_exportable_splat_ =
             std::max(peak_exportable_splat_, snap.process.exportable_splat_bytes);
+        for (const auto& gauge : snap.gauges) {
+            if (gauge.key == "vram.audit.io.decoded_frame_ring.bytes")
+                peak_io_ring_bytes_ = std::max(peak_io_ring_bytes_, static_cast<std::size_t>(gauge.value));
+        }
 
         std::size_t arena_cap = 0;
         std::size_t raster_live = 0;
+        std::size_t io_external = 0;
         peak_rows_.clear();
         for (const auto& row : snap.rows) {
             if (row.live_bytes == 0 && row.peak_bytes == 0) {
@@ -211,6 +219,11 @@ namespace lfs::training {
                 row.label.find("sorted_indices") != std::string::npos) {
                 raster_live += std::max(row.live_bytes, row.peak_bytes);
             }
+            if (row.scope == "io.nvimagecodec" || row.scope == "io.image_loader" ||
+                row.label.find("nvimagecodec") != std::string::npos ||
+                row.label.find("image_loader") != std::string::npos) {
+                io_external += std::max(row.live_bytes, row.peak_bytes);
+            }
             diagnostics::PeakSubsystemLine line;
             line.name = row.scope.empty() ? row.label : (row.scope + "." + row.label);
             line.owner = "vram_profiler";
@@ -219,6 +232,7 @@ namespace lfs::training {
             peak_rows_.push_back(std::move(line));
         }
         peak_arena_capacity_ = std::max(peak_arena_capacity_, arena_cap);
+        peak_io_external_bytes_ = std::max(peak_io_external_bytes_, io_external);
         if (raster_live > 0) {
             peak_fastgs_raster_live_ = std::max(peak_fastgs_raster_live_, raster_live);
         }
@@ -277,6 +291,10 @@ namespace lfs::training {
                 // Next step is the first steady-state step — enable alloc trace.
             }
         } else {
+            const auto pinned_stats = lfs::core::PinnedMemoryAllocator::instance().get_stats();
+            peak_steady_pinned_host_bytes_ = std::max(
+                peak_steady_pinned_host_bytes_,
+                pinned_stats.allocated_bytes + pinned_stats.cached_bytes);
             steady_allocs_ += allocs;
             steady_ms_sum_ += ms;
             ++steady_steps_;
@@ -308,17 +326,6 @@ namespace lfs::training {
             steady_dataloader_wait_ms_sum_ += wait_ms;
             ++steady_dataloader_wait_count_;
         }
-    }
-
-    void PerfBenchCollector::set_gt_cache_bytes(const std::size_t bytes) {
-        if (!started_) {
-            return;
-        }
-        gt_cache_bytes_ = bytes;
-        // Include cache in the reported peak when it is the dominant resident
-        // consumer (cudaMemGetInfo peak already covers live use; this is the
-        // explicit ledger line for the GT cache bucket).
-        (void)bytes;
     }
 
     void PerfBenchCollector::set_loss_workspace_bytes(const std::size_t bytes) {
@@ -356,7 +363,6 @@ namespace lfs::training {
         out.baseline_cuda_used_bytes = baseline_cuda_used_;
         out.peak_pool_reserved_bytes = peak_pool_reserved_;
         out.peak_pool_used_bytes = peak_pool_used_;
-        out.gt_cache_bytes = gt_cache_bytes_;
         out.training_state_bytes = ledger_.total_bytes;
         out.training_state_reserved_bytes = training_state_reserved_bytes_;
         out.loss_workspace_bytes = loss_workspace_bytes_;
@@ -376,17 +382,13 @@ namespace lfs::training {
             peak_exportable_splat_ > 0 ? peak_exportable_splat_
                                        : snap.process.exportable_splat_bytes;
 
-        // ex_cache is the device-wide peak after subtracting the GT cache.
-        out.ex_cache_bytes =
-            peak_cuda_used_ > gt_cache_bytes_ ? peak_cuda_used_ - gt_cache_bytes_ : 0;
+        out.ex_cache_bytes = peak_cuda_used_;
         // Process-net: also subtract pre-train baseline (desktop + cold CUDA context).
         // On a busy desktop baseline can be 200–300 MiB and must not count as "ours".
         const std::size_t peak_above_baseline =
             peak_cuda_used_ > baseline_cuda_used_ ? peak_cuda_used_ - baseline_cuda_used_
                                                   : 0;
-        out.ex_cache_net_bytes =
-            peak_above_baseline > gt_cache_bytes_ ? peak_above_baseline - gt_cache_bytes_
-                                                  : 0;
+        out.ex_cache_net_bytes = peak_above_baseline;
         // Compare process-net usage with the quiet-GPU baseline.
         out.baseline_ex_cache_bytes = diagnostics::PeakExCacheLedger::kExCacheBaselineBytes;
         out.excess_over_baseline_bytes =
@@ -412,7 +414,6 @@ namespace lfs::training {
         // Attribute retained allocations to their owning subsystem.
         add("baseline_cuda_context", "desktop+ctx", baseline_cuda_used_,
             /*justified=*/true);
-        add("gt_cache", "ground_truth", gt_cache_bytes_, /*justified=*/true);
         add("training_state", "optimizer", ledger_.total_bytes, /*justified=*/true);
         add("training_state_capacity_overhead",
             "capacity",
@@ -432,6 +433,10 @@ namespace lfs::training {
             /*justified=*/true);
         add("rasterizer_arena", "rasterizer", out.arena_capacity_bytes,
             /*justified=*/true);
+        add("io.decoded_frame_ring", "image_loader", peak_io_ring_bytes_, false);
+        add("io.external_codec_and_bucketed", "image_loader", peak_io_external_bytes_, true);
+        add("pinned_host_active_cached_steady", "pinned_allocator",
+            peak_steady_pinned_host_bytes_, false);
 
         // Only residuals added above the baseline may cover excess_over_baseline;
         // the baseline already includes training state and the raster working set.
@@ -444,7 +449,8 @@ namespace lfs::training {
                 : 0;
         const std::size_t new_justified =
             loss_workspace_bytes_ + densify_workspace_bytes_ + out.pool_bucket_cache_bytes +
-            out.fastgs_sort_hwm_bytes + out.exportable_splat_bytes + capacity_overhead;
+            out.fastgs_sort_hwm_bytes + out.exportable_splat_bytes + capacity_overhead +
+            peak_io_external_bytes_;
 
         // Honest residual: do NOT auto-justify the remainder as "no_trim".
         // MRNF currently trims after refine; free-list residual is the
@@ -506,8 +512,6 @@ namespace lfs::training {
                 ? steady_dataloader_wait_ms_sum_ /
                       static_cast<double>(steady_dataloader_wait_count_)
                 : 0.0;
-        const double gt_cache_mib =
-            static_cast<double>(gt_cache_bytes_) / (1024.0 * 1024.0);
         const auto peak_ledger = peak_ex_cache_ledger();
         const double ex_cache_mib =
             static_cast<double>(peak_ledger.ex_cache_bytes) / (1024.0 * 1024.0);
@@ -541,13 +545,13 @@ namespace lfs::training {
         out << "  \"steady_allocs_total\": " << steady_allocs_ << ",\n";
         out << "  \"warmup_allocs_per_iter\": " << warmup_allocs_iter << ",\n";
         out << "  \"steady_allocs_per_iter\": " << steady_allocs_iter << ",\n";
+        out << "  \"steady_pinned_active_cached_bytes\": "
+            << peak_steady_pinned_host_bytes_ << ",\n";
         out << "  \"peak_cuda_used_bytes\": " << peak_cuda_used_ << ",\n";
         out << "  \"peak_cuda_total_bytes\": " << peak_cuda_total_ << ",\n";
         out << "  \"baseline_cuda_used_bytes\": " << baseline_cuda_used_ << ",\n";
         out << "  \"peak_pool_reserved_bytes\": " << peak_pool_reserved_ << ",\n";
         out << "  \"peak_pool_used_bytes\": " << peak_pool_used_ << ",\n";
-        out << "  \"gt_cache_bytes\": " << gt_cache_bytes_ << ",\n";
-        out << "  \"gt_cache_mib\": " << gt_cache_mib << ",\n";
         out << "  \"ex_cache_bytes\": " << peak_ledger.ex_cache_bytes << ",\n";
         out << "  \"ex_cache_mib\": " << ex_cache_mib << ",\n";
         out << "  \"ex_cache_net_bytes\": " << peak_ledger.ex_cache_net_bytes << ",\n";
@@ -580,7 +584,6 @@ namespace lfs::training {
         out << "    \"optimizer_bytes\": " << ledger_.optimizer_bytes << ",\n";
         out << "    \"gradients_or_helpers_bytes\": " << ledger_.gradients_or_helpers_bytes << ",\n";
         out << "    \"densify_aux_bytes\": " << ledger_.densify_aux_bytes << ",\n";
-        out << "    \"gt_cache_bytes\": " << gt_cache_bytes_ << ",\n";
         out << "    \"loss_workspace_bytes\": " << loss_workspace_bytes_ << ",\n";
         out << "    \"densify_workspace_bytes\": " << densify_workspace_bytes_ << ",\n";
         out << "    \"training_state_reserved_bytes\": " << training_state_reserved_bytes_ << ",\n";
@@ -602,6 +605,8 @@ namespace lfs::training {
         out << "    \"peak_pool_reserved_bytes\": " << peak_ledger.peak_pool_reserved_bytes
             << ",\n";
         out << "    \"peak_pool_used_bytes\": " << peak_ledger.peak_pool_used_bytes << ",\n";
+        out << "    \"steady_pinned_active_cached_bytes\": "
+            << peak_steady_pinned_host_bytes_ << ",\n";
         out << "    \"fastgs_sort_hwm_bytes\": " << peak_ledger.fastgs_sort_hwm_bytes << ",\n";
         out << "    \"fastgs_raster_live_bytes\": " << peak_ledger.fastgs_raster_live_bytes
             << ",\n";
@@ -627,7 +632,7 @@ namespace lfs::training {
 
         LOG_INFO("PerfBench: wrote {} (steady {:.2f} ms/iter, dl_wait {:.2f} ms/iter steady, "
                  "{:.1f} allocs/iter, peak VRAM {:.1f} MiB, baseline {:.1f} MiB, "
-                 "gt_cache {:.1f} MiB, ex_cache {:.1f} MiB / net {:.1f} MiB "
+                 "ex_cache {:.1f} MiB / net {:.1f} MiB "
                  "(excess {:.1f} vs baseline, unjustified {:.1f}), "
                  "sort_hwm {:.1f} MiB, {:.1f} B/splat)",
                  path.string(),
@@ -636,7 +641,6 @@ namespace lfs::training {
                  steady_allocs_iter,
                  static_cast<double>(peak_cuda_used_) / (1024.0 * 1024.0),
                  static_cast<double>(baseline_cuda_used_) / (1024.0 * 1024.0),
-                 gt_cache_mib,
                  ex_cache_mib,
                  static_cast<double>(peak_ledger.ex_cache_net_bytes) / (1024.0 * 1024.0),
                  excess_mib,

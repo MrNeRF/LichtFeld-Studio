@@ -132,9 +132,7 @@ namespace lfs::diagnostics {
         std::size_t baseline_cuda_used_bytes = 0; // device-wide at train start
         std::size_t peak_pool_reserved_bytes = 0; // process-local pool HWM
         std::size_t peak_pool_used_bytes = 0;
-        // peak_cuda - baseline - gt_cache (fair vs quiet-GPU)
         std::size_t ex_cache_net_bytes = 0;
-        std::size_t gt_cache_bytes = 0;
         std::size_t training_state_bytes = 0;          // params+optim+densify (logical)
         std::size_t training_state_reserved_bytes = 0; // capacity-backed
         std::size_t loss_workspace_bytes = 0;
@@ -144,7 +142,6 @@ namespace lfs::diagnostics {
         std::size_t fastgs_sort_hwm_bytes = 0;
         std::size_t fastgs_raster_live_bytes = 0; // per_prim+tile+sorted at peak
         std::size_t arena_capacity_bytes = 0;
-        // peak - gt_cache (the quantity compared to 938 MiB)
         std::size_t ex_cache_bytes = 0;
         std::size_t baseline_ex_cache_bytes = kExCacheBaselineBytes;
         std::size_t excess_over_baseline_bytes = 0;

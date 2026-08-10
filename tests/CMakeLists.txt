@@ -270,10 +270,10 @@ set(TEST_FILES
     test_normal_prior_decode.cpp
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
+    test_compressed_blob_tier.cpp
     test_pipelined_loader.cpp
     test_pipelined_loader_ledger.cpp
     test_pipelined_loader_sidecar_jpeg2k.cpp
-    test_gt_device_cache.cpp
     test_operator_return_value.cpp
     test_sdl_rml_key_mapping.cpp
     test_rml_path_utils.cpp

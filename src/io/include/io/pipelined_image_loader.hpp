@@ -40,8 +40,7 @@ namespace lfs::io {
         constexpr size_t DEFAULT_OUTPUT_QUEUE_SIZE = 4;
         constexpr size_t DEFAULT_IO_THREADS = 2;
         constexpr size_t DEFAULT_COLD_THREADS = 2;
-        constexpr size_t DEFAULT_MAX_CACHE_BYTES = 8ULL * 1024 * 1024 * 1024;
-        constexpr float DEFAULT_MIN_FREE_RATIO = 0.2f;
+        constexpr size_t DEFAULT_MAX_CACHE_BYTES = 0;
         constexpr int DEFAULT_JPEG_QUALITY = 95;
         constexpr int DEFAULT_BATCH_TIMEOUT_MS = 3;
         constexpr int DEFAULT_OUTPUT_TIMEOUT_MS = 50;
@@ -68,100 +67,7 @@ namespace lfs::io {
         SidecarCount normal;
     };
 
-    /// Default free-VRAM headroom reserved above the GT-cache footprint so
-    // headless/CLI training peak still has room.
-    constexpr size_t GT_CACHE_DEFAULT_HEADROOM_BYTES = 2ULL * 1024 * 1024 * 1024;
-
-    /// Interactive H2D staging depth: rotating freestanding device buffers for
-    /// the next camera image(s). Not a keyed multi-image device cache — only
-    /// hides PCIe latency while the dataloader pipeline runs ahead. Depth is a
-    /// pipeline constant (runtime image size still sizes each slot).
-    constexpr size_t GT_H2D_STAGING_DEPTH = 2;
-
-    /**
-     * @brief Pure budget gate for the decoded-GT device cache.
-     *
-     * Headless/CLI: enable device tier only when n_images * bytes_per_image
-     * fits under min(free_vram - headroom, optional programmatic cap).
-     * Interactive (GUI/viewer): device tier is always 0 — GT lives in the
-     * pinned-host tier and is served via async H2D into a small staging
-     * ring (depth GT_H2D_STAGING_DEPTH). Both off falls back to decode.
-     *
-     * Scaling-invariant: sizes come from n_images / bytes_per_image / free
-     * VRAM only — never from dataset name or resolution labels.
-     */
-    struct GtCacheBudgetDecision {
-        bool enable_device = false;
-        bool enable_pinned_host = false;
-        size_t estimated_bytes = 0;
-        size_t free_vram_bytes = 0;
-        size_t headroom_bytes = GT_CACHE_DEFAULT_HEADROOM_BYTES;
-        size_t cap_bytes = 0; // 0 = no explicit cap; interactive device budget stays 0
-        size_t device_budget_bytes = 0;
-        bool interactive = false;
-        const char* reason = "uninitialized";
-    };
-
-    [[nodiscard]] inline GtCacheBudgetDecision evaluate_gt_cache_budget(
-        const size_t n_images,
-        const size_t bytes_per_image,
-        const size_t free_vram_bytes,
-        const size_t headroom_bytes = GT_CACHE_DEFAULT_HEADROOM_BYTES,
-        const size_t cap_bytes = 0,
-        const bool force_disable = false,
-        const bool allow_pinned_fallback = true,
-        const bool interactive = false) {
-        GtCacheBudgetDecision d;
-        d.estimated_bytes = n_images * bytes_per_image;
-        d.free_vram_bytes = free_vram_bytes;
-        d.headroom_bytes = headroom_bytes;
-        d.cap_bytes = cap_bytes;
-        d.interactive = interactive;
-        if (force_disable) {
-            d.reason = "disabled_by_config";
-            return d;
-        }
-        if (n_images == 0 || bytes_per_image == 0) {
-            d.reason = "unknown_footprint";
-            return d;
-        }
-
-        if (interactive) {
-            // Owner binding: GUI device tier = 0 always. Pinned host
-            // holds the decoded set; H2D staging (not a device cache) hides
-            // upload latency. free_vram / cap do not re-enable device tier —
-            // no residual mini-tier knobs.
-            d.device_budget_bytes = 0;
-            d.cap_bytes = 0;
-            d.enable_device = false;
-            d.enable_pinned_host = allow_pinned_fallback;
-            d.reason = d.enable_pinned_host ? "interactive_device_tier_zero_use_pinned"
-                                            : "interactive_device_tier_zero_no_cache";
-            return d;
-        }
-
-        // Headless / CLI training: free − headroom all-or-nothing (bench stable).
-        if (free_vram_bytes <= headroom_bytes) {
-            d.enable_pinned_host = allow_pinned_fallback;
-            d.reason = d.enable_pinned_host ? "vram_below_headroom_use_pinned"
-                                            : "vram_below_headroom_no_cache";
-            return d;
-        }
-        size_t budget = free_vram_bytes - headroom_bytes;
-        if (cap_bytes > 0) {
-            budget = std::min(budget, cap_bytes);
-        }
-        d.device_budget_bytes = budget;
-        if (d.estimated_bytes <= budget) {
-            d.enable_device = true;
-            d.reason = "device_within_budget";
-            return d;
-        }
-        d.enable_pinned_host = allow_pinned_fallback;
-        d.reason = d.enable_pinned_host ? "device_over_budget_use_pinned"
-                                        : "device_over_budget_no_cache";
-        return d;
-    }
+    constexpr size_t DECODE_FRAME_RING_CAPACITY = 14;
 
     struct PipelinedLoaderConfig {
         size_t jpeg_batch_size = config::DEFAULT_BATCH_SIZE;
@@ -171,24 +77,11 @@ namespace lfs::io {
         size_t io_threads = config::DEFAULT_IO_THREADS;
         size_t cold_process_threads = config::DEFAULT_COLD_THREADS;
         size_t max_cache_bytes = config::DEFAULT_MAX_CACHE_BYTES;
-        float min_free_memory_ratio = config::DEFAULT_MIN_FREE_RATIO;
         bool use_filesystem_cache = true;
         int cache_jpeg_quality = config::DEFAULT_JPEG_QUALITY;
         std::chrono::milliseconds batch_collect_timeout{config::DEFAULT_BATCH_TIMEOUT_MS};
         std::chrono::milliseconds output_wait_timeout{config::DEFAULT_OUTPUT_TIMEOUT_MS};
         bool use_16bit_color = false;
-
-        // Decoded-GT device / pinned cache. Disabled when false;
-        // when true the budget gate still decides device vs pinned vs off.
-        bool enable_gt_cache = true;
-        bool enable_gt_pinned_fallback = true;
-        size_t gt_cache_headroom_bytes = GT_CACHE_DEFAULT_HEADROOM_BYTES;
-        size_t gt_cache_cap_bytes = 0; // 0 = no override (tests may set a tight cap)
-        size_t gt_cache_expected_images = 0;
-        size_t gt_cache_bytes_per_image = 0;
-        // True when the GUI/viewer is active (stricter VRAM policy). Set from
-        // the rendering/visualizer session path — never from env knobs.
-        bool interactive_session = false;
 
         // Default preserves today's unconditional "skip and continue" behavior
         // for every optional sidecar. Required fails the whole camera
@@ -243,6 +136,7 @@ namespace lfs::io {
         // each carries its own event; consumers must wait on both.
         CUevent_st* depth_ready_event = nullptr;
         CUevent_st* normal_ready_event = nullptr;
+        std::vector<std::shared_ptr<void>> decoded_frame_leases;
         std::string error; // Non-empty for a failed primary image request
     };
 
@@ -312,18 +206,9 @@ namespace lfs::io {
             std::uint64_t succeeded_sequences = 0;
             std::uint64_t cancelled_sequences = 0;
             std::uint64_t failed_sequences = 0;
-            // Decoded-GT device / pinned cache
-            bool gt_device_cache_enabled = false;
-            bool gt_pinned_cache_enabled = false;
-            size_t gt_device_cache_entries = 0;
-            size_t gt_device_cache_bytes = 0;
-            size_t gt_pinned_cache_entries = 0;
-            size_t gt_pinned_cache_bytes = 0;
-            size_t gt_device_cache_hits = 0;
-            size_t gt_device_cache_misses = 0;
-            size_t gt_pinned_cache_hits = 0;
-            size_t gt_cache_inserts = 0;
-            size_t gt_cache_evictions = 0;
+            size_t decoded_frames_live = 0;
+            size_t decoded_frames_peak = 0;
+            size_t decoded_frame_capacity = 0;
         };
 
         explicit PipelinedImageLoader(PipelinedLoaderConfig config = {});
@@ -347,30 +232,14 @@ namespace lfs::io {
         lfs::core::Tensor load_image_immediate(
             const std::filesystem::path& path, const LoadParams& params);
 
-        /// Evaluate VRAM budget and enable device / pinned GT tiers.
-        /// Call once the dataset size and (optionally) per-image decoded size
-        /// are known. Safe to call multiple times; later calls re-evaluate.
-        /// @param interactive when true (GUI/viewer active), apply the strict
-        ///        interactive device cap; headless/CLI leave this false.
-        void configure_gt_cache(size_t expected_images,
-                                size_t bytes_per_image = 0,
-                                bool interactive = false);
-
-        /// Drop all decoded-GT device / pinned entries (VRAM reclaim).
-        /// Returns the number of entries evicted (device + pinned).
-        size_t clear_gt_cache();
-
-        /// Evict device-tier entries under VRAM pressure (pinned kept).
-        /// Returns bytes released. Safe from the pressure coordinator.
-        size_t reclaim_gt_device_cache_for_pressure();
-
-        [[nodiscard]] GtCacheBudgetDecision gt_cache_budget() const { return gt_budget_; }
-        [[nodiscard]] size_t gt_device_cache_bytes() const;
-        [[nodiscard]] size_t gt_pinned_cache_bytes() const;
-
         size_t ready_count() const;
         size_t in_flight_count() const;
+        void observe_training_iteration(double train_ms, double dl_wait_ms, std::size_t iter);
+        void record_decode_latency(double decode_ms);
+        [[nodiscard]] size_t adaptive_prefetch_target() const;
+        [[nodiscard]] size_t adaptive_prefetch_occupancy() const;
         void clear();
+        void reclaim_idle_decoded_frames();
         void shutdown();
         bool is_running() const { return running_.load(); }
         CacheStats get_stats() const;
@@ -404,11 +273,6 @@ namespace lfs::io {
             const lfs::core::UndistortParams* undistort = nullptr;
         };
 
-        struct CachedJpegHit {
-            std::shared_ptr<std::vector<uint8_t>> data;
-            bool from_base_key = false;
-        };
-
         // Pairing buffer: wait for the image and requested auxiliary images before output
         struct PendingPair {
             std::uint64_t loader_generation = 0;
@@ -426,6 +290,7 @@ namespace lfs::io {
             bool mask_failed = false;
             bool depth_failed = false;
             bool normal_failed = false;
+            std::vector<std::shared_ptr<void>> decoded_frame_leases;
             size_t image_bytes = 0;
             size_t mask_bytes = 0;
             size_t depth_bytes = 0;
@@ -546,9 +411,6 @@ namespace lfs::io {
         std::vector<uint8_t> read_file(const std::filesystem::path& path) const;
         void save_to_fs_cache(const std::string& cache_key, const std::vector<uint8_t>& data);
         std::shared_ptr<std::vector<uint8_t>> load_cached_jpeg_blob(const std::string& cache_key);
-        std::optional<CachedJpegHit> find_cached_jpeg(const std::string& cache_key,
-                                                      const std::string& base_key,
-                                                      const std::filesystem::path& source_path);
         lfs::core::Tensor decode_file_on_cpu(const std::filesystem::path& path,
                                              const LoadParams& params) const;
         void write_derived_cache(NvCodecImageLoader& nvcodec,
@@ -591,7 +453,8 @@ namespace lfs::io {
             cudaStream_t stream,
             std::optional<lfs::core::Tensor> depth = std::nullopt,
             std::optional<lfs::core::Tensor> normal = std::nullopt,
-            CUevent_st* sidecar_ready_event = nullptr);
+            CUevent_st* sidecar_ready_event = nullptr,
+            std::shared_ptr<void> decoded_frame_lease = nullptr);
         void try_push_ready_locked(size_t sequence_id,
                                    PendingPairIterator it,
                                    std::unique_lock<std::mutex>& pending_lock);
@@ -619,22 +482,7 @@ namespace lfs::io {
         void destroy_sidecar_ready_event(CUevent_st*& event);
         void reset_pipeline_gpu_bytes();
 
-        // Decoded-GT device / pinned cache helpers (primary RGB only).
-        void evaluate_and_apply_gt_budget();
-        [[nodiscard]] bool detect_interactive_session() const;
-        void register_gt_pressure_client_once();
-        void publish_gt_cache_vram_gauge() const;
-        [[nodiscard]] std::optional<lfs::core::Tensor> try_gt_device_hit(const std::string& key);
-        [[nodiscard]] std::optional<lfs::core::Tensor> try_gt_pinned_hit(const std::string& key,
-                                                                         cudaStream_t stream);
-        /// Async H2D from pinned host into a freestanding device tensor (not inserted
-        /// into the keyed device cache). Pipeline prefetch keeps the next 1–2 camera
-        /// images ahead so PCIe latency is hidden from dl_wait; destinations are
-        /// transient ReadyImage payloads, not a multi-image device cache.
-        [[nodiscard]] lfs::core::Tensor h2d_from_pinned(const lfs::core::Tensor& host,
-                                                        cudaStream_t stream);
-        void maybe_store_gt_tensor(const std::string& key, const lfs::core::Tensor& tensor);
-        void evict_gt_device_if_needed(size_t required_bytes);
+        void publish_loader_vram_gauges() const;
 
         PipelinedLoaderConfig config_;
         std::atomic<bool> running_{false};
@@ -662,26 +510,9 @@ namespace lfs::io {
         mutable std::mutex jpeg_cache_mutex_;
         std::atomic<size_t> jpeg_cache_bytes_{0};
 
-        // Decoded-GT caches: device-resident (primary) and pinned-host (middle).
-        struct GtDeviceEntry {
-            lfs::core::Tensor tensor; // CUDA, typically u8 CHW
-            size_t size_bytes = 0;
-            std::chrono::steady_clock::time_point last_access;
-        };
-        struct GtPinnedEntry {
-            lfs::core::Tensor tensor; // pinned CPU, same dtype/shape as device
-            size_t size_bytes = 0;
-            std::chrono::steady_clock::time_point last_access;
-        };
-        std::unordered_map<std::string, GtDeviceEntry> gt_device_cache_;
-        std::unordered_map<std::string, GtPinnedEntry> gt_pinned_cache_;
-        mutable std::mutex gt_cache_mutex_;
-        std::atomic<size_t> gt_device_cache_bytes_{0};
-        std::atomic<size_t> gt_pinned_cache_bytes_{0};
-        std::atomic<bool> gt_device_enabled_{false};
-        std::atomic<bool> gt_pinned_enabled_{false};
-        GtCacheBudgetDecision gt_budget_{};
-        bool gt_budget_evaluated_ = false;
+        struct DecodedFrameRing;
+        std::shared_ptr<DecodedFrameRing> decoded_frame_ring_;
+        std::vector<lfs::core::Tensor> decode_hwc_workspace_;
 
         std::filesystem::path fs_cache_folder_;
         std::mutex fs_cache_mutex_;
@@ -693,6 +524,16 @@ namespace lfs::io {
 
         mutable std::mutex stats_mutex_;
         CacheStats stats_;
+        mutable std::mutex adaptive_mutex_;
+        double decode_latency_ema_ms_ = 0.0;
+        double train_latency_ema_ms_ = 0.0;
+        double adaptive_wait_sum_ms_ = 0.0;
+        size_t adaptive_wait_samples_ = 0;
+        size_t adaptive_target_ = config::DEFAULT_PREFETCH_COUNT;
+        size_t adaptive_low_recommendation_windows_ = 0;
+        size_t adaptive_growth_cooldown_windows_ = 0;
+        size_t adaptive_occupancy_ = 0;
+        size_t adaptive_peak_occupancy_ = 0;
         std::atomic<size_t> in_flight_{0};
         std::atomic<size_t> output_image_bytes_{0};
         std::atomic<size_t> output_mask_bytes_{0};

@@ -43,9 +43,6 @@ namespace lfs::training {
         /// the train_step span that feeds steady_ms). @p iter is 1-based.
         void record_dataloader_wait(int iter, double wait_ms);
 
-        /// Decoded-GT device cache footprint (bytes) for VRAM ledger line.
-        void set_gt_cache_bytes(std::size_t bytes);
-
         // Loss-workspace arena footprint for peak attribution.
         void set_loss_workspace_bytes(std::size_t bytes);
 
@@ -104,9 +101,11 @@ namespace lfs::training {
         std::size_t peak_arena_capacity_ = 0;
         std::size_t peak_fastgs_sort_hwm_ = 0;
         std::size_t peak_fastgs_raster_live_ = 0;
+        std::size_t peak_io_ring_bytes_ = 0;
+        std::size_t peak_io_external_bytes_ = 0;
+        std::size_t peak_steady_pinned_host_bytes_ = 0;
         int peak_iter_ = 0;
         std::vector<diagnostics::PeakSubsystemLine> peak_rows_;
-        std::size_t gt_cache_bytes_ = 0;
         std::size_t loss_workspace_bytes_ = 0;
         std::size_t densify_workspace_bytes_ = 0;
         std::size_t training_state_reserved_bytes_ = 0;

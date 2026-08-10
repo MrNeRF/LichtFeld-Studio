@@ -19,7 +19,7 @@
  *
  *
  * optional per-site attribution. Coarse pool-tier tags are always
- * recorded; a TLS logical site (gt_cache / densify / joint_bounds / …) can be
+ * recorded; a TLS logical site (densify / joint_bounds / …) can be
  * stacked via ScopedSite.
  */
 

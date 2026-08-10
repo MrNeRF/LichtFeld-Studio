@@ -503,6 +503,7 @@ namespace lfs::training {
         std::shared_ptr<CameraLossHeatmapState> camera_loss_heatmap_;
 
         // Pre-loaded mask from pipelined dataloader (used in train_step)
+        // Sidecars are not ring-backed; if that changes, carry their ring lease here too.
         lfs::core::Tensor pipelined_mask_;
         lfs::core::Tensor pipelined_depth_;
         lfs::core::Tensor pipelined_normal_;
