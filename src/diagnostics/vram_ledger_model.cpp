@@ -4,7 +4,9 @@
 #include "diagnostics/vram_ledger_model.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
+#include <map>
 #include <stdexcept>
 
 namespace lfs::diagnostics {
@@ -76,6 +78,88 @@ namespace lfs::diagnostics {
                 parent.attributed_bytes += bytes;
             }
             parent.children.push_back(std::move(c));
+        }
+
+        struct RequiredAllocationPair {
+            std::size_t required_bytes = 0;
+            std::size_t allocated_bytes = 0;
+            bool has_required = false;
+            bool has_allocated = false;
+        };
+
+        [[nodiscard]] std::size_t gauge_bytes(const double value) {
+            if (!std::isfinite(value) || value <= 0.0) {
+                return 0;
+            }
+            const auto max_bytes = static_cast<double>(std::numeric_limits<std::size_t>::max());
+            return static_cast<std::size_t>(std::min(value, max_bytes));
+        }
+
+        [[nodiscard]] std::map<std::string, RequiredAllocationPair>
+        discover_required_allocation_pairs(const VramProfilerSnapshot& snapshot) {
+            constexpr std::string_view kPrefix = "vram.audit.";
+            constexpr std::string_view kRequiredSuffix = ".required_bytes";
+            constexpr std::string_view kAllocatedSuffix = ".allocated_bytes";
+
+            std::map<std::string, RequiredAllocationPair> pairs;
+            for (const auto& gauge : snapshot.gauges) {
+                const std::string_view key = gauge.key;
+                if (!starts_with(key, kPrefix)) {
+                    continue;
+                }
+
+                const auto set_value = [&](const std::string_view suffix,
+                                           const bool required) {
+                    if (!key.ends_with(suffix) || key.size() <= kPrefix.size() + suffix.size()) {
+                        return false;
+                    }
+                    const auto name = key.substr(
+                        kPrefix.size(), key.size() - kPrefix.size() - suffix.size());
+                    auto& pair = pairs[std::string(name)];
+                    if (required) {
+                        pair.required_bytes = gauge_bytes(gauge.value);
+                        pair.has_required = true;
+                    } else {
+                        pair.allocated_bytes = gauge_bytes(gauge.value);
+                        pair.has_allocated = true;
+                    }
+                    return true;
+                };
+
+                if (!set_value(kRequiredSuffix, true)) {
+                    (void)set_value(kAllocatedSuffix, false);
+                }
+            }
+            return pairs;
+        }
+
+        void add_required_allocation_disclosures(
+            VramLedgerNode& pool_root,
+            VramLedgerNode& arena_root,
+            const std::map<std::string, RequiredAllocationPair>& pairs) {
+            for (const auto& [name, pair] : pairs) {
+                if (!pair.has_required || !pair.has_allocated) {
+                    continue;
+                }
+
+                const bool rasterizer_pair = name.find("raster") != std::string::npos ||
+                                             name.find("fastgs") != std::string::npos;
+                auto& parent = rasterizer_pair ? arena_root : pool_root;
+                VramLedgerNode disclosure;
+                disclosure.name = name;
+                disclosure.owner = parent.owner;
+                disclosure.measured_bytes = pair.allocated_bytes;
+                disclosure.required_bytes = pair.required_bytes;
+                disclosure.has_required = true;
+                disclosure.state = AttributionState::Nested;
+                disclosure.row_kind = VramRowKind::Sampled;
+                disclosure.root_id = parent.root_id;
+                disclosure.note = name == "fastgs_raster_live" &&
+                                          pair.required_bytes == pair.allocated_bytes
+                                      ? "degenerate required/allocated pair"
+                                      : "required/allocated disclosure";
+                parent.children.push_back(std::move(disclosure));
+            }
         }
 
     } // namespace
@@ -154,6 +238,7 @@ namespace lfs::diagnostics {
     VramLedgerTree buildLiveLedger(const VramProfilerSnapshot& snapshot,
                                    const VramLedgerPolicy& policy) {
         VramLedgerTree tree;
+        const auto disclosure_pairs = discover_required_allocation_pairs(snapshot);
         tree.include_vulkan_roots = policy.include_vulkan_in_sum;
         const auto& proc = snapshot.process;
         tree.process_used_bytes =
@@ -341,6 +426,8 @@ namespace lfs::diagnostics {
         }
         root_d.attributed_bytes = hooked_arena_bytes;
         apply_closure(root_d, ledger_epsilon(root_d.measured_bytes, policy));
+
+        add_required_allocation_disclosures(root_a, root_d, disclosure_pairs);
 
         auto root_e = make_root(VramLedgerRootId::ExportableVmm, exportable, "viewport");
         if (proc.exportable_splat_bytes > 0) {
