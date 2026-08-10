@@ -49,15 +49,13 @@ namespace {
                     mask = lfs::core::Tensor::empty(
                         {static_cast<size_t>(height), static_cast<size_t>(width), size_t{1}},
                         lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-                    const auto* source = pixels;
                     auto* target = mask.ptr<uint8_t>();
                     for (size_t i = 0; i < static_cast<size_t>(width) * height; ++i) {
-                        const size_t source_index = i * static_cast<size_t>(channels);
-                        const unsigned luminance =
-                            static_cast<unsigned>(source[source_index]) +
-                            static_cast<unsigned>(source[source_index + std::min(channels - 1, 1)]) +
-                            static_cast<unsigned>(source[source_index + std::min(channels - 1, 2)]);
-                        target[i] = luminance >= 3u * 64u ? 255u : 0u;
+                        const size_t x = i % static_cast<size_t>(width);
+                        target[i] = width > 1
+                                        ? static_cast<uint8_t>((255u * x) /
+                                                               static_cast<size_t>(width - 1))
+                                        : uint8_t{0};
                     }
                 }
                 if (pixels)
@@ -166,35 +164,43 @@ TEST_F(PipelinedImageLoaderTest, ResizeAndMaxWidthKeepImageAndMaskAligned) {
 TEST_F(PipelinedImageLoaderTest, MaskCacheHitPreservesInvertAndThresholdSemantics) {
     PipelinedImageLoader loader(config());
 
-    auto inverted_request = request(2, 0);
+    constexpr float threshold = 0.25f;
+    auto threshold_request = request(1, 0);
+    threshold_request.mask_params.threshold = threshold;
+    loader.prefetch({threshold_request});
+    const auto thresholded_cold = loader.get();
+
+    threshold_request.sequence_id = 2;
+    loader.prefetch({threshold_request});
+    const auto thresholded_hot = loader.get();
+
+    auto normal_request = request(3, 0);
+    loader.prefetch({normal_request});
+    const auto normal = loader.get();
+
+    auto inverted_request = request(4, 0);
     inverted_request.mask_params.invert = true;
     loader.prefetch({inverted_request});
     const auto inverted = loader.get();
 
-    auto normal_request = request(1, 0);
-    loader.prefetch({normal_request});
-    const auto normal = loader.get();
-
-    auto threshold_request = request(3, 0);
-    threshold_request.mask_params.threshold = 0.5f;
-    loader.prefetch({threshold_request});
-    const auto thresholded = loader.get();
-
     const auto normal_values = mask_values(normal);
     const auto inverted_values = mask_values(inverted);
-    const auto thresholded_values = mask_values(thresholded);
+    const auto thresholded_cold_values = mask_values(thresholded_cold);
+    const auto thresholded_hot_values = mask_values(thresholded_hot);
     ASSERT_EQ(inverted_values.size(), normal_values.size());
-    ASSERT_EQ(thresholded_values.size(), normal_values.size());
+    ASSERT_EQ(thresholded_cold_values.size(), normal_values.size());
+    ASSERT_EQ(thresholded_hot_values.size(), normal_values.size());
 
     size_t zeros = 0;
     size_t ones = 0;
     for (size_t i = 0; i < normal_values.size(); ++i) {
         // UINT8 lossless J2K quantization is 1/255.
         EXPECT_NEAR(inverted_values[i], 1.0f - normal_values[i], 0.01f);
-        const float expected = normal_values[i] >= 0.5f ? 1.0f : 0.0f;
-        EXPECT_FLOAT_EQ(thresholded_values[i], expected);
-        zeros += thresholded_values[i] == 0.0f;
-        ones += thresholded_values[i] == 1.0f;
+        const float expected = normal_values[i] >= threshold ? 1.0f : 0.0f;
+        EXPECT_FLOAT_EQ(thresholded_cold_values[i], expected);
+        EXPECT_FLOAT_EQ(thresholded_hot_values[i], expected);
+        zeros += thresholded_hot_values[i] == 0.0f;
+        ones += thresholded_hot_values[i] == 1.0f;
     }
     EXPECT_GT(zeros, 0u);
     EXPECT_GT(ones, 0u);

@@ -342,7 +342,7 @@ namespace lfs::io {
             }
         }
 
-        lfs::core::Tensor process_mask(lfs::core::Tensor mask, bool binarize) {
+        lfs::core::Tensor process_mask(lfs::core::Tensor mask, const float threshold) {
             if (!mask.is_valid())
                 return {};
             if (mask.dtype() == lfs::core::DataType::UInt8)
@@ -350,8 +350,8 @@ namespace lfs::io {
             else if (mask.dtype() == lfs::core::DataType::Bool)
                 mask = mask.to(lfs::core::DataType::Float32);
             mask = mask.clamp(0.0f, 1.0f);
-            if (binarize)
-                mask = mask.ge(0.5f).to(lfs::core::DataType::Float32);
+            if (threshold > 0.0f)
+                mask = mask.ge(threshold).to(lfs::core::DataType::Float32);
             return mask.contiguous();
         }
 
@@ -2393,7 +2393,7 @@ after_primary_image_enqueued:
 
                             if (batch[i].mask_params.invert)
                                 mask_tensor = mask_tensor * -1.0f + 1.0f;
-                            mask_tensor = process_mask(std::move(mask_tensor), batch[i].mask_params.threshold > 0);
+                            mask_tensor = process_mask(std::move(mask_tensor), batch[i].mask_params.threshold);
                             try_complete_pair(batch[i].sequence_id, batch[i].loader_generation,
                                               std::nullopt, std::move(mask_tensor), nullptr);
 
@@ -2612,7 +2612,7 @@ after_primary_image_enqueued:
                         cuda::launch_mask_invert(alpha_ptr, H, W, nullptr);
                     if (item.alpha_mask_params.threshold > 0)
                         cuda::launch_mask_threshold(alpha_ptr, H, W, item.alpha_mask_params.threshold, nullptr);
-                    alpha = process_mask(std::move(alpha), item.alpha_mask_params.threshold > 0);
+                    alpha = process_mask(std::move(alpha), item.alpha_mask_params.threshold);
 
                     try_complete_pair(item.sequence_id, item.loader_generation,
                                       std::move(rgb), std::move(alpha), nullptr);
@@ -2735,7 +2735,7 @@ after_primary_image_enqueued:
                         if (item.mask_params.threshold > 0) {
                             cuda::launch_mask_threshold(mask_ptr, H, W, item.mask_params.threshold, aux_stream);
                         }
-                        aux_tensor = process_mask(std::move(aux_tensor), item.mask_params.threshold > 0);
+                        aux_tensor = process_mask(std::move(aux_tensor), item.mask_params.threshold);
                     } else {
                         if (item.aux_target_width > 0 && item.aux_target_height > 0 &&
                             aux_tensor.ndim() == 2 &&
