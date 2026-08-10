@@ -2848,7 +2848,9 @@ namespace lfs::vis {
         return true;
     }
 
-    std::size_t VulkanContext::queryVmaUsedBytes() const {
+    std::size_t VulkanContext::queryVmaUsedBytes(
+        const std::size_t additional_block_bytes,
+        const std::size_t additional_allocation_bytes) const {
         if (allocator_ == VK_NULL_HANDLE)
             return 0;
         // VK_EXT_memory_budget reports the *full* per-heap memory the driver attributes
@@ -2871,6 +2873,8 @@ namespace lfs::vis {
                 total_allocation_bytes += budgets[i].statistics.allocationBytes;
             }
         }
+        total_block_bytes += additional_block_bytes;
+        total_allocation_bytes += additional_allocation_bytes;
         auto& profiler = lfs::diagnostics::VramProfiler::instance();
         profiler.setGauge("vulkan.vma.budget_usage", static_cast<double>(total_usage));
         profiler.setGauge("vulkan.vma.block_bytes", static_cast<double>(total_block_bytes));
@@ -4343,7 +4347,7 @@ namespace lfs::vis {
         swapchain_estimated_bytes_ = bytes_per_pixel > 0
                                          ? pixel_count * image_count * bytes_per_pixel
                                          : 0;
-        recordCurrentVulkanBytes("vulkan.swapchain", "driver_owned_images_estimate", swapchain_estimated_bytes_);
+        recordCurrentVulkanBytes("vulkan.external.swapchain", "driver_owned_images_estimate", swapchain_estimated_bytes_);
         swapchain_images_in_flight_.assign(image_count, VK_NULL_HANDLE);
         swapchain_format_ = surface_format.format;
         swapchain_extent_fixed_to_surface_ = extent_fixed_to_surface;
@@ -4857,7 +4861,7 @@ namespace lfs::vis {
         }
         swapchain_image_usage_ = 0;
         if (swapchain_estimated_bytes_ > 0) {
-            recordCurrentVulkanBytes("vulkan.swapchain", "driver_owned_images_estimate", 0);
+            recordCurrentVulkanBytes("vulkan.external.swapchain", "driver_owned_images_estimate", 0);
             swapchain_estimated_bytes_ = 0;
         }
     }

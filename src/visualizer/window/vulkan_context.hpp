@@ -190,7 +190,9 @@ namespace lfs::vis {
         [[nodiscard]] VkQueue graphicsQueue() const { return graphics_queue_; }
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
         [[nodiscard]] VmaAllocator allocator() const { return allocator_; }
-        [[nodiscard]] std::size_t queryVmaUsedBytes() const;
+        [[nodiscard]] std::size_t queryVmaUsedBytes(
+            std::size_t additional_block_bytes = 0,
+            std::size_t additional_allocation_bytes = 0) const;
         [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }

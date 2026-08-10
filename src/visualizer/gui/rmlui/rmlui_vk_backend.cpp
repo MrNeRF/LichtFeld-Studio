@@ -16,6 +16,7 @@
 #include <RmlUi/Core/Math.h>
 #include <RmlUi/Core/Profiling.h>
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -323,6 +324,25 @@ void RenderInterface_VK::SetTextureDebugName(const Rml::TextureHandle texture_ha
     (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
                                   (uint64_t)texture->m_p_vk_image_view,
                                   view_name.c_str());
+}
+
+RenderInterface_VK::VmaStatistics RenderInterface_VK::QueryVmaStatistics() const {
+    VmaStatistics result{};
+    if (m_p_allocator == VK_NULL_HANDLE || m_p_physical_device == VK_NULL_HANDLE)
+        return result;
+
+    VkPhysicalDeviceMemoryProperties memory_properties{};
+    vkGetPhysicalDeviceMemoryProperties(m_p_physical_device, &memory_properties);
+
+    std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+    vmaGetHeapBudgets(m_p_allocator, budgets.data());
+    for (std::uint32_t i = 0; i < memory_properties.memoryHeapCount; ++i) {
+        if ((memory_properties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0)
+            continue;
+        result.block_bytes += budgets[i].statistics.blockBytes;
+        result.allocation_bytes += budgets[i].statistics.allocationBytes;
+    }
+    return result;
 }
 
 Rml::CompiledGeometryHandle RenderInterface_VK::CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) {
@@ -782,6 +802,9 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture(Rml::TextureHandle reu
         (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
                                       (uint64_t)texture->m_p_vk_image,
                                       "rmlui.saved-layer.image");
+        vmaSetAllocationName(m_p_allocator,
+                             texture->m_p_vma_allocation,
+                             "RmlUi saved layer texture");
         texture->m_barrier_generation = ++m_image_barrier_generation;
         texture->m_width = capture_w;
         texture->m_height = capture_h;
@@ -1324,9 +1347,7 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
         return {};
     };
 
-#ifdef RMLUI_VK_DEBUG
     vmaSetAllocationName(m_p_allocator, p_allocation, name.c_str());
-#endif
 
     if (use_host_image_copy) {
         VkHostImageLayoutTransitionInfoEXT to_sampled{};
@@ -2233,6 +2254,9 @@ RenderInterface_VK::buffer_data_t RenderInterface_VK::CreateResource_StagingBuff
 
     VkResult status = vmaCreateBuffer(m_p_allocator, &info, &info_allocation, &p_buffer, &p_allocation, &info_stats);
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateBuffer");
+    if (status == VkResult::VK_SUCCESS && p_allocation != VK_NULL_HANDLE) {
+        vmaSetAllocationName(m_p_allocator, p_allocation, "RmlUi staging buffer");
+    }
 
 #ifdef RMLUI_VK_DEBUG
     Rml::Log::Message(Rml::Log::LT_DEBUG, "Allocated buffer [%s]", FormatByteSize(info_stats.size).c_str());
@@ -2409,6 +2433,9 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
                                   (uint64_t)layer.m_color.m_p_vk_image,
                                   color_image_name.c_str());
+    vmaSetAllocationName(m_p_allocator,
+                         layer.m_color.m_p_vma_allocation,
+                         color_image_name.c_str());
     layer.m_color.m_vram_scope = "vulkan.rmlui.render_layer";
     layer.m_color.m_vram_label = TextureVramLabel("layer_color", "rmlui", m_width, m_height, &layer.m_color);
     layer.m_color.m_vram_allocation_size = color_allocation_stats.size;
@@ -2456,6 +2483,9 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
                                   (uint64_t)layer.m_depth_stencil.m_p_vk_image,
                                   depth_image_name.c_str());
+    vmaSetAllocationName(m_p_allocator,
+                         layer.m_depth_stencil.m_p_vma_allocation,
+                         depth_image_name.c_str());
     layer.m_depth_stencil.m_vram_scope = "vulkan.rmlui.render_layer";
     layer.m_depth_stencil.m_vram_label = TextureVramLabel("layer_depth", "rmlui", m_width, m_height, &layer.m_depth_stencil);
     layer.m_depth_stencil.m_vram_allocation_size = depth_allocation_stats.size;
@@ -2807,6 +2837,14 @@ void RenderInterface_VK::MemoryPool::Initialize(VkDeviceSize byte_size, VkDevice
     auto status = vmaCreateBuffer(m_p_vk_allocator, &info, &info_alloc, &m_p_buffer, &m_p_buffer_alloc, &info_stats);
 
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateBuffer");
+    if (status == VkResult::VK_SUCCESS && m_p_buffer_alloc != VK_NULL_HANDLE) {
+        vmaSetAllocationName(m_p_vk_allocator,
+                             m_p_buffer_alloc,
+                             "RmlUi geometry memory pool");
+        RecordRmlUiVram("vulkan.rmlui.geometry_pool",
+                        "vertex_index_uniform",
+                        info_stats.size);
+    }
 
     VmaVirtualBlockCreateInfo info_virtual_block = {};
     info_virtual_block.size = m_memory_total_size;
@@ -2835,6 +2873,7 @@ void RenderInterface_VK::MemoryPool::Shutdown() noexcept {
 
     vmaUnmapMemory(m_p_vk_allocator, m_p_buffer_alloc);
     vmaDestroyVirtualBlock(m_p_block);
+    RecordRmlUiVram("vulkan.rmlui.geometry_pool", "vertex_index_uniform", 0);
     vmaDestroyBuffer(m_p_vk_allocator, m_p_buffer, m_p_buffer_alloc);
 }
 

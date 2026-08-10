@@ -29,6 +29,7 @@
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
+#include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "gui/rotation_gizmo.hpp"
 #include "gui/scale_gizmo.hpp"
 #include "gui/scene_panel_native.hpp"
@@ -5342,7 +5343,12 @@ namespace lfs::vis::gui {
                                                  memory.device_name);
                     if (auto* const wm = viewer_ ? viewer_->getWindowManager() : nullptr) {
                         if (auto* const vk = wm->getVulkanContext()) {
-                            profiler.setVulkanVmaUsed(vk->queryVmaUsedBytes());
+                            const auto rmlui_vma = rmlui_manager_.getVulkanRenderInterface()
+                                                       ? rmlui_manager_.getVulkanRenderInterface()->QueryVmaStatistics()
+                                                       : RenderInterface_VK::VmaStatistics{};
+                            profiler.setVulkanVmaUsed(vk->queryVmaUsedBytes(
+                                static_cast<std::size_t>(rmlui_vma.block_bytes),
+                                static_cast<std::size_t>(rmlui_vma.allocation_bytes)));
                         }
                     }
                     const auto snapshot = profiler.snapshot();

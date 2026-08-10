@@ -94,6 +94,12 @@ public:
     static std::string MakeExternalTextureSource(VkImageView image_view, VkSampler sampler, int width, int height);
     void SetTextureDebugName(Rml::TextureHandle texture_handle, std::string_view debug_name) const;
 
+    struct VmaStatistics {
+        VkDeviceSize block_bytes = 0;
+        VkDeviceSize allocation_bytes = 0;
+    };
+    [[nodiscard]] VmaStatistics QueryVmaStatistics() const;
+
     // -- Inherited from Rml::RenderInterface --
 
     /// Called by RmlUi when it wants to compile geometry it believes will be static for the forseeable future.

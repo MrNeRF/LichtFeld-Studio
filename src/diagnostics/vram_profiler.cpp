@@ -49,6 +49,13 @@ namespace lfs::diagnostics {
             bool current_sample = false;
         };
 
+        // Vulkan current-state rows are the ownership registry for long-lived VMA
+        // allocations. Most of those objects exist before detailed profiling is
+        // enabled, so keep this small registry independent of high-volume tracing.
+        [[nodiscard]] bool is_persistent_current_scope(const std::string_view scope) {
+            return scope.starts_with("vulkan.") || scope.starts_with("vksplat");
+        }
+
         struct AllocationRecord {
             MetricKey key;
             std::size_t bytes = 0;
@@ -364,7 +371,14 @@ namespace lfs::diagnostics {
         impl_->enabled.store(enabled, std::memory_order_release);
         if (!enabled) {
             std::lock_guard lock(impl_->mutex);
-            impl_->metrics.clear();
+            for (auto it = impl_->metrics.begin(); it != impl_->metrics.end();) {
+                if (!it->second.current_sample || it->second.live_bytes == 0 ||
+                    !is_persistent_current_scope(it->first.scope)) {
+                    it = impl_->metrics.erase(it);
+                } else {
+                    ++it;
+                }
+            }
             impl_->allocations.clear();
             impl_->scope_nodes.clear();
             impl_->accounted_live_bytes = 0;
@@ -386,8 +400,10 @@ namespace lfs::diagnostics {
             impl_->pinned_host_used = 0;
             impl_->pinned_host_cached = 0;
             impl_->pinned_host_peak = 0;
-            impl_->vulkan_vma_used = 0;
-            impl_->vulkan_vma_block_bytes = 0;
+            // Keep VMA process gauges: long-lived vulkan.* ownership rows and the
+            // free-in-blocks sampler stay live when detailed profiling is off, so the
+            // blockBytes / budget totals must remain coherent with those rows.
+            // vulkan_vma_used / vulkan_vma_block_bytes intentionally preserved.
             impl_->exportable_splat_bytes = 0;
             impl_->shared_scratch_bytes = 0;
             impl_->cuda_slab_reserved_bytes = 0;
@@ -717,12 +733,24 @@ namespace lfs::diagnostics {
                                           std::string_view label,
                                           const std::size_t bytes,
                                           const VramAllocationMethod method) {
-        if (!enabled() || scope.empty() || label.empty()) {
+        if (scope.empty() || label.empty()) {
+            return;
+        }
+
+        const bool detailed_tracking = enabled();
+        if (!detailed_tracking && !is_persistent_current_scope(scope)) {
             return;
         }
 
         std::lock_guard lock(impl_->mutex);
-        auto& metric = impl_->metrics[MetricKey{std::string(scope), std::string(label)}];
+        MetricKey key{std::string(scope), std::string(label)};
+        if (!detailed_tracking && bytes == 0) {
+            if (impl_->metrics.erase(key) > 0) {
+                impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+            }
+            return;
+        }
+        auto& metric = impl_->metrics[std::move(key)];
         metric.live_bytes = bytes;
         metric.peak_bytes = std::max(metric.peak_bytes, bytes);
         metric.allocated_bytes = std::max(metric.allocated_bytes, bytes);
