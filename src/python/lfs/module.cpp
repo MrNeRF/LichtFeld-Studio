@@ -43,6 +43,7 @@
 #include "py_uilist.hpp"
 #include "py_viewport.hpp"
 #include "python/viewport_overlay.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
 
@@ -1600,6 +1601,10 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "toggle_vram_hud", []() { lfs::core::events::ui::ToggleVramHud{}.emit(); },
         "Toggle the VRAM diagnostics HUD overlay (requires vram profiler enabled)");
+    m.def(
+        "is_perf_hud_visible",
+        []() -> bool { return lfs::vis::app_store().perf_hud.get().visible; },
+        "True when the performance HUD is currently shown");
     m.def(
         "toggle_independent_split_view", []() {
             auto* controller = lfs::vis::InputController::instance();

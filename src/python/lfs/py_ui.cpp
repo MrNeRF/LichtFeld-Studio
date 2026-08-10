@@ -4546,6 +4546,11 @@ namespace lfs::python {
             "Toggle the VRAM diagnostics HUD overlay");
 
         m.def(
+            "is_perf_hud_visible",
+            []() -> bool { return lfs::vis::app_store().perf_hud.get().visible; },
+            "True when the performance HUD is currently shown");
+
+        m.def(
             "is_windows_platform", []() -> bool {
 #ifdef WIN32
                 return true;

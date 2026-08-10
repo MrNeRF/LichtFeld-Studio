@@ -67,7 +67,8 @@ class ViewMenu:
             menu_toggle(
                 tr("menu.view.performance_hud"),
                 lf.ui.toggle_vram_hud,
-                False,
+                bool(getattr(lf.ui, "is_perf_hud_visible", lambda: False)()),
+                shortcut="F10",
             ),
             menu_action(_tr_fallback("image_preview.reset_view", "Reset View"), lf.reset_camera),
             menu_action(_tr_fallback("main_panel.console", "Console"), lf.ui.toggle_system_console),
