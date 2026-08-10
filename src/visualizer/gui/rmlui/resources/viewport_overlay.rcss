@@ -1265,7 +1265,7 @@ body {
 
 .perf-hud-ledger-name-cell {
     flex: 1;
-    min-width: 150dp;
+    min-width: 80dp;
     display: flex;
     align-items: baseline;
     gap: 4dp;
@@ -1311,16 +1311,20 @@ body {
 }
 
 .perf-hud-ledger-disclosure {
-    width: 142dp;
-    min-width: 142dp;
+    width: 100dp;
+    min-width: 100dp;
+    flex-shrink: 1;
     font-size: 9dp;
     text-align: right;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .perf-hud-ledger-allocated {
     width: 76dp;
     min-width: 76dp;
+    flex-shrink: 0;
     font-size: 10dp;
     text-align: right;
 }
@@ -1328,6 +1332,7 @@ body {
 .perf-hud-ledger-badge {
     width: 28dp;
     min-width: 28dp;
+    flex-shrink: 0;
     padding: 1dp 2dp;
     border-width: 1dp;
     border-radius: 7dp;
@@ -1597,6 +1602,15 @@ body {
     align-items: baseline;
 }
 
+.perf-hud-card-chevron {
+    width: 14dp;
+    min-width: 14dp;
+    font-size: 12dp;
+    text-align: center;
+    cursor: pointer;
+    drag: none;
+}
+
 .vram-hud-throughput {
     font-size: 11dp;
 }
@@ -1755,7 +1769,8 @@ body {
 .perf-hud-strip-label { width: 34dp; }
 .perf-hud-meter-track { flex-grow: 1; display: flex; height: 7dp; overflow: hidden; border-radius: 3dp; }
 .perf-hud-meter-fill { display: block; height: 100%; width: 0%; }
-.perf-hud-strip-value { width: 66dp; text-align: right; font-size: 10dp; }
+/* Fits "23.51 GiB / 23.51 GiB" on one line (mono 10dp). */
+.perf-hud-strip-value { width: 128dp; min-width: 128dp; text-align: right; font-size: 10dp; white-space: nowrap; }
 .perf-hud-strip-badge { width: 12dp; font-size: 10dp; }
 .perf-hud-core-strip { display: flex; align-items: flex-end; gap: 1dp; height: 13dp; margin-left: 39dp; overflow: hidden; }
 .perf-hud-core-strip .perf-hud-core-bar { flex: 1 1 0; min-width: 1dp; max-width: 4dp; height: 100%; }

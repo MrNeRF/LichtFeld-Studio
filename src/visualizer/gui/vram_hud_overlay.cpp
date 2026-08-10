@@ -553,12 +553,16 @@ namespace lfs::vis::gui {
     void VramHudOverlay::attachListeners() {
         if (listeners_attached_)
             return;
-        if (root_)
+        if (root_) {
             root_->AddEventListener(Rml::EventId::Click, &click_listener_);
+            // Expanded→compact return path: double-click the card header.
+            root_->AddEventListener(Rml::EventId::Dblclick, &click_listener_);
+        }
         if (header_) {
             header_->AddEventListener(Rml::EventId::Dragstart, &header_drag_listener_);
             header_->AddEventListener(Rml::EventId::Drag, &header_drag_listener_);
             header_->AddEventListener(Rml::EventId::Dragend, &header_drag_listener_);
+            header_->AddEventListener(Rml::EventId::Dblclick, &click_listener_);
         }
         if (resize_handle_) {
             resize_handle_->AddEventListener(Rml::EventId::Dragstart, &resize_drag_listener_);
@@ -874,8 +878,17 @@ namespace lfs::vis::gui {
         if (perf_vram_value_)
             perf_vram_value_->SetInnerRML(std::format("{} / {}", formatBytes(s.vram_used_bytes),
                                                       formatBytes(s.vram_total_bytes)));
-        if (perf_vram_badge_)
-            perf_vram_badge_->SetInnerRML(s.ledger_over ? "‼" : (s.ledger_closed ? "✓" : "!"));
+        if (perf_vram_badge_) {
+            // Unknown when profiler off — no standing amber GAP.
+            if (!s.ledger_valid)
+                perf_vram_badge_->SetInnerRML("–");
+            else if (s.ledger_over)
+                perf_vram_badge_->SetInnerRML("\xE2\x80\xBC"); // ‼
+            else if (s.ledger_closed)
+                perf_vram_badge_->SetInnerRML("\xE2\x9C\x93"); // ✓
+            else
+                perf_vram_badge_->SetInnerRML("!");
+        }
 
         const auto ram_process = ratio(s.ram_process_bytes, s.ram_total_bytes);
         const auto ram_used = ratio(s.ram_used_bytes, s.ram_total_bytes);
@@ -891,8 +904,15 @@ namespace lfs::vis::gui {
         const auto cpu = s.cpu_valid ? percent(s.process_cpu_percent) : 0.0f;
         set_width(perf_gpu_fill_, gpu);
         set_width(perf_cpu_fill_, cpu);
-        set_threshold(perf_gpu_fill_, gpu);
-        set_threshold(perf_cpu_fill_, cpu);
+        // Utilization is not pressure — never paint GPU/CPU meters as warn/crit.
+        if (perf_gpu_fill_) {
+            perf_gpu_fill_->SetClass("warn", false);
+            perf_gpu_fill_->SetClass("crit", false);
+        }
+        if (perf_cpu_fill_) {
+            perf_cpu_fill_->SetClass("warn", false);
+            perf_cpu_fill_->SetClass("crit", false);
+        }
         if (perf_gpu_value_)
             perf_gpu_value_->SetInnerRML(s.gpu_utilization_valid ? std::format("{:.0f}%", gpu) : "--");
         if (perf_cpu_value_)
@@ -1205,7 +1225,15 @@ namespace lfs::vis::gui {
             }
 
             setText(row.name, row.cached_name, std::string(node.name));
-            setText(row.note, row.cached_note, std::string(node.note));
+            // Map stable English tokens from the ledger model onto locale keys (S9).
+            std::string note_text = node.note;
+            if (node.note == "retention")
+                note_text = std::string(LOC("ui.perf_retention"));
+            else if (node.note == "reclaimable")
+                note_text = std::string(LOC("ui.perf_reclaimable"));
+            else if (node.note == "untracked")
+                note_text = std::string(LOC("ui.perf_untracked"));
+            setText(row.note, row.cached_note, std::move(note_text));
 
             const double share = item.parent_bytes == 0
                                      ? 0.0
@@ -1238,6 +1266,10 @@ namespace lfs::vis::gui {
             } else if (degenerate) {
                 badge = "=";
                 badge_title = "ui.perf_degenerate_pair";
+            } else if (node.has_required && node.measured_bytes > node.required_bytes) {
+                badge_title = "ui.perf_slack";
+            } else if (node.has_required && node.measured_bytes < node.required_bytes) {
+                badge_title = "ui.perf_over_budget";
             } else if (node.state == AttributionState::Nested) {
                 badge = "\xE2\x86\xB3";
                 badge_title = "ui.perf_nested_disclosure";
@@ -1809,6 +1841,24 @@ namespace lfs::vis::gui {
         if (!owner)
             return;
         auto* target = event.GetTargetElement();
+        const bool is_dblclick = event.GetId() == Rml::EventId::Dblclick;
+
+        // Double-click expanded card header → collapse to strip.
+        if (is_dblclick) {
+            while (target) {
+                if (target->GetId() == "vram-hud-header" || target->GetId() == "perf-hud-card") {
+                    if (owner->state_.perf_hud.visible && owner->state_.perf_hud.expanded) {
+                        lfs::core::events::ui::TogglePerfHudExpanded{}.emit();
+                        event.StopPropagation();
+                    }
+                    return;
+                }
+                target = target->GetParentNode();
+            }
+            return;
+        }
+
+        target = event.GetTargetElement();
         while (target) {
             const auto toggle_expanded = target->GetAttribute<Rml::String>("data-perf-toggle-expanded", "");
             if (!toggle_expanded.empty()) {
