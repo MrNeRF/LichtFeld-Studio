@@ -13,11 +13,30 @@
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <atomic>
 #include <vector>
 
 using namespace lfs::core;
 
 namespace {
+
+    std::atomic<void*> g_failed_reclaim_ptr{nullptr};
+
+    cudaError_t fail_slab_reclaim_for_testing(void* ptr) {
+        void* expected = nullptr;
+        g_failed_reclaim_ptr.compare_exchange_strong(expected, ptr);
+        return cudaErrorMemoryAllocation;
+    }
+
+    class ReclaimHookReset {
+    public:
+        explicit ReclaimHookReset(GPUSlabAllocator& allocator)
+            : allocator_(allocator) {}
+        ~ReclaimHookReset() { allocator_.set_reclaim_free_fn_for_testing(nullptr); }
+
+    private:
+        GPUSlabAllocator& allocator_;
+    };
 
     void cuda_ok() {
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -108,6 +127,37 @@ TEST(AllocatorHygiene, TrimCachedMemoryFreesFullyEmptySlabs) {
     EXPECT_LT(reserved_after, reserved_peak)
         << "trim_cached_memory must free fully-empty slabs (peak="
         << reserved_peak << " after=" << reserved_after << ")";
+}
+
+TEST(AllocatorHygiene, FailedSlabReclaimRestoresOwnershipAndAccounting) {
+    auto& pool = CudaMemoryPool::instance();
+    auto& slab = GPUSlabAllocator::instance();
+
+    pool.trim_cached_memory();
+    cuda_ok();
+    {
+        auto tensor = Tensor::zeros({64}, Device::CUDA, DataType::Float32);
+        ASSERT_TRUE(tensor.is_valid());
+        cuda_ok();
+    }
+    cuda_ok();
+
+    const size_t reserved_before = slab.stats().total_slab_memory;
+    ASSERT_GT(reserved_before, 0u);
+
+    g_failed_reclaim_ptr.store(nullptr, std::memory_order_release);
+    slab.set_reclaim_free_fn_for_testing(&fail_slab_reclaim_for_testing);
+    ReclaimHookReset reset_hook(slab);
+    pool.trim_cached_memory();
+
+    void* const failed_ptr = g_failed_reclaim_ptr.load(std::memory_order_acquire);
+    ASSERT_NE(failed_ptr, nullptr);
+    EXPECT_TRUE(slab.owns_pointer(failed_ptr));
+    EXPECT_EQ(slab.stats().total_slab_memory, reserved_before)
+        << "a failed driver free must keep the slab budget charged";
+
+    // The slab stays quarantined until allocator shutdown because CUDA can
+    // report an older asynchronous error from cudaFree, making reuse unsafe.
 }
 
 // ---------------------------------------------------------------------------

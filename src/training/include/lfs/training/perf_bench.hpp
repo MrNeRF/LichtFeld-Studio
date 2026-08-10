@@ -21,6 +21,22 @@
 
 namespace lfs::training {
 
+    namespace detail {
+
+        struct PerfPeakCoverSample {
+            std::size_t pool_bucket_cache_bytes = 0;
+            std::size_t pool_bucket_live_waste_bytes = 0;
+            std::size_t exportable_splat_bytes = 0;
+            std::size_t io_external_bytes = 0;
+        };
+
+        /// Values that may justify a process peak must come from that same
+        /// snapshot. Historical per-row peaks are disclosure only.
+        [[nodiscard]] PerfPeakCoverSample collect_perf_peak_cover_sample(
+            const diagnostics::VramProfilerSnapshot& snapshot);
+
+    } // namespace detail
+
     class PerfBenchCollector {
     public:
         static PerfBenchCollector& instance();
@@ -120,6 +136,7 @@ namespace lfs::training {
         std::size_t peak_io_ring_bytes_ = 0;
         std::size_t peak_io_external_bytes_ = 0;
         std::size_t peak_steady_pinned_host_bytes_ = 0;
+        bool peak_cover_captured_ = false;
         int peak_iter_ = 0;
         std::vector<diagnostics::PeakSubsystemLine> peak_rows_;
         std::size_t loss_workspace_required_bytes_ = 0;

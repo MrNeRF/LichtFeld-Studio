@@ -116,25 +116,27 @@ namespace lfs::core {
         // synchronized the device and preferably merged streams into virgin
         // (see CudaMemoryPool::trim_cached_memory). Safe only when no live
         // allocation holds a block from a reclaimed slab.
-        // Serialized with expand_slab via expand_mutex_ (lock order:
-        // expand → free_lists → slabs).
+        // Serialized with expand_slab via expand_mutex_. Candidate blocks are
+        // detached under the metadata locks, but the driver free is deliberately
+        // performed after releasing them. A failed free remains tracked and
+        // budgeted; its blocks stay quarantined because CUDA may surface an older
+        // asynchronous error without making the free's outcome knowable.
         void reclaim_empty_slabs() {
             LFS_CUDA_BREADCRUMB("tensor.slab.reclaim");
             std::lock_guard<std::mutex> expand_lock(expand_mutex_);
 
             size_t reclaimed_bytes = 0;
-            std::vector<Slab> survivors;
+            std::vector<Slab> candidates;
             {
                 std::lock_guard<std::mutex> slabs_lock(slabs_mutex_);
                 if (slabs_.empty()) {
                     return;
                 }
-                survivors.reserve(slabs_.size());
+                candidates.reserve(slabs_.size());
 
                 for (const auto& slab : slabs_) {
                     const size_t size_class = slab.size_class;
                     if (size_class >= NUM_SIZE_CLASSES) {
-                        survivors.push_back(slab);
                         continue;
                     }
 
@@ -167,7 +169,6 @@ namespace lfs::core {
                     }
 
                     if (free_in_slab != num_blocks) {
-                        survivors.push_back(slab);
                         continue;
                     }
 
@@ -194,25 +195,44 @@ namespace lfs::core {
                     const size_t prev = lists.count.load(std::memory_order_relaxed);
                     lists.count.store(prev >= num_blocks ? prev - num_blocks : 0,
                                       std::memory_order_release);
+                    candidates.push_back(slab);
+                }
+            }
 
-                    const cudaError_t free_status = cudaFree(slab.base);
-                    if (free_status != cudaSuccess) {
-                        ensure_cuda_success(
-                            free_status, "cudaFree(GPU slab reclaim)",
-                            ::lfs::core::detail::format_cuda_safe(
-                                "ptr={}, bytes={}, size_class={}", slab.base, slab.size,
-                                slab.size_class),
-                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
-                    }
-                    reclaimed_bytes += slab.size;
-                    if (stats_.blocks_per_class[size_class] >= num_blocks) {
-                        stats_.blocks_per_class[size_class] -= num_blocks;
-                    } else {
-                        stats_.blocks_per_class[size_class] = 0;
-                    }
+            std::unordered_map<void*, bool> reclaimed_bases;
+            reclaimed_bases.reserve(candidates.size());
+            for (const auto& slab : candidates) {
+                const cudaError_t free_status = reclaim_free_fn_
+                                                    ? reclaim_free_fn_(slab.base)
+                                                    : cudaFree(slab.base);
+                if (free_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        free_status, "cudaFree(GPU slab reclaim)",
+                        ::lfs::core::detail::format_cuda_safe(
+                            "ptr={}, bytes={}, size_class={}", slab.base, slab.size,
+                            slab.size_class),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+                    continue;
                 }
 
-                slabs_ = std::move(survivors);
+                reclaimed_bases.emplace(slab.base, true);
+                reclaimed_bytes += slab.size;
+                const size_t num_blocks = slab.size / get_block_size(slab.size_class);
+                if (stats_.blocks_per_class[slab.size_class] >= num_blocks) {
+                    stats_.blocks_per_class[slab.size_class] -= num_blocks;
+                } else {
+                    stats_.blocks_per_class[slab.size_class] = 0;
+                }
+            }
+
+            if (!reclaimed_bases.empty()) {
+                std::lock_guard<std::mutex> slabs_lock(slabs_mutex_);
+                slabs_.erase(
+                    std::remove_if(slabs_.begin(), slabs_.end(),
+                                   [&](const Slab& slab) {
+                                       return reclaimed_bases.contains(slab.base);
+                                   }),
+                    slabs_.end());
             }
 
             if (reclaimed_bytes > 0) {
@@ -288,6 +308,12 @@ namespace lfs::core {
         }
 
         const Stats& stats() const { return stats_; }
+
+        using ReclaimFreeFn = cudaError_t (*)(void*);
+        void set_reclaim_free_fn_for_testing(ReclaimFreeFn fn) {
+            std::lock_guard<std::mutex> lock(expand_mutex_);
+            reclaim_free_fn_ = fn;
+        }
 
         GPUSlabAllocator(const GPUSlabAllocator&) = delete;
         GPUSlabAllocator& operator=(const GPUSlabAllocator&) = delete;
@@ -460,6 +486,7 @@ namespace lfs::core {
         mutable std::mutex slabs_mutex_;
         // Serializes expand_slab / reclaim_empty_slabs / cleanup growth-shrink.
         std::mutex expand_mutex_;
+        ReclaimFreeFn reclaim_free_fn_ = nullptr;
         Stats stats_;
         std::atomic<bool> enabled_{false};
         std::atomic<bool> shutdown_{false};

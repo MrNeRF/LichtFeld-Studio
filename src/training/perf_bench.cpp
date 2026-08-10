@@ -123,6 +123,29 @@ namespace lfs::training {
 
     } // namespace
 
+    namespace detail {
+
+        PerfPeakCoverSample collect_perf_peak_cover_sample(
+            const diagnostics::VramProfilerSnapshot& snapshot) {
+            PerfPeakCoverSample sample;
+            sample.pool_bucket_cache_bytes =
+                snapshot.process.cuda_pool_bucket_cache_bytes;
+            sample.pool_bucket_live_waste_bytes =
+                snapshot.process.cuda_pool_bucket_live_waste_bytes;
+            sample.exportable_splat_bytes = snapshot.process.exportable_splat_bytes;
+
+            for (const auto& row : snapshot.rows) {
+                if (row.scope == "io.nvimagecodec" || row.scope == "io.image_loader" ||
+                    row.label.find("nvimagecodec") != std::string::npos ||
+                    row.label.find("image_loader") != std::string::npos) {
+                    sample.io_external_bytes += row.live_bytes;
+                }
+            }
+            return sample;
+        }
+
+    } // namespace detail
+
     PerfBenchCollector& PerfBenchCollector::instance() {
         static PerfBenchCollector collector;
         return collector;
@@ -193,6 +216,7 @@ namespace lfs::training {
         peak_io_ring_bytes_ = 0;
         peak_io_external_bytes_ = 0;
         peak_steady_pinned_host_bytes_ = 0;
+        peak_cover_captured_ = false;
         peak_iter_ = 0;
         peak_rows_.clear();
         loss_workspace_required_bytes_ = 0;
@@ -270,13 +294,11 @@ namespace lfs::training {
         auto& profiler = diagnostics::VramProfiler::instance();
         profiler.sampleCudaMemory();
         const auto snap = profiler.snapshot();
-        peak_pool_bucket_cache_ =
-            std::max(peak_pool_bucket_cache_, snap.process.cuda_pool_bucket_cache_bytes);
-        peak_pool_bucket_live_waste_ = std::max(
-            peak_pool_bucket_live_waste_,
-            snap.process.cuda_pool_bucket_live_waste_bytes);
-        peak_exportable_splat_ =
-            std::max(peak_exportable_splat_, snap.process.exportable_splat_bytes);
+        const auto cover = detail::collect_perf_peak_cover_sample(snap);
+        peak_pool_bucket_cache_ = cover.pool_bucket_cache_bytes;
+        peak_pool_bucket_live_waste_ = cover.pool_bucket_live_waste_bytes;
+        peak_exportable_splat_ = cover.exportable_splat_bytes;
+        peak_cover_captured_ = true;
         for (const auto& gauge : snap.gauges) {
             if (gauge.key == "vram.audit.io.decoded_frame_ring.bytes") {
                 peak_io_ring_bytes_ = std::max(peak_io_ring_bytes_, static_cast<std::size_t>(gauge.value));
@@ -291,7 +313,6 @@ namespace lfs::training {
 
         std::size_t arena_cap = 0;
         std::size_t raster_live = 0;
-        std::size_t io_external = 0;
         peak_rows_.clear();
         for (const auto& row : snap.rows) {
             if (row.live_bytes == 0 && row.peak_bytes == 0) {
@@ -306,11 +327,6 @@ namespace lfs::training {
                 row.label.find("sorted_indices") != std::string::npos) {
                 raster_live += std::max(row.live_bytes, row.peak_bytes);
             }
-            if (row.scope == "io.nvimagecodec" || row.scope == "io.image_loader" ||
-                row.label.find("nvimagecodec") != std::string::npos ||
-                row.label.find("image_loader") != std::string::npos) {
-                io_external += std::max(row.live_bytes, row.peak_bytes);
-            }
             diagnostics::PeakSubsystemLine line;
             line.name = row.scope.empty() ? row.label : (row.scope + "." + row.label);
             line.owner = "vram_profiler";
@@ -319,7 +335,7 @@ namespace lfs::training {
             peak_rows_.push_back(std::move(line));
         }
         peak_arena_capacity_ = std::max(peak_arena_capacity_, arena_cap);
-        peak_io_external_bytes_ = std::max(peak_io_external_bytes_, io_external);
+        peak_io_external_bytes_ = cover.io_external_bytes;
         if (raster_live > 0) {
             peak_fastgs_raster_live_ = std::max(peak_fastgs_raster_live_, raster_live);
         }
@@ -533,11 +549,11 @@ namespace lfs::training {
         in.mrnf_grow_peak_allocated_bytes = mrnf_transient.grow_required_bytes;
         in.pool_bucket_live_rounding_waste_bytes = peak_pool_bucket_live_waste_;
         in.pool_bucket_cache_bytes =
-            peak_pool_bucket_cache_ > 0 ? peak_pool_bucket_cache_
-                                        : snap.process.cuda_pool_bucket_cache_bytes;
+            peak_cover_captured_ ? peak_pool_bucket_cache_
+                                 : snap.process.cuda_pool_bucket_cache_bytes;
         in.exportable_splat_bytes =
-            peak_exportable_splat_ > 0 ? peak_exportable_splat_
-                                       : snap.process.exportable_splat_bytes;
+            peak_cover_captured_ ? peak_exportable_splat_
+                                 : snap.process.exportable_splat_bytes;
         in.fastgs_sort_required_bytes = peak_fastgs_sort_required_;
         in.fastgs_sort_allocated_bytes = peak_fastgs_sort_allocated_;
         in.fastgs_raster_live_bytes = peak_fastgs_raster_live_;

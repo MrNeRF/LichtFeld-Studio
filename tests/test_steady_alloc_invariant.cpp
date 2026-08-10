@@ -21,6 +21,26 @@ namespace {
 
 } // namespace
 
+TEST(PerfBenchPeakCover, UsesOneSnapshotAndLiveIoBytes) {
+    lfs::diagnostics::VramProfilerSnapshot snapshot;
+    snapshot.process.cuda_pool_bucket_cache_bytes = 11;
+    snapshot.process.cuda_pool_bucket_live_waste_bytes = 22;
+    snapshot.process.exportable_splat_bytes = 33;
+    snapshot.rows = {
+        {.scope = "io.nvimagecodec", .live_bytes = 40, .peak_bytes = 400},
+        {.scope = "io.image_loader", .live_bytes = 50, .peak_bytes = 500},
+        {.scope = "train", .label = "not_io", .live_bytes = 60, .peak_bytes = 600},
+    };
+
+    const auto sample =
+        lfs::training::detail::collect_perf_peak_cover_sample(snapshot);
+    EXPECT_EQ(sample.pool_bucket_cache_bytes, 11u);
+    EXPECT_EQ(sample.pool_bucket_live_waste_bytes, 22u);
+    EXPECT_EQ(sample.exportable_splat_bytes, 33u);
+    EXPECT_EQ(sample.io_external_bytes, 90u)
+        << "historical per-row peaks are not a concurrent I/O cover";
+}
+
 TEST(SteadyAllocInvariant, JointDensifySteadyLoopWithinBudget) {
     alloc_counter::reset_site_counts();
 
