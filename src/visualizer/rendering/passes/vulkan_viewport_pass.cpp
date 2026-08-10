@@ -68,6 +68,15 @@ namespace lfs::vis {
             return std::string(outcome.error().detail());
         }
 
+        [[nodiscard]] std::string_view sceneUpscalerLabel(
+            const SceneUpscalerBackend backend) noexcept {
+            switch (backend) {
+            case SceneUpscalerBackend::Native: return "native";
+            case SceneUpscalerBackend::Spatial: return "spatial";
+            }
+            return "unknown";
+        }
+
         struct Vertex {
             glm::vec2 position;
             glm::vec2 uv;
@@ -255,6 +264,8 @@ namespace lfs::vis {
         VkPipelineLayout scene_spatial_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline scene_spatial_pipeline = VK_NULL_HANDLE;
         bool scene_spatial_pipeline_attempted = false;
+        SceneUpscalerSelection scene_upscaler_selection{};
+        std::optional<SceneUpscalerSelection> logged_scene_upscaler_selection;
         VkPipelineLayout vignette_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline vignette_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout grid_pipeline_layout = VK_NULL_HANDLE;
@@ -2036,6 +2047,35 @@ namespace lfs::vis {
             environment_pass.prepare(params.environment, params.frame_slot);
             depth_blit_pass.prepare(params.depth_blit, params.frame_slot);
             split_view_pass.prepare(params.split_view, params.frame_slot);
+
+            const bool split_spatial_available =
+                params.split_view.enabled && split_view_pass.ready(params.frame_slot);
+            scene_upscaler_selection = resolveSceneUpscalerSelection(
+                params.scene_upscaler,
+                scene_spatial_pipeline != VK_NULL_HANDLE || split_spatial_available);
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.setGauge("viewer.upscaler.requested",
+                              static_cast<double>(scene_upscaler_selection.requested));
+            profiler.setGauge("viewer.upscaler.effective",
+                              static_cast<double>(scene_upscaler_selection.effective));
+            profiler.setGauge("viewer.upscaler.fallback",
+                              scene_upscaler_selection.fallback ? 1.0 : 0.0);
+            profiler.setGauge("viewer.upscaler.adapter_ready",
+                              scene_spatial_pipeline != VK_NULL_HANDLE || split_spatial_available
+                                  ? 1.0
+                                  : 0.0);
+            if (!logged_scene_upscaler_selection ||
+                *logged_scene_upscaler_selection != scene_upscaler_selection) {
+                if (scene_upscaler_selection.fallback) {
+                    LOG_WARN("Scene upscaler '{}' unavailable; using '{}'",
+                             sceneUpscalerLabel(scene_upscaler_selection.requested),
+                             sceneUpscalerLabel(scene_upscaler_selection.effective));
+                } else {
+                    LOG_INFO("Scene upscaler active: {}",
+                             sceneUpscalerLabel(scene_upscaler_selection.effective));
+                }
+                logged_scene_upscaler_selection = scene_upscaler_selection;
+            }
         }
 
         void bindViewport(VkCommandBuffer command_buffer, const FramebufferRect& rect) const {
@@ -2214,7 +2254,7 @@ namespace lfs::vis {
                 // coords so the shader's letterbox check matches gl_FragCoord.
                 VulkanSplitViewParams adjusted = params.split_view;
                 adjusted.spatial_filter =
-                    params.scene_upscaler == SceneUpscalerBackend::Spatial;
+                    scene_upscaler_selection.effective == SceneUpscalerBackend::Spatial;
                 if (adjusted.coordinate_extent.x > 0 && adjusted.coordinate_extent.y > 0) {
                     const float scale_x = static_cast<float>(rect.width) /
                                           static_cast<float>(adjusted.coordinate_extent.x);
@@ -2237,7 +2277,7 @@ namespace lfs::vis {
                 split_view_pass.record(command_buffer, panel_rect, adjusted, params.frame_slot);
             } else if (has_scene) {
                 const bool use_spatial =
-                    params.scene_upscaler == SceneUpscalerBackend::Spatial &&
+                    scene_upscaler_selection.effective == SceneUpscalerBackend::Spatial &&
                     scene_spatial_pipeline != VK_NULL_HANDLE;
                 const VkPipeline selected_pipeline = use_spatial ? scene_spatial_pipeline : scene_pipeline;
                 const VkPipelineLayout selected_layout =

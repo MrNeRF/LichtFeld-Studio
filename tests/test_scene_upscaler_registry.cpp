@@ -48,4 +48,24 @@ namespace lfs::vis {
         EXPECT_FALSE(sceneUpscalerBackendFromId("dlss").has_value());
         EXPECT_FALSE(sceneUpscalerBackendFromId("").has_value());
     }
+
+    TEST(SceneUpscalerRegistry, ResolvesEffectiveBackendAndFallbackExplicitly) {
+        const auto native = resolveSceneUpscalerSelection(
+            SceneUpscalerBackend::Native, false);
+        EXPECT_EQ(native.requested, SceneUpscalerBackend::Native);
+        EXPECT_EQ(native.effective, SceneUpscalerBackend::Native);
+        EXPECT_FALSE(native.fallback);
+
+        const auto spatial = resolveSceneUpscalerSelection(
+            SceneUpscalerBackend::Spatial, true);
+        EXPECT_EQ(spatial.requested, SceneUpscalerBackend::Spatial);
+        EXPECT_EQ(spatial.effective, SceneUpscalerBackend::Spatial);
+        EXPECT_FALSE(spatial.fallback);
+
+        const auto fallback = resolveSceneUpscalerSelection(
+            SceneUpscalerBackend::Spatial, false);
+        EXPECT_EQ(fallback.requested, SceneUpscalerBackend::Spatial);
+        EXPECT_EQ(fallback.effective, SceneUpscalerBackend::Native);
+        EXPECT_TRUE(fallback.fallback);
+    }
 } // namespace lfs::vis

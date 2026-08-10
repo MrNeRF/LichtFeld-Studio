@@ -45,4 +45,19 @@ namespace lfs::vis {
             return std::nullopt;
         return descriptor->backend;
     }
+
+    SceneUpscalerSelection resolveSceneUpscalerSelection(
+        const SceneUpscalerBackend requested, const bool adapter_available) {
+        if (requested == SceneUpscalerBackend::Native) {
+            return {};
+        }
+        if (requested == SceneUpscalerBackend::Spatial && adapter_available) {
+            return {.requested = requested, .effective = requested, .fallback = false};
+        }
+        return {
+            .requested = requested,
+            .effective = SceneUpscalerBackend::Native,
+            .fallback = true,
+        };
+    }
 } // namespace lfs::vis
