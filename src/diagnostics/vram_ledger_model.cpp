@@ -473,12 +473,12 @@ namespace lfs::diagnostics {
 
         // Root F: VMA blockBytes is the measured reservation. Named Vulkan rows are
         // recorded via recordCurrentBytes → Sampled (nothing else covers VMA), so they
-        // justify the used portion; free_inside_blocks = blocks - named used sum.
-        // The neighbouring VMA free sampler (allocator_free_in_blocks) is Nested only —
-        // not part of the used sum — and must agree with free_inside within ε when named
-        // coverage is complete.
+        // justify the used portion. Driver free (allocator_free_in_blocks) is Nested
+        // authority for free_inside_blocks; residual beyond that is unattributed_in_root
+        // (Unjustified) so incomplete named coverage reports GAP, not a false CLOSED.
         auto root_f = make_root(VramLedgerRootId::VulkanVma, vma_blocks, "vulkan_vma");
         std::size_t vulkan_named = 0;
+        std::size_t driver_free_in_blocks = 0;
         std::size_t rmlui_texture_bytes = 0;
         std::size_t rmlui_texture_count = 0;
         for (const auto& row : snapshot.rows) {
@@ -487,10 +487,11 @@ namespace lfs::diagnostics {
                 continue;
             }
             if (is_vma_free_sampler_row(row)) {
+                driver_free_in_blocks = row.live_bytes;
                 add_child(root_f,
                           row.scope + (row.label.empty() ? "" : "." + row.label),
                           row.live_bytes, AttributionState::Nested, row.kind,
-                          "VMA free sampler (driver); compare to free_inside_blocks");
+                          "VMA free sampler (driver); authority for free_inside_blocks");
                 continue;
             }
             // N3: collapse serial-stamped RmlUi textures into one disclosure row.
@@ -515,8 +516,19 @@ namespace lfs::diagnostics {
             vulkan_named += rmlui_texture_bytes;
         }
         if (vma_blocks > vulkan_named) {
-            add_child(root_f, "free_inside_blocks", vma_blocks - vulkan_named,
-                      AttributionState::Justified, VramRowKind::Hooked, "retention");
+            const std::size_t residual = vma_blocks - vulkan_named;
+            const std::size_t free_inside =
+                std::min(residual, driver_free_in_blocks);
+            const std::size_t unattributed_in_root = residual - free_inside;
+            if (free_inside > 0) {
+                add_child(root_f, "free_inside_blocks", free_inside,
+                          AttributionState::Justified, VramRowKind::Hooked, "retention");
+            }
+            if (unattributed_in_root > 0) {
+                add_child(root_f, "unattributed_in_root", unattributed_in_root,
+                          AttributionState::Unjustified, VramRowKind::Sampled,
+                          "incomplete named VMA coverage");
+            }
         }
         root_f.attributed_bytes = 0;
         for (const auto& c : root_f.children) {

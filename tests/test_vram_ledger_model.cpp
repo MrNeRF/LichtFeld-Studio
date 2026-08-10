@@ -431,11 +431,106 @@ TEST(VramLedger, RmlUiTexturesCollapsedUnderRootF) {
     EXPECT_EQ(texture_groups, 1);
     EXPECT_EQ(raw_texture_rows, 0);
 
-    // Grouped bytes still feed free_inside residual.
+    // Without driver free authority, residual is unattributed (not false free_inside).
+    const std::size_t kNamed = 4 * MiB + 512ull * 1024ull;
+    const std::size_t kResidual = 32 * MiB - kNamed;
     std::size_t free_inside = 0;
+    std::size_t unattributed = 0;
     for (const auto& c : root_f->children) {
         if (c.name == "free_inside_blocks")
             free_inside = c.measured_bytes;
+        if (c.name == "unattributed_in_root") {
+            unattributed = c.measured_bytes;
+            EXPECT_EQ(c.state, AttributionState::Unjustified);
+        }
     }
-    EXPECT_EQ(free_inside, 32 * MiB - 4 * MiB - 512ull * 1024ull);
+    EXPECT_EQ(free_inside, 0u);
+    EXPECT_EQ(unattributed, kResidual);
+    EXPECT_EQ(root_f->closure, LedgerClosureState::Gap);
+}
+
+// N2b: incomplete named VMA coverage must GAP (not close via free_inside sponge).
+// free_inside = min(blocks - named, driver_free); remainder is unattributed_in_root.
+TEST(VramLedger, IncompleteNamedVmaCoverageYieldsGap) {
+    constexpr std::size_t MiB = 1024ull * 1024ull;
+    // Live idle shape: blocks >> named used; driver free is the true free authority.
+    constexpr std::size_t kBlocks = 23 * MiB;
+    constexpr std::size_t kNamed = 5 * MiB;       // incomplete instrumentation
+    constexpr std::size_t kDriverFree = 4 * MiB;  // allocator_free_in_blocks
+    constexpr std::size_t kResidual = kBlocks - kNamed;
+    constexpr std::size_t kFreeInside = kDriverFree; // min(residual, driver_free)
+    constexpr std::size_t kUnattributed = kResidual - kFreeInside;
+
+    VramProfilerSnapshot snap;
+    snap.process.process_memory_valid = true;
+    snap.process.process_used = 200 * MiB;
+    snap.process.vulkan_vma_block_bytes = kBlocks;
+    snap.rows.push_back(make_row("vulkan.image.color", "viewport", kNamed, VramRowKind::Sampled));
+    snap.rows.push_back(make_row("vulkan.vma", "allocator_free_in_blocks", kDriverFree,
+                                 VramRowKind::Sampled));
+
+    VramLedgerPolicy policy;
+    policy.include_vulkan_in_sum = true;
+    policy.epsilon_min_bytes = 1 * MiB;
+    const auto tree = buildLiveLedger(snap, policy);
+
+    const VramLedgerNode* root_f = nullptr;
+    for (const auto& r : tree.roots) {
+        if (r.root_id == VramLedgerRootId::VulkanVma)
+            root_f = &r;
+    }
+    ASSERT_NE(root_f, nullptr);
+    EXPECT_EQ(root_f->measured_bytes, kBlocks);
+
+    std::size_t free_inside = 0;
+    std::size_t unattributed = 0;
+    std::size_t driver_free = 0;
+    for (const auto& c : root_f->children) {
+        if (c.name == "free_inside_blocks") {
+            free_inside = c.measured_bytes;
+            EXPECT_EQ(c.state, AttributionState::Justified);
+            EXPECT_EQ(c.note, "retention");
+        } else if (c.name == "unattributed_in_root") {
+            unattributed = c.measured_bytes;
+            EXPECT_EQ(c.state, AttributionState::Unjustified);
+        } else if (c.name.find("allocator_free_in_blocks") != std::string::npos) {
+            driver_free = c.measured_bytes;
+            EXPECT_EQ(c.state, AttributionState::Nested);
+        }
+    }
+    EXPECT_EQ(driver_free, kDriverFree);
+    EXPECT_EQ(free_inside, kFreeInside);
+    EXPECT_EQ(unattributed, kUnattributed);
+    // Justified = named + free_inside; unattributed does not close the root.
+    EXPECT_EQ(root_f->attributed_bytes, kNamed + kFreeInside);
+    EXPECT_LT(root_f->attributed_bytes, root_f->measured_bytes);
+    EXPECT_EQ(root_f->closure, LedgerClosureState::Gap);
+
+    // Complete coverage still closes (regression guard for the complete-coverage path).
+    {
+        constexpr std::size_t kFullNamed = kBlocks - kDriverFree;
+        VramProfilerSnapshot full;
+        full.process.process_memory_valid = true;
+        full.process.process_used = 200 * MiB;
+        full.process.vulkan_vma_block_bytes = kBlocks;
+        full.rows.push_back(
+            make_row("vulkan.image.color", "viewport", kFullNamed, VramRowKind::Sampled));
+        full.rows.push_back(make_row("vulkan.vma", "allocator_free_in_blocks", kDriverFree,
+                                     VramRowKind::Sampled));
+        const auto full_tree = buildLiveLedger(full, policy);
+        const VramLedgerNode* full_f = nullptr;
+        for (const auto& r : full_tree.roots) {
+            if (r.root_id == VramLedgerRootId::VulkanVma)
+                full_f = &r;
+        }
+        ASSERT_NE(full_f, nullptr);
+        bool saw_unattr = false;
+        for (const auto& c : full_f->children) {
+            if (c.name == "unattributed_in_root")
+                saw_unattr = true;
+        }
+        EXPECT_FALSE(saw_unattr);
+        EXPECT_EQ(full_f->attributed_bytes, full_f->measured_bytes);
+        EXPECT_EQ(full_f->closure, LedgerClosureState::Closed);
+    }
 }

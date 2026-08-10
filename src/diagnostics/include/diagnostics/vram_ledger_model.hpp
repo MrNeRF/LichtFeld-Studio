@@ -97,7 +97,8 @@ namespace lfs::diagnostics {
 
     /// Live closed ledger over a profiler snapshot. Justified children contribute to
     /// per-root attributed totals. Sampled/Static rows are Nested disclosures except
-    /// root F (Vulkan VMA), where named Sampled rows justify used-inside-blocks.
+    /// root F (Vulkan VMA), where named Sampled rows justify used-inside-blocks and
+    /// driver free caps free_inside; residual beyond that is Unjustified GAP.
     [[nodiscard]] LFS_DIAGNOSTICS_API VramLedgerTree
     buildLiveLedger(const VramProfilerSnapshot& snapshot, const VramLedgerPolicy& policy = {});
 
