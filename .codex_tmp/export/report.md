@@ -47,4 +47,8 @@
 
 ## Commits
 
-- `fix: make q16 SH export merges dtype-safe` (final commit hash is reported in the handoff).
+- `34773826d` — `fix: make q16 SH export merges dtype-safe` (no push).
+
+## Independent re-verify
+
+- Re-ran `ShValueStorageTest.*` (8/8 PASSED) including `Q16DeletedMaskSceneMergeAndPlyExport` against `/home/paja/.cache/lichtfeld/gsc-wt-export-build/tests/lichtfeld_tests` with libtorch from the private deps cache.
