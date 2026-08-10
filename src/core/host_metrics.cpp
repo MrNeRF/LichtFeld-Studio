@@ -14,8 +14,10 @@
 #include <vector>
 
 #ifdef _WIN32
-#include <psapi.h>
+// clang-format off: windows.h must precede psapi.h.
 #include <windows.h>
+#include <psapi.h>
+// clang-format on
 #else
 #include <unistd.h>
 #endif

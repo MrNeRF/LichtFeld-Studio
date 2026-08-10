@@ -3,10 +3,12 @@
 
 #include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#include "io/exporter.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_quant_kernels.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -20,6 +22,7 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <filesystem>
+#include <glm/mat4x4.hpp>
 #include <gtest/gtest.h>
 #include <random>
 #include <stdexcept>
@@ -124,6 +127,38 @@ TEST(ShValueStorageTest, CanonicalExportIsFp32BitCompat) {
     const double mse = mse_tensors(ref, deq.cpu());
     EXPECT_LT(mse, 1e-6);
     EXPECT_GT(psnr_from_mse(mse), 55.0);
+
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, Q16DeletedMaskSceneMergeAndPlyExport) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto splat = make_random_sh3(64);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+    ASSERT_EQ(splat.shN_raw().dtype(), DataType::Float16);
+
+    std::vector<bool> deleted(64, false);
+    deleted[1] = true;
+    deleted[17] = true;
+    deleted[63] = true;
+    splat.deleted() = Tensor::from_vector(deleted, {deleted.size()}, Device::CPU).to(Device::CUDA);
+    ASSERT_TRUE(splat.has_deleted_mask());
+
+    auto merged = Scene::mergeSplatsWithTransforms(
+        {{&splat, glm::mat4{1.0f}}}, Scene::MergeStorageMode::Clone);
+    ASSERT_NE(merged, nullptr);
+    ASSERT_EQ(merged->size(), 61);
+
+    const auto output_path =
+        std::filesystem::temp_directory_path() / "lfs_q16_deleted_merge_export.ply";
+    std::filesystem::remove(output_path);
+    const auto save_result = lfs::io::save_ply(
+        *merged, {.output_path = output_path, .binary = true, .async = false});
+    ASSERT_TRUE(save_result.has_value()) << save_result.error().message;
+    ASSERT_TRUE(std::filesystem::exists(output_path));
+    EXPECT_GT(std::filesystem::file_size(output_path), 0u);
+    std::filesystem::remove(output_path);
 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
