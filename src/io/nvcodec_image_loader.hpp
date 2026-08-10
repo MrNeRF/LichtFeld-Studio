@@ -38,6 +38,8 @@ namespace lfs::io {
             int max_num_cpu_threads = 0;
             bool enable_fallback = true;
             size_t decoder_pool_size = 8;
+            bool enable_device_allocator = false;
+            size_t device_allocator_budget_bytes = size_t(256) << 20;
         };
 
         explicit NvCodecImageLoader(const Options& options);

@@ -650,6 +650,101 @@ namespace lfs::io {
             vram_account.set_owner(this);
         }
 
+        static int device_malloc(void* context, void** ptr, const size_t size, cudaStream_t stream) {
+            auto* impl = static_cast<Impl*>(context);
+            if (!impl || !ptr || size == 0 || !impl->decode_pool) {
+                return 1;
+            }
+
+            size_t previous = impl->device_bytes_in_use.load(std::memory_order_relaxed);
+            while (true) {
+                if (size > impl->device_budget_bytes || previous > impl->device_budget_bytes - size) {
+                    *ptr = nullptr;
+                    return 1;
+                }
+                if (impl->device_bytes_in_use.compare_exchange_weak(
+                        previous, previous + size, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                    break;
+                }
+            }
+
+            const cudaError_t status = cudaMallocFromPoolAsync(ptr, size, impl->decode_pool, stream);
+            if (status != cudaSuccess) {
+                impl->device_bytes_in_use.fetch_sub(size, std::memory_order_acq_rel);
+                *ptr = nullptr;
+                return 1;
+            }
+            return 0;
+        }
+
+        static int device_free(void* context, void* ptr, const size_t size, cudaStream_t stream) {
+            auto* impl = static_cast<Impl*>(context);
+            if (!impl || !ptr) {
+                return 0;
+            }
+
+            const cudaError_t status = cudaFreeAsync(ptr, stream);
+            if (status == cudaSuccess) {
+                size_t used = impl->device_bytes_in_use.load(std::memory_order_acquire);
+                while (used != 0) {
+                    const size_t released = std::min(size, used);
+                    if (impl->device_bytes_in_use.compare_exchange_weak(
+                            used, used - released, std::memory_order_acq_rel, std::memory_order_acquire)) {
+                        break;
+                    }
+                }
+                return 0;
+            }
+            return 1;
+        }
+
+        bool configure_device_allocator(const int device, const size_t budget_bytes) {
+#if CUDART_VERSION >= 11020
+            if (budget_bytes == 0) {
+                return false;
+            }
+
+            cudaMemPoolProps props{};
+            props.allocType = cudaMemAllocationTypePinned;
+            props.location.type = cudaMemLocationTypeDevice;
+            props.location.id = device;
+            if (const cudaError_t status = cudaMemPoolCreate(&decode_pool, &props); status != cudaSuccess) {
+                LOG_WARN("[NvCodecImageLoader] Device allocator pool creation failed: {}", cudaGetErrorString(status));
+                decode_pool = nullptr;
+                return false;
+            }
+
+            uint64_t release_threshold = 0;
+            if (const cudaError_t status = cudaMemPoolSetAttribute(
+                    decode_pool, cudaMemPoolAttrReleaseThreshold, &release_threshold);
+                status != cudaSuccess) {
+                LOG_WARN("[NvCodecImageLoader] Device allocator pool configuration failed: {}",
+                         cudaGetErrorString(status));
+                cudaMemPoolDestroy(decode_pool);
+                decode_pool = nullptr;
+                return false;
+            }
+
+            device_budget_bytes = budget_bytes;
+            device_allocator = nvimgcodecDeviceAllocator_t{
+                NVIMGCODEC_STRUCTURE_TYPE_DEVICE_ALLOCATOR,
+                sizeof(nvimgcodecDeviceAllocator_t),
+                nullptr,
+                &Impl::device_malloc,
+                &Impl::device_free,
+                this,
+                256};
+            LOG_INFO("[NvCodecImageLoader] nvImageCodec device allocator enabled: budget={} MiB, release_threshold=0",
+                     budget_bytes / (size_t(1) << 20));
+            return true;
+#else
+            (void)device;
+            (void)budget_bytes;
+            LOG_WARN("[NvCodecImageLoader] nvImageCodec device allocator disabled: CUDA mempools unavailable");
+            return false;
+#endif
+        }
+
         nvimgcodecInstance_t instance = nullptr;
         std::vector<nvimgcodecDecoder_t> decoder_pool;
         std::vector<bool> decoder_available;
@@ -659,6 +754,10 @@ namespace lfs::io {
         std::mutex encoder_mutex;
         int device_id = 0;
         bool fallback_enabled = true;
+        cudaMemPool_t decode_pool = nullptr;
+        nvimgcodecDeviceAllocator_t device_allocator{};
+        size_t device_budget_bytes = 0;
+        std::atomic<size_t> device_bytes_in_use{0};
         NvCodecVramAccount vram_account;
 
         size_t acquire_decoder() {
@@ -715,6 +814,13 @@ namespace lfs::io {
                         nvimgcodecInstanceDestroy(instance);
                         instance = nullptr;
                     }
+#if CUDART_VERSION >= 11020
+                    if (decode_pool) {
+                        cudaMemPoolTrimTo(decode_pool, 0);
+                        cudaMemPoolDestroy(decode_pool);
+                        decode_pool = nullptr;
+                    }
+#endif
                 }
             } catch (const std::exception& e) {
                 LOG_WARN("[NvCodecImageLoader] Ignoring nvImageCodec shutdown error: {}", e.what());
@@ -740,6 +846,9 @@ namespace lfs::io {
         impl_->device_id = options.device_id;
         impl_->fallback_enabled = options.enable_fallback;
         const cudaError_t set_device_status = cudaSetDevice(impl_->device_id);
+        if (set_device_status == cudaSuccess && options.enable_device_allocator) {
+            impl_->configure_device_allocator(options.device_id, options.device_allocator_budget_bytes);
+        }
         const auto init_vram_before =
             set_device_status == cudaSuccess ? cuda_usage_snapshot_now() : CudaUsageSnapshot{};
 
@@ -772,7 +881,7 @@ namespace lfs::io {
             NVIMGCODEC_STRUCTURE_TYPE_EXECUTION_PARAMS,
             sizeof(nvimgcodecExecutionParams_t),
             nullptr,
-            nullptr,
+            impl_->decode_pool ? &impl_->device_allocator : nullptr,
             nullptr,
             options.max_num_cpu_threads,
             nullptr,
