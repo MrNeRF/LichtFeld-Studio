@@ -4,7 +4,11 @@
 
 #pragma once
 
+#include <glm/glm.hpp>
+
+#include <cmath>
 #include <cstdint>
+#include <optional>
 
 namespace lfs::vis {
 
@@ -81,6 +85,42 @@ namespace lfs::vis {
             .includes_jitter = includes_jitter,
             .flip_y = flip_y,
         };
+    }
+
+    [[nodiscard]] inline std::optional<glm::vec2> canonicalSceneMotionPixels(
+        const glm::vec2 encoded_motion, const SceneMotionContract& contract) {
+        if (!contract.available() || !contract.valid() ||
+            !std::isfinite(encoded_motion.x) || !std::isfinite(encoded_motion.y)) {
+            return std::nullopt;
+        }
+
+        glm::vec2 pixels = encoded_motion;
+        if (contract.encoding == SceneMotionEncoding::NormalizedUvDisplacement) {
+            pixels *= glm::vec2(contract.width, contract.height);
+        } else if (contract.encoding == SceneMotionEncoding::NdcDisplacement) {
+            pixels *= 0.5f * glm::vec2(contract.width, contract.height);
+        }
+        if (contract.flip_y) {
+            pixels.y = -pixels.y;
+        }
+        if (contract.direction == SceneMotionDirection::PreviousToCurrent) {
+            pixels = -pixels;
+        }
+        return pixels;
+    }
+
+    [[nodiscard]] inline std::optional<glm::vec2> currentToPreviousSceneMotionNdc(
+        const glm::vec4 current_clip, const glm::vec4 previous_clip) {
+        const auto finite_clip = [](const glm::vec4 value) {
+            return std::isfinite(value.x) && std::isfinite(value.y) &&
+                   std::isfinite(value.z) && std::isfinite(value.w) && value.w != 0.0f;
+        };
+        if (!finite_clip(current_clip) || !finite_clip(previous_clip)) {
+            return std::nullopt;
+        }
+        const glm::vec2 current_ndc = glm::vec2(current_clip) / current_clip.w;
+        const glm::vec2 previous_ndc = glm::vec2(previous_clip) / previous_clip.w;
+        return previous_ndc - current_ndc;
     }
 
 } // namespace lfs::vis

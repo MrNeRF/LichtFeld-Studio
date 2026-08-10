@@ -5,6 +5,7 @@
 #include "visualizer/rendering/scene_motion_contract.hpp"
 
 #include <gtest/gtest.h>
+#include <limits>
 
 namespace lfs::vis {
 
@@ -93,6 +94,63 @@ namespace lfs::vis {
                          false,
                          false)
                          .valid());
+    }
+
+    TEST(SceneMotionContract, CanonicalizesEncodingDirectionAndVerticalOrigin) {
+        const auto pixels = makeSceneMotionContract(
+            true,
+            SceneMotionStorage::VulkanImage,
+            SceneMotionEncoding::PixelDisplacement,
+            SceneMotionDirection::CurrentToPrevious,
+            200,
+            100,
+            false,
+            false);
+        const auto canonical_pixels = canonicalSceneMotionPixels({20.0f, -10.0f}, pixels);
+        ASSERT_TRUE(canonical_pixels.has_value());
+        EXPECT_EQ(*canonical_pixels, glm::vec2(20.0f, -10.0f));
+
+        auto uv = pixels;
+        uv.encoding = SceneMotionEncoding::NormalizedUvDisplacement;
+        uv.direction = SceneMotionDirection::PreviousToCurrent;
+        uv.flip_y = true;
+        const auto canonical_uv = canonicalSceneMotionPixels({0.1f, 0.1f}, uv);
+        ASSERT_TRUE(canonical_uv.has_value());
+        EXPECT_EQ(*canonical_uv, glm::vec2(-20.0f, 10.0f));
+
+        auto ndc = pixels;
+        ndc.encoding = SceneMotionEncoding::NdcDisplacement;
+        const auto canonical_ndc = canonicalSceneMotionPixels({0.2f, -0.2f}, ndc);
+        ASSERT_TRUE(canonical_ndc.has_value());
+        EXPECT_EQ(*canonical_ndc, glm::vec2(20.0f, -10.0f));
+    }
+
+    TEST(SceneMotionContract, RejectsUnavailableOrNonFiniteMotionSamples) {
+        EXPECT_FALSE(canonicalSceneMotionPixels({1.0f, 1.0f}, {}).has_value());
+        const auto contract = makeSceneMotionContract(
+            true,
+            SceneMotionStorage::Tensor,
+            SceneMotionEncoding::PixelDisplacement,
+            SceneMotionDirection::CurrentToPrevious,
+            1280,
+            720,
+            false,
+            false);
+        EXPECT_FALSE(canonicalSceneMotionPixels(
+                         {std::numeric_limits<float>::quiet_NaN(), 0.0f}, contract)
+                         .has_value());
+    }
+
+    TEST(SceneMotionContract, DerivesCurrentToPreviousDisplacementFromClipPositions) {
+        const auto motion = currentToPreviousSceneMotionNdc(
+            glm::vec4(0.5f, 0.0f, 0.0f, 1.0f),
+            glm::vec4(0.0f, 0.5f, 0.0f, 2.0f));
+        ASSERT_TRUE(motion.has_value());
+        EXPECT_EQ(*motion, glm::vec2(-0.5f, 0.25f));
+
+        EXPECT_FALSE(currentToPreviousSceneMotionNdc(
+                         glm::vec4(0.0f), glm::vec4(0.0f, 0.0f, 0.0f, 1.0f))
+                         .has_value());
     }
 
 } // namespace lfs::vis
