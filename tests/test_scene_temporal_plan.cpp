@@ -8,6 +8,24 @@
 
 namespace lfs::vis {
 
+    namespace {
+        SceneTemporalPlan temporalHistoryPlan(const glm::ivec2 extent = {1920, 1080},
+                                              const bool depth = true) {
+            SceneUpscalerRequirements requirements;
+            requirements.depth = depth;
+            requirements.motion_vectors = true;
+            requirements.jitter = true;
+            requirements.history = true;
+            return makeSceneTemporalPlan(requirements, extent, extent);
+        }
+
+        TemporalFrameInput temporalFrameInput(const glm::ivec2 extent = {1920, 1080}) {
+            TemporalFrameInput input;
+            input.view.size = extent;
+            return input;
+        }
+    } // namespace
+
     TEST(SceneTemporalPlan, NativeAndSpatialRemainValidZeroCostPlans) {
         const auto native = makeSceneTemporalPlan(
             nativeSceneUpscalerDescriptor().requirements, {2200, 1476}, {2200, 1476});
@@ -98,6 +116,123 @@ namespace lfs::vis {
                          1080,
                          1)
                          .valid());
+    }
+
+    TEST(SceneHistoryTracker, FirstFrameBecomesHistoryForTheNextCompatibleFrame) {
+        TemporalFrameTracker frames;
+        SceneHistoryTracker histories;
+        const auto plan = temporalHistoryPlan();
+        const auto input = temporalFrameInput();
+
+        const auto first = frames.prepare(TemporalViewId::Main, input);
+        EXPECT_FALSE(first.history_valid);
+        EXPECT_FALSE(histories.prepare(TemporalViewId::Main, plan, first).available());
+        EXPECT_TRUE(histories.commit(
+            TemporalViewId::Main,
+            plan,
+            first,
+            SceneHistoryStorage::VulkanImage,
+            SceneHistoryStorage::VulkanImage));
+        frames.commit(TemporalViewId::Main, input);
+
+        const auto second = frames.prepare(TemporalViewId::Main, input);
+        ASSERT_TRUE(second.history_valid);
+        const auto history = histories.prepare(TemporalViewId::Main, plan, second);
+        EXPECT_TRUE(history.available());
+        EXPECT_TRUE(history.hasDepth());
+        EXPECT_EQ(history.sequence, second.sequence);
+    }
+
+    TEST(SceneHistoryTracker, RejectsMissingRequiredColorOrDepthStorage) {
+        SceneHistoryTracker histories;
+        TemporalFrameState frame;
+        const auto plan = temporalHistoryPlan();
+        EXPECT_FALSE(histories.commit(
+            TemporalViewId::Main,
+            plan,
+            frame,
+            SceneHistoryStorage::None,
+            SceneHistoryStorage::VulkanImage));
+        EXPECT_FALSE(histories.commit(
+            TemporalViewId::Main,
+            plan,
+            frame,
+            SceneHistoryStorage::VulkanImage,
+            SceneHistoryStorage::None));
+    }
+
+    TEST(SceneHistoryTracker, StoresNoDepthWhenThePlanDoesNotRequestIt) {
+        SceneHistoryTracker histories;
+        TemporalFrameState first;
+        const auto plan = temporalHistoryPlan({1280, 720}, false);
+        EXPECT_TRUE(histories.commit(
+            TemporalViewId::Main,
+            plan,
+            first,
+            SceneHistoryStorage::Tensor,
+            SceneHistoryStorage::VulkanImage));
+
+        TemporalFrameState second;
+        second.history_valid = true;
+        second.sequence = 1;
+        const auto history = histories.prepare(TemporalViewId::Main, plan, second);
+        EXPECT_TRUE(history.available());
+        EXPECT_FALSE(history.hasDepth());
+    }
+
+    TEST(SceneHistoryTracker, InvalidatesIncompatibleExtentOrFrameHistory) {
+        SceneHistoryTracker histories;
+        const auto plan = temporalHistoryPlan();
+        TemporalFrameState first;
+        ASSERT_TRUE(histories.commit(
+            TemporalViewId::Main,
+            plan,
+            first,
+            SceneHistoryStorage::VulkanImage,
+            SceneHistoryStorage::VulkanImage));
+
+        TemporalFrameState next;
+        next.history_valid = true;
+        next.sequence = 1;
+        EXPECT_FALSE(histories.prepare(
+                                  TemporalViewId::Main,
+                                  temporalHistoryPlan({1280, 720}),
+                                  next)
+                         .available());
+        next.sequence = 2;
+        EXPECT_FALSE(histories.prepare(TemporalViewId::Main, plan, next).available());
+        next.sequence = 1;
+        next.history_valid = false;
+        EXPECT_FALSE(histories.prepare(TemporalViewId::Main, plan, next).available());
+    }
+
+    TEST(SceneHistoryTracker, KeepsViewsIndependentAndSupportsExplicitReset) {
+        SceneHistoryTracker histories;
+        const auto plan = temporalHistoryPlan();
+        TemporalFrameState first;
+        ASSERT_TRUE(histories.commit(
+            TemporalViewId::SplitLeft,
+            plan,
+            first,
+            SceneHistoryStorage::VulkanImage,
+            SceneHistoryStorage::VulkanImage));
+
+        TemporalFrameState next;
+        next.history_valid = true;
+        next.sequence = 1;
+        EXPECT_TRUE(histories.prepare(TemporalViewId::SplitLeft, plan, next).available());
+        EXPECT_FALSE(histories.prepare(TemporalViewId::SplitRight, plan, next).available());
+        histories.reset(TemporalViewId::SplitLeft);
+        EXPECT_FALSE(histories.prepare(TemporalViewId::SplitLeft, plan, next).available());
+
+        ASSERT_TRUE(histories.commit(
+            TemporalViewId::Main,
+            plan,
+            first,
+            SceneHistoryStorage::VulkanImage,
+            SceneHistoryStorage::VulkanImage));
+        histories.resetAll();
+        EXPECT_FALSE(histories.prepare(TemporalViewId::Main, plan, next).available());
     }
 
 } // namespace lfs::vis

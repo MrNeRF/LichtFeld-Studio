@@ -5,10 +5,14 @@
 #pragma once
 
 #include "rendering/scene_upscaler_registry.hpp"
+#include "rendering/temporal_frame_tracker.hpp"
 
 #include <glm/glm.hpp>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace lfs::vis {
 
@@ -114,5 +118,68 @@ namespace lfs::vis {
             .sequence = sequence,
         };
     }
+
+    class SceneHistoryTracker {
+    public:
+        [[nodiscard]] SceneHistoryContract prepare(
+            const TemporalViewId view,
+            const SceneTemporalPlan& plan,
+            const TemporalFrameState& frame) const {
+            if (!plan.valid() || !plan.needsHistoryColor() || !frame.history_valid) {
+                return {};
+            }
+            const auto& history = entries_.at(index(view));
+            if (!history || !history->valid() ||
+                !history->matchesOutputExtent(plan.output_extent.x, plan.output_extent.y) ||
+                history->sequence != frame.sequence) {
+                return {};
+            }
+            return *history;
+        }
+
+        [[nodiscard]] bool commit(const TemporalViewId view,
+                                  const SceneTemporalPlan& plan,
+                                  const TemporalFrameState& frame,
+                                  const SceneHistoryStorage color_storage,
+                                  const SceneHistoryStorage depth_storage) {
+            auto& history = entries_.at(index(view));
+            if (!plan.valid() || !plan.needsHistoryColor()) {
+                history.reset();
+                return false;
+            }
+            if (color_storage == SceneHistoryStorage::None ||
+                (plan.needsHistoryDepth() && depth_storage == SceneHistoryStorage::None)) {
+                history.reset();
+                return false;
+            }
+            history = makeSceneHistoryContract(
+                true,
+                color_storage,
+                plan.needsHistoryDepth() ? depth_storage : SceneHistoryStorage::None,
+                plan.output_extent.x,
+                plan.output_extent.y,
+                frame.sequence + 1);
+            return history->valid();
+        }
+
+        void reset(const TemporalViewId view) {
+            entries_.at(index(view)).reset();
+        }
+
+        void resetAll() {
+            for (auto& history : entries_) {
+                history.reset();
+            }
+        }
+
+    private:
+        [[nodiscard]] static constexpr std::size_t index(const TemporalViewId view) {
+            return static_cast<std::size_t>(view);
+        }
+
+        std::array<std::optional<SceneHistoryContract>,
+                   static_cast<std::size_t>(TemporalViewId::Count)>
+            entries_{};
+    };
 
 } // namespace lfs::vis
