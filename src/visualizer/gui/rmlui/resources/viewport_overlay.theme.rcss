@@ -362,13 +362,13 @@
     border-bottom-color: @{alpha(border,0.39)};
 }
 
-#vram-hud-filter {
+.vram-hud-filter-input {
     background-color: @{viewport.metrics_bg};
     border-color: @{alpha(border,0.39)};
     color: @{text};
 }
 
-#vram-hud-filter:focus {
+.vram-hud-filter-input:focus {
     border-color: @{primary};
 }
 
@@ -427,3 +427,10 @@
 .perf-hud-strip-meter.crit .perf-hud-meter-fill,
 .perf-hud-meter-fill.crit { background-color: @{error}; }
 .perf-hud-core-bar { background-color: @{primary}; }
+
+.perf-hud-sparkline .histogram-bar-fill {
+    background-color: @{primary};
+}
+.perf-hud-meter-track {
+    background-color: @{statusbar.progress_bg};
+}

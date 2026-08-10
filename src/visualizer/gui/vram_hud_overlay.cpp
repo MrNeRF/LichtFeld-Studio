@@ -358,6 +358,10 @@ namespace lfs::vis::gui {
         perf_cpu_fill_ = nullptr;
         perf_cpu_value_ = nullptr;
         perf_core_strip_ = nullptr;
+        spark_vram_root_ = nullptr;
+        spark_ram_root_ = nullptr;
+        spark_gpu_root_ = nullptr;
+        spark_cpu_root_ = nullptr;
         header_ = nullptr;
         resize_handle_ = nullptr;
         filter_input_ = nullptr;
@@ -411,6 +415,10 @@ namespace lfs::vis::gui {
         perf_cpu_fill_ = document_->GetElementById("perf-hud-cpu-fill");
         perf_cpu_value_ = document_->GetElementById("perf-hud-cpu-value");
         perf_core_strip_ = document_->GetElementById("perf-hud-core-strip");
+        spark_vram_root_ = document_->GetElementById("perf-hud-spark-vram");
+        spark_ram_root_ = document_->GetElementById("perf-hud-spark-ram");
+        spark_gpu_root_ = document_->GetElementById("perf-hud-spark-gpu");
+        spark_cpu_root_ = document_->GetElementById("perf-hud-spark-cpu");
         header_ = document_->GetElementById("vram-hud-header");
         resize_handle_ = document_->GetElementById("vram-hud-resize");
         filter_input_ = document_->GetElementById("vram-hud-filter");
@@ -783,6 +791,9 @@ namespace lfs::vis::gui {
             return;
 
         applyCompactStrip();
+        if (sparkline_tick_due())
+            pushSparklineSample();
+        applySparklines();
         const bool compact = state_.perf_hud.visible && !state_.perf_hud.expanded;
         if (perf_strip_) {
             perf_strip_->SetClass("hidden", !state_.perf_hud.visible || state_.perf_hud.expanded);
@@ -912,6 +923,72 @@ namespace lfs::vis::gui {
             }
             perf_core_strip_->SetInnerRML(bars);
         }
+    }
+
+    bool VramHudOverlay::sparkline_tick_due() const noexcept {
+        if (!state_.perf_hud.visible)
+            return false;
+        if (last_sparkline_sample_ == std::chrono::steady_clock::time_point{})
+            return true;
+        return std::chrono::steady_clock::now() - last_sparkline_sample_ >= std::chrono::seconds(1);
+    }
+
+    void VramHudOverlay::pushSparklineSample() {
+        if (!state_.perf_hud.snapshot)
+            return;
+        const auto& s = *state_.perf_hud.snapshot;
+        const auto ratio = [](std::size_t value, std::size_t total) {
+            return total == 0
+                       ? 0.0f
+                       : std::clamp(100.0f * static_cast<float>(value) /
+                                        static_cast<float>(total),
+                                    0.0f, 100.0f);
+        };
+        spark_vram_hist_[spark_write_] = ratio(s.vram_process_bytes, s.vram_total_bytes);
+        spark_ram_hist_[spark_write_] = ratio(s.ram_process_bytes, s.ram_total_bytes);
+        spark_gpu_hist_[spark_write_] =
+            s.gpu_utilization_valid ? std::clamp(s.gpu_utilization_percent, 0.0f, 100.0f) : 0.0f;
+        spark_cpu_hist_[spark_write_] =
+            s.cpu_valid ? std::clamp(s.process_cpu_percent, 0.0f, 100.0f) : 0.0f;
+        spark_write_ = (spark_write_ + 1) % kSparklineSamples;
+        if (spark_count_ < kSparklineSamples)
+            ++spark_count_;
+        last_sparkline_sample_ = std::chrono::steady_clock::now();
+        cached_spark_vram_.clear();
+        cached_spark_ram_.clear();
+        cached_spark_gpu_.clear();
+        cached_spark_cpu_.clear();
+    }
+
+    void VramHudOverlay::applySparklines() {
+        if (!state_.perf_hud.visible || spark_count_ == 0)
+            return;
+
+        const auto render_series = [&](Rml::Element* root, std::string& cache,
+                                       const std::array<float, kSparklineSamples>& hist) {
+            if (!root)
+                return;
+            std::string rml;
+            rml.reserve(spark_count_ * 72);
+            const std::size_t start =
+                spark_count_ < kSparklineSamples ? 0
+                                                 : spark_write_;
+            for (std::size_t i = 0; i < spark_count_; ++i) {
+                const float value = hist[(start + i) % kSparklineSamples];
+                rml += std::format(
+                    "<span class=\"histogram-bar-fill\" style=\"height:{:.1f}%\"></span>",
+                    value);
+            }
+            if (cache == rml)
+                return;
+            cache = rml;
+            root->SetInnerRML(cache);
+        };
+
+        render_series(spark_vram_root_, cached_spark_vram_, spark_vram_hist_);
+        render_series(spark_ram_root_, cached_spark_ram_, spark_ram_hist_);
+        render_series(spark_gpu_root_, cached_spark_gpu_, spark_gpu_hist_);
+        render_series(spark_cpu_root_, cached_spark_cpu_, spark_cpu_hist_);
     }
 
     void VramHudOverlay::applySummary(std::size_t process_used, std::size_t process_total) {

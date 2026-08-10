@@ -1764,3 +1764,59 @@ body {
 .vram-hud-overlay.perf-hud-compact .perf-hud-strip { display: flex; }
 .vram-hud-overlay:not(.perf-hud-compact) .perf-hud-strip { display: none; }
 .perf-hud-strip.hidden { display: none; }
+
+.perf-hud-overview-meters {
+    display: flex;
+    flex-direction: column;
+    gap: 6dp;
+    margin-top: 8dp;
+}
+
+.perf-hud-sparkline-row {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    height: 28dp;
+}
+
+.perf-hud-sparkline-label {
+    width: 34dp;
+    font-size: 10dp;
+}
+
+.perf-hud-sparkline {
+    flex-grow: 1;
+    height: 24dp;
+    display: flex;
+    align-items: flex-end;
+    gap: 1dp;
+    overflow: hidden;
+}
+
+.perf-hud-sparkline .histogram-bar-fill {
+    flex: 1 1 0;
+    min-width: 1dp;
+    max-width: 4dp;
+    height: 0%;
+}
+
+.perf-hud-ledger-allocated,
+.perf-hud-ledger-disclosure,
+.perf-hud-ledger-badge,
+.vram-hud-summary-value,
+.vram-hud-col-live,
+.vram-hud-col-peak,
+.vram-hud-col-delta,
+.vram-hud-col-time,
+.vram-hud-col-gpu,
+.vram-hud-anno-bytes,
+.vram-hud-anno-peak,
+.vram-hud-anno-wall,
+.vram-hud-anno-gpu,
+.vram-hud-anno-calls,
+.vram-hud-allocs-summary-value,
+.vram-hud-breakdown-bytes,
+.vram-hud-breakdown-pct {
+    font-family: "JetBrains Mono";
+    font-weight: normal;
+}

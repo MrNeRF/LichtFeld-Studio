@@ -9,6 +9,7 @@
 #include "visualizer/app_store.hpp"
 
 #include <RmlUi/Core/EventListener.h>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -41,7 +42,9 @@ namespace lfs::vis::gui {
 
         void setState(State state);
         [[nodiscard]] bool isVisible() const noexcept { return state_.visible || state_.perf_hud.visible; }
-        [[nodiscard]] bool needsAnimationFrame() const noexcept { return pointer_captured_; }
+        [[nodiscard]] bool needsAnimationFrame() const noexcept {
+            return pointer_captured_ || sparkline_tick_due();
+        }
         [[nodiscard]] bool isCapturingPointer() const noexcept { return pointer_captured_; }
 
         [[nodiscard]] bool isDueForProcessSample(std::chrono::milliseconds interval);
@@ -83,6 +86,9 @@ namespace lfs::vis::gui {
         void attachListeners();
         void apply();
         void applyCompactStrip();
+        void applySparklines();
+        void pushSparklineSample();
+        [[nodiscard]] bool sparkline_tick_due() const noexcept;
         void applySummary(std::size_t process_used, std::size_t process_total);
         void applyLedger();
         void applyCounters();
@@ -141,6 +147,10 @@ namespace lfs::vis::gui {
         Rml::Element* perf_cpu_fill_ = nullptr;
         Rml::Element* perf_cpu_value_ = nullptr;
         Rml::Element* perf_core_strip_ = nullptr;
+        Rml::Element* spark_vram_root_ = nullptr;
+        Rml::Element* spark_ram_root_ = nullptr;
+        Rml::Element* spark_gpu_root_ = nullptr;
+        Rml::Element* spark_cpu_root_ = nullptr;
         Rml::Element* header_ = nullptr;
         Rml::Element* resize_handle_ = nullptr;
         Rml::Element* filter_input_ = nullptr;
@@ -313,6 +323,19 @@ namespace lfs::vis::gui {
         bool persistence_dirty_ = false;
 
         std::chrono::steady_clock::time_point last_process_sample_{};
+        std::chrono::steady_clock::time_point last_sparkline_sample_{};
+
+        static constexpr std::size_t kSparklineSamples = 60;
+        std::array<float, kSparklineSamples> spark_vram_hist_{};
+        std::array<float, kSparklineSamples> spark_ram_hist_{};
+        std::array<float, kSparklineSamples> spark_gpu_hist_{};
+        std::array<float, kSparklineSamples> spark_cpu_hist_{};
+        std::size_t spark_count_ = 0;
+        std::size_t spark_write_ = 0;
+        std::string cached_spark_vram_;
+        std::string cached_spark_ram_;
+        std::string cached_spark_gpu_;
+        std::string cached_spark_cpu_;
     };
 
 } // namespace lfs::vis::gui

@@ -141,6 +141,7 @@ namespace lfs::vis::gui {
             Keyboard = 1u << 14,
             LodStats = 1u << 15,
             LeftDockResize = 1u << 16,
+            PerfHud = 1u << 17,
         };
         void markRenderNeeded(RenderReason reason);
         [[nodiscard]] std::string renderReasonSources() const;
