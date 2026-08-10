@@ -53,8 +53,9 @@ namespace lfs::training {
         /// Capacity-backed training-state high-water (params+optim reserved, not logical N).
         void set_training_state_reserved_bytes(std::size_t bytes);
 
-        /// FastGS raster live buffers at a step (per_prim + per_tile + sorted).
-        void set_fastgs_raster_live_bytes(std::size_t bytes);
+        /// FastGS raster live buffers split into disjoint arena and sort owners.
+        void set_fastgs_raster_live_bytes(std::size_t arena_bytes,
+                                          std::size_t sort_bytes);
 
         /// Write JSON report to @p path (parent dirs created as needed).
         void finalize(const std::filesystem::path& path);
@@ -97,6 +98,8 @@ namespace lfs::training {
         std::size_t baseline_cuda_used_ = 0;
         std::size_t peak_pool_reserved_ = 0;
         std::size_t peak_pool_used_ = 0;
+        std::size_t pool_reserved_at_peak_ = 0;
+        std::size_t pool_used_at_peak_ = 0;
         std::size_t peak_pool_bucket_cache_ = 0;
         std::size_t peak_pool_bucket_live_waste_ = 0;
         std::size_t peak_exportable_splat_ = 0;
@@ -104,6 +107,8 @@ namespace lfs::training {
         std::size_t peak_arena_capacity_ = 0;
         std::size_t peak_fastgs_sort_hwm_ = 0;
         std::size_t peak_fastgs_raster_live_ = 0;
+        std::size_t peak_fastgs_raster_arena_live_ = 0;
+        std::size_t peak_fastgs_raster_sort_live_ = 0;
         std::size_t peak_io_ring_bytes_ = 0;
         std::size_t peak_io_external_bytes_ = 0;
         std::size_t peak_steady_pinned_host_bytes_ = 0;
@@ -114,6 +119,8 @@ namespace lfs::training {
         std::size_t densify_workspace_bytes_ = 0;
         std::size_t training_state_reserved_bytes_ = 0;
         std::size_t fastgs_raster_live_bytes_ = 0;
+        std::size_t fastgs_raster_arena_live_bytes_ = 0;
+        std::size_t fastgs_raster_sort_live_bytes_ = 0;
         float last_loss_ = 0.0f;
         std::size_t last_live_splats_ = 0;
         double last_psnr_ = -1.0;

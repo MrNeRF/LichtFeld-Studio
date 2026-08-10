@@ -129,6 +129,8 @@ namespace lfs::training {
         // configure was skipped, fall back to the value already stored (0).
         peak_pool_reserved_ = 0;
         peak_pool_used_ = 0;
+        pool_reserved_at_peak_ = 0;
+        pool_used_at_peak_ = 0;
         peak_pool_bucket_cache_ = 0;
         peak_pool_bucket_live_waste_ = 0;
         peak_exportable_splat_ = 0;
@@ -136,6 +138,8 @@ namespace lfs::training {
         peak_arena_capacity_ = 0;
         peak_fastgs_sort_hwm_ = 0;
         peak_fastgs_raster_live_ = 0;
+        peak_fastgs_raster_arena_live_ = 0;
+        peak_fastgs_raster_sort_live_ = 0;
         peak_io_ring_bytes_ = 0;
         peak_io_external_bytes_ = 0;
         peak_steady_pinned_host_bytes_ = 0;
@@ -146,6 +150,8 @@ namespace lfs::training {
         densify_workspace_bytes_ = 0;
         training_state_reserved_bytes_ = 0;
         fastgs_raster_live_bytes_ = 0;
+        fastgs_raster_arena_live_bytes_ = 0;
+        fastgs_raster_sort_live_bytes_ = 0;
         dataloader_wait_ms_sum_ = 0.0;
         steady_dataloader_wait_ms_sum_ = 0.0;
         dataloader_wait_count_ = 0;
@@ -186,11 +192,17 @@ namespace lfs::training {
         peak_pool_used_ = std::max(peak_pool_used_, std::max(used_high, used_cur));
         peak_pool_reserved_ =
             std::max(peak_pool_reserved_, std::max(reserved_high, reserved_cur));
+        pool_used_at_peak_ = used_cur;
+        pool_reserved_at_peak_ = reserved_cur;
 
         const auto sort_hwm = fast_lfs::rasterization::sort_workspace_high_water_bytes();
         peak_fastgs_sort_hwm_ = std::max(peak_fastgs_sort_hwm_, sort_hwm);
         peak_fastgs_raster_live_ =
             std::max(peak_fastgs_raster_live_, fastgs_raster_live_bytes_);
+        peak_fastgs_raster_arena_live_ =
+            std::max(peak_fastgs_raster_arena_live_, fastgs_raster_arena_live_bytes_);
+        peak_fastgs_raster_sort_live_ =
+            std::max(peak_fastgs_raster_sort_live_, fastgs_raster_sort_live_bytes_);
 
         // Refresh process snapshot so pool_bucket_cache / exportable are current.
         auto& profiler = diagnostics::VramProfiler::instance();
@@ -366,12 +378,20 @@ namespace lfs::training {
         training_state_reserved_bytes_ = std::max(training_state_reserved_bytes_, bytes);
     }
 
-    void PerfBenchCollector::set_fastgs_raster_live_bytes(const std::size_t bytes) {
+    void PerfBenchCollector::set_fastgs_raster_live_bytes(const std::size_t arena_bytes,
+                                                          const std::size_t sort_bytes) {
         if (!started_) {
             return;
         }
-        fastgs_raster_live_bytes_ = bytes;
-        peak_fastgs_raster_live_ = std::max(peak_fastgs_raster_live_, bytes);
+        fastgs_raster_arena_live_bytes_ = arena_bytes;
+        fastgs_raster_sort_live_bytes_ = sort_bytes;
+        fastgs_raster_live_bytes_ = arena_bytes + sort_bytes;
+        peak_fastgs_raster_live_ =
+            std::max(peak_fastgs_raster_live_, fastgs_raster_live_bytes_);
+        peak_fastgs_raster_arena_live_ =
+            std::max(peak_fastgs_raster_arena_live_, arena_bytes);
+        peak_fastgs_raster_sort_live_ =
+            std::max(peak_fastgs_raster_sort_live_, sort_bytes);
     }
 
     diagnostics::PeakExCacheLedger PerfBenchCollector::peak_ex_cache_ledger() const {
@@ -380,6 +400,12 @@ namespace lfs::training {
         out.baseline_cuda_used_bytes = baseline_cuda_used_;
         out.peak_pool_reserved_bytes = peak_pool_reserved_;
         out.peak_pool_used_bytes = peak_pool_used_;
+        out.pool_reserved_at_peak_bytes = pool_reserved_at_peak_;
+        out.pool_used_at_peak_bytes = pool_used_at_peak_;
+        out.pool_driver_retained_bytes =
+            pool_reserved_at_peak_ > pool_used_at_peak_
+                ? pool_reserved_at_peak_ - pool_used_at_peak_
+                : 0;
         out.training_state_bytes = ledger_.total_bytes;
         out.training_state_reserved_bytes = training_state_reserved_bytes_;
         out.loss_workspace_required_bytes = loss_workspace_required_bytes_;
@@ -388,6 +414,8 @@ namespace lfs::training {
         out.pool_bucket_live_rounding_waste_bytes = peak_pool_bucket_live_waste_;
         out.fastgs_sort_hwm_bytes = peak_fastgs_sort_hwm_;
         out.fastgs_raster_live_bytes = peak_fastgs_raster_live_;
+        out.fastgs_raster_arena_live_bytes = peak_fastgs_raster_arena_live_;
+        out.fastgs_raster_sort_live_bytes = peak_fastgs_raster_sort_live_;
         out.arena_required_bytes = peak_arena_required_;
         out.arena_capacity_bytes = peak_arena_capacity_;
         out.peak_iter = peak_iter_;
@@ -431,6 +459,15 @@ namespace lfs::training {
             }
         };
 
+        const std::size_t loss_workspace_slack =
+            loss_workspace_allocated_bytes_ > loss_workspace_required_bytes_
+                ? loss_workspace_allocated_bytes_ - loss_workspace_required_bytes_
+                : 0;
+        const std::size_t capacity_overhead =
+            training_state_reserved_bytes_ > ledger_.total_bytes
+                ? training_state_reserved_bytes_ - ledger_.total_bytes
+                : 0;
+
         // Attribute retained allocations to their owning subsystem.
         add("baseline_cuda_context", "desktop+ctx", baseline_cuda_used_,
             /*justified=*/true);
@@ -445,39 +482,46 @@ namespace lfs::training {
             loss_workspace_required_bytes_, /*justified=*/true);
         add("loss_workspace_arena", "loss_workspace",
             loss_workspace_allocated_bytes_, /*justified=*/true);
+        add("loss_workspace_slack", "loss_workspace", loss_workspace_slack,
+            /*justified=*/true);
         add("densify_child_workspace", "densification", densify_workspace_bytes_,
             /*justified=*/true);
         add("pool_bucket_cache", "allocator", out.pool_bucket_cache_bytes,
             /*justified=*/true);
         add("pool_bucket_live_rounding_waste", "allocator",
             out.pool_bucket_live_rounding_waste_bytes, /*justified=*/true);
+        add("pool_driver_retained", "allocator", out.pool_driver_retained_bytes,
+            /*justified=*/true);
         add("exportable_splat", "viewport", out.exportable_splat_bytes,
             /*justified=*/true);
         add("fastgs_sort_hwm", "fastgs_sort", out.fastgs_sort_hwm_bytes, /*justified=*/true);
         add("fastgs_raster_live", "FastGS", out.fastgs_raster_live_bytes,
             /*justified=*/true);
+        add("fastgs_raster_arena_live", "FastGS", out.fastgs_raster_arena_live_bytes,
+            /*justified=*/true);
+        add("fastgs_raster_sort_live", "FastGS", out.fastgs_raster_sort_live_bytes,
+            /*justified=*/true);
         add("rasterizer_arena", "rasterizer", out.arena_capacity_bytes,
             /*justified=*/true);
         add("rasterizer_arena_required", "rasterizer", out.arena_required_bytes,
             /*justified=*/true);
-        add("io.decoded_frame_ring", "image_loader", peak_io_ring_bytes_, false);
+        add("io.decoded_frame_ring", "image_loader", peak_io_ring_bytes_, true);
         add("io.external_codec_and_bucketed", "image_loader", peak_io_external_bytes_, true);
         add("pinned_host_active_cached_steady", "pinned_allocator",
             peak_steady_pinned_host_bytes_, false);
 
-        // Only residuals added above the baseline may cover excess_over_baseline;
-        // the baseline already includes training state and the raster working set.
-        // Eligible residuals are the loss arena, densification workspace, pool
-        // free lists, FastGS sort high-water, exportable splat block, and retained
-        // tensor capacity above live N. Transient q16 expansion is excluded.
-        const std::size_t capacity_overhead =
-            training_state_reserved_bytes_ > ledger_.total_bytes
-                ? training_state_reserved_bytes_ - ledger_.total_bytes
-                : 0;
+        // Cover excess only with disjoint, measured retained allocations. The
+        // decoded-frame ring is already inside io.external_codec_and_bucketed,
+        // and the selected sorted-index slice is already inside fastgs_sort_hwm;
+        // both remain visible above but are not counted twice here. Raster arena
+        // capacity likewise contains fastgs_raster_arena_live, so only the live
+        // suballocation is eligible. Transient q16 expansion is excluded.
         const std::size_t new_justified =
-            loss_workspace_allocated_bytes_ + densify_workspace_bytes_ + out.pool_bucket_cache_bytes +
-            out.fastgs_sort_hwm_bytes + out.exportable_splat_bytes + capacity_overhead +
-            peak_io_external_bytes_;
+            loss_workspace_required_bytes_ + loss_workspace_slack +
+            densify_workspace_bytes_ + out.pool_bucket_cache_bytes +
+            out.pool_bucket_live_rounding_waste_bytes + out.pool_driver_retained_bytes +
+            out.fastgs_sort_hwm_bytes + out.fastgs_raster_arena_live_bytes +
+            out.exportable_splat_bytes + capacity_overhead + peak_io_external_bytes_;
 
         // Honest residual: do NOT auto-justify the remainder as "no_trim".
         // MRNF currently trims after refine; free-list residual is the
@@ -616,6 +660,11 @@ namespace lfs::training {
             << loss_workspace_required_bytes_ << ",\n";
         out << "    \"loss_workspace_allocated_bytes\": "
             << loss_workspace_allocated_bytes_ << ",\n";
+        out << "    \"loss_workspace_slack_bytes\": "
+            << (loss_workspace_allocated_bytes_ > loss_workspace_required_bytes_
+                    ? loss_workspace_allocated_bytes_ - loss_workspace_required_bytes_
+                    : 0)
+            << ",\n";
         out << "    \"densify_workspace_bytes\": " << densify_workspace_bytes_ << ",\n";
         out << "    \"training_state_required_bytes\": " << ledger_.total_bytes << ",\n";
         out << "    \"training_state_allocated_bytes\": "
@@ -645,6 +694,12 @@ namespace lfs::training {
         out << "    \"peak_pool_reserved_bytes\": " << peak_ledger.peak_pool_reserved_bytes
             << ",\n";
         out << "    \"peak_pool_used_bytes\": " << peak_ledger.peak_pool_used_bytes << ",\n";
+        out << "    \"pool_reserved_at_peak_bytes\": "
+            << peak_ledger.pool_reserved_at_peak_bytes << ",\n";
+        out << "    \"pool_used_at_peak_bytes\": "
+            << peak_ledger.pool_used_at_peak_bytes << ",\n";
+        out << "    \"pool_driver_retained_bytes\": "
+            << peak_ledger.pool_driver_retained_bytes << ",\n";
         out << "    \"training_state_required_bytes\": "
             << peak_ledger.training_state_bytes << ",\n";
         out << "    \"training_state_allocated_bytes\": "
@@ -663,6 +718,10 @@ namespace lfs::training {
             << peak_ledger.fastgs_raster_live_bytes << ",\n";
         out << "    \"fastgs_raster_allocated_bytes\": "
             << peak_ledger.fastgs_raster_live_bytes << ",\n";
+        out << "    \"fastgs_raster_arena_live_bytes\": "
+            << peak_ledger.fastgs_raster_arena_live_bytes << ",\n";
+        out << "    \"fastgs_raster_sort_live_bytes\": "
+            << peak_ledger.fastgs_raster_sort_live_bytes << ",\n";
         out << "    \"rasterizer_arena_required_bytes\": "
             << peak_ledger.arena_required_bytes << ",\n";
         out << "    \"rasterizer_arena_allocated_bytes\": "

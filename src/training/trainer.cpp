@@ -877,17 +877,20 @@ namespace lfs::training {
             record_vram_current(scope, "forward.per_tile_buffers", ctx.forward_ctx.per_tile_buffers_size);
             record_vram_current(scope, "forward.sorted_indices_live", ctx.forward_ctx.sorted_primitive_indices_size);
             record_rasterizer_arena_disclosure(scope);
-            const std::size_t raster_live =
+            const std::size_t raster_arena_live =
                 ctx.forward_ctx.per_primitive_buffers_size +
-                ctx.forward_ctx.per_tile_buffers_size +
+                ctx.forward_ctx.per_tile_buffers_size;
+            const std::size_t raster_sort_live =
                 ctx.forward_ctx.sorted_primitive_indices_size;
+            const std::size_t raster_live = raster_arena_live + raster_sort_live;
             auto& profiler = lfs::diagnostics::VramProfiler::instance();
             profiler.setGauge("vram.audit.fastgs_raster_live.required_bytes",
                               static_cast<double>(raster_live));
             profiler.setGauge("vram.audit.fastgs_raster_live.allocated_bytes",
                               static_cast<double>(raster_live));
             if (PerfBenchCollector::enabled()) {
-                PerfBenchCollector::instance().set_fastgs_raster_live_bytes(raster_live);
+                PerfBenchCollector::instance().set_fastgs_raster_live_bytes(
+                    raster_arena_live, raster_sort_live);
             }
             // Sort scratch is released after forward, and sort_total includes sorted_indices_live.
             // Clear these legacy live rows so the HUD does not count transient/duplicate bytes
