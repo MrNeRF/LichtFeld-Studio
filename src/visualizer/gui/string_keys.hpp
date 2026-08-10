@@ -444,6 +444,10 @@ namespace lichtfeld::Strings {
             "preferences.temporal_quality_balanced";
         inline constexpr const char* TEMPORAL_QUALITY_QUALITY =
             "preferences.temporal_quality_quality";
+        inline constexpr const char* RESET_TEMPORAL_HISTORY =
+            "preferences.reset_temporal_history";
+        inline constexpr const char* RESET_TEMPORAL_HISTORY_ACTION =
+            "preferences.reset_temporal_history_action";
     } // namespace Preferences
 
     namespace MainPanel {

@@ -134,6 +134,7 @@ class PreferencesPanel(Panel):
         model.bind_event("mcp_port_change", self._on_mcp_port_change)
         model.bind_event("confirm_mcp_port", self._on_confirm_mcp_port)
         model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
+        model.bind_event("reset_temporal_history", self._on_reset_temporal_history)
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_record_list("themes")
         model.bind_record_list("scales")
@@ -378,6 +379,11 @@ class PreferencesPanel(Panel):
                 except AttributeError:
                     return
             self._refresh_selection()
+
+    def _on_reset_temporal_history(self, _handle, _event, _args):
+        reset = getattr(lf, "reset_temporal_history", None)
+        if callable(reset):
+            reset()
 
     def _language_index(self):
         current = lf.ui.get_current_language()

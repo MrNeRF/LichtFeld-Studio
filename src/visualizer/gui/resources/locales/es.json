@@ -247,6 +247,8 @@
     "temporal_quality_performance": "Rendimiento",
     "temporal_quality_balanced": "Equilibrada",
     "temporal_quality_quality": "Calidad",
+    "reset_temporal_history": "Historial temporal",
+    "reset_temporal_history_action": "Restablecer historial",
     "input": "Entrada",
     "camera_navigation": "Navegación de cámara",
     "navigation_mode": "Modo de navegación",

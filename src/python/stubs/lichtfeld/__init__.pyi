@@ -1431,6 +1431,8 @@ class RenderSettings:
 
 def get_render_settings() -> RenderSettings | None: ...
 
+def reset_temporal_history() -> bool: ...
+
 def get_lod_stats() -> dict:
     """
     Get LOD statistics: {enabled, selected, budget, levels:[{level, count}, ...]}

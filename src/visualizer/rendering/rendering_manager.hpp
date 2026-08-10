@@ -235,6 +235,8 @@ namespace lfs::vis {
         void markDirty(DirtyMask flags);
         void markCameraPoseChanged();
         void requestCameraSettleRender(bool reset_temporal_history = false);
+        // Explicitly discard temporal history and schedule a fresh render.
+        void requestTemporalHistoryReset();
 
         [[nodiscard]] bool pollDirtyState();
 

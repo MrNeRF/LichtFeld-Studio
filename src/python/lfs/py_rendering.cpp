@@ -1347,6 +1347,14 @@ namespace lfs::python {
         return PyRenderSettings(std::move(*settings));
     }
 
+    bool reset_temporal_history() {
+        auto* const rendering_manager = get_rendering_manager();
+        if (!rendering_manager)
+            return false;
+        rendering_manager->requestTemporalHistoryReset();
+        return true;
+    }
+
     nb::dict get_lod_stats() {
         nb::dict result;
         auto* rm = get_rendering_manager();
@@ -1962,6 +1970,8 @@ Args:
             .def("__dir__", &PyRenderSettings::python_dir);
 
         m.def("get_render_settings", &get_render_settings);
+        m.def("reset_temporal_history", &reset_temporal_history,
+              "Discard scene temporal history and request a fresh render");
         m.def("get_lod_stats", &get_lod_stats,
               "Get LOD statistics: {enabled, selected, budget, levels:[{level, count}, ...]}");
     }

@@ -787,6 +787,8 @@
     "temporal_quality_performance": "パフォーマンス",
     "temporal_quality_balanced": "バランス",
     "temporal_quality_quality": "品質",
+    "reset_temporal_history": "テンポラル履歴",
+    "reset_temporal_history_action": "履歴をリセット",
     "input": "入力",
     "camera_navigation": "カメラ操作",
     "navigation_mode": "ナビゲーションモード",
