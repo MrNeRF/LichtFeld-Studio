@@ -2393,6 +2393,9 @@ def toggle_system_console() -> None:
 def toggle_vram_hud() -> None:
     """Toggle the VRAM diagnostics HUD overlay"""
 
+def is_perf_hud_visible() -> bool:
+    """True when the performance HUD is currently shown"""
+
 def is_windows_platform() -> bool:
     """Returns true on Windows"""
 

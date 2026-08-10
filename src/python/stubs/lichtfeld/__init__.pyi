@@ -483,6 +483,9 @@ def toggle_vram_hud() -> None:
     Toggle the VRAM diagnostics HUD overlay (requires vram profiler enabled)
     """
 
+def is_perf_hud_visible() -> bool:
+    """True when the performance HUD is currently shown"""
+
 def toggle_independent_split_view() -> None:
     """Toggle independent split view"""
 
