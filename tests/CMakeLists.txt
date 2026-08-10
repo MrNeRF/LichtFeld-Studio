@@ -136,6 +136,7 @@ set(TEST_FILES
     test_densify_events_4x.cpp
     test_training_state_ledger.cpp
     test_vram_ledger_model.cpp
+    test_host_metrics.cpp
     test_joint_adam_codec.cpp
     test_sh_value_codec.cpp
     test_sh_value_storage.cpp

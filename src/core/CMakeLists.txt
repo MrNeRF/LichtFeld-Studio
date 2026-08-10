@@ -58,6 +58,7 @@ set(CORE_SOURCES
         error_latch.cpp
         error_reporter.cpp
         guarded_task.cpp
+        host_metrics.cpp
         failure_report.cpp
         cuda/memory_arena_owner.cpp
         memory_pressure.cpp

@@ -160,6 +160,11 @@ namespace lfs::vis::gui {
         using FnNvmlInit = int (*)();
         using FnNvmlDeviceGetHandleByPciBusId = int (*)(const char*, NvmlDevice*);
         using FnNvmlDeviceGetComputeRunningProcesses = int (*)(NvmlDevice, unsigned int*, NvmlProcessInfo*);
+        struct NvmlUtilization {
+            unsigned int gpu;
+            unsigned int memory;
+        };
+        using FnNvmlDeviceGetUtilizationRates = int (*)(NvmlDevice, NvmlUtilization*);
 
         struct NvmlState {
             bool initialized = false;
@@ -167,6 +172,7 @@ namespace lfs::vis::gui {
             unsigned int pid = 0;
             void* lib = nullptr;
             FnNvmlDeviceGetComputeRunningProcesses fn_get_procs = nullptr;
+            FnNvmlDeviceGetUtilizationRates fn_get_utilization = nullptr;
 
             NvmlState() {
                 lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
@@ -184,6 +190,8 @@ namespace lfs::vis::gui {
                     load("nvmlDeviceGetHandleByPciBusId_v2"));
                 fn_get_procs = reinterpret_cast<FnNvmlDeviceGetComputeRunningProcesses>(
                     load("nvmlDeviceGetComputeRunningProcesses_v3"));
+                fn_get_utilization = reinterpret_cast<FnNvmlDeviceGetUtilizationRates>(
+                    load("nvmlDeviceGetUtilizationRates"));
 
                 if (!fn_init || !fn_get_handle || !fn_get_procs)
                     return;
@@ -215,6 +223,15 @@ namespace lfs::vis::gui {
                 }
                 return 0;
             }
+
+            float getUtilization() const {
+                if (!initialized || !fn_get_utilization)
+                    return -1.f;
+                NvmlUtilization utilization{};
+                if (fn_get_utilization(device, &utilization) != NVML_SUCCESS)
+                    return -1.f;
+                return static_cast<float>(utilization.gpu);
+            }
         };
 
         NvmlState& nvmlState() {
@@ -245,11 +262,21 @@ namespace lfs::vis::gui {
         info.process_used = dxgiState().getProcessMemory();
 #else
         info.process_used = nvmlState().getProcessMemory();
+        info.gpu_utilization_percent = nvmlState().getUtilization();
+        info.gpu_utilization_valid = info.gpu_utilization_percent >= 0.f;
 #endif
         if (info.process_used > info.total)
             info.process_used = 0;
 
         return info;
+    }
+
+    float queryGpuUtilization() {
+#ifdef _WIN32
+        return -1.f;
+#else
+        return nvmlState().getUtilization();
+#endif
     }
 
 } // namespace lfs::vis::gui
