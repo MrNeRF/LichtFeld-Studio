@@ -313,6 +313,7 @@ namespace lfs::diagnostics {
         std::size_t vulkan_vma_used = 0;
         std::size_t vulkan_vma_block_bytes = 0;
         std::size_t exportable_splat_bytes = 0;
+        std::size_t shared_scratch_bytes = 0;
         std::size_t cuda_slab_reserved_bytes = 0;
         // Pushed lock-free from the tensor pool's hot path; read into the snapshot
         // under the mutex. A lossy gauge, so no sequence bump on update.
@@ -388,6 +389,7 @@ namespace lfs::diagnostics {
             impl_->vulkan_vma_used = 0;
             impl_->vulkan_vma_block_bytes = 0;
             impl_->exportable_splat_bytes = 0;
+            impl_->shared_scratch_bytes = 0;
             impl_->cuda_slab_reserved_bytes = 0;
             // cuda_context_baseline intentionally preserved: it captures the irreducible
             // runtime overhead once at process startup and is valid for the session.
@@ -971,6 +973,13 @@ namespace lfs::diagnostics {
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
+    void VramProfiler::setSharedScratchBytes(const std::size_t bytes) {
+        std::lock_guard lock(impl_->mutex);
+        impl_->shared_scratch_bytes = bytes;
+        impl_->process.shared_scratch_bytes = bytes;
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
     void VramProfiler::setCudaContextBaselineBytes(const std::size_t bytes) {
         std::lock_guard lock(impl_->mutex);
         impl_->cuda_context_baseline = bytes;
@@ -1110,6 +1119,7 @@ namespace lfs::diagnostics {
                 impl_->cuda_pool_bucket_live_waste_bytes.load(std::memory_order_relaxed);
             process.cuda_slab_reserved_bytes = impl_->cuda_slab_reserved_bytes;
             process.exportable_splat_bytes = impl_->exportable_splat_bytes;
+            process.shared_scratch_bytes = impl_->shared_scratch_bytes;
             process.cuda_context_baseline = impl_->cuda_context_baseline;
             process.cuda_warmup_bytes = impl_->cuda_warmup_bytes;
             impl_->process = std::move(process);
@@ -1177,8 +1187,8 @@ namespace lfs::diagnostics {
                                               const std::size_t bytes) {
             switch (method) {
             case VramAllocationMethod::Slab:
+                // C2: slab memory is cudaMalloc, not inside cudaMemPoolAttrUsedMemCurrent.
                 out.accounted_slab_live_bytes += bytes;
-                out.accounted_cuda_pool_live_bytes += bytes;
                 break;
             case VramAllocationMethod::Bucketed:
                 out.accounted_bucketed_live_bytes += bytes;
@@ -1281,12 +1291,21 @@ namespace lfs::diagnostics {
                                                     stats.max_vram_decrease_bytes);
         };
 
-        const auto append_metric = [&](const MetricKey& key, const Metric& metric, const bool include_live_sample) {
+        const auto append_metric = [&](const MetricKey& key,
+                                       const Metric& metric,
+                                       const bool from_static_map) {
             if (metric.live_bytes == 0 && metric.peak_bytes == 0 &&
                 metric.allocated_bytes == 0 && metric.freed_bytes == 0) {
                 return;
             }
-            if (metric.current_sample || include_live_sample) {
+            // C1: row kind so consumers can separate allocations from disclosures.
+            VramRowKind kind = VramRowKind::Hooked;
+            if (from_static_map) {
+                kind = VramRowKind::Static;
+            } else if (metric.current_sample) {
+                kind = VramRowKind::Sampled;
+            }
+            if (metric.current_sample || from_static_map) {
                 out.sampled_live_bytes += metric.live_bytes;
             }
             out.rows.push_back({
@@ -1299,6 +1318,7 @@ namespace lfs::diagnostics {
                 .allocation_count = metric.allocation_count,
                 .free_count = metric.free_count,
                 .method = metric.method,
+                .kind = kind,
             });
             add_metric_to_tree(key, metric);
         };

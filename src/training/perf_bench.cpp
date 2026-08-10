@@ -6,6 +6,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#include "diagnostics/vram_ledger_model.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 
 #include <cuda_runtime.h>
@@ -37,21 +38,6 @@ namespace lfs::training {
                 return "unjustified";
             }
             return "unjustified";
-        }
-
-        [[nodiscard]] std::int64_t signed_byte_difference(const std::size_t lhs,
-                                                          const std::size_t rhs) {
-            constexpr auto kMaxSignedBytes =
-                static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max());
-            if (lhs > kMaxSignedBytes || rhs > kMaxSignedBytes) {
-                throw std::overflow_error("VRAM ledger byte count exceeds signed residual range");
-            }
-            return static_cast<std::int64_t>(lhs) - static_cast<std::int64_t>(rhs);
-        }
-
-        [[nodiscard]] std::size_t signed_byte_magnitude(const std::int64_t bytes) noexcept {
-            return bytes >= 0 ? static_cast<std::size_t>(bytes)
-                              : static_cast<std::size_t>(-(bytes + 1)) + 1;
         }
 
         [[nodiscard]] std::int64_t now_ns() {
@@ -436,174 +422,42 @@ namespace lfs::training {
     }
 
     diagnostics::PeakExCacheLedger PerfBenchCollector::peak_ex_cache_ledger() const {
-        diagnostics::PeakExCacheLedger out;
-        out.peak_cuda_used_bytes = peak_cuda_used_;
-        out.baseline_cuda_used_bytes = baseline_cuda_used_;
+        const auto snap = diagnostics::VramProfiler::instance().snapshot();
+
+        diagnostics::PeakExCacheInputs in;
+        in.peak_cuda_used_bytes = peak_cuda_used_;
+        in.baseline_cuda_used_bytes = baseline_cuda_used_;
+        in.baseline_ex_cache_bytes = diagnostics::PeakExCacheLedger::kExCacheBaselineBytes;
+        in.training_state_bytes = ledger_.total_bytes;
+        in.training_state_reserved_bytes = training_state_reserved_bytes_;
+        in.loss_workspace_required_bytes = loss_workspace_required_bytes_;
+        in.loss_workspace_allocated_bytes = loss_workspace_allocated_bytes_;
+        in.densify_workspace_bytes = densify_workspace_bytes_;
+        in.pool_bucket_live_rounding_waste_bytes = peak_pool_bucket_live_waste_;
+        in.pool_bucket_cache_bytes =
+            peak_pool_bucket_cache_ > 0 ? peak_pool_bucket_cache_
+                                        : snap.process.cuda_pool_bucket_cache_bytes;
+        in.exportable_splat_bytes =
+            peak_exportable_splat_ > 0 ? peak_exportable_splat_
+                                       : snap.process.exportable_splat_bytes;
+        in.fastgs_sort_required_bytes = peak_fastgs_sort_required_;
+        in.fastgs_sort_allocated_bytes = peak_fastgs_sort_allocated_;
+        in.fastgs_raster_live_bytes = peak_fastgs_raster_live_;
+        in.fastgs_raster_arena_live_bytes = peak_fastgs_raster_arena_live_;
+        in.fastgs_raster_sort_live_bytes = peak_fastgs_raster_sort_live_;
+        in.arena_required_bytes = peak_arena_required_;
+        in.arena_capacity_bytes = peak_arena_capacity_;
+        in.peak_io_ring_bytes = peak_io_ring_bytes_;
+        in.peak_io_external_bytes = peak_io_external_bytes_;
+        in.peak_steady_pinned_host_bytes = peak_steady_pinned_host_bytes_;
+
+        auto out = diagnostics::buildPeakExCacheLedger(in);
         out.peak_pool_reserved_bytes = peak_pool_reserved_;
         out.peak_pool_used_bytes = peak_pool_used_;
         out.pool_reserved_at_peak_bytes = pool_reserved_at_peak_;
         out.pool_used_at_peak_bytes = pool_used_at_peak_;
-        out.training_state_bytes = ledger_.total_bytes;
-        out.training_state_reserved_bytes = training_state_reserved_bytes_;
-        out.loss_workspace_required_bytes = loss_workspace_required_bytes_;
-        out.loss_workspace_allocated_bytes = loss_workspace_allocated_bytes_;
-        out.densify_workspace_bytes = densify_workspace_bytes_;
-        out.pool_bucket_live_rounding_waste_bytes = peak_pool_bucket_live_waste_;
-        out.fastgs_sort_required_bytes = peak_fastgs_sort_required_;
-        out.fastgs_sort_allocated_bytes = peak_fastgs_sort_allocated_;
-        out.fastgs_raster_live_bytes = peak_fastgs_raster_live_;
-        out.fastgs_raster_arena_live_bytes = peak_fastgs_raster_arena_live_;
-        out.fastgs_raster_sort_live_bytes = peak_fastgs_raster_sort_live_;
-        out.arena_required_bytes = peak_arena_required_;
-        out.arena_capacity_bytes = peak_arena_capacity_;
         out.peak_iter = peak_iter_;
         out.peak_rows = peak_rows_;
-
-        const auto snap = diagnostics::VramProfiler::instance().snapshot();
-        // Prefer peak-moment bucket cache; fall back to finalize snapshot.
-        out.pool_bucket_cache_bytes =
-            peak_pool_bucket_cache_ > 0 ? peak_pool_bucket_cache_
-                                        : snap.process.cuda_pool_bucket_cache_bytes;
-        out.exportable_splat_bytes =
-            peak_exportable_splat_ > 0 ? peak_exportable_splat_
-                                       : snap.process.exportable_splat_bytes;
-
-        out.ex_cache_bytes = peak_cuda_used_;
-        // Process-net: also subtract pre-train baseline (desktop + cold CUDA context).
-        // On a busy desktop baseline can be 200–300 MiB and must not count as "ours".
-        const std::size_t peak_above_baseline =
-            peak_cuda_used_ > baseline_cuda_used_ ? peak_cuda_used_ - baseline_cuda_used_
-                                                  : 0;
-        out.ex_cache_net_bytes = peak_above_baseline;
-        // Compare process-net usage with the quiet-GPU baseline.
-        out.baseline_ex_cache_bytes = diagnostics::PeakExCacheLedger::kExCacheBaselineBytes;
-        out.excess_over_baseline_bytes =
-            out.ex_cache_net_bytes > out.baseline_ex_cache_bytes
-                ? out.ex_cache_net_bytes - out.baseline_ex_cache_bytes
-                : 0;
-
-        auto add = [&](const char* name,
-                       const char* owner,
-                       const std::size_t bytes,
-                       const diagnostics::AttributionState state,
-                       const char* note = "") {
-            if (bytes == 0) {
-                return;
-            }
-            diagnostics::PeakSubsystemLine line;
-            line.name = name;
-            line.owner = owner;
-            line.bytes = bytes;
-            line.state = state;
-            line.note = note;
-            out.lines.push_back(std::move(line));
-            if (state == diagnostics::AttributionState::Justified) {
-                out.justified_excess_bytes += bytes;
-            }
-        };
-
-        using diagnostics::AttributionState;
-
-        const std::size_t loss_workspace_slack =
-            loss_workspace_allocated_bytes_ > loss_workspace_required_bytes_
-                ? loss_workspace_allocated_bytes_ - loss_workspace_required_bytes_
-                : 0;
-        const std::size_t capacity_overhead =
-            training_state_reserved_bytes_ > ledger_.total_bytes
-                ? training_state_reserved_bytes_ - ledger_.total_bytes
-                : 0;
-        const std::size_t fastgs_sort_slack =
-            out.fastgs_sort_allocated_bytes > out.fastgs_sort_required_bytes
-                ? out.fastgs_sort_allocated_bytes - out.fastgs_sort_required_bytes
-                : 0;
-
-        // Attribute retained allocations to their owning subsystem.
-        add("baseline_cuda_context", "desktop+ctx", baseline_cuda_used_,
-            AttributionState::Nested,
-            "subtracted before process-net excess; not justified cover");
-        add("training_state", "optimizer", ledger_.total_bytes, AttributionState::Nested,
-            "baseline-accounted inventory; only capacity overhead covers new excess");
-        add("training_state_capacity_overhead",
-            "capacity",
-            capacity_overhead,
-            AttributionState::Justified);
-        add("loss_workspace_required", "loss_workspace",
-            loss_workspace_required_bytes_, AttributionState::Justified);
-        add("loss_workspace_arena", "loss_workspace",
-            loss_workspace_allocated_bytes_, AttributionState::Nested,
-            "aggregate of loss_workspace_required and loss_workspace_slack");
-        add("loss_workspace_slack", "loss_workspace", loss_workspace_slack,
-            AttributionState::Justified);
-        add("densify_child_workspace", "densification", densify_workspace_bytes_,
-            AttributionState::Justified);
-        add("pool_bucket_cache", "allocator", out.pool_bucket_cache_bytes,
-            AttributionState::Justified);
-        add("pool_bucket_live_rounding_waste", "allocator",
-            out.pool_bucket_live_rounding_waste_bytes, AttributionState::Justified);
-        add("exportable_splat", "viewport", out.exportable_splat_bytes,
-            AttributionState::Justified);
-        add("fastgs_sort_required", "fastgs_sort",
-            out.fastgs_sort_required_bytes, AttributionState::Nested,
-            "disclosure component of fastgs_sort_allocated");
-        add("fastgs_sort_allocated", "fastgs_sort",
-            out.fastgs_sort_allocated_bytes,
-            AttributionState::Justified);
-        add("fastgs_sort_slack", "fastgs_sort", fastgs_sort_slack,
-            AttributionState::Nested,
-            "disclosure component already included in fastgs_sort_allocated");
-        add("fastgs_raster_live", "FastGS", out.fastgs_raster_live_bytes,
-            AttributionState::Nested,
-            "aggregate of raster arena live and sort workspace");
-        add("fastgs_raster_arena_live", "FastGS", out.fastgs_raster_arena_live_bytes,
-            AttributionState::Justified);
-        add("fastgs_raster_sort_live", "FastGS", out.fastgs_raster_sort_live_bytes,
-            AttributionState::Nested,
-            "selected sort slice already included in fastgs_sort_allocated");
-        add("rasterizer_arena", "rasterizer", out.arena_capacity_bytes,
-            AttributionState::Nested,
-            "backing container; live FastGS arena bytes are covered separately");
-        add("rasterizer_arena_required", "rasterizer", out.arena_required_bytes,
-            AttributionState::Nested,
-            "required portion of the rasterizer arena container");
-        add("io.decoded_frame_ring", "image_loader", peak_io_ring_bytes_,
-            AttributionState::Nested,
-            "already included in io.external_codec_and_bucketed");
-        add("io.external_codec_and_bucketed", "image_loader", peak_io_external_bytes_,
-            AttributionState::Justified);
-        add("pinned_host_active_cached_steady", "pinned_allocator",
-            peak_steady_pinned_host_bytes_, AttributionState::Unjustified,
-            "host memory; visible inventory outside the VRAM cover sum");
-
-        // Cover excess only with disjoint, measured retained allocations. The
-        // decoded-frame ring is already inside io.external_codec_and_bucketed,
-        // and the selected sorted-index slice is already inside
-        // fastgs_sort_allocated; both remain visible above but are not counted
-        // twice here. Raster arena capacity likewise contains
-        // fastgs_raster_arena_live, so only the live suballocation is eligible.
-        // Transient q16 expansion is excluded.
-        const std::size_t new_justified = out.justified_excess_bytes;
-
-        // Honest residual: do NOT auto-justify the remainder as "no_trim".
-        // MRNF currently trims after refine; free-list residual is the
-        // measured pool_bucket_cache line above. Anything left is unattributed.
-        out.signed_residual_bytes =
-            signed_byte_difference(new_justified, out.excess_over_baseline_bytes);
-        out.unjustified_excess_bytes = out.signed_residual_bytes < 0
-                                           ? signed_byte_magnitude(out.signed_residual_bytes)
-                                           : 0;
-        out.over_attributed_bytes = out.signed_residual_bytes > 0
-                                        ? signed_byte_magnitude(out.signed_residual_bytes)
-                                        : 0;
-        if (out.signed_residual_bytes != 0) {
-            add("signed_residual",
-                "audit",
-                signed_byte_magnitude(out.signed_residual_bytes),
-                AttributionState::Unjustified,
-                "magnitude only; signed value is in signed_residual_bytes");
-        }
-        // justified_excess_bytes already sums all justified inventory lines;
-        // for the gate, track post-baseline cover separately via new_justified.
-        out.justified_excess_bytes = new_justified;
         return out;
     }
 

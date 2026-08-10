@@ -3308,8 +3308,11 @@ namespace lfs::vis {
         // The per-region rows are published by bindSharedScratchBuffers (the single
         // source of truth for the breakdown); here we only refresh the capacity gauge.
         const auto publish_capacity = [this]() {
-            lfs::diagnostics::VramProfiler::instance().setGauge(
-                "vram.audit.shared_scratch.capacity", static_cast<double>(shared_scratch_.bytes));
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.setGauge("vram.audit.shared_scratch.capacity",
+                              static_cast<double>(shared_scratch_.bytes));
+            // C4: first-class process field for ledger root E (shared scratch).
+            profiler.setSharedScratchBytes(shared_scratch_.bytes);
         };
 
         // Grow callback handed to the arena: when training's scratch demand
@@ -3519,8 +3522,12 @@ namespace lfs::vis {
         shared_scratch_.imported_buffer = reimported;
         shared_scratch_.bytes = shared_scratch_.block->size;
         ++shared_scratch_.generation;
-        lfs::diagnostics::VramProfiler::instance().setGauge(
-            "vram.audit.shared_scratch.capacity", static_cast<double>(shared_scratch_.bytes));
+        {
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.setGauge("vram.audit.shared_scratch.capacity",
+                              static_cast<double>(shared_scratch_.bytes));
+            profiler.setSharedScratchBytes(shared_scratch_.bytes);
+        }
         LOG_DEBUG(
             "vksplat.scratch.arena.reimport bytes={}MiB generation={}",
             shared_scratch_.bytes >> 20,

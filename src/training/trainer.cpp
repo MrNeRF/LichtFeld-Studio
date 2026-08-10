@@ -786,10 +786,12 @@ namespace lfs::training {
         void record_vram_tensor(std::string_view scope,
                                 std::string_view label,
                                 const lfs::core::Tensor& tensor) {
-            const auto method =
-                tensor.device() == lfs::core::Device::CUDA && !tensor.is_external_storage()
-                    ? lfs::diagnostics::VramAllocationMethod::Direct
-                    : lfs::diagnostics::VramAllocationMethod::External;
+            // C7: Sampled disclosures must not claim Direct. Direct is reserved for
+            // hooked cudaMalloc via try_allocate_direct. External storage is External;
+            // ordinary CUDA tensors are Unknown (method census only).
+            const auto method = tensor.is_external_storage()
+                                    ? lfs::diagnostics::VramAllocationMethod::External
+                                    : lfs::diagnostics::VramAllocationMethod::Unknown;
             record_vram_current(scope, label, tensor_reserved_bytes(tensor), false, method);
         }
 

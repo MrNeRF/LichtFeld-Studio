@@ -1,0 +1,604 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "diagnostics/vram_ledger_model.hpp"
+
+#include <algorithm>
+#include <limits>
+#include <stdexcept>
+
+namespace lfs::diagnostics {
+    namespace {
+
+        [[nodiscard]] bool starts_with(const std::string_view s, const std::string_view prefix) {
+            return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+        }
+
+        [[nodiscard]] bool is_fastgs_or_gsplat_logical_scope(const std::string_view scope) {
+            return starts_with(scope, "rasterizer.fastgs") ||
+                   starts_with(scope, "rasterizer.gsplat");
+        }
+
+        [[nodiscard]] bool is_vulkan_named_row(const VramMetricSnapshot& row) {
+            return starts_with(row.scope, "vulkan.") || starts_with(row.scope, "vksplat") ||
+                   starts_with(row.label, "vulkan.");
+        }
+
+        [[nodiscard]] bool is_vulkan_external_row(const VramMetricSnapshot& row) {
+            return starts_with(row.scope, "vulkan.external") ||
+                   starts_with(row.label, "vulkan.external");
+        }
+
+        void apply_closure(VramLedgerNode& node, const std::size_t epsilon) {
+            const auto res = make_signed_residual(node.attributed_bytes, node.measured_bytes);
+            node.residual_bytes = res.signed_residual_bytes;
+            if (signed_byte_magnitude(res.signed_residual_bytes) <= epsilon) {
+                node.closure = LedgerClosureState::Closed;
+            } else if (res.signed_residual_bytes < 0) {
+                node.closure = LedgerClosureState::Gap;
+            } else {
+                node.closure = LedgerClosureState::Over;
+            }
+        }
+
+        VramLedgerNode make_root(const VramLedgerRootId id,
+                                 const std::size_t measured,
+                                 const char* owner) {
+            VramLedgerNode n;
+            n.name = vram_ledger_root_name(id);
+            n.owner = owner;
+            n.measured_bytes = measured;
+            n.root_id = id;
+            n.state = AttributionState::Justified;
+            n.row_kind = VramRowKind::Hooked;
+            return n;
+        }
+
+        void add_child(VramLedgerNode& parent,
+                       std::string name,
+                       const std::size_t bytes,
+                       const AttributionState state,
+                       const VramRowKind kind,
+                       std::string note = {}) {
+            if (bytes == 0 && state != AttributionState::Unjustified) {
+                return;
+            }
+            VramLedgerNode c;
+            c.name = std::move(name);
+            c.owner = parent.owner;
+            c.measured_bytes = bytes;
+            c.attributed_bytes = state == AttributionState::Justified ? bytes : 0;
+            c.state = state;
+            c.row_kind = kind;
+            c.root_id = parent.root_id;
+            c.note = std::move(note);
+            if (state == AttributionState::Justified) {
+                parent.attributed_bytes += bytes;
+            }
+            parent.children.push_back(std::move(c));
+        }
+
+    } // namespace
+
+    std::int64_t signed_byte_difference(const std::size_t lhs, const std::size_t rhs) {
+        constexpr auto kMaxSignedBytes =
+            static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max());
+        if (lhs > kMaxSignedBytes || rhs > kMaxSignedBytes) {
+            throw std::overflow_error("VRAM ledger byte count exceeds signed residual range");
+        }
+        return static_cast<std::int64_t>(lhs) - static_cast<std::int64_t>(rhs);
+    }
+
+    std::size_t signed_byte_magnitude(const std::int64_t bytes) noexcept {
+        return bytes >= 0 ? static_cast<std::size_t>(bytes)
+                          : static_cast<std::size_t>(-(bytes + 1)) + 1;
+    }
+
+    LedgerSignedResidual make_signed_residual(const std::size_t attributed_bytes,
+                                              const std::size_t measured_bytes) {
+        LedgerSignedResidual out;
+        out.signed_residual_bytes = signed_byte_difference(attributed_bytes, measured_bytes);
+        out.under_claim_bytes = out.signed_residual_bytes < 0
+                                    ? signed_byte_magnitude(out.signed_residual_bytes)
+                                    : 0;
+        out.over_claim_bytes = out.signed_residual_bytes > 0
+                                   ? signed_byte_magnitude(out.signed_residual_bytes)
+                                   : 0;
+        return out;
+    }
+
+    const char* vram_ledger_root_name(const VramLedgerRootId id) noexcept {
+        switch (id) {
+        case VramLedgerRootId::CudaAsyncPool:
+            return "CUDA async pool";
+        case VramLedgerRootId::CudaSlab:
+            return "CUDA slab";
+        case VramLedgerRootId::CudaDirect:
+            return "CUDA direct";
+        case VramLedgerRootId::RasterizerArena:
+            return "Rasterizer arena";
+        case VramLedgerRootId::ExportableVmm:
+            return "Exportable VMM";
+        case VramLedgerRootId::VulkanVma:
+            return "Vulkan VMA blocks";
+        case VramLedgerRootId::VulkanExternal:
+            return "Vulkan external";
+        case VramLedgerRootId::CudaContextDriver:
+            return "CUDA context and driver";
+        case VramLedgerRootId::Unattributed:
+            return "Unattributed";
+        case VramLedgerRootId::Count:
+            break;
+        }
+        return "Unknown";
+    }
+
+    const char* vram_row_kind_name(const VramRowKind kind) noexcept {
+        switch (kind) {
+        case VramRowKind::Hooked:
+            return "hooked";
+        case VramRowKind::Sampled:
+            return "sampled";
+        case VramRowKind::Static:
+            return "static";
+        }
+        return "unknown";
+    }
+
+    std::size_t ledger_epsilon(const std::size_t parent_bytes, const VramLedgerPolicy& policy) {
+        const auto frac = static_cast<std::size_t>(
+            static_cast<double>(parent_bytes) * policy.epsilon_frac);
+        return std::max(policy.epsilon_min_bytes, frac);
+    }
+
+    VramLedgerTree buildLiveLedger(const VramProfilerSnapshot& snapshot,
+                                   const VramLedgerPolicy& policy) {
+        VramLedgerTree tree;
+        tree.include_vulkan_roots = policy.include_vulkan_in_sum;
+        const auto& proc = snapshot.process;
+        tree.process_used_bytes =
+            proc.process_memory_valid ? proc.process_used : 0;
+        tree.epsilon_bytes = ledger_epsilon(tree.process_used_bytes, policy);
+
+        // --- Root measured sizes (disjoint API sources) ---
+        const std::size_t pool_reserved =
+            proc.cuda_pool_valid ? proc.cuda_pool_reserved : 0;
+        const std::size_t slab_reserved = proc.cuda_slab_reserved_bytes;
+        const std::size_t direct_live = snapshot.accounted_direct_live_bytes;
+        // C3: do not also sum cuda_phase_default_pool when pool reserved is a root.
+        std::size_t arena_live = snapshot.accounted_arena_live_bytes;
+        if (policy.arena_external_backing) {
+            arena_live = 0; // bytes live under exportable VMM / shared scratch
+        }
+        const std::size_t exportable =
+            proc.exportable_splat_bytes + proc.shared_scratch_bytes;
+        const std::size_t vma_blocks =
+            policy.include_vulkan_in_sum ? proc.vulkan_vma_block_bytes : 0;
+
+        std::size_t vulkan_external = 0;
+        std::size_t hooked_pool_bytes = 0;
+        std::size_t hooked_slab_bytes = 0;
+        std::size_t hooked_direct_bytes = 0;
+        std::size_t hooked_arena_bytes = 0;
+        std::size_t hooked_exportable_desc = 0;
+
+        for (const auto& row : snapshot.rows) {
+            if (row.live_bytes == 0) {
+                continue;
+            }
+            // C5: gsplat/fastgs arena disclosure scopes are never root-justified.
+            const bool logical_raster =
+                is_fastgs_or_gsplat_logical_scope(row.scope);
+
+            if (row.kind == VramRowKind::Hooked) {
+                switch (row.method) {
+                case VramAllocationMethod::Bucketed:
+                case VramAllocationMethod::Async:
+                    hooked_pool_bytes += row.live_bytes;
+                    break;
+                case VramAllocationMethod::Slab:
+                    hooked_slab_bytes += row.live_bytes;
+                    break;
+                case VramAllocationMethod::Direct:
+                    hooked_direct_bytes += row.live_bytes;
+                    break;
+                case VramAllocationMethod::Arena:
+                    if (!policy.arena_external_backing) {
+                        hooked_arena_bytes += row.live_bytes;
+                    }
+                    break;
+                case VramAllocationMethod::External:
+                    if (starts_with(row.label, "rasterizer.arena.") ||
+                        starts_with(row.scope, "shared.scratch") ||
+                        starts_with(row.label, "exportable")) {
+                        hooked_exportable_desc += row.live_bytes;
+                    }
+                    if (is_vulkan_external_row(row)) {
+                        vulkan_external += row.live_bytes;
+                    }
+                    break;
+                default:
+                    break;
+                }
+            } else if (row.kind == VramRowKind::Sampled || row.kind == VramRowKind::Static) {
+                if (is_vulkan_external_row(row)) {
+                    // external disclosure only
+                }
+                (void)logical_raster;
+            }
+        }
+
+        // Prefer process method buckets for hooked totals when available (C2: slab
+        // is no longer folded into accounted_cuda_pool_live_bytes).
+        if (snapshot.accounted_bucketed_live_bytes + snapshot.accounted_async_live_bytes > 0) {
+            hooked_pool_bytes =
+                snapshot.accounted_bucketed_live_bytes + snapshot.accounted_async_live_bytes;
+        }
+        if (snapshot.accounted_slab_live_bytes > 0) {
+            hooked_slab_bytes = snapshot.accounted_slab_live_bytes;
+        }
+        if (snapshot.accounted_direct_live_bytes > 0) {
+            hooked_direct_bytes = snapshot.accounted_direct_live_bytes;
+        }
+        if (snapshot.accounted_arena_live_bytes > 0 && !policy.arena_external_backing) {
+            hooked_arena_bytes = snapshot.accounted_arena_live_bytes;
+        }
+
+        auto root_a = make_root(VramLedgerRootId::CudaAsyncPool, pool_reserved, "cuda_pool");
+        add_child(root_a, "hooked_pool_live", hooked_pool_bytes, AttributionState::Justified,
+                  VramRowKind::Hooked);
+        if (proc.cuda_pool_bucket_cache_bytes > 0) {
+            add_child(root_a, "bucket_cache", proc.cuda_pool_bucket_cache_bytes,
+                      AttributionState::Justified, VramRowKind::Hooked, "reclaimable");
+        }
+        // Nested disclosures under pool (Sampled optimizer/model tensors, etc.)
+        for (const auto& row : snapshot.rows) {
+            if (row.live_bytes == 0 || row.kind == VramRowKind::Hooked) {
+                continue;
+            }
+            if (is_fastgs_or_gsplat_logical_scope(row.scope)) {
+                continue; // placed under arena / untracked
+            }
+            if (row.method == VramAllocationMethod::Bucketed ||
+                row.method == VramAllocationMethod::Async ||
+                starts_with(row.scope, "optimizer.") ||
+                starts_with(row.scope, "model.") ||
+                starts_with(row.scope, "train.")) {
+                add_child(root_a,
+                          row.scope + (row.label.empty() ? "" : "." + row.label),
+                          row.live_bytes,
+                          AttributionState::Nested,
+                          row.kind,
+                          "disclosure, not counted again");
+            }
+        }
+        {
+            const auto used = proc.cuda_pool_valid ? proc.cuda_pool_used : 0;
+            if (pool_reserved > used) {
+                add_child(root_a, "reserved_not_used", pool_reserved - used,
+                          AttributionState::Justified, VramRowKind::Hooked, "retention");
+            }
+            // Untracked inside pool: used - justified children so far (excluding nested)
+            std::size_t justified_used = 0;
+            for (const auto& c : root_a.children) {
+                if (c.state == AttributionState::Justified && c.name != "reserved_not_used") {
+                    justified_used += c.measured_bytes;
+                }
+            }
+            if (used > justified_used) {
+                add_child(root_a, "untracked_pool_used", used - justified_used,
+                          AttributionState::Justified, VramRowKind::Hooked,
+                          "includes unhooked gsplat async when gut is on");
+            }
+            // Recompute attributed from Justified children only
+            root_a.attributed_bytes = 0;
+            for (const auto& c : root_a.children) {
+                if (c.state == AttributionState::Justified) {
+                    root_a.attributed_bytes += c.measured_bytes;
+                }
+            }
+            apply_closure(root_a, ledger_epsilon(root_a.measured_bytes, policy));
+        }
+
+        auto root_b = make_root(VramLedgerRootId::CudaSlab, slab_reserved, "cuda_slab");
+        add_child(root_b, "hooked_slab_live", hooked_slab_bytes, AttributionState::Justified,
+                  VramRowKind::Hooked);
+        if (slab_reserved > hooked_slab_bytes) {
+            add_child(root_b, "slab_reserve_gap", slab_reserved - hooked_slab_bytes,
+                      AttributionState::Justified, VramRowKind::Hooked, "retention");
+        }
+        root_b.attributed_bytes = 0;
+        for (const auto& c : root_b.children) {
+            if (c.state == AttributionState::Justified) {
+                root_b.attributed_bytes += c.measured_bytes;
+            }
+        }
+        apply_closure(root_b, ledger_epsilon(root_b.measured_bytes, policy));
+
+        auto root_c = make_root(VramLedgerRootId::CudaDirect, direct_live, "cuda_direct");
+        add_child(root_c, "hooked_direct_live", hooked_direct_bytes, AttributionState::Justified,
+                  VramRowKind::Hooked);
+        root_c.attributed_bytes = hooked_direct_bytes;
+        apply_closure(root_c, ledger_epsilon(root_c.measured_bytes, policy));
+
+        auto root_d = make_root(VramLedgerRootId::RasterizerArena, arena_live, "rasterizer");
+        add_child(root_d, "hooked_arena_live", hooked_arena_bytes, AttributionState::Justified,
+                  VramRowKind::Hooked);
+        for (const auto& row : snapshot.rows) {
+            if (row.live_bytes == 0) {
+                continue;
+            }
+            if (!is_fastgs_or_gsplat_logical_scope(row.scope)) {
+                continue;
+            }
+            // Nested disclosures (capacity/current/peak, per_primitive, etc.)
+            add_child(root_d,
+                      row.scope + (row.label.empty() ? "" : "." + row.label),
+                      row.live_bytes,
+                      AttributionState::Nested,
+                      row.kind == VramRowKind::Hooked ? VramRowKind::Sampled : row.kind,
+                      "disclosure, not counted again");
+        }
+        root_d.attributed_bytes = hooked_arena_bytes;
+        apply_closure(root_d, ledger_epsilon(root_d.measured_bytes, policy));
+
+        auto root_e = make_root(VramLedgerRootId::ExportableVmm, exportable, "viewport");
+        if (proc.exportable_splat_bytes > 0) {
+            add_child(root_e, "splat_store", proc.exportable_splat_bytes,
+                      AttributionState::Justified, VramRowKind::Hooked);
+        }
+        if (proc.shared_scratch_bytes > 0) {
+            add_child(root_e, "shared_scratch", proc.shared_scratch_bytes,
+                      AttributionState::Justified, VramRowKind::Hooked);
+        }
+        root_e.attributed_bytes =
+            proc.exportable_splat_bytes + proc.shared_scratch_bytes;
+        apply_closure(root_e, ledger_epsilon(root_e.measured_bytes, policy));
+
+        auto root_f = make_root(VramLedgerRootId::VulkanVma, vma_blocks, "vulkan_vma");
+        std::size_t vulkan_named = 0;
+        for (const auto& row : snapshot.rows) {
+            if (row.live_bytes == 0 || !is_vulkan_named_row(row) || is_vulkan_external_row(row)) {
+                continue;
+            }
+            add_child(root_f,
+                      row.scope + (row.label.empty() ? "" : "." + row.label),
+                      row.live_bytes,
+                      row.kind == VramRowKind::Hooked ? AttributionState::Justified
+                                                      : AttributionState::Nested,
+                      row.kind);
+            if (row.kind == VramRowKind::Hooked) {
+                vulkan_named += row.live_bytes;
+            }
+        }
+        if (vma_blocks > vulkan_named) {
+            add_child(root_f, "free_inside_blocks", vma_blocks - vulkan_named,
+                      AttributionState::Justified, VramRowKind::Hooked, "retention");
+        }
+        root_f.attributed_bytes = 0;
+        for (const auto& c : root_f.children) {
+            if (c.state == AttributionState::Justified) {
+                root_f.attributed_bytes += c.measured_bytes;
+            }
+        }
+        apply_closure(root_f, ledger_epsilon(root_f.measured_bytes, policy));
+
+        auto root_g = make_root(VramLedgerRootId::VulkanExternal, vulkan_external, "vulkan_raw");
+        root_g.attributed_bytes = vulkan_external;
+        apply_closure(root_g, ledger_epsilon(root_g.measured_bytes, policy));
+
+        // Root H: context baseline minus phases that belong to other roots.
+        // C3: cuda_phase_default_pool is NOT added here as a justified summand when
+        // root A already carries reserved.
+        const std::size_t context_baseline = proc.cuda_context_baseline;
+        auto root_h =
+            make_root(VramLedgerRootId::CudaContextDriver, context_baseline, "cuda_driver");
+        if (proc.cuda_phase_primary_context > 0) {
+            add_child(root_h, "primary_context", proc.cuda_phase_primary_context,
+                      AttributionState::Justified, VramRowKind::Static);
+        }
+        if (proc.cuda_phase_default_pool > 0) {
+            add_child(root_h, "default_pool_at_startup", proc.cuda_phase_default_pool,
+                      AttributionState::Nested, VramRowKind::Static,
+                      "nested: live pool reserved is root A");
+        }
+        if (proc.cuda_phase_curand_load > 0) {
+            add_child(root_h, "curand_load", proc.cuda_phase_curand_load,
+                      AttributionState::Justified, VramRowKind::Static);
+        }
+        if (proc.cuda_warmup_bytes > 0) {
+            add_child(root_h, "module_warmup", proc.cuda_warmup_bytes,
+                      AttributionState::Justified, VramRowKind::Static);
+        }
+        root_h.attributed_bytes = 0;
+        for (const auto& c : root_h.children) {
+            if (c.state == AttributionState::Justified) {
+                root_h.attributed_bytes += c.measured_bytes;
+            }
+        }
+        // If we only have baseline, treat baseline as measured with nested residual.
+        if (root_h.attributed_bytes == 0 && context_baseline > 0) {
+            root_h.attributed_bytes = context_baseline;
+        }
+        apply_closure(root_h, ledger_epsilon(root_h.measured_bytes, policy));
+
+        tree.roots.push_back(std::move(root_a));
+        tree.roots.push_back(std::move(root_b));
+        tree.roots.push_back(std::move(root_c));
+        tree.roots.push_back(std::move(root_d));
+        tree.roots.push_back(std::move(root_e));
+        if (policy.include_vulkan_in_sum) {
+            tree.roots.push_back(std::move(root_f));
+            tree.roots.push_back(std::move(root_g));
+        }
+        tree.roots.push_back(std::move(root_h));
+
+        tree.attributed_bytes = 0;
+        for (const auto& r : tree.roots) {
+            // Sum root measured sizes (independent reservations), not child attributed.
+            if (r.root_id != VramLedgerRootId::Unattributed) {
+                tree.attributed_bytes += r.measured_bytes;
+            }
+        }
+
+        tree.residual = make_signed_residual(tree.attributed_bytes, tree.process_used_bytes);
+        if (signed_byte_magnitude(tree.residual.signed_residual_bytes) <= tree.epsilon_bytes) {
+            tree.closure = LedgerClosureState::Closed;
+        } else if (tree.residual.signed_residual_bytes < 0) {
+            tree.closure = LedgerClosureState::Gap;
+        } else {
+            tree.closure = LedgerClosureState::Over;
+        }
+
+        // Always show unattributed residual row (C6: never cap away).
+        VramLedgerNode unattr =
+            make_root(VramLedgerRootId::Unattributed,
+                      tree.residual.under_claim_bytes > 0
+                          ? tree.residual.under_claim_bytes
+                          : tree.residual.over_claim_bytes,
+                      "audit");
+        unattr.state = AttributionState::Unjustified;
+        if (tree.residual.over_claim_bytes > 0) {
+            unattr.note = "over-attributed";
+            unattr.closure = LedgerClosureState::Over;
+        } else if (tree.residual.under_claim_bytes > 0) {
+            unattr.note = "honest gap";
+            unattr.closure = LedgerClosureState::Gap;
+        } else {
+            unattr.note = "closes";
+            unattr.closure = LedgerClosureState::Closed;
+        }
+        unattr.residual_bytes = tree.residual.signed_residual_bytes;
+        tree.roots.push_back(std::move(unattr));
+
+        return tree;
+    }
+
+    PeakExCacheLedger buildPeakExCacheLedger(const PeakExCacheInputs& in) {
+        PeakExCacheLedger out;
+        out.peak_cuda_used_bytes = in.peak_cuda_used_bytes;
+        out.baseline_cuda_used_bytes = in.baseline_cuda_used_bytes;
+        out.baseline_ex_cache_bytes = in.baseline_ex_cache_bytes;
+        out.training_state_bytes = in.training_state_bytes;
+        out.training_state_reserved_bytes = in.training_state_reserved_bytes;
+        out.loss_workspace_required_bytes = in.loss_workspace_required_bytes;
+        out.loss_workspace_allocated_bytes = in.loss_workspace_allocated_bytes;
+        out.densify_workspace_bytes = in.densify_workspace_bytes;
+        out.pool_bucket_cache_bytes = in.pool_bucket_cache_bytes;
+        out.pool_bucket_live_rounding_waste_bytes = in.pool_bucket_live_rounding_waste_bytes;
+        out.exportable_splat_bytes = in.exportable_splat_bytes;
+        out.fastgs_sort_required_bytes = in.fastgs_sort_required_bytes;
+        out.fastgs_sort_allocated_bytes = in.fastgs_sort_allocated_bytes;
+        out.fastgs_raster_live_bytes = in.fastgs_raster_live_bytes;
+        out.fastgs_raster_arena_live_bytes = in.fastgs_raster_arena_live_bytes;
+        out.fastgs_raster_sort_live_bytes = in.fastgs_raster_sort_live_bytes;
+        out.arena_required_bytes = in.arena_required_bytes;
+        out.arena_capacity_bytes = in.arena_capacity_bytes;
+        out.ex_cache_bytes = in.peak_cuda_used_bytes;
+
+        const std::size_t peak_above_baseline =
+            in.peak_cuda_used_bytes > in.baseline_cuda_used_bytes
+                ? in.peak_cuda_used_bytes - in.baseline_cuda_used_bytes
+                : 0;
+        out.ex_cache_net_bytes = peak_above_baseline;
+        out.excess_over_baseline_bytes =
+            out.ex_cache_net_bytes > out.baseline_ex_cache_bytes
+                ? out.ex_cache_net_bytes - out.baseline_ex_cache_bytes
+                : 0;
+
+        auto add = [&](const char* name,
+                       const char* owner,
+                       const std::size_t bytes,
+                       const AttributionState state,
+                       const char* note = "") {
+            if (bytes == 0) {
+                return;
+            }
+            PeakSubsystemLine line;
+            line.name = name;
+            line.owner = owner;
+            line.bytes = bytes;
+            line.state = state;
+            line.note = note;
+            out.lines.push_back(std::move(line));
+            if (state == AttributionState::Justified) {
+                out.justified_excess_bytes += bytes;
+            }
+        };
+
+        const std::size_t loss_workspace_slack =
+            in.loss_workspace_allocated_bytes > in.loss_workspace_required_bytes
+                ? in.loss_workspace_allocated_bytes - in.loss_workspace_required_bytes
+                : 0;
+        const std::size_t capacity_overhead =
+            in.training_state_reserved_bytes > in.training_state_bytes
+                ? in.training_state_reserved_bytes - in.training_state_bytes
+                : 0;
+        const std::size_t fastgs_sort_slack =
+            in.fastgs_sort_allocated_bytes > in.fastgs_sort_required_bytes
+                ? in.fastgs_sort_allocated_bytes - in.fastgs_sort_required_bytes
+                : 0;
+
+        add("baseline_cuda_context", "desktop+ctx", in.baseline_cuda_used_bytes,
+            AttributionState::Nested,
+            "subtracted before process-net excess; not justified cover");
+        add("training_state", "optimizer", in.training_state_bytes, AttributionState::Nested,
+            "baseline-accounted inventory; only capacity overhead covers new excess");
+        add("training_state_capacity_overhead", "capacity", capacity_overhead,
+            AttributionState::Justified);
+        add("loss_workspace_required", "loss_workspace", in.loss_workspace_required_bytes,
+            AttributionState::Justified);
+        add("loss_workspace_arena", "loss_workspace", in.loss_workspace_allocated_bytes,
+            AttributionState::Nested,
+            "aggregate of loss_workspace_required and loss_workspace_slack");
+        add("loss_workspace_slack", "loss_workspace", loss_workspace_slack,
+            AttributionState::Justified);
+        add("densify_child_workspace", "densification", in.densify_workspace_bytes,
+            AttributionState::Justified);
+        add("pool_bucket_cache", "allocator", in.pool_bucket_cache_bytes,
+            AttributionState::Justified);
+        add("pool_bucket_live_rounding_waste", "allocator",
+            in.pool_bucket_live_rounding_waste_bytes, AttributionState::Justified);
+        add("exportable_splat", "viewport", in.exportable_splat_bytes,
+            AttributionState::Justified);
+        add("fastgs_sort_required", "fastgs_sort", in.fastgs_sort_required_bytes,
+            AttributionState::Nested, "disclosure component of fastgs_sort_allocated");
+        add("fastgs_sort_allocated", "fastgs_sort", in.fastgs_sort_allocated_bytes,
+            AttributionState::Justified);
+        add("fastgs_sort_slack", "fastgs_sort", fastgs_sort_slack, AttributionState::Nested,
+            "disclosure component already included in fastgs_sort_allocated");
+        add("fastgs_raster_live", "FastGS", in.fastgs_raster_live_bytes,
+            AttributionState::Nested, "aggregate of raster arena live and sort workspace");
+        add("fastgs_raster_arena_live", "FastGS", in.fastgs_raster_arena_live_bytes,
+            AttributionState::Justified);
+        add("fastgs_raster_sort_live", "FastGS", in.fastgs_raster_sort_live_bytes,
+            AttributionState::Nested,
+            "selected sort slice already included in fastgs_sort_allocated");
+        add("rasterizer_arena", "rasterizer", in.arena_capacity_bytes, AttributionState::Nested,
+            "backing container; live FastGS arena bytes are covered separately");
+        add("rasterizer_arena_required", "rasterizer", in.arena_required_bytes,
+            AttributionState::Nested, "required portion of the rasterizer arena container");
+        add("io.decoded_frame_ring", "image_loader", in.peak_io_ring_bytes,
+            AttributionState::Nested, "already included in io.external_codec_and_bucketed");
+        add("io.external_codec_and_bucketed", "image_loader", in.peak_io_external_bytes,
+            AttributionState::Justified);
+        add("pinned_host_active_cached_steady", "pinned_allocator",
+            in.peak_steady_pinned_host_bytes, AttributionState::Unjustified,
+            "host memory; visible inventory outside the VRAM cover sum");
+
+        const std::size_t new_justified = out.justified_excess_bytes;
+        const auto residual =
+            make_signed_residual(new_justified, out.excess_over_baseline_bytes);
+        out.signed_residual_bytes = residual.signed_residual_bytes;
+        out.unjustified_excess_bytes = residual.under_claim_bytes;
+        out.over_attributed_bytes = residual.over_claim_bytes;
+        if (out.signed_residual_bytes != 0) {
+            add("signed_residual", "audit", signed_byte_magnitude(out.signed_residual_bytes),
+                AttributionState::Unjustified,
+                "magnitude only; signed value is in signed_residual_bytes");
+        }
+        out.justified_excess_bytes = new_justified;
+        return out;
+    }
+
+} // namespace lfs::diagnostics

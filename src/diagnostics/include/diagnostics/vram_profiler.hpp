@@ -25,6 +25,14 @@ namespace lfs::diagnostics {
         External,
     };
 
+    /// Distinguishes real hooked allocations from disclosure re-descriptions.
+    /// Only Hooked rows may contribute to a ledger root's attributed total (HUD_DESIGN §3.3).
+    enum class VramRowKind : std::uint8_t {
+        Hooked = 0,
+        Sampled = 1,
+        Static = 2,
+    };
+
     struct VramMetricSnapshot {
         std::string scope;
         std::string label;
@@ -35,6 +43,7 @@ namespace lfs::diagnostics {
         std::uint64_t allocation_count = 0;
         std::uint64_t free_count = 0;
         VramAllocationMethod method = VramAllocationMethod::Unknown;
+        VramRowKind kind = VramRowKind::Hooked;
     };
 
     struct VramTreeNodeSnapshot {
@@ -210,6 +219,9 @@ namespace lfs::diagnostics {
         // vulkan_vma_block_bytes, so the per-tensor model.* rows account for it
         // without overlapping the Vulkan residual.
         std::size_t exportable_splat_bytes = 0;
+        // Shared CUDA↔Vulkan scratch block (viewport arena external backing).
+        // Separate from exportable_splat_bytes (C4); both form ledger root E.
+        std::size_t shared_scratch_bytes = 0;
         std::size_t process_used = 0;
         std::size_t total_used = 0;
         std::size_t total = 0;
@@ -371,6 +383,7 @@ namespace lfs::diagnostics {
         void setCudaPoolBucketLiveWasteBytes(std::size_t bytes);
         void setCudaSlabReservedBytes(std::size_t bytes);
         void setExportableSplatBytes(std::size_t bytes);
+        void setSharedScratchBytes(std::size_t bytes);
         void captureCudaDeviceBaseline();
         void captureCudaWarmupDelta();
         void recordCudaPhaseBytes(std::string_view phase, std::size_t bytes);
