@@ -29,6 +29,37 @@ namespace lfs::vis {
         EXPECT_EQ(next.sequence, 1u);
     }
 
+    TEST(TemporalFrameTracker, CarriesCurrentAndPreviousJitterWithoutApplyingIt) {
+        TemporalFrameTracker tracker;
+        auto input = frameInput();
+        input.jitter = {0.25f, -0.125f};
+        tracker.commit(TemporalViewId::Main, input);
+
+        input.jitter = {-0.25f, 0.125f};
+        const auto state = tracker.prepare(TemporalViewId::Main, input);
+        EXPECT_TRUE(state.history_valid);
+        EXPECT_EQ(state.current_jitter, input.jitter);
+        EXPECT_EQ(state.previous_jitter, glm::vec2(0.25f, -0.125f));
+    }
+
+    TEST(TemporalFrameTracker, HaltonJitterIsBoundedAndResolutionAware) {
+        const auto first = temporalJitterPixels(0);
+        EXPECT_FLOAT_EQ(first.x, 0.0f);
+        EXPECT_NEAR(first.y, -1.0f / 6.0f, 1e-6f);
+        for (std::uint64_t sequence = 0; sequence < 64; ++sequence) {
+            const auto jitter = temporalJitterPixels(sequence);
+            EXPECT_GE(jitter.x, -0.5f);
+            EXPECT_LT(jitter.x, 0.5f);
+            EXPECT_GE(jitter.y, -0.5f);
+            EXPECT_LT(jitter.y, 0.5f);
+        }
+
+        const auto ndc = temporalJitterNdc(0, {100, 50});
+        EXPECT_FLOAT_EQ(ndc.x, 0.0f);
+        EXPECT_NEAR(ndc.y, -1.0f / 150.0f, 1e-6f);
+        EXPECT_EQ(temporalJitterNdc(3, {0, 50}), glm::vec2(0.0f));
+    }
+
     TEST(TemporalFrameTracker, CameraMotionPreservesHistoryButExplicitCutResetsIt) {
         TemporalFrameTracker tracker;
         auto input = frameInput();
@@ -84,5 +115,12 @@ namespace lfs::vis {
         const auto state = tracker.prepare(TemporalViewId::Main, input);
         EXPECT_FALSE(state.history_valid);
         EXPECT_TRUE(hasTemporalResetReason(state.reset_reasons, TemporalResetReason::InvalidInput));
+
+        input = frameInput();
+        input.jitter.y = std::numeric_limits<float>::infinity();
+        tracker.commit(TemporalViewId::Main, input);
+        EXPECT_TRUE(hasTemporalResetReason(
+            tracker.prepare(TemporalViewId::Main, input).reset_reasons,
+            TemporalResetReason::InvalidInput));
     }
 } // namespace lfs::vis

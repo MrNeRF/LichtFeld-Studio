@@ -10,7 +10,8 @@ namespace lfs::vis {
     namespace {
         constexpr float EPSILON = 1e-6f;
 
-        bool finite(const lfs::rendering::FrameView& view, const float scale) {
+        bool finite(const lfs::rendering::FrameView& view, const glm::vec2 jitter,
+                    const float scale) {
             const auto finite_vec3 = [](const glm::vec3& value) {
                 return std::isfinite(value.x) && std::isfinite(value.y) &&
                        std::isfinite(value.z);
@@ -18,6 +19,7 @@ namespace lfs::vis {
             bool valid = view.size.x > 0 && view.size.y > 0 && finite_vec3(view.translation) &&
                          std::isfinite(view.focal_length_mm) && std::isfinite(view.near_plane) &&
                          std::isfinite(view.far_plane) && std::isfinite(view.ortho_scale) &&
+                         std::isfinite(jitter.x) && std::isfinite(jitter.y) &&
                          std::isfinite(scale);
             for (int column = 0; column < 3; ++column)
                 valid = valid && finite_vec3(view.rotation[column]);
@@ -44,7 +46,33 @@ namespace lfs::vis {
             return different(a.focal_x, b.focal_x) || different(a.focal_y, b.focal_y) ||
                    different(a.center_x, b.center_x) || different(a.center_y, b.center_y);
         }
+
+        float halton(std::uint64_t index, const std::uint64_t base) {
+            float result = 0.0f;
+            float fraction = 1.0f;
+            while (index > 0) {
+                fraction /= static_cast<float>(base);
+                result += fraction * static_cast<float>(index % base);
+                index /= base;
+            }
+            return result;
+        }
     } // namespace
+
+    glm::vec2 temporalJitterPixels(const std::uint64_t sequence) {
+        const std::uint64_t sample = sequence + 1;
+        return {halton(sample, 2) - 0.5f, halton(sample, 3) - 0.5f};
+    }
+
+    glm::vec2 temporalJitterNdc(const std::uint64_t sequence,
+                                const glm::ivec2 render_size) {
+        if (render_size.x <= 0 || render_size.y <= 0) {
+            return {0.0f, 0.0f};
+        }
+        const glm::vec2 pixel = temporalJitterPixels(sequence);
+        return {2.0f * pixel.x / static_cast<float>(render_size.x),
+                2.0f * pixel.y / static_cast<float>(render_size.y)};
+    }
 
     std::size_t TemporalFrameTracker::index(const TemporalViewId id) {
         return static_cast<std::size_t>(id);
@@ -55,9 +83,11 @@ namespace lfs::vis {
         const auto& entry = entries_.at(index(id));
         TemporalFrameState result{.current = input.view,
                                   .previous = input.view,
+                                  .current_jitter = input.jitter,
+                                  .previous_jitter = input.jitter,
                                   .sequence = entry.sequence,
                                   .reset_reasons = entry.pending_reset};
-        if (!finite(input.view, input.render_scale)) {
+        if (!finite(input.view, input.jitter, input.render_scale)) {
             result.reset_reasons |= TemporalResetReason::InvalidInput;
             return result;
         }
@@ -68,6 +98,7 @@ namespace lfs::vis {
 
         const auto& previous = *entry.committed;
         result.previous = previous.view;
+        result.previous_jitter = previous.jitter;
         if (input.camera_cut)
             result.reset_reasons |= TemporalResetReason::CameraCut;
         if (input.view.size != previous.view.size)
@@ -81,14 +112,16 @@ namespace lfs::vis {
         if (input.backend_key != previous.backend_key)
             result.reset_reasons |= TemporalResetReason::Backend;
         result.history_valid = result.reset_reasons == TemporalResetReason::None;
-        if (!result.history_valid)
+        if (!result.history_valid) {
             result.previous = input.view;
+            result.previous_jitter = input.jitter;
+        }
         return result;
     }
 
     void TemporalFrameTracker::commit(const TemporalViewId id, const TemporalFrameInput& input) {
         auto& entry = entries_.at(index(id));
-        if (!finite(input.view, input.render_scale)) {
+        if (!finite(input.view, input.jitter, input.render_scale)) {
             entry.committed.reset();
             entry.pending_reset = TemporalResetReason::InvalidInput;
             return;

@@ -51,11 +51,16 @@ namespace lfs::vis {
 
     struct TemporalFrameInput {
         lfs::rendering::FrameView view;
+        glm::vec2 jitter{0.0f};
         float render_scale = 1.0f;
         std::uint64_t scene_generation = 0;
         std::uint64_t backend_key = 0;
         bool camera_cut = false;
     };
+
+    [[nodiscard]] LFS_VIS_API glm::vec2 temporalJitterPixels(std::uint64_t sequence);
+    [[nodiscard]] LFS_VIS_API glm::vec2 temporalJitterNdc(std::uint64_t sequence,
+                                                          glm::ivec2 render_size);
 
     struct TemporalFrameState {
         lfs::rendering::FrameView current;
