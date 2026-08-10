@@ -119,7 +119,6 @@ TEST_F(ArenaMetricsContentionTest, FullResetDecommitsVmmHighWater) {
     constexpr size_t MiB = 1024 * 1024;
     RasterizerMemoryArena::Config config;
     config.virtual_size = 1ULL * 1024 * MiB;
-    config.initial_commit = 64 * MiB;
     config.max_physical = 512 * MiB;
     config.granularity = 2 * MiB;
     RasterizerMemoryArena arena(config);
@@ -130,19 +129,20 @@ TEST_F(ArenaMetricsContentionTest, FullResetDecommitsVmmHighWater) {
     arena.end_frame(frame, nullptr, false);
 
     const auto grown = arena.get_statistics();
-    ASSERT_GT(grown.capacity, config.initial_commit);
+    ASSERT_EQ(grown.capacity, 192 * MiB);
+    const auto grown_info = arena.get_memory_info();
+    EXPECT_EQ(grown_info.required_bytes, grown_info.arena_capacity);
 
     arena.full_reset();
 
     const auto reset = arena.get_statistics();
     EXPECT_EQ(reset.current_usage, 0u);
-    EXPECT_EQ(reset.capacity, config.initial_commit);
+    EXPECT_EQ(reset.capacity, 0u);
 }
 
-TEST_F(ArenaMetricsContentionTest, FallbackGrowthAppliesMultiplierOnce) {
+TEST_F(ArenaMetricsContentionTest, FallbackGrowthUsesExactMeasuredRequirement) {
     constexpr size_t MiB = 1024 * 1024;
     RasterizerMemoryArena::Config config;
-    config.initial_commit = 64 * MiB;
     config.max_physical = 512 * MiB;
     config.enable_vmm = false;
     RasterizerMemoryArena arena(config);
@@ -152,6 +152,8 @@ TEST_F(ArenaMetricsContentionTest, FallbackGrowthAppliesMultiplierOnce) {
     ASSERT_NE(allocate(128 * MiB), nullptr);
 
     const auto grown = arena.get_statistics();
-    EXPECT_EQ(grown.capacity, 256 * MiB);
+    EXPECT_EQ(grown.capacity, 128 * MiB);
+    const auto grown_info = arena.get_memory_info();
+    EXPECT_EQ(grown_info.required_bytes, grown_info.arena_capacity);
     arena.end_frame(frame, nullptr, false);
 }
