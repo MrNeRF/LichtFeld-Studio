@@ -46,6 +46,7 @@
 #include "python/runner.hpp"
 #include "rasterization/fast_rasterizer.hpp"
 #include "rasterization/fastgs/rasterization/include/forward.h"
+#include "rasterization/gsplat/Ops.h"
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/mcmc.hpp"
 #include "strategies/strategy_factory.hpp"
@@ -806,11 +807,33 @@ namespace lfs::training {
             record_vram_current(scope, "arena.peak_usage", info.peak_usage);
             auto& profiler = lfs::diagnostics::VramProfiler::instance();
             profiler.setGauge("vram.audit.rasterizer_arena.required_bytes",
-                              static_cast<double>(info.peak_usage));
+                              static_cast<double>(info.required_bytes));
             profiler.setGauge("vram.audit.rasterizer_arena.allocated_bytes",
                               static_cast<double>(info.arena_capacity));
             profiler.setGauge("vram.audit.rasterizer_arena.current_usage_bytes",
                               static_cast<double>(info.current_usage));
+        }
+
+        void resize_rasterizer_arena_at_boundary(std::string_view boundary,
+                                                 bool release_all) {
+            auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
+            if (!arena) {
+                return;
+            }
+            const bool resized = release_all
+                                     ? arena->release_at_boundary()
+                                     : arena->shrink_to_current_at_boundary();
+            if (!resized) {
+                LOG_WARN("Rasterizer arena {} boundary could not drain every CUDA device",
+                         boundary);
+            }
+            if (release_all) {
+                // B3/B6: gsplat's exact high-water workspaces are retained
+                // across iterations (EXACT-2) and released only at a named
+                // boundary after the arena has drained.
+                (void)release_gsplat_rasterizer_thread_local_caches();
+                (void)gsplat_lfs::release_intersect_thread_local_cache();
+            }
         }
 
         void record_vram_entries(std::string_view scope,
@@ -3532,6 +3555,7 @@ namespace lfs::training {
             }
             // B3: the previous step is complete; release the production loss arena.
             photometric_loss_.arena().reset();
+            resize_rasterizer_arena_at_boundary("B3 pause", true);
             LOG_INFO("Training paused at iteration {}", iter);
             LOG_DEBUG("Click 'Resume Training' to continue.");
         } else if (!pause_requested_.load() && is_paused_.load()) {
@@ -4121,6 +4145,9 @@ namespace lfs::training {
                     if (lock.owns_lock()) {
                         current_phase = StepPhase::Publish;
                         recordParamsReady();
+                    }
+                    if (refining) {
+                        resize_rasterizer_arena_at_boundary("B1 refine", false);
                     }
                     // densify_barrier dtor runs when leaving this block — topology
                     // fan-out only after q16 commit is stable (see defer above).
@@ -5691,6 +5718,9 @@ namespace lfs::training {
                         // step's writes; readers wait on this point.
                         current_phase = StepPhase::Publish;
                         recordParamsReady();
+                        if (refining && !fastgs_strategy_hooks_at_start) {
+                            resize_rasterizer_arena_at_boundary("B1 refine", false);
+                        }
                     }
 
                     // Clean evaluation - let the evaluator handle everything
@@ -6404,6 +6434,7 @@ namespace lfs::training {
 
         // B3: training has stopped or completed; the editor may remain alive.
         photometric_loss_.arena().reset();
+        resize_rasterizer_arena_at_boundary("B3 training end", true);
 
         auto& command_center = lfs::training::CommandCenter::instance();
         auto snapshot_guard = makeScopeGuard([&command_center, this]() {

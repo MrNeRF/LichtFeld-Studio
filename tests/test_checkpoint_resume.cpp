@@ -132,7 +132,6 @@ namespace {
     TEST(TrainerRetrySemantics, GlobalArenaCanBeReconfiguredForCapacityInjection) {
         lfs::core::RasterizerMemoryArena::Config config;
         config.virtual_size = 128ULL << 20;
-        config.initial_commit = 64ULL << 20;
         config.max_physical = 64ULL << 20;
         config.granularity = 64ULL << 20;
         config.enable_vmm = false;
@@ -149,7 +148,6 @@ namespace {
 
         lfs::core::RasterizerMemoryArena::Config config;
         config.virtual_size = 128ULL << 20;
-        config.initial_commit = 64ULL << 20;
         config.max_physical = 64ULL << 20;
         config.granularity = 64ULL << 20;
         config.enable_vmm = false;
