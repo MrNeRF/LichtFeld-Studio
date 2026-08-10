@@ -299,6 +299,10 @@ namespace lfs::core {
             if (mode == CudaStorageMode::Direct) {
                 return try_allocate_direct_cuda_storage(bytes, failure_status);
             }
+            if (mode == CudaStorageMode::ExactAsync) {
+                return CudaMemoryPool::instance().try_allocate_exact_async(
+                    bytes, stream, failure_status);
+            }
             return CudaMemoryPool::instance().try_allocate(bytes, stream, failure_status);
         };
 

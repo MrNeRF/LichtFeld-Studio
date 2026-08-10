@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor/internal/gpu_slab_allocator.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "core/tensor/internal/size_bucketed_pool.hpp"
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 using namespace lfs::core;
@@ -129,4 +131,42 @@ TEST(AllocatorPolicyTest, LiveBucketWasteTracksOnlyOutstandingAllocations) {
     pool.deallocate(rounded, request);
     EXPECT_EQ(pool.stats().live_rounding_waste.load(std::memory_order_relaxed),
               baseline);
+}
+
+TEST(AllocatorPolicyTest, ExactAsyncBypassesBucketCache) {
+    int device_count = 0;
+    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
+    if (device_count == 0) {
+        GTEST_SKIP() << "No CUDA device available";
+    }
+
+    constexpr size_t MiB = 1024 * 1024;
+    constexpr size_t request = MiB + 17;
+    auto& bucket_pool = SizeBucketedPool::instance();
+    const auto cached_before =
+        bucket_pool.stats().bytes_cached.load(std::memory_order_relaxed);
+    const auto waste_before =
+        bucket_pool.stats().live_rounding_waste.load(std::memory_order_relaxed);
+
+    void* ptr = nullptr;
+    {
+        CudaMemoryPool::LabelGuard label_guard("test.exact_async");
+        ptr = allocate_cuda_storage(
+            request, nullptr, CudaStorageMode::ExactAsync,
+            "test.exact_async", "allocator-policy-test");
+    }
+    ASSERT_NE(ptr, nullptr);
+    EXPECT_EQ(bucket_pool.stats().bytes_cached.load(std::memory_order_relaxed),
+              cached_before);
+    EXPECT_EQ(
+        bucket_pool.stats().live_rounding_waste.load(std::memory_order_relaxed),
+        waste_before);
+
+    safe_cuda_pool_deallocate(ptr);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    EXPECT_EQ(bucket_pool.stats().bytes_cached.load(std::memory_order_relaxed),
+              cached_before);
+    EXPECT_EQ(
+        bucket_pool.stats().live_rounding_waste.load(std::memory_order_relaxed),
+        waste_before);
 }

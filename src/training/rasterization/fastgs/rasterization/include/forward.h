@@ -20,13 +20,12 @@ namespace fast_lfs::rasterization {
         size_t per_instance_sort_total_size = 0;
     };
 
-    /// sorted indices live in grow-only thread-local cache — no free.
+    /// Sorted indices live in the persistent exact thread-local block — no free.
     void release_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept;
 
-    /// Release grow-only FastGS sort workspaces on the calling thread (keys×2,
-    /// indices×2, CUB WS, pinned n_instances slot kept). Call from training-
-    /// thread shutdown so VRAM is returned before the worker joins, not only
-    /// when the TLS destructor runs.
+    /// Release the consolidated FastGS sort workspace on the calling thread
+    /// (keys×2, indices×2, CUB WS; pinned n_instances slot kept). Call at an
+    /// established workspace boundary so VRAM is returned before worker join.
     void release_sort_workspace_buffers() noexcept;
 
     /// mid-pipeline n_instances hard-sync fallback count (warmup/growth).
@@ -37,9 +36,11 @@ namespace fast_lfs::rasterization {
     /// Testing: drop high-water capacity so the next forward must grow+sync.
     void reset_sort_capacity_for_testing() noexcept;
 
-    /// Process-peak attribution (ex-cache ledger): grow-only sort TLS high-water
+    /// Process-peak attribution (ex-cache ledger): exact retained sort TLS
     /// residency on the calling thread (keys×2 + indices×2 + CUB WS).
     [[nodiscard]] std::size_t sort_workspace_high_water_bytes() noexcept;
+    [[nodiscard]] std::size_t sort_workspace_required_bytes() noexcept;
+    [[nodiscard]] std::size_t sort_workspace_allocated_bytes() noexcept;
     [[nodiscard]] int sort_workspace_capacity_n_instances() noexcept;
 
     // Warp-cull mode for blend_cu:

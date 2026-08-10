@@ -45,6 +45,7 @@
 #include "optimizer/adam_optimizer.hpp"
 #include "python/runner.hpp"
 #include "rasterization/fast_rasterizer.hpp"
+#include "rasterization/fastgs/rasterization/include/forward.h"
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/mcmc.hpp"
 #include "strategies/strategy_factory.hpp"
@@ -888,13 +889,21 @@ namespace lfs::training {
                               static_cast<double>(raster_live));
             profiler.setGauge("vram.audit.fastgs_raster_live.allocated_bytes",
                               static_cast<double>(raster_live));
+            profiler.setGauge(
+                "vram.audit.fastgs_sort.required_bytes",
+                static_cast<double>(
+                    fast_lfs::rasterization::sort_workspace_required_bytes()));
+            profiler.setGauge(
+                "vram.audit.fastgs_sort.allocated_bytes",
+                static_cast<double>(
+                    fast_lfs::rasterization::sort_workspace_allocated_bytes()));
             if (PerfBenchCollector::enabled()) {
                 PerfBenchCollector::instance().set_fastgs_raster_live_bytes(
                     raster_arena_live, raster_sort_live);
             }
-            // Sort scratch is released after forward, and sort_total includes sorted_indices_live.
-            // Clear these legacy live rows so the HUD does not count transient/duplicate bytes
-            // as retained process VRAM.
+            // The exact sort block is disclosed by the gauges above and includes
+            // sorted_indices_live. Keep legacy transient rows clear so the HUD
+            // does not count the retained block twice.
             record_vram_current(scope, "forward.sort_scratch_transient", 0, true);
             record_vram_current(scope, "forward.sort_total_transient", 0, true);
             record_vram_current(scope, "backward.grad_mean2d_helper", num_primitives * 2 * sizeof(float));

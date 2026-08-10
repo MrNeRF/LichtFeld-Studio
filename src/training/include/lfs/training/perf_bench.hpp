@@ -105,6 +105,8 @@ namespace lfs::training {
         std::size_t peak_exportable_splat_ = 0;
         std::size_t peak_arena_required_ = 0;
         std::size_t peak_arena_capacity_ = 0;
+        std::size_t peak_fastgs_sort_required_ = 0;
+        std::size_t peak_fastgs_sort_allocated_ = 0;
         std::size_t peak_fastgs_sort_hwm_ = 0;
         std::size_t peak_fastgs_raster_live_ = 0;
         std::size_t peak_fastgs_raster_arena_live_ = 0;

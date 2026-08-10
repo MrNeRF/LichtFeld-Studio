@@ -36,6 +36,7 @@ namespace lfs::core {
 
     enum class CudaStorageMode : uint8_t {
         Pooled,
+        ExactAsync,
         Direct,
     };
 
@@ -220,6 +221,63 @@ namespace lfs::core {
 #endif
 
             return try_allocate_direct(bytes, failure_status);
+        }
+
+        // Exact cudaMallocAsync tier: bypasses slab and size-bucket rounding,
+        // but remains tracked by the pool so release is stream ordered and
+        // teardown-safe. Intended for measured, privately retained workspaces.
+        void* try_allocate_exact_async(size_t bytes,
+                                       cudaStream_t stream = nullptr,
+                                       cudaError_t* failure_status = nullptr) {
+            LFS_CUDA_BREADCRUMB_STREAM("tensor.pool.allocate_exact_async", stream);
+            if (failure_status) {
+                *failure_status = cudaSuccess;
+            }
+            if (bytes == 0) {
+                return nullptr;
+            }
+            if (shutdown_.load(std::memory_order_acquire)) {
+                LOG_ERROR("Attempted to allocate exact CUDA storage after shutdown!");
+                if (failure_status) {
+                    *failure_status = cudaErrorUnknown;
+                }
+                return nullptr;
+            }
+            if (cuda_is_unavailable()) [[unlikely]] {
+                if (failure_status) {
+                    *failure_status = cudaErrorInitializationError;
+                }
+                return nullptr;
+            }
+
+            std::shared_lock stream_routing_lock(stream_routing_mutex_);
+#if CUDART_VERSION >= 12080
+            void* ptr = nullptr;
+            const auto pre_call_state = sample_cuda_pre_call_state(stream);
+            const cudaError_t err = cudaMallocAsync(&ptr, bytes, stream);
+            if (err == cudaSuccess) {
+                alloc_counter::record_site(alloc_counter::Site::PoolAsync);
+                stats_.async_allocs.fetch_add(1, std::memory_order_relaxed);
+                stats_.async_bytes.fetch_add(bytes, std::memory_order_relaxed);
+                track_allocation(ptr, bytes, AllocMethod::Async, stream);
+                if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
+                    AllocationProfiler::instance().record_allocation(bytes, 3);
+                }
+                return ptr;
+            }
+            if (failure_status) {
+                *failure_status = err;
+            }
+            ensure_cuda_success(
+                err, pre_call_state, "cudaMallocAsync(exact tier)",
+                ::lfs::core::detail::format_cuda_safe("requested_bytes={}", bytes),
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+            return nullptr;
+#else
+            // Compatibility builds without the async pool still bypass bucket
+            // quantization and preserve exact byte sizing.
+            return try_allocate_direct(bytes, failure_status);
+#endif
         }
 
         // Marks `ptr` as used by `stream` beyond its home stream. The free will

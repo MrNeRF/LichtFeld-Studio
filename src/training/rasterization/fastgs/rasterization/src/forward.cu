@@ -3,9 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "buffer_utils.h"
-#include "core/alloc_counter.hpp"
 #include "core/crash_handler.hpp"
-#include "diagnostics/vram_profiler.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "forward.h"
 #include "helper_math.h"
 #include "kernels_forward.cuh"
@@ -24,52 +23,41 @@
 
 namespace {
     namespace raster = fast_lfs::rasterization;
+    static_assert(sizeof(raster::InstanceKey) == sizeof(uint));
+    static_assert(sizeof(raster::InstanceKey) == 4);
 
-    // Grow-only high-water sort scratch. Never shrinks; frees only
-    // on destruction / explicit reset (slot-style grow-only buffer semantics).
-    // 1.5× headroom absorbs typical densify/view jumps without overflow re-runs.
-    constexpr double kSortBufferGrowthFactor = 1.5;
-
-    class StreamOrderedDeviceBuffer {
+    class ExactAsyncDeviceBuffer {
     public:
-        StreamOrderedDeviceBuffer() = default;
-        explicit StreamOrderedDeviceBuffer(const char* label, cudaStream_t stream = nullptr)
+        explicit ExactAsyncDeviceBuffer(const char* label)
             : label_(label),
-              stream_(stream) {}
+              stream_(nullptr) {}
 
-        StreamOrderedDeviceBuffer(const StreamOrderedDeviceBuffer&) = delete;
-        StreamOrderedDeviceBuffer& operator=(const StreamOrderedDeviceBuffer&) = delete;
+        ExactAsyncDeviceBuffer(const ExactAsyncDeviceBuffer&) = delete;
+        ExactAsyncDeviceBuffer& operator=(const ExactAsyncDeviceBuffer&) = delete;
 
-        StreamOrderedDeviceBuffer(StreamOrderedDeviceBuffer&& other) noexcept
-            : ptr_(other.ptr_),
-              size_(other.size_),
-              label_(other.label_),
-              stream_(other.stream_) {
-            other.ptr_ = nullptr;
-            other.size_ = 0;
-        }
-
-        ~StreamOrderedDeviceBuffer() {
+        ~ExactAsyncDeviceBuffer() {
             reset();
         }
 
-        void set_stream(cudaStream_t stream) noexcept {
+        void bind_stream(cudaStream_t stream) {
+            if (ptr_ && stream != stream_) {
+                lfs::core::CudaMemoryPool::instance().record_stream(ptr_, stream);
+            }
             stream_ = stream;
         }
 
-        /// Ensure at least `size` bytes. Reuses existing storage when large enough;
-        /// otherwise frees and reallocates with ×1.2 headroom (growth only).
-        void ensure(size_t size) {
-            if (size == 0) {
-                return;
-            }
-            if (ptr_ && size_ >= size) {
-                return;
-            }
-            const size_t grown = static_cast<size_t>(
-                static_cast<double>(size) * kSortBufferGrowthFactor + 0.5);
-            const size_t new_size = std::max(size, grown);
-            allocate_exact(new_size);
+        void allocate_exact(size_t size) {
+            LFS_ASSERT_MSG(ptr_ == nullptr && size_ == 0,
+                           "FastGS exact sort block must be empty before allocation");
+            LFS_ASSERT_MSG(size > 0,
+                           "FastGS exact sort block cannot allocate zero bytes");
+            lfs::core::CudaMemoryPool::LabelGuard label_guard(label_);
+            ptr_ = lfs::core::allocate_cuda_storage(
+                size, stream_, lfs::core::CudaStorageMode::ExactAsync,
+                label_, "fastgs.sort_workspace.allocate");
+            LFS_ASSERT_MSG(ptr_ != nullptr,
+                           "FastGS exact sort block allocation returned null");
+            size_ = size;
         }
 
         void reset() noexcept {
@@ -86,27 +74,7 @@ namespace {
             if (lfs::core::gpu_process_teardown_started()) {
                 return;
             }
-
-            try {
-                lfs::diagnostics::VramProfiler::instance().recordDeallocation(p);
-            } catch (...) {
-            }
-
-            // Device-wide sync + cudaFree is valid for cudaMallocAsync storage
-            // and avoids cuMemFreeAsync SIGSEGVs observed at process exit when
-            // the buffer's home stream is already half-dead. Hot-path growth
-            // still uses cudaMallocAsync; only the release path is conservative.
-            // Never call ensure_cuda_success here (logging re-enters CUDA).
-            (void)cudaDeviceSynchronize();
-            const cudaError_t st = cudaFree(p);
-            if (st != cudaSuccess) {
-                (void)cudaGetLastError();
-            }
-        }
-
-        template <typename T>
-        T* as() const noexcept {
-            return static_cast<T*>(ptr_);
+            lfs::core::safe_cuda_pool_deallocate(p, stream_);
         }
 
         size_t size() const noexcept {
@@ -118,51 +86,21 @@ namespace {
         }
 
     private:
-        void allocate_exact(size_t size) {
-            reset();
-            if (size == 0) {
-                return;
-            }
-
-            void* ptr = nullptr;
-#if CUDART_VERSION >= 11020
-            const cudaError_t err = cudaMallocAsync(&ptr, size, stream_);
-#else
-            const cudaError_t err = cudaMalloc(&ptr, size);
-#endif
-            if (err != cudaSuccess) {
-                LFS_ENSURE_CUDA_SUCCESS_MSG(
-                    err, "FastGS sort-buffer allocation",
-                    lfs::core::detail::format_cuda_safe(
-                        "requested_bytes={}, label={}", size,
-                        label_ ? label_ : "rasterizer.fastgs.scratch"));
-            }
-            lfs::core::alloc_counter::record_site(lfs::core::alloc_counter::Site::FastgsSort);
-            ptr_ = ptr;
-            size_ = size;
-            lfs::diagnostics::VramProfiler::instance().recordAllocation(
-                ptr_, size_,
-                lfs::diagnostics::VramAllocationMethod::Async,
-                label_ ? label_ : "rasterizer.fastgs.scratch");
-        }
-
         void* ptr_ = nullptr;
         size_t size_ = 0;
-        const char* label_ = "rasterizer.fastgs.scratch";
+        const char* label_ = "rasterizer.fastgs.sort_workspace";
         cudaStream_t stream_ = nullptr;
     };
 
-    // Thread-local persistent sort workspace (like FastRasterizerThreadLocalCaches).
-    // Sorted primitive indices live here through backward; release is a no-op free.
+    // One thread-local exact block retained under EXACT-2. The four typed
+    // instance buffers occupy the first 16 bytes per capacity element and the
+    // exact CUB query occupies the tail. Sorted indices stay live through
+    // backward; release_sorted_primitive_indices therefore remains a no-op.
     struct FastGSSortBufferCache {
-        StreamOrderedDeviceBuffer keys_current{"rasterizer.fastgs.sort_keys"};
-        StreamOrderedDeviceBuffer keys_alternate{"rasterizer.fastgs.sort_keys_alt"};
-        StreamOrderedDeviceBuffer primitive_indices_current{"rasterizer.fastgs.sort_indices"};
-        StreamOrderedDeviceBuffer primitive_indices_alternate{"rasterizer.fastgs.sort_indices_alt"};
-        StreamOrderedDeviceBuffer cub_workspace{"rasterizer.fastgs.cub_workspace"};
-        size_t cub_workspace_query_size = 0; // last successful CUB temp-bytes query
-        int capacity_n_instances = 0;        // host-side element capacity of sort buffers
-        int last_n_instances = 0;            // most recent completed D2H count
+        ExactAsyncDeviceBuffer workspace{"rasterizer.fastgs.sort_workspace"};
+        size_t required_bytes = 0;
+        size_t cub_workspace_bytes = 0;
+        int capacity_n_instances = 0;
         std::uint64_t* h_n_instances_pinned = nullptr;
         bool h_n_instances_is_pinned = false;
         bool force_sync_next = false; // testing: force mid-pipeline sync fallback
@@ -213,39 +151,61 @@ namespace {
         }
 
         void bind_stream(cudaStream_t stream) {
-            keys_current.set_stream(stream);
-            keys_alternate.set_stream(stream);
-            primitive_indices_current.set_stream(stream);
-            primitive_indices_alternate.set_stream(stream);
-            cub_workspace.set_stream(stream);
+            workspace.bind_stream(stream);
+        }
+
+        [[nodiscard]] size_t per_buffer_bytes() const noexcept {
+            return static_cast<size_t>(capacity_n_instances) *
+                   sizeof(raster::InstanceKey);
+        }
+
+        [[nodiscard]] raster::InstanceKey* keys_current() const noexcept {
+            return static_cast<raster::InstanceKey*>(workspace.raw());
+        }
+
+        [[nodiscard]] raster::InstanceKey* keys_alternate() const noexcept {
+            auto* const base = static_cast<char*>(workspace.raw());
+            return reinterpret_cast<raster::InstanceKey*>(
+                base + per_buffer_bytes());
+        }
+
+        [[nodiscard]] uint* primitive_indices_current() const noexcept {
+            auto* const base = static_cast<char*>(workspace.raw());
+            return reinterpret_cast<uint*>(base + 2 * per_buffer_bytes());
+        }
+
+        [[nodiscard]] uint* primitive_indices_alternate() const noexcept {
+            auto* const base = static_cast<char*>(workspace.raw());
+            return reinterpret_cast<uint*>(base + 3 * per_buffer_bytes());
+        }
+
+        [[nodiscard]] void* cub_workspace() const noexcept {
+            auto* const base = static_cast<char*>(workspace.raw());
+            return base + 4 * per_buffer_bytes();
         }
 
         bool owns_sorted_indices(const void* ptr) const noexcept {
             return ptr != nullptr &&
-                   (ptr == primitive_indices_current.raw() ||
-                    ptr == primitive_indices_alternate.raw());
+                   (ptr == primitive_indices_current() ||
+                    ptr == primitive_indices_alternate());
         }
 
-        /// Grow sort buffers to hold at least n_instances elements (×1.2 headroom).
-        void ensure_instance_capacity(int n_instances) {
-            if (n_instances <= 0) {
-                return;
-            }
-            if (n_instances <= capacity_n_instances) {
-                return;
-            }
-            const size_t n = static_cast<size_t>(n_instances);
-            using Key = fast_lfs::rasterization::InstanceKey;
-            keys_current.ensure(n * sizeof(Key));
-            keys_alternate.ensure(n * sizeof(Key));
-            primitive_indices_current.ensure(n * sizeof(uint));
-            primitive_indices_alternate.ensure(n * sizeof(uint));
-            // Capacity in elements is the smallest of the four (they grow together).
-            const size_t cap_keys = keys_current.size() / sizeof(Key);
-            capacity_n_instances = static_cast<int>(cap_keys);
-            if (capacity_n_instances < n_instances) {
-                capacity_n_instances = n_instances;
-            }
+        void replace_workspace(int n_instances, size_t cub_bytes, size_t total_bytes) {
+            workspace.reset();
+            required_bytes = 0;
+            cub_workspace_bytes = 0;
+            capacity_n_instances = 0;
+            workspace.allocate_exact(total_bytes);
+            capacity_n_instances = n_instances;
+            cub_workspace_bytes = cub_bytes;
+            required_bytes = total_bytes;
+        }
+
+        void release_workspace() noexcept {
+            workspace.reset();
+            required_bytes = 0;
+            cub_workspace_bytes = 0;
+            capacity_n_instances = 0;
         }
     };
 
@@ -266,7 +226,7 @@ namespace {
 void fast_lfs::rasterization::release_sorted_primitive_indices(
     void* ptr,
     cudaStream_t /*stream*/) noexcept {
-    // sorted indices live in the grow-only thread-local cache.
+    // Sorted indices live in the persistent exact thread-local block.
     // Ownership is never transferred to the caller — do not cudaFree.
     // Stream ordering with subsequent forwards on the same stream keeps the
     // buffer valid through backward without an explicit free.
@@ -279,14 +239,7 @@ void fast_lfs::rasterization::release_sort_workspace_buffers() noexcept {
     // for the TLS object's lifetime so mid-process release (training-thread
     // shutdown, VRAM tests) does not break a later FastGS forward on the same
     // thread. The TLS dtor frees host/event (or no-ops after process teardown).
-    cache.keys_current.reset();
-    cache.keys_alternate.reset();
-    cache.primitive_indices_current.reset();
-    cache.primitive_indices_alternate.reset();
-    cache.cub_workspace.reset();
-    cache.cub_workspace_query_size = 0;
-    cache.capacity_n_instances = 0;
-    cache.last_n_instances = 0;
+    cache.release_workspace();
 }
 
 std::uint64_t fast_lfs::rasterization::n_instances_fallback_sync_count() noexcept {
@@ -324,10 +277,15 @@ void fast_lfs::rasterization::reset_sort_capacity_for_testing() noexcept {
 }
 
 std::size_t fast_lfs::rasterization::sort_workspace_high_water_bytes() noexcept {
-    const auto& cache = sort_buffer_cache();
-    return cache.keys_current.size() + cache.keys_alternate.size() +
-           cache.primitive_indices_current.size() +
-           cache.primitive_indices_alternate.size() + cache.cub_workspace.size();
+    return sort_workspace_allocated_bytes();
+}
+
+std::size_t fast_lfs::rasterization::sort_workspace_required_bytes() noexcept {
+    return sort_buffer_cache().required_bytes;
+}
+
+std::size_t fast_lfs::rasterization::sort_workspace_allocated_bytes() noexcept {
+    return sort_buffer_cache().workspace.size();
 }
 
 int fast_lfs::rasterization::sort_workspace_capacity_n_instances() noexcept {
@@ -495,51 +453,64 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         sort_cache.force_sync_next ||
         sort_cache.capacity_n_instances == 0;
 
-    auto ensure_cub_workspace = [&](int sort_n, cub::DoubleBuffer<InstanceKey>& keys_db,
-                                    cub::DoubleBuffer<uint>& idx_db) -> size_t {
-        size_t cub_workspace_size = 0;
-        if (static_cast<size_t>(sort_n) > sort_cache.cub_workspace_query_size ||
-            sort_cache.cub_workspace.size() == 0) {
-            size_t query_bytes = 0;
-            check_cuda_with_fastgs_status(
-                cub::DeviceRadixSort::SortPairs(
-                    nullptr,
-                    query_bytes,
-                    keys_db,
-                    idx_db,
-                    sort_n,
-                    0,
-                    key_end_bit),
-                "cub::DeviceRadixSort::SortPairs workspace query",
-                forward_status,
-                "radix sort workspace query",
-                static_cast<uint64_t>(n_primitives),
-                n_tiles_u64);
-            LFS_ASSERT_MSG(
-                query_bytes > 0,
-                "FastGS CUB radix sort returned an empty workspace for nonempty instance input");
-            sort_cache.cub_workspace.ensure(query_bytes);
-            sort_cache.cub_workspace_query_size = static_cast<size_t>(sort_n);
-            cub_workspace_size = query_bytes;
-        } else {
-            cub_workspace_size = sort_cache.cub_workspace.size();
+    auto ensure_sort_workspace = [&](int sort_n) {
+        if (sort_n <= sort_cache.capacity_n_instances) {
+            return;
         }
-        LFS_ASSERT_MSG(sort_cache.cub_workspace.as<char>() != nullptr,
-                       "FastGS CUB radix sort cannot execute with null workspace");
-        return cub_workspace_size;
+
+        cub::DoubleBuffer<InstanceKey> query_keys(
+            static_cast<InstanceKey*>(nullptr),
+            static_cast<InstanceKey*>(nullptr));
+        cub::DoubleBuffer<uint> query_indices(
+            static_cast<uint*>(nullptr),
+            static_cast<uint*>(nullptr));
+        size_t cub_bytes = 0;
+        check_cuda_with_fastgs_status(
+            cub::DeviceRadixSort::SortPairs(
+                nullptr,
+                cub_bytes,
+                query_keys,
+                query_indices,
+                sort_n,
+                0,
+                key_end_bit,
+                stream),
+            "cub::DeviceRadixSort::SortPairs workspace query",
+            forward_status,
+            "radix sort workspace query",
+            static_cast<uint64_t>(n_primitives),
+            n_tiles_u64);
+        LFS_ASSERT_MSG(
+            cub_bytes > 0,
+            "FastGS CUB radix sort returned an empty workspace for nonempty instance input");
+
+        constexpr size_t bytes_per_instance =
+            2 * sizeof(InstanceKey) + 2 * sizeof(uint);
+        const size_t n = static_cast<size_t>(sort_n);
+        if (n > (std::numeric_limits<size_t>::max() - cub_bytes) /
+                    bytes_per_instance) {
+            throw std::overflow_error("FastGS exact sort workspace size overflow");
+        }
+        const size_t required_bytes = n * bytes_per_instance + cub_bytes;
+        LFS_ASSERT_MSG(
+            required_bytes > sort_cache.workspace.size(),
+            "FastGS sort capacity grew without increasing its exact byte requirement");
+        sort_cache.replace_workspace(sort_n, cub_bytes, required_bytes);
     };
 
     // Run create → sort → extract for a known host sort count (exact or capacity).
     auto run_sort_path = [&](int sort_n, bool use_device_count_for_extract,
                              uint max_write_instances) {
         cub::DoubleBuffer<InstanceKey> keys(
-            sort_cache.keys_current.as<InstanceKey>(),
-            sort_cache.keys_alternate.as<InstanceKey>());
+            sort_cache.keys_current(),
+            sort_cache.keys_alternate());
         cub::DoubleBuffer<uint> primitive_indices(
-            sort_cache.primitive_indices_current.as<uint>(),
-            sort_cache.primitive_indices_alternate.as<uint>());
+            sort_cache.primitive_indices_current(),
+            sort_cache.primitive_indices_alternate());
 
-        size_t cub_workspace_size = ensure_cub_workspace(sort_n, keys, primitive_indices);
+        size_t cub_workspace_size = sort_cache.cub_workspace_bytes;
+        LFS_ASSERT_MSG(sort_cache.cub_workspace() != nullptr && cub_workspace_size > 0,
+                       "FastGS CUB radix sort cannot execute with an empty workspace");
 
         kernels::forward::create_instances_cu<<<div_round_up(n_primitives, config::block_size_create_instances), config::block_size_create_instances, 0, stream>>>(
             per_primitive_buffers.n_touched_tiles,
@@ -561,7 +532,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
 
         check_cuda_with_fastgs_status(
             cub::DeviceRadixSort::SortPairs(
-                sort_cache.cub_workspace.as<char>(),
+                sort_cache.cub_workspace(),
                 cub_workspace_size,
                 keys,
                 primitive_indices,
@@ -619,31 +590,23 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         n_instances = checked_fastgs_instance_count(
             *sort_cache.h_n_instances_pinned,
             static_cast<uint64_t>(n_primitives), n_tiles_u64);
-        sort_cache.last_n_instances = n_instances;
         if (n_instances > 0) {
-            sort_cache.ensure_instance_capacity(n_instances);
+            ensure_sort_workspace(n_instances);
             sorted_primitive_indices = run_sort_path(
                 n_instances, /*use_device_count_for_extract=*/false,
                 static_cast<uint>(n_instances));
         }
     } else {
-        // The steady-state pipeline first grows capacity from last_n headroom
-        // without synchronizing. create_instances then runs clamped to that
-        // capacity while the count is copied to the host. Wait only for that
-        // copy before sorting, extracting, and blending with the exact count.
-        // Overflow (n > capacity) is the rare growth fallback.
-        if (sort_cache.last_n_instances > 0) {
-            const int predicted = static_cast<int>(
-                static_cast<double>(sort_cache.last_n_instances) * kSortBufferGrowthFactor + 0.5);
-            sort_cache.ensure_instance_capacity(std::max(predicted, sort_cache.last_n_instances));
-        }
+        // Create runs against the exact measured high-water already retained.
+        // The D2H event is synchronized only after this launch. A new record
+        // drains the stream, grows exactly, and re-runs the path below.
         const int capacity = sort_cache.capacity_n_instances;
         cub::DoubleBuffer<InstanceKey> keys(
-            sort_cache.keys_current.as<InstanceKey>(),
-            sort_cache.keys_alternate.as<InstanceKey>());
+            sort_cache.keys_current(),
+            sort_cache.keys_alternate());
         cub::DoubleBuffer<uint> primitive_indices(
-            sort_cache.primitive_indices_current.as<uint>(),
-            sort_cache.primitive_indices_alternate.as<uint>());
+            sort_cache.primitive_indices_current(),
+            sort_cache.primitive_indices_alternate());
 
         // Optimistic create into capacity-sized buffers (no host count yet).
         kernels::forward::create_instances_cu<<<div_round_up(n_primitives, config::block_size_create_instances), config::block_size_create_instances, 0, stream>>>(
@@ -690,16 +653,18 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                                  "cudaMemsetAsync(tile instance ranges re-run)");
             LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(forward_status, 0, sizeof(raster::FastGSForwardStatus), stream),
                                  "cudaMemsetAsync(FastGS forward status re-run)");
-            sort_cache.ensure_instance_capacity(n_instances);
+            ensure_sort_workspace(n_instances);
             sorted_primitive_indices = run_sort_path(
                 n_instances, /*use_device_count_for_extract=*/false,
                 static_cast<uint>(n_instances));
         } else if (n_instances > 0) {
             // Exact-size sort/extract — create already wrote [0, n_instances).
-            size_t cub_workspace_size = ensure_cub_workspace(n_instances, keys, primitive_indices);
+            size_t cub_workspace_size = sort_cache.cub_workspace_bytes;
+            LFS_ASSERT_MSG(sort_cache.cub_workspace() != nullptr && cub_workspace_size > 0,
+                           "FastGS CUB radix sort cannot execute with an empty workspace");
             check_cuda_with_fastgs_status(
                 cub::DeviceRadixSort::SortPairs(
-                    sort_cache.cub_workspace.as<char>(),
+                    sort_cache.cub_workspace(),
                     cub_workspace_size,
                     keys,
                     primitive_indices,
@@ -734,11 +699,6 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.extract_instance_ranges");
             check_cuda_with_fastgs_status(cudaGetLastError(), "extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
             sync_fastgs_phase_if_requested("extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
-        }
-
-        sort_cache.last_n_instances = n_instances;
-        if (n_instances > 0) {
-            sort_cache.ensure_instance_capacity(n_instances);
         }
 
         // Fall through to shared blend path below.
@@ -779,12 +739,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     check_cuda_with_fastgs_status(cudaGetLastError(), "blend", forward_status, "blend", static_cast<uint64_t>(n_primitives), n_tiles_u64);
     sync_fastgs_phase_if_requested("blend", forward_status, "blend", static_cast<uint64_t>(n_primitives), n_tiles_u64);
 
-    per_instance_sort_total_size =
-        sort_cache.keys_current.size() +
-        sort_cache.keys_alternate.size() +
-        sort_cache.primitive_indices_current.size() +
-        sort_cache.primitive_indices_alternate.size() +
-        sort_cache.cub_workspace.size();
+    per_instance_sort_total_size = sort_cache.workspace.size();
 
     ForwardResult result;
     result.n_instances = n_instances;

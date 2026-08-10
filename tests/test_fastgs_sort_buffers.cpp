@@ -89,6 +89,9 @@ protected:
 
 // A second same-size forward must issue no driver allocations.
 TEST_F(FastGSSortBufferTest, SteadyStateSecondForwardHasZeroSortAllocs) {
+    using fast_lfs::rasterization::sort_workspace_allocated_bytes;
+    using fast_lfs::rasterization::sort_workspace_required_bytes;
+
     // Warmup: arena + thread-local image buffers + first sort-buffer growth.
     {
         auto warm = fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false);
@@ -99,6 +102,11 @@ TEST_F(FastGSSortBufferTest, SteadyStateSecondForwardHasZeroSortAllocs) {
         warm->second.release_forward_context();
     }
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto warm_required = sort_workspace_required_bytes();
+    const auto warm_allocated = sort_workspace_allocated_bytes();
+    ASSERT_GT(warm_required, 0u);
+    ASSERT_EQ(warm_required, warm_allocated)
+        << "the retained consolidated sort block must be byte-exact";
 
     // First measured forward at steady size — may still grow if warm n_instances
     // differed; with fixed scene it should already be at high-water after warm.
@@ -110,6 +118,9 @@ TEST_F(FastGSSortBufferTest, SteadyStateSecondForwardHasZeroSortAllocs) {
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
         (void)alloc_counter::delta_since(snap);
     }
+    EXPECT_EQ(sort_workspace_required_bytes(), warm_required);
+    EXPECT_EQ(sort_workspace_allocated_bytes(), warm_allocated)
+        << "release_forward_context must not free the persistent sort block";
 
     // Second consecutive same-size forward: sort path must not touch the driver.
     const auto snap2 = alloc_counter::snapshot();
@@ -118,6 +129,10 @@ TEST_F(FastGSSortBufferTest, SteadyStateSecondForwardHasZeroSortAllocs) {
     ASSERT_GT(r2->second.forward_ctx.n_instances, 0);
     r2->second.release_forward_context();
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    EXPECT_EQ(sort_workspace_required_bytes(), warm_required);
+    EXPECT_EQ(sort_workspace_allocated_bytes(), warm_allocated)
+        << "same-size forwards must retain one exact sort block";
 
     const auto delta2 = alloc_counter::delta_since(snap2);
     EXPECT_EQ(delta2, 0u)

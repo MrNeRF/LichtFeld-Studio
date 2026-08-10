@@ -380,7 +380,7 @@ namespace fast_lfs::rasterization {
             // Verify allocations happened
             if (forward_result.n_instances > 0 && !forward_result.sorted_primitive_indices) {
                 // Internal invariant guard, not one of the three OOM-class causes:
-                // StreamOrderedDeviceBuffer::allocate throws on real exhaustion, so
+                // ExactAsync workspace allocation throws on real exhaustion, so
                 // this firing means broken bookkeeping — must not classify retryable.
                 return fail("OUT_OF_MEMORY: Sorted primitive indices were not allocated despite n_instances > 0", false);
             }
