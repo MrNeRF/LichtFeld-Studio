@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/nvcodec_image_loader.hpp"
+#include "core/assert.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/environment.hpp"
 #include "core/executable_path.hpp"
@@ -695,6 +696,9 @@ namespace lfs::io {
                 }
                 return 0;
             }
+            // Keep the failed allocation charged: CUDA did not accept the free,
+            // so releasing its budget would permit overcommit. This allocator is
+            // experimental and remains disabled at every production call site.
             return 1;
         }
 
@@ -1715,6 +1719,13 @@ namespace lfs::io {
         bool eight_bit) {
 
         using namespace lfs::core;
+
+        // The eight-bit staging expression uses Tensor pointwise operations,
+        // whose execution stream is not the caller-supplied codec stream.
+        // Current mask-cache callers deliberately use the legacy stream.
+        LFS_ASSERT_MSG(
+            !eight_bit || cuda_stream == nullptr,
+            "eight-bit JPEG2000 staging currently requires the legacy CUDA stream");
 
         if (!impl_->encoder) {
             throw std::runtime_error("JPEG2000 encoder not available");

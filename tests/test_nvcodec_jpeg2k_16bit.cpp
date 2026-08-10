@@ -456,6 +456,30 @@ TEST(NvCodecImageLoaderJpeg2k8Bit, MaskRoundTripIsLossless) {
     }
 }
 
+TEST(NvCodecImageLoaderJpeg2k8Bit, RejectsNonLegacyStagingStream) {
+    int device_count = 0;
+    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
+    ASSERT_GT(device_count, 0);
+
+    auto input = lfs::core::Tensor::zeros(
+        {size_t{8}, size_t{8}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+    lfs::io::NvCodecImageLoader::Options options;
+    options.decoder_pool_size = 1;
+    std::unique_ptr<lfs::io::NvCodecImageLoader> loader;
+    try {
+        loader = std::make_unique<lfs::io::NvCodecImageLoader>(options);
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "nvImageCodec unavailable: " << e.what();
+    }
+
+    cudaStream_t stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    EXPECT_THROW(
+        (void)loader->encode_grayscale_to_jpeg2k(input, stream, true, true),
+        std::runtime_error);
+    EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+}
+
 TEST(NvCodecImageLoaderJpeg, CanonicalJpegMeetsBicyclePsnrGate) {
     const auto path = fs::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8739.JPG";
     if (!fs::is_regular_file(path)) {

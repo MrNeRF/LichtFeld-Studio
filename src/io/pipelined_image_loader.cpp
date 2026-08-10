@@ -3,6 +3,7 @@
 
 #include "io/pipelined_image_loader.hpp"
 #include "core/alloc_counter.hpp"
+#include "core/assert.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/undistort/undistort.hpp"
@@ -2369,17 +2370,13 @@ after_primary_image_enqueued:
                             if (is_jpeg2k) {
                                 auto raw = nvcodec->decode_jpeg2k_16bit_from_memory_gpu(
                                     bytes, decode_stream_, false, true);
-                                if (raw.dtype() == lfs::core::DataType::UInt8) {
-                                    mask_tensor = raw.to(lfs::core::DataType::Float32) / 255.0f;
-                                } else {
-                                    mask_tensor = lfs::core::Tensor::empty(
-                                        raw.shape(), lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-                                    cuda::launch_uint16_hwc_to_float32_hwc(
-                                        reinterpret_cast<const uint16_t*>(raw.data_ptr()),
-                                        mask_tensor.ptr<float>(), raw.shape()[0], raw.shape()[1], 1,
-                                        decode_stream_);
-                                    mask_tensor = mask_tensor / 65535.0f;
-                                }
+                                // Pipeline mask sidecars are always encoded as UINT8 below.
+                                // The decoder returns normalized Float32 for UINT16 streams;
+                                // reinterpreting that output as raw u16 would normalize twice.
+                                LFS_ASSERT_MSG(
+                                    raw.dtype() == lfs::core::DataType::UInt8,
+                                    "pipeline JPEG2000 mask cache must contain eight-bit samples");
+                                mask_tensor = raw.to(lfs::core::DataType::Float32) / 255.0f;
                             } else {
                                 mask_tensor = nvcodec->load_image_from_memory_gpu(
                                     bytes, 1, 0, decode_stream_, DecodeFormat::Grayscale);
