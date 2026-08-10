@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace lfs::core {
@@ -98,7 +99,10 @@ namespace lfs::core {
         [[nodiscard]] LFS_CORE_API std::expected<void, std::string>
         rebindSplatData(SplatData& model, SplatTensorAllocator allocator = {}) const;
 
-        [[nodiscard]] bool valid() const noexcept { return static_cast<bool>(block); }
+        [[nodiscard]] bool valid() const noexcept {
+            return static_cast<bool>(block) && !poisoned_;
+        }
+        [[nodiscard]] bool poisoned() const noexcept { return poisoned_; }
         [[nodiscard]] std::size_t capacity() const noexcept { return capacity_; }
         [[nodiscard]] std::size_t reservedCapacity() const noexcept { return reserved_capacity_; }
         [[nodiscard]] int shDegree() const noexcept { return sh_degree_; }
@@ -115,9 +119,10 @@ namespace lfs::core {
             std::size_t capacity = 0;
             int sh_degree = 0;
             std::uint64_t generation = 0;
+            bool poisoned = false;
 
             [[nodiscard]] void* region_ptr(Region region) const {
-                if (!block || !block->device_ptr) {
+                if (poisoned || !block || !block->device_ptr) {
                     return nullptr;
                 }
                 return static_cast<char*>(block->device_ptr) + region_offsets[region];
@@ -134,11 +139,18 @@ namespace lfs::core {
         std::size_t reserved_capacity_ = 0;
         int sh_degree_ = 0;
         std::uint64_t generation_ = 0;
+        bool poisoned_ = false;
 
         std::shared_ptr<Control> control_;
 
         void syncControl() const;
     };
+
+    // One-shot failure seam for the destructive grow transaction. Passing a
+    // region injects a failure after that region has been relocated; nullopt
+    // clears the seam. Production code never enables it.
+    LFS_CORE_API void set_splat_exportable_relocate_failure_for_testing(
+        std::optional<std::size_t> region) noexcept;
 
     // Stamp live-control provenance onto an exportable view Tensor so bind sites
     // can re-resolve the device pointer after a grow without holding storage.

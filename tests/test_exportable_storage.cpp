@@ -192,6 +192,49 @@ TEST(SplatExportableStorageTest, GrowPreservesDataAndTracksBytes) {
     EXPECT_FALSE(*grew_again);
 }
 
+TEST(SplatExportableStorageTest, MidRelocateFailureRestoresPreviousLayout) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 128;
+    constexpr std::size_t kGrown = 512;
+    constexpr int kShDegree = 3;
+    constexpr unsigned char kPattern = 0x5a;
+
+    auto storage_result =
+        SplatExportableStorage::create(kInitial, kShDegree, 0, kGrown * 2);
+    ASSERT_TRUE(storage_result.has_value()) << storage_result.error();
+    auto storage = std::move(*storage_result);
+
+    const std::size_t old_total = SplatExportableStorage::layoutBytes(kInitial, kShDegree);
+    const auto old_offsets = storage.region_offsets;
+    const auto old_bytes = storage.region_bytes;
+    const auto old_generation = storage.generation();
+    ASSERT_EQ(cudaMemset(storage.block->device_ptr, kPattern, old_total), cudaSuccess);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    set_splat_exportable_relocate_failure_for_testing(SplatExportableStorage::Rotation);
+    const auto grew = storage.grow(kGrown);
+    set_splat_exportable_relocate_failure_for_testing(std::nullopt);
+
+    ASSERT_FALSE(grew.has_value());
+    EXPECT_NE(grew.error().find("injected region"), std::string::npos) << grew.error();
+    EXPECT_NE(grew.error().find("previous layout restored"), std::string::npos) << grew.error();
+    EXPECT_TRUE(storage.valid());
+    EXPECT_FALSE(storage.poisoned());
+    EXPECT_EQ(storage.capacity(), kInitial);
+    EXPECT_EQ(storage.generation(), old_generation);
+    EXPECT_EQ(storage.region_offsets, old_offsets);
+    EXPECT_EQ(storage.region_bytes, old_bytes);
+
+    std::vector<unsigned char> restored(old_total);
+    ASSERT_EQ(cudaMemcpy(restored.data(), storage.block->device_ptr, old_total,
+                         cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    EXPECT_TRUE(std::all_of(restored.begin(), restored.end(), [](const unsigned char value) {
+        return value == kPattern;
+    }));
+}
+
 TEST(SplatExportableStorageTest, TensorViewsValidAfterGrowViaRebind) {
     require_cuda();
 

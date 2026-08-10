@@ -353,6 +353,10 @@ namespace lfs::vis {
         auto grew = splat_storage_->grow(want);
         if (!grew) {
             LOG_ERROR("Exportable splat grow failed (need={}): {}", needed_rows, grew.error());
+            if (splat_storage_->poisoned() && trainer_) {
+                LOG_ERROR("Exportable splat storage is poisoned; stopping training");
+                trainer_->request_stop();
+            }
             return false;
         }
         if (splat_storage_->capacity() < needed_rows) {
