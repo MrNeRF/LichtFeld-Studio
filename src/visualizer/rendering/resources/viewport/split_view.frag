@@ -13,7 +13,7 @@ layout(push_constant) uniform Push {
     // x = split_position (0..1 in viewport space)
     // y = left_flip_y (0/1)
     // z = right_flip_y (0/1)
-    // w = unused padding (divider color is hardcoded in the shader)
+    // w = spatial filter enabled (0/1)
     vec4 split;
 
     // Viewport pixel rect (x, y, width, height) — letterboxed content extent.
@@ -48,7 +48,22 @@ vec3 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normaliz
     }
     float v = flip_y > 0.5 ? 1.0 - uv.y : uv.y;
     vec2 st = min(vec2(u, v) * uv_scale, uv_clamp_max);
-    return texture(tex, st).rgb;
+    vec3 center = texture(tex, st).rgb;
+    if (pc.split.w < 0.5) {
+        return center;
+    }
+
+    const float strength = 0.18;
+    vec2 texel = 1.0 / vec2(textureSize(tex, 0));
+    vec3 left = texture(tex, clamp(st - vec2(texel.x, 0.0), vec2(0.0), uv_clamp_max)).rgb;
+    vec3 right = texture(tex, clamp(st + vec2(texel.x, 0.0), vec2(0.0), uv_clamp_max)).rgb;
+    vec3 up = texture(tex, clamp(st - vec2(0.0, texel.y), vec2(0.0), uv_clamp_max)).rgb;
+    vec3 down = texture(tex, clamp(st + vec2(0.0, texel.y), vec2(0.0), uv_clamp_max)).rgb;
+    vec3 sharpened = center * (1.0 + 4.0 * strength) -
+                     (left + right + up + down) * strength;
+    vec3 neighborhood_min = min(center, min(min(left, right), min(up, down)));
+    vec3 neighborhood_max = max(center, max(max(left, right), max(up, down)));
+    return clamp(sharpened, neighborhood_min, neighborhood_max);
 }
 
 void main() {

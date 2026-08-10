@@ -2213,6 +2213,20 @@ namespace lfs::vis {
                 // content_rect arrives panel-local; lift it into framebuffer
                 // coords so the shader's letterbox check matches gl_FragCoord.
                 VulkanSplitViewParams adjusted = params.split_view;
+                adjusted.spatial_filter =
+                    params.scene_upscaler == SceneUpscalerBackend::Spatial;
+                if (adjusted.coordinate_extent.x > 0 && adjusted.coordinate_extent.y > 0) {
+                    const float scale_x = static_cast<float>(rect.width) /
+                                          static_cast<float>(adjusted.coordinate_extent.x);
+                    const float scale_y = static_cast<float>(rect.height) /
+                                          static_cast<float>(adjusted.coordinate_extent.y);
+                    adjusted.content_rect = {
+                        static_cast<int>(std::lround(adjusted.content_rect.x * scale_x)),
+                        static_cast<int>(std::lround(adjusted.content_rect.y * scale_y)),
+                        static_cast<int>(std::lround(adjusted.content_rect.z * scale_x)),
+                        static_cast<int>(std::lround(adjusted.content_rect.w * scale_y)),
+                    };
+                }
                 adjusted.content_rect.x += rect.x;
                 adjusted.content_rect.y += rect.y;
                 const VkRect2D panel_rect{

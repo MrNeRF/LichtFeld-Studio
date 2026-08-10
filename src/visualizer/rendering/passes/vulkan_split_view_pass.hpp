@@ -34,9 +34,11 @@ namespace lfs::vis {
 
     struct VulkanSplitViewParams {
         bool enabled = false;
+        bool spatial_filter = false;
         VulkanSplitViewPanel left;
         VulkanSplitViewPanel right;
         float split_position = 0.5f;
+        glm::ivec2 coordinate_extent{0, 0};  // source coordinate space for content_rect
         glm::ivec4 content_rect{0, 0, 0, 0}; // x, y, w, h (letterboxed)
         glm::vec3 background{0.0f};
     };
