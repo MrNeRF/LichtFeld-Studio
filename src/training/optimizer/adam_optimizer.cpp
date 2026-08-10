@@ -563,7 +563,7 @@ namespace lfs::training {
                 throw std::runtime_error(
                     "AdamOptimizer::step_param: joint-codec shN requires fused FastGS "
                     "backward (non-fused joint swizzle step not implemented). "
-                    "GUT/gsplat sessions auto-disable joint Adam — see Trainer::initialize");
+                    "GUT/gsplat SH training must be rejected by Trainer::initialize");
             }
             if (!state.joint_bounds.is_valid()) {
                 throw std::runtime_error("AdamOptimizer::step_param: joint state missing bounds");

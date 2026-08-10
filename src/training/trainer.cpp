@@ -2730,6 +2730,12 @@ namespace lfs::training {
         if (const auto validation_error = params.validate(); !validation_error.empty()) {
             return std::unexpected("Invalid training parameters: " + validation_error);
         }
+        if (params.optimization.gut && params.optimization.sh_degree > 0) {
+            return std::unexpected(
+                "GUT/gsplat training with sh_degree > 0 is unsupported: the unfused "
+                "optimizer cannot update joint-codec SH-rest values. Use sh_degree=0 "
+                "or select the FastGS training path.");
+        }
 
         // Thread-safe initialization using mutex
         std::lock_guard<std::mutex> lock(init_mutex_);
@@ -2745,15 +2751,6 @@ namespace lfs::training {
 
         try {
             params_ = params;
-
-            // GUT/gsplat uses unfused Adam step(). Joint shN is fused-FastGS-only
-            // and q16 re-encode is fused-only — GUT with sh_degree > 0 will fail at the
-            // unfused shN step. Codecs are permanent; no env/fallback disable path.
-            if (params_.optimization.gut) {
-                LOG_WARN(
-                    "GUT/gsplat uses unfused Adam; joint codec shN requires fused "
-                    "FastGS backward. Prefer FastGS (default) for SH training.");
-            }
 
             // Wire CLI instruments (replaces former env flags).
             PerfBenchCollector::configure(
