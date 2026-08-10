@@ -3443,6 +3443,14 @@ namespace lfs::vis::gui {
         ops.needs_animation = [](void* host) -> bool {
             return static_cast<RmlPanelHost*>(host)->needsAnimationFrame();
         };
+        ops.next_scheduled_update_delay = [](void* host, double* out_seconds) -> bool {
+            const auto delay =
+                static_cast<RmlPanelHost*>(host)->nextScheduledUpdateDelay();
+            if (!delay || !out_seconds)
+                return false;
+            *out_seconds = *delay;
+            return true;
+        };
         lfs::python::set_rml_panel_host_ops(ops);
 
         registerNativePanels();
@@ -6622,6 +6630,44 @@ namespace lfs::vis::gui {
             }))
             return true;
         return false;
+    }
+
+    std::optional<double> GuiManager::secondsUntilNextAnimationFrame() const {
+        auto min_delay = [](std::optional<double> a, std::optional<double> b) -> std::optional<double> {
+            if (!a)
+                return b;
+            if (!b)
+                return a;
+            return std::min(*a, *b);
+        };
+
+        std::optional<double> result;
+
+        if (!python::is_plugin_preload_running()) {
+            result = min_delay(result,
+                               PanelRegistry::instance().nextScheduledAnimationDelayForVisiblePanels({
+                                   .active_main_tab = panel_layout_.getActiveTab(),
+                                   .ui_visible = !ui_hidden_,
+                                   .right_panel_visible = show_main_panel_ && !ui_hidden_,
+                                   .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
+                               }));
+        }
+
+        result = min_delay(result, rml_viewport_overlay_.nextScheduledUpdateDelay());
+
+        // VRAM HUD cadence: when armed and not yet due, wake at the publish deadline.
+        if (isVramHudOverlayVisible()) {
+            const auto now = std::chrono::steady_clock::now();
+            if (next_vram_hud_publish_ != std::chrono::steady_clock::time_point{} &&
+                now < next_vram_hud_publish_) {
+                const double remaining =
+                    std::chrono::duration<double>(next_vram_hud_publish_ - now).count();
+                if (remaining > 0.0)
+                    result = min_delay(result, remaining);
+            }
+        }
+
+        return result;
     }
 
     bool GuiManager::isViewportExportLocked() const {

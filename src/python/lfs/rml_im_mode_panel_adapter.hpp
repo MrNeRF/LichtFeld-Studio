@@ -39,6 +39,7 @@ namespace lfs::vis::gui {
         void setForcedHeight(float h) override;
         void setPanelSpace(PanelSpace space) override;
         bool needsAnimationFrame() const override;
+        std::optional<double> nextScheduledAnimationDelay() const override;
         void reloadRmlResources() override;
 
     private:

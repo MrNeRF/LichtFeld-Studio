@@ -21,7 +21,9 @@
 #include <RmlUi/Core/Input.h>
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <format>
+#include <limits>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -1000,7 +1002,9 @@ namespace lfs::vis::gui {
             rml_context_->SetDimensions(Rml::Vector2i(w, h));
             rml_context_->Update();
             queueCachedVulkanContext(true);
-            animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
+            const double next_delay = rml_context_->GetNextUpdateDelay();
+            next_update_delay_ = next_delay;
+            animation_active_ = (next_delay == 0.0);
             return;
         }
         const bool can_reuse = theme_current && !render_needed_ && !animation_active_ &&
@@ -1117,12 +1121,20 @@ namespace lfs::vis::gui {
         queueCachedVulkanContext(true);
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.next_delay", 0.25);
-            animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
+            const double next_delay = rml_context_->GetNextUpdateDelay();
+            next_update_delay_ = next_delay;
+            animation_active_ = (next_delay == 0.0);
         }
         render_needed_ = false;
         render_reason_bits_ = 0;
         last_render_w_ = w;
         last_render_h_ = h;
+    }
+
+    std::optional<double> RmlViewportOverlay::nextScheduledUpdateDelay() const {
+        if (std::isfinite(next_update_delay_) && next_update_delay_ > 0.0)
+            return next_update_delay_;
+        return std::nullopt;
     }
 
 } // namespace lfs::vis::gui

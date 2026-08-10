@@ -1830,6 +1830,7 @@
     "secondary_view": "セカンダリビュー",
     "split": "分割:",
     "gpu": "GPU",
+    "ui_fps": "UI FPS",
     "strategy_default": "デフォルト"
   },
   "plugin_manager": {

@@ -46,6 +46,7 @@ namespace lfs::vis::gui {
         void setForcedHeight(float h) override;
         bool wantsKeyboard() const override;
         bool needsAnimationFrame() const override;
+        std::optional<double> nextScheduledAnimationDelay() const override;
         bool wantsExternalFloatingShadow() const override { return !foreground_; }
         void setPanelSpace(PanelSpace space) override;
         void reloadRmlResources() override;

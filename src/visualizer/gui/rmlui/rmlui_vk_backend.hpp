@@ -81,6 +81,13 @@ public:
     void SetContextClipRect(float x1, float y1, float x2, float y2);
     void RenderTextureQuad(Rml::TextureHandle texture, float x, float y, float w, float h);
 
+    // Restrict layer render-pass area (and thus loadOp clears / scissor bounds) to the
+    // capture clip rect while recording a cached-panel refresh. Pair with EndCacheCapture.
+    // Nested PushLayer during the capture inherits the same restricted area. Normal
+    // (non-capture) layer usage is unaffected when capture is inactive.
+    void BeginCacheCapture(int x, int y, int width, int height);
+    void EndCacheCapture();
+
     // Build a Rml::Image src URL referencing an externally-owned VkImageView/VkSampler.
     // The view+sampler must remain alive while any element references this URL. The
     // returned URL form is "lfs-vk://?v=<view_hex>&s=<sampler_hex>&w=W&h=H".
@@ -128,6 +135,11 @@ public:
     void PopLayer() override;
     /// Called by RmlUi when it wants to capture the current layer as a texture.
     Rml::TextureHandle SaveLayerAsTexture() override;
+    /// Like SaveLayerAsTexture(), but when `reuse_texture` has the same extent as the
+    /// capture bounds, reuses that image (copy into it) instead of allocating a new one.
+    /// On extent mismatch or invalid handle, allocates a new texture (caller must release
+    /// the old one if it is no longer needed).
+    Rml::TextureHandle SaveLayerAsTexture(Rml::TextureHandle reuse_texture);
 
     /// Called by RmlUi when it wants to set the current transform matrix to a new matrix.
     void SetTransform(const Rml::Matrix4f* transform) override;
@@ -155,6 +167,8 @@ private:
         std::string m_vram_scope;
         std::string m_vram_label;
         VkDeviceSize m_vram_allocation_size = 0;
+        int m_width = 0;
+        int m_height = 0;
         bool m_is_async_preview = false;
         // Resource identity for VulkanImageBarrierTracker (#1478).
         std::uint64_t m_barrier_generation = 0;
@@ -574,6 +588,8 @@ private:
     void ApplyTransformState();
     VkRect2D ContextClipScissor() const noexcept;
     VkRect2D IntersectContextClip(VkRect2D scissor) const noexcept;
+    // Intersect with the active cache-capture render area when capture is active; no-op otherwise.
+    VkRect2D ClampToCacheCaptureArea(VkRect2D rect) const noexcept;
     void ResetDynamicRenderState();
     void RenderFullscreenTexture(texture_data_t& texture, Rml::BlendMode blend_mode);
 
@@ -639,6 +655,9 @@ private:
     VkRect2D m_context_clip_scissor{};
     bool m_context_clip_enabled = false;
     bool m_current_context_used_preview_texture = false;
+    // When true, layer render passes clear/draw only this sub-rect of the full-size layer.
+    bool m_cache_capture_active = false;
+    VkRect2D m_cache_capture_render_area{};
 
     Rml::Matrix4f m_projection;
     Rml::Vector<VkShaderModule> m_shaders;

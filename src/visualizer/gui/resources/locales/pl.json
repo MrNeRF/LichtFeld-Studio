@@ -1830,6 +1830,7 @@
     "secondary_view": "Widok pomocniczy",
     "split": "Podział:",
     "gpu": "GPU",
+    "ui_fps": "UI FPS",
     "strategy_default": "Domyślny"
   },
   "plugin_manager": {

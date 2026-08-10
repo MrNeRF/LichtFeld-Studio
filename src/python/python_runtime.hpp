@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -95,9 +96,14 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API const PyContext& context();
 
     // UI redraw request mechanism
+    // request_redraw / request_redraw_after: "render a GUI frame no later than now + delay"
+    // (delay 0 = immediate). Multiple scheduled deadlines keep the earliest.
     LFS_PYTHON_RUNTIME_API void request_redraw();
+    LFS_PYTHON_RUNTIME_API void request_redraw_after(double delay_seconds);
     LFS_PYTHON_RUNTIME_API bool has_redraw_request();
     LFS_PYTHON_RUNTIME_API bool consume_redraw_request();
+    // Remaining seconds until a future scheduled redraw; nullopt if none or already due.
+    LFS_PYTHON_RUNTIME_API std::optional<double> seconds_until_scheduled_redraw();
     LFS_PYTHON_RUNTIME_API uint64_t redraw_request_generation();
     LFS_PYTHON_RUNTIME_API void request_pre_scene_panel_sync();
     LFS_PYTHON_RUNTIME_API uint64_t pre_scene_panel_sync_generation();
@@ -703,6 +709,9 @@ namespace lfs::python {
         void (*set_input)(void* host, const void* input);
         void (*set_forced_height)(void* host, float h);
         bool (*needs_animation)(void* host);
+        // Returns true and writes delay when the host has a finite scheduled
+        // update delay > 0 seconds; false for continuous demand or idle.
+        bool (*next_scheduled_update_delay)(void* host, double* out_seconds);
     };
 
     LFS_PYTHON_RUNTIME_API void set_rml_panel_host_ops(const RmlPanelHostOps& ops);

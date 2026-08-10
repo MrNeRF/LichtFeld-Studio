@@ -357,8 +357,13 @@ namespace lfs::vis {
 
         void clearLatestCameraMetrics();
 
-        // FPS monitoring
+        // FPS monitoring (scene renders vs. swapchain-presented GUI frames)
         float getAverageFPS() const { return framerate_controller_.getAverageFPS(); }
+        float getPresentedAverageFPS() const {
+            return presented_framerate_controller_.getAverageFPS();
+        }
+        // Measurement only — does not affect scene render pacing/limiting.
+        void notePresentedFrame() { presented_framerate_controller_.beginFrame(); }
 
         // Access to the auxiliary rendering engine used by point-cloud, mesh, and readback paths.
         lfs::rendering::RenderingEngine* getRenderingEngine();
@@ -738,6 +743,9 @@ namespace lfs::vis {
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
         lfs::rendering::ScreenOverlayRenderer screen_overlay_renderer_;
         mutable FramerateController framerate_controller_;
+        // Parallel presented-frame counter (GUI-only frames included). Does not
+        // drive pacing — scene path still uses framerate_controller_ alone.
+        mutable FramerateController presented_framerate_controller_;
 
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;

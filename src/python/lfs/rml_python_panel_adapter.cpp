@@ -621,6 +621,37 @@ namespace lfs::vis::gui {
         return ops.needs_animation ? ops.needs_animation(host_) : false;
     }
 
+    std::optional<double> RmlPythonPanelAdapter::nextScheduledAnimationDelay() const {
+        std::optional<double> min_delay;
+
+        if (host_) {
+            const auto& ops = lfs::python::get_rml_panel_host_ops();
+            if (ops.next_scheduled_update_delay) {
+                double host_delay = 0.0;
+                if (ops.next_scheduled_update_delay(host_, &host_delay))
+                    min_delay = host_delay;
+            }
+        }
+
+        // Interval-policy panels: remaining time until next_update_at_ when it is
+        // still in the future. When unset/expired, needsAnimationFrame() is true.
+        if (!dirty_driven_updates_) {
+            if (next_update_at_ != std::chrono::steady_clock::time_point{}) {
+                const auto now = std::chrono::steady_clock::now();
+                if (now < next_update_at_) {
+                    const double remaining =
+                        std::chrono::duration<double>(next_update_at_ - now).count();
+                    if (remaining > 0.0) {
+                        if (!min_delay || remaining < *min_delay)
+                            min_delay = remaining;
+                    }
+                }
+            }
+        }
+
+        return min_delay;
+    }
+
     void RmlPythonPanelAdapter::setForeground(bool fg) {
         foreground_ = fg;
         if (host_) {
