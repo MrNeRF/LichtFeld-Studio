@@ -234,6 +234,19 @@ namespace lfs::vis {
         }
     }
 
+    void RenderingManager::requestTemporalFollowUp() {
+        dirty_mask_.fetch_or(DirtyFlag::TEMPORAL, std::memory_order_relaxed);
+
+        std::function<void()> wake_callback;
+        {
+            std::scoped_lock lock(wake_callback_mutex_);
+            wake_callback = wake_callback_;
+        }
+        if (wake_callback) {
+            wake_callback();
+        }
+    }
+
     void RenderingManager::notifyAsyncLodResultsReady() {
         requestRenderFollowUp();
     }

@@ -74,6 +74,30 @@ namespace lfs::vis {
                 2.0f * pixel.y / static_cast<float>(render_size.y)};
     }
 
+    void TemporalConvergenceController::prepare(const bool enabled, const bool restart) {
+        enabled_ = enabled;
+        if (!enabled_) {
+            sequence_ = 0;
+            remaining_ = 0;
+        } else if (restart) {
+            sequence_ = 0;
+            remaining_ = SAMPLE_COUNT;
+        }
+    }
+
+    glm::vec2 TemporalConvergenceController::jitter() const {
+        return enabled_ && remaining_ > 0 ? temporalJitterPixels(sequence_) : glm::vec2(0.0f);
+    }
+
+    bool TemporalConvergenceController::completeSuccessfulFrame() {
+        if (!enabled_ || remaining_ == 0) {
+            return false;
+        }
+        ++sequence_;
+        --remaining_;
+        return remaining_ > 0;
+    }
+
     glm::mat4 applySceneProjectionJitter(const glm::mat4& projection,
                                          const glm::vec2 jitter_ndc) {
         if (!std::isfinite(jitter_ndc.x) || !std::isfinite(jitter_ndc.y)) {

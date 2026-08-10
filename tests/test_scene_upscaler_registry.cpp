@@ -48,7 +48,7 @@ namespace lfs::vis {
         EXPECT_TRUE(temporal.requirements.depth);
         EXPECT_TRUE(temporal.requirements.motion_vectors);
         EXPECT_TRUE(temporal.requirements.history);
-        EXPECT_FALSE(temporal.requirements.jitter);
+        EXPECT_TRUE(temporal.requirements.jitter);
         EXPECT_FALSE(temporal.requirements.reactive_mask);
         EXPECT_FALSE(temporal.requirements.exposure);
     }

@@ -62,6 +62,23 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API glm::vec2 temporalJitterNdc(std::uint64_t sequence,
                                                           glm::ivec2 render_size);
 
+    class LFS_VIS_API TemporalConvergenceController {
+    public:
+        static constexpr std::uint32_t SAMPLE_COUNT = 8;
+
+        void prepare(bool enabled, bool restart);
+        [[nodiscard]] glm::vec2 jitter() const;
+        [[nodiscard]] bool completeSuccessfulFrame();
+        [[nodiscard]] std::uint64_t sequence() const { return sequence_; }
+        [[nodiscard]] std::uint32_t remaining() const { return remaining_; }
+        [[nodiscard]] bool enabled() const { return enabled_; }
+
+    private:
+        bool enabled_ = false;
+        std::uint64_t sequence_ = 0;
+        std::uint32_t remaining_ = 0;
+    };
+
     struct TemporalFrameState {
         lfs::rendering::FrameView current;
         lfs::rendering::FrameView previous;

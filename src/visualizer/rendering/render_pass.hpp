@@ -132,7 +132,14 @@ namespace lfs::vis {
                     .size = frame_view.size,
                     .focal_length_mm = frame_view.focal_length_mm,
                     .orthographic = frame_view.orthographic,
-                    .ortho_scale = frame_view.ortho_scale};
+                    .ortho_scale = frame_view.ortho_scale,
+                    .projection_jitter_ndc =
+                        frame_view.orthographic || size.x <= 0 || size.y <= 0
+                            ? glm::vec2(0.0f)
+                            : glm::vec2(2.0f * scene_jitter_pixels.x /
+                                            static_cast<float>(size.x),
+                                        2.0f * scene_jitter_pixels.y /
+                                            static_cast<float>(size.y))};
         }
 
         [[nodiscard]] lfs::rendering::ViewportData makeViewportData() const {

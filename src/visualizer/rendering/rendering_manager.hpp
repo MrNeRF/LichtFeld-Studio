@@ -23,6 +23,7 @@
 #include "scene_depth_contract.hpp"
 #include "spark_lod_controller.hpp"
 #include "split_view_service.hpp"
+#include "temporal_frame_tracker.hpp"
 #include "viewport_appearance_correction.hpp"
 #include "viewport_artifact_service.hpp"
 #include "viewport_frame_lifecycle_service.hpp"
@@ -710,6 +711,7 @@ namespace lfs::vis {
         void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
         void requestRenderFollowUp();
+        void requestTemporalFollowUp();
         void notifyAsyncLodResultsReady();
         void requestResizeTrainingPause(TrainerManager* trainer_manager);
         void releaseResizeTrainingPause();
@@ -763,6 +765,7 @@ namespace lfs::vis {
         std::uint64_t viewport_projection_generation_ = 1;
         std::uint64_t temporal_scene_revision_ = 1;
         std::atomic<std::uint64_t> temporal_camera_reset_generation_{1};
+        TemporalConvergenceController temporal_convergence_;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
         std::unique_ptr<SparkLodController> lod_controller_;

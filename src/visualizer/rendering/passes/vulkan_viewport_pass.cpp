@@ -2165,7 +2165,7 @@ namespace lfs::vis {
                                                         ? temporal_previous_view_projection
                                                         : params.mesh_view_projection,
                         .render_extent = temporal_render_extent,
-                        .includes_jitter = false,
+                        .includes_jitter = params.scene_upscaler == SceneUpscalerBackend::Temporal,
                         .flip_y = params.scene_image_flip_y,
                     };
                     frame.temporal_ready = true;

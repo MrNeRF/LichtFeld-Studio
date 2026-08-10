@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "rendering/rendering.hpp"
 #include "visualizer/rendering/temporal_frame_tracker.hpp"
 
 #include <gtest/gtest.h>
@@ -60,6 +61,34 @@ namespace lfs::vis {
         EXPECT_EQ(temporalJitterNdc(3, {0, 50}), glm::vec2(0.0f));
     }
 
+    TEST(TemporalFrameTracker, ConvergenceIsFiniteAndOnlyRestartsForNewSourceWork) {
+        TemporalConvergenceController convergence;
+        convergence.prepare(true, true);
+        EXPECT_TRUE(convergence.enabled());
+        EXPECT_EQ(convergence.remaining(), TemporalConvergenceController::SAMPLE_COUNT);
+        EXPECT_EQ(convergence.sequence(), 0u);
+
+        std::uint32_t follow_ups = 0;
+        for (std::uint32_t sample = 0;
+             sample < TemporalConvergenceController::SAMPLE_COUNT;
+             ++sample) {
+            EXPECT_EQ(convergence.jitter(), temporalJitterPixels(sample));
+            if (convergence.completeSuccessfulFrame()) {
+                ++follow_ups;
+            }
+            convergence.prepare(true, false);
+        }
+        EXPECT_EQ(follow_ups, TemporalConvergenceController::SAMPLE_COUNT - 1);
+        EXPECT_EQ(convergence.remaining(), 0u);
+        EXPECT_EQ(convergence.jitter(), glm::vec2(0.0f));
+        EXPECT_FALSE(convergence.completeSuccessfulFrame());
+
+        convergence.prepare(false, true);
+        EXPECT_FALSE(convergence.enabled());
+        EXPECT_EQ(convergence.sequence(), 0u);
+        EXPECT_EQ(convergence.remaining(), 0u);
+    }
+
     TEST(TemporalFrameTracker, JitterOffsetsOnlyTheSuppliedSceneProjection) {
         const glm::mat4 projection(1.0f);
         const glm::vec4 point(0.2f, -0.1f, 0.5f, 1.0f);
@@ -72,6 +101,37 @@ namespace lfs::vis {
                       projection,
                       {std::numeric_limits<float>::quiet_NaN(), 0.0f}),
                   projection);
+    }
+
+    TEST(TemporalFrameTracker, ViewportProjectionCarriesRuntimeJitter) {
+        lfs::rendering::ViewportData viewport{
+            .rotation = glm::mat3(1.0f),
+            .translation = glm::vec3(0.0f),
+            .size = {1280, 720},
+            .projection_jitter_ndc = {0.25f, -0.125f},
+        };
+        const auto base = lfs::rendering::ViewportData{
+            .rotation = viewport.rotation,
+            .translation = viewport.translation,
+            .size = viewport.size,
+        }
+                              .getProjectionMatrix();
+        const auto jittered = viewport.getProjectionMatrix();
+        const glm::vec4 point(0.1f, -0.2f, 0.5f, 1.0f);
+        const glm::vec4 base_clip = base * point;
+        const glm::vec4 jittered_clip = jittered * point;
+        EXPECT_NEAR(jittered_clip.x / jittered_clip.w,
+                    base_clip.x / base_clip.w + 0.25f,
+                    1e-6f);
+        EXPECT_NEAR(jittered_clip.y / jittered_clip.w,
+                    base_clip.y / base_clip.w - 0.125f,
+                    1e-6f);
+
+        viewport.orthographic = true;
+        viewport.projection_jitter_ndc = {0.25f, -0.125f};
+        const auto orthographic_jittered = viewport.getProjectionMatrix();
+        viewport.projection_jitter_ndc = {};
+        EXPECT_EQ(orthographic_jittered, viewport.getProjectionMatrix());
     }
 
     TEST(TemporalFrameTracker, ProjectionPairUsesCurrentAndPreviousJitter) {

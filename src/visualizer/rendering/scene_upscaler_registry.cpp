@@ -30,6 +30,7 @@ namespace lfs::vis {
                 .requirements = {
                     .depth = true,
                     .motion_vectors = true,
+                    .jitter = true,
                     .history = true,
                 },
                 .requires_adapter = true,

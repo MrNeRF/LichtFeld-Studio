@@ -16,6 +16,7 @@
 #include "rendering/image_layout.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "temporal_frame_tracker.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "viewport_appearance_correction.hpp"
@@ -1831,6 +1832,15 @@ namespace lfs::vis {
         }
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
+        constexpr DirtyMask temporal_source_dirty =
+            DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::MESH |
+            DirtyFlag::VIEWPORT | DirtyFlag::BACKGROUND | DirtyFlag::SPLIT_VIEW;
+        const bool temporal_jitter_enabled =
+            frame_settings.scene_upscaler == 2 &&
+            !frame_settings.orthographic && !frame_settings.equirectangular;
+        temporal_convergence_.prepare(
+            temporal_jitter_enabled,
+            (frame_dirty & temporal_source_dirty) != 0);
         if ((frame_dirty & (DirtyFlag::SPLATS | DirtyFlag::MESH)) != 0) {
             ++temporal_scene_revision_;
             if (temporal_scene_revision_ == 0)
@@ -1843,7 +1853,8 @@ namespace lfs::vis {
             frame_dirty |= DirtyFlag::CAMERA;
         }
         constexpr DirtyMask projection_dirty =
-            DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::VIEWPORT | DirtyFlag::SPLIT_VIEW;
+            DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::VIEWPORT |
+            DirtyFlag::SPLIT_VIEW | DirtyFlag::TEMPORAL;
         if ((frame_dirty & projection_dirty) != 0) {
             ++viewport_projection_generation_;
             if (viewport_projection_generation_ == 0) {
@@ -2053,6 +2064,7 @@ namespace lfs::vis {
 
         framerate_controller_.beginFrame();
 
+        const glm::vec2 temporal_jitter = temporal_convergence_.jitter();
         const FrameContext frame_ctx{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,
@@ -2071,7 +2083,22 @@ namespace lfs::vis {
             .current_camera_id = camera_interaction_service_.currentCameraId(),
             .hovered_gaussian_id = viewport_overlay_service_.hoveredGaussianId(),
             .selection_flash_intensity = getSelectionFlashIntensity(),
-            .view_panels = {}};
+            .view_panels = {},
+            .scene_jitter_pixels = temporal_jitter};
+
+        auto& temporal_profiler = lfs::diagnostics::VramProfiler::instance();
+        temporal_profiler.setGauge("viewer.temporal.jitter_x", temporal_jitter.x);
+        temporal_profiler.setGauge("viewer.temporal.jitter_y", temporal_jitter.y);
+        temporal_profiler.setGauge("viewer.temporal.convergence_remaining",
+                                   static_cast<double>(temporal_convergence_.remaining()));
+        const auto complete_temporal_convergence_frame = [&] {
+            const bool needs_follow_up = temporal_convergence_.completeSuccessfulFrame();
+            temporal_profiler.setGauge("viewer.temporal.convergence_remaining",
+                                       static_cast<double>(temporal_convergence_.remaining()));
+            if (needs_follow_up) {
+                requestTemporalFollowUp();
+            }
+        };
 
         std::shared_ptr<lfs::core::Tensor> rendered_image;
         lfs::rendering::FrameMetadata rendered_metadata{};
@@ -3759,6 +3786,7 @@ namespace lfs::vis {
                                     split_view_service_.updateInfo(FrameResources{});
                                     publish_mesh_frame_for_vksplat();
                                     release_inactive_split_outputs();
+                                    complete_temporal_convergence_frame();
 
                                     return {.image = vulkan_viewport_image_,
                                             .image_generation = vulkan_viewport_image_generation_,
@@ -3837,6 +3865,7 @@ namespace lfs::vis {
 
                         publish_mesh_frame_for_vksplat();
                         release_inactive_split_outputs();
+                        complete_temporal_convergence_frame();
 
                         return {.image = {},
                                 .external_image = vulkan_external_viewport_image_,
@@ -4212,6 +4241,7 @@ namespace lfs::vis {
             split_info_resources.split_info = std::move(*rendered_split_info);
         }
         split_view_service_.updateInfo(split_info_resources);
+        complete_temporal_convergence_frame();
 
         return {.image = vulkan_viewport_image_,
                 .image_generation = vulkan_viewport_image_generation_,
