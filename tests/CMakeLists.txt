@@ -308,6 +308,7 @@ set(TEST_FILES
     test_rml_text_input_handler.cpp
     test_rml_im_mode_layout.cpp
     test_scene_upscaler_registry.cpp
+    test_scene_depth_contract.cpp
     test_status_bar_fit.cpp
     test_temporal_frame_tracker.cpp
     test_rotated_sh_correctness.cpp
