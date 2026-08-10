@@ -132,6 +132,8 @@ TEST_F(LossWorkspaceUnionTest, SequentialModesThroughArenaStayWithinMax) {
 
     LossWorkspaceArena arena;
     arena.ensure_fused(shape);
+    EXPECT_EQ(arena.required_bytes(), LossWorkspaceArena::fused_layout_bytes(shape));
+    EXPECT_GE(arena.allocated_bytes(), arena.required_bytes());
     arena.ensure_pure_ssim(shape);
     arena.ensure_decoupled(shape);
     arena.ensure_masked_fused(shape);

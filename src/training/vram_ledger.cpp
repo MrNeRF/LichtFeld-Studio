@@ -119,7 +119,13 @@ namespace lfs::training {
         if (!profiler.enabled()) {
             return;
         }
-        profiler.setTrainingStateLedger(compute_training_state_ledger(splat, optimizer));
+        const auto ledger = compute_training_state_ledger(splat, optimizer);
+        const auto reserved = compute_training_state_reserved_bytes(splat, optimizer);
+        profiler.setTrainingStateLedger(ledger);
+        profiler.setGauge("vram.audit.training_state.required_bytes",
+                          static_cast<double>(ledger.total_bytes));
+        profiler.setGauge("vram.audit.training_state.allocated_bytes",
+                          static_cast<double>(reserved));
     }
 
 } // namespace lfs::training

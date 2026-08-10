@@ -2652,6 +2652,27 @@ namespace lfs::training::kernels {
                          masked_decoupled_layout_bytes(shape)});
     }
 
+    size_t LossWorkspaceArena::required_bytes() const {
+        if (active_shape_.empty()) {
+            return 0;
+        }
+        switch (active_kind_) {
+        case Kind::Fused:
+            return fused_layout_bytes(active_shape_);
+        case Kind::PureSSIM:
+            return pure_ssim_layout_bytes(active_shape_);
+        case Kind::Decoupled:
+            return decoupled_layout_bytes(active_shape_);
+        case Kind::MaskedFused:
+            return masked_fused_layout_bytes(active_shape_);
+        case Kind::MaskedDecoupled:
+            return masked_decoupled_layout_bytes(active_shape_);
+        case Kind::None:
+            return 0;
+        }
+        return 0;
+    }
+
     void LossWorkspaceArena::ensure_capacity(size_t bytes) {
         if (bytes <= capacity_bytes_ && storage_.is_valid()) {
             return;

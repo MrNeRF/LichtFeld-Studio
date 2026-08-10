@@ -99,3 +99,34 @@ TEST(AllocatorPolicyTest, OversizedSingletonDoesNotEscapeBucketCacheBudget) {
     pool.trim_cache();
     pool.set_cache_budget_for_testing(0);
 }
+
+TEST(AllocatorPolicyTest, LiveBucketWasteTracksOnlyOutstandingAllocations) {
+    int device_count = 0;
+    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
+    if (device_count == 0) {
+        GTEST_SKIP() << "No CUDA device available";
+    }
+
+    constexpr size_t MiB = 1024 * 1024;
+    auto& pool = SizeBucketedPool::instance();
+    const auto baseline =
+        pool.stats().live_rounding_waste.load(std::memory_order_relaxed);
+
+    void* exact = pool.allocate(MiB);
+    ASSERT_NE(exact, nullptr);
+    EXPECT_EQ(pool.stats().live_rounding_waste.load(std::memory_order_relaxed),
+              baseline);
+    pool.deallocate(exact, MiB);
+    EXPECT_EQ(pool.stats().live_rounding_waste.load(std::memory_order_relaxed),
+              baseline);
+
+    constexpr size_t request = MiB + 1;
+    const size_t expected_waste = SizeBucketedPool::get_bucket_size(request) - request;
+    void* rounded = pool.allocate(request);
+    ASSERT_NE(rounded, nullptr);
+    EXPECT_EQ(pool.stats().live_rounding_waste.load(std::memory_order_relaxed),
+              baseline + expected_waste);
+    pool.deallocate(rounded, request);
+    EXPECT_EQ(pool.stats().live_rounding_waste.load(std::memory_order_relaxed),
+              baseline);
+}

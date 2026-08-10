@@ -317,6 +317,7 @@ namespace lfs::diagnostics {
         // Pushed lock-free from the tensor pool's hot path; read into the snapshot
         // under the mutex. A lossy gauge, so no sequence bump on update.
         std::atomic<std::size_t> cuda_pool_bucket_cache_bytes{0};
+        std::atomic<std::size_t> cuda_pool_bucket_live_waste_bytes{0};
         std::size_t cuda_context_baseline = 0;
         std::size_t cuda_warmup_bytes = 0;
         std::size_t cuda_device_baseline = 0;
@@ -951,6 +952,11 @@ namespace lfs::diagnostics {
         impl_->cuda_pool_bucket_cache_bytes.store(bytes, std::memory_order_relaxed);
     }
 
+    void VramProfiler::setCudaPoolBucketLiveWasteBytes(const std::size_t bytes) {
+        // Lock-free: this is updated on every size-bucketed allocation/free.
+        impl_->cuda_pool_bucket_live_waste_bytes.store(bytes, std::memory_order_relaxed);
+    }
+
     void VramProfiler::setCudaSlabReservedBytes(const std::size_t bytes) {
         std::lock_guard lock(impl_->mutex);
         impl_->cuda_slab_reserved_bytes = bytes;
@@ -1100,6 +1106,8 @@ namespace lfs::diagnostics {
             process.vulkan_vma_block_bytes = impl_->vulkan_vma_block_bytes;
             process.cuda_pool_bucket_cache_bytes =
                 impl_->cuda_pool_bucket_cache_bytes.load(std::memory_order_relaxed);
+            process.cuda_pool_bucket_live_waste_bytes =
+                impl_->cuda_pool_bucket_live_waste_bytes.load(std::memory_order_relaxed);
             process.cuda_slab_reserved_bytes = impl_->cuda_slab_reserved_bytes;
             process.exportable_splat_bytes = impl_->exportable_splat_bytes;
             process.cuda_context_baseline = impl_->cuda_context_baseline;
@@ -1425,10 +1433,13 @@ namespace lfs::diagnostics {
                 break;
         }
 
-        out.gauges.reserve(impl_->gauges.size());
+        out.gauges.reserve(impl_->gauges.size() + 1);
         for (const auto& [k, v] : impl_->gauges) {
             out.gauges.push_back({k, v, impl_->gauge_generation});
         }
+        out.gauges.push_back({"vram.audit.pool.bucket_live_rounding_waste",
+                              static_cast<double>(out.process.cuda_pool_bucket_live_waste_bytes),
+                              impl_->gauge_generation});
         std::sort(out.gauges.begin(), out.gauges.end(),
                   [](const auto& a, const auto& b) { return a.key < b.key; });
 

@@ -43,6 +43,7 @@ namespace lfs::core {
             std::atomic<uint64_t> free_count{0};
             std::atomic<uint64_t> bytes_cached{0};
             std::atomic<uint64_t> bytes_wasted{0};
+            std::atomic<uint64_t> live_rounding_waste{0};
             std::atomic<uint64_t> cross_stream_reuse{0};
         };
 
@@ -143,6 +144,7 @@ namespace lfs::core {
                     stats_.cache_hits.fetch_add(1, std::memory_order_relaxed);
                     stats_.bytes_cached.fetch_sub(bucket_size, std::memory_order_relaxed);
                     stats_.bytes_wasted.fetch_add(bucket_size - bytes, std::memory_order_relaxed);
+                    account_live_allocation(bytes);
                     publish_cache_bytes();
                     return block.ptr;
                 }
@@ -159,6 +161,8 @@ namespace lfs::core {
             // Bypass cache for oversize requests (same predicate as allocate).
             if (bucket_index_bypasses_cache(bucket_idx))
                 return false;
+
+            retire_live_allocation(bytes);
 
             {
                 std::lock_guard<std::mutex> lock(buckets_[bucket_idx].mutex);
@@ -234,6 +238,7 @@ namespace lfs::core {
             alloc_counter::record_site(alloc_counter::Site::PoolBucket);
             stats_.alloc_count.fetch_add(1, std::memory_order_relaxed);
             stats_.bytes_wasted.fetch_add(bucket_size - bytes, std::memory_order_relaxed);
+            account_live_allocation(bytes);
             return ptr;
         }
 
@@ -242,6 +247,7 @@ namespace lfs::core {
             if (!ptr)
                 return;
             if (!cache_free(ptr, bytes, stream)) {
+                retire_live_allocation(bytes);
                 const cudaError_t free_status = cudaFreeAsync(ptr, stream);
                 if (free_status != cudaSuccess) {
                     ensure_cuda_success(
@@ -307,6 +313,14 @@ namespace lfs::core {
 
         const Stats& stats() const { return stats_; }
 
+        // Fresh bucket allocations are issued by CudaMemoryPool so it can keep
+        // its own method/site accounting. Record their live quantization here.
+        void account_live_allocation(const size_t bytes) {
+            stats_.live_rounding_waste.fetch_add(
+                get_bucket_size(bytes) - bytes, std::memory_order_relaxed);
+            publish_cache_bytes();
+        }
+
         // Fault-isolated policy hook for allocator regression tests. Zero
         // restores automatic device-sized budgeting on the next cache use.
         void set_cache_budget_for_testing(const size_t bytes) {
@@ -334,6 +348,14 @@ namespace lfs::core {
         void publish_cache_bytes() const {
             lfs::diagnostics::VramProfiler::instance().setCudaPoolBucketCacheBytes(
                 stats_.bytes_cached.load(std::memory_order_relaxed));
+            lfs::diagnostics::VramProfiler::instance().setCudaPoolBucketLiveWasteBytes(
+                stats_.live_rounding_waste.load(std::memory_order_relaxed));
+        }
+
+        void retire_live_allocation(const size_t bytes) {
+            stats_.live_rounding_waste.fetch_sub(
+                get_bucket_size(bytes) - bytes, std::memory_order_relaxed);
+            publish_cache_bytes();
         }
 
         size_t current_cache_budget() {

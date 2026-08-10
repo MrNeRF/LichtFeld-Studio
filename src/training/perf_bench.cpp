@@ -130,7 +130,9 @@ namespace lfs::training {
         peak_pool_reserved_ = 0;
         peak_pool_used_ = 0;
         peak_pool_bucket_cache_ = 0;
+        peak_pool_bucket_live_waste_ = 0;
         peak_exportable_splat_ = 0;
+        peak_arena_required_ = 0;
         peak_arena_capacity_ = 0;
         peak_fastgs_sort_hwm_ = 0;
         peak_fastgs_raster_live_ = 0;
@@ -139,7 +141,8 @@ namespace lfs::training {
         peak_steady_pinned_host_bytes_ = 0;
         peak_iter_ = 0;
         peak_rows_.clear();
-        loss_workspace_bytes_ = 0;
+        loss_workspace_required_bytes_ = 0;
+        loss_workspace_allocated_bytes_ = 0;
         densify_workspace_bytes_ = 0;
         training_state_reserved_bytes_ = 0;
         fastgs_raster_live_bytes_ = 0;
@@ -195,11 +198,21 @@ namespace lfs::training {
         const auto snap = profiler.snapshot();
         peak_pool_bucket_cache_ =
             std::max(peak_pool_bucket_cache_, snap.process.cuda_pool_bucket_cache_bytes);
+        peak_pool_bucket_live_waste_ = std::max(
+            peak_pool_bucket_live_waste_,
+            snap.process.cuda_pool_bucket_live_waste_bytes);
         peak_exportable_splat_ =
             std::max(peak_exportable_splat_, snap.process.exportable_splat_bytes);
         for (const auto& gauge : snap.gauges) {
-            if (gauge.key == "vram.audit.io.decoded_frame_ring.bytes")
+            if (gauge.key == "vram.audit.io.decoded_frame_ring.bytes") {
                 peak_io_ring_bytes_ = std::max(peak_io_ring_bytes_, static_cast<std::size_t>(gauge.value));
+            } else if (gauge.key == "vram.audit.rasterizer_arena.required_bytes") {
+                peak_arena_required_ =
+                    std::max(peak_arena_required_, static_cast<std::size_t>(gauge.value));
+            } else if (gauge.key == "vram.audit.rasterizer_arena.allocated_bytes") {
+                peak_arena_capacity_ =
+                    std::max(peak_arena_capacity_, static_cast<std::size_t>(gauge.value));
+            }
         }
 
         std::size_t arena_cap = 0;
@@ -328,11 +341,15 @@ namespace lfs::training {
         }
     }
 
-    void PerfBenchCollector::set_loss_workspace_bytes(const std::size_t bytes) {
+    void PerfBenchCollector::set_loss_workspace_bytes(const std::size_t required_bytes,
+                                                      const std::size_t allocated_bytes) {
         if (!started_) {
             return;
         }
-        loss_workspace_bytes_ = std::max(loss_workspace_bytes_, bytes);
+        loss_workspace_required_bytes_ =
+            std::max(loss_workspace_required_bytes_, required_bytes);
+        loss_workspace_allocated_bytes_ =
+            std::max(loss_workspace_allocated_bytes_, allocated_bytes);
     }
 
     void PerfBenchCollector::set_densify_workspace_bytes(const std::size_t bytes) {
@@ -365,10 +382,13 @@ namespace lfs::training {
         out.peak_pool_used_bytes = peak_pool_used_;
         out.training_state_bytes = ledger_.total_bytes;
         out.training_state_reserved_bytes = training_state_reserved_bytes_;
-        out.loss_workspace_bytes = loss_workspace_bytes_;
+        out.loss_workspace_required_bytes = loss_workspace_required_bytes_;
+        out.loss_workspace_allocated_bytes = loss_workspace_allocated_bytes_;
         out.densify_workspace_bytes = densify_workspace_bytes_;
+        out.pool_bucket_live_rounding_waste_bytes = peak_pool_bucket_live_waste_;
         out.fastgs_sort_hwm_bytes = peak_fastgs_sort_hwm_;
         out.fastgs_raster_live_bytes = peak_fastgs_raster_live_;
+        out.arena_required_bytes = peak_arena_required_;
         out.arena_capacity_bytes = peak_arena_capacity_;
         out.peak_iter = peak_iter_;
         out.peak_rows = peak_rows_;
@@ -421,17 +441,24 @@ namespace lfs::training {
                 ? training_state_reserved_bytes_ - ledger_.total_bytes
                 : 0,
             /*justified=*/true);
-        add("loss_workspace_arena", "loss_workspace", loss_workspace_bytes_, /*justified=*/true);
+        add("loss_workspace_required", "loss_workspace",
+            loss_workspace_required_bytes_, /*justified=*/true);
+        add("loss_workspace_arena", "loss_workspace",
+            loss_workspace_allocated_bytes_, /*justified=*/true);
         add("densify_child_workspace", "densification", densify_workspace_bytes_,
             /*justified=*/true);
         add("pool_bucket_cache", "allocator", out.pool_bucket_cache_bytes,
             /*justified=*/true);
+        add("pool_bucket_live_rounding_waste", "allocator",
+            out.pool_bucket_live_rounding_waste_bytes, /*justified=*/true);
         add("exportable_splat", "viewport", out.exportable_splat_bytes,
             /*justified=*/true);
         add("fastgs_sort_hwm", "fastgs_sort", out.fastgs_sort_hwm_bytes, /*justified=*/true);
         add("fastgs_raster_live", "FastGS", out.fastgs_raster_live_bytes,
             /*justified=*/true);
         add("rasterizer_arena", "rasterizer", out.arena_capacity_bytes,
+            /*justified=*/true);
+        add("rasterizer_arena_required", "rasterizer", out.arena_required_bytes,
             /*justified=*/true);
         add("io.decoded_frame_ring", "image_loader", peak_io_ring_bytes_, false);
         add("io.external_codec_and_bucketed", "image_loader", peak_io_external_bytes_, true);
@@ -448,7 +475,7 @@ namespace lfs::training {
                 ? training_state_reserved_bytes_ - ledger_.total_bytes
                 : 0;
         const std::size_t new_justified =
-            loss_workspace_bytes_ + densify_workspace_bytes_ + out.pool_bucket_cache_bytes +
+            loss_workspace_allocated_bytes_ + densify_workspace_bytes_ + out.pool_bucket_cache_bytes +
             out.fastgs_sort_hwm_bytes + out.exportable_splat_bytes + capacity_overhead +
             peak_io_external_bytes_;
 
@@ -584,9 +611,22 @@ namespace lfs::training {
         out << "    \"optimizer_bytes\": " << ledger_.optimizer_bytes << ",\n";
         out << "    \"gradients_or_helpers_bytes\": " << ledger_.gradients_or_helpers_bytes << ",\n";
         out << "    \"densify_aux_bytes\": " << ledger_.densify_aux_bytes << ",\n";
-        out << "    \"loss_workspace_bytes\": " << loss_workspace_bytes_ << ",\n";
+        out << "    \"loss_workspace_bytes\": " << loss_workspace_allocated_bytes_ << ",\n";
+        out << "    \"loss_workspace_required_bytes\": "
+            << loss_workspace_required_bytes_ << ",\n";
+        out << "    \"loss_workspace_allocated_bytes\": "
+            << loss_workspace_allocated_bytes_ << ",\n";
         out << "    \"densify_workspace_bytes\": " << densify_workspace_bytes_ << ",\n";
+        out << "    \"training_state_required_bytes\": " << ledger_.total_bytes << ",\n";
+        out << "    \"training_state_allocated_bytes\": "
+            << training_state_reserved_bytes_ << ",\n";
         out << "    \"training_state_reserved_bytes\": " << training_state_reserved_bytes_ << ",\n";
+        out << "    \"pool_bucket_cache_required_bytes\": 0,\n";
+        out << "    \"pool_bucket_cache_allocated_bytes\": "
+            << peak_ledger.pool_bucket_cache_bytes << ",\n";
+        out << "    \"pool_bucket_live_rounding_waste_required_bytes\": 0,\n";
+        out << "    \"pool_bucket_live_rounding_waste_allocated_bytes\": "
+            << peak_ledger.pool_bucket_live_rounding_waste_bytes << ",\n";
         out << "    \"total_bytes\": " << ledger_.total_bytes << ",\n";
         out << "    \"live_splats\": " << ledger_.live_splats << ",\n";
         out << "    \"bytes_per_splat\": " << ledger_.bytes_per_splat << "\n";
@@ -605,6 +645,28 @@ namespace lfs::training {
         out << "    \"peak_pool_reserved_bytes\": " << peak_ledger.peak_pool_reserved_bytes
             << ",\n";
         out << "    \"peak_pool_used_bytes\": " << peak_ledger.peak_pool_used_bytes << ",\n";
+        out << "    \"training_state_required_bytes\": "
+            << peak_ledger.training_state_bytes << ",\n";
+        out << "    \"training_state_allocated_bytes\": "
+            << peak_ledger.training_state_reserved_bytes << ",\n";
+        out << "    \"loss_workspace_required_bytes\": "
+            << peak_ledger.loss_workspace_required_bytes << ",\n";
+        out << "    \"loss_workspace_allocated_bytes\": "
+            << peak_ledger.loss_workspace_allocated_bytes << ",\n";
+        out << "    \"pool_bucket_cache_required_bytes\": 0,\n";
+        out << "    \"pool_bucket_cache_allocated_bytes\": "
+            << peak_ledger.pool_bucket_cache_bytes << ",\n";
+        out << "    \"pool_bucket_live_rounding_waste_required_bytes\": 0,\n";
+        out << "    \"pool_bucket_live_rounding_waste_allocated_bytes\": "
+            << peak_ledger.pool_bucket_live_rounding_waste_bytes << ",\n";
+        out << "    \"fastgs_raster_required_bytes\": "
+            << peak_ledger.fastgs_raster_live_bytes << ",\n";
+        out << "    \"fastgs_raster_allocated_bytes\": "
+            << peak_ledger.fastgs_raster_live_bytes << ",\n";
+        out << "    \"rasterizer_arena_required_bytes\": "
+            << peak_ledger.arena_required_bytes << ",\n";
+        out << "    \"rasterizer_arena_allocated_bytes\": "
+            << peak_ledger.arena_capacity_bytes << ",\n";
         out << "    \"steady_pinned_active_cached_bytes\": "
             << peak_steady_pinned_host_bytes_ << ",\n";
         out << "    \"fastgs_sort_hwm_bytes\": " << peak_ledger.fastgs_sort_hwm_bytes << ",\n";

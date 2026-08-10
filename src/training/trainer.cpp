@@ -748,8 +748,18 @@ namespace lfs::training {
             return inputs;
         }
 
-        [[nodiscard]] size_t photometric_workspace_bytes(const losses::PhotometricLoss& photometric_loss) {
-            return photometric_loss.arena().allocated_bytes();
+        struct WorkspaceDisclosure {
+            size_t required = 0;
+            size_t allocated = 0;
+        };
+
+        [[nodiscard]] WorkspaceDisclosure
+        photometric_workspace_bytes(const losses::PhotometricLoss& photometric_loss) {
+            const auto& arena = photometric_loss.arena();
+            return {
+                .required = arena.required_bytes(),
+                .allocated = arena.allocated_bytes(),
+            };
         }
 
         [[nodiscard]] size_t ssim_map_workspace_bytes(const kernels::SSIMMapWorkspace& workspace) {
@@ -780,6 +790,24 @@ namespace lfs::training {
                     ? lfs::diagnostics::VramAllocationMethod::Direct
                     : lfs::diagnostics::VramAllocationMethod::External;
             record_vram_current(scope, label, tensor_reserved_bytes(tensor), false, method);
+        }
+
+        void record_rasterizer_arena_disclosure(std::string_view scope) {
+            auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
+            if (!arena) {
+                return;
+            }
+            const auto info = arena->get_memory_info();
+            record_vram_current(scope, "arena.capacity", info.arena_capacity);
+            record_vram_current(scope, "arena.current_usage", info.current_usage);
+            record_vram_current(scope, "arena.peak_usage", info.peak_usage);
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.setGauge("vram.audit.rasterizer_arena.required_bytes",
+                              static_cast<double>(info.peak_usage));
+            profiler.setGauge("vram.audit.rasterizer_arena.allocated_bytes",
+                              static_cast<double>(info.arena_capacity));
+            profiler.setGauge("vram.audit.rasterizer_arena.current_usage_bytes",
+                              static_cast<double>(info.current_usage));
         }
 
         void record_vram_entries(std::string_view scope,
@@ -848,11 +876,17 @@ namespace lfs::training {
             record_vram_current(scope, "forward.per_primitive_buffers", ctx.forward_ctx.per_primitive_buffers_size);
             record_vram_current(scope, "forward.per_tile_buffers", ctx.forward_ctx.per_tile_buffers_size);
             record_vram_current(scope, "forward.sorted_indices_live", ctx.forward_ctx.sorted_primitive_indices_size);
+            record_rasterizer_arena_disclosure(scope);
+            const std::size_t raster_live =
+                ctx.forward_ctx.per_primitive_buffers_size +
+                ctx.forward_ctx.per_tile_buffers_size +
+                ctx.forward_ctx.sorted_primitive_indices_size;
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.setGauge("vram.audit.fastgs_raster_live.required_bytes",
+                              static_cast<double>(raster_live));
+            profiler.setGauge("vram.audit.fastgs_raster_live.allocated_bytes",
+                              static_cast<double>(raster_live));
             if (PerfBenchCollector::enabled()) {
-                const std::size_t raster_live =
-                    ctx.forward_ctx.per_primitive_buffers_size +
-                    ctx.forward_ctx.per_tile_buffers_size +
-                    ctx.forward_ctx.sorted_primitive_indices_size;
                 PerfBenchCollector::instance().set_fastgs_raster_live_bytes(raster_live);
             }
             // Sort scratch is released after forward, and sort_total includes sorted_indices_live.
@@ -894,11 +928,8 @@ namespace lfs::training {
                     frame_bytes += buffer.size;
                 }
                 record_vram_current(scope, "arena.frame_buffers", frame_bytes);
-                const auto info = arena->get_memory_info();
-                record_vram_current(scope, "arena.capacity", info.arena_capacity);
-                record_vram_current(scope, "arena.current_usage", info.current_usage);
-                record_vram_current(scope, "arena.peak_usage", info.peak_usage);
             }
+            record_rasterizer_arena_disclosure(scope);
             record_vram_current(scope, "forward.isect_ids", static_cast<std::size_t>(ctx.n_isects) * sizeof(std::int64_t));
             record_vram_current(scope, "forward.flatten_ids", static_cast<std::size_t>(ctx.n_isects) * sizeof(std::int32_t));
             record_vram_tensor(scope, "output.image", output.image);
@@ -4495,10 +4526,15 @@ namespace lfs::training {
                                 const auto loss_ws =
                                     photometric_workspace_bytes(photometric_loss_);
                                 record_vram_current("train.losses", "loss_workspace_arena",
-                                                    loss_ws);
+                                                    loss_ws.allocated);
+                                auto& profiler = lfs::diagnostics::VramProfiler::instance();
+                                profiler.setGauge("vram.audit.loss_workspace.required_bytes",
+                                                  static_cast<double>(loss_ws.required));
+                                profiler.setGauge("vram.audit.loss_workspace.allocated_bytes",
+                                                  static_cast<double>(loss_ws.allocated));
                                 if (PerfBenchCollector::enabled()) {
                                     PerfBenchCollector::instance().set_loss_workspace_bytes(
-                                        loss_ws);
+                                        loss_ws.required, loss_ws.allocated);
                                 }
                             }
                         }
@@ -5212,10 +5248,15 @@ namespace lfs::training {
                                 const auto loss_ws =
                                     photometric_workspace_bytes(photometric_loss_);
                                 record_vram_current("train.losses", "loss_workspace_arena",
-                                                    loss_ws);
+                                                    loss_ws.allocated);
+                                auto& profiler = lfs::diagnostics::VramProfiler::instance();
+                                profiler.setGauge("vram.audit.loss_workspace.required_bytes",
+                                                  static_cast<double>(loss_ws.required));
+                                profiler.setGauge("vram.audit.loss_workspace.allocated_bytes",
+                                                  static_cast<double>(loss_ws.allocated));
                                 if (PerfBenchCollector::enabled()) {
                                     PerfBenchCollector::instance().set_loss_workspace_bytes(
-                                        loss_ws);
+                                        loss_ws.required, loss_ws.allocated);
                                 }
                             }
                             record_vram_current("train.losses", "densification_ssim.workspace",

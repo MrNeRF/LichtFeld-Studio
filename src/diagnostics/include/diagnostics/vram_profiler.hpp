@@ -135,12 +135,15 @@ namespace lfs::diagnostics {
         std::size_t ex_cache_net_bytes = 0;
         std::size_t training_state_bytes = 0;          // params+optim+densify (logical)
         std::size_t training_state_reserved_bytes = 0; // capacity-backed
-        std::size_t loss_workspace_bytes = 0;
+        std::size_t loss_workspace_required_bytes = 0;
+        std::size_t loss_workspace_allocated_bytes = 0;
         std::size_t densify_workspace_bytes = 0;
         std::size_t pool_bucket_cache_bytes = 0; // at peak moment when possible
+        std::size_t pool_bucket_live_rounding_waste_bytes = 0;
         std::size_t exportable_splat_bytes = 0;
         std::size_t fastgs_sort_hwm_bytes = 0;
         std::size_t fastgs_raster_live_bytes = 0; // per_prim+tile+sorted at peak
+        std::size_t arena_required_bytes = 0;
         std::size_t arena_capacity_bytes = 0;
         std::size_t ex_cache_bytes = 0;
         std::size_t baseline_ex_cache_bytes = kExCacheBaselineBytes;
@@ -162,6 +165,9 @@ namespace lfs::diagnostics {
         // still counted in cuda_pool_used but not in the allocator's live map. Lets
         // the HUD split cuda.pool.untracked_used into reclaimable cache vs the rest.
         std::size_t cuda_pool_bucket_cache_bytes = 0;
+        // Quantization waste for outstanding size-bucketed allocations only.
+        // Cached free-list entries are excluded and reported by the cache field.
+        std::size_t cuda_pool_bucket_live_waste_bytes = 0;
         // Device memory committed by the small-allocation slab allocator. Live
         // blocks are tracked individually; the reserve gap is free space inside
         // committed slabs that still belongs to this process.
@@ -348,6 +354,7 @@ namespace lfs::diagnostics {
         void setVulkanVmaUsed(std::size_t bytes);
         void setVulkanVmaBlockBytes(std::size_t bytes);
         void setCudaPoolBucketCacheBytes(std::size_t bytes);
+        void setCudaPoolBucketLiveWasteBytes(std::size_t bytes);
         void setCudaSlabReservedBytes(std::size_t bytes);
         void setExportableSplatBytes(std::size_t bytes);
         void captureCudaDeviceBaseline();

@@ -179,6 +179,7 @@ namespace lfs::core {
                 const auto pre_call_state = sample_cuda_pre_call_state(stream);
                 cudaError_t err = cudaMallocAsync(&ptr, bucket_size, stream);
                 if (err == cudaSuccess) {
+                    SizeBucketedPool::instance().account_live_allocation(bytes);
                     alloc_counter::record_site(alloc_counter::Site::PoolBucket);
                     stats_.bucket_allocs.fetch_add(1, std::memory_order_relaxed);
                     stats_.bucket_bytes.fetch_add(bytes, std::memory_order_relaxed);

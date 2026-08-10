@@ -346,6 +346,7 @@ namespace lfs::training::kernels {
         }
 
         [[nodiscard]] size_t allocated_bytes() const { return capacity_bytes_; }
+        [[nodiscard]] size_t required_bytes() const;
         [[nodiscard]] Kind active_kind() const { return active_kind_; }
         [[nodiscard]] const std::vector<size_t>& active_shape() const { return active_shape_; }
 
