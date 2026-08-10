@@ -1000,51 +1000,6 @@ namespace lfs::vis::gui {
         return y_offset;
     }
 
-    void PanelRegistry::draw_single_panel(const std::string& id, const PanelDrawContext& ctx) {
-        std::shared_ptr<IPanel> panel_holder;
-        PanelSnapshot snap{};
-        PanelSpace panel_space = PanelSpace::Floating;
-        bool found = false;
-        {
-            std::lock_guard lock(mutex_);
-            for (size_t i = 0; i < panels_.size(); ++i) {
-                if (panels_[i].id == id && panels_[i].enabled && !panels_[i].error_disabled &&
-                    !shouldSuppressPanelForContext(panels_[i], ctx)) {
-                    panel_holder = panels_[i].panel;
-                    snap = {i, panels_[i].panel.get(), panels_[i].label, panels_[i].id,
-                            panels_[i].parent_id, panels_[i].options, panels_[i].is_native,
-                            panels_[i].poll_dependencies, panels_[i].initial_width, panels_[i].initial_height,
-                            panels_[i].float_x, panels_[i].float_y};
-                    panel_space = panels_[i].space;
-                    found = true;
-                    break;
-                }
-            }
-        }
-
-        if (!found)
-            return;
-
-        try {
-            if (!check_poll(snap, ctx))
-                return;
-        } catch (const std::exception& e) {
-            LOG_ERROR("Panel '{}' poll error: {}", snap.label, e.what());
-            return;
-        }
-
-        bool draw_succeeded = false;
-        try {
-            snap.panel->setPanelSpace(panel_space);
-            snap.panel->draw(ctx);
-            draw_succeeded = true;
-        } catch (const std::exception& e) {
-            LOG_ERROR("Panel '{}' error: {}", snap.label, e.what());
-        }
-
-        track_draw_result(snap, draw_succeeded);
-    }
-
     bool PanelRegistry::has_panels(PanelSpace space) const {
         std::lock_guard lock(mutex_);
         for (const auto& p : panels_) {

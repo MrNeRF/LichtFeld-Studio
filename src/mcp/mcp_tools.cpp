@@ -629,10 +629,4 @@ namespace lfs::mcp {
             });
     }
 
-    void register_builtin_tools() {
-        register_core_tools();
-        register_core_resources();
-        register_scene_tools();
-    }
-
 } // namespace lfs::mcp

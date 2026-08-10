@@ -78,8 +78,7 @@ NvJpegException NvJpegException::FromNvJpegError(nvjpegStatus_t status, const st
     if (it != nvjpeg_status_to_nvimgcodec_error_map.end())
         e.status_ = it->second;
     std::stringstream ss;
-    ss << "nvjpeg error #" << static_cast<int>(status) << " (" << getErrorString(status) << ")"
-       << " when running " << where;
+    ss << "nvjpeg error #" << static_cast<int>(status) << " (" << getErrorString(status) << ")" << " when running " << where;
     e.info_ = ss.str();
     return e;
 }

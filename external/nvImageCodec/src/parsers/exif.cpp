@@ -52,15 +52,7 @@ namespace nvimgcodec {
 
     namespace cv {
 
-        ExifEntry_t::ExifEntry_t() : field_float(0),
-                                     field_double(0),
-                                     field_u32(0),
-                                     field_s32(0),
-                                     tag(INVALID_TAG),
-                                     field_u16(0),
-                                     field_s16(0),
-                                     field_u8(0),
-                                     field_s8(0) {
+        ExifEntry_t::ExifEntry_t() : field_float(0), field_double(0), field_u32(0), field_s32(0), tag(INVALID_TAG), field_u16(0), field_s16(0), field_u8(0), field_s8(0) {
         }
 
         /**

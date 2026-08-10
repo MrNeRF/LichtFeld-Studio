@@ -121,7 +121,4 @@ namespace lfs::mcp {
         mutable std::mutex mutex_;
         mutable std::mutex selection_mutex_;
     };
-
-    LFS_MCP_API void register_scene_tools();
-
 } // namespace lfs::mcp

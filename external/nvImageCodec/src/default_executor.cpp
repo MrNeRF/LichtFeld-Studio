@@ -23,10 +23,7 @@
 namespace nvimgcodec {
 
     DefaultExecutor::DefaultExecutor(ILogger* logger, int num_threads)
-        : logger_(logger),
-          desc_{NVIMGCODEC_STRUCTURE_TYPE_EXECUTOR_DESC, sizeof(nvimgcodecExecutorDesc_t), nullptr, this, &static_schedule, &static_run,
-                &static_wait, &static_get_num_threads},
-          num_threads_(num_threads) {
+        : logger_(logger), desc_{NVIMGCODEC_STRUCTURE_TYPE_EXECUTOR_DESC, sizeof(nvimgcodecExecutorDesc_t), nullptr, this, &static_schedule, &static_run, &static_wait, &static_get_num_threads}, num_threads_(num_threads) {
         const int cpu_cores_count = std::thread::hardware_concurrency();
         if (cpu_cores_count > 0 && num_threads_ > cpu_cores_count - 1) { // -1 because we also use the main thread.
             NVIMGCODEC_LOG_WARNING(logger_, "Requested " << num_threads_ << " threads but there are only " << cpu_cores_count

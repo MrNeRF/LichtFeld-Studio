@@ -273,7 +273,6 @@ namespace lfs::vis::gui {
         void draw_panels(PanelSpace space, const PanelDrawContext& ctx,
                          const PanelInputState* input = nullptr);
         void preload_panels(PanelSpace space, const PanelDrawContext& ctx);
-        void draw_single_panel(const std::string& id, const PanelDrawContext& ctx);
         bool has_panels(PanelSpace space) const;
 
         float draw_panels_direct(PanelSpace space, float x, float y, float w, float max_h,

@@ -82,6 +82,4 @@ namespace lfs::mcp {
 
     LFS_MCP_API void register_core_tools();
     LFS_MCP_API void register_core_resources();
-    LFS_MCP_API void register_builtin_tools();
-
 } // namespace lfs::mcp
