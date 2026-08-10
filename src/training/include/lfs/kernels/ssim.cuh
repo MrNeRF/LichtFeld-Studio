@@ -397,7 +397,7 @@ namespace lfs::training::kernels {
         void bind_masked_fused(const std::vector<size_t>& shape);
         void bind_masked_decoupled(const std::vector<size_t>& shape);
 
-        lfs::core::Tensor storage_; // UInt8 grow-only blob
+        lfs::core::Tensor storage_; // UInt8 blob sized to the aligned active layout
         size_t capacity_bytes_ = 0;
         Kind active_kind_ = Kind::None;
         std::vector<size_t> active_shape_;

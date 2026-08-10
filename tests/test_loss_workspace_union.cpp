@@ -5,7 +5,7 @@
 /**
  * @file test_loss_workspace_union.cpp
  * @brief Mutually exclusive L1+SSIM workspaces share one arena
- *        region (capacity = max(variant), not sum).
+ *        region sized exactly to the active variant.
  */
 
 #include <gtest/gtest.h>
@@ -63,6 +63,17 @@ namespace {
                tensor_bytes(w.reduction_temp) + tensor_bytes(w.masked_loss) + tensor_bytes(w.mask_sum);
     }
 
+    constexpr size_t align_arena_bytes(const size_t bytes) {
+        constexpr size_t alignment = 256;
+        return (bytes + alignment - 1) & ~(alignment - 1);
+    }
+
+    void expect_exact_active_allocation(const LossWorkspaceArena& arena,
+                                        const size_t required) {
+        EXPECT_EQ(arena.required_bytes(), required);
+        EXPECT_EQ(arena.allocated_bytes(), align_arena_bytes(required));
+    }
+
 } // namespace
 
 class LossWorkspaceUnionTest : public ::testing::Test {
@@ -76,8 +87,8 @@ protected:
     }
 };
 
-// Five independent workspaces retain the sum of their allocations, while
-// SequentialModesThroughArenaStayWithinMax checks the production union path.
+// Five independent workspaces retain the sum of their allocations, while the
+// production arena keeps only its active variant.
 TEST_F(LossWorkspaceUnionTest, IndependentWorkspacesRetainSum) {
     const std::vector<size_t> shape = {1, 3, 64, 96};
 
@@ -109,42 +120,55 @@ TEST_F(LossWorkspaceUnionTest, IndependentWorkspacesRetainSum) {
         << "sum should be well above a single variant";
 }
 
-// Sequential activation through the shared arena must retain the largest variant
-// plus alignment slack, not the sum of every mode touched.
-TEST_F(LossWorkspaceUnionTest, SequentialModesThroughArenaStayWithinMax) {
+// Sequential activation must resize in both directions to the active layout.
+TEST_F(LossWorkspaceUnionTest, SequentialModesThroughArenaTrackActiveVariantExactly) {
     const std::vector<size_t> shape = {1, 3, 64, 96};
-
-    // Independently allocated variants provide the maximum-size oracle.
-    FusedL1SSIMWorkspace fused_ref;
-    SSIMWorkspace pure_ref;
-    DecoupledFusedL1SSIMWorkspace decoupled_ref;
-    MaskedFusedL1SSIMWorkspace masked_ref;
-    MaskedDecoupledFusedL1SSIMWorkspace masked_decoupled_ref;
-    fused_ref.ensure_size(shape);
-    pure_ref.ensure_size(shape);
-    decoupled_ref.ensure_size(shape);
-    masked_ref.ensure_size(shape);
-    masked_decoupled_ref.ensure_size(shape);
-    const size_t max_variant = std::max({fused_bytes(fused_ref), pure_ssim_bytes(pure_ref),
-                                         decoupled_bytes(decoupled_ref), masked_bytes(masked_ref),
-                                         masked_decoupled_bytes(masked_decoupled_ref)});
-    const size_t slack = 256 * 1024; // arena alignment / grow headroom
 
     LossWorkspaceArena arena;
     arena.ensure_fused(shape);
-    EXPECT_EQ(arena.required_bytes(), LossWorkspaceArena::fused_layout_bytes(shape));
-    EXPECT_GE(arena.allocated_bytes(), arena.required_bytes());
-    arena.ensure_pure_ssim(shape);
-    arena.ensure_decoupled(shape);
-    arena.ensure_masked_fused(shape);
-    arena.ensure_masked_decoupled(shape);
+    expect_exact_active_allocation(arena, LossWorkspaceArena::fused_layout_bytes(shape));
 
-    const size_t total = arena.allocated_bytes();
-    EXPECT_LE(total, max_variant + slack)
-        << "arena retained " << total << " bytes after touching all modes; "
-        << "max single variant is " << max_variant << " (slack=" << slack << ")";
-    EXPECT_GE(total, max_variant)
-        << "arena must be large enough for the largest variant";
+    arena.ensure_pure_ssim(shape);
+    expect_exact_active_allocation(arena, LossWorkspaceArena::pure_ssim_layout_bytes(shape));
+
+    arena.ensure_decoupled(shape);
+    expect_exact_active_allocation(arena, LossWorkspaceArena::decoupled_layout_bytes(shape));
+
+    arena.ensure_masked_fused(shape);
+    expect_exact_active_allocation(arena, LossWorkspaceArena::masked_fused_layout_bytes(shape));
+
+    arena.ensure_masked_decoupled(shape);
+    expect_exact_active_allocation(
+        arena, LossWorkspaceArena::masked_decoupled_layout_bytes(shape));
+}
+
+TEST_F(LossWorkspaceUnionTest, ActiveVariantAllocationMatchesRequiredAtTwoShapes) {
+    const std::vector<std::vector<size_t>> shapes = {
+        {1, 3, 17, 29},
+        {2, 3, 64, 96},
+    };
+
+    LossWorkspaceArena arena;
+    for (const auto& shape : shapes) {
+        SCOPED_TRACE(::testing::Message() << "shape=" << shape[0] << "x" << shape[1]
+                                          << "x" << shape[2] << "x" << shape[3]);
+
+        arena.ensure_fused(shape);
+        expect_exact_active_allocation(arena, LossWorkspaceArena::fused_layout_bytes(shape));
+
+        arena.ensure_pure_ssim(shape);
+        expect_exact_active_allocation(arena, LossWorkspaceArena::pure_ssim_layout_bytes(shape));
+
+        arena.ensure_decoupled(shape);
+        expect_exact_active_allocation(arena, LossWorkspaceArena::decoupled_layout_bytes(shape));
+
+        arena.ensure_masked_fused(shape);
+        expect_exact_active_allocation(arena, LossWorkspaceArena::masked_fused_layout_bytes(shape));
+
+        arena.ensure_masked_decoupled(shape);
+        expect_exact_active_allocation(
+            arena, LossWorkspaceArena::masked_decoupled_layout_bytes(shape));
+    }
 }
 
 // Loss values must match between arena-backed and independently-allocated fused workspaces.
@@ -196,18 +220,16 @@ TEST_F(LossWorkspaceUnionTest, PhotometricLossExposesSharedArena) {
     auto& arena = loss.arena();
     const size_t after_fused = arena.allocated_bytes();
     ASSERT_GT(after_fused, 0u);
+    ASSERT_EQ(arena.active_kind(), LossWorkspaceArena::Kind::Fused);
+    expect_exact_active_allocation(
+        arena, LossWorkspaceArena::fused_layout_bytes(arena.active_shape()));
 
     arena.ensure_decoupled(shape);
+    expect_exact_active_allocation(arena, LossWorkspaceArena::decoupled_layout_bytes(shape));
     arena.ensure_masked_fused(shape);
+    expect_exact_active_allocation(arena, LossWorkspaceArena::masked_fused_layout_bytes(shape));
     arena.ensure_pure_ssim(shape);
-
-    const size_t after_many = arena.allocated_bytes();
-    // Capacity is grow-only and must not climb to sum-of-modes.
-    // max(variant) at 32x48 is well under 16 MiB; sum would be larger.
-    EXPECT_LE(after_many, after_fused + 8 * 1024 * 1024)
-        << "arena grew too much after mode switches: fused=" << after_fused
-        << " after_many=" << after_many;
-    EXPECT_LE(after_many, 16ull * 1024 * 1024);
+    expect_exact_active_allocation(arena, LossWorkspaceArena::pure_ssim_layout_bytes(shape));
 }
 
 // The appearance branch omits sigma partials while preserving gradient results.

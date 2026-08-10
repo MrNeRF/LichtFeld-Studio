@@ -2674,23 +2674,25 @@ namespace lfs::training::kernels {
     }
 
     void LossWorkspaceArena::ensure_capacity(size_t bytes) {
-        if (bytes <= capacity_bytes_ && storage_.is_valid()) {
+        const size_t required_capacity = align_up_bytes(bytes);
+        if (required_capacity == capacity_bytes_ && storage_.is_valid()) {
             return;
         }
-        // Grow-only; bump by 25% to absorb small resolution steps without thrash.
-        const size_t grown = capacity_bytes_ + capacity_bytes_ / 4;
-        capacity_bytes_ = std::max(bytes, grown);
-        capacity_bytes_ = align_up_bytes(capacity_bytes_);
-        storage_ = lfs::core::Tensor::empty({capacity_bytes_}, lfs::core::Device::CUDA,
-                                            lfs::core::DataType::UInt8);
+
+        auto new_storage = lfs::core::Tensor::empty(
+            {required_capacity}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
         // Stamp the home stream so from_blob views inherit a valid producer stream.
-        if (storage_.stream() != lfs::core::getCurrentCUDAStream()) {
-            storage_.set_stream(lfs::core::getCurrentCUDAStream());
+        if (new_storage.stream() != lfs::core::getCurrentCUDAStream()) {
+            new_storage.set_stream(lfs::core::getCurrentCUDAStream());
         }
-        // Storage reallocation invalidates all views.
+
+        // A size change is an active-variant/shape boundary. Replace the backing
+        // storage exactly (growing or shrinking) and invalidate every old view.
+        clear_all_views();
+        storage_ = std::move(new_storage);
+        capacity_bytes_ = required_capacity;
         active_kind_ = Kind::None;
         active_shape_.clear();
-        clear_all_views();
     }
 
     void LossWorkspaceArena::clear_all_views() {
@@ -2864,7 +2866,7 @@ namespace lfs::training::kernels {
     }
 
     FusedL1SSIMWorkspace& LossWorkspaceArena::ensure_fused(const std::vector<size_t>& shape) {
-        ensure_capacity(max_variant_bytes(shape));
+        ensure_capacity(fused_layout_bytes(shape));
         if (active_kind_ == Kind::Fused && active_shape_ == shape && fused_.ssim_map.is_valid()) {
             return fused_;
         }
@@ -2876,7 +2878,7 @@ namespace lfs::training::kernels {
     }
 
     SSIMWorkspace& LossWorkspaceArena::ensure_pure_ssim(const std::vector<size_t>& shape) {
-        ensure_capacity(max_variant_bytes(shape));
+        ensure_capacity(pure_ssim_layout_bytes(shape));
         if (active_kind_ == Kind::PureSSIM && active_shape_ == shape && pure_ssim_.ssim_map.is_valid()) {
             return pure_ssim_;
         }
@@ -2888,7 +2890,7 @@ namespace lfs::training::kernels {
     }
 
     DecoupledFusedL1SSIMWorkspace& LossWorkspaceArena::ensure_decoupled(const std::vector<size_t>& shape) {
-        ensure_capacity(max_variant_bytes(shape));
+        ensure_capacity(decoupled_layout_bytes(shape));
         if (active_kind_ == Kind::Decoupled && active_shape_ == shape && decoupled_.ssim_map.is_valid()) {
             return decoupled_;
         }
@@ -2900,7 +2902,7 @@ namespace lfs::training::kernels {
     }
 
     MaskedFusedL1SSIMWorkspace& LossWorkspaceArena::ensure_masked_fused(const std::vector<size_t>& shape) {
-        ensure_capacity(max_variant_bytes(shape));
+        ensure_capacity(masked_fused_layout_bytes(shape));
         if (active_kind_ == Kind::MaskedFused && active_shape_ == shape &&
             masked_fused_.ssim_map.is_valid()) {
             return masked_fused_;
@@ -2914,7 +2916,7 @@ namespace lfs::training::kernels {
 
     MaskedDecoupledFusedL1SSIMWorkspace&
     LossWorkspaceArena::ensure_masked_decoupled(const std::vector<size_t>& shape) {
-        ensure_capacity(max_variant_bytes(shape));
+        ensure_capacity(masked_decoupled_layout_bytes(shape));
         if (active_kind_ == Kind::MaskedDecoupled && active_shape_ == shape &&
             masked_decoupled_.ssim_map.is_valid()) {
             return masked_decoupled_;
