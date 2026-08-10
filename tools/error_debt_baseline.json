@@ -130,9 +130,9 @@
       "src/training/rasterization/gsplat_rasterizer.cpp:683",
       "src/training/strategies/mcmc.cpp:909",
       "src/training/strategies/mcmc.cpp:923",
-      "src/training/strategies/mrnf.cpp:562",
-      "src/training/strategies/mrnf.cpp:589",
-      "src/training/strategies/strategy_utils.cpp:562"
+      "src/training/strategies/mrnf.cpp:523",
+      "src/training/strategies/mrnf.cpp:550",
+      "src/training/strategies/strategy_utils.cpp:541"
     ],
     "visualizer": [
       "src/visualizer/gui/gpu_memory_query.cpp:57",
@@ -236,8 +236,7 @@
       "src/training/rasterization/edge_compute/rasterization/src/rasterization_api.cu:135",
       "src/training/rasterization/fastgs/rasterization/src/rasterization_api.cu:427",
       "src/training/rasterization/fastgs/rasterization/src/rasterization_api.cu:538",
-      "src/training/rasterization/fastgs/rasterization/src/rasterization_api.cu:673",
-      "src/training/strategies/mrnf.cpp:797"
+      "src/training/rasterization/fastgs/rasterization/src/rasterization_api.cu:673"
     ],
     "visualizer": [
       "src/visualizer/core/data_loading_service.cpp:239",
