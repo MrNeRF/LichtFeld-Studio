@@ -74,6 +74,29 @@ namespace lfs::vis {
                 2.0f * pixel.y / static_cast<float>(render_size.y)};
     }
 
+    glm::mat4 applySceneProjectionJitter(const glm::mat4& projection,
+                                         const glm::vec2 jitter_ndc) {
+        if (!std::isfinite(jitter_ndc.x) || !std::isfinite(jitter_ndc.y)) {
+            return projection;
+        }
+        glm::mat4 jittered = projection;
+        for (int column = 0; column < 4; ++column) {
+            jittered[column][0] += jitter_ndc.x * projection[column][3];
+            jittered[column][1] += jitter_ndc.y * projection[column][3];
+        }
+        return jittered;
+    }
+
+    TemporalProjectionPair makeTemporalProjectionPair(
+        const TemporalFrameState& state,
+        const glm::mat4& current_projection,
+        const glm::mat4& previous_projection) {
+        return {
+            .current = applySceneProjectionJitter(current_projection, state.current_jitter),
+            .previous = applySceneProjectionJitter(previous_projection, state.previous_jitter),
+        };
+    }
+
     std::size_t TemporalFrameTracker::index(const TemporalViewId id) {
         return static_cast<std::size_t>(id);
     }

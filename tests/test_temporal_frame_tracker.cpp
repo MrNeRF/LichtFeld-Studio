@@ -60,6 +60,31 @@ namespace lfs::vis {
         EXPECT_EQ(temporalJitterNdc(3, {0, 50}), glm::vec2(0.0f));
     }
 
+    TEST(TemporalFrameTracker, JitterOffsetsOnlyTheSuppliedSceneProjection) {
+        const glm::mat4 projection(1.0f);
+        const glm::vec4 point(0.2f, -0.1f, 0.5f, 1.0f);
+        const glm::vec2 jitter(0.25f, -0.5f);
+        const glm::vec4 shifted = applySceneProjectionJitter(projection, jitter) * point;
+        EXPECT_NEAR(shifted.x / shifted.w, point.x / point.w + jitter.x, 1e-6f);
+        EXPECT_NEAR(shifted.y / shifted.w, point.y / point.w + jitter.y, 1e-6f);
+        EXPECT_EQ(applySceneProjectionJitter(projection, glm::vec2(0.0f)), projection);
+        EXPECT_EQ(applySceneProjectionJitter(
+                      projection,
+                      {std::numeric_limits<float>::quiet_NaN(), 0.0f}),
+                  projection);
+    }
+
+    TEST(TemporalFrameTracker, ProjectionPairUsesCurrentAndPreviousJitter) {
+        TemporalFrameState state;
+        state.current_jitter = {0.25f, 0.0f};
+        state.previous_jitter = {-0.25f, 0.0f};
+        const auto pair = makeTemporalProjectionPair(
+            state, glm::mat4(1.0f), glm::mat4(1.0f));
+        const glm::vec4 point(0.0f, 0.0f, 0.0f, 1.0f);
+        EXPECT_NEAR((pair.current * point).x, 0.25f, 1e-6f);
+        EXPECT_NEAR((pair.previous * point).x, -0.25f, 1e-6f);
+    }
+
     TEST(TemporalFrameTracker, CameraMotionPreservesHistoryButExplicitCutResetsIt) {
         TemporalFrameTracker tracker;
         auto input = frameInput();

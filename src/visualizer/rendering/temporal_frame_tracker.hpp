@@ -72,6 +72,18 @@ namespace lfs::vis {
         bool history_valid = false;
     };
 
+    struct TemporalProjectionPair {
+        glm::mat4 current{1.0f};
+        glm::mat4 previous{1.0f};
+    };
+
+    [[nodiscard]] LFS_VIS_API glm::mat4 applySceneProjectionJitter(
+        const glm::mat4& projection, glm::vec2 jitter_ndc);
+    [[nodiscard]] LFS_VIS_API TemporalProjectionPair makeTemporalProjectionPair(
+        const TemporalFrameState& state,
+        const glm::mat4& current_projection,
+        const glm::mat4& previous_projection);
+
     class LFS_VIS_API TemporalFrameTracker {
     public:
         [[nodiscard]] TemporalFrameState prepare(TemporalViewId id,
