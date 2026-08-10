@@ -8,22 +8,16 @@
 
 namespace fast_lfs::rasterization {
 
-    // Optimizer moments: either legacy uint8 m/v + per-primitive scales, or joint
-    // (u, log_s) packed + float4 bounds per 256-splat block.
-    // joint_bits == 0 → legacy; 8 or 16 → joint codec.
+    // Optimizer moments use joint (u, log_s) packing plus float4 bounds per
+    // 256-splat block. joint_bits == 0 disables updates; 8 or 16 selects the codec.
     // SH value quant: when sh_value_bits==16, `param` is uint16 codes
     // (pad-dropped cell-linear swizzle) and sh_value_bounds is float2 per 256-prim block.
     struct FusedAdamParam {
         float* param = nullptr; // float params OR bitcast uint16* when sh_value_bits==16
-        // Legacy codec
-        std::uint8_t* exp_avg_q = nullptr;
-        std::uint8_t* exp_avg_sq_q = nullptr;
-        float* exp_avg_scale = nullptr;
-        float* exp_avg_sq_scale = nullptr;
         // Joint codec: packed (u,log_s) bytes + float4 bounds[n_bounds]
         std::uint8_t* joint_packed = nullptr;
         float* joint_bounds = nullptr; // float4 as 4 floats per bound
-        int joint_bits = 0;            // 0=legacy, 8=SH, 16=non-SH
+        int joint_bits = 0;            // 0=disabled, 8=SH, 16=non-SH
         // SH value quant — only meaningful on fused.shN
         float* sh_value_bounds = nullptr; // float2 as 2 floats per 256-prim block
         int sh_value_bits = 0;            // 0=fp32 param, 16=uint16 codes

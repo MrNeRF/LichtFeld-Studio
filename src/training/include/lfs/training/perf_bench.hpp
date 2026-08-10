@@ -86,8 +86,6 @@ namespace lfs::training {
         // Build the peak ex-cache ledger (owners + justified residuals).
         [[nodiscard]] diagnostics::PeakExCacheLedger peak_ex_cache_ledger() const;
 
-        [[nodiscard]] bool started() const noexcept { return started_; }
-
     private:
         PerfBenchCollector() = default;
 

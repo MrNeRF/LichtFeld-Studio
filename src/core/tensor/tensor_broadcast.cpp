@@ -6,7 +6,6 @@
 #include "internal/cuda_stream_context.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
-#include "internal/tensor_zero_stride.hpp"
 
 namespace lfs::core {
 

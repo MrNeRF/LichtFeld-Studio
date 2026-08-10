@@ -5329,7 +5329,6 @@ namespace lfs::vis::gui {
                     }
                 }
                 perf_snapshot->rate = rate;
-                perf_snapshot->frame_ms = rate > 0.0f ? 1000.0f / rate : 0.0f;
 
                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
                 if (profiler.enabled()) {
@@ -5358,8 +5357,6 @@ namespace lfs::vis::gui {
                         ledger.closure == lfs::diagnostics::LedgerClosureState::Closed;
                     perf_snapshot->ledger_over =
                         ledger.closure == lfs::diagnostics::LedgerClosureState::Over;
-                    perf_snapshot->profiler_snapshot =
-                        std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(snapshot);
                     app_store().vram_hud.set(AppStore::VramHud{
                         .visible = true,
                         .snapshot = std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(

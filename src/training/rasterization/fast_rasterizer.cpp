@@ -721,10 +721,6 @@ namespace lfs::training {
         auto convert_param = [](const FastGSFusedAdamParam& src) {
             fast_lfs::rasterization::FusedAdamParam dst;
             dst.param = src.param;
-            dst.exp_avg_q = src.exp_avg_q;
-            dst.exp_avg_sq_q = src.exp_avg_sq_q;
-            dst.exp_avg_scale = src.exp_avg_scale;
-            dst.exp_avg_sq_scale = src.exp_avg_sq_scale;
             dst.joint_packed = src.joint_packed;
             dst.joint_bounds = src.joint_bounds;
             dst.joint_bits = src.joint_bits;

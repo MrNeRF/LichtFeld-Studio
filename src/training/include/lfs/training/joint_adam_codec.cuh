@@ -97,14 +97,6 @@ namespace lfs::training::joint_adam {
             encode_us(packed, idx, u_val, log_s_val, mm.x, mm.z, inv_u, inv_s);
         }
 
-        __device__ static inline void encode_g1g2(uint8_t* __restrict__ packed,
-                                                  const int64_t idx,
-                                                  const float g1,
-                                                  const float g2,
-                                                  const float4 mm) {
-            const float2 prim = g1g2_to_us(g1, g2);
-            encode_us(packed, idx, prim.x, prim.y, mm);
-        }
     };
 
 } // namespace lfs::training::joint_adam

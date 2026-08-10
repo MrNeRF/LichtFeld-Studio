@@ -41,20 +41,18 @@ namespace lfs::diagnostics {
         std::size_t over_claim_bytes = 0;       // justified - measured when residual > 0
     };
 
-    /// Lifted verbatim from perf_bench.cpp:42-55 (design §3.4).
+    /// Signed byte arithmetic shared by the live and peak ledger models.
     [[nodiscard]] LFS_DIAGNOSTICS_API std::int64_t signed_byte_difference(std::size_t lhs,
                                                                           std::size_t rhs);
 
     [[nodiscard]] LFS_DIAGNOSTICS_API std::size_t signed_byte_magnitude(std::int64_t bytes) noexcept;
 
-    /// residual = signed_byte_difference(attributed, measured); under/over split as
-    /// perf_bench.cpp:589-596.
+    /// residual = signed_byte_difference(attributed, measured), split into
+    /// under-claim and over-claim magnitudes.
     [[nodiscard]] LFS_DIAGNOSTICS_API LedgerSignedResidual
     make_signed_residual(std::size_t attributed_bytes, std::size_t measured_bytes);
 
     [[nodiscard]] LFS_DIAGNOSTICS_API const char* vram_ledger_root_name(VramLedgerRootId id) noexcept;
-
-    [[nodiscard]] LFS_DIAGNOSTICS_API const char* vram_row_kind_name(VramRowKind kind) noexcept;
 
     struct LFS_DIAGNOSTICS_API VramLedgerNode {
         std::string name;
@@ -78,7 +76,6 @@ namespace lfs::diagnostics {
         LedgerSignedResidual residual;
         LedgerClosureState closure = LedgerClosureState::Closed;
         std::size_t epsilon_bytes = 0;
-        bool include_vulkan_roots = true;  // L0 Linux: true
         std::vector<VramLedgerNode> roots; // A–H plus Unattributed child
     };
 

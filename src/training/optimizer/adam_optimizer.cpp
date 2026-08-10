@@ -769,10 +769,6 @@ namespace lfs::training {
             out.joint_packed = state.exp_avg.ptr<uint8_t>();
             out.joint_bounds = state.joint_bounds.ptr<float>();
             out.joint_bits = state.joint_bits;
-            out.exp_avg_q = nullptr;
-            out.exp_avg_sq_q = nullptr;
-            out.exp_avg_scale = nullptr;
-            out.exp_avg_sq_scale = nullptr;
             out.frozen_mask = frozen_mask_ptr();
             out.frozen_mask_size = frozen_mask_size();
             out.frozen_lr_scale = frozen_lr_scale_;

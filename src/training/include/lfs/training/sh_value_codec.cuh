@@ -13,7 +13,6 @@
 
 namespace lfs::training::sh_value {
 
-    constexpr int kBlockSizeDevice = 256;
     constexpr float kQMaxDevice = 65535.0f;
     constexpr float kInvQMaxDevice = 1.0f / 65535.0f;
     constexpr float kEpsDevice = 1e-20f;
@@ -29,27 +28,6 @@ namespace lfs::training::sh_value {
             return static_cast<uint16_t>(qf);
         }
 
-        /// Decode one float4 slot (4 cells) from packed uint16.
-        __device__ static inline float4 decode_slot(const uint16_t* __restrict__ packed,
-                                                    const int64_t float4_slot,
-                                                    const float2 mm) {
-            const int64_t base = float4_slot * 4;
-            return make_float4(decode(packed[base + 0], mm.x, mm.y),
-                               decode(packed[base + 1], mm.x, mm.y),
-                               decode(packed[base + 2], mm.x, mm.y),
-                               decode(packed[base + 3], mm.x, mm.y));
-        }
-
-        __device__ static inline void encode_slot(uint16_t* __restrict__ packed,
-                                                  const int64_t float4_slot,
-                                                  const float4 v,
-                                                  const float2 mm) {
-            const int64_t base = float4_slot * 4;
-            packed[base + 0] = encode(v.x, mm.x, mm.y);
-            packed[base + 1] = encode(v.y, mm.x, mm.y);
-            packed[base + 2] = encode(v.z, mm.x, mm.y);
-            packed[base + 3] = encode(v.w, mm.x, mm.y);
-        }
     };
 
     // Cell-linear swizzle index for q16 values (pad-dropped layout).

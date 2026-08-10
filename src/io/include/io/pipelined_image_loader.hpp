@@ -206,9 +206,6 @@ namespace lfs::io {
             std::uint64_t succeeded_sequences = 0;
             std::uint64_t cancelled_sequences = 0;
             std::uint64_t failed_sequences = 0;
-            size_t decoded_frames_live = 0;
-            size_t decoded_frames_peak = 0;
-            size_t decoded_frame_capacity = 0;
         };
 
         explicit PipelinedImageLoader(PipelinedLoaderConfig config = {});
@@ -237,7 +234,6 @@ namespace lfs::io {
         void observe_training_iteration(double train_ms, double dl_wait_ms, std::size_t iter);
         void record_decode_latency(double decode_ms);
         [[nodiscard]] size_t adaptive_prefetch_target() const;
-        [[nodiscard]] size_t adaptive_prefetch_occupancy() const;
         void clear();
         void reclaim_idle_decoded_frames();
         void shutdown();
@@ -533,7 +529,6 @@ namespace lfs::io {
         size_t adaptive_low_recommendation_windows_ = 0;
         size_t adaptive_growth_cooldown_windows_ = 0;
         size_t adaptive_occupancy_ = 0;
-        size_t adaptive_peak_occupancy_ = 0;
         std::atomic<size_t> in_flight_{0};
         std::atomic<size_t> output_image_bytes_{0};
         std::atomic<size_t> output_mask_bytes_{0};

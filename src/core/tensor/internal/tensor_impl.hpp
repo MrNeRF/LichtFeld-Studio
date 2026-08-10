@@ -590,7 +590,7 @@ namespace lfs::core {
         /// Materialize zero-stride expand/broadcast views before raw-pointer escape.
         ///
         /// Raw-pointer escape is the materialization boundary:
-        /// - Op paths are firewalled via contiguous_read / dense_for_kernel / allowlist.
+        /// - Op paths are firewalled via contiguous_read / the allowlist.
         /// - That firewall does NOT cover raw-pointer escapes: callers hand
         ///   ptr()+numel() or data_ptr()+bytes() to flat memcpy/kernels (e.g.
         ///   cudaMemcpy HostToDevice of scaling [N,3] from an expand of [N,1]).

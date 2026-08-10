@@ -394,9 +394,6 @@ namespace lfs::training {
             warmup_allocs_ += allocs;
             warmup_ms_sum_ += ms;
             ++warmup_steps_;
-            if (iter == warmup_) {
-                // Next step is the first steady-state step — enable alloc trace.
-            }
         } else {
             const auto pinned_stats = lfs::core::PinnedMemoryAllocator::instance().get_stats();
             peak_steady_pinned_host_bytes_ = std::max(

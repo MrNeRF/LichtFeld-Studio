@@ -117,7 +117,6 @@ namespace lfs::core {
             std::array<std::size_t, Count> region_offsets{};
             std::array<std::size_t, Count> region_bytes{};
             std::size_t capacity = 0;
-            int sh_degree = 0;
             std::uint64_t generation = 0;
             bool poisoned = false;
 

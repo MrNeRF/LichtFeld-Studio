@@ -200,7 +200,6 @@ namespace lfs::core {
         control_->region_offsets = region_offsets;
         control_->region_bytes = region_bytes;
         control_->capacity = capacity_;
-        control_->sh_degree = sh_degree_;
         control_->generation = generation_;
         control_->poisoned = poisoned_;
     }

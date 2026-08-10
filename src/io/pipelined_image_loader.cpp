@@ -2,15 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/pipelined_image_loader.hpp"
-#include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
-#include "core/cuda/memory_arena.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/error_reporter.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
-#include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -90,7 +87,6 @@ namespace lfs::io {
                             [](const Slot& slot) { return !slot.in_use; });
                         it->in_use = true;
                         ++live_count_;
-                        peak_count_ = std::max(peak_count_, live_count_);
                         auto lease = std::make_shared<Lease>();
                         lease->storage = it->storage;
                         lease->owner = shared_from_this();
@@ -104,18 +100,6 @@ namespace lfs::io {
             return {};
         }
 
-        size_t live_count() const {
-            std::lock_guard<std::mutex> lock(mutex_);
-            return live_count_;
-        }
-
-        size_t peak_count() const {
-            std::lock_guard<std::mutex> lock(mutex_);
-            return peak_count_;
-        }
-
-        size_t capacity() const { return capacity_limit(); }
-
         void set_capacity(const size_t capacity) {
             std::lock_guard<std::mutex> lock(mutex_);
             capacity_limit_ = std::clamp<size_t>(capacity, 1, slots_.size());
@@ -124,11 +108,6 @@ namespace lfs::io {
                     slots_[i].storage = lfs::core::Tensor();
             }
             cv_.notify_all();
-        }
-
-        size_t capacity_limit() const {
-            std::lock_guard<std::mutex> lock(mutex_);
-            return capacity_limit_;
         }
 
         void cancel() { cv_.notify_all(); }
@@ -154,7 +133,6 @@ namespace lfs::io {
         mutable std::mutex mutex_;
         std::condition_variable cv_;
         size_t live_count_ = 0;
-        size_t peak_count_ = 0;
         size_t capacity_limit_ = 1;
         const std::atomic<bool>* running_ = nullptr;
     };
@@ -732,11 +710,6 @@ namespace lfs::io {
         return adaptive_target_;
     }
 
-    size_t PipelinedImageLoader::adaptive_prefetch_occupancy() const {
-        std::lock_guard<std::mutex> lock(adaptive_mutex_);
-        return adaptive_occupancy_;
-    }
-
     void PipelinedImageLoader::record_decode_latency(const double decode_ms) {
         if (decode_ms <= 0.0)
             return;
@@ -760,7 +733,6 @@ namespace lfs::io {
         adaptive_wait_sum_ms_ += std::max(0.0, dl_wait_ms);
         ++adaptive_wait_samples_;
         adaptive_occupancy_ = in_flight_.load(std::memory_order_relaxed);
-        adaptive_peak_occupancy_ = std::max(adaptive_peak_occupancy_, adaptive_occupancy_);
         if (iter % 64 != 0)
             return;
 
@@ -829,21 +801,6 @@ namespace lfs::io {
         if (!ring) {
             return;
         }
-        profiler.setGauge("vram.audit.io.decoded_frames.live",
-                          static_cast<double>(ring->live_count()));
-        profiler.setGauge("vram.audit.io.decoded_frames.peak",
-                          static_cast<double>(ring->peak_count()));
-        profiler.setGauge("vram.audit.io.decoded_frames.capacity",
-                          static_cast<double>(ring->capacity()));
-        {
-            std::lock_guard<std::mutex> lock(adaptive_mutex_);
-            profiler.setGauge("vram.audit.io.prefetch.target",
-                              static_cast<double>(adaptive_target_));
-            profiler.setGauge("vram.audit.io.prefetch.occupancy",
-                              static_cast<double>(adaptive_occupancy_));
-            profiler.setGauge("vram.audit.io.prefetch.peak",
-                              static_cast<double>(adaptive_peak_occupancy_));
-        }
         profiler.setGauge("vram.audit.io.decoded_frame_ring.bytes",
                           static_cast<double>(ring->storage_bytes()));
     }
@@ -885,11 +842,6 @@ namespace lfs::io {
         s.pending_mask_bytes = gpu_stats.pending_mask_bytes;
         s.pending_depth_bytes = gpu_stats.pending_depth_bytes;
         s.pending_normal_bytes = gpu_stats.pending_normal_bytes;
-        if (decoded_frame_ring_) {
-            s.decoded_frames_live = decoded_frame_ring_->live_count();
-            s.decoded_frames_peak = decoded_frame_ring_->peak_count();
-            s.decoded_frame_capacity = decoded_frame_ring_->capacity();
-        }
         publish_loader_vram_gauges();
         return s;
     }
@@ -2084,7 +2036,6 @@ namespace lfs::io {
                 continue; // Skip auxiliary image processing if image failed
             }
 
-after_primary_image_enqueued:
             if (request.mask_path) {
                 if (!is_regular_file_no_throw(*request.mask_path)) {
                     LOG_DEBUG("[PipelinedImageLoader] Skipping missing mask {}", lfs::core::path_to_utf8(*request.mask_path));

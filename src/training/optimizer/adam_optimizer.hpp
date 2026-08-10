@@ -80,10 +80,6 @@ namespace lfs::training {
 
     struct FastGSFusedAdamParam {
         float* param = nullptr;
-        uint8_t* exp_avg_q = nullptr;
-        uint8_t* exp_avg_sq_q = nullptr;
-        float* exp_avg_scale = nullptr;
-        float* exp_avg_sq_scale = nullptr;
         uint8_t* joint_packed = nullptr;
         float* joint_bounds = nullptr;
         int joint_bits = 0;

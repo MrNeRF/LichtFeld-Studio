@@ -254,18 +254,6 @@ namespace lfs::diagnostics {
         return "Unknown";
     }
 
-    const char* vram_row_kind_name(const VramRowKind kind) noexcept {
-        switch (kind) {
-        case VramRowKind::Hooked:
-            return "hooked";
-        case VramRowKind::Sampled:
-            return "sampled";
-        case VramRowKind::Static:
-            return "static";
-        }
-        return "unknown";
-    }
-
     std::size_t ledger_epsilon(const std::size_t parent_bytes, const VramLedgerPolicy& policy) {
         const auto frac = static_cast<std::size_t>(
             static_cast<double>(parent_bytes) * policy.epsilon_frac);
@@ -276,7 +264,6 @@ namespace lfs::diagnostics {
                                    const VramLedgerPolicy& policy) {
         VramLedgerTree tree;
         const auto disclosure_pairs = discover_required_allocation_pairs(snapshot);
-        tree.include_vulkan_roots = policy.include_vulkan_in_sum;
         const auto& proc = snapshot.process;
         tree.process_used_bytes =
             proc.process_memory_valid ? proc.process_used : 0;
@@ -308,7 +295,6 @@ namespace lfs::diagnostics {
         std::size_t hooked_slab_bytes = 0;
         std::size_t hooked_direct_bytes = 0;
         std::size_t hooked_arena_bytes = 0;
-        std::size_t hooked_exportable_desc = 0;
 
         for (const auto& row : snapshot.rows) {
             if (row.live_bytes == 0) {
@@ -322,10 +308,6 @@ namespace lfs::diagnostics {
             if (is_viewer_cuda_external_row(row)) {
                 viewer_cuda_external += row.live_bytes;
             }
-            // C5: gsplat/fastgs arena disclosure scopes are never root-justified.
-            const bool logical_raster =
-                is_fastgs_or_gsplat_logical_scope(row.scope);
-
             if (row.kind == VramRowKind::Hooked) {
                 switch (row.method) {
                 case VramAllocationMethod::Bucketed:
@@ -344,12 +326,6 @@ namespace lfs::diagnostics {
                     }
                     break;
                 case VramAllocationMethod::External:
-                    if (starts_with(row.label, "rasterizer.arena.") ||
-                        starts_with(row.scope, "shared.scratch") ||
-                        starts_with(row.label, "exportable")) {
-                        hooked_exportable_desc += row.live_bytes;
-                    }
-                    break;
                 default:
                     break;
                 }
@@ -357,7 +333,6 @@ namespace lfs::diagnostics {
                 if (is_vulkan_external_row(row)) {
                     // external disclosure only
                 }
-                (void)logical_raster;
             }
         }
 
