@@ -95,8 +95,9 @@ namespace lfs::diagnostics {
     [[nodiscard]] LFS_DIAGNOSTICS_API std::size_t
     ledger_epsilon(std::size_t parent_bytes, const VramLedgerPolicy& policy);
 
-    /// Live closed ledger over a profiler snapshot. Only Hooked rows contribute to
-    /// attributed totals; Sampled/Static are Nested disclosure children.
+    /// Live closed ledger over a profiler snapshot. Justified children contribute to
+    /// per-root attributed totals. Sampled/Static rows are Nested disclosures except
+    /// root F (Vulkan VMA), where named Sampled rows justify used-inside-blocks.
     [[nodiscard]] LFS_DIAGNOSTICS_API VramLedgerTree
     buildLiveLedger(const VramProfilerSnapshot& snapshot, const VramLedgerPolicy& policy = {});
 

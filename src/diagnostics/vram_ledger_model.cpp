@@ -38,6 +38,20 @@ namespace lfs::diagnostics {
                    starts_with(row.scope, "vksplat.shaders");
         }
 
+        // Serial-stamped RmlUi textures (TextureVramLabel appends @0xPTR). Group under root F.
+        [[nodiscard]] bool is_rmlui_texture_row(const VramMetricSnapshot& row) {
+            return starts_with(row.scope, "vulkan.rmlui.texture");
+        }
+
+        // VMA block free sampler (blockBytes − allocationBytes). Nested driver reference;
+        // free_inside_blocks is derived separately and must agree with this within ε.
+        [[nodiscard]] bool is_vma_free_sampler_row(const VramMetricSnapshot& row) {
+            return starts_with(row.scope, "vulkan.vma") &&
+                   (row.label.find("free_in_blocks") != std::string::npos ||
+                    row.label.find("allocator_free") != std::string::npos ||
+                    starts_with(row.label, "free"));
+        }
+
         [[nodiscard]] std::string format_mib(const std::size_t bytes) {
             const double mib = static_cast<double>(bytes) / (1024.0 * 1024.0);
             if (mib >= 10.0)
@@ -457,22 +471,48 @@ namespace lfs::diagnostics {
             proc.exportable_splat_bytes + proc.shared_scratch_bytes;
         apply_closure(root_e, ledger_epsilon(root_e.measured_bytes, policy));
 
+        // Root F: VMA blockBytes is the measured reservation. Named Vulkan rows are
+        // recorded via recordCurrentBytes → Sampled (nothing else covers VMA), so they
+        // justify the used portion; free_inside_blocks = blocks - named used sum.
+        // The neighbouring VMA free sampler (allocator_free_in_blocks) is Nested only —
+        // not part of the used sum — and must agree with free_inside within ε when named
+        // coverage is complete.
         auto root_f = make_root(VramLedgerRootId::VulkanVma, vma_blocks, "vulkan_vma");
         std::size_t vulkan_named = 0;
+        std::size_t rmlui_texture_bytes = 0;
+        std::size_t rmlui_texture_count = 0;
         for (const auto& row : snapshot.rows) {
             if (row.live_bytes == 0 || !is_vulkan_named_row(row) || is_vulkan_external_row(row) ||
                 is_shader_bytecode_row(row)) {
                 continue;
             }
+            if (is_vma_free_sampler_row(row)) {
+                add_child(root_f,
+                          row.scope + (row.label.empty() ? "" : "." + row.label),
+                          row.live_bytes, AttributionState::Nested, row.kind,
+                          "VMA free sampler (driver); compare to free_inside_blocks");
+                continue;
+            }
+            // N3: collapse serial-stamped RmlUi textures into one disclosure row.
+            if (is_rmlui_texture_row(row)) {
+                rmlui_texture_bytes += row.live_bytes;
+                ++rmlui_texture_count;
+                continue;
+            }
+            // N2: Sampled named VMA rows justify used-inside-blocks (no Hooked dual path).
             add_child(root_f,
                       row.scope + (row.label.empty() ? "" : "." + row.label),
                       row.live_bytes,
-                      row.kind == VramRowKind::Hooked ? AttributionState::Justified
-                                                      : AttributionState::Nested,
+                      AttributionState::Justified,
                       row.kind);
-            if (row.kind == VramRowKind::Hooked) {
-                vulkan_named += row.live_bytes;
-            }
+            vulkan_named += row.live_bytes;
+        }
+        if (rmlui_texture_count > 0) {
+            add_child(root_f,
+                      std::format("RmlUi textures, {}, {}", rmlui_texture_count,
+                                  format_mib(rmlui_texture_bytes)),
+                      rmlui_texture_bytes, AttributionState::Justified, VramRowKind::Sampled);
+            vulkan_named += rmlui_texture_bytes;
         }
         if (vma_blocks > vulkan_named) {
             add_child(root_f, "free_inside_blocks", vma_blocks - vulkan_named,
@@ -509,9 +549,13 @@ namespace lfs::diagnostics {
             add_child(root_h, "curand_load", proc.cuda_phase_curand_load,
                       AttributionState::Justified, VramRowKind::Static);
         }
+        // N1: cuda_warmup_bytes is a device-wide cudaMemGetInfo delta (post-warmup
+        // used − device baseline), not a slice of the per-PID context baseline that
+        // measures root H. Mark Nested so primary_context (= baseline) can close H.
         if (proc.cuda_warmup_bytes > 0) {
             add_child(root_h, "module_warmup", proc.cuda_warmup_bytes,
-                      AttributionState::Justified, VramRowKind::Static);
+                      AttributionState::Nested, VramRowKind::Static,
+                      "device-wide warmup delta; not inside context baseline");
         }
         {
             std::size_t shader_bytes = 0;

@@ -272,3 +272,170 @@ TEST(VramLedger, ShaderBytecodeCollapsedUnderRootH) {
     }
     EXPECT_EQ(shader_groups, 1);
 }
+
+// N1: module_warmup is a device-wide delta, not inside context baseline.
+TEST(VramLedger, ModuleWarmupNestedUnderRootH) {
+    constexpr std::size_t MiB = 1024ull * 1024ull;
+    VramProfilerSnapshot snap;
+    snap.process.process_memory_valid = true;
+    snap.process.process_used = 300 * MiB;
+    // Live idle shape: primary_context equals the whole root H measured baseline.
+    snap.process.cuda_context_baseline = 242 * MiB;
+    snap.process.cuda_phase_primary_context = 242 * MiB;
+    snap.process.cuda_warmup_bytes = 36 * MiB;
+
+    VramLedgerPolicy policy;
+    policy.epsilon_min_bytes = 2 * MiB;
+    const auto tree = buildLiveLedger(snap, policy);
+
+    const VramLedgerNode* root_h = nullptr;
+    for (const auto& r : tree.roots) {
+        if (r.root_id == VramLedgerRootId::CudaContextDriver)
+            root_h = &r;
+    }
+    ASSERT_NE(root_h, nullptr);
+    EXPECT_EQ(root_h->measured_bytes, 242 * MiB);
+
+    bool saw_primary = false;
+    bool saw_warmup = false;
+    for (const auto& c : root_h->children) {
+        if (c.name == "primary_context") {
+            saw_primary = true;
+            EXPECT_EQ(c.state, AttributionState::Justified);
+            EXPECT_EQ(c.measured_bytes, 242 * MiB);
+        }
+        if (c.name == "module_warmup") {
+            saw_warmup = true;
+            EXPECT_EQ(c.state, AttributionState::Nested);
+            EXPECT_EQ(c.measured_bytes, 36 * MiB);
+        }
+    }
+    EXPECT_TRUE(saw_primary);
+    EXPECT_TRUE(saw_warmup);
+    // Warmup must not inflate justified sum past measured → permanent OVER.
+    EXPECT_EQ(root_h->attributed_bytes, 242 * MiB);
+    EXPECT_NE(root_h->closure, LedgerClosureState::Over);
+    EXPECT_TRUE(root_h->closure == LedgerClosureState::Closed ||
+                root_h->closure == LedgerClosureState::Gap);
+}
+
+// N2: Sampled named VMA rows justify used-inside-blocks; free is the residual.
+TEST(VramLedger, VulkanVmaSampledNamedAttribution) {
+    constexpr std::size_t MiB = 1024ull * 1024ull;
+    // Live idle shape from designer re-validation: ~20.8 MiB free next to VMA.
+    // Use exact bytes so free_inside == blockBytes - named used (no Hooked dual path).
+    constexpr std::size_t kBlocks = 100 * MiB;
+    constexpr std::size_t kNamedA = 40 * MiB;
+    constexpr std::size_t kNamedB = 30 * MiB;
+    constexpr std::size_t kNamedC = 9 * MiB + 200ull * 1024ull; // ~9.2 MiB
+    constexpr std::size_t kNamed = kNamedA + kNamedB + kNamedC;
+    constexpr std::size_t kExpectedFree = kBlocks - kNamed; // ~20.8 MiB
+
+    VramProfilerSnapshot snap;
+    snap.process.process_memory_valid = true;
+    snap.process.process_used = 200 * MiB;
+    snap.process.vulkan_vma_block_bytes = kBlocks;
+    // All Vulkan rows are Sampled (recordCurrentBytes) — pre-fix only Hooked counted.
+    snap.rows.push_back(make_row("vulkan.image.color", "viewport", kNamedA, VramRowKind::Sampled));
+    snap.rows.push_back(make_row("vulkan.buffer.ubo", "frame", kNamedB, VramRowKind::Sampled));
+    snap.rows.push_back(
+        make_row("vulkan.rmlui.render_layer", "layer_color:rmlui:1920x1080@0x1", kNamedC,
+                 VramRowKind::Sampled));
+    // Neighbouring driver free sampler — Nested, not part of used sum.
+    snap.rows.push_back(make_row("vulkan.vma", "allocator_free_in_blocks", kExpectedFree,
+                                 VramRowKind::Sampled));
+
+    VramLedgerPolicy policy;
+    policy.include_vulkan_in_sum = true;
+    policy.epsilon_min_bytes = 2 * MiB;
+    const auto tree = buildLiveLedger(snap, policy);
+
+    const VramLedgerNode* root_f = nullptr;
+    for (const auto& r : tree.roots) {
+        if (r.root_id == VramLedgerRootId::VulkanVma)
+            root_f = &r;
+    }
+    ASSERT_NE(root_f, nullptr);
+    EXPECT_EQ(root_f->measured_bytes, kBlocks);
+
+    std::size_t free_inside = 0;
+    std::size_t driver_free = 0;
+    std::size_t justified_named = 0;
+    int free_rows = 0;
+    for (const auto& c : root_f->children) {
+        if (c.name == "free_inside_blocks") {
+            ++free_rows;
+            free_inside = c.measured_bytes;
+            EXPECT_EQ(c.state, AttributionState::Justified);
+        } else if (c.name.find("allocator_free_in_blocks") != std::string::npos) {
+            driver_free = c.measured_bytes;
+            EXPECT_EQ(c.state, AttributionState::Nested);
+        } else if (c.state == AttributionState::Justified) {
+            justified_named += c.measured_bytes;
+        }
+    }
+    EXPECT_EQ(free_rows, 1);
+    EXPECT_EQ(justified_named, kNamed);
+    EXPECT_EQ(free_inside, kExpectedFree);
+    EXPECT_EQ(driver_free, kExpectedFree);
+    // free_inside agrees with driver free within ε (exact when named coverage complete).
+    EXPECT_EQ(free_inside, driver_free);
+    // free + named == measured → CLOSED (not 100% free_inside retention).
+    EXPECT_EQ(root_f->attributed_bytes, root_f->measured_bytes);
+    EXPECT_EQ(root_f->closure, LedgerClosureState::Closed);
+    // ~20.8 MiB free.
+    EXPECT_NEAR(static_cast<double>(free_inside) / static_cast<double>(MiB), 20.8, 0.05);
+}
+
+// N3: serial-stamped vulkan.rmlui.texture.* collapse like shader bytecode.
+TEST(VramLedger, RmlUiTexturesCollapsedUnderRootF) {
+    constexpr std::size_t MiB = 1024ull * 1024ull;
+    VramProfilerSnapshot snap;
+    snap.process.process_memory_valid = true;
+    snap.process.process_used = 64 * MiB;
+    snap.process.vulkan_vma_block_bytes = 32 * MiB;
+    // Three serial-stamped textures (pointer suffix differs) + one unrelated VMA row.
+    snap.rows.push_back(make_row("vulkan.rmlui.texture", "texture:icon.png:32x32@0xaaa",
+                                 128ull * 1024ull, VramRowKind::Sampled));
+    snap.rows.push_back(make_row("vulkan.rmlui.texture", "texture:logo.png:64x64@0xbbb",
+                                 256ull * 1024ull, VramRowKind::Sampled));
+    snap.rows.push_back(make_row("vulkan.rmlui.texture", "texture:icon.png:32x32@0xccc",
+                                 128ull * 1024ull, VramRowKind::Sampled));
+    snap.rows.push_back(make_row("vulkan.image.color", "viewport", 4 * MiB, VramRowKind::Sampled));
+
+    VramLedgerPolicy policy;
+    policy.include_vulkan_in_sum = true;
+    const auto tree = buildLiveLedger(snap, policy);
+
+    const VramLedgerNode* root_f = nullptr;
+    for (const auto& r : tree.roots) {
+        if (r.root_id == VramLedgerRootId::VulkanVma)
+            root_f = &r;
+    }
+    ASSERT_NE(root_f, nullptr);
+
+    // No per-texture flood.
+    int texture_groups = 0;
+    int raw_texture_rows = 0;
+    for (const auto& c : root_f->children) {
+        if (c.name.find("RmlUi textures") != std::string::npos) {
+            ++texture_groups;
+            EXPECT_NE(c.name.find("3"), std::string::npos) << c.name;
+            EXPECT_EQ(c.measured_bytes, 512ull * 1024ull);
+            EXPECT_EQ(c.state, AttributionState::Justified);
+        }
+        if (c.name.find("vulkan.rmlui.texture") != std::string::npos) {
+            ++raw_texture_rows;
+        }
+    }
+    EXPECT_EQ(texture_groups, 1);
+    EXPECT_EQ(raw_texture_rows, 0);
+
+    // Grouped bytes still feed free_inside residual.
+    std::size_t free_inside = 0;
+    for (const auto& c : root_f->children) {
+        if (c.name == "free_inside_blocks")
+            free_inside = c.measured_bytes;
+    }
+    EXPECT_EQ(free_inside, 32 * MiB - 4 * MiB - 512ull * 1024ull);
+}
