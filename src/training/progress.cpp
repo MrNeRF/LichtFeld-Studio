@@ -6,6 +6,7 @@
 
 #include "indicators.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
@@ -111,31 +112,47 @@ namespace lfs::training {
         update(current_iteration, loss, splat_count, phase);
     }
 
-    void TrainingProgress::complete() {
+    void TrainingProgress::complete(const bool user_stopped, const int actual_iterations) {
         if (!impl_->progress_bar->is_completed()) {
-            impl_->progress_bar->set_progress(100);
+            const int iterations = actual_iterations > 0 ? actual_iterations : impl_->total_iterations;
+            const float fraction = impl_->total_iterations > 0
+                                       ? static_cast<float>(iterations) / impl_->total_iterations
+                                       : 0.0f;
+            impl_->progress_bar->set_progress(static_cast<size_t>(std::clamp(fraction, 0.0f, 1.0f) * 100.0f));
+            if (user_stopped) {
+                impl_->progress_bar->set_option(indicators::option::PostfixText(
+                    "Stopped by user at " + std::to_string(iterations) + "/" +
+                    std::to_string(impl_->total_iterations)));
+            }
             impl_->progress_bar->mark_as_completed();
             std::cout << std::endl;
         }
     }
 
-    void TrainingProgress::print_final_summary(const int final_splats, const int actual_iterations) {
-        complete();
+    void TrainingProgress::print_final_summary(const int final_splats, const int actual_iterations,
+                                               const bool user_stopped) {
+        complete(user_stopped, actual_iterations);
 
         const auto end_time = std::chrono::steady_clock::now();
         const auto elapsed = std::chrono::duration<double>(end_time - impl_->start_time).count();
         const int iterations_used = actual_iterations > 0 ? actual_iterations : impl_->total_iterations;
 
-        std::cout << std::endl
+        std::ostringstream summary;
+        summary << std::fixed << std::setprecision(3);
 #ifdef _WIN32
-                  << "* Training completed in "
+        summary << (user_stopped ? "* Training stopped by user at iteration "
+                                 : "* Training completed in ");
 #else
-                  << "✓ Training completed in "
+        summary << (user_stopped ? "Training stopped by user at iteration "
+                                 : "✓ Training completed in ");
 #endif
-                  << std::fixed << std::setprecision(3) << elapsed << "s"
-                  << " (avg " << std::fixed << std::setprecision(1)
-                  << iterations_used / elapsed << " iter/s)"
-                  << std::endl
+        if (user_stopped) {
+            summary << iterations_used << " (checkpoint saved)";
+        } else {
+            summary << elapsed << "s (avg " << std::setprecision(1)
+                    << (elapsed > 0.0 ? iterations_used / elapsed : 0.0) << " iter/s)";
+        }
+        std::cout << std::endl << summary.str() << std::endl
 #ifdef _WIN32
                   << "* Final splats: " << final_splats
 #else

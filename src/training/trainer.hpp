@@ -140,6 +140,7 @@ namespace lfs::training {
         bool is_running() const { return is_running_.load(); }
         bool is_training_complete() const { return training_complete_.load(); }
         bool has_stopped() const { return stop_requested_.load(); }
+        bool is_saving_model() const { return saving_model_.load(std::memory_order_acquire); }
 
         // Set Python script paths to execute once before training; scripts register per-iteration callbacks.
         void set_python_scripts(std::vector<std::filesystem::path> scripts) {
@@ -449,7 +450,8 @@ namespace lfs::training {
                                                   const std::string& filename,
                                                   int iter_num,
                                                   bool join_threads = true,
-                                                  bool save_checkpoint = true);
+                                                  bool save_checkpoint = true,
+                                                  bool durable_checkpoint = true);
         void updateGTLoadConfigSnapshot();
         void clearActiveImageLoader();
 
@@ -603,6 +605,7 @@ namespace lfs::training {
         std::atomic<bool> is_paused_{false};
         std::atomic<bool> is_running_{false};
         std::atomic<bool> training_complete_{false};
+        std::atomic<bool> saving_model_{false};
         std::atomic<bool> ready_to_start_{false};
         std::atomic<bool> initialized_{false};
         std::atomic<bool> shutdown_complete_{false};

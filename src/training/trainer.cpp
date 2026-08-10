@@ -6377,6 +6377,8 @@ namespace lfs::training {
         const bool rotate_checkpoint = get_active_sparsify_steps() == 0;
         apply_pending_params_at_safe_point();
         const auto terminal_params = getParams();
+        const auto terminal_save_started = std::chrono::steady_clock::now();
+        saving_model_.store(true, std::memory_order_release);
         try {
             LOG_INFO("Saving {} model at iteration {}...",
                      terminal_error ? "recovery" : (user_stopped ? "stopped" : "final"),
@@ -6386,7 +6388,8 @@ namespace lfs::training {
                     terminal_params.dataset.output_name,
                     terminal_iteration,
                     /*join=*/true,
-                    /*save_checkpoint=*/rotate_checkpoint);
+                    /*save_checkpoint=*/rotate_checkpoint,
+                    /*durable_checkpoint=*/!user_stopped);
                 !save_result) {
                 append_terminal_error(lfs::make_error(lfs::ErrorInit{
                     .code = lfs::ErrorCode::Internal,
@@ -6407,6 +6410,10 @@ namespace lfs::training {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }
+        LOG_INFO("Terminal {} save phase took {:.3f}s",
+                 user_stopped ? "stop" : "completion",
+                 std::chrono::duration<double>(std::chrono::steady_clock::now() - terminal_save_started).count());
+        saving_model_.store(false, std::memory_order_release);
 
         {
             std::lock_guard<std::mutex> lock(params_mutex_);
@@ -6419,13 +6426,14 @@ namespace lfs::training {
 
         try {
             if (progress_) {
-                progress_->complete();
+                progress_->complete(user_stopped, terminal_iteration);
             }
             if (evaluator_) {
                 evaluator_->save_report();
             }
             if (progress_ && strategy_) {
-                progress_->print_final_summary(static_cast<int>(strategy_->get_model().size()));
+                progress_->print_final_summary(static_cast<int>(strategy_->get_model().size()),
+                                               terminal_iteration, user_stopped);
             }
             if (PerfBenchCollector::enabled()) {
                 const auto report_path =
@@ -6486,7 +6494,8 @@ namespace lfs::training {
                                                        const std::string& filename,
                                                        const int iter_num,
                                                        const bool join_threads,
-                                                       const bool save_checkpoint_file) {
+                                                       const bool save_checkpoint_file,
+                                                       const bool durable_checkpoint) {
 
         std::filesystem::path ply_output_path = filename.empty() ? save_path / ("splat_" + std::to_string(iter_num) + ".ply") : save_path / (filename + ".ply");
 
@@ -6521,9 +6530,10 @@ namespace lfs::training {
         PPISPControllerPool* controller_to_save = controller_pool_for_save(iter_num);
 
         if (save_checkpoint_file) {
-            auto ckpt_result = lfs::training::save_checkpoint(save_path, iter_num, *strategy_,
+                auto ckpt_result = lfs::training::save_checkpoint(save_path, iter_num, *strategy_,
                                                               params_for_checkpoint_save(),
-                                                              bilateral_grid_.get(), ppisp_.get(), controller_to_save);
+                                                              bilateral_grid_.get(), ppisp_.get(), controller_to_save,
+                                                              /*durable=*/durable_checkpoint);
             if (!ckpt_result) {
                 LOG_WARN("Failed to save checkpoint: {}", ckpt_result.error());
                 errors.push_back("checkpoint: " + ckpt_result.error());

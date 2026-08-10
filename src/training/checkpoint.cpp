@@ -54,7 +54,8 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params,
         const BilateralGrid* bilateral_grid,
         const PPISP* ppisp,
-        const PPISPControllerPool* ppisp_controller_pool) {
+        const PPISPControllerPool* ppisp_controller_pool,
+        const bool durable) {
 
         try {
             // Validate input path
@@ -67,7 +68,8 @@ namespace lfs::training {
             lfs::io::ScopedAtomicOutputFile atomic_checkpoint(
                 checkpoint_path,
                 lfs::io::AtomicOutputTempName::AppendSuffix,
-                lfs::io::AtomicOutputDurability::Durable);
+                durable ? lfs::io::AtomicOutputDurability::Durable
+                        : lfs::io::AtomicOutputDurability::Atomic);
             const auto& temp_checkpoint_path = atomic_checkpoint.temp_path();
 
             // Create checkpoint directory with error checking

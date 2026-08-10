@@ -728,6 +728,14 @@ NB_MODULE(lichtfeld, m) {
         "Get trainer state");
 
     m.def(
+        "trainer_saving_model",
+        []() {
+            const auto* const tm = lfs::python::get_trainer_manager();
+            return tm && tm->getTrainer() && tm->getTrainer()->is_saving_model();
+        },
+        "Whether the terminal stop/completion model save is in progress");
+
+    m.def(
         "finish_reason",
         []() -> std::optional<std::string> {
             const auto* const tm = lfs::python::get_trainer_manager();

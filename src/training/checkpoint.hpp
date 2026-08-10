@@ -46,7 +46,8 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params,
         const BilateralGrid* bilateral_grid = nullptr,
         const PPISP* ppisp = nullptr,
-        const PPISPControllerPool* ppisp_controller_pool = nullptr);
+        const PPISPControllerPool* ppisp_controller_pool = nullptr,
+        bool durable = true);
 
     /// Load complete training checkpoint (strategy + optional appearance components)
     std::expected<int, std::string> load_checkpoint(

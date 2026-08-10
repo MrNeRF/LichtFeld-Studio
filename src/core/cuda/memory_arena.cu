@@ -410,12 +410,6 @@ namespace lfs::core {
                 // Reset the offset to reuse the buffer from the beginning
                 it->second->offset.store(0, std::memory_order_release);
 
-                // Log memory status periodically (but not too often)
-                bool should_log = (frame_id == 1) || (frame_id % config_.log_interval == 0);
-
-                if (should_log) {
-                    log_memory_status(frame_id, true);
-                }
             }
         }
 
@@ -501,6 +495,14 @@ namespace lfs::core {
                 err, "cudaGetDevice(arena end frame)",
                 detail::format_cuda_safe("frame_id={}", frame_id), LFS_SOURCE_SITE_CURRENT(),
                 CudaFailureDisposition::LogOnly);
+        }
+
+        // Log after the frame's high-water mark has been captured.  Logging at
+        // begin_frame() reset the offset before the first allocation, producing
+        // the misleading committed=0/peak=0 line for a single frame that grew
+        // the arena many times.
+        if (frame_id == 1 || (frame_id % config_.log_interval == 0)) {
+            log_memory_status(frame_id, true);
         }
 
         std::lock_guard<std::mutex> lock(frame_mutex_);
