@@ -709,6 +709,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tool_registry_activation.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_manager_regressions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tools_new.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_panel_regressions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_transform_controls_panel.py

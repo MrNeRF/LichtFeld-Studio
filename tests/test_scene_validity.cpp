@@ -255,7 +255,7 @@ namespace lfs::python {
                 return true;
             });
         EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::Failed);
-        trainer.endExportableDensifyBarrier();
+        EXPECT_TRUE(trainer.endExportableDensifyBarrier());
         EXPECT_EQ(begin_calls, 1);
         EXPECT_EQ(end_calls, 0);
 
@@ -270,11 +270,32 @@ namespace lfs::python {
             });
         EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::Acquired);
         EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::Acquired);
-        trainer.endExportableDensifyBarrier();
+        EXPECT_TRUE(trainer.endExportableDensifyBarrier());
         EXPECT_EQ(end_calls, 0);
-        trainer.endExportableDensifyBarrier();
+        EXPECT_TRUE(trainer.endExportableDensifyBarrier());
         EXPECT_EQ(begin_calls, 2);
         EXPECT_EQ(end_calls, 1);
+    }
+
+    TEST(TrainerConstructionTest, ExportableDensifyBarrierEndFailureStopsTrainer) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        training::Trainer trainer(scene);
+        using Begin = training::Trainer::ExportableDensifyBarrierBegin;
+
+        int end_calls = 0;
+        trainer.setExportableDensifyBarrier(
+            [] { return true; },
+            [&] {
+                ++end_calls;
+                return false;
+            });
+
+        EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::Acquired);
+        EXPECT_FALSE(trainer.endExportableDensifyBarrier());
+        EXPECT_EQ(end_calls, 1);
+        EXPECT_TRUE(trainer.has_stopped());
     }
 
     TEST(TrainerConstructionTest, ManagerClearReleasesTrainerResourcesAndPoolCache) {

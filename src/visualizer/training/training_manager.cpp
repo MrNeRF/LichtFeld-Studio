@@ -51,6 +51,26 @@ namespace lfs::vis {
                 params.eval_steps = steps;
         }
 
+        template <typename Fn>
+        class ScopeExit final {
+        public:
+            explicit ScopeExit(Fn fn) : fn_(std::move(fn)) {}
+            ScopeExit(const ScopeExit&) = delete;
+            ScopeExit& operator=(const ScopeExit&) = delete;
+
+            ~ScopeExit() noexcept {
+                if (active_) {
+                    fn_();
+                }
+            }
+
+            void release() noexcept { active_ = false; }
+
+        private:
+            Fn fn_;
+            bool active_ = true;
+        };
+
         void release_training_thread_local_cuda_caches() noexcept {
             (void)lfs::training::release_fast_rasterizer_thread_local_caches();
             (void)lfs::training::release_gsplat_rasterizer_thread_local_caches();
@@ -343,6 +363,33 @@ namespace lfs::vis {
             LOG_ERROR("Exportable pre-grow rebind (drop Vulkan import) failed");
             return false;
         }
+        // From this point until a successful re-import, every exit must restore
+        // the viewer's Vulkan-backed tensor owners. In particular, grow() can
+        // fail transactionally after the old import was already detached.
+        auto restore_vulkan_interop = ScopeExit([this]() noexcept {
+            try {
+                if (!rebindExportableVulkanInterop()) {
+                    LOG_ERROR("Failed to restore Vulkan interop after exportable grow failure; "
+                              "stopping training");
+                    if (trainer_) {
+                        trainer_->request_stop();
+                    }
+                }
+            } catch (const std::exception& error) {
+                LOG_ERROR("Exception while restoring Vulkan interop after exportable grow "
+                          "failure: {}; stopping training",
+                          error.what());
+                if (trainer_) {
+                    trainer_->request_stop();
+                }
+            } catch (...) {
+                LOG_ERROR("Unknown exception while restoring Vulkan interop after exportable "
+                          "grow failure; stopping training");
+                if (trainer_) {
+                    trainer_->request_stop();
+                }
+            }
+        });
         if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
             LOG_ERROR("cudaDeviceSynchronize before exportable grow failed: {} ({})",
                       cudaGetErrorName(err),
@@ -379,6 +426,7 @@ namespace lfs::vis {
             LOG_ERROR("Exportable rebind after grow failed");
             return false;
         }
+        restore_vulkan_interop.release();
         LOG_INFO("Exportable splat storage grew for densify: capacity={} block={} MiB gen={}",
                  splat_storage_->capacity(),
                  splat_storage_->block->size >> 20,

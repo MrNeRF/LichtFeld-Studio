@@ -218,7 +218,9 @@ namespace lfs::training {
         /// Begin densify-window Vulkan exclusion. Headless callers proceed on
         /// NotInstalled; Failed means the mutation must be aborted.
         [[nodiscard]] ExportableDensifyBarrierBegin beginExportableDensifyBarrier();
-        void endExportableDensifyBarrier();
+        /// Release one nesting level. A failed outermost callback is logged and
+        /// stops training because the post-mutation device state is not known safe.
+        [[nodiscard]] bool endExportableDensifyBarrier();
 
         void setOnIterationStart(std::function<void()> cb) { on_iteration_start_ = std::move(cb); }
 

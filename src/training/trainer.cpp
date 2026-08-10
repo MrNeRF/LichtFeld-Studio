@@ -2261,17 +2261,20 @@ namespace lfs::training {
         return ExportableDensifyBarrierBegin::Acquired;
     }
 
-    void Trainer::endExportableDensifyBarrier() {
+    bool Trainer::endExportableDensifyBarrier() {
         if (exportable_densify_barrier_depth_ <= 0) {
-            return;
+            return true;
         }
         --exportable_densify_barrier_depth_;
         if (exportable_densify_barrier_depth_ > 0) {
-            return;
+            return true;
         }
-        if (exportable_densify_barrier_end_) {
-            (void)exportable_densify_barrier_end_();
+        if (exportable_densify_barrier_end_ && !exportable_densify_barrier_end_()) {
+            LOG_ERROR("Failed to end exportable densify barrier; stopping training");
+            request_stop();
+            return false;
         }
+        return true;
     }
 
     void Trainer::publishViewerBorrow(uint64_t value) {
@@ -4089,7 +4092,7 @@ namespace lfs::training {
                         }
                         ~DensifyBarrierGuard() {
                             if (held && self) {
-                                self->endExportableDensifyBarrier();
+                                (void)self->endExportableDensifyBarrier();
                             }
                         }
                         DensifyBarrierGuard(const DensifyBarrierGuard&) = delete;
@@ -5622,7 +5625,7 @@ namespace lfs::training {
                             }
                             ~DensifyBarrierGuard() {
                                 if (held && self) {
-                                    self->endExportableDensifyBarrier();
+                                    (void)self->endExportableDensifyBarrier();
                                 }
                             }
                             DensifyBarrierGuard(const DensifyBarrierGuard&) = delete;
