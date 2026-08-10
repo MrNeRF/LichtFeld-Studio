@@ -409,3 +409,21 @@
 .viewport-status-stage {
     color: @{text_dim};
 }
+
+.perf-hud-strip {
+    background-color: @{viewport.panel_bg};
+    border-color: @{viewport.panel_border};
+    color: @{text};
+}
+.perf-hud-strip-rate, .perf-hud-strip-value { color: @{text_dim}; }
+.perf-hud-meter-track { background-color: @{statusbar.progress_bg}; }
+.perf-hud-meter-fill { background-color: @{primary}; }
+.perf-hud-meter-fill.process { background-color: @{primary}; }
+.perf-hud-meter-fill.other { background-color: @{alpha(text_dim,0.45)}; }
+.perf-hud-meter-fill.free { background-color: @{alpha(text_dim,0.20)}; }
+.perf-hud-strip-badge { color: @{success}; }
+.perf-hud-strip-meter.warn .perf-hud-meter-fill,
+.perf-hud-meter-fill.warn { background-color: @{warning}; }
+.perf-hud-strip-meter.crit .perf-hud-meter-fill,
+.perf-hud-meter-fill.crit { background-color: @{error}; }
+.perf-hud-core-bar { background-color: @{primary}; }

@@ -1012,7 +1012,44 @@
     </div>
 
     <div id="vram-hud-overlay" class="vram-hud-overlay hidden">
-        <div class="vram-hud-card">
+        <div id="perf-hud-strip" class="perf-hud-strip hidden">
+            <div class="perf-hud-strip-header" data-perf-toggle-expanded="true">
+                <span class="perf-hud-strip-title">@tr:ui.perf_hud_title</span>
+                <span id="perf-hud-strip-rate" class="perf-hud-strip-rate"></span>
+                <span class="perf-hud-strip-chevron">⌄</span>
+            </div>
+            <div class="perf-hud-strip-meter" data-perf-tab="ledger">
+                <span class="perf-hud-strip-label">VRAM</span>
+                <div class="perf-hud-meter-track">
+                    <span id="perf-hud-vram-process" class="perf-hud-meter-fill process"></span>
+                    <span id="perf-hud-vram-other" class="perf-hud-meter-fill other"></span>
+                    <span id="perf-hud-vram-free" class="perf-hud-meter-fill free"></span>
+                </div>
+                <span id="perf-hud-vram-value" class="perf-hud-strip-value"></span>
+                <span id="perf-hud-vram-badge" class="perf-hud-strip-badge"></span>
+            </div>
+            <div class="perf-hud-strip-meter">
+                <span class="perf-hud-strip-label">RAM</span>
+                <div class="perf-hud-meter-track">
+                    <span id="perf-hud-ram-process" class="perf-hud-meter-fill process"></span>
+                    <span id="perf-hud-ram-other" class="perf-hud-meter-fill other"></span>
+                    <span id="perf-hud-ram-free" class="perf-hud-meter-fill free"></span>
+                </div>
+                <span id="perf-hud-ram-value" class="perf-hud-strip-value"></span>
+            </div>
+            <div class="perf-hud-strip-meter">
+                <span class="perf-hud-strip-label">GPU</span>
+                <div class="perf-hud-meter-track"><span id="perf-hud-gpu-fill" class="perf-hud-meter-fill"></span></div>
+                <span id="perf-hud-gpu-value" class="perf-hud-strip-value"></span>
+            </div>
+            <div class="perf-hud-strip-meter">
+                <span class="perf-hud-strip-label">CPU</span>
+                <div class="perf-hud-meter-track"><span id="perf-hud-cpu-fill" class="perf-hud-meter-fill"></span></div>
+                <span id="perf-hud-cpu-value" class="perf-hud-strip-value"></span>
+            </div>
+            <div id="perf-hud-core-strip" class="perf-hud-core-strip"></div>
+        </div>
+        <div id="perf-hud-card" class="vram-hud-card">
             <div id="vram-hud-header" class="vram-hud-header">
                 <span class="vram-hud-title">@tr:ui.perf_hud_title</span>
                 <span class="vram-hud-header-meta">

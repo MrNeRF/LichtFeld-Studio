@@ -3048,7 +3048,8 @@ namespace lfs::python {
                     self.image_uv(tex.texture_id(), size, {0.0f, 0.0f}, tex.uv1(), std::move(tint));
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& self, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& self, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -4539,6 +4540,10 @@ namespace lfs::python {
 
         m.def("toggle_system_console", &toggle_system_console,
               "Toggle system console visibility");
+
+        m.def(
+            "toggle_vram_hud", []() { lfs::core::events::ui::ToggleVramHud{}.emit(); },
+            "Toggle the VRAM diagnostics HUD overlay");
 
         m.def(
             "is_windows_platform", []() -> bool {

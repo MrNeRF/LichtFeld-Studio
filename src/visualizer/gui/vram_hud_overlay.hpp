@@ -6,6 +6,7 @@
 
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "visualizer/app_store.hpp"
 
 #include <RmlUi/Core/EventListener.h>
 #include <chrono>
@@ -26,6 +27,7 @@ namespace lfs::vis::gui {
         struct State {
             bool visible = false;
             lfs::diagnostics::VramProfilerSnapshot snapshot;
+            lfs::vis::AppStore::PerfHud perf_hud;
         };
 
         VramHudOverlay();
@@ -38,7 +40,7 @@ namespace lfs::vis::gui {
         void onDocumentDestroyed();
 
         void setState(State state);
-        [[nodiscard]] bool isVisible() const noexcept { return state_.visible; }
+        [[nodiscard]] bool isVisible() const noexcept { return state_.visible || state_.perf_hud.visible; }
         [[nodiscard]] bool needsAnimationFrame() const noexcept { return pointer_captured_; }
         [[nodiscard]] bool isCapturingPointer() const noexcept { return pointer_captured_; }
 
@@ -80,6 +82,7 @@ namespace lfs::vis::gui {
 
         void attachListeners();
         void apply();
+        void applyCompactStrip();
         void applySummary(std::size_t process_used, std::size_t process_total);
         void applyLedger();
         void applyCounters();
@@ -113,11 +116,31 @@ namespace lfs::vis::gui {
         std::uint64_t last_language_generation_ = 0;
         bool has_language_generation_ = false;
         bool last_visible_ = false;
+        std::shared_ptr<const lfs::vis::AppStore::PerfHudSnapshot> last_perf_snapshot_;
+        bool last_perf_visible_ = false;
+        bool last_perf_expanded_ = true;
         bool default_collapse_applied_ = false;
         bool ledger_default_collapse_applied_ = false;
 
         Rml::ElementDocument* document_ = nullptr;
         Rml::Element* root_ = nullptr;
+        Rml::Element* perf_strip_ = nullptr;
+        Rml::Element* perf_card_ = nullptr;
+        Rml::Element* perf_rate_ = nullptr;
+        Rml::Element* perf_vram_process_ = nullptr;
+        Rml::Element* perf_vram_other_ = nullptr;
+        Rml::Element* perf_vram_free_ = nullptr;
+        Rml::Element* perf_vram_value_ = nullptr;
+        Rml::Element* perf_vram_badge_ = nullptr;
+        Rml::Element* perf_ram_process_ = nullptr;
+        Rml::Element* perf_ram_other_ = nullptr;
+        Rml::Element* perf_ram_free_ = nullptr;
+        Rml::Element* perf_ram_value_ = nullptr;
+        Rml::Element* perf_gpu_fill_ = nullptr;
+        Rml::Element* perf_gpu_value_ = nullptr;
+        Rml::Element* perf_cpu_fill_ = nullptr;
+        Rml::Element* perf_cpu_value_ = nullptr;
+        Rml::Element* perf_core_strip_ = nullptr;
         Rml::Element* header_ = nullptr;
         Rml::Element* resize_handle_ = nullptr;
         Rml::Element* filter_input_ = nullptr;

@@ -6270,6 +6270,25 @@ namespace lfs::vis::gui {
             state.save();
         });
 
+        ui::TogglePerfHudExpanded::when([this](const auto&) {
+            perf_hud_expanded_ = !perf_hud_expanded_;
+            LayoutState state;
+            state.load();
+            state.perf_hud_visible = show_vram_hud_;
+            state.perf_hud_expanded = perf_hud_expanded_;
+            state.save();
+        });
+
+        ui::OpenPerfHudLedger::when([this](const auto&) {
+            perf_hud_expanded_ = true;
+            LayoutState state;
+            state.load();
+            state.perf_hud_visible = show_vram_hud_;
+            state.perf_hud_expanded = true;
+            state.vram_hud_active_tab = "ledger";
+            state.save();
+        });
+
         ui::ToggleFullscreen::when([this](const auto&) {
             queueFullscreenToggle();
         });

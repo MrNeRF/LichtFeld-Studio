@@ -5,6 +5,7 @@
 #include "gui/vram_hud_overlay.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/events.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/string_keys.hpp"
@@ -336,7 +337,27 @@ namespace lfs::vis::gui {
         last_sequence_ = 0;
         has_language_generation_ = false;
         last_visible_ = false;
+        last_perf_snapshot_.reset();
+        last_perf_visible_ = false;
+        last_perf_expanded_ = true;
         root_ = nullptr;
+        perf_strip_ = nullptr;
+        perf_card_ = nullptr;
+        perf_rate_ = nullptr;
+        perf_vram_process_ = nullptr;
+        perf_vram_other_ = nullptr;
+        perf_vram_free_ = nullptr;
+        perf_vram_value_ = nullptr;
+        perf_vram_badge_ = nullptr;
+        perf_ram_process_ = nullptr;
+        perf_ram_other_ = nullptr;
+        perf_ram_free_ = nullptr;
+        perf_ram_value_ = nullptr;
+        perf_gpu_fill_ = nullptr;
+        perf_gpu_value_ = nullptr;
+        perf_cpu_fill_ = nullptr;
+        perf_cpu_value_ = nullptr;
+        perf_core_strip_ = nullptr;
         header_ = nullptr;
         resize_handle_ = nullptr;
         filter_input_ = nullptr;
@@ -373,6 +394,23 @@ namespace lfs::vis::gui {
             return;
 
         root_ = document_->GetElementById("vram-hud-overlay");
+        perf_strip_ = document_->GetElementById("perf-hud-strip");
+        perf_card_ = document_->GetElementById("perf-hud-card");
+        perf_rate_ = document_->GetElementById("perf-hud-strip-rate");
+        perf_vram_process_ = document_->GetElementById("perf-hud-vram-process");
+        perf_vram_other_ = document_->GetElementById("perf-hud-vram-other");
+        perf_vram_free_ = document_->GetElementById("perf-hud-vram-free");
+        perf_vram_value_ = document_->GetElementById("perf-hud-vram-value");
+        perf_vram_badge_ = document_->GetElementById("perf-hud-vram-badge");
+        perf_ram_process_ = document_->GetElementById("perf-hud-ram-process");
+        perf_ram_other_ = document_->GetElementById("perf-hud-ram-other");
+        perf_ram_free_ = document_->GetElementById("perf-hud-ram-free");
+        perf_ram_value_ = document_->GetElementById("perf-hud-ram-value");
+        perf_gpu_fill_ = document_->GetElementById("perf-hud-gpu-fill");
+        perf_gpu_value_ = document_->GetElementById("perf-hud-gpu-value");
+        perf_cpu_fill_ = document_->GetElementById("perf-hud-cpu-fill");
+        perf_cpu_value_ = document_->GetElementById("perf-hud-cpu-value");
+        perf_core_strip_ = document_->GetElementById("perf-hud-core-strip");
         header_ = document_->GetElementById("vram-hud-header");
         resize_handle_ = document_->GetElementById("vram-hud-resize");
         filter_input_ = document_->GetElementById("vram-hud-filter");
@@ -697,10 +735,14 @@ namespace lfs::vis::gui {
         const auto language_generation = lfs::vis::app_store().language_generation.get();
         const bool language_changed = !has_language_generation_ ||
                                       language_generation != last_language_generation_;
-        const bool visibility_changed = last_visible_ != state.visible;
+        const bool effective_visible = state.visible || state.perf_hud.visible;
+        const bool visibility_changed = last_visible_ != effective_visible;
         const bool data_changed = state.visible && last_sequence_ != state.snapshot.sequence;
+        const bool perf_changed = last_perf_visible_ != state.perf_hud.visible ||
+                                  last_perf_expanded_ != state.perf_hud.expanded ||
+                                  last_perf_snapshot_ != state.perf_hud.snapshot;
         state_ = std::move(state);
-        if (!visibility_changed && !data_changed && !language_changed)
+        if (!visibility_changed && !data_changed && !perf_changed && !language_changed)
             return;
         if (language_changed) {
             last_language_generation_ = language_generation;
@@ -712,7 +754,10 @@ namespace lfs::vis::gui {
                     lfs::event::LocalizationManager::getInstance().get("toolbar.waiting_training_diagnostics"));
             }
         }
-        last_visible_ = state_.visible;
+        last_visible_ = effective_visible;
+        last_perf_visible_ = state_.perf_hud.visible;
+        last_perf_expanded_ = state_.perf_hud.expanded;
+        last_perf_snapshot_ = state_.perf_hud.snapshot;
         last_sequence_ = state_.snapshot.sequence;
         apply();
     }
@@ -731,7 +776,23 @@ namespace lfs::vis::gui {
         if (!document_ || !root_)
             return;
 
-        root_->SetClass("hidden", !state_.visible);
+        const bool visible = state_.visible || state_.perf_hud.visible;
+        root_->SetClass("hidden", !visible);
+        root_->SetClass("perf-hud-compact", state_.perf_hud.visible && !state_.perf_hud.expanded);
+        if (!visible)
+            return;
+
+        applyCompactStrip();
+        const bool compact = state_.perf_hud.visible && !state_.perf_hud.expanded;
+        if (perf_strip_) {
+            perf_strip_->SetClass("hidden", !state_.perf_hud.visible || state_.perf_hud.expanded);
+            perf_strip_->SetProperty("display", compact ? "flex" : "none");
+        }
+        if (perf_card_) {
+            perf_card_->SetClass("hidden", compact);
+            perf_card_->SetProperty("display", compact ? "none" : "flex");
+        }
+
         if (!state_.visible)
             return;
 
@@ -773,6 +834,84 @@ namespace lfs::vis::gui {
         }
 
         applyTree(process_used);
+    }
+
+    void VramHudOverlay::applyCompactStrip() {
+        if (!state_.perf_hud.visible || !state_.perf_hud.snapshot)
+            return;
+        const auto& s = *state_.perf_hud.snapshot;
+        const auto ratio = [](std::size_t value, std::size_t total) {
+            return total == 0 ? 0.0f : std::clamp(100.0f * static_cast<float>(value) / static_cast<float>(total), 0.0f, 100.0f);
+        };
+        const auto percent = [](float value) { return std::clamp(value, 0.0f, 100.0f); };
+        const auto set_width = [](Rml::Element* element, const float value) {
+            if (element)
+                element->SetProperty("width", std::format("{:.2f}%", value));
+        };
+        const auto set_threshold = [](Rml::Element* element, const float value) {
+            if (!element)
+                return;
+            element->SetClass("warn", value >= 80.0f && value < 92.0f);
+            element->SetClass("crit", value >= 92.0f);
+        };
+        const auto vram_process = ratio(s.vram_process_bytes, s.vram_total_bytes);
+        const auto vram_used = ratio(s.vram_used_bytes, s.vram_total_bytes);
+        set_width(perf_vram_process_, vram_process);
+        set_width(perf_vram_other_, std::max(0.0f, vram_used - vram_process));
+        set_width(perf_vram_free_, std::max(0.0f, 100.0f - vram_used));
+        set_threshold(perf_vram_process_, vram_used);
+        if (perf_vram_value_)
+            perf_vram_value_->SetInnerRML(std::format("{} / {}", formatBytes(s.vram_used_bytes),
+                                                      formatBytes(s.vram_total_bytes)));
+        if (perf_vram_badge_)
+            perf_vram_badge_->SetInnerRML(s.ledger_over ? "‼" : (s.ledger_closed ? "✓" : "!"));
+
+        const auto ram_process = ratio(s.ram_process_bytes, s.ram_total_bytes);
+        const auto ram_used = ratio(s.ram_used_bytes, s.ram_total_bytes);
+        set_width(perf_ram_process_, ram_process);
+        set_width(perf_ram_other_, std::max(0.0f, ram_used - ram_process));
+        set_width(perf_ram_free_, std::max(0.0f, 100.0f - ram_used));
+        set_threshold(perf_ram_process_, ram_used);
+        if (perf_ram_value_)
+            perf_ram_value_->SetInnerRML(std::format("{} / {}", formatBytes(s.ram_used_bytes),
+                                                     formatBytes(s.ram_total_bytes)));
+
+        const auto gpu = s.gpu_utilization_valid ? percent(s.gpu_utilization_percent) : 0.0f;
+        const auto cpu = s.cpu_valid ? percent(s.process_cpu_percent) : 0.0f;
+        set_width(perf_gpu_fill_, gpu);
+        set_width(perf_cpu_fill_, cpu);
+        set_threshold(perf_gpu_fill_, gpu);
+        set_threshold(perf_cpu_fill_, cpu);
+        if (perf_gpu_value_)
+            perf_gpu_value_->SetInnerRML(s.gpu_utilization_valid ? std::format("{:.0f}%", gpu) : "--");
+        if (perf_cpu_value_)
+            perf_cpu_value_->SetInnerRML(s.cpu_valid ? std::format("{:.0f}%", cpu) : "--");
+        if (perf_rate_) {
+            // Keep unit literal off the SetInnerRML line (check_ui_hardcoded is line-based);
+            // fps is a design-exempt technical unit, same pattern as "{:.1f} iter/s" above.
+            const std::string rate_text =
+                s.rate > 0.0f ? std::format("{:.1f} fps", s.rate) : std::string("--");
+            perf_rate_->SetInnerRML(rate_text);
+        }
+
+        if (perf_core_strip_) {
+            std::string bars;
+            const std::size_t bucket_count = std::min<std::size_t>(32, s.per_core_cpu_percent.size());
+            if (bucket_count > 0) {
+                bars.reserve(bucket_count * 64);
+                for (std::size_t i = 0; i < bucket_count; ++i) {
+                    const auto begin = i * s.per_core_cpu_percent.size() / bucket_count;
+                    const auto end = std::max(begin + 1,
+                                              (i + 1) * s.per_core_cpu_percent.size() / bucket_count);
+                    float peak = 0.0f;
+                    for (std::size_t j = begin; j < end && j < s.per_core_cpu_percent.size(); ++j)
+                        peak = std::max(peak, s.per_core_cpu_percent[j]);
+                    bars += std::format("<span class=\"perf-hud-core-bar\" style=\"height:{:.1f}%\"></span>",
+                                        percent(peak));
+                }
+            }
+            perf_core_strip_->SetInnerRML(bars);
+        }
     }
 
     void VramHudOverlay::applySummary(std::size_t process_used, std::size_t process_total) {
@@ -1594,6 +1733,19 @@ namespace lfs::vis::gui {
             return;
         auto* target = event.GetTargetElement();
         while (target) {
+            const auto toggle_expanded = target->GetAttribute<Rml::String>("data-perf-toggle-expanded", "");
+            if (!toggle_expanded.empty()) {
+                lfs::core::events::ui::TogglePerfHudExpanded{}.emit();
+                event.StopPropagation();
+                return;
+            }
+            const auto perf_tab = target->GetAttribute<Rml::String>("data-perf-tab", "");
+            if (!perf_tab.empty()) {
+                lfs::core::events::ui::OpenPerfHudLedger{}.emit();
+                owner->setActiveTab("ledger");
+                event.StopPropagation();
+                return;
+            }
             const auto enable_tracking =
                 target->GetAttribute<Rml::String>("data-perf-enable-tracking", "");
             if (!enable_tracking.empty()) {

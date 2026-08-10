@@ -1725,3 +1725,42 @@ body {
 .hidden {
     display: none;
 }
+
+.perf-hud-strip {
+    position: absolute;
+    right: 18dp;
+    top: 18dp;
+    width: 300dp;
+    min-height: 142dp;
+    padding: 10dp 12dp;
+    display: flex;
+    flex-direction: column;
+    gap: 5dp;
+    border-width: 1dp;
+    border-radius: 7dp;
+    z-index: 30;
+}
+
+.perf-hud-strip-header {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    height: 18dp;
+    cursor: pointer;
+}
+
+.perf-hud-strip-title { flex-grow: 1; }
+.perf-hud-strip-rate, .perf-hud-strip-value, .perf-hud-strip-badge { font-family: "JetBrains Mono"; }
+.perf-hud-strip-meter { display: flex; align-items: center; gap: 5dp; height: 18dp; cursor: pointer; }
+.perf-hud-strip-label { width: 34dp; }
+.perf-hud-meter-track { flex-grow: 1; display: flex; height: 7dp; overflow: hidden; border-radius: 3dp; }
+.perf-hud-meter-fill { display: block; height: 100%; width: 0%; }
+.perf-hud-strip-value { width: 66dp; text-align: right; font-size: 10dp; }
+.perf-hud-strip-badge { width: 12dp; font-size: 10dp; }
+.perf-hud-core-strip { display: flex; align-items: flex-end; gap: 1dp; height: 13dp; margin-left: 39dp; overflow: hidden; }
+.perf-hud-core-strip .perf-hud-core-bar { flex: 1 1 0; min-width: 1dp; max-width: 4dp; height: 100%; }
+.perf-hud-strip-header, .perf-hud-strip-meter, .perf-hud-core-strip { box-sizing: border-box; }
+.vram-hud-overlay.perf-hud-compact .vram-hud-card { display: none; }
+.vram-hud-overlay.perf-hud-compact .perf-hud-strip { display: flex; }
+.vram-hud-overlay:not(.perf-hud-compact) .perf-hud-strip { display: none; }
+.perf-hud-strip.hidden { display: none; }
