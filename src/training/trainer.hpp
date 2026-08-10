@@ -209,8 +209,15 @@ namespace lfs::training {
             exportable_densify_barrier_end_ = std::move(end);
         }
 
-        /// Begin densify-window Vulkan exclusion. Returns true if end must be called.
-        [[nodiscard]] bool beginExportableDensifyBarrier();
+        enum class ExportableDensifyBarrierBegin {
+            NotInstalled,
+            Acquired,
+            Failed,
+        };
+
+        /// Begin densify-window Vulkan exclusion. Headless callers proceed on
+        /// NotInstalled; Failed means the mutation must be aborted.
+        [[nodiscard]] ExportableDensifyBarrierBegin beginExportableDensifyBarrier();
         void endExportableDensifyBarrier();
 
         void setOnIterationStart(std::function<void()> cb) { on_iteration_start_ = std::move(cb); }

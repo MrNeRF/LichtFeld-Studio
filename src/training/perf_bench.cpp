@@ -97,9 +97,13 @@ namespace lfs::training {
             const diagnostics::VramProfilerSnapshot& snapshot) {
             MrnfTransientPeaks peaks;
             for (const auto& row : snapshot.rows) {
+                const bool in_grow =
+                    row.scope.find("MRNF::grow_and_split") != std::string::npos;
+                const bool in_refine =
+                    row.scope.find("MRNF::refine") != std::string::npos;
                 if (row.kind != diagnostics::VramRowKind::Hooked || row.peak_bytes == 0 ||
                     row.method != diagnostics::VramAllocationMethod::Bucketed ||
-                    row.scope.find("MRNF::refine") == std::string::npos) {
+                    (!in_refine && !in_grow)) {
                     continue;
                 }
                 // Durable child/N scratch (and any retained model storage) is
@@ -108,7 +112,7 @@ namespace lfs::training {
                 // allocator cache/rounding roots cover backing overhead.
                 const std::size_t transient_bytes =
                     row.peak_bytes > row.live_bytes ? row.peak_bytes - row.live_bytes : 0;
-                if (row.scope.find("MRNF::grow_and_split") != std::string::npos) {
+                if (in_grow) {
                     peaks.grow_required_bytes += transient_bytes;
                 } else {
                     peaks.refine_required_bytes += transient_bytes;

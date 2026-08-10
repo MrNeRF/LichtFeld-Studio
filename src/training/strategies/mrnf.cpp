@@ -925,6 +925,7 @@ namespace lfs::training {
     void MRNF::refine(int iter) {
         lfs::core::alloc_counter::ScopedSite densify_site("densify");
         LOG_TIMER("MRNF::refine");
+        LFS_VRAM_SCOPE("MRNF::refine");
         using namespace lfs::core;
         // densify ops are float-native. Expand q16 → float for this step only;
         // commit restores q16 before refine() returns (single buffer residency).
@@ -1048,6 +1049,7 @@ namespace lfs::training {
 
     void MRNF::grow_and_split(int iter, int pruned_count) {
         LOG_TIMER("MRNF::grow_and_split");
+        LFS_VRAM_SCOPE("MRNF::grow_and_split");
         using namespace lfs::core;
         // Expand q16 → float if needed. Do NOT re-encode here: refine() owns the single
         // post-growth commit so bounds/codes always match the final N. Tests that call

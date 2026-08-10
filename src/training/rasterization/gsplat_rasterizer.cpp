@@ -166,6 +166,14 @@ namespace lfs::training {
                         fwd_stream);
                     shN_ptr = shN_dequant_temp.ptr<float>();
                 } else {
+                    if (shN.dtype() != core::DataType::Float32) {
+                        LOG_ERROR(
+                            "gsplat SH-rest requires Float32 or valid q16 codes+bounds; "
+                            "refusing to reinterpret non-Float32 storage");
+                        throw std::runtime_error(
+                            "gsplat_rasterize_forward: unsupported SH-rest storage; "
+                            "expected Float32 or valid q16 codes+bounds");
+                    }
                     shN_ptr = shN.ptr<float>();
                 }
             }

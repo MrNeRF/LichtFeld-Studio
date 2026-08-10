@@ -2246,19 +2246,19 @@ namespace lfs::training {
         viewer_borrow_value_.store(0, std::memory_order_release);
     }
 
-    bool Trainer::beginExportableDensifyBarrier() {
+    Trainer::ExportableDensifyBarrierBegin Trainer::beginExportableDensifyBarrier() {
         if (exportable_densify_barrier_depth_ > 0) {
             ++exportable_densify_barrier_depth_;
-            return true;
+            return ExportableDensifyBarrierBegin::Acquired;
         }
         if (!exportable_densify_barrier_begin_) {
-            return false;
+            return ExportableDensifyBarrierBegin::NotInstalled;
         }
         if (!exportable_densify_barrier_begin_()) {
-            return false;
+            return ExportableDensifyBarrierBegin::Failed;
         }
         exportable_densify_barrier_depth_ = 1;
-        return true;
+        return ExportableDensifyBarrierBegin::Acquired;
     }
 
     void Trainer::endExportableDensifyBarrier() {
@@ -4079,7 +4079,12 @@ namespace lfs::training {
                         bool held = false;
                         explicit DensifyBarrierGuard(Trainer* t, bool need) : self(t) {
                             if (need && self) {
-                                held = self->beginExportableDensifyBarrier();
+                                const auto result = self->beginExportableDensifyBarrier();
+                                if (result == ExportableDensifyBarrierBegin::Failed) {
+                                    throw std::runtime_error(
+                                        "Failed to begin exportable densify barrier");
+                                }
+                                held = result == ExportableDensifyBarrierBegin::Acquired;
                             }
                         }
                         ~DensifyBarrierGuard() {
@@ -5607,7 +5612,12 @@ namespace lfs::training {
                             bool held = false;
                             explicit DensifyBarrierGuard(Trainer* t, bool need) : self(t) {
                                 if (need && self) {
-                                    held = self->beginExportableDensifyBarrier();
+                                    const auto result = self->beginExportableDensifyBarrier();
+                                    if (result == ExportableDensifyBarrierBegin::Failed) {
+                                        throw std::runtime_error(
+                                            "Failed to begin exportable densify barrier");
+                                    }
+                                    held = result == ExportableDensifyBarrierBegin::Acquired;
                                 }
                             }
                             ~DensifyBarrierGuard() {

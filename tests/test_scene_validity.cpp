@@ -234,6 +234,49 @@ namespace lfs::python {
         EXPECT_FALSE(trainer.isInitialized());
     }
 
+    TEST(TrainerConstructionTest, ExportableDensifyBarrierDistinguishesAbsentAndFailed) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        training::Trainer trainer(scene);
+        using Begin = training::Trainer::ExportableDensifyBarrierBegin;
+
+        EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::NotInstalled);
+
+        int begin_calls = 0;
+        int end_calls = 0;
+        trainer.setExportableDensifyBarrier(
+            [&] {
+                ++begin_calls;
+                return false;
+            },
+            [&] {
+                ++end_calls;
+                return true;
+            });
+        EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::Failed);
+        trainer.endExportableDensifyBarrier();
+        EXPECT_EQ(begin_calls, 1);
+        EXPECT_EQ(end_calls, 0);
+
+        trainer.setExportableDensifyBarrier(
+            [&] {
+                ++begin_calls;
+                return true;
+            },
+            [&] {
+                ++end_calls;
+                return true;
+            });
+        EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::Acquired);
+        EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::Acquired);
+        trainer.endExportableDensifyBarrier();
+        EXPECT_EQ(end_calls, 0);
+        trainer.endExportableDensifyBarrier();
+        EXPECT_EQ(begin_calls, 2);
+        EXPECT_EQ(end_calls, 1);
+    }
+
     TEST(TrainerConstructionTest, ManagerClearReleasesTrainerResourcesAndPoolCache) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");

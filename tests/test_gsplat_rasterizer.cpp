@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 using namespace lfs::training;
@@ -344,4 +345,41 @@ TEST(GsplatRasterizerQuantTest, GutForwardBackwardWithDefaultQuantAndShDegree) {
     GlobalArenaManager::instance().get_arena().end_frame(ctx.frame_id, ctx.stream);
 
     lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(GsplatRasterizerQuantTest, RejectsFloat16ShRestWithoutQ16Bounds) {
+    auto camera = make_camera(32, 32);
+    constexpr size_t n = 4;
+    constexpr size_t rest = 3;
+
+    std::vector<float> rotations(n * 4, 0.0f);
+    for (size_t i = 0; i < n; ++i) {
+        rotations[i * 4] = 1.0f;
+    }
+    auto splat = SplatData(
+        1,
+        Tensor::zeros({n, size_t{3}}, Device::CUDA),
+        Tensor::full({n, size_t{1}, size_t{3}}, 0.5f, Device::CUDA),
+        Tensor::full({n, rest, size_t{3}}, 0.05f, Device::CUDA),
+        Tensor::full({n, size_t{3}}, -2.0f, Device::CUDA),
+        Tensor::from_vector(rotations, {n, size_t{4}}, Device::CUDA),
+        Tensor::full({n, size_t{1}}, 2.0f, Device::CUDA),
+        1.0f);
+    // Canonical construction currently accepts Float32 only. Convert the valid
+    // resident float4 swizzle afterward to model the viewer's IEEE-f16 storage
+    // without q16 bounds.
+    splat.shN() = splat.shN().to(DataType::Float16);
+    ASSERT_EQ(splat.shN().dtype(), DataType::Float16);
+    ASSERT_FALSE(splat.shN_value_quantized());
+
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    try {
+        (void)gsplat_rasterize_forward(
+            camera, splat, background, 0, 0, 0, 0, 1.0f, false,
+            GsplatRenderMode::RGB, /*use_gut=*/true);
+        FAIL() << "gsplat accepted non-q16 Float16 SH-rest";
+    } catch (const std::runtime_error& error) {
+        EXPECT_NE(std::string_view(error.what()).find("unsupported SH-rest storage"),
+                  std::string_view::npos);
+    }
 }
