@@ -5,8 +5,8 @@
 
 #include "core/host_metrics.hpp"
 
-#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -35,6 +35,8 @@ namespace lfs::vis::gui {
         void run(std::stop_token stop_token);
 
         mutable std::mutex mutex_;
+        std::mutex wait_mutex_;
+        std::condition_variable_any cv_;
         std::shared_ptr<const PerfSample> latest_;
         std::jthread thread_;
     };

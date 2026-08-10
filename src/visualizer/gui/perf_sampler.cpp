@@ -24,8 +24,11 @@ namespace lfs::vis::gui {
             std::scoped_lock lock(mutex_);
             thread = std::move(thread_);
         }
-        if (thread.joinable())
+        if (thread.joinable()) {
             thread.request_stop();
+            cv_.notify_all();
+        }
+        // jthread dtor joins; wait_for in run() exits promptly on stop.
     }
 
     std::shared_ptr<const PerfSample> PerfSampler::latest() const {
@@ -43,7 +46,10 @@ namespace lfs::vis::gui {
                 std::scoped_lock lock(mutex_);
                 latest_ = std::move(snapshot);
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            // Interruptible sleep on a dedicated mutex so latest() never stalls.
+            std::unique_lock wait_lock(wait_mutex_);
+            cv_.wait_for(wait_lock, stop_token, std::chrono::milliseconds(500),
+                         [&] { return stop_token.stop_requested(); });
         }
     }
 
