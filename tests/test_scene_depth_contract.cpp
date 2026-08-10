@@ -14,6 +14,7 @@ namespace lfs::vis {
         EXPECT_FALSE(depth.available());
         EXPECT_TRUE(depth.valid());
         EXPECT_FALSE(depth.matchesRenderExtent(1920, 1080));
+        EXPECT_FALSE(depth.matchesRenderExtent(0, 0));
         EXPECT_FALSE(depth.requiresLinearization());
     }
 

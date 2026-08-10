@@ -20,6 +20,7 @@
 #include "rendering/rendering.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
 #include "rendering_types.hpp"
+#include "scene_depth_contract.hpp"
 #include "spark_lod_controller.hpp"
 #include "split_view_service.hpp"
 #include "viewport_appearance_correction.hpp"
@@ -511,6 +512,10 @@ namespace lfs::vis {
             std::lock_guard lock(vulkan_mesh_frame_mutex_);
             return vulkan_mesh_frame_;
         }
+        [[nodiscard]] SceneDepthContract getSceneDepthContract() const {
+            std::lock_guard lock(scene_depth_contract_mutex_);
+            return scene_depth_contract_;
+        }
         void clearVulkanMeshFrame() {
             std::lock_guard lock(vulkan_mesh_frame_mutex_);
             vulkan_mesh_frame_ = {};
@@ -697,6 +702,7 @@ namespace lfs::vis {
         static constexpr auto GT_COMPARISON_IMAGE_RETRY_COOLDOWN = std::chrono::seconds(2);
 
         void applySplitModeChange(const SplitViewService::ModeChangeResult& result);
+        void updateSceneDepthContract(SceneDepthContract contract, glm::ivec2 render_extent);
         void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
         void requestRenderFollowUp();
@@ -852,6 +858,8 @@ namespace lfs::vis {
         mutable std::mutex settings_mutex_;
         mutable std::mutex camera_metrics_mutex_;
         mutable std::mutex vulkan_mesh_frame_mutex_;
+        mutable std::mutex scene_depth_contract_mutex_;
+        SceneDepthContract scene_depth_contract_;
         VulkanMeshFrame vulkan_mesh_frame_;
         std::optional<CameraMetricsOverlayState> latest_camera_metrics_;
         std::optional<CameraMetricsJobRequest> pending_camera_metrics_request_;

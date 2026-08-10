@@ -42,6 +42,24 @@
 
 namespace lfs::vis {
 
+    void RenderingManager::updateSceneDepthContract(
+        SceneDepthContract contract, const glm::ivec2 render_extent) {
+        {
+            std::lock_guard lock(scene_depth_contract_mutex_);
+            scene_depth_contract_ = contract;
+        }
+        auto& profiler = lfs::diagnostics::VramProfiler::instance();
+        profiler.setGauge("viewer.depth.available", contract.available() ? 1.0 : 0.0);
+        profiler.setGauge("viewer.depth.valid",
+                          contract.available() && contract.valid() ? 1.0 : 0.0);
+        profiler.setGauge("viewer.depth.encoding", static_cast<double>(contract.encoding));
+        profiler.setGauge("viewer.depth.storage", static_cast<double>(contract.storage));
+        profiler.setGauge("viewer.depth.width_px", contract.width);
+        profiler.setGauge("viewer.depth.height_px", contract.height);
+        profiler.setGauge("viewer.depth.matches_render_extent",
+                          contract.matchesRenderExtent(render_extent.x, render_extent.y) ? 1.0 : 0.0);
+    }
+
     namespace {
         constexpr double kGpuLodRenderCapacityOverhead = 1.20;
         constexpr float kInteractiveResizeRenderScale = 0.33f;
@@ -3285,6 +3303,19 @@ namespace lfs::vis {
                 viewport_interaction_context_.scene_manager = scene_manager;
                 split_view_service_.updateInfo(FrameResources{});
 
+                updateSceneDepthContract(
+                    makeSceneDepthContract(
+                        render_result->depth_image_view != VK_NULL_HANDLE,
+                        SceneDepthStorage::VulkanImage,
+                        true,
+                        render_result->size.x,
+                        render_result->size.y,
+                        pc_request.frame_view.near_plane,
+                        pc_request.frame_view.far_plane,
+                        pc_request.frame_view.orthographic,
+                        render_result->flip_y),
+                    render_size);
+
                 if (!frame_ctx.scene_state.meshes.empty() ||
                     environmentBackgroundEnabled(frame_settings)) {
                     auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
@@ -3585,6 +3616,18 @@ namespace lfs::vis {
                             } else {
                                 clearVulkanMeshFrame();
                             }
+                            updateSceneDepthContract(
+                                makeSceneDepthContract(
+                                    render_result.depth_image_view != VK_NULL_HANDLE,
+                                    SceneDepthStorage::VulkanImage,
+                                    false,
+                                    render_result.size.x,
+                                    render_result.size.y,
+                                    request.frame_view.near_plane,
+                                    request.frame_view.far_plane,
+                                    request.frame_view.orthographic,
+                                    render_result.flip_y),
+                                render_size);
                         };
 
                         const lfs::rendering::FrameView capture_frame_view = request.frame_view;
@@ -3881,6 +3924,34 @@ namespace lfs::vis {
             clearVulkanMeshFrame();
         }
 
+        const std::shared_ptr<lfs::core::Tensor> tensor_depth =
+            rendered_image && rendered_metadata.depth_panel_count > 0
+                ? rendered_metadata.depth_panels[0].depth
+                : nullptr;
+        const float tensor_depth_near = rendered_metadata.near_plane > 0.0f
+                                            ? rendered_metadata.near_plane
+                                            : 0.1f;
+        const float tensor_depth_far = rendered_metadata.far_plane > 0.0f
+                                           ? rendered_metadata.far_plane
+                                           : 1000.0f;
+        const bool tensor_depth_shape_valid = tensor_depth && tensor_depth->is_valid() &&
+                                              tensor_depth->ndim() == 3 &&
+                                              tensor_depth->size(0) == 1;
+        if (rendered_image) {
+            updateSceneDepthContract(
+                makeSceneDepthContract(
+                    tensor_depth_shape_valid,
+                    SceneDepthStorage::Tensor,
+                    rendered_metadata.depth_is_ndc,
+                    tensor_depth_shape_valid ? static_cast<int>(tensor_depth->size(2)) : 0,
+                    tensor_depth_shape_valid ? static_cast<int>(tensor_depth->size(1)) : 0,
+                    tensor_depth_near,
+                    tensor_depth_far,
+                    rendered_metadata.orthographic,
+                    false),
+                render_size);
+        }
+
         if ((rendered_image || render_error.empty() || pending_split_view.enabled) &&
             (environmentBackgroundEnabled(frame_settings) || !frame_ctx.scene_state.meshes.empty() ||
              pending_split_view.enabled)) {
@@ -3889,21 +3960,15 @@ namespace lfs::vis {
 
             // Splat depth -> mesh-pass z-test source. Only meaningful when the
             // active render path produced a tensor-backed depth output.
-            if (rendered_image && rendered_metadata.depth_panel_count > 0 &&
-                rendered_metadata.depth_panels[0].depth &&
-                rendered_metadata.depth_panels[0].depth->is_valid()) {
-                gpu_mesh_frame.depth_blit.depth = rendered_metadata.depth_panels[0].depth;
+            if (tensor_depth_shape_valid) {
+                gpu_mesh_frame.depth_blit.depth = tensor_depth;
                 gpu_mesh_frame.depth_blit.depth_is_ndc = rendered_metadata.depth_is_ndc;
                 // Depth and color tensors share storage orientation; the viewport
                 // pass already flips the screen quad's UVs for the color image,
                 // so the depth-blit pass inherits that flip and needs no extra one.
                 gpu_mesh_frame.depth_blit.flip_y = false;
-                gpu_mesh_frame.depth_blit.near_plane = rendered_metadata.near_plane > 0.0f
-                                                           ? rendered_metadata.near_plane
-                                                           : 0.1f;
-                gpu_mesh_frame.depth_blit.far_plane = rendered_metadata.far_plane > 0.0f
-                                                          ? rendered_metadata.far_plane
-                                                          : 1000.0f;
+                gpu_mesh_frame.depth_blit.near_plane = tensor_depth_near;
+                gpu_mesh_frame.depth_blit.far_plane = tensor_depth_far;
             }
 
             setVulkanMeshFrame(std::move(gpu_mesh_frame));

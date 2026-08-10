@@ -48,7 +48,7 @@ namespace lfs::vis {
 
         [[nodiscard]] bool matchesRenderExtent(const int render_width,
                                                const int render_height) const {
-            return valid() && width == render_width && height == render_height;
+            return available() && valid() && width == render_width && height == render_height;
         }
 
         [[nodiscard]] constexpr bool requiresLinearization() const {

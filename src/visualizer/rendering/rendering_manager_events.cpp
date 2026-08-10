@@ -214,6 +214,7 @@ namespace lfs::vis {
 
     void RenderingManager::handleSceneCleared() {
         releaseSceneRenderResources();
+        updateSceneDepthContract({}, {0, 0});
         invalidateCameraMetricsRequests(true);
         SplitViewService::ModeChangeResult result;
         {
