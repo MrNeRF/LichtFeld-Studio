@@ -86,6 +86,11 @@ namespace lfs::vis::gui {
             vram_hud["collapsed"] = vram_hud_collapsed_paths;
             j["vram_hud"] = vram_hud;
 
+            nlohmann::json perf_hud;
+            perf_hud["visible"] = perf_hud_visible;
+            perf_hud["expanded"] = perf_hud_expanded;
+            j["perf_hud"] = perf_hud;
+
             std::ofstream file(path);
             if (file) {
                 file << j.dump(2);
@@ -137,6 +142,12 @@ namespace lfs::vis::gui {
                             vram_hud_collapsed_paths.push_back(entry.get<std::string>());
                     }
                 }
+            }
+
+            if (j.contains("perf_hud") && j["perf_hud"].is_object()) {
+                const auto& ph = j["perf_hud"];
+                perf_hud_visible = ph.value("visible", perf_hud_visible);
+                perf_hud_expanded = ph.value("expanded", perf_hud_expanded);
             }
 
             LOG_INFO("Layout state loaded from {}", path.string());

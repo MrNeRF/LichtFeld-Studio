@@ -1862,6 +1862,10 @@ namespace lfs::vis {
                 cmd::CutSelection{}.emit();
                 return;
 
+            case input::Action::TOGGLE_PERFORMANCE_HUD:
+                lfs::core::events::ui::ToggleVramHud{}.emit();
+                return;
+
             case input::Action::PASTE_SELECTION:
                 cmd::PasteSelection{}.emit();
                 return;

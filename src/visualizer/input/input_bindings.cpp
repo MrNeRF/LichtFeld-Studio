@@ -26,8 +26,8 @@ namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 19; // Version 19 adds cut selection.
-        constexpr Action LAST_ACTION = Action::CUT_SELECTION;
+        constexpr int PROFILE_VERSION = 20; // Version 20 adds the performance HUD toggle.
+        constexpr Action LAST_ACTION = Action::TOGGLE_PERFORMANCE_HUD;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -502,7 +502,8 @@ namespace lfs::vis::input {
                 (version < 16 && def.action == Action::TOGGLE_CAMERA_FRUSTUMS) ||
                 (version < 17 && def.action == Action::SELECTION_INTERSECT) ||
                 (version < 18 && selection_volume_shortcut) ||
-                (version < 19 && def.action == Action::CUT_SELECTION);
+                (version < 19 && def.action == Action::CUT_SELECTION) ||
+                (version < 20 && def.action == Action::TOGGLE_PERFORMANCE_HUD);
             if (!should_add) {
                 continue;
             }
@@ -1005,6 +1006,7 @@ namespace lfs::vis::input {
             // UI
             {KeyTrigger{KEY_F12, MODIFIER_NONE}, Action::TOGGLE_UI, "Hide UI"},
             {KeyTrigger{KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
+            {KeyTrigger{KEY_F10, MODIFIER_NONE}, Action::TOGGLE_PERFORMANCE_HUD, "Performance HUD"},
             {MouseScrollTrigger{MODIFIER_CTRL}, Action::HISTOGRAM_ZOOM_MARKED, "Zoom histogram at cursor"},
             // Sequencer
             {KeyTrigger{KEY_K, MODIFIER_NONE}, Action::SEQUENCER_ADD_KEYFRAME, "Add keyframe"},
@@ -1153,6 +1155,7 @@ namespace lfs::vis::input {
         case Action::NODE_RECT_SELECT: return "Rectangle Select Nodes";
         case Action::TOGGLE_UI: return "Toggle UI";
         case Action::TOGGLE_FULLSCREEN: return "Toggle Fullscreen";
+        case Action::TOGGLE_PERFORMANCE_HUD: return "Toggle Performance HUD";
         case Action::SEQUENCER_ADD_KEYFRAME: return "Add Keyframe";
         case Action::SEQUENCER_UPDATE_KEYFRAME: return "Update Keyframe";
         case Action::SEQUENCER_PLAY_PAUSE: return "Play/Pause";
@@ -1234,6 +1237,7 @@ namespace lfs::vis::input {
         case Action::NODE_RECT_SELECT: return "node_rect_select";
         case Action::TOGGLE_UI: return "toggle_ui";
         case Action::TOGGLE_FULLSCREEN: return "toggle_fullscreen";
+        case Action::TOGGLE_PERFORMANCE_HUD: return "toggle_performance_hud";
         case Action::SEQUENCER_ADD_KEYFRAME: return "sequencer_add_keyframe";
         case Action::SEQUENCER_UPDATE_KEYFRAME: return "sequencer_update_keyframe";
         case Action::SEQUENCER_PLAY_PAUSE: return "sequencer_play_pause";
@@ -1925,6 +1929,7 @@ namespace lfs::vis::input {
 
         case Action::TOGGLE_UI:
         case Action::TOGGLE_FULLSCREEN:
+        case Action::TOGGLE_PERFORMANCE_HUD:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:
             return d_ui_scroll;
@@ -1958,6 +1963,7 @@ namespace lfs::vis::input {
         case Action::TOOL_ALIGN:
         case Action::TOGGLE_UI:
         case Action::TOGGLE_FULLSCREEN:
+        case Action::TOGGLE_PERFORMANCE_HUD:
         case Action::SELECT_MODE_CENTERS:
         case Action::SELECT_MODE_RECTANGLE:
         case Action::SELECT_MODE_POLYGON:

@@ -26,6 +26,7 @@ namespace lfs::vis {
                                     "gt_metrics_overlay_config",
                                     GTMetricsOverlayConfig{}),
           vram_hud(store_, Field::VramHudValue, "vram_hud", VramHud{}),
+          perf_hud(store_, Field::PerfHudValue, "perf_hud", PerfHud{}),
           active_tool(store_, Field::ActiveTool, "active_tool", std::string{}),
           active_submode(store_, Field::ActiveSubmode, "active_submode", std::string{}),
           transform_space(store_, Field::TransformSpaceValue, "transform_space", 0),

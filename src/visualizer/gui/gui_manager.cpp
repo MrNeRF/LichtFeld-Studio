@@ -12,6 +12,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -3002,6 +3003,12 @@ namespace lfs::vis::gui {
           async_tasks_(viewer) {
 
         panel_layout_.loadState();
+        {
+            LayoutState state;
+            state.load();
+            show_vram_hud_ = state.perf_hud_visible;
+            perf_hud_expanded_ = state.perf_hud_expanded;
+        }
 
         // Create components
         menu_bar_ = std::make_unique<MenuBar>();
@@ -5279,6 +5286,11 @@ namespace lfs::vis::gui {
         const auto publish_vram_hud_overlay_if_due = [&]() {
             const auto now = std::chrono::steady_clock::now();
             if (!isVramHudOverlayVisible()) {
+                perf_sampler_.stop();
+                if (perf_hud_visible_published_) {
+                    app_store().perf_hud.set(AppStore::PerfHud{});
+                    perf_hud_visible_published_ = false;
+                }
                 if (vram_hud_visible_published_) {
                     app_store().vram_hud.set(AppStore::VramHud{});
                     vram_hud_visible_published_ = false;
@@ -5287,12 +5299,43 @@ namespace lfs::vis::gui {
                 return;
             }
 
+            perf_sampler_.start();
+
             if (isVramHudPublishDue(now)) {
+                const auto memory = queryGpuMemory();
+                auto perf_snapshot = std::make_shared<AppStore::PerfHudSnapshot>();
+                perf_snapshot->vram_process_bytes = memory.process_used;
+                perf_snapshot->vram_used_bytes = memory.total_used;
+                perf_snapshot->vram_total_bytes = memory.total;
+                if (const auto sample = perf_sampler_.latest()) {
+                    perf_snapshot->ram_process_bytes = sample->host.process_rss_bytes;
+                    perf_snapshot->ram_used_bytes = sample->host.system_used_bytes;
+                    perf_snapshot->ram_total_bytes = sample->host.system_total_bytes;
+                    perf_snapshot->gpu_utilization_percent = sample->gpu_utilization_percent;
+                    perf_snapshot->gpu_utilization_valid = sample->gpu_utilization_valid;
+                    perf_snapshot->process_cpu_percent = sample->host.process_cpu_percent;
+                    perf_snapshot->per_core_cpu_percent = sample->host.per_core_cpu_percent;
+                    perf_snapshot->cpu_valid = sample->host.cpu_valid;
+                }
+                perf_snapshot->rate = app_store().fps.get();
+                perf_snapshot->frame_ms = perf_snapshot->rate > 0.0f
+                                              ? 1000.0f / perf_snapshot->rate
+                                              : 0.0f;
+
                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
-                {
+                if (profiler.enabled()) {
                     LOG_TIMER("gui_render.vram_hud_sample");
                     profiler.sampleCudaMemory();
-                    const auto memory = queryGpuMemory();
+                    {
+                        const auto snapshot = profiler.snapshot();
+                        const auto ledger = lfs::diagnostics::buildLiveLedger(snapshot);
+                        perf_snapshot->ledger_closed = ledger.closure ==
+                                                       lfs::diagnostics::LedgerClosureState::Closed;
+                        perf_snapshot->ledger_over = ledger.closure ==
+                                                     lfs::diagnostics::LedgerClosureState::Over;
+                        perf_snapshot->profiler_snapshot =
+                            std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(snapshot);
+                    }
                     profiler.updateProcessMemory(memory.process_used,
                                                  memory.total_used,
                                                  memory.total,
@@ -5302,12 +5345,23 @@ namespace lfs::vis::gui {
                             profiler.setVulkanVmaUsed(vk->queryVmaUsedBytes());
                         }
                     }
+                    const auto snapshot = profiler.snapshot();
+                    perf_snapshot->profiler_snapshot =
+                        std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(snapshot);
+                    app_store().vram_hud.set(AppStore::VramHud{
+                        .visible = true,
+                        .snapshot = std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(
+                            std::move(snapshot))});
+                    vram_hud_visible_published_ = true;
+                } else if (vram_hud_visible_published_) {
+                    app_store().vram_hud.set(AppStore::VramHud{});
+                    vram_hud_visible_published_ = false;
                 }
-                app_store().vram_hud.set(AppStore::VramHud{
+                app_store().perf_hud.set(AppStore::PerfHud{
                     .visible = true,
-                    .snapshot = std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(
-                        profiler.snapshot())});
-                vram_hud_visible_published_ = true;
+                    .expanded = perf_hud_expanded_,
+                    .snapshot = std::move(perf_snapshot)});
+                perf_hud_visible_published_ = true;
                 next_vram_hud_publish_ = now + std::chrono::milliseconds(250);
             }
         };
@@ -6209,6 +6263,11 @@ namespace lfs::vis::gui {
         ui::ToggleVramHud::when([this](const auto&) {
             show_vram_hud_ = !show_vram_hud_;
             next_vram_hud_publish_ = {};
+            LayoutState state;
+            state.load();
+            state.perf_hud_visible = show_vram_hud_;
+            state.perf_hud_expanded = perf_hud_expanded_;
+            state.save();
         });
 
         ui::ToggleFullscreen::when([this](const auto&) {
@@ -6477,7 +6536,7 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isVramHudOverlayVisible() const {
-        return show_vram_hud_ && lfs::diagnostics::VramProfiler::instance().enabled();
+        return show_vram_hud_;
     }
 
     bool GuiManager::isVramHudPublishDue(const std::chrono::steady_clock::time_point now) const {

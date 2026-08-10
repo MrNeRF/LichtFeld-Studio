@@ -16,6 +16,7 @@
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
+#include "gui/perf_sampler.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "gui/rml_modal_overlay.hpp"
 #include "gui/rml_right_panel.hpp"
@@ -250,9 +251,12 @@ namespace lfs::vis {
             // UI state only
             std::unordered_map<std::string, bool> window_states_;
             bool show_main_panel_ = true;
-            bool show_vram_hud_ = true;
+            bool show_vram_hud_ = false;
+            bool perf_hud_expanded_ = true;
             bool vram_hud_visible_published_ = false;
+            bool perf_hud_visible_published_ = false;
             std::chrono::steady_clock::time_point next_vram_hud_publish_{};
+            PerfSampler perf_sampler_;
             std::chrono::steady_clock::time_point ui_toggle_next_allowed_at_{};
             bool ui_toggle_pending_ = false;
             std::chrono::steady_clock::time_point fullscreen_toggle_next_allowed_at_{};
