@@ -72,6 +72,7 @@ namespace lfs::vis {
             float frame_ms = 0.0f;
             bool gpu_utilization_valid = false;
             bool cpu_valid = false;
+            bool ledger_valid = false; // false when profiler off → badge unknown (not GAP)
             bool ledger_closed = false;
             bool ledger_over = false;
             std::shared_ptr<const lfs::diagnostics::VramProfilerSnapshot> profiler_snapshot;

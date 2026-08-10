@@ -5317,25 +5317,25 @@ namespace lfs::vis::gui {
                     perf_snapshot->per_core_cpu_percent = sample->host.per_core_cpu_percent;
                     perf_snapshot->cpu_valid = sample->host.cpu_valid;
                 }
-                perf_snapshot->rate = app_store().fps.get();
-                perf_snapshot->frame_ms = perf_snapshot->rate > 0.0f
-                                              ? 1000.0f / perf_snapshot->rate
-                                              : 0.0f;
+                // FPS: same fallback chain as the status bar (rml_status_bar.cpp).
+                // app_store().fps is only set from Python; viewer path uses RM rates.
+                float rate = app_store().fps.get();
+                if (rate <= 0.0f) {
+                    if (auto* const rm = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+                        const float scene_fps = rm->getAverageFPS();
+                        const float presented_fps = rm->getPresentedAverageFPS();
+                        rate = scene_fps > 0.0f ? scene_fps : presented_fps;
+                    }
+                }
+                perf_snapshot->rate = rate;
+                perf_snapshot->frame_ms = rate > 0.0f ? 1000.0f / rate : 0.0f;
 
                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
                 if (profiler.enabled()) {
                     LOG_TIMER("gui_render.vram_hud_sample");
                     profiler.sampleCudaMemory();
-                    {
-                        const auto snapshot = profiler.snapshot();
-                        const auto ledger = lfs::diagnostics::buildLiveLedger(snapshot);
-                        perf_snapshot->ledger_closed = ledger.closure ==
-                                                       lfs::diagnostics::LedgerClosureState::Closed;
-                        perf_snapshot->ledger_over = ledger.closure ==
-                                                     lfs::diagnostics::LedgerClosureState::Over;
-                        perf_snapshot->profiler_snapshot =
-                            std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(snapshot);
-                    }
+                    // Design trap 4: process memory + VMA must land BEFORE the
+                    // single snapshot used for both the strip badge and Ledger tab.
                     profiler.updateProcessMemory(memory.process_used,
                                                  memory.total_used,
                                                  memory.total,
@@ -5346,12 +5346,18 @@ namespace lfs::vis::gui {
                         }
                     }
                     const auto snapshot = profiler.snapshot();
+                    const auto ledger = lfs::diagnostics::buildLiveLedger(snapshot);
+                    perf_snapshot->ledger_valid = true;
+                    perf_snapshot->ledger_closed =
+                        ledger.closure == lfs::diagnostics::LedgerClosureState::Closed;
+                    perf_snapshot->ledger_over =
+                        ledger.closure == lfs::diagnostics::LedgerClosureState::Over;
                     perf_snapshot->profiler_snapshot =
                         std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(snapshot);
                     app_store().vram_hud.set(AppStore::VramHud{
                         .visible = true,
                         .snapshot = std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(
-                            std::move(snapshot))});
+                            snapshot)});
                     vram_hud_visible_published_ = true;
                 } else if (vram_hud_visible_published_) {
                     app_store().vram_hud.set(AppStore::VramHud{});
