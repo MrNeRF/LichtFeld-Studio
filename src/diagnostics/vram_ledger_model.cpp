@@ -32,6 +32,13 @@ namespace lfs::diagnostics {
                    starts_with(row.label, "vulkan.external");
         }
 
+        // nvImageCodec's viewer decoder probe reports driver/direct CUDA bytes as a
+        // Static External row.  They are real per-process device allocations, but do
+        // not flow through the CUDA pool/direct accounting counters.
+        [[nodiscard]] bool is_viewer_cuda_external_row(const VramMetricSnapshot& row) {
+            return starts_with(row.scope, "io.nvimagecodec");
+        }
+
         // recordStaticBytes SPIR-V estimates — not VMA allocations. Group under root H.
         [[nodiscard]] bool is_shader_bytecode_row(const VramMetricSnapshot& row) {
             return starts_with(row.scope, "vksplat.shaders.") ||
@@ -291,6 +298,13 @@ namespace lfs::diagnostics {
             policy.include_vulkan_in_sum ? proc.vulkan_vma_block_bytes : 0;
 
         std::size_t vulkan_external = 0;
+        // VK_EXT_memory_budget includes swap-chain/render-target and driver-owned
+        // allocations that are not VMA blocks.  Keep that measured remainder in
+        // the external root instead of leaving the viewer path as a process gap.
+        const std::size_t vulkan_budget_external =
+            proc.vulkan_vma_used > vma_blocks ? proc.vulkan_vma_used - vma_blocks : 0;
+        std::size_t vulkan_named_external = 0;
+        std::size_t viewer_cuda_external = 0;
         std::size_t hooked_pool_bytes = 0;
         std::size_t hooked_slab_bytes = 0;
         std::size_t hooked_direct_bytes = 0;
@@ -300,6 +314,15 @@ namespace lfs::diagnostics {
         for (const auto& row : snapshot.rows) {
             if (row.live_bytes == 0) {
                 continue;
+            }
+            if (is_vulkan_external_row(row)) {
+                // recordCurrentBytes rows are Sampled, while direct Vulkan imports
+                // may be Hooked. Both are measured by the external root.
+                vulkan_external += row.live_bytes;
+                vulkan_named_external += row.live_bytes;
+            }
+            if (is_viewer_cuda_external_row(row)) {
+                viewer_cuda_external += row.live_bytes;
             }
             // C5: gsplat/fastgs arena disclosure scopes are never root-justified.
             const bool logical_raster =
@@ -327,9 +350,6 @@ namespace lfs::diagnostics {
                         starts_with(row.scope, "shared.scratch") ||
                         starts_with(row.label, "exportable")) {
                         hooked_exportable_desc += row.live_bytes;
-                    }
-                    if (is_vulkan_external_row(row)) {
-                        vulkan_external += row.live_bytes;
                     }
                     break;
                 default:
@@ -429,10 +449,24 @@ namespace lfs::diagnostics {
         }
         apply_closure(root_b, ledger_epsilon(root_b.measured_bytes, policy));
 
-        auto root_c = make_root(VramLedgerRootId::CudaDirect, direct_live, "cuda_direct");
+        const std::size_t cuda_direct_measured = direct_live + viewer_cuda_external;
+        auto root_c = make_root(VramLedgerRootId::CudaDirect, cuda_direct_measured, "cuda_direct");
         add_child(root_c, "hooked_direct_live", hooked_direct_bytes, AttributionState::Justified,
                   VramRowKind::Hooked);
-        root_c.attributed_bytes = hooked_direct_bytes;
+        if (viewer_cuda_external > 0) {
+            for (const auto& row : snapshot.rows) {
+                if (row.live_bytes == 0 || !is_viewer_cuda_external_row(row)) {
+                    continue;
+                }
+                add_child(root_c,
+                          row.scope + (row.label.empty() ? "" : "." + row.label),
+                          row.live_bytes,
+                          AttributionState::Justified,
+                          row.kind,
+                          "viewer decoder driver/direct allocation");
+            }
+        }
+        root_c.attributed_bytes = hooked_direct_bytes + viewer_cuda_external;
         apply_closure(root_c, ledger_epsilon(root_c.measured_bytes, policy));
 
         auto root_d = make_root(VramLedgerRootId::RasterizerArena, arena_live, "rasterizer");
@@ -538,7 +572,33 @@ namespace lfs::diagnostics {
         }
         apply_closure(root_f, ledger_epsilon(root_f.measured_bytes, policy));
 
+        const std::size_t budget_unlisted_external =
+            vulkan_budget_external > vulkan_named_external
+                ? vulkan_budget_external - vulkan_named_external
+                : 0;
+        vulkan_external += budget_unlisted_external;
         auto root_g = make_root(VramLedgerRootId::VulkanExternal, vulkan_external, "vulkan_raw");
+        if (vulkan_external > 0) {
+            for (const auto& row : snapshot.rows) {
+                if (row.live_bytes == 0 || !is_vulkan_external_row(row)) {
+                    continue;
+                }
+                add_child(root_g,
+                          row.scope + (row.label.empty() ? "" : "." + row.label),
+                          row.live_bytes,
+                          AttributionState::Justified,
+                          row.kind,
+                          "viewer interop external allocation");
+            }
+        }
+        if (budget_unlisted_external > 0) {
+            add_child(root_g,
+                      "vulkan.memory_budget.render_targets_and_driver",
+                      budget_unlisted_external,
+                      AttributionState::Justified,
+                      VramRowKind::Sampled,
+                      "VK_EXT_memory_budget remainder outside VMA blocks");
+        }
         root_g.attributed_bytes = vulkan_external;
         apply_closure(root_g, ledger_epsilon(root_g.measured_bytes, policy));
 

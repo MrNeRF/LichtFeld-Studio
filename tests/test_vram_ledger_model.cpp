@@ -142,6 +142,37 @@ TEST(VramLedger, ExternalBackingMovesArenaToExportable) {
     EXPECT_EQ(export_m, 700u);
 }
 
+TEST(VramLedger, ViewerExternalRowsLandInTheirMeasuredRoots) {
+    constexpr std::size_t MiB = 1024ull * 1024ull;
+    VramProfilerSnapshot snap;
+    snap.process.process_memory_valid = true;
+    snap.process.process_used = 100 * MiB;
+    snap.rows.push_back(make_row("io.nvimagecodec", "driver_or_direct", 12 * MiB,
+                                 VramRowKind::Static, VramAllocationMethod::External));
+    snap.rows.push_back(make_row("vulkan.external.viewport_interop", "color", 8 * MiB,
+                                 VramRowKind::Sampled, VramAllocationMethod::External));
+
+    const auto tree = buildLiveLedger(snap);
+    const auto* cuda_direct = static_cast<const VramLedgerNode*>(nullptr);
+    const auto* vulkan_external = static_cast<const VramLedgerNode*>(nullptr);
+    for (const auto& root : tree.roots) {
+        if (root.root_id == VramLedgerRootId::CudaDirect) {
+            cuda_direct = &root;
+        } else if (root.root_id == VramLedgerRootId::VulkanExternal) {
+            vulkan_external = &root;
+        }
+    }
+
+    ASSERT_NE(cuda_direct, nullptr);
+    ASSERT_NE(vulkan_external, nullptr);
+    EXPECT_EQ(cuda_direct->measured_bytes, 12 * MiB);
+    EXPECT_EQ(cuda_direct->attributed_bytes, 12 * MiB);
+    EXPECT_EQ(vulkan_external->measured_bytes, 8 * MiB);
+    EXPECT_EQ(vulkan_external->attributed_bytes, 8 * MiB);
+    EXPECT_EQ(cuda_direct->closure, LedgerClosureState::Closed);
+    EXPECT_EQ(vulkan_external->closure, LedgerClosureState::Closed);
+}
+
 TEST(VramLedger, C2SlabNotInPoolAccounted) {
     // Simulator of snapshot post-C2: slab live is separate from pool accounted.
     VramProfilerSnapshot snap;
