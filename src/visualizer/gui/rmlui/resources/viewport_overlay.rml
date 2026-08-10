@@ -1016,7 +1016,7 @@
             <div class="perf-hud-strip-header" data-perf-toggle-expanded="true">
                 <span class="perf-hud-strip-title">@tr:ui.perf_hud_title</span>
                 <span id="perf-hud-strip-rate" class="perf-hud-strip-rate"></span>
-                <span class="perf-hud-strip-chevron">⌄</span>
+                <span class="perf-hud-strip-chevron" title="@tr:ui.perf_expand">⌄</span>
             </div>
             <div class="perf-hud-strip-meter" data-perf-tab="ledger" title="@tr:ui.perf_this_process">
                 <span class="perf-hud-strip-label">VRAM</span>
