@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <string_view>
 #include <vector>
 
 using namespace lfs::core;
@@ -137,6 +139,20 @@ TEST(SplatExportableStorageTest, CreateTracksLiveCapacityNotMaxCap) {
     const auto snap = lfs::diagnostics::VramProfiler::instance().snapshot();
     EXPECT_EQ(snap.process.exportable_splat_bytes, storage.block->size);
     EXPECT_LT(snap.process.exportable_splat_bytes, max_bytes / 4);
+}
+
+TEST(SplatExportableStorageTest, LayoutBytesRejectsRegionSizeOverflow) {
+    constexpr std::size_t kPerPrimitiveBytes = 3 * sizeof(float);
+    const std::size_t overflowing_capacity =
+        std::numeric_limits<std::size_t>::max() / kPerPrimitiveBytes + 1;
+
+    try {
+        (void)SplatExportableStorage::layoutBytes(overflowing_capacity, /*sh_degree=*/0);
+        FAIL() << "overflowing exportable region size was accepted";
+    } catch (const std::runtime_error& error) {
+        EXPECT_NE(std::string_view(error.what()).find("exportable splat region"),
+                  std::string_view::npos);
+    }
 }
 
 TEST(SplatExportableStorageTest, GrowPreservesDataAndTracksBytes) {

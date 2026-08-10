@@ -6,6 +6,7 @@ class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
 class MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
 class MRNFStrategyTest_GrowAndSplitUsesIgsPlusSplitRule_Test;
 class MRNFStrategyTest_GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks_Test;
+class MRNFStrategyTest_DeletedMaskCapacityGrowthPreservesExistingRows_Test;
 class MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;
 class MRNFStrategyTest_GrowAndSplitReusesFreeSlotsBeforeAppending_Test;
 class MRNFStrategyTest_SerializeRoundTripPreservesFreeMask_Test;
@@ -543,6 +544,44 @@ TEST(MRNFStrategyTest, GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks) {
     ASSERT_TRUE(splat_data.has_deleted_mask());
     EXPECT_EQ(splat_data.deleted().shape()[0], splat_data.size());
     EXPECT_EQ(strategy.free_count(), 0u);
+}
+
+TEST(MRNFStrategyTest, DeletedMaskCapacityGrowthPreservesExistingRows) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::mrnf_defaults();
+    opt_params.iterations = 10'000;
+    opt_params.sh_degree_interval = 10'000;
+    opt_params.max_cap = 0;
+    opt_params.growth_grad_threshold = 0.5f;
+    opt_params.grow_fraction = 1.0f;
+    opt_params.grow_until_iter = 10'000;
+    strategy.initialize(opt_params);
+
+    const size_t initial_size = splat_data.size();
+    splat_data.deleted() = Tensor::zeros_direct(
+        TensorShape({initial_size}), initial_size, Device::CUDA, DataType::Bool);
+    const auto deleted_index =
+        Tensor::from_vector(std::vector<int>{3}, TensorShape({1}), Device::CUDA)
+            .to(DataType::Int64);
+    splat_data.deleted().index_put_(deleted_index, Tensor::ones_bool({1}, Device::CUDA));
+
+    strategy._refine_weight_max = Tensor::zeros({initial_size}, Device::CUDA);
+    strategy._vis_count = Tensor::zeros({initial_size}, Device::CUDA);
+    const auto split_index =
+        Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA)
+            .to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(split_index, Tensor::full({1}, 1.0f, Device::CUDA));
+    strategy._vis_count.index_put_(split_index, Tensor::full({1}, 1.0f, Device::CUDA));
+
+    strategy.grow_and_split(1, 0);
+
+    ASSERT_EQ(splat_data.size(), initial_size + 1);
+    const auto deleted_cpu = splat_data.deleted().cpu();
+    const bool* values = deleted_cpu.ptr<bool>();
+    EXPECT_TRUE(values[3]);
+    EXPECT_FALSE(values[initial_size]);
 }
 
 TEST(MRNFStrategyTest, GrowAndSplitReplacementSkipsZeroWeightCandidates) {

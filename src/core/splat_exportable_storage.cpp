@@ -4,6 +4,7 @@
 
 #include "core/splat_exportable_storage.hpp"
 
+#include "core/checked_arithmetic.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
@@ -96,7 +97,10 @@ namespace lfs::core {
         }
 
         std::size_t region_bytes_for(std::size_t capacity, std::size_t per_primitive_floats) {
-            return capacity * per_primitive_floats * kFloatBytes;
+            const std::size_t elements = checked_product(
+                capacity, per_primitive_floats, "exportable splat region element count");
+            return checked_product(
+                elements, kFloatBytes, "exportable splat region byte count");
         }
 
         struct Layout {

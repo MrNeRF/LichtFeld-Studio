@@ -240,6 +240,26 @@ namespace lfs::training {
                                         : static_cast<size_t>(splat_data.size());
         }
 
+        void copy_deleted_mask_prefix(lfs::core::Tensor& destination,
+                                      const lfs::core::Tensor& source,
+                                      const size_t rows) {
+            if (rows == 0) {
+                return;
+            }
+            // Keep the source allocation alive until the asynchronous copy is
+            // complete. Today zeros_direct uses the legacy stream, but this
+            // remains correct if either tensor gains an explicit stream later.
+            const lfs::core::Tensor source_keepalive = source;
+            const cudaStream_t copy_stream = destination.stream();
+            LFS_CUDA_CHECK(cudaMemcpyAsync(
+                destination.ptr<uint8_t>(),
+                source_keepalive.ptr<uint8_t>(),
+                rows * sizeof(uint8_t),
+                cudaMemcpyDeviceToDevice,
+                copy_stream));
+            LFS_CUDA_CHECK(cudaStreamSynchronize(copy_stream));
+        }
+
         void ensure_deleted_mask_size(
             lfs::core::SplatData& splat_data,
             const lfs::core::Tensor& free_mask) {
@@ -269,14 +289,7 @@ namespace lfs::training {
                 desired_capacity,
                 deleted.device(),
                 lfs::core::DataType::Bool);
-            if (current_size > 0) {
-                LFS_CUDA_CHECK(cudaMemcpyAsync(
-                    fresh.ptr<uint8_t>(),
-                    deleted.ptr<uint8_t>(),
-                    current_size * sizeof(uint8_t),
-                    cudaMemcpyDeviceToDevice,
-                    fresh.stream()));
-            }
+            copy_deleted_mask_prefix(fresh, deleted, current_size);
             deleted = std::move(fresh);
             splat_data.notify_deleted_mask_changed();
         }
@@ -362,14 +375,7 @@ namespace lfs::training {
                         desired_capacity,
                         deleted.device(),
                         lfs::core::DataType::Bool);
-                    if (target_size > 0) {
-                        LFS_CUDA_CHECK(cudaMemcpyAsync(
-                            fresh.ptr<uint8_t>(),
-                            deleted.ptr<uint8_t>(),
-                            target_size * sizeof(uint8_t),
-                            cudaMemcpyDeviceToDevice,
-                            fresh.stream()));
-                    }
+                    copy_deleted_mask_prefix(fresh, deleted, target_size);
                     deleted = std::move(fresh);
                     splat_data.notify_deleted_mask_changed();
                 }
@@ -391,14 +397,7 @@ namespace lfs::training {
                         grow_cap,
                         deleted.device(),
                         lfs::core::DataType::Bool);
-                    if (cur > 0) {
-                        LFS_CUDA_CHECK(cudaMemcpyAsync(
-                            fresh.ptr<uint8_t>(),
-                            deleted.ptr<uint8_t>(),
-                            cur * sizeof(uint8_t),
-                            cudaMemcpyDeviceToDevice,
-                            fresh.stream()));
-                    }
+                    copy_deleted_mask_prefix(fresh, deleted, cur);
                     fresh.append_zeros(pad);
                     deleted = std::move(fresh);
                 }
