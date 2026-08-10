@@ -941,8 +941,20 @@ namespace lfs::vis {
         [[nodiscard]] RenderingManager::VulkanMeshFrame populateMeshFrame(
             const FrameContext& frame_ctx,
             const RenderSettings& settings,
-            const VulkanSplitViewParams& split_view_params) {
+            const VulkanSplitViewParams& split_view_params,
+            const std::uint64_t scene_revision,
+            const std::uint64_t temporal_reset_generation) {
             RenderingManager::VulkanMeshFrame frame;
+            if (frame_ctx.model) {
+                const auto address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(frame_ctx.model));
+                frame.scene_identity = address ^
+                                       (static_cast<std::uint64_t>(frame_ctx.model->size()) << 17u) ^
+                                       (frame_ctx.model->param_layout_generation() << 33u) ^
+                                       scene_revision;
+            }
+            frame.temporal_scene_stable = !frame_ctx.training_active;
+            frame.temporal_reset_generation = temporal_reset_generation;
             const auto vp_data = frame_ctx.makeViewportData();
             frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
             frame.camera_position = vp_data.translation;
@@ -1819,6 +1831,11 @@ namespace lfs::vis {
         }
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
+        if ((frame_dirty & (DirtyFlag::SPLATS | DirtyFlag::MESH)) != 0) {
+            ++temporal_scene_revision_;
+            if (temporal_scene_revision_ == 0)
+                ++temporal_scene_revision_;
+        }
         if (lod_controller_ && lod_controller_->hasReadyResults()) {
             frame_dirty |= DirtyFlag::CAMERA;
         }
@@ -3318,7 +3335,12 @@ namespace lfs::vis {
 
                 if (!frame_ctx.scene_state.meshes.empty() ||
                     environmentBackgroundEnabled(frame_settings)) {
-                    auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
+                    auto mesh_frame = populateMeshFrame(
+                        frame_ctx,
+                        frame_settings,
+                        pending_split_view,
+                        temporal_scene_revision_,
+                        temporal_camera_reset_generation_.load(std::memory_order_relaxed));
                     populate_independent_split_mesh_panels(mesh_frame);
                     if (render_result->depth_image_view != VK_NULL_HANDLE) {
                         // Hardware depth attachment stores Vulkan-native NDC z; the
@@ -3590,7 +3612,12 @@ namespace lfs::vis {
                                 environmentBackgroundEnabled(frame_settings) ||
                                 render_result.depth_image_view != VK_NULL_HANDLE;
                             if (publish_mesh_frame) {
-                                auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
+                                auto mesh_frame = populateMeshFrame(
+                                    frame_ctx,
+                                    frame_settings,
+                                    pending_split_view,
+                                    temporal_scene_revision_,
+                                    temporal_camera_reset_generation_.load(std::memory_order_relaxed));
                                 populate_independent_split_mesh_panels(mesh_frame);
                                 if (render_result.depth_image_view != VK_NULL_HANDLE) {
                                     mesh_frame.depth_blit.external_image_view = render_result.depth_image_view;
@@ -3955,7 +3982,12 @@ namespace lfs::vis {
         if ((rendered_image || render_error.empty() || pending_split_view.enabled) &&
             (environmentBackgroundEnabled(frame_settings) || !frame_ctx.scene_state.meshes.empty() ||
              pending_split_view.enabled)) {
-            VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
+            VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(
+                frame_ctx,
+                frame_settings,
+                pending_split_view,
+                temporal_scene_revision_,
+                temporal_camera_reset_generation_.load(std::memory_order_relaxed));
             populate_independent_split_mesh_panels(gpu_mesh_frame);
 
             // Splat depth -> mesh-pass z-test source. Only meaningful when the

@@ -782,6 +782,7 @@
     "scene_upscaler": "장면 업스케일러",
     "scene_upscaler_native": "네이티브",
     "scene_upscaler_spatial": "공간",
+    "scene_upscaler_temporal": "시간적(실험적)",
     "input": "입력",
     "camera_navigation": "카메라 탐색",
     "navigation_mode": "탐색 모드",

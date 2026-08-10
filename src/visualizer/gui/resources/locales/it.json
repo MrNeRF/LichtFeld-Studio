@@ -782,6 +782,7 @@
     "scene_upscaler": "Upscaler della scena",
     "scene_upscaler_native": "Nativo",
     "scene_upscaler_spatial": "Spaziale",
+    "scene_upscaler_temporal": "Temporale (sperimentale)",
     "input": "Input",
     "camera_navigation": "Navigazione della camera",
     "navigation_mode": "Modalità di navigazione",

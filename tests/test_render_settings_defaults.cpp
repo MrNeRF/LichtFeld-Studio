@@ -25,12 +25,19 @@ TEST(RenderSettingsProxy, SceneUpscalerRoundTrips) {
     lfs::vis::RenderSettings settings;
     settings.scene_upscaler = 1;
 
-    const auto proxy = lfs::vis::to_proxy(settings);
+    auto proxy = lfs::vis::to_proxy(settings);
     EXPECT_EQ(proxy.scene_upscaler, 1);
 
     lfs::vis::RenderSettings roundtrip;
     lfs::vis::apply_proxy(roundtrip, proxy);
     EXPECT_EQ(roundtrip.scene_upscaler, 1);
+
+    settings.scene_upscaler = 2;
+    proxy = lfs::vis::to_proxy(settings);
+    EXPECT_EQ(proxy.scene_upscaler, 2);
+    roundtrip = {};
+    lfs::vis::apply_proxy(roundtrip, proxy);
+    EXPECT_EQ(roundtrip.scene_upscaler, 2);
 }
 
 TEST(RenderSettingsProxy, DepthFilterTransformRoundTrips) {

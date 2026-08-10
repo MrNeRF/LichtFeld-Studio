@@ -1184,7 +1184,8 @@ namespace lfs::vis {
     void saveSceneUpscalerPreference(const std::string& backend_id) {
         try {
             auto preferences = loadPreferences();
-            preferences["scene_upscaler"] = backend_id == "spatial" ? "spatial" : "native";
+            preferences["scene_upscaler"] =
+                backend_id == "spatial" || backend_id == "temporal" ? backend_id : "native";
             savePreferences(std::move(preferences));
         } catch (const std::exception& e) {
             LOG_WARN("Failed to save scene upscaler preference: {}", e.what());
@@ -1197,8 +1198,11 @@ namespace lfs::vis {
                 return "native";
             const auto preferences = loadPreferences();
             const auto it = preferences.find("scene_upscaler");
-            if (it != preferences.end() && it->is_string() && it->get<std::string>() == "spatial")
-                return "spatial";
+            if (it != preferences.end() && it->is_string()) {
+                const auto value = it->get<std::string>();
+                if (value == "spatial" || value == "temporal")
+                    return value;
+            }
         } catch (const std::exception& e) {
             LOG_WARN("Failed to load scene upscaler preference: {}", e.what());
         }

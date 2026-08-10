@@ -248,6 +248,8 @@ TEST(ThemePreferencesContract, SceneUpscalerRoundTripsAndRejectsUnknownValues) {
 
     lfs::vis::saveSceneUpscalerPreference("spatial");
     EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "spatial");
+    lfs::vis::saveSceneUpscalerPreference("temporal");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "temporal");
     lfs::vis::saveSceneUpscalerPreference("unknown");
     EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
 

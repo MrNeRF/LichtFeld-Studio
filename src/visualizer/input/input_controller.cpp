@@ -1530,6 +1530,7 @@ namespace lfs::vis {
         if (scroll_action == input::Action::CAMERA_ROLL) {
             target_viewport.camera.rotate_roll(delta);
         } else if (scroll_action == input::Action::CAMERA_ZOOM) {
+            camera_settle_requires_temporal_reset_ = true;
             // In orthographic mode, adjust ortho_scale instead of camera position
             if (services().renderingOrNull()) {
                 auto settings = services().renderingOrNull()->getSettings();
@@ -3049,6 +3050,13 @@ namespace lfs::vis {
         auto now = std::chrono::steady_clock::now();
         if (now - last_camera_movement_time_ >= camera_movement_timeout_) {
             camera_is_moving_ = false;
+            // Scroll gestures (notably two-finger touchpad zoom) have no release
+            // event. Request one settled frame after their idle timeout so
+            // temporal reconstruction does not remain on the last moving frame.
+            if (auto* const rendering = services().renderingOrNull()) {
+                rendering->requestCameraSettleRender(camera_settle_requires_temporal_reset_);
+            }
+            camera_settle_requires_temporal_reset_ = false;
         }
     }
 

@@ -37,6 +37,7 @@ class PreferencesPanel(Panel):
     SCENE_UPSCALER_OPTIONS = (
         ("native", "preferences.scene_upscaler_native"),
         ("spatial", "preferences.scene_upscaler_spatial"),
+        ("temporal", "preferences.scene_upscaler_temporal"),
     )
 
     NAVIGATION_OPTIONS = (
@@ -306,7 +307,7 @@ class PreferencesPanel(Panel):
         if settings is None:
             return "native"
         backend = str(settings.scene_upscaler)
-        return backend if backend in {"native", "spatial"} else "native"
+        return backend if backend in {"native", "spatial", "temporal"} else "native"
 
     def _scene_upscaler_index(self):
         current = self._scene_upscaler()

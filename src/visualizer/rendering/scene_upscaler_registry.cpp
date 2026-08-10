@@ -24,6 +24,17 @@ namespace lfs::vis {
                 .requires_adapter = true,
                 .available = true,
             },
+            SceneUpscalerDescriptor{
+                .backend = SceneUpscalerBackend::Temporal,
+                .id = "temporal",
+                .requirements = {
+                    .depth = true,
+                    .motion_vectors = true,
+                    .history = true,
+                },
+                .requires_adapter = true,
+                .available = true,
+            },
         };
     } // namespace
 
@@ -37,6 +48,10 @@ namespace lfs::vis {
 
     const SceneUpscalerDescriptor& spatialSceneUpscalerDescriptor() {
         return DESCRIPTORS[1];
+    }
+
+    const SceneUpscalerDescriptor& temporalSceneUpscalerDescriptor() {
+        return DESCRIPTORS[2];
     }
 
     const SceneUpscalerDescriptor& sceneUpscalerDescriptor(const SceneUpscalerBackend backend) {
@@ -57,7 +72,9 @@ namespace lfs::vis {
         if (requested == SceneUpscalerBackend::Native) {
             return {};
         }
-        if (requested == SceneUpscalerBackend::Spatial && adapter_available) {
+        if ((requested == SceneUpscalerBackend::Spatial ||
+             requested == SceneUpscalerBackend::Temporal) &&
+            adapter_available) {
             return {.requested = requested, .effective = requested, .fallback = false};
         }
         return {

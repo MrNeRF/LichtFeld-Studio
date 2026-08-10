@@ -8,13 +8,15 @@
 
 namespace lfs::vis {
 
-    TEST(SceneUpscalerRegistry, RegistersNativeAndInternalSpatialBackends) {
+    TEST(SceneUpscalerRegistry, RegistersInternalBackends) {
         const auto descriptors = sceneUpscalerDescriptors();
-        ASSERT_EQ(descriptors.size(), 2u);
+        ASSERT_EQ(descriptors.size(), 3u);
         EXPECT_EQ(descriptors.front().backend, SceneUpscalerBackend::Native);
         EXPECT_EQ(descriptors.front().id, "native");
-        EXPECT_EQ(descriptors.back().backend, SceneUpscalerBackend::Spatial);
-        EXPECT_EQ(descriptors.back().id, "spatial");
+        EXPECT_EQ(descriptors[1].backend, SceneUpscalerBackend::Spatial);
+        EXPECT_EQ(descriptors[1].id, "spatial");
+        EXPECT_EQ(descriptors.back().backend, SceneUpscalerBackend::Temporal);
+        EXPECT_EQ(descriptors.back().id, "temporal");
     }
 
     TEST(SceneUpscalerRegistry, SpatialNeedsOnlyItsLazyAdapter) {
@@ -39,9 +41,22 @@ namespace lfs::vis {
         EXPECT_FALSE(native.requirements.exposure);
     }
 
+    TEST(SceneUpscalerRegistry, TemporalDeclaresOnlyImplementedRuntimeInputs) {
+        const auto& temporal = temporalSceneUpscalerDescriptor();
+        EXPECT_TRUE(temporal.available);
+        EXPECT_TRUE(temporal.requires_adapter);
+        EXPECT_TRUE(temporal.requirements.depth);
+        EXPECT_TRUE(temporal.requirements.motion_vectors);
+        EXPECT_TRUE(temporal.requirements.history);
+        EXPECT_FALSE(temporal.requirements.jitter);
+        EXPECT_FALSE(temporal.requirements.reactive_mask);
+        EXPECT_FALSE(temporal.requirements.exposure);
+    }
+
     TEST(SceneUpscalerRegistry, LookupRejectsUnknownOrUnavailableIds) {
         EXPECT_EQ(sceneUpscalerBackendFromId("native"), SceneUpscalerBackend::Native);
         EXPECT_EQ(sceneUpscalerBackendFromId("spatial"), SceneUpscalerBackend::Spatial);
+        EXPECT_EQ(sceneUpscalerBackendFromId("temporal"), SceneUpscalerBackend::Temporal);
         EXPECT_FALSE(sceneUpscalerBackendFromId("nis").has_value());
         EXPECT_FALSE(sceneUpscalerBackendFromId("fsr").has_value());
         EXPECT_FALSE(sceneUpscalerBackendFromId("xess").has_value());
@@ -67,5 +82,10 @@ namespace lfs::vis {
         EXPECT_EQ(fallback.requested, SceneUpscalerBackend::Spatial);
         EXPECT_EQ(fallback.effective, SceneUpscalerBackend::Native);
         EXPECT_TRUE(fallback.fallback);
+
+        const auto temporal = resolveSceneUpscalerSelection(
+            SceneUpscalerBackend::Temporal, true);
+        EXPECT_EQ(temporal.effective, SceneUpscalerBackend::Temporal);
+        EXPECT_FALSE(temporal.fallback);
     }
 } // namespace lfs::vis

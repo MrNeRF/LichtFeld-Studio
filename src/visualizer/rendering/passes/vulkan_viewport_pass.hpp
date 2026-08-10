@@ -10,6 +10,7 @@
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
 #include "vulkan_scene_motion_pass.hpp"
+#include "vulkan_scene_temporal_resolve_pass.hpp"
 #include "vulkan_split_view_pass.hpp"
 
 #include <array>
@@ -26,6 +27,38 @@ namespace lfs::core {
 
 namespace lfs::vis {
     class VulkanContext;
+
+    [[nodiscard]] constexpr bool temporalViewportRuntimeEligible(
+        const bool split_view,
+        const bool external_scene_image,
+        const bool depth_available,
+        const bool projection_supported,
+        const glm::ivec2 render_extent,
+        const glm::ivec2 output_extent) {
+        return !split_view && external_scene_image && depth_available && projection_supported &&
+               render_extent.x > 0 && render_extent.y > 0 && output_extent.x > 0 &&
+               output_extent.y > 0;
+    }
+
+    [[nodiscard]] constexpr bool temporalSourceUnchanged(
+        const VkImage previous_image,
+        const std::uint64_t previous_generation,
+        const VkImage current_image,
+        const std::uint64_t current_generation) {
+        return previous_image != VK_NULL_HANDLE && previous_image == current_image &&
+               previous_generation == current_generation;
+    }
+
+    [[nodiscard]] constexpr bool temporalHistoryRequiresReset(
+        const bool history_valid,
+        const std::uint64_t previous_scene_identity,
+        const std::uint64_t current_scene_identity,
+        const std::uint64_t previous_reset_generation,
+        const std::uint64_t current_reset_generation) {
+        return history_valid &&
+               (previous_scene_identity != current_scene_identity ||
+                previous_reset_generation != current_reset_generation);
+    }
 
     struct VulkanViewportOverlayVertex {
         glm::vec2 position{0.0f};
@@ -115,11 +148,18 @@ namespace lfs::vis {
         VkImageView external_scene_image_view = VK_NULL_HANDLE;
         VkImageLayout external_scene_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         std::uint64_t external_scene_image_generation = 0;
+        // Exact physical viewport extent selected by the scene renderer. Keeping
+        // this separate avoids reconstructing integer pixels from GUI floats.
+        glm::ivec2 scene_output_extent{0, 0};
         // Interactive resize deliberately keeps the last complete interop image
         // until the render extent settles. Do not replace that binding with an
         // incompletely prepared image during the deferral window.
         bool preserve_scene_image_binding = false;
         SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
+        bool scene_temporal_projection_supported = true;
+        bool scene_temporal_stable = true;
+        std::uint64_t scene_identity = 0;
+        std::uint64_t scene_temporal_reset_generation = 0;
         // Dormant unless the effective backend explicitly requests motion vectors.
         // The depth view is filled from depth_blit after prepare when omitted here.
         VulkanSceneMotionParams scene_motion;

@@ -3994,18 +3994,46 @@ namespace lfs::vis::gui {
         const bool export_locked = isViewportExportLocked();
 
         VulkanViewportPassParams params{};
+        float scene_render_scale = 1.0f;
         params.frame_slot = frame_slot;
         params.viewport_pos = has_viewport_layout ? viewport_layout_.pos : glm::vec2(0.0f, 0.0f);
         params.viewport_size = has_viewport_layout
                                    ? viewport_layout_.size
                                    : glm::vec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
         params.framebuffer_scale = {1.0f, 1.0f};
+        const int viewport_x0 = std::clamp(
+            static_cast<int>(std::lround(params.viewport_pos.x * params.framebuffer_scale.x)),
+            0,
+            static_cast<int>(extent.width));
+        const int viewport_y0 = std::clamp(
+            static_cast<int>(std::lround(params.viewport_pos.y * params.framebuffer_scale.y)),
+            0,
+            static_cast<int>(extent.height));
+        const int viewport_x1 = std::clamp(
+            static_cast<int>(std::lround(
+                (params.viewport_pos.x + params.viewport_size.x) * params.framebuffer_scale.x)),
+            0,
+            static_cast<int>(extent.width));
+        const int viewport_y1 = std::clamp(
+            static_cast<int>(std::lround(
+                (params.viewport_pos.y + params.viewport_size.y) * params.framebuffer_scale.y)),
+            0,
+            static_cast<int>(extent.height));
+        params.scene_output_extent = {
+            std::max(0, viewport_x1 - viewport_x0),
+            std::max(0, viewport_y1 - viewport_y0),
+        };
 
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             const auto settings = rendering_manager->getSettings();
+            scene_render_scale = std::clamp(settings.render_scale, 0.01f, 1.0f);
             params.scene_upscaler = settings.scene_upscaler == 1
                                         ? SceneUpscalerBackend::Spatial
+                                    : settings.scene_upscaler == 2
+                                        ? SceneUpscalerBackend::Temporal
                                         : SceneUpscalerBackend::Native;
+            params.scene_temporal_projection_supported =
+                !settings.orthographic && !settings.equirectangular;
             params.background_color = settings.background_color;
             params.grid_enabled =
                 settings.show_grid &&
@@ -4090,6 +4118,9 @@ namespace lfs::vis::gui {
             auto mesh_frame = rendering_manager->getVulkanMeshFrame();
             params.mesh_view_projection = mesh_frame.view_projection;
             params.mesh_camera_position = mesh_frame.camera_position;
+            params.scene_identity = mesh_frame.scene_identity;
+            params.scene_temporal_reset_generation = mesh_frame.temporal_reset_generation;
+            params.scene_temporal_stable = mesh_frame.temporal_scene_stable;
             params.mesh_items = std::move(mesh_frame.items);
             params.mesh_panels = std::move(mesh_frame.panels);
             params.environment = std::move(mesh_frame.environment);
@@ -4099,6 +4130,16 @@ namespace lfs::vis::gui {
             // run after params.split_view is populated (split stitching is gated on
             // params.split_view.enabled).
             rendering_manager->bindViewportInteropParams(params, frame_slot, export_locked);
+            if (params.scene_image_size.x > 0 && params.scene_image_size.y > 0) {
+                params.scene_output_extent = {
+                    std::max(1, static_cast<int>(std::lround(
+                                    static_cast<float>(params.scene_image_size.x) /
+                                    scene_render_scale))),
+                    std::max(1, static_cast<int>(std::lround(
+                                    static_cast<float>(params.scene_image_size.y) /
+                                    scene_render_scale))),
+                };
+            }
         }
 
         // Sample mouse pos with SDL_GetGlobalMouseState here, after all panel/tool overlay

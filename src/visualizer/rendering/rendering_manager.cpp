@@ -202,6 +202,13 @@ namespace lfs::vis {
         markDirty(DirtyFlag::CAMERA);
     }
 
+    void RenderingManager::requestCameraSettleRender(const bool reset_temporal_history) {
+        if (reset_temporal_history) {
+            temporal_camera_reset_generation_.fetch_add(1, std::memory_order_relaxed);
+        }
+        requestRenderFollowUp();
+    }
+
     bool RenderingManager::pollDirtyState() {
         if (const DirtyMask animation_dirty = animation_state_.pollDirtyState(); animation_dirty) {
             dirty_mask_.fetch_or(animation_dirty, std::memory_order_relaxed);

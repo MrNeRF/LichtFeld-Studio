@@ -233,6 +233,7 @@ namespace lfs::vis {
         void markDirty();
         void markDirty(DirtyMask flags);
         void markCameraPoseChanged();
+        void requestCameraSettleRender(bool reset_temporal_history = false);
 
         [[nodiscard]] bool pollDirtyState();
 
@@ -498,6 +499,9 @@ namespace lfs::vis {
         struct VulkanMeshFrame {
             glm::mat4 view_projection{1.0f};
             glm::vec3 camera_position{0.0f};
+            std::uint64_t scene_identity = 0;
+            std::uint64_t temporal_reset_generation = 0;
+            bool temporal_scene_stable = true;
             std::vector<lfs::vis::VulkanMeshDrawItem> items;
             std::vector<lfs::vis::VulkanMeshViewportPanel> panels;
             lfs::vis::VulkanEnvironmentParams environment;
@@ -757,6 +761,8 @@ namespace lfs::vis {
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
         std::uint64_t viewport_projection_generation_ = 1;
+        std::uint64_t temporal_scene_revision_ = 1;
+        std::atomic<std::uint64_t> temporal_camera_reset_generation_{1};
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
         std::unique_ptr<SparkLodController> lod_controller_;

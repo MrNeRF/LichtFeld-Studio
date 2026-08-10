@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "visualizer/rendering/passes/vulkan_scene_motion_pass.hpp"
+#include "visualizer/rendering/passes/vulkan_viewport_pass.hpp"
 #include "visualizer/rendering/scene_temporal_coordinator.hpp"
 
 #include <gtest/gtest.h>
@@ -195,6 +196,7 @@ namespace lfs::vis {
     TEST(SceneUpscalerRegistry, DescriptorLookupFallsBackSafelyForUnknownEnum) {
         EXPECT_EQ(sceneUpscalerDescriptor(SceneUpscalerBackend::Native).id, "native");
         EXPECT_EQ(sceneUpscalerDescriptor(SceneUpscalerBackend::Spatial).id, "spatial");
+        EXPECT_EQ(sceneUpscalerDescriptor(SceneUpscalerBackend::Temporal).id, "temporal");
         EXPECT_EQ(sceneUpscalerDescriptor(static_cast<SceneUpscalerBackend>(255)).id, "native");
     }
 
@@ -208,6 +210,42 @@ namespace lfs::vis {
         EXPECT_TRUE(needsVulkanSceneMotionPreRender(params, true));
         params.render_extent = {0, 720};
         EXPECT_FALSE(needsVulkanSceneMotionPreRender(params, true));
+    }
+
+    TEST(SceneTemporalCoordinator, RuntimeEligibilityRejectsUnsupportedViewportPaths) {
+        constexpr glm::ivec2 render{1100, 738};
+        constexpr glm::ivec2 output{2200, 1476};
+        EXPECT_TRUE(temporalViewportRuntimeEligible(
+            false, true, true, true, render, output));
+        EXPECT_FALSE(temporalViewportRuntimeEligible(
+            true, true, true, true, render, output));
+        EXPECT_FALSE(temporalViewportRuntimeEligible(
+            false, false, true, true, render, output));
+        EXPECT_FALSE(temporalViewportRuntimeEligible(
+            false, true, false, true, render, output));
+        EXPECT_FALSE(temporalViewportRuntimeEligible(
+            false, true, true, false, render, output));
+        EXPECT_FALSE(temporalViewportRuntimeEligible(
+            false, true, true, true, {0, 738}, output));
+        EXPECT_FALSE(temporalViewportRuntimeEligible(
+            false, true, true, true, render, {2200, 0}));
+    }
+
+    TEST(SceneTemporalCoordinator, SourceReuseRequiresMatchingImageAndContentGeneration) {
+        const auto image_a = reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(0x1000));
+        const auto image_b = reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(0x2000));
+
+        EXPECT_TRUE(temporalSourceUnchanged(image_a, 7, image_a, 7));
+        EXPECT_FALSE(temporalSourceUnchanged(image_a, 7, image_b, 7));
+        EXPECT_FALSE(temporalSourceUnchanged(image_a, 7, image_a, 8));
+        EXPECT_FALSE(temporalSourceUnchanged(VK_NULL_HANDLE, 7, VK_NULL_HANDLE, 7));
+    }
+
+    TEST(SceneTemporalCoordinator, ExplicitCameraGenerationInvalidatesStableSceneHistory) {
+        EXPECT_FALSE(temporalHistoryRequiresReset(false, 10, 10, 3, 4));
+        EXPECT_FALSE(temporalHistoryRequiresReset(true, 10, 10, 3, 3));
+        EXPECT_TRUE(temporalHistoryRequiresReset(true, 10, 11, 3, 3));
+        EXPECT_TRUE(temporalHistoryRequiresReset(true, 10, 10, 3, 4));
     }
 
 } // namespace lfs::vis

@@ -791,7 +791,9 @@ namespace lfs::python {
                      "scene_upscaler",
                      "Scene Upscaler",
                      "Reconstruction filter used when presenting the scene image",
-                     {{"Native", "native", 0}, {"Spatial", "spatial", 1}},
+                     {{"Native", "native", 0},
+                      {"Spatial", "spatial", 1},
+                      {"Temporal", "temporal", 2}},
                      0);
         add_float(&Proxy::depth_view_min, "depth_view_min", "Depth Near", "Depth-map visualization near range",
                   lfs::rendering::DEFAULT_DEPTH_VIEW_MIN, 0.0, lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
