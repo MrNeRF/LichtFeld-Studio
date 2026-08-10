@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <mutex>
@@ -235,7 +236,7 @@ namespace lfs::python {
     }
 
     void request_redraw_after(double delay_seconds) {
-        if (delay_seconds <= 0.0) {
+        if (std::isnan(delay_seconds) || delay_seconds <= 0.0) {
             request_redraw();
             return;
         }
