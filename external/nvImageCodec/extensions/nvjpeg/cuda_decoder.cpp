@@ -219,7 +219,7 @@ namespace nvjpeg {
 
         if (!device_mem_padding_.has_value() && exec_params_->device_allocator && exec_params_->device_allocator->device_mem_padding != 0)
             device_mem_padding_ = exec_params_->device_allocator->device_mem_padding;
-        if (!pinned_mem_padding_.has_value() && exec_params_->device_allocator && exec_params_->pinned_allocator->pinned_mem_padding != 0)
+        if (!pinned_mem_padding_.has_value() && exec_params_->pinned_allocator && exec_params_->pinned_allocator->pinned_mem_padding != 0)
             pinned_mem_padding_ = exec_params_->pinned_allocator->pinned_mem_padding;
 
         bool use_nvjpeg_create_ex_v2 = false;
@@ -239,7 +239,7 @@ namespace nvjpeg {
                 pinned_allocator_.pinned_malloc = exec_params_->pinned_allocator->pinned_malloc;
                 pinned_allocator_.pinned_free = exec_params_->pinned_allocator->pinned_free;
             } else {
-                device_mem_padding_ = 0;
+                pinned_mem_padding_ = 0;
             }
             use_nvjpeg_create_ex_v2 =
                 device_allocator_.dev_malloc && device_allocator_.dev_free && pinned_allocator_.pinned_malloc && pinned_allocator_.pinned_free;

@@ -366,7 +366,7 @@ namespace nvjpeg2k {
 
         if (!device_mem_padding_.has_value() && exec_params_->device_allocator && exec_params_->device_allocator->device_mem_padding != 0)
             device_mem_padding_ = exec_params_->device_allocator->device_mem_padding;
-        if (!pinned_mem_padding_.has_value() && exec_params_->device_allocator && exec_params_->pinned_allocator->pinned_mem_padding != 0)
+        if (!pinned_mem_padding_.has_value() && exec_params_->pinned_allocator && exec_params_->pinned_allocator->pinned_mem_padding != 0)
             pinned_mem_padding_ = exec_params_->pinned_allocator->pinned_mem_padding;
 
         if (device_mem_padding_.has_value() && device_mem_padding_.value() > 0) {
