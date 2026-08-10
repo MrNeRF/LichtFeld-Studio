@@ -9,8 +9,11 @@
 #include "core/checked_arithmetic.hpp"
 #include "core/cuda_allocation.hpp"
 #include "core/cuda_error.hpp"
+#include "core/crash_handler.hpp"
+#include "core/memory_pressure.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <cstdio>
 #include <string>
 #include <string_view>
@@ -65,6 +68,10 @@ struct UnscentedTransformParameters {
 
 namespace gsplat_lfs {
 
+    void* allocate_exact_async_storage(size_t bytes, cudaStream_t stream, const char* label);
+    void release_exact_async_storage(void* ptr, cudaStream_t stream) noexcept;
+    void record_exact_async_stream(void* ptr, cudaStream_t stream) noexcept;
+
 // Redundant pointer validation is debug-only; public tensor/device contracts are
 // established by the caller before this low-level backend boundary.
 #ifdef DEBUG_BUILD
@@ -103,23 +110,85 @@ namespace gsplat_lfs {
     inline void maybe_inject_cuda_allocation_failure(std::string_view) noexcept {}
 #endif
 
-    struct GsplatAllocationHooks {
-        void before_allocate(const std::string_view label) const {
-            maybe_inject_cuda_allocation_failure(label);
+    // Exact, stream-ordered ownership for gsplat's retained workspaces. The
+    // exact tier bypasses bucket rounding while the pool still records every
+    // allocation in the VRAM ledger and routes release through the serving
+    // stream. A reused workspace records any newly participating stream.
+    class ExactAsyncDeviceBuffer {
+    public:
+        ExactAsyncDeviceBuffer() = default;
+        explicit ExactAsyncDeviceBuffer(const char* label) : label_(label) {}
+        ExactAsyncDeviceBuffer(const size_t bytes, const cudaStream_t stream, const char* label)
+            : label_(label) {
+            allocate_exact(bytes, stream);
+        }
+        ExactAsyncDeviceBuffer(const ExactAsyncDeviceBuffer&) = delete;
+        ExactAsyncDeviceBuffer& operator=(const ExactAsyncDeviceBuffer&) = delete;
+        ExactAsyncDeviceBuffer(ExactAsyncDeviceBuffer&& other) noexcept
+            : ptr_(std::exchange(other.ptr_, nullptr)),
+              bytes_(std::exchange(other.bytes_, 0)),
+              stream_(std::exchange(other.stream_, nullptr)),
+              label_(other.label_) {}
+        ExactAsyncDeviceBuffer& operator=(ExactAsyncDeviceBuffer&& other) noexcept {
+            if (this != &other) {
+                reset();
+                ptr_ = std::exchange(other.ptr_, nullptr);
+                bytes_ = std::exchange(other.bytes_, 0);
+                stream_ = std::exchange(other.stream_, nullptr);
+                label_ = other.label_;
+            }
+            return *this;
+        }
+        ~ExactAsyncDeviceBuffer() { reset(); }
+
+        void bind_stream(cudaStream_t stream) {
+            if (ptr_ && stream != stream_) {
+                record_exact_async_stream(ptr_, stream);
+            }
+            stream_ = stream;
         }
 
-        // Count real driver allocs so gsplat high-water pools are visible
-        // to alloc_counter / steady-state smoke tests. Pool reuse does not call this.
-        void after_allocate(void*, size_t, std::string_view) const noexcept {
-            lfs::core::alloc_counter::record();
+        void allocate_exact(const size_t bytes, const cudaStream_t stream) {
+            LFS_ASSERT_MSG(ptr_ == nullptr && bytes_ == 0,
+                           "gsplat exact workspace must be empty before allocation");
+            LFS_ASSERT_MSG(bytes > 0, "gsplat exact workspace cannot allocate zero bytes");
+            maybe_inject_cuda_allocation_failure(label_);
+            ptr_ = allocate_exact_async_storage(bytes, stream, label_);
+            LFS_ASSERT_MSG(ptr_ != nullptr, "gsplat exact workspace allocation returned null");
+            bytes_ = bytes;
+            stream_ = stream;
         }
-        void before_deallocate(void*) const noexcept {}
+
+        void reset() noexcept {
+            if (!ptr_) {
+                return;
+            }
+            void* const ptr = std::exchange(ptr_, nullptr);
+            bytes_ = 0;
+            if (lfs::core::gpu_process_teardown_started()) {
+                stream_ = nullptr;
+                return;
+            }
+            release_exact_async_storage(ptr, stream_);
+            stream_ = nullptr;
+        }
+
+        [[nodiscard]] void* get() const noexcept { return ptr_; }
+        template <typename T> [[nodiscard]] T* as() const noexcept {
+            return static_cast<T*>(ptr_);
+        }
+        [[nodiscard]] size_t size() const noexcept { return bytes_; }
+        [[nodiscard]] explicit operator bool() const noexcept { return ptr_ != nullptr; }
+
+    private:
+        void* ptr_ = nullptr;
+        size_t bytes_ = 0;
+        cudaStream_t stream_ = nullptr;
+        const char* label_ = "rasterizer.gsplat.workspace";
     };
 
-    using DirectDeviceBuffer = lfs::core::UniqueCudaAllocation<
-        lfs::core::DirectCudaAllocator, GsplatAllocationHooks>;
-    using StreamOrderedDeviceBuffer = lfs::core::UniqueCudaAllocation<
-        lfs::core::StreamOrderedCudaAllocator, GsplatAllocationHooks>;
+    using DirectDeviceBuffer = ExactAsyncDeviceBuffer;
+    using StreamOrderedDeviceBuffer = ExactAsyncDeviceBuffer;
 
     /// Grow-only CUB temp storage shared by gsplat scan/sort (thread-local).
     /// Returns a workspace of at least @p bytes; never shrinks until release.

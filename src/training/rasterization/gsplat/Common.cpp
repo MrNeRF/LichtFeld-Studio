@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "Common.h"
+#include "memory_pool.hpp"
 
 #include <format>
-#include <limits>
 
 #if LFS_CUDA_FAILURE_INJECTION_ENABLED
 #include <atomic>
@@ -12,15 +12,24 @@
 
 namespace gsplat_lfs {
 
-    namespace {
-        size_t growth_capacity_bytes(const size_t required, const std::string_view allocation) {
-            const size_t headroom = required / 4;
-            LFS_ASSERT_MSG(
-                required <= std::numeric_limits<size_t>::max() - headroom,
-                std::format("{} capacity overflow for {} bytes", allocation, required));
-            return required + headroom;
-        }
+    void* allocate_exact_async_storage(const size_t bytes,
+                                       const cudaStream_t stream,
+                                       const char* const label) {
+        lfs::core::CudaMemoryPool::LabelGuard label_guard(label);
+        return lfs::core::allocate_cuda_storage(
+            bytes, stream, lfs::core::CudaStorageMode::ExactAsync,
+            label, "gsplat exact workspace allocation");
+    }
 
+    void release_exact_async_storage(void* const ptr, const cudaStream_t stream) noexcept {
+        lfs::core::safe_cuda_pool_deallocate(ptr, stream);
+    }
+
+    void record_exact_async_stream(void* const ptr, const cudaStream_t stream) noexcept {
+        lfs::core::CudaMemoryPool::instance().record_stream(ptr, stream);
+    }
+
+    namespace {
         // Thread-local grow-only CUB workspace for scan/sort in the gsplat path.
         // Replaces per-call StreamOrderedDeviceBuffer alloc/free (CudaCubWorkspace).
         struct GsplatCubWorkspaceCache {
@@ -32,9 +41,10 @@ namespace gsplat_lfs {
                     return nullptr;
                 }
                 if (bytes <= capacity_bytes && buffer) {
+                    buffer.bind_stream(stream);
                     return buffer.get();
                 }
-                const size_t new_cap = growth_capacity_bytes(bytes, "gsplat cub workspace");
+                const size_t new_cap = bytes;
                 StreamOrderedDeviceBuffer replacement(
                     new_cap, stream, "rasterizer.gsplat.cub_workspace");
                 buffer = std::move(replacement);
@@ -65,9 +75,10 @@ namespace gsplat_lfs {
                     return nullptr;
                 }
                 if (bytes <= capacity_bytes && buffer) {
+                    buffer.bind_stream(stream);
                     return buffer.get();
                 }
-                const size_t new_cap = growth_capacity_bytes(bytes, "gsplat color grad workspace");
+                const size_t new_cap = bytes;
                 StreamOrderedDeviceBuffer replacement(
                     new_cap, stream, "rasterizer.gsplat.color_gradients");
                 buffer = std::move(replacement);

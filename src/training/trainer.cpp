@@ -46,6 +46,7 @@
 #include "python/runner.hpp"
 #include "rasterization/fast_rasterizer.hpp"
 #include "rasterization/fastgs/rasterization/include/forward.h"
+#include "rasterization/gsplat/Ops.h"
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/mcmc.hpp"
 #include "strategies/strategy_factory.hpp"
@@ -823,6 +824,13 @@ namespace lfs::training {
             if (!resized) {
                 LOG_WARN("Rasterizer arena {} boundary could not drain every CUDA device",
                          boundary);
+            }
+            if (release_all) {
+                // B3/B6: gsplat's exact high-water workspaces are retained
+                // across iterations (EXACT-2) and released only at a named
+                // boundary after the arena has drained.
+                (void)release_gsplat_rasterizer_thread_local_caches();
+                (void)gsplat_lfs::release_intersect_thread_local_cache();
             }
         }
 

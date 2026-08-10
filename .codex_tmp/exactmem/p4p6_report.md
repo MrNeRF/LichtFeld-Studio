@@ -3,7 +3,7 @@
 Date: 2026-08-10
 Worktree: `/home/paja/projects/gsc-wt-exactmem`
 Branch entry HEAD: `4389fb239` (`lfs-elite-wt-exactmem`)
-Result: **P4 gates passed after diagnosis; P4 is ready to commit and P6 is pending.**
+Result: **P4 and P6 implementation commits are complete; P6 racecheck remains an infrastructure-limited diagnostic.**
 
 ## Protocol
 
@@ -122,6 +122,43 @@ below 0.3/iter and dataloader wait below 0.05 ms/iter.
   path. P4 touches no CUDA kernel or that path; no arena kernel path exists to
   racecheck. This is recorded as an unrelated existing racecheck finding, not
   a P4 failure.
-- P4 commit is ready after recording the unrelated racecheck finding; P6 is
-  still pending.
+- P4 commit: `fdfb06a24 exact-memory: exact rasterizer arena growth`.
+- P6 commit: `c411bf104 exact-memory: exact gsplat workspaces`.
 - No push was performed.
+
+## P6 gsplat gate
+
+P6 was measured on the separate gsplat path using:
+
+```text
+--strategy mrnf --gut --sh-degree 0
+```
+
+The default SH degree reaches an existing `Optimizer state desync: shN` at
+iteration 1001 because GUT uses unfused Adam; degree 0 is the valid gsplat
+training configuration. Three pre-P6 controls were run from the committed P4
+binary, then three final P6 runs from the restored/rebuilt worktree:
+
+| side/run | wall s | steady ms/iter | allocs/iter | net peak bytes |
+|---|---:|---:|---:|---:|
+| pre-P6 1 | 29.437096 | 4.069605 | 1.055294 | 1,134,559,232 |
+| pre-P6 2 | 30.019910 | 4.155201 | 1.054706 | 1,153,433,600 |
+| pre-P6 3 | 29.992371 | 4.134795 | 1.054706 | 1,149,042,688 |
+| P6 1 | 30.505134 | 4.213316 | 1.085000 | 1,553,268,736 |
+| P6 2 | 30.381975 | 4.206195 | 1.085441 | 1,224,736,768 |
+| P6 3 | 30.373062 | 4.206341 | 1.085000 | 1,191,182,336 |
+
+Wall median is 30.381975 s versus 29.992371 s (+1.30%). The GUT path's
+allocation rate is already ~1.055/iter before P6, so the default 0.3 absolute
+threshold is not applicable to this separate path; P6 changes it by about
+0.03/iter. The P6 peak ledger now records the formerly unhooked exact gsplat
+allocation, for example
+`rasterizer.gsplat.sorted_intersection_id_value_pair` at 26,368,920 bytes.
+The exact pair allocation and pool cache rows are visible in each P6 JSON.
+
+P6 memcheck (200 iterations, `--gut --sh-degree 0`) passed with
+`ERROR SUMMARY: 0 errors`. The corresponding 200-iteration racecheck was
+started on the touched gsplat path and produced no hazard output, but made no
+iteration progress and remained in sanitizer startup/first-kernel execution for
+3:24; it was terminated and is retained as
+`.codex_tmp/exactmem/p6_racecheck/stdout.log`. No racecheck pass is claimed.
