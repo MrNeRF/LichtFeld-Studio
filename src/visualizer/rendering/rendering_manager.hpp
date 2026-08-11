@@ -163,7 +163,8 @@ namespace lfs::vis {
 
         // Image + per-pixel linear depth from the same viewport render. When
         // expected_depth is true, depth is alpha-weighted expected depth instead
-        // of median depth. image is [H,W,3] and depth is [H,W], both CPU float32.
+        // of median depth. Image is CPU [H,W,C] (float RGB or uint8 RGBA depending
+        // on the entry point); depth is CPU float32 [H,W].
         struct PreviewRgbd {
             std::shared_ptr<lfs::core::Tensor> image;
             std::shared_ptr<lfs::core::Tensor> depth;
@@ -175,6 +176,25 @@ namespace lfs::vis {
                                                int width, int height,
                                                bool expected_depth = false,
                                                std::optional<glm::vec3> background_color_override = std::nullopt);
+        PreviewRgbd renderPreviewImageAndDepth(const lfs::core::SplatData& model,
+                                               SceneRenderState scene_state,
+                                               const glm::mat3& camera_rotation,
+                                               const glm::vec3& camera_position,
+                                               float focal_length_mm,
+                                               int width, int height,
+                                               bool expected_depth = false,
+                                               std::optional<glm::vec3> background_color_override = std::nullopt,
+                                               std::optional<bool> orthographic_override = std::nullopt,
+                                               std::optional<float> ortho_scale_override = std::nullopt);
+        PreviewRgbd renderPreviewImageRgba8AndDepth(const lfs::core::SplatData& model,
+                                                    SceneRenderState scene_state,
+                                                    const glm::mat3& camera_rotation,
+                                                    const glm::vec3& camera_position,
+                                                    float focal_length_mm,
+                                                    int width, int height,
+                                                    bool expected_depth = false,
+                                                    std::optional<bool> orthographic_override = std::nullopt,
+                                                    std::optional<float> ortho_scale_override = std::nullopt);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgba8(SceneManager* scene_manager,
                                                                    const glm::mat3& camera_rotation,
                                                                    const glm::vec3& camera_position,
@@ -642,7 +662,38 @@ namespace lfs::vis {
             bool expected_depth,
             std::optional<glm::vec3> background_color_override,
             std::optional<bool> orthographic_override,
-            std::optional<float> ortho_scale_override);
+            std::optional<float> ortho_scale_override,
+            std::optional<bool> transparent_background_override = std::nullopt);
+        PreviewRgbd renderPreviewImageAndDepthWithState(
+            SceneManager* scene_manager,
+            const lfs::core::SplatData& model,
+            SceneRenderState scene_state,
+            const glm::mat3& camera_rotation,
+            const glm::vec3& camera_position,
+            float focal_length_mm,
+            int width,
+            int height,
+            bool render_lock_held,
+            bool expected_depth,
+            std::optional<glm::vec3> background_color_override,
+            std::optional<bool> orthographic_override,
+            std::optional<float> ortho_scale_override,
+            PreviewImageReadback readback);
+        PreviewRgbd renderPreviewImageAndDepthTiledWithState(
+            SceneManager* scene_manager,
+            const lfs::core::SplatData& model,
+            SceneRenderState scene_state,
+            const glm::mat3& camera_rotation,
+            const glm::vec3& camera_position,
+            float focal_length_mm,
+            int width,
+            int height,
+            bool render_lock_held,
+            bool expected_depth,
+            std::optional<glm::vec3> background_color_override,
+            std::optional<bool> orthographic_override,
+            std::optional<float> ortho_scale_override,
+            PreviewImageReadback readback);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageTiledWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,

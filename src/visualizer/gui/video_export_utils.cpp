@@ -199,4 +199,24 @@ namespace lfs::vis::gui {
         return options;
     }
 
+    lfs::rendering::FrameMetadata makeVideoExportFrameMetadata(
+        const lfs::rendering::FrameView& frame_view,
+        const std::shared_ptr<lfs::core::Tensor>& linear_depth) {
+        lfs::rendering::FrameMetadata metadata{
+            .valid = true,
+            .near_plane = frame_view.near_plane,
+            .far_plane = frame_view.far_plane,
+            .orthographic = frame_view.orthographic,
+        };
+        if (linear_depth && linear_depth->is_valid() && linear_depth->ndim() == 2) {
+            metadata.depth_panels[0] = lfs::rendering::FramePanelMetadata{
+                .depth = std::make_shared<lfs::core::Tensor>(linear_depth->unsqueeze(0).contiguous()),
+                .start_position = 0.0f,
+                .end_position = 1.0f,
+            };
+            metadata.depth_panel_count = 1;
+        }
+        return metadata;
+    }
+
 } // namespace lfs::vis::gui

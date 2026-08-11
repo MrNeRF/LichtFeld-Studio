@@ -512,13 +512,6 @@ namespace lfs::vis::gui {
         return frame.contiguous();
     }
 
-    rendering::FrameMetadata makeVideoExportFrameMetadata(const rendering::FrameView& frame_view) {
-        return rendering::FrameMetadata{
-            .valid = true,
-            .far_plane = frame_view.far_plane,
-            .orthographic = frame_view.orthographic};
-    }
-
     std::expected<lfs::core::Tensor, std::string> renderVideoExportFrame(
         RenderingManager& rendering_manager,
         rendering::RenderingEngine& engine,
@@ -572,26 +565,66 @@ namespace lfs::vis::gui {
             } else {
                 auto scene_state = makeVideoExportGaussianSceneState(snapshot);
                 const auto camera_rotation = glm::mat3_cast(cam_state.rotation);
-                auto preview_image = render_environment
-                                         ? rendering_manager.renderPreviewImageRgba8(
-                                               *snapshot.combined_model,
-                                               std::move(scene_state),
-                                               camera_rotation,
-                                               cam_state.position,
-                                               cam_state.focal_length_mm,
-                                               width,
-                                               height)
-                                         : rendering_manager.renderPreviewImage(
-                                               *snapshot.combined_model,
-                                               std::move(scene_state),
-                                               camera_rotation,
-                                               cam_state.position,
-                                               cam_state.focal_length_mm,
-                                               width,
-                                               height);
+                std::shared_ptr<lfs::core::Tensor> preview_image;
+                std::shared_ptr<lfs::core::Tensor> preview_depth;
+                if (!snapshot.meshes.empty()) {
+                    auto preview = render_environment
+                                       ? rendering_manager.renderPreviewImageRgba8AndDepth(
+                                             *snapshot.combined_model,
+                                             std::move(scene_state),
+                                             camera_rotation,
+                                             cam_state.position,
+                                             cam_state.focal_length_mm,
+                                             width,
+                                             height,
+                                             false,
+                                             frame_view.orthographic,
+                                             frame_view.ortho_scale)
+                                       : rendering_manager.renderPreviewImageAndDepth(
+                                             *snapshot.combined_model,
+                                             std::move(scene_state),
+                                             camera_rotation,
+                                             cam_state.position,
+                                             cam_state.focal_length_mm,
+                                             width,
+                                             height,
+                                             false,
+                                             std::nullopt,
+                                             frame_view.orthographic,
+                                             frame_view.ortho_scale);
+                    preview_image = std::move(preview.image);
+                    preview_depth = std::move(preview.depth);
+                } else {
+                    preview_image = render_environment
+                                        ? rendering_manager.renderPreviewImageRgba8(
+                                              *snapshot.combined_model,
+                                              std::move(scene_state),
+                                              camera_rotation,
+                                              cam_state.position,
+                                              cam_state.focal_length_mm,
+                                              width,
+                                              height,
+                                              frame_view.orthographic,
+                                              frame_view.ortho_scale)
+                                        : rendering_manager.renderPreviewImage(
+                                              *snapshot.combined_model,
+                                              std::move(scene_state),
+                                              camera_rotation,
+                                              cam_state.position,
+                                              cam_state.focal_length_mm,
+                                              width,
+                                              height,
+                                              std::nullopt,
+                                              frame_view.orthographic,
+                                              frame_view.ortho_scale);
+                }
                 auto video_frame = makeGaussianPreviewVideoFrame(preview_image);
                 if (!video_frame) {
                     return std::unexpected(video_frame.error());
+                }
+                if (!snapshot.meshes.empty() &&
+                    (!preview_depth || !preview_depth->is_valid())) {
+                    return std::unexpected("Failed to render Gaussian depth for mesh compositing");
                 }
 
                 if (!requires_composite_pass) {
@@ -601,7 +634,7 @@ namespace lfs::vis::gui {
                 auto frame_image = std::make_shared<lfs::core::Tensor>(std::move(*video_frame));
                 auto materialized = engine.materializeGpuFrame(
                     frame_image,
-                    makeVideoExportFrameMetadata(frame_view),
+                    makeVideoExportFrameMetadata(frame_view, preview_depth),
                     {width, height});
                 if (!materialized || !materialized->valid()) {
                     return std::unexpected(materialized ? LOC(lichtfeld::Strings::Runtime::RENDERED_GAUSSIAN_INVALID)

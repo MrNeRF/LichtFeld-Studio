@@ -423,7 +423,8 @@ namespace lfs::vis {
         const bool expected_depth,
         std::optional<glm::vec3> background_color_override,
         std::optional<bool> orthographic_override,
-        std::optional<float> ortho_scale_override) {
+        std::optional<float> ortho_scale_override,
+        std::optional<bool> transparent_background_override) {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview depth render dimensions");
         }
@@ -431,15 +432,9 @@ namespace lfs::vis {
             return std::unexpected("no renderable Gaussian model is available");
         }
         if (previewRenderNeedsTiling(width, height)) {
-            // Depth comes from the single per-frame pixel_depth scratch; a tiled
-            // render would need per-tile depth assembly, which isn't wired yet.
-            LOG_WARN("render_view depth unavailable for tiled preview size {}x{}", width, height);
-            return std::unexpected("preview depth render would require tiled depth assembly");
+            return std::unexpected("preview depth render requires tiled depth assembly");
         }
 
-        // The macro-tile (HiGS) chain only yields per-macro-tile median depth;
-        // force the legacy per-pixel chain for the depth-capture render so the
-        // readback matches the image resolution.
         if (!vksplat_viewport_renderer_) {
             vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
         }
@@ -449,10 +444,10 @@ namespace lfs::vis {
             ~DepthCaptureModeGuard() { renderer->setDepthCaptureMode(false); }
         } depth_capture_guard{vksplat_viewport_renderer_.get()};
 
-        auto rendered = renderPreviewImageToPreviewSlotWithState(
+        return renderPreviewImageToPreviewSlotWithState(
             scene_manager,
             model,
-            scene_state,
+            std::move(scene_state),
             rotation,
             position,
             focal_length_mm,
@@ -465,8 +460,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            std::nullopt);
-        return rendered;
+            transparent_background_override);
     }
 
     RenderingManager::PreviewRgbd RenderingManager::renderPreviewImageAndDepth(
@@ -489,7 +483,7 @@ namespace lfs::vis {
             return result;
         }
 
-        auto rendered = renderDepthCaptureToPreviewSlotWithState(
+        return renderPreviewImageAndDepthWithState(
             scene_manager,
             *model,
             std::move(render_state),
@@ -502,30 +496,65 @@ namespace lfs::vis {
             expected_depth,
             background_color_override,
             std::nullopt,
-            std::nullopt);
-        if (!rendered) {
-            LOG_ERROR("Gaussian preview rgbd render failed: {}", rendered.error());
-            return result;
-        }
+            std::nullopt,
+            PreviewImageReadback::FloatRgb);
+    }
 
-        // image and depth are read from the same render: the Preview output slot
-        // and the pixel_depth scratch it just wrote (still resident — the Preview
-        // path uses private scratch, which render() does not release).
-        auto image = vksplat_viewport_renderer_->readOutputImage(
-            *last_vulkan_context_, VksplatViewportRenderer::OutputSlot::Preview);
-        if (!image) {
-            LOG_ERROR("Gaussian preview rgbd image readback failed: {}", image.error());
-            return result;
-        }
-        auto depth = vksplat_viewport_renderer_->readPreviewDepth(
-            *last_vulkan_context_, VksplatViewportRenderer::OutputSlot::Preview);
-        if (!depth) {
-            LOG_ERROR("Gaussian preview depth readback failed: {}", depth.error());
-            return result;
-        }
-        result.image = std::move(*image);
-        result.depth = std::move(*depth);
-        return result;
+    RenderingManager::PreviewRgbd RenderingManager::renderPreviewImageAndDepth(
+        const lfs::core::SplatData& model,
+        SceneRenderState scene_state,
+        const glm::mat3& rotation,
+        const glm::vec3& position,
+        const float focal_length_mm,
+        const int width,
+        const int height,
+        const bool expected_depth,
+        std::optional<glm::vec3> background_color_override,
+        std::optional<bool> orthographic_override,
+        std::optional<float> ortho_scale_override) {
+        return renderPreviewImageAndDepthWithState(
+            nullptr,
+            model,
+            std::move(scene_state),
+            rotation,
+            position,
+            focal_length_mm,
+            width,
+            height,
+            false,
+            expected_depth,
+            background_color_override,
+            orthographic_override,
+            ortho_scale_override,
+            PreviewImageReadback::FloatRgb);
+    }
+
+    RenderingManager::PreviewRgbd RenderingManager::renderPreviewImageRgba8AndDepth(
+        const lfs::core::SplatData& model,
+        SceneRenderState scene_state,
+        const glm::mat3& rotation,
+        const glm::vec3& position,
+        const float focal_length_mm,
+        const int width,
+        const int height,
+        const bool expected_depth,
+        std::optional<bool> orthographic_override,
+        std::optional<float> ortho_scale_override) {
+        return renderPreviewImageAndDepthWithState(
+            nullptr,
+            model,
+            std::move(scene_state),
+            rotation,
+            position,
+            focal_length_mm,
+            width,
+            height,
+            false,
+            expected_depth,
+            std::nullopt,
+            orthographic_override,
+            ortho_scale_override,
+            PreviewImageReadback::UInt8Rgba);
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgb8(SceneManager* const scene_manager,
@@ -834,6 +863,259 @@ namespace lfs::vis {
         };
         return applyExportPostProcess(
             std::move(image), scene_manager, settings, getCurrentCameraId(), request.mode, view);
+    }
+
+    RenderingManager::PreviewRgbd RenderingManager::renderPreviewImageAndDepthWithState(
+        SceneManager* const scene_manager,
+        const lfs::core::SplatData& model,
+        SceneRenderState scene_state,
+        const glm::mat3& rotation,
+        const glm::vec3& position,
+        const float focal_length_mm,
+        const int width,
+        const int height,
+        const bool render_lock_held,
+        const bool expected_depth,
+        std::optional<glm::vec3> background_color_override,
+        std::optional<bool> orthographic_override,
+        std::optional<float> ortho_scale_override,
+        const PreviewImageReadback readback) {
+        if (width <= 0 || height <= 0) {
+            return {};
+        }
+        if (previewRenderNeedsTiling(width, height)) {
+            return renderPreviewImageAndDepthTiledWithState(
+                scene_manager,
+                model,
+                std::move(scene_state),
+                rotation,
+                position,
+                focal_length_mm,
+                width,
+                height,
+                render_lock_held,
+                expected_depth,
+                background_color_override,
+                orthographic_override,
+                ortho_scale_override,
+                readback);
+        }
+
+        const auto readback_config =
+            previewImageReadbackConfig(readback, background_color_override.has_value());
+        auto rendered = renderDepthCaptureToPreviewSlotWithState(
+            scene_manager,
+            model,
+            scene_state,
+            rotation,
+            position,
+            focal_length_mm,
+            width,
+            height,
+            render_lock_held,
+            expected_depth,
+            background_color_override,
+            orthographic_override,
+            ortho_scale_override,
+            readback_config.transparent_background_override);
+        if (!rendered) {
+            if (isTileInstanceOverflow(rendered.error()) &&
+                height > kMinPreviewSubdivisionHeight) {
+                return renderPreviewImageAndDepthTiledWithState(
+                    scene_manager,
+                    model,
+                    std::move(scene_state),
+                    rotation,
+                    position,
+                    focal_length_mm,
+                    width,
+                    height,
+                    render_lock_held,
+                    expected_depth,
+                    background_color_override,
+                    orthographic_override,
+                    ortho_scale_override,
+                    readback);
+            }
+            LOG_ERROR("Gaussian preview RGBD render failed: {}", rendered.error());
+            return {};
+        }
+
+        std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> image =
+            std::unexpected("unsupported preview image readback format");
+        if (readback_config.dtype == lfs::core::DataType::UInt8 &&
+            readback_config.channels == 4) {
+            image = vksplat_viewport_renderer_->readOutputImageRgba8(
+                *last_vulkan_context_,
+                VksplatViewportRenderer::OutputSlot::Preview);
+        } else if (readback_config.dtype == lfs::core::DataType::UInt8) {
+            image = vksplat_viewport_renderer_->readOutputImageRgb8(
+                *last_vulkan_context_,
+                VksplatViewportRenderer::OutputSlot::Preview);
+        } else {
+            image = vksplat_viewport_renderer_->readOutputImage(
+                *last_vulkan_context_,
+                VksplatViewportRenderer::OutputSlot::Preview);
+        }
+        if (!image) {
+            LOG_ERROR("Gaussian preview RGBD image readback failed: {}", image.error());
+            return {};
+        }
+
+        auto depth = vksplat_viewport_renderer_->readPreviewDepth(
+            *last_vulkan_context_,
+            VksplatViewportRenderer::OutputSlot::Preview);
+        if (!depth) {
+            LOG_ERROR("Gaussian preview RGBD depth readback failed: {}", depth.error());
+            return {};
+        }
+        return PreviewRgbd{
+            .image = std::move(*image),
+            .depth = std::move(*depth),
+        };
+    }
+
+    RenderingManager::PreviewRgbd RenderingManager::renderPreviewImageAndDepthTiledWithState(
+        SceneManager* const scene_manager,
+        const lfs::core::SplatData& model,
+        SceneRenderState scene_state,
+        const glm::mat3& rotation,
+        const glm::vec3& position,
+        const float focal_length_mm,
+        const int width,
+        const int height,
+        const bool render_lock_held,
+        const bool expected_depth,
+        std::optional<glm::vec3> background_color_override,
+        std::optional<bool> orthographic_override,
+        std::optional<float> ortho_scale_override,
+        const PreviewImageReadback readback) {
+        PreviewRgbd result{};
+        if (width <= 0 || height <= 0) {
+            return result;
+        }
+
+        const auto readback_config =
+            previewImageReadbackConfig(readback, background_color_override.has_value());
+        const int tile_height_limit = previewTileHeightForWidth(width);
+        if (tile_height_limit <= 0) {
+            return result;
+        }
+
+        auto image = lfs::core::Tensor::empty(
+            {static_cast<std::size_t>(height),
+             static_cast<std::size_t>(width),
+             static_cast<std::size_t>(readback_config.channels)},
+            lfs::core::Device::CPU,
+            readback_config.dtype);
+        auto depth = lfs::core::Tensor::empty(
+            {static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
+            lfs::core::Device::CPU,
+            lfs::core::DataType::Float32);
+        if (!image.is_valid() || !depth.is_valid()) {
+            LOG_TRACE("Gaussian preview tiled RGBD render failed to allocate output tensors");
+            return result;
+        }
+
+        if (!vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+        }
+        vksplat_viewport_renderer_->setDepthCaptureMode(true, expected_depth);
+        struct DepthCaptureModeGuard {
+            VksplatViewportRenderer* renderer;
+            ~DepthCaptureModeGuard() { renderer->setDepthCaptureMode(false); }
+        } depth_capture_guard{vksplat_viewport_renderer_.get()};
+
+        int band_height_limit = tile_height_limit;
+        for (int tile_y = 0; tile_y < height;) {
+            int tile_height = std::min(band_height_limit, height - tile_y);
+            const auto intrinsics = previewTileIntrinsics(width, height, focal_length_mm);
+            while (true) {
+                auto rendered = renderPreviewImageToPreviewSlotWithState(
+                    scene_manager,
+                    model,
+                    scene_state,
+                    rotation,
+                    position,
+                    focal_length_mm,
+                    width,
+                    tile_height,
+                    render_lock_held,
+                    intrinsics,
+                    {0, tile_y},
+                    {width, height},
+                    orthographic_override,
+                    ortho_scale_override,
+                    background_color_override,
+                    readback_config.transparent_background_override);
+                if (rendered) {
+                    break;
+                }
+                if (!isTileInstanceOverflow(rendered.error()) ||
+                    tile_height <= kMinPreviewSubdivisionHeight) {
+                    LOG_TRACE("Gaussian preview tiled RGBD render failed at tile y={} height={}: {}",
+                              tile_y,
+                              tile_height,
+                              rendered.error());
+                    return {};
+                }
+                tile_height = std::max(kMinPreviewSubdivisionHeight, tile_height / 2);
+                band_height_limit = tile_height;
+            }
+
+            auto color_ticket = vksplat_viewport_renderer_->submitReadOutputImageIntoCpuHwcTicket(
+                *last_vulkan_context_,
+                VksplatViewportRenderer::OutputSlot::Preview,
+                image,
+                0,
+                tile_y);
+            if (!color_ticket) {
+                LOG_TRACE("Gaussian preview tiled RGBD color readback failed at tile y={}: {}",
+                          tile_y,
+                          color_ticket.error());
+                return {};
+            }
+
+            auto tile_depth = vksplat_viewport_renderer_->readPreviewDepth(
+                *last_vulkan_context_,
+                VksplatViewportRenderer::OutputSlot::Preview);
+            if (!tile_depth) {
+                vksplat_viewport_renderer_->abandonReadbackTicket(*color_ticket);
+                LOG_TRACE("Gaussian preview tiled RGBD depth readback failed at tile y={}: {}",
+                          tile_y,
+                          tile_depth.error());
+                return {};
+            }
+            if (const auto waited = vksplat_viewport_renderer_->waitReadbackTicket(*color_ticket);
+                !waited) {
+                LOG_TRACE("Gaussian preview tiled RGBD color wait failed at tile y={}: {}",
+                          tile_y,
+                          waited.error());
+                return {};
+            }
+            if (!(*tile_depth)->is_valid() ||
+                (*tile_depth)->device() != lfs::core::Device::CPU ||
+                (*tile_depth)->dtype() != lfs::core::DataType::Float32 ||
+                (*tile_depth)->ndim() != 2 ||
+                static_cast<int>((*tile_depth)->size(0)) != tile_height ||
+                static_cast<int>((*tile_depth)->size(1)) != width ||
+                !(*tile_depth)->is_contiguous()) {
+                LOG_TRACE("Gaussian preview tiled RGBD depth shape mismatch at tile y={}", tile_y);
+                return {};
+            }
+
+            const std::size_t tile_pixels =
+                static_cast<std::size_t>(tile_height) * static_cast<std::size_t>(width);
+            std::copy_n(
+                (*tile_depth)->ptr<float>(),
+                tile_pixels,
+                depth.ptr<float>() + static_cast<std::size_t>(tile_y) * width);
+            tile_y += tile_height;
+        }
+
+        result.image = std::make_shared<lfs::core::Tensor>(std::move(image));
+        result.depth = std::make_shared<lfs::core::Tensor>(std::move(depth));
+        return result;
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageWithState(

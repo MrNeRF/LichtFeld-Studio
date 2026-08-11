@@ -10,7 +10,7 @@ namespace lfs::rendering::detail {
         const float alpha,
         const float mesh_view_depth,
         const float scene_view_depth) noexcept {
-        return alpha > 0.0f && mesh_view_depth > 0.0f && mesh_view_depth < scene_view_depth;
+        return alpha > 0.0f && mesh_view_depth < scene_view_depth;
     }
 
 } // namespace lfs::rendering::detail

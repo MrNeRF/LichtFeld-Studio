@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "rendering/mesh_offscreen_renderer.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/video_composite_utils.hpp"
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
 #include <optional>
@@ -30,6 +32,14 @@ namespace {
         const std::vector<float>& values,
         const lfs::core::TensorShape& shape) {
         return Tensor::from_vector(values, shape, Device::CUDA);
+    }
+
+    [[nodiscard]] float projectedMeshDepth(const float view_depth, const bool orthographic) {
+        const glm::mat4 projection = orthographic
+                                         ? glm::ortho(-2.0f, 2.0f, -2.0f, 2.0f, 0.25f, FAR_PLANE)
+                                         : glm::perspective(glm::radians(55.0f), 1.0f, 0.25f, FAR_PLANE);
+        const glm::vec4 clip = projection * glm::vec4(0.0f, 0.0f, -view_depth, 1.0f);
+        return lfs::vis::linearizeMeshViewDepth(clip.z / clip.w, projection);
     }
 
     [[nodiscard]] VideoCompositeFrameRequest makeRequest(
@@ -95,7 +105,6 @@ namespace {
 
         EXPECT_TRUE(meshFragmentPassesDepthTest(1.0f, 2.0f, 5.0f));
         EXPECT_FALSE(meshFragmentPassesDepthTest(0.0f, 2.0f, 5.0f));
-        EXPECT_FALSE(meshFragmentPassesDepthTest(1.0f, -2.0f, 5.0f));
         EXPECT_FALSE(meshFragmentPassesDepthTest(1.0f, 5.0f, 2.0f));
         EXPECT_FALSE(meshFragmentPassesDepthTest(1.0f, 5.0f, 5.0f));
     }
@@ -109,7 +118,10 @@ namespace {
                  0.0f, 0.0f,
                  1.0f, 0.0f},
                 {4, HEIGHT, WIDTH}),
-            .view_depth = makeTensor({1.0f, 1.0f}, {HEIGHT, WIDTH}),
+            .view_depth = makeTensor(
+                {projectedMeshDepth(1.0f, orthographic()),
+                 projectedMeshDepth(1.0f, orthographic())},
+                {HEIGHT, WIDTH}),
         };
 
         expectFramePixels(
@@ -170,7 +182,12 @@ namespace {
                  1.0f, 1.0f, 0.0f, 1.0f,
                  1.0f, 1.0f, 0.0f, 1.0f},
                 {4, HEIGHT, WIDTH}),
-            .view_depth = makeTensor({1.0f, 5.0f, 0.5f, 8.0f}, {HEIGHT, WIDTH}),
+            .view_depth = makeTensor(
+                {projectedMeshDepth(1.0f, orthographic()),
+                 projectedMeshDepth(5.0f, orthographic()),
+                 projectedMeshDepth(0.5f, orthographic()),
+                 projectedMeshDepth(9.0f, orthographic())},
+                {HEIGHT, WIDTH}),
         };
 
         expectFramePixels(
@@ -183,24 +200,24 @@ namespace {
     }
 
     TEST_P(VideoExportCompositePathTest, SplitViewUsesEachPanelsDepth) {
-        constexpr int WIDTH = 4;
+        constexpr int WIDTH = 7;
         const std::vector<float> primary_colors{
-            1.0f, 1.0f, 0.0f, 0.0f,
-            0.0f, 0.0f, 0.0f, 0.0f,
-            0.0f, 0.0f, 1.0f, 1.0f};
+            1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
         auto left_depth = std::make_shared<Tensor>(
-            makeTensor({2.0f, 2.0f}, {1, HEIGHT, 2}));
+            makeTensor({2.0f}, {1, HEIGHT, 1}));
         auto right_depth = std::make_shared<Tensor>(
-            makeTensor({8.0f, 8.0f}, {1, HEIGHT, 2}));
+            makeTensor({8.0f, 2.0f, 8.0f}, {1, HEIGHT, 3}));
         FrameMetadata metadata{
             .depth_panels =
                 {FramePanelMetadata{
                      .depth = std::move(left_depth),
                      .start_position = 0.0f,
-                     .end_position = 0.5f},
+                     .end_position = 0.3f},
                  FramePanelMetadata{
                      .depth = std::move(right_depth),
-                     .start_position = 0.5f,
+                     .start_position = 0.3f,
                      .end_position = 1.0f}},
             .depth_panel_count = 2,
             .valid = true,
@@ -212,21 +229,23 @@ namespace {
 
         MeshLayer mesh{
             .rgba = makeTensor(
-                {0.0f, 0.0f, 0.0f, 0.0f,
-                 1.0f, 1.0f, 1.0f, 1.0f,
-                 0.0f, 0.0f, 0.0f, 0.0f,
-                 1.0f, 1.0f, 1.0f, 1.0f},
+                {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f},
                 {4, HEIGHT, WIDTH}),
-            .view_depth = makeTensor({5.0f, 5.0f, 5.0f, 5.0f}, {HEIGHT, WIDTH}),
+            .view_depth = makeTensor(
+                std::vector<float>(WIDTH, projectedMeshDepth(5.0f, orthographic())),
+                {HEIGHT, WIDTH}),
         };
 
         expectFramePixels(
             engine_->renderVideoCompositeFrame(
                 primary,
                 makeRequest(WIDTH, orthographic(), &mesh)),
-            {1.0f, 1.0f, 0.0f, 0.0f,
-             0.0f, 0.0f, 1.0f, 1.0f,
-             0.0f, 0.0f, 0.0f, 0.0f});
+            {1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+             0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f,
+             0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f});
     }
 
     INSTANTIATE_TEST_SUITE_P(

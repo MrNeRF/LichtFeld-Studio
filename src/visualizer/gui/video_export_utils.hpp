@@ -11,6 +11,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "io/video/video_export_options.hpp"
+#include "rendering/rendering.hpp"
 #include <expected>
 #include <glm/glm.hpp>
 #include <memory>
@@ -77,5 +78,9 @@ namespace lfs::vis::gui {
 
     LFS_VIS_API std::expected<lfs::io::video::VideoExportOptions, std::string> validateVideoExportOptions(
         lfs::io::video::VideoExportOptions options);
+
+    LFS_VIS_API lfs::rendering::FrameMetadata makeVideoExportFrameMetadata(
+        const lfs::rendering::FrameView& frame_view,
+        const std::shared_ptr<lfs::core::Tensor>& linear_depth = {});
 
 } // namespace lfs::vis::gui

@@ -237,6 +237,44 @@ TEST(VideoExportUtilsTest, CaptureSnapshotSupportsMeshOnlyScenes) {
     expect_visualizer_translation_from_data(snapshot.meshes[0].transform, {-1.5f, 0.0f, 4.0f});
 }
 
+TEST(VideoExportUtilsTest, FrameMetadataCarriesLinearDepthAndProjection) {
+    auto depth = std::make_shared<Tensor>(Tensor::from_vector(
+        {2.0f, 4.0f, 6.0f, 8.0f},
+        {size_t{2}, size_t{2}},
+        Device::CPU));
+    const lfs::rendering::FrameView frame_view{
+        .size = {2, 2},
+        .near_plane = 0.25f,
+        .far_plane = 80.0f,
+        .orthographic = true,
+    };
+
+    const auto metadata = lfs::vis::gui::makeVideoExportFrameMetadata(frame_view, depth);
+
+    EXPECT_TRUE(metadata.valid);
+    EXPECT_FLOAT_EQ(metadata.near_plane, 0.25f);
+    EXPECT_FLOAT_EQ(metadata.far_plane, 80.0f);
+    EXPECT_TRUE(metadata.orthographic);
+    ASSERT_EQ(metadata.depth_panel_count, 1u);
+    ASSERT_TRUE(metadata.primaryDepth());
+    EXPECT_EQ(metadata.primaryDepth()->shape(), lfs::core::TensorShape({1, 2, 2}));
+    EXPECT_EQ(metadata.primaryDepth()->to_vector(), std::vector<float>({2.0f, 4.0f, 6.0f, 8.0f}));
+}
+
+TEST(VideoExportUtilsTest, FrameMetadataOmitsUnavailableDepth) {
+    const lfs::rendering::FrameView frame_view{
+        .size = {2, 2},
+        .near_plane = 0.1f,
+        .far_plane = 100.0f,
+    };
+
+    const auto metadata = lfs::vis::gui::makeVideoExportFrameMetadata(frame_view);
+
+    EXPECT_TRUE(metadata.valid);
+    EXPECT_EQ(metadata.depth_panel_count, 0u);
+    EXPECT_FALSE(metadata.primaryDepth());
+}
+
 TEST(VideoExportUtilsTest, ValidateVideoExportOptionsRejectsInvalidValues) {
     EXPECT_FALSE(lfs::vis::gui::validateVideoExportOptions({.width = 0,
                                                             .height = 1080,
