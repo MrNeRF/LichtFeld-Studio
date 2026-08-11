@@ -73,6 +73,7 @@ namespace lfs::vis {
         bool mip_filter = false;
         int sh_degree = 3;
         float render_scale = 1.0f;
+        float scene_upscaler_scale = 1.0f;
         std::string scene_upscaler = "native";
         int scene_temporal_quality = 1;
         int camera_metrics_mode = 0;

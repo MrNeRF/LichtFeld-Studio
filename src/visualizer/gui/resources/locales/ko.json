@@ -778,7 +778,7 @@
     "appearance": "모양",
     "scene_rendering": "장면 렌더링",
     "scene_render_scale": "입력 해상도",
-    "scene_render_scale_description": "선택한 업스케일러에 제공할 렌더링 해상도입니다.",
+    "scene_render_scale_description": "선택한 업스케일러에 제공할 기본 렌더 스케일의 비율입니다.",
     "scene_upscaler": "장면 업스케일러",
     "scene_upscaler_native": "네이티브",
     "scene_upscaler_spatial": "공간",

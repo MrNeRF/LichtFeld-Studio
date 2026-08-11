@@ -785,7 +785,7 @@
     "appearance": "外观",
     "scene_rendering": "场景渲染",
     "scene_render_scale": "输入分辨率",
-    "scene_render_scale_description": "渲染并提供给所选升频器的分辨率。",
+    "scene_render_scale_description": "提供给所选升频器的基础渲染比例百分比。",
     "scene_upscaler": "场景升频器",
     "scene_upscaler_native": "原生",
     "scene_upscaler_spatial": "空间",

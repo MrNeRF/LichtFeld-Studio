@@ -2230,15 +2230,105 @@ namespace lfs::vis {
             }
             if (optional_active) {
                 const auto requirements = optional_upscaler.requirements();
-                frame.optional_ready =
+                const bool main_optional_source_ready =
                     !params.split_view.enabled && params.external_scene_image != VK_NULL_HANDLE &&
                     params.external_scene_image_view != VK_NULL_HANDLE;
+                frame.optional_ready = main_optional_source_ready;
                 frame.split_optional_ready =
                     params.split_view.enabled && params.split_view.left.external_image != VK_NULL_HANDLE &&
                     params.split_view.left.external_image_view != VK_NULL_HANDLE &&
                     params.split_view.right.external_image != VK_NULL_HANDLE &&
                     params.split_view.right.external_image_view != VK_NULL_HANDLE;
-                if (requirements.motion_vectors) {
+                if (main_optional_source_ready) {
+                    auto& state = temporalState(TemporalViewId::Main);
+                    const glm::ivec2 output_extent =
+                        params.scene_output_extent.x > 0 && params.scene_output_extent.y > 0
+                            ? params.scene_output_extent
+                            : glm::ivec2{
+                                  std::max(1, static_cast<int>(std::lround(
+                                                  params.viewport_size.x * params.framebuffer_scale.x))),
+                                  std::max(1, static_cast<int>(std::lround(
+                                                  params.viewport_size.y * params.framebuffer_scale.y)))};
+                    const auto output = optional_upscaler.output(TemporalViewId::Main);
+                    const bool reuse_output = optionalUpscalerOutputReusable(
+                        state.previous_valid,
+                        temporalHistoryResetReasons(state.previous_valid,
+                                                    state.scene_identity,
+                                                    params.scene_identity,
+                                                    state.reset_generation,
+                                                    params.scene_temporal_reset_generation,
+                                                    state.quality,
+                                                    params.scene_temporal_quality),
+                        state.source_image,
+                        state.source_generation,
+                        params.external_scene_image,
+                        params.external_scene_image_generation,
+                        output.valid(output_extent));
+                    if (reuse_output) {
+                        bindSceneImageView(frame, output.color.view, output.color.layout);
+                        frame.bound_scene_valid_extent = output.color.valid_extent;
+                        frame.bound_scene_allocation_extent = output.color.allocation_extent;
+                        frame.optional_ready = false;
+                    }
+                }
+                if (frame.split_optional_ready) {
+                    const glm::ivec2 total_output =
+                        params.scene_output_extent.x > 0 && params.scene_output_extent.y > 0
+                            ? params.scene_output_extent
+                            : glm::ivec2{
+                                  std::max(1, static_cast<int>(std::lround(
+                                                  params.viewport_size.x * params.framebuffer_scale.x))),
+                                  std::max(1, static_cast<int>(std::lround(
+                                                  params.viewport_size.y * params.framebuffer_scale.y)))};
+                    constexpr std::array<TemporalViewId, 2> views{
+                        TemporalViewId::SplitLeft, TemporalViewId::SplitRight};
+                    const std::array<const VulkanSplitViewPanel*, 2> source_panels{
+                        &params.split_view.left, &params.split_view.right};
+                    std::array<VulkanSplitViewPanel*, 2> output_panels{
+                        &frame.effective_split_view.left, &frame.effective_split_view.right};
+                    bool reuse_split_output = true;
+                    for (std::size_t index = 0; index < views.size(); ++index) {
+                        const auto& source = *source_panels[index];
+                        const auto output_extent = splitTemporalOutputExtent(
+                            total_output, source.start_position, source.end_position);
+                        const auto output = optional_upscaler.output(views[index]);
+                        const auto& state = temporalState(views[index]);
+                        if (!optionalUpscalerOutputReusable(
+                                state.previous_valid,
+                                temporalHistoryResetReasons(state.previous_valid,
+                                                            state.scene_identity,
+                                                            params.scene_identity,
+                                                            state.reset_generation,
+                                                            params.scene_temporal_reset_generation,
+                                                            state.quality,
+                                                            params.scene_temporal_quality),
+                                state.source_image,
+                                state.source_generation,
+                                source.external_image,
+                                source.external_image_generation,
+                                output.valid(output_extent))) {
+                            reuse_split_output = false;
+                            break;
+                        }
+                        auto& destination = *output_panels[index];
+                        destination.external_image = output.color.image;
+                        destination.external_image_view = output.color.view;
+                        destination.external_image_layout = output.color.layout;
+                        destination.external_image_generation = output.color.generation;
+                        destination.image_size = output.color.valid_extent;
+                        destination.allocation_size = output.color.allocation_extent;
+                        destination.uv_scale = {1.0f, 1.0f};
+                        destination.uv_clamp_max = {1.0f, 1.0f};
+                    }
+                    if (reuse_split_output) {
+                        frame.split_optional_ready = false;
+                        split_view_pass.prepare(frame.effective_split_view, params.frame_slot);
+                    } else {
+                        frame.effective_split_view = params.split_view;
+                    }
+                }
+                if (requirements.motion_vectors &&
+                    (frame.optional_ready || frame.split_optional_ready)) {
                     frame.optional_motion = {
                         .enabled = true,
                         .depth_view = depth_blit_pass.depthView(params.frame_slot),
@@ -2607,6 +2697,8 @@ namespace lfs::vis {
                     state.scene_identity = params.scene_identity;
                     state.reset_generation = params.scene_temporal_reset_generation;
                     state.quality = params.scene_temporal_quality;
+                    state.source_image = color.image;
+                    state.source_generation = color.generation;
                     return true;
                 };
 

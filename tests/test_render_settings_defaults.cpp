@@ -18,21 +18,26 @@ TEST(RenderSettingsDefaults, CameraFrustumsAreDisabledByDefault) {
     EXPECT_FLOAT_EQ(render_settings.camera_frustum_scale, 0.25f);
     EXPECT_FLOAT_EQ(proxy_settings.camera_frustum_scale, 0.25f);
     EXPECT_EQ(render_settings.scene_upscaler, "native");
+    EXPECT_FLOAT_EQ(render_settings.scene_upscaler_scale, 1.0f);
     EXPECT_EQ(render_settings.scene_temporal_quality, 1);
     EXPECT_EQ(proxy_settings.scene_upscaler, "native");
+    EXPECT_FLOAT_EQ(proxy_settings.scene_upscaler_scale, 1.0f);
     EXPECT_EQ(proxy_settings.scene_temporal_quality, 1);
 }
 
 TEST(RenderSettingsProxy, SceneUpscalerRoundTrips) {
     lfs::vis::RenderSettings settings;
     settings.scene_upscaler = "spatial";
+    settings.scene_upscaler_scale = 0.5f;
 
     auto proxy = lfs::vis::to_proxy(settings);
     EXPECT_EQ(proxy.scene_upscaler, "spatial");
+    EXPECT_FLOAT_EQ(proxy.scene_upscaler_scale, 0.5f);
 
     lfs::vis::RenderSettings roundtrip;
     lfs::vis::apply_proxy(roundtrip, proxy);
     EXPECT_EQ(roundtrip.scene_upscaler, "spatial");
+    EXPECT_FLOAT_EQ(roundtrip.scene_upscaler_scale, 0.5f);
 
     settings.scene_upscaler = "temporal";
     proxy = lfs::vis::to_proxy(settings);

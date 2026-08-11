@@ -84,6 +84,21 @@ namespace lfs::vis {
                previous_generation == current_generation;
     }
 
+    [[nodiscard]] constexpr bool optionalUpscalerOutputReusable(
+        const bool previous_valid,
+        const TemporalResetReason reset_reasons,
+        const VkImage previous_image,
+        const std::uint64_t previous_generation,
+        const VkImage current_image,
+        const std::uint64_t current_generation,
+        const bool output_valid) {
+        return previous_valid && reset_reasons == TemporalResetReason::None && output_valid &&
+               temporalSourceUnchanged(previous_image,
+                                       previous_generation,
+                                       current_image,
+                                       current_generation);
+    }
+
     [[nodiscard]] constexpr TemporalResetReason temporalHistoryResetReasons(
         const bool history_valid,
         const std::uint64_t previous_scene_identity,

@@ -100,6 +100,20 @@ namespace lfs::vis {
             std::max(static_cast<int>(std::lround(static_cast<float>(viewport_size.y) * clamped_scale)), 1)};
     }
 
+    [[nodiscard]] inline float effectiveSceneRenderScale(
+        const float base_scale,
+        const float upscaler_scale,
+        const bool upscaler_enabled) {
+        const float sanitized_base = clampSceneRenderScale(base_scale);
+        if (!upscaler_enabled) {
+            return sanitized_base;
+        }
+        const float sanitized_upscaler = std::isfinite(upscaler_scale)
+                                             ? std::clamp(upscaler_scale, 0.25f, 1.0f)
+                                             : 1.0f;
+        return clampSceneRenderScale(sanitized_base * sanitized_upscaler);
+    }
+
     struct SplitViewPanelLayout {
         SplitViewPanelId panel = SplitViewPanelId::Left;
         int x = 0;
@@ -202,7 +216,8 @@ namespace lfs::vis {
         bool antialiasing = false;
         bool mip_filter = false;
         int sh_degree = 3;
-        float render_scale = 1.0f;             // Scene resolution scale (0.25-1.0), does not affect UI or training
+        float render_scale = 1.0f;             // Base scene resolution scale (0.25-1.0), independent of upscaling.
+        float scene_upscaler_scale = 1.0f;     // Backend input multiplier (0.25-1.0); ignored by Native.
         std::string scene_upscaler = "native"; // Stable backend ID; Native is the default.
         int scene_temporal_quality = 1;        // SceneTemporalQuality value; Balanced is the default.
         CameraMetricsMode camera_metrics_mode = CameraMetricsMode::Off;

@@ -787,6 +787,13 @@ namespace lfs::python {
                      2);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
+        add_float(&Proxy::scene_upscaler_scale,
+                  "scene_upscaler_scale",
+                  "Upscaler Input Scale",
+                  "Input-resolution multiplier applied independently of the base render scale",
+                  1.0,
+                  0.25,
+                  1.0);
         add_string(&Proxy::scene_upscaler,
                    "scene_upscaler",
                    "Scene Upscaler",
@@ -944,9 +951,7 @@ namespace lfs::python {
                                               const float input_scale,
                                               const int quality) {
         settings_.scene_upscaler = backend_id;
-        settings_.render_scale = backend_id == "native"
-                                     ? 1.0f
-                                     : std::clamp(input_scale, 0.25f, 1.0f);
+        settings_.scene_upscaler_scale = std::clamp(input_scale, 0.25f, 1.0f);
         settings_.scene_temporal_quality = std::clamp(quality, 0, 2);
         vis::update_render_settings(settings_);
         request_redraw();

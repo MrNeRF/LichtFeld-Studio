@@ -778,7 +778,7 @@
     "appearance": "Erscheinungsbild",
     "scene_rendering": "Szenen-Rendering",
     "scene_render_scale": "Eingabeauflösung",
-    "scene_render_scale_description": "Auflösung, die gerendert und dem ausgewählten Upscaler übergeben wird.",
+    "scene_render_scale_description": "Prozentsatz der grundlegenden Render-Skalierung für den ausgewählten Upscaler.",
     "scene_upscaler": "Szenen-Upscaler",
     "scene_upscaler_native": "Nativ",
     "scene_upscaler_spatial": "Räumlich",

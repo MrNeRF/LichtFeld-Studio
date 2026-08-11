@@ -241,6 +241,20 @@ namespace lfs::vis {
         EXPECT_FALSE(temporalSourceUnchanged(VK_NULL_HANDLE, 7, VK_NULL_HANDLE, 7));
     }
 
+    TEST(SceneTemporalCoordinator, OptionalOutputReuseRequiresStableValidInputAndOutput) {
+        const auto image = reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(0x101));
+        EXPECT_TRUE(optionalUpscalerOutputReusable(
+            true, TemporalResetReason::None, image, 7, image, 7, true));
+        EXPECT_FALSE(optionalUpscalerOutputReusable(
+            false, TemporalResetReason::None, image, 7, image, 7, true));
+        EXPECT_FALSE(optionalUpscalerOutputReusable(
+            true, TemporalResetReason::Requested, image, 7, image, 7, true));
+        EXPECT_FALSE(optionalUpscalerOutputReusable(
+            true, TemporalResetReason::None, image, 7, image, 8, true));
+        EXPECT_FALSE(optionalUpscalerOutputReusable(
+            true, TemporalResetReason::None, image, 7, image, 7, false));
+    }
+
     TEST(SceneTemporalCoordinator, ExplicitCameraGenerationInvalidatesStableSceneHistory) {
         EXPECT_FALSE(temporalHistoryRequiresReset(false, 10, 10, 3, 4));
         EXPECT_FALSE(temporalHistoryRequiresReset(true, 10, 10, 3, 3));

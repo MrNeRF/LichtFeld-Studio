@@ -56,6 +56,16 @@ namespace lfs::vis {
         EXPECT_EQ(computeSceneRenderSize({-1, 1080}, 1.0f), glm::ivec2(0, 0));
     }
 
+    TEST(SceneRenderResolution, AppliesUpscalerInputAsAnIndependentMultiplier) {
+        EXPECT_FLOAT_EQ(effectiveSceneRenderScale(1.0f, 0.5f, true), 0.5f);
+        EXPECT_FLOAT_EQ(effectiveSceneRenderScale(0.75f, 0.5f, true), 0.375f);
+        EXPECT_FLOAT_EQ(effectiveSceneRenderScale(0.75f, 0.5f, false), 0.75f);
+        EXPECT_FLOAT_EQ(effectiveSceneRenderScale(0.5f, 1.0f, true), 0.5f);
+        EXPECT_FLOAT_EQ(
+            effectiveSceneRenderScale(0.5f, std::numeric_limits<float>::quiet_NaN(), true),
+            0.5f);
+    }
+
     namespace {
         std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x) {
             using lfs::core::DataType;

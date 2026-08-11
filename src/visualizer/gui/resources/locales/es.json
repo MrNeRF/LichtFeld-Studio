@@ -238,7 +238,7 @@
     "appearance": "Apariencia",
     "scene_rendering": "Renderizado de escena",
     "scene_render_scale": "Resolución de entrada",
-    "scene_render_scale_description": "Resolución renderizada y enviada al reescalador seleccionado.",
+    "scene_render_scale_description": "Porcentaje de la escala de render base enviado al reescalador seleccionado.",
     "scene_upscaler": "Reescalador de escena",
     "scene_upscaler_native": "Nativo",
     "scene_upscaler_spatial": "Espacial",

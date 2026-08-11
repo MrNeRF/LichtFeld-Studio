@@ -778,7 +778,7 @@
     "appearance": "Wygląd",
     "scene_rendering": "Renderowanie sceny",
     "scene_render_scale": "Rozdzielczość wejściowa",
-    "scene_render_scale_description": "Rozdzielczość renderowana i przekazywana wybranemu upscalerowi.",
+    "scene_render_scale_description": "Procent bazowej skali renderowania przekazywany wybranemu upscalerowi.",
     "scene_upscaler": "Skalowanie sceny",
     "scene_upscaler_native": "Natywne",
     "scene_upscaler_spatial": "Przestrzenne",

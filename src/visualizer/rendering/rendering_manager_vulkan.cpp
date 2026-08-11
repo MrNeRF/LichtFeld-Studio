@@ -1545,11 +1545,15 @@ namespace lfs::vis {
                 vksplat_viewport_renderer_->setLiveSubmitCallback({});
             }
             releaseResizeTrainingPause();
+            const float requested_scale = effectiveSceneRenderScale(
+                frame_settings.render_scale,
+                frame_settings.scene_upscaler_scale,
+                frame_settings.scene_upscaler != "native");
             publishViewportResolutionDiagnostics(
                 current_size,
                 {0, 0},
-                frame_settings.render_scale,
-                clampSceneRenderScale(frame_settings.render_scale),
+                requested_scale,
+                requested_scale,
                 false,
                 false,
                 lfs::core::MemoryPressureCoordinator::instance().pressure_active());
@@ -1667,7 +1671,11 @@ namespace lfs::vis {
         const bool resize_deferring = frame_lifecycle_service_.isResizeDeferring();
         const bool memory_pressure_active =
             lfs::core::MemoryPressureCoordinator::instance().pressure_active();
-        float scale = clampSceneRenderScale(frame_settings.render_scale);
+        const float requested_scale = effectiveSceneRenderScale(
+            frame_settings.render_scale,
+            frame_settings.scene_upscaler_scale,
+            frame_settings.scene_upscaler != "native");
+        float scale = requested_scale;
         if (resize_result.render_interactive_frame) {
             scale = std::min(scale, kInteractiveResizeRenderScale);
         }
@@ -1681,11 +1689,18 @@ namespace lfs::vis {
         publishViewportResolutionDiagnostics(
             current_size,
             render_size,
-            frame_settings.render_scale,
+            requested_scale,
             scale,
             resize_deferring,
             resize_result.render_interactive_frame,
             memory_pressure_active);
+        auto& resolution_profiler = lfs::diagnostics::VramProfiler::instance();
+        resolution_profiler.setGauge("viewer.resolution.scene.base_scale",
+                                     frame_settings.render_scale);
+        resolution_profiler.setGauge("viewer.resolution.scene.upscaler_scale",
+                                     frame_settings.scene_upscaler == "native"
+                                         ? 1.0
+                                         : frame_settings.scene_upscaler_scale);
         const DirtyMask pending_dirty = dirty_mask_.load(std::memory_order_relaxed);
         const bool only_split_position_pending =
             (pending_dirty & ~DirtyFlag::SPLIT_POSITION) == 0;

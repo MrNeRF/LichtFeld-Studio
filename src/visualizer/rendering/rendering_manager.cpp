@@ -456,6 +456,8 @@ namespace lfs::vis {
                                           const DirtyMask dirty_flags) {
         RenderSettings sanitized_settings = new_settings;
         sanitized_settings.render_scale = clampSceneRenderScale(sanitized_settings.render_scale);
+        sanitized_settings.scene_upscaler_scale =
+            std::clamp(sanitized_settings.scene_upscaler_scale, 0.25f, 1.0f);
         bool clear_metrics = false;
         bool lod_request_changed = false;
         bool lod_enabled_turned_on = false;

@@ -233,7 +233,8 @@ namespace lfs::vis {
         initial_settings.antialiasing = options.antialiasing;
         initial_settings.scene_upscaler =
             options.safe_mode ? "native" : loadSceneUpscalerPreference();
-        initial_settings.render_scale =
+        initial_settings.render_scale = loadSceneRenderScalePreference();
+        initial_settings.scene_upscaler_scale =
             loadSceneUpscalerScalePreference(initial_settings.scene_upscaler);
         const auto temporal_quality_preference =
             loadSceneUpscalerQualityPreference(initial_settings.scene_upscaler);
@@ -884,6 +885,7 @@ namespace lfs::vis {
                     return;
                 auto s = rendering_manager_->getSettings();
                 const float previous_render_scale = s.render_scale;
+                const float previous_upscaler_scale = s.scene_upscaler_scale;
                 const std::string previous_scene_upscaler = s.scene_upscaler;
                 const int previous_temporal_quality = s.scene_temporal_quality;
                 vis::apply_proxy(s, proxy);
@@ -893,15 +895,19 @@ namespace lfs::vis {
                 }
                 s.scene_temporal_quality = std::clamp(s.scene_temporal_quality, 0, 2);
                 rendering_manager_->updateSettings(s);
-                const float applied_render_scale = rendering_manager_->getSettings().render_scale;
+                const auto applied_settings = rendering_manager_->getSettings();
+                const float applied_render_scale = applied_settings.render_scale;
                 if (std::abs(applied_render_scale - previous_render_scale) > 0.0001f)
-                    saveSceneUpscalerScalePreference(s.scene_upscaler, applied_render_scale);
+                    saveSceneRenderScalePreference(applied_render_scale);
+                if (std::abs(applied_settings.scene_upscaler_scale - previous_upscaler_scale) > 0.0001f)
+                    saveSceneUpscalerScalePreference(applied_settings.scene_upscaler,
+                                                     applied_settings.scene_upscaler_scale);
                 const std::string applied_scene_upscaler =
-                    rendering_manager_->getSettings().scene_upscaler;
+                    applied_settings.scene_upscaler;
                 if (applied_scene_upscaler != previous_scene_upscaler)
                     saveSceneUpscalerPreference(applied_scene_upscaler);
                 const int applied_temporal_quality =
-                    rendering_manager_->getSettings().scene_temporal_quality;
+                    applied_settings.scene_temporal_quality;
                 if (applied_temporal_quality != previous_temporal_quality)
                     saveSceneUpscalerQualityPreference(
                         applied_scene_upscaler,

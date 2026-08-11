@@ -778,7 +778,7 @@
     "appearance": "Uiterlijk",
     "scene_rendering": "Scènerendering",
     "scene_render_scale": "Invoerresolutie",
-    "scene_render_scale_description": "Resolutie die wordt gerenderd en aan de geselecteerde upscaler wordt geleverd.",
+    "scene_render_scale_description": "Percentage van de basis-renderschaal voor de geselecteerde upscaler.",
     "scene_upscaler": "Scène-upscaler",
     "scene_upscaler_native": "Native",
     "scene_upscaler_spatial": "Ruimtelijk",

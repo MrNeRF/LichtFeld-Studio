@@ -1215,14 +1215,6 @@ namespace lfs::vis {
                 }
             }
 
-            // Migrate the former single scene scale lazily into the selected
-            // backend without changing the legacy key during this read.
-            const auto legacy = preferences.find("scene_render_scale");
-            if (legacy != preferences.end() && legacy->is_number()) {
-                const float scale = legacy->get<float>();
-                if (std::isfinite(scale) && scale >= 0.25f && scale <= 1.0f)
-                    return scale;
-            }
         } catch (const std::exception& e) {
             LOG_WARN("Failed to load scene upscaler scale preference: {}", e.what());
         }

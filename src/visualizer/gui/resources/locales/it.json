@@ -778,7 +778,7 @@
     "appearance": "Aspetto",
     "scene_rendering": "Rendering della scena",
     "scene_render_scale": "Risoluzione di input",
-    "scene_render_scale_description": "Risoluzione renderizzata e fornita all'upscaler selezionato.",
+    "scene_render_scale_description": "Percentuale della Scala di rendering di base fornita all'upscaler selezionato.",
     "scene_upscaler": "Upscaler della scena",
     "scene_upscaler_native": "Nativo",
     "scene_upscaler_spatial": "Spaziale",

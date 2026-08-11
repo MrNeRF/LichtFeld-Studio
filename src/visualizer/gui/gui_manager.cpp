@@ -4037,15 +4037,18 @@ namespace lfs::vis::gui {
                     std::clamp(settings.scene_temporal_quality, 0, 2));
                 const float recommended_scale = recommended_scales[quality_index];
                 if (recommended_scale >= 0.25f && recommended_scale <= 1.0f &&
-                    std::abs(settings.render_scale - recommended_scale) > 0.001f) {
-                    settings.render_scale = recommended_scale;
+                    std::abs(settings.scene_upscaler_scale - recommended_scale) > 0.001f) {
+                    settings.scene_upscaler_scale = recommended_scale;
                     rendering_manager->updateSettings(settings);
                     saveSceneUpscalerScalePreference(settings.scene_upscaler,
                                                      recommended_scale);
                 }
             }
 #endif
-            scene_render_scale = std::clamp(settings.render_scale, 0.01f, 1.0f);
+            scene_render_scale = effectiveSceneRenderScale(
+                settings.render_scale,
+                settings.scene_upscaler_scale,
+                settings.scene_upscaler != "native");
             params.scene_upscaler_id = settings.scene_upscaler;
             params.scene_upscaler =
                 sceneUpscalerBackendFromId(settings.scene_upscaler)

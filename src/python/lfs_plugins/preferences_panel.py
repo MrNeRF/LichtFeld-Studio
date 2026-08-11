@@ -291,7 +291,7 @@ class PreferencesPanel(Panel):
             return max(0.25, min(1.0, float(lf.ui.get_scene_upscaler_scale(backend))))
         except AttributeError:
             settings = lf.get_render_settings()
-            return 1.0 if settings is None else max(0.25, min(1.0, float(settings.render_scale)))
+            return 1.0 if settings is None else max(0.25, min(1.0, float(settings.scene_upscaler_scale)))
 
     def _scene_render_scale_options(self):
         current = self._scene_render_scale()
@@ -335,7 +335,7 @@ class PreferencesPanel(Panel):
                 if backend == "native":
                     return
                 scale = self._scene_render_scale_catalog[index]
-                settings.render_scale = scale
+                settings.scene_upscaler_scale = scale
                 try:
                     lf.ui.set_scene_upscaler_scale(backend, scale)
                 except AttributeError:
@@ -413,7 +413,7 @@ class PreferencesPanel(Panel):
                     if scale <= 0.0:
                         scale = float(lf.ui.get_scene_upscaler_scale(backend))
                 except AttributeError:
-                    scale = 1.0 if backend == "native" else float(settings.render_scale)
+                    scale = 1.0 if backend == "native" else float(settings.scene_upscaler_scale)
                 try:
                     quality_id = str(lf.ui.get_scene_upscaler_quality(backend))
                 except AttributeError:
@@ -423,7 +423,7 @@ class PreferencesPanel(Panel):
                     settings.set_scene_upscaler(backend, scale, quality)
                 except AttributeError:
                     settings.scene_upscaler = backend
-                    settings.render_scale = scale
+                    settings.scene_upscaler_scale = scale
                     settings.scene_temporal_quality = quality_id
                 self._sync_scene_render_scale_records()
             self._refresh_selection()
@@ -759,6 +759,7 @@ class PreferencesPanel(Panel):
             settings = lf.get_render_settings()
             if settings is not None:
                 settings.render_scale = 1.0
+                settings.scene_upscaler_scale = 1.0
                 settings.scene_upscaler = "native"
                 try:
                     for backend, _label_key in self._scene_upscaler_catalog:

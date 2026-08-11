@@ -23,6 +23,7 @@ namespace lfs::vis {
         p.mip_filter = s.mip_filter;
         p.sh_degree = s.sh_degree;
         p.render_scale = s.render_scale;
+        p.scene_upscaler_scale = s.scene_upscaler_scale;
         p.scene_upscaler = s.scene_upscaler;
         p.scene_temporal_quality = s.scene_temporal_quality;
         p.camera_metrics_mode = static_cast<int>(s.camera_metrics_mode);
@@ -108,6 +109,7 @@ namespace lfs::vis {
         s.mip_filter = p.mip_filter;
         s.sh_degree = p.sh_degree;
         s.render_scale = p.render_scale;
+        s.scene_upscaler_scale = p.scene_upscaler_scale;
         s.scene_upscaler = p.scene_upscaler;
         s.scene_temporal_quality = p.scene_temporal_quality;
         s.camera_metrics_mode = static_cast<RenderSettings::CameraMetricsMode>(p.camera_metrics_mode);
