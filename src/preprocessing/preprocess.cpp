@@ -10,13 +10,13 @@
 #include "core/tensor.hpp"
 #include "depth_anchor_cache.hpp"
 #include "io/loader.hpp"
+#include "lfs_onnx_vulkan/onnx_vulkan.hpp"
 
 #include "indicators.hpp"
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
 #include <OpenImageIO/imageio.h>
 #include <curl/curl.h>
-#include <onnxruntime_cxx_api.h>
 #include <openssl/evp.h>
 
 #ifdef _WIN32
@@ -50,7 +50,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -115,7 +114,7 @@ namespace {
         std::vector<float> xyz_hwc;
     };
 
-    struct OrtOutputs {
+    struct MogeOutputs {
         SpatialMap mask;
         VectorMap points;
         VectorMap normals;
@@ -493,12 +492,6 @@ namespace {
         return out;
     }
 
-    int resolve_thread_count(int requested_threads) {
-        if (requested_threads > 0)
-            return requested_threads;
-        return static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
-    }
-
     int round_to_patch_multiple(int value) {
         constexpr int patch = 14;
         return std::max(patch, (value + patch / 2) / patch * patch);
@@ -631,42 +624,12 @@ namespace {
         output->close();
     }
 
-    std::vector<std::string> get_input_names(Ort::Session& session) {
-        Ort::AllocatorWithDefaultOptions allocator;
-        std::vector<std::string> names;
-        const auto count = session.GetInputCount();
-        names.reserve(count);
-        for (std::size_t i = 0; i < count; ++i) {
-            auto name = session.GetInputNameAllocated(i, allocator);
-            names.emplace_back(name.get());
-        }
-        return names;
-    }
-
-    std::vector<std::string> get_output_names(Ort::Session& session) {
-        Ort::AllocatorWithDefaultOptions allocator;
-        std::vector<std::string> names;
-        const auto count = session.GetOutputCount();
-        names.reserve(count);
-        for (std::size_t i = 0; i < count; ++i) {
-            auto name = session.GetOutputNameAllocated(i, allocator);
-            names.emplace_back(name.get());
-        }
-        return names;
-    }
-
-    std::vector<int64_t> tensor_shape(const Ort::Value& value) {
-        return value.GetTensorTypeAndShapeInfo().GetShape();
-    }
-
-    std::size_t tensor_element_count(const Ort::Value& value) {
-        return value.GetTensorTypeAndShapeInfo().GetElementCount();
-    }
-
-    SpatialMap extract_mask(const Ort::Value& value, int fallback_width, int fallback_height) {
-        const auto shape = tensor_shape(value);
-        const auto count = tensor_element_count(value);
-        const float* data = value.GetTensorData<float>();
+    SpatialMap extract_mask(const lfs::onnx_vulkan::Tensor& value,
+                            int fallback_width,
+                            int fallback_height) {
+        const auto shape = value.shape();
+        const auto data = value.data_as<float>();
+        const auto count = data.size();
 
         int width = fallback_width;
         int height = fallback_height;
@@ -694,17 +657,17 @@ namespace {
         SpatialMap mask;
         mask.width = width;
         mask.height = height;
-        mask.values.assign(data, data + expected);
+        mask.values.assign(data.begin(), data.begin() + static_cast<std::ptrdiff_t>(expected));
         return mask;
     }
 
-    VectorMap extract_vector3(const Ort::Value& value,
+    VectorMap extract_vector3(const lfs::onnx_vulkan::Tensor& value,
                               int fallback_width,
                               int fallback_height,
                               std::string_view label) {
-        const auto shape = tensor_shape(value);
-        const auto count = tensor_element_count(value);
-        const float* data = value.GetTensorData<float>();
+        const auto shape = value.shape();
+        const auto data = value.data_as<float>();
+        const auto count = data.size();
 
         int width = fallback_width;
         int height = fallback_height;
@@ -732,7 +695,7 @@ namespace {
         out.xyz_hwc.resize(pixels * 3);
 
         if (!chw) {
-            std::copy(data, data + pixels * 3, out.xyz_hwc.begin());
+            std::copy(data.begin(), data.begin() + static_cast<std::ptrdiff_t>(pixels * 3), out.xyz_hwc.begin());
         } else {
             for (std::size_t i = 0; i < pixels; ++i) {
                 out.xyz_hwc[i * 3 + 0] = data[i];
@@ -743,115 +706,65 @@ namespace {
         return out;
     }
 
-    Ort::SessionOptions make_session_options(int thread_count, bool use_cuda) {
-        Ort::SessionOptions session_options;
-        session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        session_options.SetIntraOpNumThreads(thread_count);
-        if (use_cuda) {
-            OrtCUDAProviderOptions cuda_options{};
-            cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchHeuristic;
-            cuda_options.do_copy_in_default_stream = 1;
-            session_options.AppendExecutionProvider_CUDA(cuda_options);
-        }
-        return session_options;
-    }
-
-    class MogeOnnxSession {
+    class MogeVulkanSession {
     public:
-        MogeOnnxSession(const fs::path& model_path, int thread_count, bool force_cpu)
-            : env_(ORT_LOGGING_LEVEL_WARNING, "LichtFeld-Studio-preprocess") {
-#ifdef _WIN32
-            const auto model_string = model_path.wstring();
-#else
-            const auto model_string = path_to_string(model_path);
-#endif
-            bool use_cuda = !force_cpu;
-            while (!session_) {
-                try {
-                    const auto session_options = make_session_options(thread_count, use_cuda);
-                    session_ = std::make_unique<Ort::Session>(env_, model_string.c_str(), session_options);
-                } catch (const Ort::Exception& e) {
-                    if (!use_cuda)
-                        throw;
-                    std::cerr << "CUDA execution provider unavailable, falling back to CPU: " << e.what() << "\n";
-                    use_cuda = false;
-                }
-            }
-            provider_ = use_cuda ? "CUDA" : "CPU";
-            input_names_ = get_input_names(*session_);
-            output_names_ = get_output_names(*session_);
-
-            bool has_image = false;
-            for (const auto& name : input_names_)
-                has_image = has_image || name == "image";
-            if (!has_image)
+        MogeVulkanSession(const fs::path& model_path, std::optional<std::uint32_t> device) {
+            lfs::onnx_vulkan::SessionOptions options;
+            options.vulkan_device = device;
+            auto session = lfs::onnx_vulkan::VulkanSession::create(model_path, std::move(options));
+            if (!session)
+                throw std::runtime_error(session.error().message);
+            session_ = std::make_unique<lfs::onnx_vulkan::VulkanSession>(std::move(*session));
+            if (std::ranges::find(session_->inputs(), "image", &lfs::onnx_vulkan::ValueInfo::name) ==
+                session_->inputs().end())
                 throw std::runtime_error("ONNX model has no 'image' input");
         }
 
-        OrtOutputs run(const Image& image, int64_t num_tokens) {
+        MogeOutputs run(const Image& image, int64_t num_tokens) {
             std::vector<float> chw = hwc_to_nchw(image);
             std::array<int64_t, 4> image_shape = {1, 3, image.height, image.width};
-            std::vector<int64_t> scalar_shape;
-            Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-
-            std::vector<Ort::Value> input_values;
-            input_values.reserve(input_names_.size());
-            for (const auto& name : input_names_) {
-                if (name == "image") {
-                    input_values.emplace_back(Ort::Value::CreateTensor<float>(
-                        memory_info, chw.data(), chw.size(), image_shape.data(), image_shape.size()));
-                } else if (name == "num_tokens") {
-                    input_values.emplace_back(Ort::Value::CreateTensor<int64_t>(
-                        memory_info, &num_tokens, 1, nullptr, scalar_shape.size()));
+            std::vector<lfs::onnx_vulkan::NamedTensorView> inputs;
+            inputs.reserve(session_->inputs().size());
+            for (const auto& input : session_->inputs()) {
+                if (input.name == "image") {
+                    inputs.push_back({"image", {lfs::onnx_vulkan::ElementType::Float32, image_shape,
+                                                std::as_bytes(std::span(chw))}});
+                } else if (input.name == "num_tokens") {
+                    inputs.push_back({"num_tokens", {lfs::onnx_vulkan::ElementType::Int64, {},
+                                                     std::as_bytes(std::span(&num_tokens, 1))}});
                 } else {
-                    throw std::runtime_error("Unsupported ONNX input: " + name);
+                    throw std::runtime_error("Unsupported ONNX input: " + input.name);
                 }
             }
-
-            std::vector<const char*> input_name_ptrs;
-            input_name_ptrs.reserve(input_names_.size());
-            for (const auto& name : input_names_)
-                input_name_ptrs.push_back(name.c_str());
-
-            std::vector<const char*> output_name_ptrs;
-            output_name_ptrs.reserve(output_names_.size());
-            for (const auto& name : output_names_)
-                output_name_ptrs.push_back(name.c_str());
-
-            Ort::RunOptions run_options;
-            auto outputs = session_->Run(run_options,
-                                         input_name_ptrs.data(),
-                                         input_values.data(),
-                                         input_values.size(),
-                                         output_name_ptrs.data(),
-                                         output_name_ptrs.size());
+            constexpr std::array<std::string_view, 4> requested{
+                "points", "normal", "mask", "metric_scale"};
+            auto result = session_->run(inputs, requested);
+            if (!result)
+                throw std::runtime_error(result.error().message);
+            auto outputs = std::move(*result);
 
             std::unordered_map<std::string, std::size_t> output_index;
-            for (std::size_t i = 0; i < output_names_.size(); ++i)
-                output_index.emplace(output_names_[i], i);
+            for (std::size_t i = 0; i < outputs.size(); ++i)
+                output_index.emplace(outputs[i].name, i);
 
-            auto get_output = [&](std::string_view name) -> const Ort::Value& {
+            auto get_output = [&](std::string_view name) -> const lfs::onnx_vulkan::Tensor& {
                 const auto it = output_index.find(std::string(name));
                 if (it == output_index.end())
                     throw std::runtime_error("ONNX model did not produce '" + std::string(name) + "'");
-                return outputs[it->second];
+                return outputs[it->second].tensor;
             };
 
-            return OrtOutputs{
+            return MogeOutputs{
                 .mask = extract_mask(get_output("mask"), image.width, image.height),
                 .points = extract_vector3(get_output("points"), image.width, image.height, "points"),
                 .normals = extract_vector3(get_output("normal"), image.width, image.height, "normal"),
             };
         }
 
-        std::string_view provider() const { return provider_; }
+        std::string_view device_name() const { return session_->device_name(); }
 
     private:
-        Ort::Env env_;
-        std::unique_ptr<Ort::Session> session_;
-        std::vector<std::string> input_names_;
-        std::vector<std::string> output_names_;
-        std::string_view provider_;
+        std::unique_ptr<lfs::onnx_vulkan::VulkanSession> session_;
     };
 
     template <typename PixelT>
@@ -1129,7 +1042,6 @@ namespace {
         if (model_path)
             std::cout << "Model: " << path_to_string(*model_path) << "\n";
         std::cout << "Images: " << plan.images.size() << " under " << path_to_string(plan.images_dir) << "\n";
-        std::cout << "Threads: " << resolve_thread_count(params.threads) << "\n";
         std::cout << "PNG compression: " << params.png_compression << "\n";
     }
 
@@ -1138,8 +1050,8 @@ namespace {
                          const PreprocessPlan& plan) {
         print_plan_summary(params, plan, &model_path);
 
-        MogeOnnxSession session(model_path, resolve_thread_count(params.threads), params.force_cpu);
-        std::cout << "Execution provider: " << session.provider() << "\n";
+        MogeVulkanSession session(model_path, params.vulkan_device);
+        std::cout << "Vulkan device: " << session.device_name() << "\n";
 
         const auto load_job = [&params](const PreprocessJob& job) {
             LoadedImage loaded{.original = load_image_rgb(job.image_path)};
@@ -1174,7 +1086,7 @@ namespace {
             top_up_loads();
 
             const auto inference_start = std::chrono::steady_clock::now();
-            auto outputs = std::make_shared<const OrtOutputs>(session.run(loaded.inference, params.num_tokens));
+            auto outputs = std::make_shared<const MogeOutputs>(session.run(loaded.inference, params.num_tokens));
             const double inference_ms =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - inference_start).count();
             if (bar)

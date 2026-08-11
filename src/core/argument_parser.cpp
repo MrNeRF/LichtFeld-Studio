@@ -1252,7 +1252,7 @@ namespace {
         "EXAMPLES:\n"
         "  LichtFeld-Studio preprocess ./data/scene\n"
         "  LichtFeld-Studio preprocess ./data/scene --mode both --overwrite\n"
-        "  LichtFeld-Studio preprocess ./data/scene --png-compression 0 --threads 8\n"
+        "  LichtFeld-Studio preprocess ./data/scene --vulkan-device 0\n"
         "  LichtFeld-Studio preprocess --download-only\n"
         "\n"
         "OUTPUTS:\n"
@@ -1529,10 +1529,9 @@ namespace {
         ::args::ValueFlag<std::string> model(parser, "path", "Local ONNX model path; skips default cache download", {"model"});
         ::args::ValueFlag<int> max_side(parser, "pixels", "Inference longest side, rounded to /14 (default: 518; 0 disables resize)", {"max-side"});
         ::args::ValueFlag<std::int64_t> num_tokens(parser, "tokens", "MoGe dynamic-token input when present (default: 1800)", {"num-tokens"});
-        ::args::ValueFlag<int> threads(parser, "count", "ONNX Runtime CPU threads (default: all available cores)", {"threads"});
+        ::args::ValueFlag<int> vulkan_device(parser, "index", "Vulkan compute device index (default: automatic)", {"vulkan-device"});
         ::args::ValueFlag<int> png_compression(parser, "level", "PNG compression level 0-9 (default: 1; 0 is fastest/largest)", {"png-compression"});
         ::args::ValueFlag<int> bit_depth(parser, "bits", "Output PNG bit depth, 8 or 16 (default: 16; 8-bit depth priors quantize visibly)", {"bit-depth"});
-        ::args::Flag cpu(parser, "cpu", "Force CPU inference even if CUDA is available", {"cpu"});
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing depth/normal files", {'y', "overwrite"});
         ::args::Flag no_download(parser, "no-download", "Fail if the default model is not already cached", {"no-download"});
         ::args::Flag download_only(parser, "download-only", "Download/verify the default model and exit", {"download-only"});
@@ -1569,8 +1568,11 @@ namespace {
         if (num_tokens) {
             params.num_tokens = ::args::get(num_tokens);
         }
-        if (threads) {
-            params.threads = ::args::get(threads);
+        if (vulkan_device) {
+            const int selected_device = ::args::get(vulkan_device);
+            if (selected_device < 0)
+                return std::unexpected("--vulkan-device must be 0 or greater");
+            params.vulkan_device = static_cast<std::uint32_t>(selected_device);
         }
         if (png_compression) {
             params.png_compression = ::args::get(png_compression);
@@ -1578,7 +1580,6 @@ namespace {
         if (bit_depth) {
             params.bit_depth = ::args::get(bit_depth);
         }
-        params.force_cpu = cpu;
         params.overwrite = overwrite;
         params.no_download = no_download;
         params.download_only = download_only;
@@ -1599,9 +1600,6 @@ namespace {
         }
         if (params.num_tokens <= 0) {
             return std::unexpected("--num-tokens must be greater than 0");
-        }
-        if (params.threads < 0) {
-            return std::unexpected("--threads must be 0 or greater");
         }
         if (params.png_compression < 0 || params.png_compression > 9) {
             return std::unexpected("--png-compression must be between 0 and 9");

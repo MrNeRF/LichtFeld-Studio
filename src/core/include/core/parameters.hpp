@@ -411,10 +411,9 @@ namespace lfs::core {
             PreprocessOutputMode mode = PreprocessOutputMode::Both;
             int max_side = 518;
             std::int64_t num_tokens = 1800;
-            int threads = 0;
+            std::optional<std::uint32_t> vulkan_device;
             int png_compression = 1;
             int bit_depth = 16;
-            bool force_cpu = false;
             bool overwrite = false;
             bool no_download = false;
             bool download_only = false;
