@@ -137,6 +137,7 @@ namespace lfs::python {
 
     void register_render_settings_properties();
     [[nodiscard]] std::optional<PyRenderSettings> get_render_settings();
+    [[nodiscard]] nb::list get_scene_upscaler_options();
     [[nodiscard]] bool reset_temporal_history();
 
     void register_rendering(nb::module_& m);

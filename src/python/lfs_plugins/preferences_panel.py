@@ -34,7 +34,7 @@ class PreferencesPanel(Panel):
     )
 
     SCENE_RENDER_SCALE_OPTIONS = (0.25, 0.33, 0.5, 0.67, 0.75, 1.0)
-    SCENE_UPSCALER_OPTIONS = (
+    DEFAULT_SCENE_UPSCALER_OPTIONS = (
         ("native", "preferences.scene_upscaler_native"),
         ("spatial", "preferences.scene_upscaler_spatial"),
         ("temporal", "preferences.scene_upscaler_temporal"),
@@ -64,6 +64,7 @@ class PreferencesPanel(Panel):
 
     def __init__(self):
         self._handle = None
+        self._scene_upscaler_catalog = list(self.DEFAULT_SCENE_UPSCALER_OPTIONS)
         self._theme_catalog = []
         self._language_catalog = []
         self._scene_render_scale_catalog = []
@@ -106,6 +107,7 @@ class PreferencesPanel(Panel):
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind("scene_render_scale_idx", self._scene_render_scale_index, self._set_scene_render_scale_index)
         model.bind("scene_upscaler_idx", self._scene_upscaler_index, self._set_scene_upscaler_index)
+        model.bind_func("scene_upscaler_temporal", lambda: self._scene_upscaler() == "temporal")
         model.bind("temporal_quality_idx", self._temporal_quality_index, self._set_temporal_quality_index)
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
@@ -172,11 +174,13 @@ class PreferencesPanel(Panel):
         self._dirty_selection()
 
     def _state(self):
+        self._sync_scene_upscaler_catalog()
         return (
             lf.ui.get_theme(),
             float(lf.ui.get_ui_scale_preference()),
             self._scene_render_scale(),
             self._scene_upscaler(),
+            tuple(value for value, _label_key in self._scene_upscaler_catalog),
             self._temporal_quality(),
             lf.ui.get_current_language(),
             lf.get_camera_navigation_mode(),
@@ -215,13 +219,7 @@ class PreferencesPanel(Panel):
             ],
         )
         self._sync_scene_render_scale_records()
-        self._handle.update_record_list(
-            "scene_upscalers",
-            [
-                {"index": str(index), "label": lf.ui.tr(label_key)}
-                for index, (_value, label_key) in enumerate(self.SCENE_UPSCALER_OPTIONS)
-            ],
-        )
+        self._sync_scene_upscaler_records()
         self._handle.update_record_list(
             "temporal_qualities",
             [
@@ -328,11 +326,35 @@ class PreferencesPanel(Panel):
         if settings is None:
             return "native"
         backend = str(settings.scene_upscaler)
-        return backend if backend in {"native", "spatial", "temporal"} else "native"
+        return backend if any(value == backend for value, _ in self._scene_upscaler_catalog) else "native"
+
+    def _sync_scene_upscaler_catalog(self):
+        try:
+            records = lf.get_scene_upscaler_options()
+            catalog = [
+                (str(record["id"]), str(record["label_key"]))
+                for record in records
+                if record.get("id") and record.get("label_key")
+            ]
+        except (AttributeError, KeyError, TypeError):
+            catalog = list(self.DEFAULT_SCENE_UPSCALER_OPTIONS)
+        if not catalog:
+            catalog = [("native", "preferences.scene_upscaler_native")]
+        self._scene_upscaler_catalog = catalog
+
+    def _sync_scene_upscaler_records(self):
+        self._sync_scene_upscaler_catalog()
+        self._handle.update_record_list(
+            "scene_upscalers",
+            [
+                {"index": str(index), "label": lf.ui.tr(label_key)}
+                for index, (_value, label_key) in enumerate(self._scene_upscaler_catalog)
+            ],
+        )
 
     def _scene_upscaler_index(self):
         current = self._scene_upscaler()
-        for index, (value, _label_key) in enumerate(self.SCENE_UPSCALER_OPTIONS):
+        for index, (value, _label_key) in enumerate(self._scene_upscaler_catalog):
             if value == current:
                 return str(index)
         return "0"
@@ -342,10 +364,10 @@ class PreferencesPanel(Panel):
             index = int(value)
         except (TypeError, ValueError):
             return
-        if 0 <= index < len(self.SCENE_UPSCALER_OPTIONS):
+        if 0 <= index < len(self._scene_upscaler_catalog):
             settings = lf.get_render_settings()
             if settings is not None:
-                settings.scene_upscaler = self.SCENE_UPSCALER_OPTIONS[index][0]
+                settings.scene_upscaler = self._scene_upscaler_catalog[index][0]
             self._refresh_selection()
 
     def _temporal_quality(self):
@@ -705,6 +727,7 @@ class PreferencesPanel(Panel):
             self._handle.dirty("scale_idx")
             self._handle.dirty("scene_render_scale_idx")
             self._handle.dirty("scene_upscaler_idx")
+            self._handle.dirty("scene_upscaler_temporal")
             self._handle.dirty("temporal_quality_idx")
             self._handle.dirty("language_idx")
             self._handle.dirty("navigation_idx")

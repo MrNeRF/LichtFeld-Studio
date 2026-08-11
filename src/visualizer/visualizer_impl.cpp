@@ -33,6 +33,7 @@
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include "tools/align_tool.hpp"
@@ -228,11 +229,8 @@ namespace lfs::vis {
         RenderSettings initial_settings;
         initial_settings.antialiasing = options.antialiasing;
         initial_settings.render_scale = loadSceneRenderScalePreference();
-        const auto scene_upscaler_preference = loadSceneUpscalerPreference();
-        initial_settings.scene_upscaler = scene_upscaler_preference == "spatial"
-                                              ? 1
-                                          : scene_upscaler_preference == "temporal" ? 2
-                                                                                    : 0;
+        initial_settings.scene_upscaler =
+            options.safe_mode ? "native" : loadSceneUpscalerPreference();
         const auto temporal_quality_preference = loadSceneTemporalQualityPreference();
         initial_settings.scene_temporal_quality = temporal_quality_preference == "performance"
                                                       ? 0
@@ -881,20 +879,22 @@ namespace lfs::vis {
                     return;
                 auto s = rendering_manager_->getSettings();
                 const float previous_render_scale = s.render_scale;
-                const int previous_scene_upscaler = s.scene_upscaler;
+                const std::string previous_scene_upscaler = s.scene_upscaler;
                 const int previous_temporal_quality = s.scene_temporal_quality;
                 vis::apply_proxy(s, proxy);
-                s.scene_upscaler = std::clamp(s.scene_upscaler, 0, 2);
+                if (!sceneUpscalerBackendFromId(s.scene_upscaler) &&
+                    !optionalSceneUpscalerRegistry().descriptor(s.scene_upscaler)) {
+                    s.scene_upscaler = "native";
+                }
                 s.scene_temporal_quality = std::clamp(s.scene_temporal_quality, 0, 2);
                 rendering_manager_->updateSettings(s);
                 const float applied_render_scale = rendering_manager_->getSettings().render_scale;
                 if (std::abs(applied_render_scale - previous_render_scale) > 0.0001f)
                     saveSceneRenderScalePreference(applied_render_scale);
-                const int applied_scene_upscaler = rendering_manager_->getSettings().scene_upscaler;
+                const std::string applied_scene_upscaler =
+                    rendering_manager_->getSettings().scene_upscaler;
                 if (applied_scene_upscaler != previous_scene_upscaler)
-                    saveSceneUpscalerPreference(applied_scene_upscaler == 1   ? "spatial"
-                                                : applied_scene_upscaler == 2 ? "temporal"
-                                                                              : "native");
+                    saveSceneUpscalerPreference(applied_scene_upscaler);
                 const int applied_temporal_quality =
                     rendering_manager_->getSettings().scene_temporal_quality;
                 if (applied_temporal_quality != previous_temporal_quality)
@@ -904,6 +904,26 @@ namespace lfs::vis {
                 wakeMainLoop();
             });
         callback_cleanup_.add([] { vis::set_render_settings_callbacks(nullptr, nullptr); });
+        vis::set_scene_upscaler_options_callback([this] {
+            SceneUpscalerProbeContext context{.safe_mode = options_.safe_mode};
+            if (const auto* const vulkan =
+                    window_manager_ ? window_manager_->getVulkanContext() : nullptr;
+                vulkan && vulkan->physicalDevice() != VK_NULL_HANDLE) {
+                VkPhysicalDeviceProperties properties{};
+                vkGetPhysicalDeviceProperties(vulkan->physicalDevice(), &properties);
+                context.graphics_api_version = properties.apiVersion;
+                context.vendor_id = properties.vendorID;
+                context.device_id = properties.deviceID;
+            }
+
+            std::vector<SceneUpscalerOptionProxy> result;
+            for (const auto& entry : availableSceneUpscalerCatalog(
+                     optionalSceneUpscalerRegistry(), context)) {
+                result.push_back({.id = entry.id, .label_key = entry.label_key});
+            }
+            return result;
+        });
+        callback_cleanup_.add([] { vis::set_scene_upscaler_options_callback(nullptr); });
     }
 
     void VisualizerImpl::setupComponentConnections() {

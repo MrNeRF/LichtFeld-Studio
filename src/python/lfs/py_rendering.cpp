@@ -787,14 +787,11 @@ namespace lfs::python {
                      2);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
-        add_int_enum(&Proxy::scene_upscaler,
-                     "scene_upscaler",
-                     "Scene Upscaler",
-                     "Reconstruction filter used when presenting the scene image",
-                     {{"Native", "native", 0},
-                      {"Spatial", "spatial", 1},
-                      {"Temporal", "temporal", 2}},
-                     0);
+        add_string(&Proxy::scene_upscaler,
+                   "scene_upscaler",
+                   "Scene Upscaler",
+                   "Stable identifier of the reconstruction filter used when presenting the scene image",
+                   "native");
         add_int_enum(&Proxy::scene_temporal_quality,
                      "scene_temporal_quality",
                      "Temporal Quality",
@@ -1345,6 +1342,17 @@ namespace lfs::python {
         if (!settings)
             return std::nullopt;
         return PyRenderSettings(std::move(*settings));
+    }
+
+    nb::list get_scene_upscaler_options() {
+        nb::list result;
+        for (const auto& option : vis::get_scene_upscaler_options()) {
+            nb::dict record;
+            record["id"] = option.id;
+            record["label_key"] = option.label_key;
+            result.append(std::move(record));
+        }
+        return result;
     }
 
     bool reset_temporal_history() {
@@ -1970,6 +1978,8 @@ Args:
             .def("__dir__", &PyRenderSettings::python_dir);
 
         m.def("get_render_settings", &get_render_settings);
+        m.def("get_scene_upscaler_options", &get_scene_upscaler_options,
+              "Return scene upscalers selectable on the active runtime and device");
         m.def("reset_temporal_history", &reset_temporal_history,
               "Discard scene temporal history and request a fresh render");
         m.def("get_lod_stats", &get_lod_stats,

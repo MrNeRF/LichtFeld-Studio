@@ -10,6 +10,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace lfs::core {
     class Tensor;
@@ -71,7 +73,7 @@ namespace lfs::vis {
         bool mip_filter = false;
         int sh_degree = 3;
         float render_scale = 1.0f;
-        int scene_upscaler = 0;
+        std::string scene_upscaler = "native";
         int scene_temporal_quality = 1;
         int camera_metrics_mode = 0;
         bool show_crop_box = false;
@@ -153,11 +155,20 @@ namespace lfs::vis {
         float lod_cone_outer_degrees = DEFAULT_LOD_CONE_OUTER_DEGREES;
     };
 
+    struct SceneUpscalerOptionProxy {
+        std::string id;
+        std::string label_key;
+    };
+
     using GetRenderSettingsCallback = std::function<std::optional<RenderSettingsProxy>()>;
     using SetRenderSettingsCallback = std::function<void(const RenderSettingsProxy&)>;
+    using GetSceneUpscalerOptionsCallback =
+        std::function<std::vector<SceneUpscalerOptionProxy>()>;
 
     LFS_VIS_API void set_render_settings_callbacks(GetRenderSettingsCallback get_cb, SetRenderSettingsCallback set_cb);
     [[nodiscard]] LFS_VIS_API std::optional<RenderSettingsProxy> get_render_settings();
     LFS_VIS_API void update_render_settings(const RenderSettingsProxy& settings);
+    LFS_VIS_API void set_scene_upscaler_options_callback(GetSceneUpscalerOptionsCallback callback);
+    [[nodiscard]] LFS_VIS_API std::vector<SceneUpscalerOptionProxy> get_scene_upscaler_options();
 
 } // namespace lfs::vis

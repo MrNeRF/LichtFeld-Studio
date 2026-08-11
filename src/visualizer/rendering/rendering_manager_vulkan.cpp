@@ -1836,7 +1836,7 @@ namespace lfs::vis {
             DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::MESH |
             DirtyFlag::VIEWPORT | DirtyFlag::BACKGROUND | DirtyFlag::SPLIT_VIEW;
         const bool temporal_jitter_enabled =
-            frame_settings.scene_upscaler == 2 &&
+            frame_settings.scene_upscaler == "temporal" &&
             !frame_settings.orthographic && !frame_settings.equirectangular;
         temporal_convergence_.prepare(
             temporal_jitter_enabled,
