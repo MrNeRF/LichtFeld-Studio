@@ -1257,9 +1257,10 @@ namespace lfs::core {
                                                 ? std::vector<size_t>(shape_.rank(), 1)
                                                 : std::vector<size_t>{}),
                                 Device::CUDA, DataType::Float32);
+                            result.set_stream(execution_stream);
                             tensor_ops::launch_fused_transform_reduce(
                                 fused_source.ptr<float>(), result.ptr<float>(), n,
-                                chain, op, result.stream());
+                                chain, op, execution_stream);
                         }
 
                         internal::lazy_executor_diagnostics_counters_increment_fused();
@@ -1391,9 +1392,10 @@ namespace lfs::core {
                             }
                             CUDAStreamGuard guard(execution_stream);
                             result = Tensor::empty(TensorShape(out_shape), Device::CUDA, DataType::Float32);
+                            result.set_stream(execution_stream);
                             tensor_ops::launch_fused_segmented_transform_reduce(
                                 fused_source.ptr<float>(), result.ptr<float>(),
-                                num_segments, segment_size, chain, op, result.stream());
+                                num_segments, segment_size, chain, op, execution_stream);
                         }
 
                         internal::lazy_executor_diagnostics_counters_increment_fused();

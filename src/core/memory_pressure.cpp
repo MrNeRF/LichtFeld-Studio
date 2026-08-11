@@ -333,6 +333,9 @@ namespace lfs::core {
         if (coordinator.relieve_and_should_retry(failure)) {
             ptr = try_allocate(&failure_status);
         }
+        // A handled OOM and pressure-client reclaim can leave CUDA's last-error
+        // state sticky. Consume it before returning control to later CUDA work.
+        (void)cudaGetLastError();
         if (ptr == nullptr) {
             if (cuda_is_unavailable()) {
                 throw_cuda_unavailable_allocation(bytes, stream, label, operation);
