@@ -606,6 +606,15 @@ namespace lfs::core {
         const size_t capacity = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
         uint32_t layout_coeffs_rest =
             static_cast<uint32_t>(sh_rest_coefficients_for_degree(_max_sh_degree));
+        // Resident SH is a one-dimensional float4-swizzled buffer; canonical inputs are
+        // rank-2/3.  A few transform/interop call sites clone the resident tensor through
+        // this constructor without repeating the layout tag.  Preserve those coefficients
+        // instead of silently treating the rank-1 storage as an empty canonical tensor.
+        if (shN_layout == ShNLayout::Canonical && shN_.is_valid() && shN_.ndim() == 1 &&
+            n > 0 && static_cast<size_t>(shN_.numel()) ==
+                         sh_swizzled_float_count(n, layout_coeffs_rest)) {
+            shN_layout = ShNLayout::Swizzled;
+        }
         if (shN_layout == ShNLayout::Swizzled) {
             _shN = std::move(shN_);
             _shN.set_name("splat.shN");
