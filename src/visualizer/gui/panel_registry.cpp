@@ -342,7 +342,6 @@ namespace lfs::vis::gui {
             panel.panel.get(),
             panel.label,
             panel.id,
-            panel.parent_id,
             panel.space,
             panel.options,
             panel.is_native,
@@ -434,7 +433,6 @@ namespace lfs::vis::gui {
             float pos_y = 0.0f;
             float drawn_height = 0.0f;
             bool has_user_height = false;
-            float forced_height = 0.0f;
             bool mouse_in_panel = false;
             bool mouse_in_titlebar = false;
             bool mouse_in_resize_grip = false;
@@ -449,17 +447,6 @@ namespace lfs::vis::gui {
         const float kTitleH = 30.0f * dpi;
         const float kResizeEdge = floatingResizeEdge();
         constexpr float kVisibleFrac = 0.1f;
-
-        auto with_panel_input = [&](IPanel* panel, auto&& draw_fn) {
-            panel->setInput(input);
-            try {
-                draw_fn();
-            } catch (...) {
-                panel->setInput(nullptr);
-                throw;
-            }
-            panel->setInput(nullptr);
-        };
 
         auto prepare_floating_direct_layout = [&](const PanelSnapshot& snap,
                                                   FloatingDirectLayout& layout) {
@@ -489,17 +476,15 @@ namespace lfs::vis::gui {
             if (drawn_h <= 0.0f) {
                 float prev_h = -1.0f;
                 for (int pass = 0; pass < 3; ++pass) {
-                    with_panel_input(snap.panel, [&] {
-                        drawn_h = snap.panel->renderDirect({
-                                                               .mode = PanelDirectRenderMode::Preload,
-                                                               .space = snap.space,
-                                                               .width = w,
-                                                               .height = max_h,
-                                                               .input = input,
-                                                           },
-                                                           ctx)
-                                      .height;
-                    });
+                    drawn_h = snap.panel->renderDirect({
+                                                           .mode = PanelDirectRenderMode::Preload,
+                                                           .space = snap.space,
+                                                           .width = w,
+                                                           .height = max_h,
+                                                           .input = input,
+                                                       },
+                                                       ctx)
+                                  .height;
 
                     const bool stable_height =
                         prev_h > 0.0f && std::abs(drawn_h - prev_h) <= 1.0f;
@@ -566,8 +551,6 @@ namespace lfs::vis::gui {
             layout.pos_y = py;
             layout.drawn_height = drawn_h;
             layout.has_user_height = has_user_height;
-            layout.forced_height = (has_user_height && drawn_h > 0 && h > drawn_h) ? h : 0.0f;
-
             if (!input)
                 return;
 
@@ -649,14 +632,12 @@ namespace lfs::vis::gui {
                 switch (space) {
                 case PanelSpace::Floating: {
                     if (snap.has_option(PanelOption::SELF_MANAGED)) {
-                        with_panel_input(snap.panel, [&] {
-                            snap.panel->renderDirect({
-                                                         .mode = PanelDirectRenderMode::Draw,
-                                                         .space = snap.space,
-                                                         .input = input,
-                                                     },
-                                                     ctx);
-                        });
+                        snap.panel->renderDirect({
+                                                     .mode = PanelDirectRenderMode::Draw,
+                                                     .space = snap.space,
+                                                     .input = input,
+                                                 },
+                                                 ctx);
                     } else if (snap.panel->renderCapabilities().direct) {
                         auto& layout = floating_direct_layouts[snap_idx];
                         if (!layout.valid)
@@ -800,20 +781,18 @@ namespace lfs::vis::gui {
                         }
 
                         const float forced = (has_user_height && drawn_h > 0 && h > drawn_h) ? h : 0.0f;
-                        with_panel_input(snap.panel, [&] {
-                            const auto result = snap.panel->renderDirect({
-                                                                             .mode = PanelDirectRenderMode::Draw,
-                                                                             .space = snap.space,
-                                                                             .x = px,
-                                                                             .y = py,
-                                                                             .width = w,
-                                                                             .height = h,
-                                                                             .forced_height = forced,
-                                                                             .input = input,
-                                                                         },
-                                                                         ctx);
-                            drawn_h = result.height;
-                        });
+                        const auto result = snap.panel->renderDirect({
+                                                                         .mode = PanelDirectRenderMode::Draw,
+                                                                         .space = snap.space,
+                                                                         .x = px,
+                                                                         .y = py,
+                                                                         .width = w,
+                                                                         .height = h,
+                                                                         .forced_height = forced,
+                                                                         .input = input,
+                                                                     },
+                                                                     ctx);
+                        drawn_h = result.height;
                     } else {
                         LOG_ERROR("Panel '{}' ({}) reached floating draw without direct rendering. "
                                   "Disabling the invalid panel instance.",
@@ -844,14 +823,12 @@ namespace lfs::vis::gui {
                 case PanelSpace::LeftDock:
                     break;
                 case PanelSpace::StatusBar:
-                    with_panel_input(snap.panel, [&] {
-                        snap.panel->renderDirect({
-                                                     .mode = PanelDirectRenderMode::Draw,
-                                                     .space = snap.space,
-                                                     .input = input,
-                                                 },
-                                                 ctx);
-                    });
+                    snap.panel->renderDirect({
+                                                 .mode = PanelDirectRenderMode::Draw,
+                                                 .space = snap.space,
+                                                 .input = input,
+                                             },
+                                             ctx);
                     break;
                 case PanelSpace::MainPanelTab:
                     break;
@@ -921,7 +898,6 @@ namespace lfs::vis::gui {
 
             bool succeeded = false;
             try {
-                snap.panel->setInput(options.input);
                 const auto result = snap.panel->renderDirect({
                                                                  .mode = options.mode == PanelRenderMode::StandardPreload
                                                                              ? PanelDirectRenderMode::Preload
@@ -930,10 +906,8 @@ namespace lfs::vis::gui {
                                                                  .input = options.input,
                                                              },
                                                              ctx);
-                snap.panel->setInput(nullptr);
                 succeeded = result.handled;
             } catch (const std::exception& e) {
-                snap.panel->setInput(nullptr);
                 LOG_ERROR("Panel '{}' {} error: {}", snap.label,
                           options.mode == PanelRenderMode::StandardPreload ? "preload" : "draw", e.what());
             }
@@ -964,8 +938,6 @@ namespace lfs::vis::gui {
             try {
                 const PanelSpace panel_space = snap.space;
 
-                snap.panel->setInput(options.input);
-
                 bool needs_live_draw = options.mode != PanelRenderMode::DirectCached;
                 if (options.mode == PanelRenderMode::DirectCached) {
                     LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "draw_cached"), 0.25);
@@ -990,10 +962,8 @@ namespace lfs::vis::gui {
                 if (needs_live_draw) {
                     {
                         LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "poll"), 0.25);
-                        if (!check_poll(snap, ctx)) {
-                            snap.panel->setInput(nullptr);
+                        if (!check_poll(snap, ctx))
                             continue;
-                        }
                     }
 
                     PanelDirectRenderResult result;
@@ -1028,14 +998,12 @@ namespace lfs::vis::gui {
                     used_height = result.height;
                 }
 
-                snap.panel->setInput(nullptr);
             } catch (const std::exception& e) {
-                snap.panel->setInput(nullptr);
                 LOG_ERROR("Panel '{}' {} error: {}", snap.label,
-                          options.mode == PanelRenderMode::DirectPreload ? "preloadDirect"
+                          options.mode == PanelRenderMode::DirectPreload ? "DirectPreload"
                                                                          : (options.mode == PanelRenderMode::DirectCached
-                                                                                ? "drawDirectCached"
-                                                                                : "drawDirect"),
+                                                                                ? "DirectCached"
+                                                                                : "Direct"),
                           e.what());
             }
 

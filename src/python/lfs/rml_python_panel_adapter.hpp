@@ -38,8 +38,6 @@ namespace lfs::vis::gui {
         }
         PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
                                              const PanelDrawContext& ctx) override;
-        void setInput(const PanelInputState* input) override;
-        bool wantsKeyboard() const override;
         bool needsAnimationFrame() const override;
         std::optional<double> nextScheduledAnimationDelay() const override;
         void reloadRmlResources() override;
@@ -73,6 +71,7 @@ namespace lfs::vis::gui {
         bool drawDirectCached(float x, float y, float w, float h,
                               const PanelDrawContext& ctx);
         float getDirectDrawHeight() const;
+        void setInput(const PanelInputState* input);
         void setInputClipY(float y_min, float y_max);
         void setForcedHeight(float h);
         void setPanelSpace(PanelSpace space);

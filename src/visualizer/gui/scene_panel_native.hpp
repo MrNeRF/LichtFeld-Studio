@@ -36,8 +36,6 @@ namespace lfs::vis::gui {
         }
         PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
                                              const PanelDrawContext& ctx) override;
-        void setInput(const PanelInputState* input) override { host_.setInput(input); }
-        bool wantsKeyboard() const override { return host_.wantsKeyboard(); }
         bool needsAnimationFrame() const override { return host_.needsAnimationFrame(); }
         std::optional<double> nextScheduledAnimationDelay() const override {
             return host_.nextScheduledUpdateDelay();

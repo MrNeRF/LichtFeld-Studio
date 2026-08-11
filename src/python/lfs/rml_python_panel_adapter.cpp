@@ -629,10 +629,6 @@ namespace lfs::vis::gui {
         }
     }
 
-    bool RmlPythonPanelAdapter::wantsKeyboard() const {
-        return false;
-    }
-
     bool RmlPythonPanelAdapter::needsAnimationFrame() const {
         if (content_dirty_)
             return true;

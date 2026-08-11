@@ -166,7 +166,6 @@ namespace lfs::vis::gui {
             return true;
         }
         virtual void preload(const PanelDrawContext& ctx) { (void)ctx; }
-        virtual void setInput(const PanelInputState* input) { (void)input; }
         virtual PanelRenderCapabilities renderCapabilities() const { return {}; }
         virtual PanelDirectRenderResult renderDirect(
             const PanelDirectRenderRequest& request,
@@ -185,7 +184,6 @@ namespace lfs::vis::gui {
             }
             return {};
         }
-        virtual bool wantsKeyboard() const { return false; }
         virtual bool needsAnimationFrame() const { return false; }
         // Finite scheduled animation/update delay in seconds (> 0). nullopt means
         // no scheduled wake (either continuous demand via needsAnimationFrame or idle).
@@ -301,7 +299,6 @@ namespace lfs::vis::gui {
         IPanel* panel;
         std::string label;
         std::string id;
-        std::string parent_id;
         PanelSpace space;
         uint32_t options;
         bool is_native;

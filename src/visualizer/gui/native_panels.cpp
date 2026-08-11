@@ -129,10 +129,6 @@ namespace lfs::vis::gui::native_panels {
             widget_->setFloating(space == PanelSpace::Floating);
     }
 
-    bool VideoExtractorPanel::wantsKeyboard() const {
-        return widget_ && widget_->wantsKeyboard();
-    }
-
     bool VideoExtractorPanel::needsAnimationFrame() const {
         return widget_ && widget_->needsAnimationFrame();
     }
