@@ -7,7 +7,10 @@
 #include "diagnostics/vram_profiler.hpp"
 
 #include <gtest/gtest.h>
+
+#include <string>
 #include <thread>
+#include <unordered_map>
 
 using lfs::diagnostics::VramAllocationMethod;
 using lfs::diagnostics::VramProfiler;
@@ -34,11 +37,15 @@ namespace {
         p.setGauge("model.capacity", 100000.0);
 
         const auto snap = p.snapshot();
-        ASSERT_EQ(snap.gauges.size(), 2u);
-        EXPECT_EQ(snap.gauges[0].key, "model.capacity");
-        EXPECT_DOUBLE_EQ(snap.gauges[0].value, 100000.0);
-        EXPECT_EQ(snap.gauges[1].key, "model.gaussians");
-        EXPECT_DOUBLE_EQ(snap.gauges[1].value, 23456.0);
+        // Snapshot always injects vram.audit.pool.bucket_live_rounding_waste.
+        std::unordered_map<std::string, double> by_key;
+        for (const auto& g : snap.gauges) {
+            by_key[g.key] = g.value;
+        }
+        ASSERT_TRUE(by_key.count("model.capacity"));
+        ASSERT_TRUE(by_key.count("model.gaussians"));
+        EXPECT_DOUBLE_EQ(by_key["model.capacity"], 100000.0);
+        EXPECT_DOUBLE_EQ(by_key["model.gaussians"], 23456.0);
     }
 
     TEST_F(VramProfilerMetricsTest, PinnedHostMemoryRoundTripsThroughSnapshot) {
@@ -160,7 +167,10 @@ namespace {
         p.setEnabled(false);
         p.setEnabled(true);
         const auto snap = p.snapshot();
-        EXPECT_TRUE(snap.gauges.empty());
+        // User gauges are wiped; snapshot may still inject the pool audit gauge.
+        for (const auto& g : snap.gauges) {
+            EXPECT_NE(g.key, "g");
+        }
         EXPECT_TRUE(snap.iter_counters.empty());
         EXPECT_TRUE(snap.total_counters.empty());
         EXPECT_TRUE(snap.histograms.empty());
@@ -173,7 +183,9 @@ namespace {
         p.addCounter("c", 5, true);
         p.recordHistogram("h", 1.0);
         const auto snap = p.snapshot();
-        EXPECT_TRUE(snap.gauges.empty());
+        for (const auto& g : snap.gauges) {
+            EXPECT_NE(g.key, "g");
+        }
         EXPECT_TRUE(snap.iter_counters.empty());
         EXPECT_TRUE(snap.histograms.empty());
     }

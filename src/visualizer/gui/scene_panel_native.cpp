@@ -846,7 +846,11 @@ namespace lfs::vis::gui {
 
         if (logging_level_select_el_ &&
             logging_level_select_el_->GetSelection() != desired_selection) {
+            // Guard the Change listener so programmatic selection does not re-enter
+            // applyLogLevelSelection → setLoggingFeedback → dirty latch.
+            syncing_logging_selection_ = true;
             logging_level_select_el_->SetSelection(desired_selection);
+            syncing_logging_selection_ = false;
             changed = true;
         }
 
@@ -964,6 +968,11 @@ namespace lfs::vis::gui {
         if (type == "change") {
             const Rml::String current_id = current ? current->GetId() : "";
             if (current_id == "logging-level-select") {
+                // Ignore Change events raised by programmatic SetSelection during sync.
+                if (syncing_logging_selection_) {
+                    event.StopPropagation();
+                    return true;
+                }
                 applyLogLevelSelection();
                 event.StopPropagation();
                 return true;
@@ -1066,6 +1075,11 @@ namespace lfs::vis::gui {
 
         const core::LogLevel selected_level =
             logLevelFromSelection(logging_level_select_el_->GetSelection());
+        // No-op when the selection already matches the applied level — avoids
+        // re-dirtying via setLoggingFeedback on programmatic Change events.
+        if (selected_level == core::Logger::get().level())
+            return;
+
         core::Logger::get().set_level(selected_level);
         setLoggingFeedback(LOCF("runtime.log_level_set", logLevelLabel(selected_level)),
                            FeedbackTone::Success);
@@ -1121,6 +1135,8 @@ namespace lfs::vis::gui {
     }
 
     void NativeScenePanel::setLoggingFeedback(std::string message, const FeedbackTone tone) {
+        if (message == logging_feedback_text_ && tone == logging_feedback_tone_)
+            return;
         logging_feedback_text_ = std::move(message);
         logging_feedback_tone_ = tone;
         logging_feedback_dirty_ = true;

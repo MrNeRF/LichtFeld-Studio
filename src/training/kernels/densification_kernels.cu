@@ -222,4 +222,359 @@ namespace lfs::training::kernels {
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.long_axis_split_inplace");
     }
 
+    __global__ void fill_free_slots_fused_kernel(
+        const int64_t* __restrict__ target_indices,
+        size_t n_fill,
+        const float* __restrict__ src_means,
+        const float* __restrict__ src_rotations,
+        const float* __restrict__ src_scales,
+        const float* __restrict__ src_sh0,
+        const float* __restrict__ src_opacities,
+        float* __restrict__ dst_means,
+        float* __restrict__ dst_rotations,
+        float* __restrict__ dst_scales,
+        float* __restrict__ dst_sh0,
+        float* __restrict__ dst_opacities,
+        int opacity_dim,
+        float* const* __restrict__ adam_scale_ptrs,
+        int n_adam_scales,
+        bool* __restrict__ free_mask,
+        size_t N) {
+
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= n_fill)
+            return;
+
+        const int64_t t = target_indices[i];
+        if (t < 0 || static_cast<size_t>(t) >= N)
+            return;
+        const size_t dst = static_cast<size_t>(t);
+
+        dst_means[dst * 3 + 0] = src_means[i * 3 + 0];
+        dst_means[dst * 3 + 1] = src_means[i * 3 + 1];
+        dst_means[dst * 3 + 2] = src_means[i * 3 + 2];
+
+        dst_rotations[dst * 4 + 0] = src_rotations[i * 4 + 0];
+        dst_rotations[dst * 4 + 1] = src_rotations[i * 4 + 1];
+        dst_rotations[dst * 4 + 2] = src_rotations[i * 4 + 2];
+        dst_rotations[dst * 4 + 3] = src_rotations[i * 4 + 3];
+
+        dst_scales[dst * 3 + 0] = src_scales[i * 3 + 0];
+        dst_scales[dst * 3 + 1] = src_scales[i * 3 + 1];
+        dst_scales[dst * 3 + 2] = src_scales[i * 3 + 2];
+
+        // sh0 is 3 floats/row whether layout is [N,3] or [N,1,3]
+        dst_sh0[dst * 3 + 0] = src_sh0[i * 3 + 0];
+        dst_sh0[dst * 3 + 1] = src_sh0[i * 3 + 1];
+        dst_sh0[dst * 3 + 2] = src_sh0[i * 3 + 2];
+
+        if (opacity_dim == 1) {
+            dst_opacities[dst] = src_opacities[i]; // [N,1] still one float per row when col=1
+        } else {
+            dst_opacities[dst] = src_opacities[i];
+        }
+
+        for (int a = 0; a < n_adam_scales; ++a) {
+            float* scales = adam_scale_ptrs[a];
+            if (scales != nullptr) {
+                scales[dst] = 0.0f;
+            }
+        }
+
+        if (free_mask != nullptr) {
+            free_mask[dst] = false;
+        }
+    }
+
+    void launch_fill_free_slots_fused(
+        const int64_t* target_indices,
+        size_t n_fill,
+        const float* src_means,
+        const float* src_rotations,
+        const float* src_scales,
+        const float* src_sh0,
+        const float* src_opacities,
+        float* dst_means,
+        float* dst_rotations,
+        float* dst_scales,
+        float* dst_sh0,
+        float* dst_opacities,
+        int opacity_dim,
+        float* const* adam_scale_ptrs,
+        int n_adam_scales,
+        bool* free_mask,
+        size_t N,
+        cudaStream_t stream) {
+
+        stream = resolve_stream(stream);
+        if (n_fill == 0)
+            return;
+
+        // Copy pointer table to device (tiny; stack H2D once per launch).
+        float** d_adam = nullptr;
+        if (n_adam_scales > 0 && adam_scale_ptrs != nullptr) {
+            LFS_CUDA_CHECK_MSG(
+                cudaMallocAsync(reinterpret_cast<void**>(&d_adam),
+                                sizeof(float*) * static_cast<size_t>(n_adam_scales), stream),
+                "fill_free_slots adam ptr table");
+            LFS_CUDA_CHECK_MSG(
+                cudaMemcpyAsync(d_adam, adam_scale_ptrs,
+                                sizeof(float*) * static_cast<size_t>(n_adam_scales),
+                                cudaMemcpyHostToDevice, stream),
+                "fill_free_slots adam ptr H2D");
+        }
+
+        const int block = 256;
+        const int grid = static_cast<int>((n_fill + block - 1) / block);
+        fill_free_slots_fused_kernel<<<grid, block, 0, stream>>>(
+            target_indices, n_fill,
+            src_means, src_rotations, src_scales, src_sh0, src_opacities,
+            dst_means, dst_rotations, dst_scales, dst_sh0, dst_opacities,
+            opacity_dim, d_adam, n_adam_scales, free_mask, N);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.fill_free_slots_fused");
+
+        if (d_adam != nullptr) {
+            LFS_CUDA_CHECK_MSG(cudaFreeAsync(d_adam, stream), "fill_free_slots free adam ptrs");
+        }
+    }
+
+    __global__ void zero_adam_scales_kernel(
+        const int64_t* __restrict__ indices,
+        size_t n_indices,
+        float* const* __restrict__ adam_scale_ptrs,
+        int n_adam_scales,
+        size_t N) {
+
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= n_indices)
+            return;
+        const int64_t t = indices[i];
+        if (t < 0 || static_cast<size_t>(t) >= N)
+            return;
+        const size_t dst = static_cast<size_t>(t);
+        for (int a = 0; a < n_adam_scales; ++a) {
+            float* scales = adam_scale_ptrs[a];
+            if (scales != nullptr) {
+                scales[dst] = 0.0f;
+            }
+        }
+    }
+
+    void launch_zero_adam_scales_at_indices(
+        const int64_t* indices,
+        size_t n_indices,
+        float* const* adam_scale_ptrs,
+        int n_adam_scales,
+        size_t N,
+        cudaStream_t stream) {
+
+        stream = resolve_stream(stream);
+        if (n_indices == 0 || n_adam_scales <= 0)
+            return;
+
+        float** d_adam = nullptr;
+        LFS_CUDA_CHECK_MSG(
+            cudaMallocAsync(reinterpret_cast<void**>(&d_adam),
+                            sizeof(float*) * static_cast<size_t>(n_adam_scales), stream),
+            "zero_adam adam ptr table");
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(d_adam, adam_scale_ptrs,
+                            sizeof(float*) * static_cast<size_t>(n_adam_scales),
+                            cudaMemcpyHostToDevice, stream),
+            "zero_adam adam ptr H2D");
+
+        const int block = 256;
+        const int grid = static_cast<int>((n_indices + block - 1) / block);
+        zero_adam_scales_kernel<<<grid, block, 0, stream>>>(
+            indices, n_indices, d_adam, n_adam_scales, N);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.zero_adam_scales");
+        LFS_CUDA_CHECK_MSG(cudaFreeAsync(d_adam, stream), "zero_adam free ptrs");
+    }
+
+    __global__ void packed_refine_counts_kernel(
+        const bool* __restrict__ bool0,
+        size_t n_bool0,
+        const bool* __restrict__ bool1,
+        size_t n_bool1,
+        const float* __restrict__ float0,
+        size_t n_float0,
+        const float* __restrict__ float1,
+        size_t n_float1,
+        int64_t* __restrict__ out_counts4) {
+
+        // One block does all four reductions via shared atomics / CUB block reduce.
+        typedef cub::BlockReduce<int64_t, 256> BlockReduce;
+        __shared__ typename BlockReduce::TempStorage temp;
+
+        const int tid = threadIdx.x;
+        int64_t local0 = 0, local1 = 0, local2 = 0, local3 = 0;
+
+        if (bool0 != nullptr) {
+            for (size_t i = tid; i < n_bool0; i += blockDim.x)
+                local0 += bool0[i] ? 1 : 0;
+        }
+        if (bool1 != nullptr) {
+            for (size_t i = tid; i < n_bool1; i += blockDim.x)
+                local1 += bool1[i] ? 1 : 0;
+        }
+        if (float0 != nullptr) {
+            for (size_t i = tid; i < n_float0; i += blockDim.x)
+                local2 += (float0[i] > 0.0f) ? 1 : 0;
+        }
+        if (float1 != nullptr) {
+            for (size_t i = tid; i < n_float1; i += blockDim.x)
+                local3 += (float1[i] > 0.0f) ? 1 : 0;
+        }
+
+        const int64_t sum0 = BlockReduce(temp).Sum(local0);
+        __syncthreads();
+        const int64_t sum1 = BlockReduce(temp).Sum(local1);
+        __syncthreads();
+        const int64_t sum2 = BlockReduce(temp).Sum(local2);
+        __syncthreads();
+        const int64_t sum3 = BlockReduce(temp).Sum(local3);
+
+        if (tid == 0) {
+            out_counts4[0] = (bool0 != nullptr) ? sum0 : 0;
+            out_counts4[1] = (bool1 != nullptr) ? sum1 : 0;
+            out_counts4[2] = (float0 != nullptr) ? sum2 : 0;
+            out_counts4[3] = (float1 != nullptr) ? sum3 : 0;
+        }
+    }
+
+    void launch_packed_refine_counts(
+        const bool* bool0,
+        size_t n_bool0,
+        const bool* bool1,
+        size_t n_bool1,
+        const float* float0,
+        size_t n_float0,
+        const float* float1,
+        size_t n_float1,
+        int64_t* out_counts4,
+        cudaStream_t stream) {
+
+        stream = resolve_stream(stream);
+        packed_refine_counts_kernel<<<1, 256, 0, stream>>>(
+            bool0, n_bool0, bool1, n_bool1,
+            float0, n_float0, float1, n_float1,
+            out_counts4);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.packed_refine_counts");
+    }
+
+    __global__ void zero_nan_kernel(float* data, size_t n) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < n && isnan(data[i]))
+            data[i] = 0.0f;
+    }
+
+    struct PositivePred {
+        __host__ __device__ bool operator()(const float& x) const { return x > 0.0f; }
+    };
+
+    __global__ void div_by_device_scalar_kernel(
+        float* data, size_t n, const float* scalar, float skip_below) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= n)
+            return;
+        const float s = fmaxf(*scalar, 1e-9f);
+        if (s <= skip_below)
+            return;
+        data[i] /= s;
+    }
+
+    void launch_normalize_by_positive_median(
+        float* data,
+        size_t n,
+        cudaStream_t stream) {
+
+        stream = resolve_stream(stream);
+        if (n == 0 || data == nullptr)
+            return;
+
+        const int block = 256;
+        const int grid = static_cast<int>((n + block - 1) / block);
+        zero_nan_kernel<<<grid, block, 0, stream>>>(data, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.zero_nan");
+
+        // Compact positives into a scratch buffer, radix-sort that only, pick mid.
+        // Falls back to no-op (leave data) when zero positives.
+        float* d_selected = nullptr;
+        int* d_count = nullptr;
+        LFS_CUDA_CHECK_MSG(
+            cudaMallocAsync(reinterpret_cast<void**>(&d_selected), n * sizeof(float), stream),
+            "positive_median selected");
+        LFS_CUDA_CHECK_MSG(
+            cudaMallocAsync(reinterpret_cast<void**>(&d_count), sizeof(int), stream),
+            "positive_median count");
+        LFS_CUDA_CHECK_MSG(cudaMemsetAsync(d_count, 0, sizeof(int), stream), "positive_median count z");
+
+        // CUB DeviceSelect::If
+        size_t temp_bytes = 0;
+        LFS_CUDA_CHECK_MSG(
+            cub::DeviceSelect::If(nullptr, temp_bytes, data, d_selected, d_count,
+                                  static_cast<int>(n), PositivePred{}, stream),
+            "positive_median select size");
+        void* d_temp = nullptr;
+        if (temp_bytes > 0) {
+            LFS_CUDA_CHECK_MSG(
+                cudaMallocAsync(&d_temp, temp_bytes, stream), "positive_median select temp");
+        }
+        LFS_CUDA_CHECK_MSG(
+            cub::DeviceSelect::If(d_temp, temp_bytes, data, d_selected, d_count,
+                                  static_cast<int>(n), PositivePred{}, stream),
+            "positive_median select");
+
+        int h_count = 0;
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(&h_count, d_count, sizeof(int), cudaMemcpyDeviceToHost, stream),
+            "positive_median count D2H");
+        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "positive_median count sync");
+
+        if (h_count <= 0) {
+            // No positives → zero the tensor (match prior masked_select empty path).
+            LFS_CUDA_CHECK_MSG(cudaMemsetAsync(data, 0, n * sizeof(float), stream),
+                               "positive_median zero empty");
+            if (d_temp)
+                cudaFreeAsync(d_temp, stream);
+            cudaFreeAsync(d_selected, stream);
+            cudaFreeAsync(d_count, stream);
+            return;
+        }
+
+        // Radix sort the compacted positives only (O(P log P), P << n for sparse edges).
+        float* d_sorted = nullptr;
+        LFS_CUDA_CHECK_MSG(
+            cudaMallocAsync(reinterpret_cast<void**>(&d_sorted),
+                            static_cast<size_t>(h_count) * sizeof(float), stream),
+            "positive_median sorted");
+        size_t sort_bytes = 0;
+        LFS_CUDA_CHECK_MSG(
+            cub::DeviceRadixSort::SortKeys(nullptr, sort_bytes, d_selected, d_sorted,
+                                           h_count, 0, sizeof(float) * 8, stream),
+            "positive_median sort size");
+        void* d_sort_temp = nullptr;
+        if (sort_bytes > 0) {
+            LFS_CUDA_CHECK_MSG(
+                cudaMallocAsync(&d_sort_temp, sort_bytes, stream), "positive_median sort temp");
+        }
+        LFS_CUDA_CHECK_MSG(
+            cub::DeviceRadixSort::SortKeys(d_sort_temp, sort_bytes, d_selected, d_sorted,
+                                           h_count, 0, sizeof(float) * 8, stream),
+            "positive_median sort");
+
+        // Median at count/2 (same index as prior sorted[valid.numel()/2]).
+        const float* d_median = d_sorted + (h_count / 2);
+        div_by_device_scalar_kernel<<<grid, block, 0, stream>>>(data, n, d_median, 0.0f);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.div_by_median");
+
+        if (d_sort_temp)
+            cudaFreeAsync(d_sort_temp, stream);
+        if (d_temp)
+            cudaFreeAsync(d_temp, stream);
+        cudaFreeAsync(d_sorted, stream);
+        cudaFreeAsync(d_selected, stream);
+        cudaFreeAsync(d_count, stream);
+    }
+
 } // namespace lfs::training::kernels

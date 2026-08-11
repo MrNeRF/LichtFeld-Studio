@@ -27,12 +27,14 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/mcmc_kernels.cu
     kernels/mrnf_kernels.cu
     kernels/densification_kernels.cu
+    kernels/sh_value_quant_kernels.cu
     kernels/grad_alpha.cu
     kernels/depth_loss.cu
     kernels/normal_loss.cu
     kernels/normal_consistency_loss.cu
     kernels/roi_weight_map.cu
     kernels/image_kernels.cu
+    kernels/mask_preprocess.cu
     components/sparsity_optimizer_kernels.cu
 )
 
@@ -81,6 +83,9 @@ add_subdirectory(depth_anchor)
 # Optimizer sources
 set(TRAINING_NEW_SOURCES
     optimizer/adam_optimizer.cpp
+    sh_value_codec.cpp
+    sh_value_storage.cpp
+    live_model_mutation_guard.cpp
     optimizer/scheduler.cpp
     losses/regularization.cpp
     losses/photometric_loss.cpp
@@ -105,6 +110,8 @@ set(TRAINING_NEW_SOURCES
         progress.cpp
         training_cropbox_mask.cpp
         trainer.cpp
+        vram_ledger.cpp
+        perf_bench.cpp
     training_setup.cpp
 )
 
@@ -140,7 +147,7 @@ target_link_libraries(lfs_training
         lfs_io                  # For CacheLoader, exporter, pipelined loader
         lfs_event_bridge        # Shared event bridge for cross-module singletons
         lfs_training_kernels    # LibTorch-free SSIM kernels
-        fastlfs_backend         # For adam_step_raw CUDA kernel (LibTorch-free)
+        fastlfs_backend         # LibTorch-free FastGS rasterization and optimizer kernels
         gsplat_backend_lfs      # LibTorch-free gsplat rasterization backend
 	edge_compute_backend    # For igs+ edge score rasterization
     PRIVATE

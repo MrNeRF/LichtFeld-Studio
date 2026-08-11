@@ -1862,6 +1862,10 @@ namespace lfs::vis {
                 cmd::CutSelection{}.emit();
                 return;
 
+            case input::Action::TOGGLE_PERFORMANCE_HUD:
+                lfs::core::events::ui::ToggleVramHud{}.emit();
+                return;
+
             case input::Action::PASTE_SELECTION:
                 cmd::PasteSelection{}.emit();
                 return;
@@ -3008,18 +3012,15 @@ namespace lfs::vis {
                 rendering && rendering->isGTComparisonActive()) {
                 cmd::ToggleGTComparison{}.emit();
             }
-
-            if (auto* trainer_mgr = services().trainerOrNull();
-                trainer_mgr && trainer_mgr->pauseTrainingTemporaryIfActive()) {
-                training_was_paused_by_camera_ = true;
-            }
+            // Training continues during camera motion. Viewer re-renders zero-copy
+            // bindings per frame (try-lock skip-and-retain on refine exclusive).
         } else {
             last_camera_movement_time_ = now;
         }
     }
 
     void InputController::onCameraMovementEnd() {
-        // Don't immediately resume - let the timeout handle it
+        // Don't clear camera_is_moving_ immediately — let the timeout handle it.
         last_camera_movement_time_ = std::chrono::steady_clock::now();
     }
 
@@ -3031,13 +3032,6 @@ namespace lfs::vis {
         auto now = std::chrono::steady_clock::now();
         if (now - last_camera_movement_time_ >= camera_movement_timeout_) {
             camera_is_moving_ = false;
-
-            // Resume training if we paused it
-            if (training_was_paused_by_camera_ && services().trainerOrNull() && services().trainerOrNull()->isRunning()) {
-                services().trainerOrNull()->resumeTrainingTemporary();
-                training_was_paused_by_camera_ = false;
-                LOG_DEBUG("Camera movement stopped - resumed temporary training pause");
-            }
         }
     }
 

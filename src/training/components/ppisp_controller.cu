@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
@@ -184,6 +185,30 @@ namespace lfs::training {
 
         LOG_INFO("[PPISPController] Shared buffers: {}x{}", max_H, max_W);
     }
+
+    void PPISPController::release_shared_buffers() noexcept {
+        // Class-static Tensor members are default-constructed before main (and
+        // thus before the CudaMemoryPool Meyers singleton). Reverse destruction
+        // would free them *after* the pool → SIGSEGV. Release here
+        // via the process pre-shutdown hook while the pool is still alive.
+        shared_buf_conv1_ = {};
+        shared_buf_pool_ = {};
+        shared_buf_conv2_ = {};
+        shared_buf_conv3_ = {};
+        shared_buf_pool2_ = {};
+        shared_buf_h_ = 0;
+        shared_buf_w_ = 0;
+    }
+
+    namespace {
+        // Register once at dynamic init so test binaries and the app both
+        // release PPISP shared buffers before Tensor::shutdown_memory_pool.
+        const bool g_ppisp_shared_release_hook_registered = [] {
+            lfs::core::register_gpu_pre_shutdown_hook(
+                []() noexcept { PPISPController::release_shared_buffers(); });
+            return true;
+        }();
+    } // namespace
 
     lfs::core::Tensor PPISPController::predict(const lfs::core::Tensor& rendered_rgb, const float exposure_prior) {
         assert(rendered_rgb.shape().rank() == 4);

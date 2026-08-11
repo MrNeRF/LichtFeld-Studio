@@ -421,6 +421,39 @@ namespace lfs::core {
         void markDirty() { invalidateCache(); }
         void markTransformDirty(NodeId node);
 
+        /// Wire the trainer step-boundary mutex (Trainer::render_mutex_) so
+        /// rebuildModelCacheIfNeeded and other live-model readers share ONE
+        /// exclusion with densify commit / trim / preview draw.
+        void setLiveModelMutex(std::shared_mutex* mutex) noexcept {
+            live_model_mutex_.store(mutex, std::memory_order_release);
+        }
+        [[nodiscard]] std::shared_mutex* liveModelMutex() const noexcept {
+            return live_model_mutex_.load(std::memory_order_acquire);
+        }
+
+        /// Nesting note for threads that already hold liveModelMutex() shared
+        /// (preview draw). Prevents non-recursive re-acquire in rebuild.
+        void noteLiveModelLockAcquired() const noexcept {
+            ++live_model_lock_depth();
+        }
+        void noteLiveModelLockReleased() const noexcept {
+            auto& d = live_model_lock_depth();
+            if (d > 0) {
+                --d;
+            }
+        }
+        [[nodiscard]] static int& live_model_lock_depth() noexcept {
+            thread_local int depth = 0;
+            return depth;
+        }
+
+        /// E2 discrimination: exclusive access to the combined-model cache mutex.
+        /// Trainer holds this across commit+trim for the experiment; production
+        /// uses live_model_mutex_ (render_mutex_) instead.
+        [[nodiscard]] std::unique_lock<std::mutex> acquireCombinedModelExclusive() const {
+            return std::unique_lock<std::mutex>(combined_model_mutex_);
+        }
+
         size_t applyDeleted();
 
     private:
@@ -443,6 +476,10 @@ namespace lfs::core {
 
         mutable std::mutex combined_model_mutex_;
         SplatTensorAllocator combined_model_allocator_;
+
+        /// Points at Trainer::render_mutex_ while a trainer owns this scene.
+        /// Null when idle / headless without a live GUI trainer.
+        mutable std::atomic<std::shared_mutex*> live_model_mutex_{nullptr};
 
         mutable std::vector<glm::mat4> cached_transforms_;
         mutable std::atomic<bool> transform_cache_valid_{false};

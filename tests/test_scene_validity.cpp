@@ -216,6 +216,88 @@ namespace lfs::python {
         EXPECT_FALSE(trainer.isInitialized());
     }
 
+    TEST(TrainerConstructionTest, InitializeRejectsGutWithShRestBeforeTraining) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        training::Trainer trainer(scene);
+
+        core::param::TrainingParameters params;
+        params.optimization.gut = true;
+        params.optimization.sh_degree = 1;
+        const auto result = trainer.initialize(params);
+
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().find("GUT/gsplat"), std::string::npos);
+        EXPECT_NE(result.error().find("sh_degree=0"), std::string::npos);
+        EXPECT_NE(result.error().find("FastGS"), std::string::npos);
+        EXPECT_FALSE(trainer.isInitialized());
+    }
+
+    TEST(TrainerConstructionTest, ExportableDensifyBarrierDistinguishesAbsentAndFailed) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        training::Trainer trainer(scene);
+        using Begin = training::Trainer::ExportableDensifyBarrierBegin;
+
+        EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::NotInstalled);
+
+        int begin_calls = 0;
+        int end_calls = 0;
+        trainer.setExportableDensifyBarrier(
+            [&] {
+                ++begin_calls;
+                return false;
+            },
+            [&] {
+                ++end_calls;
+                return true;
+            });
+        EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::Failed);
+        EXPECT_TRUE(trainer.endExportableDensifyBarrier());
+        EXPECT_EQ(begin_calls, 1);
+        EXPECT_EQ(end_calls, 0);
+
+        trainer.setExportableDensifyBarrier(
+            [&] {
+                ++begin_calls;
+                return true;
+            },
+            [&] {
+                ++end_calls;
+                return true;
+            });
+        EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::Acquired);
+        EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::Acquired);
+        EXPECT_TRUE(trainer.endExportableDensifyBarrier());
+        EXPECT_EQ(end_calls, 0);
+        EXPECT_TRUE(trainer.endExportableDensifyBarrier());
+        EXPECT_EQ(begin_calls, 2);
+        EXPECT_EQ(end_calls, 1);
+    }
+
+    TEST(TrainerConstructionTest, ExportableDensifyBarrierEndFailureStopsTrainer) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        training::Trainer trainer(scene);
+        using Begin = training::Trainer::ExportableDensifyBarrierBegin;
+
+        int end_calls = 0;
+        trainer.setExportableDensifyBarrier(
+            [] { return true; },
+            [&] {
+                ++end_calls;
+                return false;
+            });
+
+        EXPECT_EQ(trainer.beginExportableDensifyBarrier(), Begin::Acquired);
+        EXPECT_FALSE(trainer.endExportableDensifyBarrier());
+        EXPECT_EQ(end_calls, 1);
+        EXPECT_TRUE(trainer.has_stopped());
+    }
+
     TEST(TrainerConstructionTest, ManagerClearReleasesTrainerResourcesAndPoolCache) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
@@ -812,7 +894,10 @@ namespace lfs::python {
         EXPECT_EQ(training_model->means_raw().capacity(), capacity);
         EXPECT_EQ(training_model->shN_raw().capacity(),
                   core::sh_swizzled_float_count(capacity, rest_coeffs));
-        EXPECT_FALSE(training_model->means_raw().is_external_storage());
+        // zeros_direct is still "external" (cuda.direct) — assert we left the
+        // Vulkan-external interop kind, not that storage is non-external.
+        EXPECT_NE(training_model->means_raw().external_storage_kind(),
+                  "vulkan_external_buffer");
     }
 
     TEST_F(SceneValidityTest, AdamAddNewParamsPreservesExportableStorage) {

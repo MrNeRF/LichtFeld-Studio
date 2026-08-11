@@ -35,6 +35,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -102,15 +103,62 @@ namespace lfs::vis {
             return state;
         }
 
-        [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
-            const SceneManager* const scene_manager) {
-            std::optional<std::shared_lock<std::shared_mutex>> lock;
-            if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
-                if (const auto* trainer = tm->getTrainer()) {
-                    lock.emplace(trainer->getRenderMutex());
+        struct LiveModelLockBundle {
+            std::shared_lock<std::shared_mutex> lock;
+            const lfs::core::Scene* scene = nullptr;
+            LiveModelLockBundle() = default;
+            LiveModelLockBundle(std::shared_lock<std::shared_mutex>&& l, const lfs::core::Scene* s)
+                : lock(std::move(l)),
+                  scene(s) {
+                if (scene && lock.owns_lock()) {
+                    scene->noteLiveModelLockAcquired();
                 }
             }
-            return lock;
+            LiveModelLockBundle(LiveModelLockBundle&& other) noexcept
+                : lock(std::move(other.lock)),
+                  scene(other.scene) {
+                other.scene = nullptr;
+            }
+            LiveModelLockBundle& operator=(LiveModelLockBundle&& other) noexcept {
+                if (this != &other) {
+                    if (scene && lock.owns_lock()) {
+                        scene->noteLiveModelLockReleased();
+                    }
+                    lock = std::move(other.lock);
+                    scene = other.scene;
+                    other.scene = nullptr;
+                }
+                return *this;
+            }
+            ~LiveModelLockBundle() {
+                if (scene && lock.owns_lock()) {
+                    scene->noteLiveModelLockReleased();
+                }
+            }
+            LiveModelLockBundle(const LiveModelLockBundle&) = delete;
+            LiveModelLockBundle& operator=(const LiveModelLockBundle&) = delete;
+            [[nodiscard]] bool owns_lock() const { return lock.owns_lock(); }
+        };
+
+        [[nodiscard]] std::optional<LiveModelLockBundle> acquireLiveModelRenderLock(
+            const SceneManager* const scene_manager,
+            const bool try_lock = false) {
+            if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
+                if (const auto* trainer = tm->getTrainer()) {
+                    const lfs::core::Scene* scene = trainer->getScene();
+                    if (try_lock) {
+                        std::shared_lock<std::shared_mutex> candidate(
+                            trainer->getRenderMutex(), std::try_to_lock);
+                        if (!candidate.owns_lock()) {
+                            return std::nullopt;
+                        }
+                        return LiveModelLockBundle(std::move(candidate), scene);
+                    }
+                    return LiveModelLockBundle(
+                        std::shared_lock<std::shared_mutex>(trainer->getRenderMutex()), scene);
+                }
+            }
+            return std::nullopt;
         }
 
         [[nodiscard]] bool isRetryableSharedScratchUnavailable(const std::string_view error) {
@@ -1418,7 +1466,16 @@ namespace lfs::vis {
         if (context.viewport_region) {
             current_size = framebuffer_region.size;
         }
+        // Minimized / zero-extent: no presentable viewport work. Never hold a
+        // resize training pause, never start model reads, and never publish
+        // new viewer borrows — the trainer continues headless on the existing
+        // handshake fences only. Restore re-enters the normal frame path
+        // (first frame may block once for a stable model, same as cold start).
         if (current_size.x <= 0 || current_size.y <= 0) {
+            if (vksplat_viewport_renderer_) {
+                vksplat_viewport_renderer_->setLiveSubmitCallback({});
+            }
+            releaseResizeTrainingPause();
             return {.image = vulkan_viewport_image_,
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};
@@ -1553,77 +1610,101 @@ namespace lfs::vis {
             update_cached_split_position(!only_split_position_pending)) {
             dirty_mask_.fetch_and(~DirtyFlag::SPLIT_POSITION, std::memory_order_relaxed);
             LOG_PERF("renderVulkanFrame: split-position early cache HIT (returning cached image)");
-            if (!resize_deferring) {
-                releaseResizeTrainingPause();
-            }
             return cached_frame_result();
         }
 
-        if (resize_deferring && is_training) {
-            requestResizeTrainingPause(trainer_manager);
-        }
-        const auto release_resize_pause_if_idle = [this, resize_deferring]() {
-            if (!resize_deferring) {
-                releaseResizeTrainingPause();
+        // Window resize/minimize must never alter the training schedule. Viewer
+        // work quiesces itself (cached frames while deferring; output-ring
+        // recreate waits ring watermarks only). pauseTrainingTemporary is not
+        // used on this path — other interactive wait sites keep it.
+
+        // Passive training preview: try the step-boundary render lock so densify
+        // (exclusive) never stalls the UI frame. On contention, retain the last
+        // splat image and retry on the next cadence tick. First frame / no cache
+        // falls back to a blocking acquire below.
+        const bool training_try_lock = is_training;
+        auto render_lock = acquireLiveModelRenderLock(scene_manager, training_try_lock);
+        bool render_lock_contended = training_try_lock && !render_lock.has_value() &&
+                                     scene_manager && scene_manager->getTrainerManager() &&
+                                     scene_manager->getTrainerManager()->getTrainer();
+
+        const lfs::core::SplatData* model = nullptr;
+        SceneRenderState scene_state;
+        auto sample_model_under_lock = [&]() {
+            model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
+            scene_state = {};
+            if (scene_manager) {
+                LOG_TIMER("renderVulkanFrame.buildRenderState");
+                scene_state = scene_manager->buildRenderState();
             }
         };
-
-        auto render_lock = acquireLiveModelRenderLock(scene_manager);
-
-        const lfs::core::SplatData* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
-        SceneRenderState scene_state;
-        if (scene_manager) {
-            LOG_TIMER("renderVulkanFrame.buildRenderState");
-            scene_state = scene_manager->buildRenderState();
+        if (!render_lock_contended) {
+            sample_model_under_lock();
         }
-        const bool has_renderable_model = hasRenderableGaussians(model);
-        const bool has_visible_gaussian_model =
-            has_renderable_model && scene_state.visible_splat_count > 0;
-        const bool has_point_cloud =
-            scene_state.point_cloud != nullptr && scene_state.point_cloud->size() > 0;
-        const bool has_meshes = std::any_of(scene_state.meshes.begin(),
-                                            scene_state.meshes.end(),
-                                            [](const auto& mesh) { return mesh.mesh != nullptr; });
-        const bool has_environment = environmentBackgroundEnabled(frame_settings);
-        const bool has_render_content = has_visible_gaussian_model || has_point_cloud || has_meshes || has_environment;
-        const size_t model_ptr = reinterpret_cast<size_t>(model);
+        bool has_renderable_model = false;
+        bool has_visible_gaussian_model = false;
+        bool has_point_cloud = false;
+        bool has_meshes = false;
+        bool has_environment = false;
+        bool has_render_content = false;
+        auto refresh_content_flags = [&]() {
+            has_renderable_model = hasRenderableGaussians(model);
+            has_visible_gaussian_model =
+                has_renderable_model && scene_state.visible_splat_count > 0;
+            has_point_cloud =
+                scene_state.point_cloud != nullptr && scene_state.point_cloud->size() > 0;
+            has_meshes = std::any_of(scene_state.meshes.begin(),
+                                     scene_state.meshes.end(),
+                                     [](const auto& mesh) { return mesh.mesh != nullptr; });
+            has_environment = environmentBackgroundEnabled(frame_settings);
+            has_render_content =
+                has_visible_gaussian_model || has_point_cloud || has_meshes || has_environment;
+        };
+        refresh_content_flags();
+        size_t model_ptr = reinterpret_cast<size_t>(model);
 
-        if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
-            model_change.changed) {
-            invalidateGTComparisonImageCache();
-            clearVulkanViewportImageState();
-            last_logged_vksplat_render_error_.clear();
-            if (vksplat_viewport_renderer_) {
-                if (is_training && lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
-                    LOG_DEBUG("Preserving VkSplat renderer across training model change");
-                } else {
-                    // The trainer must drop the fence handle before reset destroys
-                    // the CUDA import it points at.
-                    if (trainer_manager) {
-                        if (auto* trainer = trainer_manager->getTrainer()) {
-                            trainer->setViewerReleaseFence(nullptr);
+        // Skip model-change tracking while the step-boundary lock is contended:
+        // model_ptr is null only because densify holds exclusive, not because the
+        // scene dropped the model. Treating it as a change would wipe the retained
+        // last splat image (the whole point of the cadence path).
+        if (!render_lock_contended) {
+            if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
+                model_change.changed) {
+                invalidateGTComparisonImageCache();
+                clearVulkanViewportImageState();
+                last_logged_vksplat_render_error_.clear();
+                if (vksplat_viewport_renderer_) {
+                    if (is_training && lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
+                        LOG_DEBUG("Preserving VkSplat renderer across training model change");
+                    } else {
+                        // The trainer must drop the fence handle before reset destroys
+                        // the CUDA import it points at.
+                        if (trainer_manager) {
+                            if (auto* trainer = trainer_manager->getTrainer()) {
+                                trainer->setViewerReleaseFence(nullptr);
+                            }
                         }
+                        // reset() destroys render_stream_; drop it from the TLS current
+                        // stream first so the rest of the frame doesn't enqueue work on a
+                        // stale handle. Re-installed after the handshake re-init below.
+                        frame_stream_guard.reset();
+                        vksplat_viewport_renderer_->reset();
+                        // Clear GT async ticket host state after ring teardown.
+                        gt_async_depth_ticket_ = 0;
+                        gt_async_depth_dest_ = {};
+                        gt_async_ticket_mode_ = GTComparisonMode::RGB;
+                        gt_async_ticket_intrinsics_.reset();
+                        gt_async_ticket_flip_y_ = false;
+                        gt_async_ticket_metadata_ = {};
+                        gt_async_held_display_.reset();
+                        gt_async_held_flip_y_ = false;
+                        gt_async_held_metadata_ = {};
                     }
-                    // reset() destroys render_stream_; drop it from the TLS current
-                    // stream first so the rest of the frame doesn't enqueue work on a
-                    // stale handle. Re-installed after the handshake re-init below.
-                    frame_stream_guard.reset();
-                    vksplat_viewport_renderer_->reset();
-                    // F3-4: clear GT async ticket host state after ring teardown.
-                    gt_async_depth_ticket_ = 0;
-                    gt_async_depth_dest_ = {};
-                    gt_async_ticket_mode_ = GTComparisonMode::RGB;
-                    gt_async_ticket_intrinsics_.reset();
-                    gt_async_ticket_flip_y_ = false;
-                    gt_async_ticket_metadata_ = {};
-                    gt_async_held_display_.reset();
-                    gt_async_held_flip_y_ = false;
-                    gt_async_held_metadata_ = {};
                 }
+                viewport_artifact_service_.clearViewportOutput();
+                markDirty(DirtyFlag::ALL);
             }
-            viewport_artifact_service_.clearViewportOutput();
-            markDirty(DirtyFlag::ALL);
-        }
+        } // !render_lock_contended model-change tracking
 
         const bool synchronize_vksplat_input_upload = is_training;
         if (const DirtyMask training_dirty = frame_lifecycle_service_.handleTrainingRefresh(
@@ -1679,16 +1760,49 @@ namespace lfs::vis {
                 ++viewport_projection_generation_;
             }
         }
-        LOG_PERF("renderVulkanFrame.frame_dirty=0x{:x} model={} pc={} mesh={} env={}",
-                 frame_dirty, has_renderable_model, has_point_cloud, has_meshes, has_environment);
-        if (!has_render_content) {
+        LOG_PERF("renderVulkanFrame.frame_dirty=0x{:x} model={} pc={} mesh={} env={} lock_contended={}",
+                 frame_dirty,
+                 has_renderable_model,
+                 has_point_cloud,
+                 has_meshes,
+                 has_environment,
+                 render_lock_contended);
+        // Step-boundary contention during densify: retain last splat image, re-queue
+        // dirty so the next cadence tick retries after the exclusive lock drops.
+        if (render_lock_contended && has_cached_viewport_output) {
+            if (frame_dirty != 0) {
+                dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
+            }
+            LOG_PERF("renderVulkanFrame: step-boundary lock contended (retaining cached splat)");
+            render_lock.reset();
+            return cached_frame_result();
+        }
+        if (render_lock_contended && !has_cached_viewport_output) {
+            // First frame while densify holds exclusive — block once so we get a
+            // stable model rather than an empty viewport for the whole refine.
+            render_lock = acquireLiveModelRenderLock(scene_manager, /*try_lock=*/false);
+            render_lock_contended = !render_lock.has_value();
+            if (render_lock) {
+                sample_model_under_lock();
+                refresh_content_flags();
+                model_ptr = reinterpret_cast<size_t>(model);
+                (void)frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
+            }
+        }
+        if (!has_render_content && !has_cached_viewport_output) {
             clearVulkanViewportImageState();
             last_logged_vksplat_render_error_.clear();
             viewport_artifact_service_.clearViewportOutput();
             clearVulkanMeshFrame();
             render_lock.reset();
-            release_resize_pause_if_idle();
             return {};
+        }
+        if (!has_render_content && has_cached_viewport_output) {
+            if (frame_dirty != 0) {
+                dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
+            }
+            render_lock.reset();
+            return cached_frame_result();
         }
 
         const DirtyMask split_deferred_dirty = frame_dirty & ~DirtyFlag::SPLIT_POSITION;
@@ -1702,7 +1816,6 @@ namespace lfs::vis {
             LOG_PERF("renderVulkanFrame: split-position cache HIT (returning cached image, deferred_dirty=0x{:x})",
                      deferred_dirty);
             render_lock.reset();
-            release_resize_pause_if_idle();
             return cached_frame_result();
         }
 
@@ -1730,38 +1843,37 @@ namespace lfs::vis {
                 VksplatViewportRenderer::OutputSlot::Main) &&
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
         if (vksplat_viewport_resize) {
-            const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
-            if (!trainer || !trainer->is_paused()) {
-                requestResizeTrainingPause(trainer_manager);
-                dirty_mask_.fetch_or(vksplatOutputResizeRetryDirty(frame_dirty),
-                                     std::memory_order_relaxed);
-                render_lock.reset();
-                return cached_frame_result();
-            }
+            // While the viewport size is moving, return cached frames without
+            // starting model reads or publishing viewer borrows. Once it is
+            // stable, ensureOutputImages retires prior rings through the
+            // producer/consumer watermarks; the viewport-independent exportable
+            // model import is retained. A normal live submit then re-arms the
+            // handshake.
             if (has_cached_viewport_output &&
                 frame_lifecycle_service_.resizeRecentlyChanged(kTrainingOutputResizeStableDelay)) {
                 dirty_mask_.fetch_or(vksplatOutputResizeRetryDirty(frame_dirty),
                                      std::memory_order_relaxed);
+                if (vksplat_viewport_renderer_) {
+                    vksplat_viewport_renderer_->setLiveSubmitCallback({});
+                }
                 render_lock.reset();
                 return cached_frame_result();
             }
-            LOG_DEBUG("Training paused for VkSplat output resize to {}x{}", render_size.x, render_size.y);
-        }
-        const auto release_resize_pause_on_return = [this, resize_deferring]() {
-            if (!resize_deferring) {
-                releaseResizeTrainingPause();
-            }
-        };
-        struct ResizePauseReleaseOnReturn {
-            const decltype(release_resize_pause_on_return)& release;
-            bool active = false;
-            ~ResizePauseReleaseOnReturn() {
-                if (active) {
-                    release();
+            // Drain in-flight viewer CUDA work before output-ring recreate so
+            // the trainer's waitForModelReaders has at most one residual frame.
+            if (vksplat_viewport_renderer_ && vksplat_viewport_renderer_->renderStream()) {
+                const cudaError_t drain =
+                    cudaStreamSynchronize(vksplat_viewport_renderer_->renderStream());
+                if (drain != cudaSuccess) {
+                    LOG_WARN("Viewer resize quiesce: render-stream sync failed: {} ({})",
+                             cudaGetErrorName(drain),
+                             cudaGetErrorString(drain));
                 }
             }
-        } resize_pause_release_on_return{release_resize_pause_on_return,
-                                         resize_training_pause_active_ && !resize_deferring};
+            LOG_DEBUG("VkSplat output resize to {}x{} (viewer-side quiesce; training continues)",
+                      render_size.x,
+                      render_size.y);
+        }
 
         if (!vksplat_viewport_resize && frame_dirty == 0 && has_cached_viewport_output) {
             LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
@@ -1797,9 +1909,25 @@ namespace lfs::vis {
             live_trainer = trainer_manager->getTrainer();
         }
         // Held shared until all CPU/GPU frame preparation and readback paths exit.
+        // Passive preview: try_to_lock so a mid-step optimizer exclusive does not stall
+        // the UI; retain last splat image and retry on the next cadence tick.
         std::optional<std::shared_lock<std::shared_mutex>> model_read_lock;
         if (live_trainer) {
-            model_read_lock.emplace(live_trainer->getModelAccessMutex());
+            std::shared_lock<std::shared_mutex> candidate(
+                live_trainer->getModelAccessMutex(), std::try_to_lock);
+            if (!candidate.owns_lock()) {
+                if (has_cached_viewport_output) {
+                    if (frame_dirty != 0) {
+                        dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
+                    }
+                    LOG_PERF("renderVulkanFrame: model-access lock contended (retaining cached splat)");
+                    render_lock.reset();
+                    return cached_frame_result();
+                }
+                // No cache yet — block once for the first published frame.
+                candidate = std::shared_lock<std::shared_mutex>(live_trainer->getModelAccessMutex());
+            }
+            model_read_lock.emplace(std::move(candidate));
         }
         if (live_trainer) {
             live_trainer->setViewerReleaseFence(vksplat_viewport_renderer_->renderCompleteFence());
@@ -2432,8 +2560,8 @@ namespace lfs::vis {
                                 // display when Ready; submit at most one new ticket when free. The
                                 // panel keeps the previous display until the new one is ready.
                                 const auto clear_gt_async_ticket = [this]() {
-                                    // F3-3: detach dest under the ring lock before freeing host
-                                    // storage; markFailed keeps pins until timeline reclaim (F3-2).
+                                    // Detach dest under the ring lock before freeing host
+                                    // storage; markFailed keeps pins until timeline reclaim.
                                     if (gt_async_depth_ticket_ != 0 && vksplat_viewport_renderer_) {
                                         vksplat_viewport_renderer_->abandonReadbackTicket(
                                             gt_async_depth_ticket_);
@@ -3009,9 +3137,12 @@ namespace lfs::vis {
                 vk_req.transform_indices = pc_request.scene.transform_indices.get();
                 vk_req.node_visibility_mask = &pc_request.scene.node_visibility_mask;
                 if (frame_settings.point_cloud_mode && has_visible_gaussian_model &&
-                    model->has_deleted_mask()) {
+                    model->has_deleted_mask() && model->deleted_mask_matches_size()) {
                     vk_req.deleted_mask = &model->deleted();
-                    vk_req.deleted_mask_revision = point_cloud_data_revision_;
+                    // Content revision for the soft-delete mask itself (not the
+                    // point-cloud positions revision). Stale wiring here caused
+                    // silent cache reuse after densify/compact.
+                    vk_req.deleted_mask_revision = model->deleted_mask_version();
                 }
                 vk_req.selection_mask = pc_request.overlay.selection_mask.get();
                 vk_req.preview_selection_mask = pc_request.overlay.transient_mask.mask;

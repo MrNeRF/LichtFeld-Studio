@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "visualizer/app_store.hpp"
 
 #include <RmlUi/Core/EventListener.h>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -25,6 +28,7 @@ namespace lfs::vis::gui {
         struct State {
             bool visible = false;
             lfs::diagnostics::VramProfilerSnapshot snapshot;
+            lfs::vis::AppStore::PerfHud perf_hud;
         };
 
         VramHudOverlay();
@@ -37,8 +41,10 @@ namespace lfs::vis::gui {
         void onDocumentDestroyed();
 
         void setState(State state);
-        [[nodiscard]] bool isVisible() const noexcept { return state_.visible; }
-        [[nodiscard]] bool needsAnimationFrame() const noexcept { return pointer_captured_; }
+        [[nodiscard]] bool isVisible() const noexcept { return state_.visible || state_.perf_hud.visible; }
+        [[nodiscard]] bool needsAnimationFrame() const noexcept {
+            return pointer_captured_ || sparkline_tick_due();
+        }
         [[nodiscard]] bool isCapturingPointer() const noexcept { return pointer_captured_; }
 
         [[nodiscard]] bool isDueForProcessSample(std::chrono::milliseconds interval);
@@ -79,8 +85,12 @@ namespace lfs::vis::gui {
 
         void attachListeners();
         void apply();
+        void applyCompactStrip();
+        void applySparklines();
+        void pushSparklineSample();
+        [[nodiscard]] bool sparkline_tick_due() const noexcept;
         void applySummary(std::size_t process_used, std::size_t process_total);
-        void applyBreakdown(std::size_t process_used);
+        void applyLedger();
         void applyCounters();
         void applyAllocations();
         void applyAnnotations();
@@ -91,7 +101,9 @@ namespace lfs::vis::gui {
         void onAnnoFilterClear();
         void updateAnnoFilterClearVisibility();
         void primeDefaultCollapse();
+        void primeDefaultLedgerCollapse(const lfs::diagnostics::VramLedgerTree& ledger);
         void toggleNode(const std::string& path);
+        void enableDetailedTracking();
         void pruneCollapsedSet();
         void loadPersistedState();
         void schedulePersistSave();
@@ -110,10 +122,35 @@ namespace lfs::vis::gui {
         std::uint64_t last_language_generation_ = 0;
         bool has_language_generation_ = false;
         bool last_visible_ = false;
+        std::shared_ptr<const lfs::vis::AppStore::PerfHudSnapshot> last_perf_snapshot_;
+        bool last_perf_visible_ = false;
+        bool last_perf_expanded_ = true;
         bool default_collapse_applied_ = false;
+        bool ledger_default_collapse_applied_ = false;
 
         Rml::ElementDocument* document_ = nullptr;
         Rml::Element* root_ = nullptr;
+        Rml::Element* perf_strip_ = nullptr;
+        Rml::Element* perf_card_ = nullptr;
+        Rml::Element* perf_rate_ = nullptr;
+        Rml::Element* perf_vram_process_ = nullptr;
+        Rml::Element* perf_vram_other_ = nullptr;
+        Rml::Element* perf_vram_free_ = nullptr;
+        Rml::Element* perf_vram_value_ = nullptr;
+        Rml::Element* perf_vram_badge_ = nullptr;
+        Rml::Element* perf_ram_process_ = nullptr;
+        Rml::Element* perf_ram_other_ = nullptr;
+        Rml::Element* perf_ram_free_ = nullptr;
+        Rml::Element* perf_ram_value_ = nullptr;
+        Rml::Element* perf_gpu_fill_ = nullptr;
+        Rml::Element* perf_gpu_value_ = nullptr;
+        Rml::Element* perf_cpu_fill_ = nullptr;
+        Rml::Element* perf_cpu_value_ = nullptr;
+        Rml::Element* perf_core_strip_ = nullptr;
+        Rml::Element* spark_vram_root_ = nullptr;
+        Rml::Element* spark_ram_root_ = nullptr;
+        Rml::Element* spark_gpu_root_ = nullptr;
+        Rml::Element* spark_cpu_root_ = nullptr;
         Rml::Element* header_ = nullptr;
         Rml::Element* resize_handle_ = nullptr;
         Rml::Element* filter_input_ = nullptr;
@@ -124,12 +161,20 @@ namespace lfs::vis::gui {
         Rml::Element* counters_root_ = nullptr;
         Rml::Element* counters_empty_ = nullptr;
         Rml::Element* panel_overview_ = nullptr;
+        Rml::Element* panel_ledger_ = nullptr;
         Rml::Element* panel_allocations_ = nullptr;
         Rml::Element* panel_tree_ = nullptr;
         Rml::Element* tabs_root_ = nullptr;
         Rml::Element* allocs_rows_root_ = nullptr;
         Rml::Element* allocs_summary_value_ = nullptr;
-        Rml::Element* breakdown_root_ = nullptr;
+        Rml::Element* tracking_off_ = nullptr;
+        Rml::Element* ledger_process_ = nullptr;
+        Rml::Element* ledger_attributed_ = nullptr;
+        Rml::Element* ledger_residual_ = nullptr;
+        Rml::Element* ledger_epsilon_ = nullptr;
+        Rml::Element* ledger_closure_ = nullptr;
+        Rml::Element* ledger_over_banner_ = nullptr;
+        Rml::Element* ledger_rows_root_ = nullptr;
         Rml::Element* panel_annotations_ = nullptr;
         Rml::Element* anno_rows_root_ = nullptr;
         Rml::Element* anno_summary_value_ = nullptr;
@@ -178,15 +223,25 @@ namespace lfs::vis::gui {
             std::string cached_pct;
         };
 
-        struct BreakdownRowElements {
+        struct LedgerRowElements {
             Rml::Element* row = nullptr;
+            Rml::Element* name_cell = nullptr;
+            Rml::Element* toggle = nullptr;
             Rml::Element* name = nullptr;
-            Rml::Element* bytes = nullptr;
-            Rml::Element* pct = nullptr;
+            Rml::Element* note = nullptr;
+            Rml::Element* share_fill = nullptr;
+            Rml::Element* disclosure = nullptr;
+            Rml::Element* allocated = nullptr;
+            Rml::Element* badge = nullptr;
             std::string cached_name;
-            std::string cached_bytes;
-            std::string cached_pct;
+            std::string cached_note;
+            std::string cached_share_width;
+            std::string cached_disclosure;
+            std::string cached_allocated;
+            std::string cached_badge;
             std::string cached_classes;
+            std::string cached_padding;
+            std::string cached_toggle;
         };
 
         struct AnnotationRowElements {
@@ -210,7 +265,7 @@ namespace lfs::vis::gui {
         std::unordered_map<std::string, RowElements> rows_by_path_;
         std::unordered_map<std::string, CounterRowElements> counter_rows_by_key_;
         std::vector<AllocRowElements> allocs_rows_;
-        std::vector<BreakdownRowElements> breakdown_rows_;
+        std::vector<LedgerRowElements> ledger_rows_;
         std::vector<AnnotationRowElements> anno_rows_;
         std::string cached_allocs_summary_;
         std::string cached_anno_summary_;
@@ -224,6 +279,12 @@ namespace lfs::vis::gui {
         std::string filter_text_;
         std::string filter_text_lower_;
         std::string cached_throughput_text_;
+        std::string cached_ledger_process_;
+        std::string cached_ledger_attributed_;
+        std::string cached_ledger_residual_;
+        std::string cached_ledger_epsilon_;
+        std::string cached_ledger_closure_;
+        std::string cached_ledger_over_banner_;
 
         struct SummaryEntry {
             Rml::Element* value = nullptr;
@@ -262,6 +323,19 @@ namespace lfs::vis::gui {
         bool persistence_dirty_ = false;
 
         std::chrono::steady_clock::time_point last_process_sample_{};
+        std::chrono::steady_clock::time_point last_sparkline_sample_{};
+
+        static constexpr std::size_t kSparklineSamples = 60;
+        std::array<float, kSparklineSamples> spark_vram_hist_{};
+        std::array<float, kSparklineSamples> spark_ram_hist_{};
+        std::array<float, kSparklineSamples> spark_gpu_hist_{};
+        std::array<float, kSparklineSamples> spark_cpu_hist_{};
+        std::size_t spark_count_ = 0;
+        std::size_t spark_write_ = 0;
+        std::string cached_spark_vram_;
+        std::string cached_spark_ram_;
+        std::string cached_spark_gpu_;
+        std::string cached_spark_cpu_;
     };
 
 } // namespace lfs::vis::gui

@@ -383,9 +383,9 @@ namespace gsplat_lfs {
             static_cast<size_t>(channels), "gsplat backward color elements");
         const size_t color_bytes = checked_bytes(
             color_values, sizeof(float), "gsplat backward color gradients");
-        StreamOrderedDeviceBuffer color_gradients(
-            color_bytes, stream, "rasterizer.gsplat.color_gradients");
-        auto* v_colors = color_gradients.as<float>();
+        // Grow-only TLS high-water — replaces per-backward cudaMallocAsync/Free.
+        float* const v_colors =
+            static_cast<float*>(ensure_gsplat_color_grad_workspace(color_bytes, stream));
         LFS_CUDA_CHECK_MSG(
             cudaMemsetAsync(v_colors, 0, color_bytes, stream),
             "gsplat backward color-gradient initialization");

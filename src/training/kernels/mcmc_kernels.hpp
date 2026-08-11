@@ -72,6 +72,22 @@ namespace lfs::training::mcmc {
         void* stream = nullptr);
 
     /**
+     * Fused RNG, covariance transform, and means update.
+     * Honors frozen_mask. The seed controls the curand sequence.
+     */
+    void launch_inject_noise_kernel(
+        const float* raw_opacities,
+        const float* raw_scales,
+        const float* raw_quats,
+        float* means,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
+        float current_lr,
+        size_t N,
+        uint64_t seed,
+        void* stream = nullptr);
+
+    /**
      * Fused scatter kernel - Copy multiple parameters from src to dst indices
      *
      * Copies parameters from sampled indices to dead indices in a single kernel.
@@ -213,6 +229,18 @@ namespace lfs::training::mcmc {
     void launch_elementwise_max_inplace(
         float* a,
         const float* b,
+        size_t N,
+        void* stream = nullptr);
+
+    /**
+     * fold densification error row into running max and zero the
+     * full [2,N] densification buffer in one pass (replaces max + zero_).
+     *
+     * densification_info layout: row0 [0..N), row1 [N..2N) — only row1 is maxed.
+     */
+    void launch_max_error_and_zero_densification(
+        float* error_max,
+        float* densification_info,
         size_t N,
         void* stream = nullptr);
 

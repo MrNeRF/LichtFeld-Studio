@@ -185,11 +185,12 @@ namespace lfs::core {
             const Tensor* a_operand = &a;
             const Tensor* b_operand = &b;
             if (a_batch == 1) {
-                a_broadcast = a.broadcast_to({batch, a.shape_[1], a.shape_[2]});
+                // broadcast_to is a zero-stride view; bmm needs dense batches.
+                a_broadcast = a.broadcast_to({batch, a.shape_[1], a.shape_[2]}).contiguous();
                 a_operand = &a_broadcast;
             }
             if (b_batch == 1) {
-                b_broadcast = b.broadcast_to({batch, b.shape_[1], b.shape_[2]});
+                b_broadcast = b.broadcast_to({batch, b.shape_[1], b.shape_[2]}).contiguous();
                 b_operand = &b_broadcast;
             }
             return a_operand->bmm(*b_operand);
@@ -202,9 +203,11 @@ namespace lfs::core {
             const size_t batch = b.shape_[0];
             const size_t m = a.shape_[0];
             const size_t k = a.shape_[1];
-            auto expanded = a.unsqueeze(0).expand({static_cast<int>(batch),
-                                                   static_cast<int>(m),
-                                                   static_cast<int>(k)});
+            auto expanded = a.unsqueeze(0)
+                                .expand({static_cast<int>(batch),
+                                         static_cast<int>(m),
+                                         static_cast<int>(k)})
+                                .contiguous();
             return expanded.bmm(b);
         }
 
@@ -215,9 +218,11 @@ namespace lfs::core {
             const size_t batch = a.shape_[0];
             const size_t k = b.shape_[0];
             const size_t n = b.shape_[1];
-            auto expanded = b.unsqueeze(0).expand({static_cast<int>(batch),
-                                                   static_cast<int>(k),
-                                                   static_cast<int>(n)});
+            auto expanded = b.unsqueeze(0)
+                                .expand({static_cast<int>(batch),
+                                         static_cast<int>(k),
+                                         static_cast<int>(n)})
+                                .contiguous();
             return a.bmm(expanded);
         }
 

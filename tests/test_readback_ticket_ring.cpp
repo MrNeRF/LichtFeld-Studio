@@ -126,7 +126,7 @@ TEST(ReadbackTicketRing, ResetWithOutstandingTicketsFailsThem) {
     EXPECT_EQ(ring.ringFullWaitCount(), 0u);
 }
 
-// F3-2: Failed cells keep pins until freeCell; reclaimFailedIf frees when complete.
+// Failed cells keep pins until freeCell; reclaimFailedIf frees them when complete.
 TEST(ReadbackTicketRing, FailedCellKeepsPinsUntilReclaim) {
     ReadbackTicketRing ring;
     auto meta = makeMeta(7, /*ring_cell=*/1, reinterpret_cast<VkImage>(0xC01));
@@ -165,7 +165,7 @@ TEST(ReadbackTicketRing, FailedCellKeepsPinsUntilReclaim) {
     EXPECT_EQ(*ring.tryAcquireCell(), 0u);
 }
 
-// F3-2: oldestActiveCell includes Failed so ring-full can wait them.
+// oldestActiveCell includes failed cells so a full ring can wait for them.
 TEST(ReadbackTicketRing, OldestActiveIncludesFailed) {
     ReadbackTicketRing ring;
     ring.markSubmitted(0, makeMeta(10, 0));
@@ -184,7 +184,7 @@ TEST(ReadbackTicketRing, OldestActiveIncludesFailed) {
     EXPECT_EQ(ring.cell(*oldest_active).state, ReadbackTicketRing::State::Failed);
 }
 
-// F3-1 contract: hasOutstandingForImage is a pure unlocked query (caller serializes).
+// hasOutstandingForImage is an unlocked query; the caller serializes access.
 // Drain predicates must call it only while holding the mutex or using a snapshot.
 TEST(ReadbackTicketRing, PinPredicateIsUnlockedQuery) {
     ReadbackTicketRing ring;

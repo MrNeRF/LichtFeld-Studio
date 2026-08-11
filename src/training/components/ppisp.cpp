@@ -1016,9 +1016,7 @@ namespace lfs::training {
             !std::isfinite(config.eps) || config.eps <= 0.0 || config.warmup_steps < 0 ||
             !std::isfinite(config.warmup_start_factor) || config.warmup_start_factor < 0.0 ||
             !std::isfinite(config.final_lr_factor) || config.final_lr_factor <= 0.0 ||
-            std::ranges::any_of(regularization_weights, [](const float weight) {
-                return !std::isfinite(weight) || weight < 0.0f;
-            })) {
+            std::ranges::any_of(regularization_weights, [](const float weight) { return !std::isfinite(weight) || weight < 0.0f; })) {
             throw std::runtime_error("Invalid PPISP checkpoint state");
         }
 

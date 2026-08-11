@@ -34,13 +34,14 @@ namespace lfs::vis::gui {
         bool poll(const PanelDrawContext& ctx) override;
         void preload(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override {
-            return {.direct = true, .external_floating_shadow = !foreground_};
+            return {.direct = true};
         }
         PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
                                              const PanelDrawContext& ctx) override;
         void setInput(const PanelInputState* input) override;
         bool wantsKeyboard() const override;
         bool needsAnimationFrame() const override;
+        std::optional<double> nextScheduledAnimationDelay() const override;
         void reloadRmlResources() override;
         void setForeground(bool fg);
 

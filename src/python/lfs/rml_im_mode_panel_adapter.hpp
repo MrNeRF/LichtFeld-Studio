@@ -33,6 +33,7 @@ namespace lfs::vis::gui {
                                              const PanelDrawContext& ctx) override;
         void setInput(const PanelInputState* input) override;
         bool needsAnimationFrame() const override;
+        std::optional<double> nextScheduledAnimationDelay() const override;
         void reloadRmlResources() override;
 
     private:

@@ -63,6 +63,11 @@ namespace lfs::io {
         std::string images_folder = "images";
         int min_track_length = 0;
         bool validate_only = false;
+        // Sidecars are opt-in so dataset loading does not inspect or cache
+        // auxiliary folders that the active training configuration will not use.
+        bool load_masks = false;
+        bool load_depths = false;
+        bool load_normals = false;
         CentralizeDataset centralize = CentralizeDataset::Off;
         ProgressCallback progress = nullptr;
         CancelCallback cancel_requested = nullptr;
@@ -77,6 +82,8 @@ namespace lfs::io {
     // Re-home a splat's tensors into the Vulkan-external allocator the renderer requires (it
     // rejects an input-copy fallback). No-op if already allocator-backed or allocator is empty.
     // The loader runs this for file imports; in-memory callers (e.g. the Python API) must too.
+    [[nodiscard]] LFS_IO_API bool splatTensorsRendererReady(const SplatData& model);
+
     [[nodiscard]] LFS_IO_API Result<void> migrateSplatTensorsToAllocator(
         SplatData& model, const SplatTensorAllocator& allocator);
 

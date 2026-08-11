@@ -1,6 +1,7 @@
 {
   "_language_name": "한국어",
   "menu": {
+    "view.performance_hud": "Performance HUD",
     "file": "파일",
     "file.new_project": "새 프로젝트",
     "file.import_dataset": "데이터셋 가져오기",
@@ -362,7 +363,6 @@
     "dataset.resize_factor": "크기 조정 계수:",
     "dataset.max_width": "최대 너비 (px):",
     "dataset.cpu_cache": "CPU 캐시:",
-    "dataset.fs_cache": "파일 시스템 캐시:",
     "dataset.use_16bit_color": "16비트 컬러:",
     "dataset.output": "출력:",
     "dataset.test_every": "테스트 간격:",
@@ -441,7 +441,6 @@
     "tooltip.resize_factor": "학습 이미지 다운샘플",
     "tooltip.max_width": "최대 이미지 너비 (픽셀)",
     "tooltip.cpu_cache": "디코딩된 이미지 RAM 캐시",
-    "tooltip.fs_cache": "디코딩된 이미지 디스크 캐시",
     "tooltip.use_16bit_color": "16비트 컬러 이미지로 학습 (HDR); 무손실 JPEG 2000으로 캐시",
     "tooltip.test_every": "N번째 이미지마다 테스트 세트로 사용",
     "tooltip.enable_eval": "훈련 중 평가 활성화(테스트 세트에서 PSNR/SSIM 계산). 훈련 속도가 약간 감소합니다.",
@@ -1223,6 +1222,7 @@
     "status_label": "상태: %s"
   },
   "input_settings": {
+    "action.toggle_performance_hud": "Toggle Performance HUD",
     "active_profile": "활성 프로필:",
     "save_current_profile": "현재 프로필 저장",
     "reset_to_default": "기본값으로 재설정",
@@ -1830,6 +1830,7 @@
     "secondary_view": "보조 보기",
     "split": "분할:",
     "gpu": "GPU",
+    "ui_fps": "UI FPS",
     "strategy_default": "기본값"
   },
   "plugin_manager": {
@@ -2068,6 +2069,33 @@
     "redo_named": "다시 실행: {name}"
   },
   "ui": {
+    "perf_hud_title": "Performance",
+    "perf_this_process": "This process",
+    "perf_other_processes": "Other processes",
+    "perf_free": "Free",
+    "perf_cores": "cores",
+    "perf_process_cpu_note": "Process CPU, share of all cores",
+    "perf_tab_ledger": "Ledger",
+    "perf_ledger_closes": "Ledger closes",
+    "perf_ledger_gap": "Unattributed",
+    "perf_ledger_over": "Over-attributed, numbers unreliable",
+    "perf_ledger_attributed": "Attributed",
+    "perf_nested_disclosure": "Disclosure, not counted again",
+    "perf_no_owner": "No owner",
+    "perf_untracked": "Untracked",
+    "perf_retention": "Retention",
+    "perf_reclaimable": "Reclaimable",
+    "perf_required": "Required",
+    "perf_allocated": "Allocated",
+    "perf_slack": "Slack",
+    "perf_over_budget": "Over budget",
+    "perf_estimate_detected": "Estimate detected",
+    "perf_degenerate_pair": "Publisher reports required equal to allocated",
+    "perf_tracking_off": "Detailed memory tracking is off",
+    "perf_enable_tracking": "Enable",
+    "perf_expand": "Expand",
+    "perf_collapse": "Collapse",
+    "perf_hud_tooltip": "Show or hide the performance HUD",
     "near": "가까이",
     "far": "멀리",
     "color": "색상",

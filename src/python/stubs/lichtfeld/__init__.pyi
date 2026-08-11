@@ -228,6 +228,9 @@ def session() -> Session:
 def trainer_state() -> str:
     """Get trainer state"""
 
+def trainer_saving_model() -> bool:
+    """Whether the terminal stop/completion model save is in progress"""
+
 def finish_reason() -> str | None:
     """Get finish reason if training finished"""
 
@@ -482,6 +485,9 @@ def toggle_vram_hud() -> None:
     """
     Toggle the VRAM diagnostics HUD overlay (requires vram profiler enabled)
     """
+
+def is_perf_hud_visible() -> bool:
+    """True when the performance HUD is currently shown"""
 
 def toggle_independent_split_view() -> None:
     """Toggle independent split view"""
@@ -2274,13 +2280,6 @@ class DatasetParams:
 
     @use_cpu_cache.setter
     def use_cpu_cache(self, arg: bool, /) -> None: ...
-
-    @property
-    def use_fs_cache(self) -> bool:
-        """Use filesystem cache for images"""
-
-    @use_fs_cache.setter
-    def use_fs_cache(self, arg: bool, /) -> None: ...
 
     @property
     def use_16bit_color(self) -> bool:

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/checked_arithmetic.hpp"
+#include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -436,15 +437,16 @@ namespace lfs::core {
         deferred.is_view_ = false;
         deferred.data_ = nullptr;
         deferred.data_owner_.reset();
+        deferred.ensure_state();
         deferred.state_->lazy = std::make_shared<LazyExprState>();
         deferred.state_->lazy->materializer = std::move(materializer);
         deferred.id_ = next_id_++;
         deferred.compute_alignment();
 
-        if (internal::lazy_ir_active()) {
-            deferred.state_->lazy->node_id =
-                internal::lazy_ir_record_deferred(deferred, "deferred_expr", lazy_input_ids);
-        }
+        // Always allocate a fusion/materializer node id for deferred tensors.
+        // Eager IR recording remains gated by lazy_ir_active() elsewhere.
+        deferred.state_->lazy->node_id =
+            internal::lazy_ir_record_deferred(deferred, "deferred_expr", lazy_input_ids);
         if (deferred.state_->lazy->node_id != 0) {
             internal::lazy_executor_register_deferred_materializer(
                 deferred.state_->lazy->node_id,
@@ -542,6 +544,7 @@ namespace lfs::core {
             storage_bytes);
 
         const size_t preserved_id = id_;
+        ensure_state();
         const bool preserved_tracked = state_->tracked;
         const std::string preserved_name = state_->name;
         const cudaStream_t preserved_stream = state_->stream;
@@ -560,17 +563,29 @@ namespace lfs::core {
         view_generation_snapshot_ = published.view_generation_snapshot_;
 #endif
 
-        state_->capacity = published.state_->capacity;
-        state_->logical_size = published.state_->logical_size;
-        state_->tracked = published.state_->tracked || preserved_tracked;
-        if (preserved_name.empty()) {
-            state_->name = published.state_->name;
+        if (published.state_) {
+            state_->capacity = published.state_->capacity;
+            state_->logical_size = published.state_->logical_size;
+            state_->tracked = published.state_->tracked || preserved_tracked;
+            if (preserved_name.empty()) {
+                state_->name = published.state_->name;
+            } else {
+                state_->name = preserved_name;
+            }
+            const cudaStream_t materialized_stream = published.state_->stream;
+            state_->stream = materialized_stream != nullptr ? materialized_stream : preserved_stream;
         } else {
+            state_->tracked = preserved_tracked;
             state_->name = preserved_name;
+            state_->stream = preserved_stream;
         }
-        const cudaStream_t materialized_stream = published.state_->stream;
-        state_->stream = materialized_stream != nullptr ? materialized_stream : preserved_stream;
-        state_->lazy.reset();
+
+        // when TensorState is shared, keep lazy->result so sibling handles
+        // can still publish. is_deferred() is per-handle (storage on this handle).
+        // Drop lazy only when we exclusively own the state.
+        if (state_.use_count() <= 1) {
+            state_->lazy.reset();
+        }
 
         id_ = preserved_id;
         compute_alignment();
@@ -583,7 +598,7 @@ namespace lfs::core {
     // ============= Helper Functions =============
 
     // Check if strides represent contiguous memory layout (row-major)
-    static bool check_contiguous(const TensorShape& shape, const std::vector<size_t>& strides) {
+    static bool check_contiguous(const TensorShape& shape, std::span<const size_t> strides) {
         if (strides.empty())
             return true;
         if (strides.size() != shape.rank())
@@ -592,9 +607,9 @@ namespace lfs::core {
         // Check if strides match row-major contiguous layout
         size_t expected_stride = 1;
         for (int i = static_cast<int>(shape.rank()) - 1; i >= 0; --i) {
-            if (strides[i] != expected_stride)
+            if (strides[static_cast<size_t>(i)] != expected_stride)
                 return false;
-            expected_stride *= shape[i];
+            expected_stride *= shape[static_cast<size_t>(i)];
         }
         return true;
     }
@@ -606,8 +621,8 @@ namespace lfs::core {
         : data_(data),
           data_owner_(nullptr), // Non-owning
           state_(std::make_shared<TensorState>()),
-          shape_(shape),
-          strides_(shape.strides()),
+          shape_(std::move(shape)),
+          strides_(shape_.strides()),
           storage_offset_(0),
           is_contiguous_(true),
           device_(device),
@@ -636,7 +651,7 @@ namespace lfs::core {
     Tensor::Tensor(const Tensor& other)
         : data_(other.data_),
           data_owner_(other.data_owner_),
-          state_(std::make_shared<TensorState>(*other.state_)),
+          state_(other.state_),
           shape_(other.shape_),
           strides_(other.strides_),
           storage_offset_(other.storage_offset_),
@@ -700,7 +715,8 @@ namespace lfs::core {
             LOG_WARN("Tensor assignment reduced capacity: old_capacity={} -> new_capacity={}, old_data={}, new_data={}",
                      old_capacity, new_capacity, old_data, new_data);
         }
-        state_ = std::make_shared<TensorState>(*other.state_);
+        // share TensorState (do not deep-copy into a new cell).
+        state_ = other.state_;
         id_ = next_id_++;
 
         if (profiling_enabled_) {
@@ -731,13 +747,11 @@ namespace lfs::core {
           id_(std::exchange(other.id_, 0)),
           lazy_ir_registered_(std::exchange(other.lazy_ir_registered_, false)) {
 
-        if (!state_) {
-            state_ = std::make_shared<TensorState>();
-        }
-        if (!other.state_) {
-            other.state_ = std::make_shared<TensorState>();
-        }
-
+        // RankedDims/TensorShape move leaves source rank intact (trivial members).
+        // Clear so moved-from metadata is consistently empty (shape()[0] OOR).
+        other.shape_ = TensorShape{};
+        other.strides_.clear();
+        // moved-from stays empty (null state) — no heap TensorState.
         if (profiling_enabled_) {
             LOG_DEBUG("Move constructed: tensor #{} (moved-from is now invalid)", id_);
         }
@@ -775,12 +789,9 @@ namespace lfs::core {
 #endif
             id_ = std::exchange(other.id_, 0);
             lazy_ir_registered_ = std::exchange(other.lazy_ir_registered_, false);
-            if (!state_) {
-                state_ = std::make_shared<TensorState>();
-            }
-            if (!other.state_) {
-                other.state_ = std::make_shared<TensorState>();
-            }
+            other.shape_ = TensorShape{};
+            other.strides_.clear();
+            // moved-from stays empty (null state) — no heap TensorState.
 
             if (profiling_enabled_) {
                 LOG_DEBUG("Move assigned: tensor #{} (moved-from is now invalid)", id_);
@@ -790,7 +801,26 @@ namespace lfs::core {
     }
 
     namespace {
+        // Published while the Meyers-singleton pool is live. Cleared by
+        // Tensor::shutdown_memory_pool() so late Tensor dtors never re-enter
+        // a destroyed function-local static.
         std::atomic<CudaMemoryPool*> g_cuda_memory_pool_instance{nullptr};
+    } // namespace
+
+    CudaMemoryPool* try_live_cuda_memory_pool() noexcept {
+        return g_cuda_memory_pool_instance.load(std::memory_order_acquire);
+    }
+
+    void safe_cuda_pool_deallocate(void* ptr, cudaStream_t stream) noexcept {
+        if (!ptr) {
+            return;
+        }
+        if (CudaMemoryPool* pool = try_live_cuda_memory_pool()) {
+            pool->deallocate(ptr, stream);
+        }
+        // else: pool already shut down / not yet constructed — abandon storage
+        // at process exit. Explicit pre-shutdown hooks should have
+        // released long-lived holders before this path is needed.
     }
 
     CudaMemoryPool& CudaMemoryPool::instance() {
@@ -829,6 +859,7 @@ namespace lfs::core {
     void Tensor::set_stream(cudaStream_t stream) {
         LFS_ASSERT_MSG(is_valid(),
                        "set_stream requires a valid tensor");
+        ensure_state();
         if (device_ == Device::CUDA) {
             if (!data_owner_) {
                 if (!state_->lazy && data_ != nullptr && state_->stream != stream) {
@@ -891,7 +922,7 @@ namespace lfs::core {
     }
 
     void Tensor::relabel_allocation_for_profiler() {
-        if (device_ != Device::CUDA || data_ == nullptr || state_->name.empty()) {
+        if (device_ != Device::CUDA || data_ == nullptr || !state_ || state_->name.empty()) {
             return;
         }
         try {
@@ -910,7 +941,13 @@ namespace lfs::core {
         // CPU-only commands must not initialize CUDA merely to tear it down.
         // A non-null pointer proves that an earlier CUDA allocation path
         // constructed the pool and all of its subordinate allocators.
-        if (CudaMemoryPool* pool = g_cuda_memory_pool_instance.load(std::memory_order_acquire)) {
+        //
+        // exchange to nullptr *before* shutdown so concurrent
+        // subsequent Tensor deleters take the safe_cuda_pool_deallocate no-op
+        // path instead of calling into a pool mid-teardown or after the
+        // function-local static is destroyed.
+        if (CudaMemoryPool* pool =
+                g_cuda_memory_pool_instance.exchange(nullptr, std::memory_order_acq_rel)) {
             pool->shutdown();
         }
     }
@@ -986,14 +1023,103 @@ namespace lfs::core {
         return result;
     }
 
+    void Tensor::materialize_zero_stride_for_raw_ptr_escape() {
+        // Only true expand/broadcast views need materialization here.
+        // Contiguous tensors with a zero-size dim (e.g. shN [N,0,3] at SH degree
+        // 0) get row-major leading stride 0 (product of a later 0-size dim) —
+        // those are NOT expand views and numel()==0 already. Skip them.
+        if (numel() == 0 || is_contiguous_ || !has_zero_stride()) {
+            return;
+        }
+
+        // Produce a dense owned tensor, then rebind *this. Do not assign:
+        // expand views are is_view_=true, so operator= would copy_from into the
+        // view and re-enter data_ptr() (stack overflow).
+        Tensor dense = contiguous();
+        LFS_ASSERT_MSG(dense.is_valid() && dense.is_contiguous() && !dense.has_zero_stride(),
+                       std::format(
+                           "zero-stride raw-ptr materialization failed: valid={} contig={} "
+                           "zero_stride={} shape={}",
+                           dense.is_valid(), dense.is_contiguous(), dense.has_zero_stride(),
+                           shape_.str()));
+
+        data_ = dense.data_;
+        data_owner_ = std::move(dense.data_owner_);
+        shape_ = dense.shape_;
+        strides_ = dense.strides_;
+        storage_offset_ = dense.storage_offset_;
+        is_contiguous_ = dense.is_contiguous_;
+        device_ = dense.device_;
+        dtype_ = dense.dtype_;
+        is_view_ = dense.is_view_;
+        storage_meta_ = dense.storage_meta_;
+#ifndef NDEBUG
+        view_generation_snapshot_ = dense.view_generation_snapshot_;
+#endif
+        if (dense.state_) {
+            state_ = dense.state_;
+        }
+        dense.data_ = nullptr;
+        dense.data_owner_.reset();
+        dense.storage_meta_.reset();
+        dense.state_.reset();
+        dense.is_view_ = false;
+    }
+
+    void Tensor::assert_device_storage_matches_tag() const {
+        // Empty / null storage: nothing to validate.
+        if (data_ == nullptr || numel() == 0) {
+            return;
+        }
+
+        cudaPointerAttributes attrs{};
+        const cudaError_t err = cudaPointerGetAttributes(&attrs, data_);
+        if (err != cudaSuccess) {
+            // Not a CUDA-visible pointer (ordinary host malloc, etc.).
+            // Clear sticky error; CPU tensors may legitimately live here.
+            (void)cudaGetLastError();
+            if (device_ == Device::CUDA) {
+                throw TensorError(
+                    "device-tag mismatch: CUDA-tagged tensor storage is not CUDA-addressable "
+                    "(cudaPointerGetAttributes failed) — refusing raw-pointer escape");
+            }
+            return;
+        }
+
+        // CUDA 11+: attrs.type distinguishes device / host / managed / unregistered.
+        const bool is_device_mem =
+            attrs.type == cudaMemoryTypeDevice || attrs.type == cudaMemoryTypeManaged;
+        // Pinned host (cudaHostAlloc) and ordinary host registered with CUDA.
+        const bool is_host_mem =
+            attrs.type == cudaMemoryTypeHost || attrs.type == cudaMemoryTypeUnregistered;
+
+        if (device_ == Device::CPU && is_device_mem) {
+            throw TensorError(
+                "device-tag mismatch: CPU-tagged tensor carries device (or managed) storage "
+                "— refusing raw-pointer escape (would break cudaMemcpy HostToDevice)");
+        }
+        if (device_ == Device::CUDA && is_host_mem &&
+            attrs.type == cudaMemoryTypeUnregistered) {
+            // Unregistered host pointer tagged CUDA is almost always a bug.
+            // Pinned host (cudaMemoryTypeHost) is allowed only for rare staging
+            // views; still reject pure pageable host tagged as CUDA.
+            throw TensorError(
+                "device-tag mismatch: CUDA-tagged tensor carries unregistered host storage "
+                "— refusing raw-pointer escape");
+        }
+        (void)is_host_mem;
+    }
+
     // ============= Contiguous (materializes non-contiguous tensors) =============
     Tensor Tensor::contiguous() const {
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid(),
                        "contiguous requires a valid tensor");
 
-        // Already contiguous? Just return shallow copy
-        if (is_contiguous_) {
+        // Already contiguous dense? Just return shallow copy.
+        // Zero-stride expand views must NEVER take this path even if a stale
+        // is_contiguous_ flag is set: logical numel can exceed physical storage.
+        if (is_contiguous_ && !has_zero_stride()) {
             return *this;
         }
 
@@ -1014,8 +1140,8 @@ namespace lfs::core {
                 tensor_ops::launch_strided_copy_immediate(
                     src_base, result.data_, shape_.dims(), strides_, numel(), dtype_, execution_stream);
             } else {
-                CudaDeviceMemory<size_t> d_shape(rank);
-                CudaDeviceMemory<size_t> d_strides(rank);
+                CudaDeviceMemory<size_t> d_shape(rank, execution_stream);
+                CudaDeviceMemory<size_t> d_strides(rank, execution_stream);
                 LFS_ASSERT_MSG(d_shape.valid() && d_strides.valid(),
                                "contiguous failed to allocate CUDA shape metadata");
                 LFS_CUDA_CHECK_ARGS(
@@ -1277,31 +1403,21 @@ namespace lfs::core {
                 }
 
                 // GENERIC PATH: For rank > 3, allocate device memory for metadata
+                // via the pool (slab for tiny rank metadata) — no bare cudaMalloc.
                 LOG_DEBUG("Using generic strided upload (requires metadata allocation for rank={})", shape_.rank());
 
                 const size_t metadata_bytes = shape_.rank() * sizeof(size_t);
-                size_t* d_shape = nullptr;
-                size_t* d_strides = nullptr;
-                LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMalloc(&d_shape, metadata_bytes),
-                    reinterpret_cast<uintptr_t>(d_shape), 0, metadata_bytes,
-                    "while allocating CUDA shape metadata for tensor '{}' shape={} dtype={} "
-                    "dst={} src={} bytes={} transfer_dst={} transfer_src={}",
-                    tensor_debug_name(*this), shape_.str(), dtype_name(dtype_),
-                    d_shape, nullptr, metadata_bytes, t.data_,
-                    static_cast<const void*>(src));
-                LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMalloc(&d_strides, metadata_bytes),
-                    reinterpret_cast<uintptr_t>(d_strides), 0, metadata_bytes,
-                    "while allocating CUDA stride metadata for tensor '{}' shape={} dtype={} "
-                    "dst={} src={} bytes={} transfer_dst={} transfer_src={}",
-                    tensor_debug_name(*this), shape_.str(), dtype_name(dtype_),
-                    d_strides, nullptr, metadata_bytes, t.data_,
-                    static_cast<const void*>(src));
+                auto& pool = CudaMemoryPool::instance();
+                size_t* d_shape = static_cast<size_t*>(
+                    pool.allocate(metadata_bytes, transfer_stream));
+                size_t* d_strides = static_cast<size_t*>(
+                    pool.allocate(metadata_bytes, transfer_stream));
+                LFS_ASSERT_MSG(d_shape != nullptr && d_strides != nullptr,
+                               "failed to allocate pooled CUDA shape/stride metadata");
 
                 LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMemcpy(d_shape, shape_.dims().data(), metadata_bytes,
-                               cudaMemcpyHostToDevice),
+                    cudaMemcpyAsync(d_shape, shape_.dims().data(), metadata_bytes,
+                                    cudaMemcpyHostToDevice, transfer_stream),
                     reinterpret_cast<uintptr_t>(d_shape),
                     reinterpret_cast<uintptr_t>(shape_.dims().data()),
                     metadata_bytes,
@@ -1311,8 +1427,8 @@ namespace lfs::core {
                     d_shape, shape_.dims().data(), metadata_bytes, t.data_,
                     static_cast<const void*>(src));
                 LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMemcpy(d_strides, strides_.data(), metadata_bytes,
-                               cudaMemcpyHostToDevice),
+                    cudaMemcpyAsync(d_strides, strides_.data(), metadata_bytes,
+                                    cudaMemcpyHostToDevice, transfer_stream),
                     reinterpret_cast<uintptr_t>(d_strides),
                     reinterpret_cast<uintptr_t>(strides_.data()),
                     metadata_bytes,
@@ -1333,24 +1449,9 @@ namespace lfs::core {
                     dtype_,
                     transfer_stream);
 
-                // Free metadata immediately (kernel has already captured the data)
-                // NO SYNC: Kernel launches asynchronously for better PCIe overlap
-                LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaFree(d_shape),
-                    0, reinterpret_cast<uintptr_t>(d_shape), metadata_bytes,
-                    "while freeing CUDA shape metadata for tensor '{}' shape={} dtype={} "
-                    "dst={} src={} bytes={} transfer_dst={} transfer_src={}",
-                    tensor_debug_name(*this), shape_.str(), dtype_name(dtype_),
-                    nullptr, d_shape, metadata_bytes, t.data_,
-                    static_cast<const void*>(src));
-                LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaFree(d_strides),
-                    0, reinterpret_cast<uintptr_t>(d_strides), metadata_bytes,
-                    "while freeing CUDA stride metadata for tensor '{}' shape={} dtype={} "
-                    "dst={} src={} bytes={} transfer_dst={} transfer_src={}",
-                    tensor_debug_name(*this), shape_.str(), dtype_name(dtype_),
-                    nullptr, d_strides, metadata_bytes, t.data_,
-                    static_cast<const void*>(src));
+                // Stream-ordered free: same stream as the kernel so reuse is ordered.
+                pool.deallocate(d_shape, transfer_stream);
+                pool.deallocate(d_strides, transfer_stream);
 
                 record_stream(transfer_stream);
 
@@ -1986,6 +2087,7 @@ namespace lfs::core {
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid(),
                        "zero_ requires a valid tensor");
+        reject_inplace_on_zero_stride("zero_");
         if (numel() == 0) {
             return *this;
         }
@@ -2016,6 +2118,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 || dtype_ == DataType::Bool,
                        "fill_ currently supports only Float32, Int32, and Bool");
         detail::require_scalar_representable(dtype_, value, "fill_");
+        reject_inplace_on_zero_stride("fill_");
         if (numel() == 0) {
             return *this;
         }
@@ -2259,16 +2362,22 @@ namespace lfs::core {
                 tensor_ops::launch_strided_scatter_immediate(
                     src.data_ptr(), data_ptr(), shape_vec, strides_, numel(), dtype_, execution_stream);
             } else {
-                size_t* d_shape = nullptr;
-                size_t* d_strides = nullptr;
-                LFS_CUDA_CHECK(cudaMalloc(&d_shape, rank * sizeof(size_t)));
-                LFS_CUDA_CHECK(cudaMalloc(&d_strides, rank * sizeof(size_t)));
-                LFS_CUDA_CHECK(cudaMemcpy(d_shape, shape_vec.data(), rank * sizeof(size_t), cudaMemcpyHostToDevice));
-                LFS_CUDA_CHECK(cudaMemcpy(d_strides, strides_.data(), rank * sizeof(size_t), cudaMemcpyHostToDevice));
+                const size_t metadata_bytes = rank * sizeof(size_t);
+                auto& pool = CudaMemoryPool::instance();
+                size_t* d_shape = static_cast<size_t*>(
+                    pool.allocate(metadata_bytes, execution_stream));
+                size_t* d_strides = static_cast<size_t*>(
+                    pool.allocate(metadata_bytes, execution_stream));
+                LFS_ASSERT_MSG(d_shape != nullptr && d_strides != nullptr,
+                               "copy_from failed to allocate pooled shape/stride metadata");
+                LFS_CUDA_CHECK(cudaMemcpyAsync(d_shape, shape_vec.data(), metadata_bytes,
+                                               cudaMemcpyHostToDevice, execution_stream));
+                LFS_CUDA_CHECK(cudaMemcpyAsync(d_strides, strides_.data(), metadata_bytes,
+                                               cudaMemcpyHostToDevice, execution_stream));
                 tensor_ops::launch_strided_scatter(
                     src.data_ptr(), data_ptr(), d_shape, d_strides, rank, numel(), dtype_, execution_stream);
-                LFS_CUDA_CHECK(cudaFree(d_shape));
-                LFS_CUDA_CHECK(cudaFree(d_strides));
+                pool.deallocate(d_shape, execution_stream);
+                pool.deallocate(d_strides, execution_stream);
             }
             return *this;
         }
@@ -2317,7 +2426,7 @@ namespace lfs::core {
                        "broadcast_to requires a valid tensor");
         LFS_ASSERT_MSG(can_broadcast_to(target_shape),
                        std::format("cannot broadcast shape {} to {}", shape_.str(), target_shape.str()));
-        if (state_ && state_->lazy) {
+        if (is_deferred()) {
             const uint64_t source_id = lazy_expr_id();
             Tensor source = *this;
             TensorShape deferred_shape = target_shape;
@@ -2554,7 +2663,7 @@ namespace lfs::core {
         }
         std::ostringstream oss;
         oss << "[";
-        for (size_t i = 0; i < dims_.size(); ++i) {
+        for (size_t i = 0; i < dims_.rank; ++i) {
             if (i > 0)
                 oss << ", ";
             oss << dims_[i];
@@ -3229,6 +3338,7 @@ namespace lfs::core {
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid(),
                        "reserve requires a valid tensor");
+        ensure_state();
         preserve_lazy_snapshots_before_write();
         LFS_ASSERT_MSG(is_supported_device(device_),
                        "reserve encountered an invalid device");
@@ -3324,11 +3434,14 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             record_storage_allocation(StorageAccountingKind::CudaDirect, new_bytes);
             new_owner = std::shared_ptr<void>(new_data, [bytes = new_bytes](void* ptr) {
-                const cudaError_t status = cudaFree(ptr);
-                if (status != cudaSuccess) {
-                    ensure_cuda_success(
-                        status, "cudaFree(tensor reserve storage)", {},
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+                // skip cudaFree after ordered process teardown.
+                if (ptr && !gpu_process_teardown_started()) {
+                    const cudaError_t status = cudaFree(ptr);
+                    if (status != cudaSuccess) {
+                        ensure_cuda_success(
+                            status, "cudaFree(tensor reserve storage)", {},
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+                    }
                 }
                 Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
             });
@@ -3420,6 +3533,7 @@ namespace lfs::core {
             t.storage_offset_ = 0;
             t.device_ = device;
             t.dtype_ = dtype;
+            t.ensure_state();
             t.state_->capacity = capacity;
             t.state_->logical_size = current_size;
             t.id_ = next_id_++;
@@ -3450,21 +3564,30 @@ namespace lfs::core {
         t.data_ = data_ptr;
         record_storage_allocation(StorageAccountingKind::CudaDirect, total_bytes);
         t.data_owner_ = std::shared_ptr<void>(data_ptr, [bytes = total_bytes](void* ptr) {
-            if (ptr) {
+            if (!ptr) {
+                return;
+            }
+            // densify N-scratch (and other zeros_direct holders) may be
+            // destroyed after ordered GPU teardown. Skipping cudaFree when the
+            // process has already begun teardown avoids cudaErrorContextIsDestroyed
+            // / SIGSEGV on a dead primary context. Pre-shutdown hooks should
+            // release long-lived holders while CUDA is still healthy.
+            if (!gpu_process_teardown_started()) {
                 const cudaError_t status = cudaFree(ptr);
                 if (status != cudaSuccess) {
                     ensure_cuda_success(
                         status, "cudaFree(zeros_direct storage)", {},
                         LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
-                Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
             }
+            Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
         });
         t.shape_ = shape;
         t.strides_ = shape.strides();
         t.storage_offset_ = 0;
         t.device_ = device;
         t.dtype_ = dtype;
+        t.ensure_state();
         t.state_->capacity = capacity;
         t.state_->logical_size = current_size;
         t.id_ = next_id_++;

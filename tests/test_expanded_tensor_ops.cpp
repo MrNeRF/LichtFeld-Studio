@@ -197,3 +197,103 @@ TEST_F(ExpandedTensorOpsTest, ScatterToRGBA) {
         EXPECT_FLOAT_EQ(p[i * 4 + 3], 1.0f);
     }
 }
+
+// Raw ptr() on a stride-0 expand view must materialize dense storage because
+// callers hand ptr()+numel() to
+// flat memcpy/kernels (e.g. SplatData init scaling upload) and read N*expand
+// elements from a physically smaller buffer otherwise.
+TEST(ExpandedTensorOps, RawPtrOnExpandViewMaterializesDense) {
+    using namespace lfs::core;
+    auto base = Tensor::from_vector(std::vector<float>{1.f, 2.f, 3.f},
+                                    TensorShape({3, 1}), Device::CPU);
+    auto expanded = base.expand(std::vector<int>{3, 4});
+    ASSERT_EQ(expanded.numel(), 12u);
+    ASSERT_TRUE(expanded.has_zero_stride());
+    const float* p = expanded.ptr<float>(); // must be safe for flat reads
+    ASSERT_NE(p, nullptr);
+    EXPECT_FALSE(expanded.has_zero_stride());
+    EXPECT_TRUE(expanded.is_contiguous());
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 4; ++c)
+            EXPECT_FLOAT_EQ(p[r * 4 + c], static_cast<float>(r + 1))
+                << "flat read r=" << r << " c=" << c;
+}
+
+// Same escape contract for data_ptr() + bytes() (serialization / memcpy paths).
+TEST(ExpandedTensorOps, DataPtrOnExpandViewMaterializesDense) {
+    using namespace lfs::core;
+    auto base = Tensor::from_vector(std::vector<float>{5.f, 6.f},
+                                    TensorShape({2, 1}), Device::CPU);
+    auto expanded = base.expand(std::vector<int>{2, 3});
+    ASSERT_TRUE(expanded.has_zero_stride());
+    ASSERT_EQ(expanded.bytes(), 6u * sizeof(float));
+    const auto* p = static_cast<const float*>(expanded.data_ptr());
+    ASSERT_NE(p, nullptr);
+    EXPECT_FALSE(expanded.has_zero_stride());
+    EXPECT_FLOAT_EQ(p[0], 5.f);
+    EXPECT_FLOAT_EQ(p[1], 5.f);
+    EXPECT_FLOAT_EQ(p[2], 5.f);
+    EXPECT_FLOAT_EQ(p[3], 6.f);
+    EXPECT_FLOAT_EQ(p[4], 6.f);
+    EXPECT_FLOAT_EQ(p[5], 6.f);
+}
+
+// Mirror SplatData scaling init: knn distances → clamp_min/sqrt/mul/log →
+// unsqueeze → expand → raw ptr() flat upload. Must be safe for flat reads.
+TEST(ExpandedTensorOps, SplatDataScalingExpandPtrMaterializes) {
+    using namespace lfs::core;
+    constexpr size_t N = 128;
+    auto nn_dist = Tensor::full({N}, 0.01f, Device::CPU).clamp_min(1e-7f);
+    auto scaling = nn_dist.sqrt()
+                       .mul(0.1f)
+                       .log()
+                       .unsqueeze(-1)
+                       .expand(std::vector<int>{static_cast<int>(N), 3});
+    ASSERT_EQ(scaling.numel(), N * 3);
+    const float* p = scaling.ptr<float>();
+    ASSERT_NE(p, nullptr);
+    EXPECT_FALSE(scaling.has_zero_stride());
+    EXPECT_TRUE(scaling.is_contiguous());
+    EXPECT_FLOAT_EQ(p[0], p[1]);
+    EXPECT_FLOAT_EQ(p[1], p[2]);
+}
+
+// SH degree 0 creates shN shape [N,0,3]: contiguous empty, row-major leading
+// stride is 0 (product of a zero-size dim). Must NOT be treated as expand view
+// and must allow ptr() escape (numel==0 flat upload is a no-op).
+TEST(ExpandedTensorOps, EmptyZeroDimTensorPtrIsSafe) {
+    using namespace lfs::core;
+    auto shN = Tensor::zeros({54275, 0, 3}, Device::CPU);
+    ASSERT_EQ(shN.numel(), 0u);
+    EXPECT_TRUE(shN.is_contiguous());
+    // Not an expand view — size>1 dim with stride 0 only from empty product.
+    EXPECT_FALSE(shN.has_zero_stride());
+    EXPECT_NO_THROW({
+        (void)shN.ptr<float>();
+        (void)shN.data_ptr();
+    });
+}
+
+// A CPU-tagged handle whose storage is CUDA device
+// memory must be rejected at raw-pointer escape (would produce cudaMemcpy
+// invalid argument with src/dst in the same address region).
+TEST(ExpandedTensorOps, CpuTaggedDeviceStorageRejectedOnPtr) {
+    using namespace lfs::core;
+    auto device_src = Tensor::from_vector(std::vector<float>{1.f, 2.f, 3.f, 4.f},
+                                          TensorShape({4}), Device::CUDA);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    // Non-owning blob: deliberately lie about device.
+    auto mismatched = Tensor::from_blob(device_src.data_ptr(),
+                                        TensorShape({4}),
+                                        Device::CPU,
+                                        DataType::Float32);
+    ASSERT_TRUE(mismatched.is_valid());
+    EXPECT_EQ(mismatched.device(), Device::CPU);
+
+    EXPECT_THROW(
+        {
+            (void)mismatched.ptr<float>();
+        },
+        TensorError);
+}

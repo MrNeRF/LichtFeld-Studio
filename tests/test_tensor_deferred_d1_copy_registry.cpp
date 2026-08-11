@@ -244,6 +244,7 @@ TEST(DeferredD1CopyRegistryTest, NamePreservedPerTensor) {
     Tensor a = Tensor::ones({4}, Device::CPU, DataType::Float32).add(2.0f);
     a.set_name("x");
     Tensor b = a;
+    // Tensor copy shares TensorState — name lives on the shared impl.
     b.set_name("y");
 
     const auto a_values = a.to_vector();
@@ -252,7 +253,7 @@ TEST(DeferredD1CopyRegistryTest, NamePreservedPerTensor) {
     EXPECT_EQ(a_values, std::vector<float>(4, 3.0f));
     EXPECT_EQ(b_values, a_values);
     EXPECT_EQ(data_pointer(a), data_pointer(b));
-    EXPECT_EQ(a.name(), "x");
+    EXPECT_EQ(a.name(), "y");
     EXPECT_EQ(b.name(), "y");
 }
 

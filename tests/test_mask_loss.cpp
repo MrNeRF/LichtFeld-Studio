@@ -16,6 +16,7 @@
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "mask_loss_reference.hpp"
 #include "training/losses/mask_loss.hpp"
 #include <cmath>
 #include <gtest/gtest.h>
@@ -117,8 +118,8 @@ TEST_F(MaskLossTest, UserMaskAndRoiWeightsComposeMultiplicatively) {
         {size_t{2}, size_t{2}},
         Device::CUDA);
 
-    const auto composed =
-        lfs::training::losses::compose_pixel_loss_weights(user_mask, roi_weight);
+    const auto composed = lfs::training::losses::test_reference::compose_pixel_loss_weights_reference(
+        user_mask, roi_weight);
 
     EXPECT_EQ(
         composed.to(Device::CPU).to_vector(),
@@ -140,7 +141,7 @@ TEST_F(MaskLossTest, RoiWeightedOpacityPenaltyKeepsGlobalPixelMean) {
         Device::CUDA);
     constexpr float scale = 2.0f;
 
-    const auto result = lfs::training::losses::compute_mask_opacity_penalty(
+    const auto result = lfs::training::losses::test_reference::compute_mask_opacity_penalty_reference(
         alpha, penalty_weight, roi_weight, scale);
 
     const float expected_loss =

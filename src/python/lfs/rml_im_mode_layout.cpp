@@ -27,10 +27,8 @@
 #include <format>
 #include <functional>
 #include <limits>
-#include <mutex>
 #include <string_view>
 #include <type_traits>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -272,15 +270,6 @@ namespace {
         return false;
     }
 
-    void warn_retained_custom_element_once(const char* method, const char* element) {
-        static std::mutex mutex;
-        static std::unordered_set<std::string> warned_methods;
-        std::lock_guard lock(mutex);
-        if (warned_methods.emplace(method).second) {
-            LOG_WARN("RmlImModeLayout::{} is unavailable in layout APIs; use the retained RmlUi {} element",
-                     method, element);
-        }
-    }
 } // namespace
 
 namespace lfs::python {
@@ -357,7 +346,6 @@ namespace lfs::python {
         disabled_depth_ = 0;
         id_stack_.clear();
         child_key_stack_.clear();
-        force_next_open_ = false;
         table_.reset();
         item_width_stack_.clear();
         last_element_ = nullptr;
@@ -621,11 +609,6 @@ namespace lfs::python {
 
     void RmlImModeLayout::reset_path_dialog_callback_for_testing() {
         path_dialog_callback() = default_path_dialog_callback();
-    }
-
-    void RmlImModeLayout::warn_unsupported(const char* method) {
-        if (warned_methods_.insert(method).second)
-            LOG_INFO("RmlImModeLayout: '{}' not yet supported, using no-op", method);
     }
 
     // ── Text ────────────────────────────────────────────────
@@ -1824,10 +1807,6 @@ namespace lfs::python {
             indent_level_ = 0;
     }
 
-    void RmlImModeLayout::set_next_item_width(float /*width*/) {}
-    void RmlImModeLayout::begin_group() {}
-    void RmlImModeLayout::end_group() {}
-
     // ── Grouping ────────────────────────────────────────────
 
     bool RmlImModeLayout::collapsing_header(const std::string& label, bool default_open) {
@@ -1837,8 +1816,7 @@ namespace lfs::python {
         auto& slot = ensure_slot(SlotType::CollapsHeader, build_slot_id("collapsing_header", &label));
 
         if (!slot.element) {
-            slot.events->open = force_next_open_ || default_open;
-            force_next_open_ = false;
+            slot.events->open = default_open;
 
             auto header = doc_->CreateElement("div");
             header->SetClass("section-header", true);
@@ -1859,10 +1837,6 @@ namespace lfs::python {
             assert(!containers_.empty());
             slot.element = containers_.back().parent->AppendChild(std::move(header));
         } else {
-            if (force_next_open_) {
-                slot.events->open = true;
-                force_next_open_ = false;
-            }
             if (slot.events->clicked) {
                 slot.events->clicked = false;
                 slot.events->open = !slot.events->open;
@@ -1877,20 +1851,6 @@ namespace lfs::python {
         last_clicked_ = false;
         return slot.events->open;
     }
-
-    bool RmlImModeLayout::tree_node(const std::string& label) {
-        return collapsing_header(label, false);
-    }
-
-    bool RmlImModeLayout::tree_node_ex(const std::string& label, const std::string& /*flags*/) {
-        return collapsing_header(label, false);
-    }
-
-    void RmlImModeLayout::set_next_item_open(bool is_open) {
-        force_next_open_ = is_open;
-    }
-
-    void RmlImModeLayout::tree_pop() {}
 
     // ── Tables ──────────────────────────────────────────────
 
@@ -2165,13 +2125,8 @@ namespace lfs::python {
             id_stack_.pop_back();
     }
 
-    // ── Style (no-op for now) ───────────────────────────────
+    // ── Item width ──────────────────────────────────────────
 
-    void RmlImModeLayout::push_style_var_float(const std::string& /*var*/, float /*value*/) {}
-    void RmlImModeLayout::push_style_var_vec2(const std::string& /*var*/, std::tuple<float, float> /*value*/) {}
-    void RmlImModeLayout::pop_style_var(int /*count*/) {}
-    void RmlImModeLayout::push_style_color(const std::string& /*col*/, nb::object /*color*/) {}
-    void RmlImModeLayout::pop_style_color(int /*count*/) {}
     void RmlImModeLayout::push_item_width(float width) {
         item_width_stack_.push_back(width);
     }
@@ -2277,15 +2232,12 @@ namespace lfs::python {
         return root_ ? root_->GetBox().GetSize().x : 0.0f;
     }
     float RmlImModeLayout::get_text_line_height() const { return cached_line_height_; }
-    std::tuple<float, float> RmlImModeLayout::get_cursor_pos() { return {0.0f, 0.0f}; }
     std::tuple<float, float> RmlImModeLayout::get_cursor_screen_pos() const {
         if (!root_)
             return {0.0f, 0.0f};
         auto off = root_->GetAbsoluteOffset(Rml::BoxArea::Content);
         return {off.x, off.y};
     }
-    void RmlImModeLayout::set_cursor_pos(std::tuple<float, float> /*pos*/) {}
-    void RmlImModeLayout::set_cursor_pos_x(float /*x*/) {}
     std::tuple<float, float> RmlImModeLayout::calc_text_size(const std::string& text) {
         float char_width = cached_line_height_ * 0.6f;
         float w = static_cast<float>(text.size()) * char_width;
@@ -2312,32 +2264,7 @@ namespace lfs::python {
     }
     float RmlImModeLayout::get_dpi_scale() { return lfs::python::get_shared_dpi_scale(); }
 
-    // ── Window management (no-op) ───────────────────────────
-
-    bool RmlImModeLayout::begin_window(const std::string& /*title*/, int /*flags*/) { return true; }
-    std::tuple<bool, bool> RmlImModeLayout::begin_window_closable(const std::string& /*title*/, int /*flags*/) { return {true, true}; }
-    void RmlImModeLayout::end_window() {}
-    void RmlImModeLayout::push_window_style() {}
-    void RmlImModeLayout::pop_window_style() {}
-    void RmlImModeLayout::set_next_window_pos(std::tuple<float, float> /*pos*/, bool /*first_use*/) {}
-    void RmlImModeLayout::set_next_window_size(std::tuple<float, float> /*size*/, bool /*first_use*/) {}
-    void RmlImModeLayout::set_next_window_pos_centered(bool /*first_use*/) {}
-    void RmlImModeLayout::set_next_window_bg_alpha(float /*alpha*/) {}
-    void RmlImModeLayout::set_next_window_pos_center() {}
-    void RmlImModeLayout::set_next_window_pos_viewport_center(bool /*always*/) {}
-    void RmlImModeLayout::set_next_window_focus() {}
-
-    // ── Focus ───────────────────────────────────────────────
-
-    void RmlImModeLayout::set_keyboard_focus_here() {}
-    bool RmlImModeLayout::is_window_focused() const { return false; }
-    bool RmlImModeLayout::is_window_hovered() const { return false; }
-    void RmlImModeLayout::capture_keyboard_from_app(bool /*capture*/) {}
-    void RmlImModeLayout::capture_mouse_from_app(bool /*capture*/) {}
-
-    // ── Scrolling ───────────────────────────────────────────
-
-    void RmlImModeLayout::set_scroll_here_y(float /*center_y_ratio*/) {}
+    // ── Child regions ───────────────────────────────────────
 
     bool RmlImModeLayout::begin_child(const std::string& id, std::tuple<float, float> size, bool border) {
         if (!doc_)
@@ -2407,8 +2334,7 @@ namespace lfs::python {
         const auto display = strip_legacy_id(label);
 
         if (!slot.element) {
-            slot.events->open = force_next_open_;
-            force_next_open_ = false;
+            slot.events->open = false;
 
             auto wrapper = doc_->CreateElement("div");
             wrapper->SetClass("im-menu", true);
@@ -2427,10 +2353,6 @@ namespace lfs::python {
         } else {
             if (slot.element->GetParentNode() != containers_.back().parent)
                 containers_.back().parent->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
-            if (force_next_open_) {
-                slot.events->open = true;
-                force_next_open_ = false;
-            }
         }
 
         if (slot.events->clicked) {
@@ -2622,9 +2544,6 @@ namespace lfs::python {
             popup_dialog_->SetClass("visible", false);
     }
 
-    void RmlImModeLayout::push_modal_style() {}
-    void RmlImModeLayout::pop_modal_style() {}
-
     // ── Images ──────────────────────────────────────────────
 
     void RmlImModeLayout::image(uint64_t texture_id, std::tuple<float, float> size, nb::object /*tint*/) {
@@ -2761,52 +2680,6 @@ namespace lfs::python {
         last_element_ = slot.element;
         last_clicked_ = clicked;
         return clicked;
-    }
-
-    // ── Drag-drop (no-op) ───────────────────────────────────
-
-    bool RmlImModeLayout::begin_drag_drop_source() { return false; }
-    void RmlImModeLayout::set_drag_drop_payload(const std::string& /*type*/, const std::string& /*data*/) {}
-    void RmlImModeLayout::end_drag_drop_source() {}
-    bool RmlImModeLayout::begin_drag_drop_target() { return false; }
-    std::optional<std::string> RmlImModeLayout::accept_drag_drop_payload(const std::string& /*type*/) { return std::nullopt; }
-    void RmlImModeLayout::end_drag_drop_target() {}
-
-    // ── Drawing primitives (no-op) ──────────────────────────
-
-    void RmlImModeLayout::draw_circle(float, float, float, nb::object, int, float) {}
-    void RmlImModeLayout::draw_circle_filled(float, float, float, nb::object, int) {}
-    void RmlImModeLayout::draw_rect(float, float, float, float, nb::object, float) {}
-    void RmlImModeLayout::draw_rect_filled(float, float, float, float, nb::object, bool) {}
-    void RmlImModeLayout::draw_rect_rounded(float, float, float, float, nb::object, float, float, bool) {}
-    void RmlImModeLayout::draw_rect_rounded_filled(float, float, float, float, nb::object, float, bool) {}
-    void RmlImModeLayout::draw_triangle_filled(float, float, float, float, float, float, nb::object, bool) {}
-    void RmlImModeLayout::draw_line(float, float, float, float, nb::object, float) {}
-    void RmlImModeLayout::draw_polyline(nb::object, nb::object, bool, float) {}
-    void RmlImModeLayout::draw_poly_filled(nb::object, nb::object) {}
-    void RmlImModeLayout::draw_text(float, float, const std::string&, nb::object, bool) {}
-    void RmlImModeLayout::draw_window_rect_filled(float, float, float, float, nb::object) {}
-    void RmlImModeLayout::draw_window_rect(float, float, float, float, nb::object, float) {}
-    void RmlImModeLayout::draw_window_rect_rounded(float, float, float, float, nb::object, float, float) {}
-    void RmlImModeLayout::draw_window_rect_rounded_filled(float, float, float, float, nb::object, float) {}
-    void RmlImModeLayout::draw_window_line(float, float, float, float, nb::object, float) {}
-    void RmlImModeLayout::draw_window_text(float, float, const std::string&, nb::object) {}
-    void RmlImModeLayout::draw_window_triangle_filled(float, float, float, float, float, float, nb::object) {}
-
-    // ── Retained-only specialized widgets ───────────────────
-
-    void RmlImModeLayout::crf_curve_preview(const std::string& /*label*/, float, float, float, float, float, float) {
-        warn_retained_custom_element_once("crf_curve_preview", "<crf-curve>");
-    }
-    std::tuple<bool, std::vector<float>> RmlImModeLayout::chromaticity_diagram(const std::string& /*label*/,
-                                                                               const float red_x, const float red_y,
-                                                                               const float green_x, const float green_y,
-                                                                               const float blue_x, const float blue_y,
-                                                                               const float neutral_x, const float neutral_y,
-                                                                               float) {
-        warn_retained_custom_element_once(
-            "chromaticity_diagram", "<chromaticity-diagram>");
-        return {false, {red_x, red_y, green_x, green_y, blue_x, blue_y, neutral_x, neutral_y}};
     }
 
     // ── Plots ───────────────────────────────────────────────
@@ -3254,15 +3127,6 @@ namespace lfs::python {
         }
 
         return {new_idx, static_cast<int>(items.size())};
-    }
-
-    void RmlImModeLayout::menu(const std::string& /*menu_id*/, const std::string& /*text*/,
-                               const std::string& /*icon*/) {
-        warn_unsupported("menu");
-    }
-    void RmlImModeLayout::popover(const std::string& /*panel_id*/, const std::string& /*text*/,
-                                  const std::string& /*icon*/) {
-        warn_unsupported("popover");
     }
 
     // ── RmlSubLayout ─────────────────────────────────────────

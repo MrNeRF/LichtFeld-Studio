@@ -26,7 +26,8 @@ namespace lfs::vis::gui {
 
 #ifdef _WIN32
         // Windows: DXGI QueryVideoMemoryInfo for per-process GPU memory.
-        // NVML returns NVML_VALUE_NOT_AVAILABLE under WDDM.
+        // NVML process memory returns NVML_VALUE_NOT_AVAILABLE under WDDM, but
+        // device utilization rates work and are used for the GPU% meter.
         struct DxgiMemoryState {
             IDXGIAdapter3* adapter3 = nullptr;
             bool init_done = false;
@@ -144,8 +145,9 @@ namespace lfs::vis::gui {
             static DxgiMemoryState s;
             return s;
         }
-#else
-        // Linux: NVML per-process memory works correctly.
+#endif
+
+        // NVML: process memory on Linux; utilization on Linux and Windows.
         using NvmlDevice = void*;
         enum { NVML_SUCCESS = 0 };
         constexpr int NVML_PCI_BUS_ID_LEN = 32;
@@ -160,32 +162,54 @@ namespace lfs::vis::gui {
         using FnNvmlInit = int (*)();
         using FnNvmlDeviceGetHandleByPciBusId = int (*)(const char*, NvmlDevice*);
         using FnNvmlDeviceGetComputeRunningProcesses = int (*)(NvmlDevice, unsigned int*, NvmlProcessInfo*);
+        struct NvmlUtilization {
+            unsigned int gpu;
+            unsigned int memory;
+        };
+        using FnNvmlDeviceGetUtilizationRates = int (*)(NvmlDevice, NvmlUtilization*);
 
         struct NvmlState {
             bool initialized = false;
             NvmlDevice device = nullptr;
             unsigned int pid = 0;
+#ifdef _WIN32
+            HMODULE lib = nullptr;
+#else
             void* lib = nullptr;
+#endif
             FnNvmlDeviceGetComputeRunningProcesses fn_get_procs = nullptr;
+            FnNvmlDeviceGetUtilizationRates fn_get_utilization = nullptr;
 
             NvmlState() {
+#ifdef _WIN32
+                lib = LoadLibraryA("nvml.dll");
+                if (!lib)
+                    return;
+                auto load = [this](const char* name) -> void* {
+                    return reinterpret_cast<void*>(GetProcAddress(lib, name));
+                };
+#else
                 lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
                 if (!lib)
                     lib = dlopen("libnvidia-ml.so", RTLD_LAZY);
                 if (!lib)
                     return;
-
                 auto load = [this](const char* name) -> void* {
                     return dlsym(lib, name);
                 };
+#endif
 
                 auto fn_init = reinterpret_cast<FnNvmlInit>(load("nvmlInit_v2"));
                 auto fn_get_handle = reinterpret_cast<FnNvmlDeviceGetHandleByPciBusId>(
                     load("nvmlDeviceGetHandleByPciBusId_v2"));
                 fn_get_procs = reinterpret_cast<FnNvmlDeviceGetComputeRunningProcesses>(
                     load("nvmlDeviceGetComputeRunningProcesses_v3"));
+                fn_get_utilization = reinterpret_cast<FnNvmlDeviceGetUtilizationRates>(
+                    load("nvmlDeviceGetUtilizationRates"));
 
-                if (!fn_init || !fn_get_handle || !fn_get_procs)
+                // Utilization only needs init + handle + getUtilizationRates.
+                // Process memory also needs get_procs (Linux path).
+                if (!fn_init || !fn_get_handle || !fn_get_utilization)
                     return;
                 if (fn_init() != NVML_SUCCESS)
                     return;
@@ -198,12 +222,15 @@ namespace lfs::vis::gui {
                 if (fn_get_handle(pci_bus_id, &device) != NVML_SUCCESS)
                     return;
 
+#ifndef _WIN32
                 pid = static_cast<unsigned int>(getpid());
+#endif
                 initialized = true;
             }
 
+#ifndef _WIN32
             size_t getProcessMemory() const {
-                if (!initialized)
+                if (!initialized || !fn_get_procs)
                     return 0;
                 unsigned int count = 64;
                 NvmlProcessInfo procs[64];
@@ -215,13 +242,22 @@ namespace lfs::vis::gui {
                 }
                 return 0;
             }
+#endif
+
+            float getUtilization() const {
+                if (!initialized || !fn_get_utilization)
+                    return -1.f;
+                NvmlUtilization utilization{};
+                if (fn_get_utilization(device, &utilization) != NVML_SUCCESS)
+                    return -1.f;
+                return static_cast<float>(utilization.gpu);
+            }
         };
 
         NvmlState& nvmlState() {
             static NvmlState s;
             return s;
         }
-#endif
 
     } // namespace
 
@@ -246,10 +282,16 @@ namespace lfs::vis::gui {
 #else
         info.process_used = nvmlState().getProcessMemory();
 #endif
+        info.gpu_utilization_percent = nvmlState().getUtilization();
+        info.gpu_utilization_valid = info.gpu_utilization_percent >= 0.f;
         if (info.process_used > info.total)
             info.process_used = 0;
 
         return info;
+    }
+
+    float queryGpuUtilization() {
+        return nvmlState().getUtilization();
     }
 
 } // namespace lfs::vis::gui

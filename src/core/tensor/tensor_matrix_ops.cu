@@ -11,34 +11,6 @@ namespace lfs::core::tensor_ops {
         constexpr size_t MAX_GRID_Y_DIM = 65535;
     }
 
-    // Transpose kernel using shared memory
-    template <int TILE_DIM, int BLOCK_ROWS>
-    __global__ void transpose_kernel(const float* input, float* output, size_t rows, size_t cols) {
-        __shared__ float tile[TILE_DIM][TILE_DIM + 1];
-
-        int x = blockIdx.x * TILE_DIM + threadIdx.x;
-        int y = blockIdx.y * TILE_DIM + threadIdx.y;
-        int width = cols;
-
-        for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS) {
-            if (x < cols && (y + j) < rows) {
-                tile[threadIdx.y + j][threadIdx.x] = input[(y + j) * width + x];
-            }
-        }
-
-        __syncthreads();
-
-        x = blockIdx.y * TILE_DIM + threadIdx.x;
-        y = blockIdx.x * TILE_DIM + threadIdx.y;
-        width = rows;
-
-        for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS) {
-            if (x < rows && (y + j) < cols) {
-                output[(y + j) * width + x] = tile[threadIdx.x][threadIdx.y + j];
-            }
-        }
-    }
-
     // Register-tiled sgemm: C = A @ B
     template <int BM, int BN, int BK, int TM, int TN>
     __global__ void sgemm_optimized_kernel(const float* __restrict__ A,

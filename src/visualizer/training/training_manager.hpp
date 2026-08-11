@@ -68,14 +68,13 @@ namespace lfs::vis {
         void stopTraining();
         void requestSaveCheckpoint();
 
-        // Temporary pause (for camera movement - doesn't change UI state)
+        // Temporary pause for short synchronization-sensitive operations; does not change UI state.
         struct TemporaryPauseResult {
             bool synchronized = false;
             bool resume_required = false;
         };
 
         void pauseTrainingTemporary();
-        [[nodiscard]] bool pauseTrainingTemporaryIfActive();
         [[nodiscard]] TemporaryPauseResult pauseTrainingTemporaryAndWait(std::chrono::milliseconds timeout);
         void resumeTrainingTemporary();
 
@@ -151,7 +150,7 @@ namespace lfs::vis {
         // Get last error message
         const std::string& getLastError() const { return last_error_; }
 
-        // Most recent training failure as a typed error (Phase 10). During an
+        // Most recent training failure as a typed error. During an
         // active run this may briefly differ from the legacy getLastError()
         // string, which keeps its exact current lifecycle for the deprecation
         // window.
@@ -205,6 +204,23 @@ namespace lfs::vis {
             const lfs::core::param::TrainingParameters& params,
             std::size_t min_capacity = 0);
 
+        // Install densify-time grow/rebind hook on the training model.
+        void installExportableCapacityEnsure(lfs::core::SplatData& model);
+        // Install densify barrier on the live trainer (no-op
+        // when there is no exportable block / no trainer).
+        void installExportableDensifyBarrier();
+        // Body of the capacity-ensure hook (member so rebind cannot destroy the
+        // running std::function target mid-call).
+        [[nodiscard]] bool growExportableForDensify(std::size_t needed_rows);
+
+        // Drop Vulkan import of the exportable block (cuda-only views). Nested.
+        [[nodiscard]] bool beginExportableDensifyBarrier();
+        // Re-import exportable block into Vulkan after densify/commit. Nested.
+        [[nodiscard]] bool endExportableDensifyBarrier();
+        // Shared drop / re-import helpers used by grow and the densify barrier.
+        [[nodiscard]] bool rebindExportableCudaOnly();
+        [[nodiscard]] bool rebindExportableVulkanInterop();
+
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
         std::unique_ptr<std::jthread> training_thread_;
@@ -215,6 +231,8 @@ namespace lfs::vis {
         VisualizerImpl* viewer_ = nullptr;
         core::Scene* scene_ = nullptr;
         std::optional<lfs::core::SplatExportableStorage> splat_storage_;
+        // Nesting depth for densify-window Vulkan exclusion.
+        int exportable_densify_barrier_depth_ = 0;
 
         // State machine (single source of truth for state)
         TrainingStateMachine state_machine_;

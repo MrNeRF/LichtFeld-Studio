@@ -100,9 +100,9 @@ namespace {
         const float* __restrict__ img1,
         const TargetT* __restrict__ img2,
         float* __restrict__ ssim_map,
-        float* __restrict__ dm_dmu1,
-        float* __restrict__ dm_dsigma1_sq,
-        float* __restrict__ dm_dsigma12) {
+        __half* __restrict__ dm_dmu1,
+        __half* __restrict__ dm_dsigma1_sq,
+        __half* __restrict__ dm_dsigma12) {
         auto block = cg::this_thread_block();
         const int bIdx = block.group_index().z; // batch index
         const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -296,9 +296,9 @@ namespace {
                         float d_m_dsigma1_sq = (-C_ * D_) / (A * B * B);
                         float d_m_dsigma12 = (2.f * C_) / (A * B);
 
-                        dm_dmu1[global_idx] = d_m_dmu1;
-                        dm_dsigma1_sq[global_idx] = d_m_dsigma1_sq;
-                        dm_dsigma12[global_idx] = d_m_dsigma12;
+                        dm_dmu1[global_idx] = static_cast<__half>(d_m_dmu1);
+                        dm_dsigma1_sq[global_idx] = static_cast<__half>(d_m_dsigma1_sq);
+                        dm_dsigma12[global_idx] = static_cast<__half>(d_m_dsigma12);
                     }
                 }
             }
@@ -322,9 +322,9 @@ namespace {
         const TargetT* __restrict__ img2,
         const float* __restrict__ dL_dmap,
         float* __restrict__ dL_dimg1,
-        const float* __restrict__ dm_dmu1,
-        const float* __restrict__ dm_dsigma1_sq,
-        const float* __restrict__ dm_dsigma12) {
+        const __half* __restrict__ dm_dmu1,
+        const __half* __restrict__ dm_dsigma1_sq,
+        const __half* __restrict__ dm_dsigma12) {
         auto block = cg::this_thread_block();
 
         const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -656,8 +656,10 @@ namespace {
         }
     }
 
-    // Fused L1+SSIM Backward Kernel
-    template <typename TargetT, typename PartialT>
+    // Fused L1+SSIM Backward Kernel.
+    // HasSigmaPartials=false: sigma partials are identically zero (decoupled
+    // appearance branch). Avoids a full-image zero_terms buffer.
+    template <typename TargetT, bool HasSigmaPartials = true>
     __global__ void fusedL1SSIMBackwardCUDA(
         float ssim_weight,
         int H,
@@ -670,9 +672,9 @@ namespace {
         const float* __restrict__ img1,
         const TargetT* __restrict__ img2,
         float* __restrict__ dL_dimg1,
-        const PartialT* __restrict__ dm_dmu1,
-        const PartialT* __restrict__ dm_dsigma1_sq,
-        const PartialT* __restrict__ dm_dsigma12) {
+        const __half* __restrict__ dm_dmu1,
+        const __half* __restrict__ dm_dsigma1_sq,
+        const __half* __restrict__ dm_dsigma12) {
 
         auto block = cg::this_thread_block();
         const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -720,8 +722,11 @@ namespace {
                             }
                         }
                         float vmu = get_pix_value(dm_dmu1, bIdx, c, gy, gx, CH, H, W);
-                        float vs1 = get_pix_value(dm_dsigma1_sq, bIdx, c, gy, gx, CH, H, W);
-                        float vs12 = get_pix_value(dm_dsigma12, bIdx, c, gy, gx, CH, H, W);
+                        float vs1 = 0.f, vs12 = 0.f;
+                        if constexpr (HasSigmaPartials) {
+                            vs1 = get_pix_value(dm_dsigma1_sq, bIdx, c, gy, gx, CH, H, W);
+                            vs12 = get_pix_value(dm_dsigma12, bIdx, c, gy, gx, CH, H, W);
+                        }
 
                         // SSIM gradient needs -ssim_weight (d(1-ssim)/d(ssim) = -1)
                         sData[row][col][0] = -ssim_weight * vmu * chain;
@@ -823,7 +828,7 @@ namespace {
         }
     }
 
-    // Masked Fused L1+SSIM Forward Kernel
+    // Masked Fused L1+SSIM Forward Kernel.
     template <typename TargetT>
     __global__ void maskedFusedL1SSIMForwardCUDA(
         int H,
@@ -833,9 +838,9 @@ namespace {
         float C2,
         const float* __restrict__ img1,
         const TargetT* __restrict__ img2,
-        float* __restrict__ dm_dmu1,
-        float* __restrict__ dm_dsigma1_sq,
-        float* __restrict__ dm_dsigma12,
+        __half* __restrict__ dm_dmu1,
+        __half* __restrict__ dm_dsigma1_sq,
+        __half* __restrict__ dm_dsigma12,
         float* __restrict__ ssim_map) {
 
         auto block = cg::this_thread_block();
@@ -1010,9 +1015,9 @@ namespace {
                         float d_m_dsigma1_sq = (-C_ * D_) / (A * B * B);
                         float d_m_dsigma12 = (2.f * C_) / (A * B);
 
-                        dm_dmu1[global_idx] = d_m_dmu1;
-                        dm_dsigma1_sq[global_idx] = d_m_dsigma1_sq;
-                        dm_dsigma12[global_idx] = d_m_dsigma12;
+                        dm_dmu1[global_idx] = static_cast<__half>(d_m_dmu1);
+                        dm_dsigma1_sq[global_idx] = static_cast<__half>(d_m_dsigma1_sq);
+                        dm_dsigma12[global_idx] = static_cast<__half>(d_m_dsigma12);
                     }
                 }
             }
@@ -1023,8 +1028,9 @@ namespace {
         }
     }
 
-    // Masked Fused L1+SSIM Backward Kernel
-    template <typename TargetT, typename MaskT>
+    // Masked Fused L1+SSIM Backward Kernel.
+    // HasSigmaPartials=false: appearance branch skips unused sigma partials.
+    template <typename TargetT, typename MaskT, bool HasSigmaPartials = true>
     __global__ void maskedFusedL1SSIMBackwardCUDA(
         float ssim_weight,
         float inv_mask_sum, // 1.0 / mask_sum for normalization
@@ -1037,9 +1043,9 @@ namespace {
         const TargetT* __restrict__ img2,
         const MaskT* __restrict__ mask,
         float* __restrict__ dL_dimg1,
-        const float* __restrict__ dm_dmu1,
-        const float* __restrict__ dm_dsigma1_sq,
-        const float* __restrict__ dm_dsigma12) {
+        const __half* __restrict__ dm_dmu1,
+        const __half* __restrict__ dm_dsigma1_sq,
+        const __half* __restrict__ dm_dsigma12) {
 
         auto block = cg::this_thread_block();
         const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -1088,8 +1094,11 @@ namespace {
                         float chain = local_mask * inv_mask_sum;
 
                         float vmu = get_pix_value(dm_dmu1, bIdx, c, gy, gx, CH, H, W);
-                        float vs1 = get_pix_value(dm_dsigma1_sq, bIdx, c, gy, gx, CH, H, W);
-                        float vs12 = get_pix_value(dm_dsigma12, bIdx, c, gy, gx, CH, H, W);
+                        float vs1 = 0.f, vs12 = 0.f;
+                        if constexpr (HasSigmaPartials) {
+                            vs1 = get_pix_value(dm_dsigma1_sq, bIdx, c, gy, gx, CH, H, W);
+                            vs12 = get_pix_value(dm_dsigma12, bIdx, c, gy, gx, CH, H, W);
+                        }
 
                         sData[row][col][0] = -ssim_weight * vmu * chain;
                         sData[row][col][1] = -ssim_weight * vs1 * chain;
@@ -1180,10 +1189,10 @@ namespace {
         const float* __restrict__ corrected_img,
         const float* __restrict__ raw_img,
         const TargetT* __restrict__ gt_img,
-        float* __restrict__ app_dm_dmu1,
-        float* __restrict__ raw_dm_dmu1,
-        float* __restrict__ raw_dm_dsigma1_sq,
-        float* __restrict__ raw_dm_dsigma12,
+        __half* __restrict__ app_dm_dmu1,
+        __half* __restrict__ raw_dm_dmu1,
+        __half* __restrict__ raw_dm_dsigma1_sq,
+        __half* __restrict__ raw_dm_dsigma12,
         float* __restrict__ ssim_map) {
 
         auto block = cg::this_thread_block();
@@ -1389,13 +1398,14 @@ namespace {
                     if (app_dm_dmu1) {
                         const float dl_dmu1 =
                             2.f * (mu_gt * A_app - mu_corrected * C_app) / (A_app * A_app);
-                        app_dm_dmu1[global_idx] = contrast_structure * dl_dmu1;
+                        app_dm_dmu1[global_idx] = static_cast<__half>(contrast_structure * dl_dmu1);
 
                         const float ds1sq = ssim_weight * (-(luminance * D_raw) / (B_raw * B_raw));
                         const float ds12 = ssim_weight * ((2.f * luminance) / B_raw);
-                        raw_dm_dsigma1_sq[global_idx] = ds1sq;
-                        raw_dm_dsigma12[global_idx] = ds12;
-                        raw_dm_dmu1[global_idx] = ds1sq * (-2.f * mu_raw) + ds12 * (-mu_gt);
+                        raw_dm_dsigma1_sq[global_idx] = static_cast<__half>(ds1sq);
+                        raw_dm_dsigma12[global_idx] = static_cast<__half>(ds12);
+                        raw_dm_dmu1[global_idx] =
+                            static_cast<__half>(ds1sq * (-2.f * mu_raw) + ds12 * (-mu_gt));
                     }
                 }
             }
@@ -1434,10 +1444,10 @@ namespace lfs::training::kernels {
             validate_loss_context_images(ctx.img1, ctx.img2, ctx.original_h, ctx.original_w);
             const auto validate_derivative = [&](const lfs::core::Tensor& tensor, const std::string_view name) {
                 LFS_ASSERT_MSG(tensor.is_valid() && tensor.device() == lfs::core::Device::CUDA &&
-                                   tensor.dtype() == lfs::core::DataType::Float32 &&
+                                   tensor.dtype() == lfs::core::DataType::Float16 &&
                                    tensor.is_contiguous() && tensor.shape() == ctx.img1.shape(),
                                lfs::core::detail::format_cuda_safe(
-                                   "{} must be a contiguous Float32 CUDA tensor matching {} (shape={})",
+                                   "{} must be a contiguous Float16 CUDA tensor matching {} (shape={})",
                                    name, ctx.img1.shape().str(), tensor.shape().str()));
             };
             validate_derivative(ctx.dm_dmu1, "SSIM dmu derivative");
@@ -1472,10 +1482,12 @@ namespace lfs::training::kernels {
         // Output SSIM map
         auto ssim_map = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
 
-        // Allocate derivative Tensors
-        auto dm_dmu1 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
-        auto dm_dsigma1_sq = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
-        auto dm_dsigma12 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
+        auto dm_dmu1 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
+                                                lfs::core::DataType::Float16);
+        auto dm_dsigma1_sq = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
+                                                      lfs::core::DataType::Float16);
+        auto dm_dsigma12 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
+                                                    lfs::core::DataType::Float16);
 
         dispatch_target_ptr(img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
@@ -1484,9 +1496,9 @@ namespace lfs::training::kernels {
                 img1.ptr<float>(),
                 img2_ptr,
                 ssim_map.ptr<float>(),
-                dm_dmu1.ptr<float>(),
-                dm_dsigma1_sq.ptr<float>(),
-                dm_dsigma12.ptr<float>());
+                dm_dmu1.ptr<__half>(),
+                dm_dsigma1_sq.ptr<__half>(),
+                dm_dsigma12.ptr<__half>());
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.forward");
         });
 
@@ -1540,17 +1552,21 @@ namespace lfs::training::kernels {
         const dim3 block(BLOCK_X, BLOCK_Y);
 
         auto ssim_map = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
-        auto dm_dmu1 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
-        auto dm_dsigma1_sq = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
-        auto dm_dsigma12 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
+        // dm_* fp16 (map path still materializes them for SSIMContext).
+        auto dm_dmu1 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
+                                                lfs::core::DataType::Float16);
+        auto dm_dsigma1_sq = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
+                                                      lfs::core::DataType::Float16);
+        auto dm_dsigma12 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
+                                                    lfs::core::DataType::Float16);
 
         dispatch_target_ptr(img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
             fusedssimCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 H, W, C, C1, C2,
                 img1.ptr<float>(), img2_ptr,
-                ssim_map.ptr<float>(), dm_dmu1.ptr<float>(),
-                dm_dsigma1_sq.ptr<float>(), dm_dsigma12.ptr<float>());
+                ssim_map.ptr<float>(), dm_dmu1.ptr<__half>(),
+                dm_dsigma1_sq.ptr<__half>(), dm_dsigma12.ptr<__half>());
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.forward_map");
         });
 
@@ -1606,7 +1622,8 @@ namespace lfs::training::kernels {
                 H, W, C, C1, C2,
                 img1.ptr<float>(), img2_ptr,
                 workspace.ssim_map.ptr<float>(),
-                nullptr, nullptr, nullptr);
+                static_cast<__half*>(nullptr), static_cast<__half*>(nullptr),
+                static_cast<__half*>(nullptr));
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.error_map_forward");
         });
 
@@ -1681,9 +1698,9 @@ namespace lfs::training::kernels {
                 img2_ptr,
                 dL_dmap.ptr<float>(),
                 dL_dimg1.ptr<float>(),
-                ctx.dm_dmu1.ptr<float>(),
-                ctx.dm_dsigma1_sq.ptr<float>(),
-                ctx.dm_dsigma12.ptr<float>());
+                ctx.dm_dmu1.ptr<__half>(),
+                ctx.dm_dsigma1_sq.ptr<__half>(),
+                ctx.dm_dsigma12.ptr<__half>());
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.backward");
         });
 
@@ -1716,8 +1733,8 @@ namespace lfs::training::kernels {
             fusedssim_backwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 ctx.original_h, ctx.original_w, static_cast<int>(C), C1, C2,
                 ctx.img1.ptr<float>(), img2_ptr, gradient_map.ptr<float>(),
-                dL_dimg1.ptr<float>(), ctx.dm_dmu1.ptr<float>(),
-                ctx.dm_dsigma1_sq.ptr<float>(), ctx.dm_dsigma12.ptr<float>());
+                dL_dimg1.ptr<float>(), ctx.dm_dmu1.ptr<__half>(),
+                ctx.dm_dsigma1_sq.ptr<__half>(), ctx.dm_dsigma12.ptr<__half>());
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.backward_grad_map");
         });
 
@@ -1765,9 +1782,9 @@ namespace lfs::training::kernels {
                 img1.ptr<float>(),
                 img2_ptr,
                 workspace.ssim_map.ptr<float>(),
-                workspace.dm_dmu1.ptr<float>(),
-                workspace.dm_dsigma1_sq.ptr<float>(),
-                workspace.dm_dsigma12.ptr<float>());
+                workspace.dm_dmu1.ptr<__half>(),
+                workspace.dm_dsigma1_sq.ptr<__half>(),
+                workspace.dm_dsigma12.ptr<__half>());
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.forward");
         });
 
@@ -1782,7 +1799,9 @@ namespace lfs::training::kernels {
             N, C, H, W,
             apply_valid_padding,
             workspace.ssim_map.stream());
-        lfs::core::Tensor ssim_value_tensor = workspace.reduction_result.clone();
+        // The returned scalar aliases the workspace and must be consumed before
+        // the next forward using this workspace.
+        lfs::core::Tensor ssim_value_tensor = workspace.reduction_result;
 
         // Save context for backward (reference workspace buffers, not copies!)
         SSIMContext ctx;
@@ -1853,9 +1872,9 @@ namespace lfs::training::kernels {
                 img2_ptr,
                 workspace.dL_dmap.ptr<float>(),
                 workspace.dL_dimg1.ptr<float>(),
-                ctx.dm_dmu1.ptr<float>(),
-                ctx.dm_dsigma1_sq.ptr<float>(),
-                ctx.dm_dsigma12.ptr<float>());
+                ctx.dm_dmu1.ptr<__half>(),
+                ctx.dm_dsigma1_sq.ptr<__half>(),
+                ctx.dm_dsigma12.ptr<__half>());
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.backward");
         });
 
@@ -1913,7 +1932,7 @@ namespace lfs::training::kernels {
                 apply_valid_padding,
                 workspace.ssim_map.stream());
         });
-        lfs::core::Tensor loss_scalar = workspace.reduction_result.clone();
+        lfs::core::Tensor loss_scalar = workspace.reduction_result;
 
         FusedL1SSIMContext ctx{
             .img1 = img1,
@@ -1953,14 +1972,12 @@ namespace lfs::training::kernels {
         const size_t numel = N * C * grad_h * grad_w;
         const float grad_per_pixel = 1.0f / static_cast<float>(numel);
 
-        workspace.grad_img.zero_();
-
         const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
         dispatch_target_ptr(ctx.img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            fusedL1SSIMBackwardCUDA<TargetT, __half><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            fusedL1SSIMBackwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 ctx.ssim_weight, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                 grad_per_pixel, ctx.apply_valid_padding,
                 ctx.img1.ptr<float>(), img2_ptr,
@@ -2012,10 +2029,10 @@ namespace lfs::training::kernels {
             decoupledFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 H, W, C, C1, C2, ssim_weight,
                 corrected.ptr<float>(), raw.ptr<float>(), gt_ptr,
-                workspace.app_dm_dmu1.ptr<float>(),
-                workspace.raw_dm_dmu1.ptr<float>(),
-                workspace.raw_dm_dsigma1_sq.ptr<float>(),
-                workspace.raw_dm_dsigma12.ptr<float>(),
+                workspace.app_dm_dmu1.ptr<__half>(),
+                workspace.raw_dm_dmu1.ptr<__half>(),
+                workspace.raw_dm_dsigma1_sq.ptr<__half>(),
+                workspace.raw_dm_dsigma12.ptr<__half>(),
                 workspace.ssim_map.ptr<float>());
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.decoupled_fused_l1_forward");
 
@@ -2030,7 +2047,7 @@ namespace lfs::training::kernels {
                 apply_valid_padding,
                 workspace.ssim_map.stream());
         });
-        lfs::core::Tensor loss_scalar = workspace.reduction_result.clone();
+        lfs::core::Tensor loss_scalar = workspace.reduction_result;
 
         DecoupledFusedL1SSIMContext ctx{
             .corrected_img = corrected,
@@ -2077,26 +2094,26 @@ namespace lfs::training::kernels {
 
         dispatch_target_ptr(ctx.gt_img, [&](auto* gt_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
-            workspace.grad_corrected.zero_();
-            fusedL1SSIMBackwardCUDA<TargetT, float><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
-                ctx.ssim_weight, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
-                grad_per_pixel, ctx.apply_valid_padding,
-                ctx.corrected_img.ptr<float>(), gt_ptr,
-                workspace.grad_corrected.ptr<float>(),
-                ctx.app_dm_dmu1.ptr<float>(),
-                workspace.zero_terms.ptr<float>(),
-                workspace.zero_terms.ptr<float>());
+            fusedL1SSIMBackwardCUDA<TargetT, /*HasSigmaPartials=*/false>
+                <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+                    ctx.ssim_weight, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
+                    grad_per_pixel, ctx.apply_valid_padding,
+                    ctx.corrected_img.ptr<float>(), gt_ptr,
+                    workspace.grad_corrected.ptr<float>(),
+                    ctx.app_dm_dmu1.ptr<__half>(),
+                    /*dm_dsigma1_sq=*/nullptr,
+                    /*dm_dsigma12=*/nullptr);
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.decoupled_fused_l1_backward");
 
-            workspace.grad_raw.zero_();
-            fusedL1SSIMBackwardCUDA<TargetT, float><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
-                1.0f, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
-                grad_per_pixel, ctx.apply_valid_padding,
-                ctx.raw_img.ptr<float>(), gt_ptr,
-                workspace.grad_raw.ptr<float>(),
-                ctx.raw_dm_dmu1.ptr<float>(),
-                ctx.raw_dm_dsigma1_sq.ptr<float>(),
-                ctx.raw_dm_dsigma12.ptr<float>());
+            fusedL1SSIMBackwardCUDA<TargetT, /*HasSigmaPartials=*/true>
+                <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+                    1.0f, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
+                    grad_per_pixel, ctx.apply_valid_padding,
+                    ctx.raw_img.ptr<float>(), gt_ptr,
+                    workspace.grad_raw.ptr<float>(),
+                    ctx.raw_dm_dmu1.ptr<__half>(),
+                    ctx.raw_dm_dsigma1_sq.ptr<__half>(),
+                    ctx.raw_dm_dsigma12.ptr<__half>());
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.decoupled_fused_l1_backward");
         });
 
@@ -2141,9 +2158,9 @@ namespace lfs::training::kernels {
             maskedFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 H, W, C, C1, C2,
                 img1.ptr<float>(), img2_ptr,
-                workspace.dm_dmu1.ptr<float>(),
-                workspace.dm_dsigma1_sq.ptr<float>(),
-                workspace.dm_dsigma12.ptr<float>(),
+                workspace.dm_dmu1.ptr<__half>(),
+                workspace.dm_dsigma1_sq.ptr<__half>(),
+                workspace.dm_dsigma12.ptr<__half>(),
                 workspace.ssim_map.ptr<float>());
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_fused_l1_forward");
 
@@ -2162,7 +2179,7 @@ namespace lfs::training::kernels {
             });
         });
 
-        auto loss_scalar = workspace.masked_loss.clone();
+        auto loss_scalar = workspace.masked_loss;
         const float mask_sum = workspace.mask_sum.item<float>();
 
         MaskedFusedL1SSIMContext ctx{
@@ -2198,8 +2215,6 @@ namespace lfs::training::kernels {
         const size_t C = ctx.img1.shape()[1];
         const float inv_mask_sum = 1.0f / ctx.mask_sum_value;
 
-        workspace.grad_img.zero_();
-
         const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
@@ -2207,12 +2222,13 @@ namespace lfs::training::kernels {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
             dispatch_mask_ptr(mask, [&](auto* mask_ptr) {
                 using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(mask_ptr)>>;
-                maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
-                    ctx.ssim_weight, inv_mask_sum, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
-                    ctx.img1.ptr<float>(), img2_ptr, mask_ptr,
-                    workspace.grad_img.ptr<float>(),
-                    ctx.dm_dmu1.ptr<float>(), ctx.dm_dsigma1_sq.ptr<float>(),
-                    ctx.dm_dsigma12.ptr<float>());
+                maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/true>
+                    <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+                        ctx.ssim_weight, inv_mask_sum, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
+                        ctx.img1.ptr<float>(), img2_ptr, mask_ptr,
+                        workspace.grad_img.ptr<float>(),
+                        ctx.dm_dmu1.ptr<__half>(), ctx.dm_dsigma1_sq.ptr<__half>(),
+                        ctx.dm_dsigma12.ptr<__half>());
                 LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_fused_l1_backward");
             });
         });
@@ -2258,10 +2274,10 @@ namespace lfs::training::kernels {
             decoupledFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 H, W, C, C1, C2, ssim_weight,
                 corrected.ptr<float>(), raw.ptr<float>(), gt_ptr,
-                workspace.app_dm_dmu1.ptr<float>(),
-                workspace.raw_dm_dmu1.ptr<float>(),
-                workspace.raw_dm_dsigma1_sq.ptr<float>(),
-                workspace.raw_dm_dsigma12.ptr<float>(),
+                workspace.app_dm_dmu1.ptr<__half>(),
+                workspace.raw_dm_dmu1.ptr<__half>(),
+                workspace.raw_dm_dsigma1_sq.ptr<__half>(),
+                workspace.raw_dm_dsigma12.ptr<__half>(),
                 workspace.ssim_map.ptr<float>());
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_fused_l1_forward");
 
@@ -2280,7 +2296,7 @@ namespace lfs::training::kernels {
             });
         });
 
-        auto loss_scalar = workspace.masked_loss.clone();
+        auto loss_scalar = workspace.masked_loss;
         const float mask_sum = workspace.mask_sum.item<float>();
 
         MaskedDecoupledFusedL1SSIMContext ctx{
@@ -2326,24 +2342,24 @@ namespace lfs::training::kernels {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
             dispatch_mask_ptr(mask, [&](auto* mask_ptr) {
                 using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(mask_ptr)>>;
-                workspace.grad_corrected.zero_();
-                maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
-                    ctx.ssim_weight, inv_mask_sum, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
-                    ctx.corrected_img.ptr<float>(), gt_ptr, mask_ptr,
-                    workspace.grad_corrected.ptr<float>(),
-                    ctx.app_dm_dmu1.ptr<float>(),
-                    workspace.zero_terms.ptr<float>(),
-                    workspace.zero_terms.ptr<float>());
+                maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/false>
+                    <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+                        ctx.ssim_weight, inv_mask_sum, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
+                        ctx.corrected_img.ptr<float>(), gt_ptr, mask_ptr,
+                        workspace.grad_corrected.ptr<float>(),
+                        ctx.app_dm_dmu1.ptr<__half>(),
+                        /*dm_dsigma1_sq=*/nullptr,
+                        /*dm_dsigma12=*/nullptr);
                 LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_fused_l1_backward");
 
-                workspace.grad_raw.zero_();
-                maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
-                    1.0f, inv_mask_sum, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
-                    ctx.raw_img.ptr<float>(), gt_ptr, mask_ptr,
-                    workspace.grad_raw.ptr<float>(),
-                    ctx.raw_dm_dmu1.ptr<float>(),
-                    ctx.raw_dm_dsigma1_sq.ptr<float>(),
-                    ctx.raw_dm_dsigma12.ptr<float>());
+                maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/true>
+                    <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+                        1.0f, inv_mask_sum, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
+                        ctx.raw_img.ptr<float>(), gt_ptr, mask_ptr,
+                        workspace.grad_raw.ptr<float>(),
+                        ctx.raw_dm_dmu1.ptr<__half>(),
+                        ctx.raw_dm_dsigma1_sq.ptr<__half>(),
+                        ctx.raw_dm_dsigma12.ptr<__half>());
                 LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_fused_l1_backward");
             });
         });
@@ -2413,6 +2429,558 @@ namespace lfs::training::kernels {
             error_map.ptr<float>(),
             C, H, W);
         LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.to_error_map");
+    }
+
+    // =========================================================================
+    // LossWorkspaceArena + independent ensure_size fallbacks
+    // =========================================================================
+    namespace {
+        constexpr size_t kArenaAlign = 256;
+
+        size_t align_up_bytes(size_t x) {
+            return (x + kArenaAlign - 1) & ~(kArenaAlign - 1);
+        }
+
+        size_t numel_of(const std::vector<size_t>& shape) {
+            size_t n = 1;
+            for (size_t d : shape) {
+                n *= d;
+            }
+            return n;
+        }
+
+        size_t field_bytes(const std::vector<size_t>& shape, lfs::core::DataType dtype) {
+            return numel_of(shape) * lfs::core::dtype_size(dtype);
+        }
+
+        size_t pack_fields(std::initializer_list<size_t> field_sizes) {
+            size_t total = 0;
+            for (size_t s : field_sizes) {
+                total = align_up_bytes(total) + s;
+            }
+            return align_up_bytes(total);
+        }
+    } // namespace
+
+    void SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        if (arena) {
+            arena->ensure_pure_ssim(shape);
+            return;
+        }
+        if (allocated_shape != shape) {
+            lfs::core::TensorShape tshape(shape);
+            ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+            dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            dL_dmap = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+            dL_dimg1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+            reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::CUDA);
+            reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            allocated_shape = shape;
+        }
+    }
+
+    void FusedL1SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        if (arena) {
+            arena->ensure_fused(shape);
+            return;
+        }
+        if (allocated_shape != shape) {
+            lfs::core::TensorShape tshape(shape);
+            std::vector<size_t> map_shape = shape;
+            map_shape[1] = 1;
+            ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
+            dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            grad_img = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+            reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::CUDA);
+            reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            allocated_shape = shape;
+        }
+    }
+
+    void DecoupledFusedL1SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        if (arena) {
+            arena->ensure_decoupled(shape);
+            return;
+        }
+        if (allocated_shape != shape) {
+            lfs::core::TensorShape tshape(shape);
+            std::vector<size_t> map_shape = shape;
+            map_shape[1] = 1;
+            ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
+            app_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            raw_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            raw_dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            raw_dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            grad_corrected = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+            grad_raw = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+            reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::CUDA);
+            reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            allocated_shape = shape;
+        }
+    }
+
+    void MaskedFusedL1SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        if (arena) {
+            arena->ensure_masked_fused(shape);
+            return;
+        }
+        if (allocated_shape != shape) {
+            lfs::core::TensorShape tshape(shape);
+            std::vector<size_t> map_shape = shape;
+            map_shape[1] = 1;
+            ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
+            dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            grad_img = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+            reduction_temp = lfs::core::Tensor::empty({2048}, lfs::core::Device::CUDA);
+            masked_loss = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            mask_sum = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            allocated_shape = shape;
+        }
+    }
+
+    void MaskedDecoupledFusedL1SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        if (arena) {
+            arena->ensure_masked_decoupled(shape);
+            return;
+        }
+        if (allocated_shape != shape) {
+            lfs::core::TensorShape tshape(shape);
+            std::vector<size_t> map_shape = shape;
+            map_shape[1] = 1;
+            ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
+            app_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            raw_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            raw_dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            raw_dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            grad_corrected = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+            grad_raw = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+            reduction_temp = lfs::core::Tensor::empty({2048}, lfs::core::Device::CUDA);
+            masked_loss = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            mask_sum = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            allocated_shape = shape;
+        }
+    }
+
+    size_t LossWorkspaceArena::fused_layout_bytes(const std::vector<size_t>& shape) {
+        std::vector<size_t> map_shape = shape;
+        map_shape[1] = 1;
+        return pack_fields({
+            field_bytes(map_shape, lfs::core::DataType::Float32),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float32),
+            1024 * sizeof(float),
+            sizeof(float),
+        });
+    }
+
+    size_t LossWorkspaceArena::pure_ssim_layout_bytes(const std::vector<size_t>& shape) {
+        // 3× dm_* fp16; ssim_map / dL_dmap / dL_dimg1 stay fp32.
+        return pack_fields({
+            field_bytes(shape, lfs::core::DataType::Float32),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float32),
+            field_bytes(shape, lfs::core::DataType::Float32),
+            1024 * sizeof(float),
+            sizeof(float),
+        });
+    }
+
+    size_t LossWorkspaceArena::decoupled_layout_bytes(const std::vector<size_t>& shape) {
+        std::vector<size_t> map_shape = shape;
+        map_shape[1] = 1;
+        // Four dm_* fields use fp16; gradients remain fp32. There is no
+        // zero_terms field.
+        return pack_fields({
+            field_bytes(map_shape, lfs::core::DataType::Float32),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float32),
+            field_bytes(shape, lfs::core::DataType::Float32),
+            1024 * sizeof(float),
+            sizeof(float),
+        });
+    }
+
+    size_t LossWorkspaceArena::masked_fused_layout_bytes(const std::vector<size_t>& shape) {
+        std::vector<size_t> map_shape = shape;
+        map_shape[1] = 1;
+        return pack_fields({
+            field_bytes(map_shape, lfs::core::DataType::Float32),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float32),
+            2048 * sizeof(float),
+            sizeof(float),
+            sizeof(float),
+        });
+    }
+
+    size_t LossWorkspaceArena::masked_decoupled_layout_bytes(const std::vector<size_t>& shape) {
+        std::vector<size_t> map_shape = shape;
+        map_shape[1] = 1;
+        // Four dm_* fields use fp16, with no zero_terms field.
+        return pack_fields({
+            field_bytes(map_shape, lfs::core::DataType::Float32),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float16),
+            field_bytes(shape, lfs::core::DataType::Float32),
+            field_bytes(shape, lfs::core::DataType::Float32),
+            2048 * sizeof(float),
+            sizeof(float),
+            sizeof(float),
+        });
+    }
+
+    size_t LossWorkspaceArena::max_variant_bytes(const std::vector<size_t>& shape) {
+        return std::max({fused_layout_bytes(shape), pure_ssim_layout_bytes(shape),
+                         decoupled_layout_bytes(shape), masked_fused_layout_bytes(shape),
+                         masked_decoupled_layout_bytes(shape)});
+    }
+
+    size_t LossWorkspaceArena::required_bytes() const {
+        if (active_shape_.empty()) {
+            return 0;
+        }
+        switch (active_kind_) {
+        case Kind::Fused:
+            return fused_layout_bytes(active_shape_);
+        case Kind::PureSSIM:
+            return pure_ssim_layout_bytes(active_shape_);
+        case Kind::Decoupled:
+            return decoupled_layout_bytes(active_shape_);
+        case Kind::MaskedFused:
+            return masked_fused_layout_bytes(active_shape_);
+        case Kind::MaskedDecoupled:
+            return masked_decoupled_layout_bytes(active_shape_);
+        case Kind::None:
+            return 0;
+        }
+        return 0;
+    }
+
+    void LossWorkspaceArena::replace_storage_exact(const size_t bytes) {
+        const size_t required_capacity = align_up_bytes(bytes);
+        LFS_ASSERT_MSG(required_capacity > 0,
+                       "LossWorkspaceArena cannot allocate an empty active layout");
+
+        auto new_storage = lfs::core::Tensor::empty(
+            {required_capacity}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+        // Stamp the home stream so from_blob views inherit a valid producer stream.
+        if (new_storage.stream() != lfs::core::getCurrentCUDAStream()) {
+            new_storage.set_stream(lfs::core::getCurrentCUDAStream());
+        }
+
+        clear_all_views();
+        storage_ = std::move(new_storage);
+        capacity_bytes_ = required_capacity;
+        active_kind_ = Kind::None;
+        active_shape_.clear();
+    }
+
+    void LossWorkspaceArena::ensure_capacity_for(const Kind kind, const size_t bytes) {
+        const size_t required_capacity = align_up_bytes(bytes);
+        const bool variant_changed = active_kind_ != Kind::None && active_kind_ != kind;
+        const bool must_allocate = !storage_.is_valid() || variant_changed ||
+                                   required_capacity > capacity_bytes_;
+        if (!must_allocate) {
+            return;
+        }
+        // Variant switches are exact in either direction. Within one variant,
+        // shape changes only grow; smaller shapes rebind into the retained block.
+        replace_storage_exact(required_capacity);
+    }
+
+    void LossWorkspaceArena::clear_all_views() {
+        auto clear_fused = [](FusedL1SSIMWorkspace& w) {
+            w.ssim_map = {};
+            w.dm_dmu1 = {};
+            w.dm_dsigma1_sq = {};
+            w.dm_dsigma12 = {};
+            w.grad_img = {};
+            w.reduction_temp = {};
+            w.reduction_result = {};
+            w.allocated_shape.clear();
+        };
+        auto clear_ssim = [](SSIMWorkspace& w) {
+            w.ssim_map = {};
+            w.dm_dmu1 = {};
+            w.dm_dsigma1_sq = {};
+            w.dm_dsigma12 = {};
+            w.dL_dmap = {};
+            w.dL_dimg1 = {};
+            w.reduction_temp = {};
+            w.reduction_result = {};
+            w.allocated_shape.clear();
+        };
+        auto clear_decoupled = [](DecoupledFusedL1SSIMWorkspace& w) {
+            w.ssim_map = {};
+            w.app_dm_dmu1 = {};
+            w.raw_dm_dmu1 = {};
+            w.raw_dm_dsigma1_sq = {};
+            w.raw_dm_dsigma12 = {};
+            w.grad_corrected = {};
+            w.grad_raw = {};
+            w.reduction_temp = {};
+            w.reduction_result = {};
+            w.allocated_shape.clear();
+        };
+        auto clear_masked = [](MaskedFusedL1SSIMWorkspace& w) {
+            w.ssim_map = {};
+            w.dm_dmu1 = {};
+            w.dm_dsigma1_sq = {};
+            w.dm_dsigma12 = {};
+            w.grad_img = {};
+            w.reduction_temp = {};
+            w.masked_loss = {};
+            w.mask_sum = {};
+            w.allocated_shape.clear();
+        };
+        auto clear_masked_dec = [](MaskedDecoupledFusedL1SSIMWorkspace& w) {
+            w.ssim_map = {};
+            w.app_dm_dmu1 = {};
+            w.raw_dm_dmu1 = {};
+            w.raw_dm_dsigma1_sq = {};
+            w.raw_dm_dsigma12 = {};
+            w.grad_corrected = {};
+            w.grad_raw = {};
+            w.reduction_temp = {};
+            w.masked_loss = {};
+            w.mask_sum = {};
+            w.allocated_shape.clear();
+        };
+        clear_fused(fused_);
+        clear_ssim(pure_ssim_);
+        clear_decoupled(decoupled_);
+        clear_masked(masked_fused_);
+        clear_masked_dec(masked_decoupled_);
+        fused_.arena = this;
+        pure_ssim_.arena = this;
+        decoupled_.arena = this;
+        masked_fused_.arena = this;
+        masked_decoupled_.arena = this;
+    }
+
+    lfs::core::Tensor LossWorkspaceArena::make_view(size_t& offset,
+                                                    const std::vector<size_t>& shape,
+                                                    lfs::core::DataType dtype) {
+        const size_t nbytes = field_bytes(shape, dtype);
+        offset = align_up_bytes(offset);
+        LFS_ASSERT_MSG(offset + nbytes <= capacity_bytes_,
+                       lfs::core::detail::format_cuda_safe(
+                           "LossWorkspaceArena view exceeds capacity (offset={}, need={}, cap={})",
+                           offset, nbytes, capacity_bytes_));
+        void* ptr = static_cast<char*>(storage_.data_ptr()) + offset;
+        offset += nbytes;
+        // Prefer current stream (matches training step); fall back to storage home.
+        cudaStream_t home = lfs::core::getCurrentCUDAStream();
+        if (home == nullptr) {
+            home = storage_.stream();
+        }
+        return lfs::core::Tensor::from_blob(ptr, lfs::core::TensorShape(shape),
+                                            lfs::core::Device::CUDA, dtype, home);
+    }
+
+    void LossWorkspaceArena::bind_fused(const std::vector<size_t>& shape) {
+        std::vector<size_t> map_shape = shape;
+        map_shape[1] = 1;
+        size_t off = 0;
+        fused_.ssim_map = make_view(off, map_shape, lfs::core::DataType::Float32);
+        fused_.dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
+        fused_.dm_dsigma1_sq = make_view(off, shape, lfs::core::DataType::Float16);
+        fused_.dm_dsigma12 = make_view(off, shape, lfs::core::DataType::Float16);
+        fused_.grad_img = make_view(off, shape, lfs::core::DataType::Float32);
+        fused_.reduction_temp = make_view(off, {1024}, lfs::core::DataType::Float32);
+        fused_.reduction_result = make_view(off, {1}, lfs::core::DataType::Float32);
+        fused_.allocated_shape = shape;
+        fused_.arena = this;
+    }
+
+    void LossWorkspaceArena::bind_pure_ssim(const std::vector<size_t>& shape) {
+        size_t off = 0;
+        pure_ssim_.ssim_map = make_view(off, shape, lfs::core::DataType::Float32);
+        pure_ssim_.dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
+        pure_ssim_.dm_dsigma1_sq = make_view(off, shape, lfs::core::DataType::Float16);
+        pure_ssim_.dm_dsigma12 = make_view(off, shape, lfs::core::DataType::Float16);
+        pure_ssim_.dL_dmap = make_view(off, shape, lfs::core::DataType::Float32);
+        pure_ssim_.dL_dimg1 = make_view(off, shape, lfs::core::DataType::Float32);
+        pure_ssim_.reduction_temp = make_view(off, {1024}, lfs::core::DataType::Float32);
+        pure_ssim_.reduction_result = make_view(off, {1}, lfs::core::DataType::Float32);
+        pure_ssim_.allocated_shape = shape;
+        pure_ssim_.arena = this;
+    }
+
+    void LossWorkspaceArena::bind_decoupled(const std::vector<size_t>& shape) {
+        std::vector<size_t> map_shape = shape;
+        map_shape[1] = 1;
+        size_t off = 0;
+        decoupled_.ssim_map = make_view(off, map_shape, lfs::core::DataType::Float32);
+        decoupled_.app_dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
+        decoupled_.raw_dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
+        decoupled_.raw_dm_dsigma1_sq = make_view(off, shape, lfs::core::DataType::Float16);
+        decoupled_.raw_dm_dsigma12 = make_view(off, shape, lfs::core::DataType::Float16);
+        decoupled_.grad_corrected = make_view(off, shape, lfs::core::DataType::Float32);
+        decoupled_.grad_raw = make_view(off, shape, lfs::core::DataType::Float32);
+        decoupled_.reduction_temp = make_view(off, {1024}, lfs::core::DataType::Float32);
+        decoupled_.reduction_result = make_view(off, {1}, lfs::core::DataType::Float32);
+        decoupled_.allocated_shape = shape;
+        decoupled_.arena = this;
+    }
+
+    void LossWorkspaceArena::bind_masked_fused(const std::vector<size_t>& shape) {
+        std::vector<size_t> map_shape = shape;
+        map_shape[1] = 1;
+        size_t off = 0;
+        masked_fused_.ssim_map = make_view(off, map_shape, lfs::core::DataType::Float32);
+        masked_fused_.dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
+        masked_fused_.dm_dsigma1_sq = make_view(off, shape, lfs::core::DataType::Float16);
+        masked_fused_.dm_dsigma12 = make_view(off, shape, lfs::core::DataType::Float16);
+        masked_fused_.grad_img = make_view(off, shape, lfs::core::DataType::Float32);
+        masked_fused_.reduction_temp = make_view(off, {2048}, lfs::core::DataType::Float32);
+        masked_fused_.masked_loss = make_view(off, {1}, lfs::core::DataType::Float32);
+        masked_fused_.mask_sum = make_view(off, {1}, lfs::core::DataType::Float32);
+        masked_fused_.allocated_shape = shape;
+        masked_fused_.arena = this;
+    }
+
+    void LossWorkspaceArena::bind_masked_decoupled(const std::vector<size_t>& shape) {
+        std::vector<size_t> map_shape = shape;
+        map_shape[1] = 1;
+        size_t off = 0;
+        masked_decoupled_.ssim_map = make_view(off, map_shape, lfs::core::DataType::Float32);
+        masked_decoupled_.app_dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
+        masked_decoupled_.raw_dm_dmu1 = make_view(off, shape, lfs::core::DataType::Float16);
+        masked_decoupled_.raw_dm_dsigma1_sq = make_view(off, shape, lfs::core::DataType::Float16);
+        masked_decoupled_.raw_dm_dsigma12 = make_view(off, shape, lfs::core::DataType::Float16);
+        masked_decoupled_.grad_corrected = make_view(off, shape, lfs::core::DataType::Float32);
+        masked_decoupled_.grad_raw = make_view(off, shape, lfs::core::DataType::Float32);
+        masked_decoupled_.reduction_temp = make_view(off, {2048}, lfs::core::DataType::Float32);
+        masked_decoupled_.masked_loss = make_view(off, {1}, lfs::core::DataType::Float32);
+        masked_decoupled_.mask_sum = make_view(off, {1}, lfs::core::DataType::Float32);
+        masked_decoupled_.allocated_shape = shape;
+        masked_decoupled_.arena = this;
+    }
+
+    FusedL1SSIMWorkspace& LossWorkspaceArena::ensure_fused(const std::vector<size_t>& shape) {
+        ensure_capacity_for(Kind::Fused, fused_layout_bytes(shape));
+        if (active_kind_ == Kind::Fused && active_shape_ == shape && fused_.ssim_map.is_valid()) {
+            return fused_;
+        }
+        clear_all_views();
+        bind_fused(shape);
+        active_kind_ = Kind::Fused;
+        active_shape_ = shape;
+        return fused_;
+    }
+
+    SSIMWorkspace& LossWorkspaceArena::ensure_pure_ssim(const std::vector<size_t>& shape) {
+        ensure_capacity_for(Kind::PureSSIM, pure_ssim_layout_bytes(shape));
+        if (active_kind_ == Kind::PureSSIM && active_shape_ == shape && pure_ssim_.ssim_map.is_valid()) {
+            return pure_ssim_;
+        }
+        clear_all_views();
+        bind_pure_ssim(shape);
+        active_kind_ = Kind::PureSSIM;
+        active_shape_ = shape;
+        return pure_ssim_;
+    }
+
+    DecoupledFusedL1SSIMWorkspace& LossWorkspaceArena::ensure_decoupled(const std::vector<size_t>& shape) {
+        ensure_capacity_for(Kind::Decoupled, decoupled_layout_bytes(shape));
+        if (active_kind_ == Kind::Decoupled && active_shape_ == shape && decoupled_.ssim_map.is_valid()) {
+            return decoupled_;
+        }
+        clear_all_views();
+        bind_decoupled(shape);
+        active_kind_ = Kind::Decoupled;
+        active_shape_ = shape;
+        return decoupled_;
+    }
+
+    MaskedFusedL1SSIMWorkspace& LossWorkspaceArena::ensure_masked_fused(const std::vector<size_t>& shape) {
+        ensure_capacity_for(Kind::MaskedFused, masked_fused_layout_bytes(shape));
+        if (active_kind_ == Kind::MaskedFused && active_shape_ == shape &&
+            masked_fused_.ssim_map.is_valid()) {
+            return masked_fused_;
+        }
+        clear_all_views();
+        bind_masked_fused(shape);
+        active_kind_ = Kind::MaskedFused;
+        active_shape_ = shape;
+        return masked_fused_;
+    }
+
+    MaskedDecoupledFusedL1SSIMWorkspace&
+    LossWorkspaceArena::ensure_masked_decoupled(const std::vector<size_t>& shape) {
+        ensure_capacity_for(Kind::MaskedDecoupled, masked_decoupled_layout_bytes(shape));
+        if (active_kind_ == Kind::MaskedDecoupled && active_shape_ == shape &&
+            masked_decoupled_.ssim_map.is_valid()) {
+            return masked_decoupled_;
+        }
+        clear_all_views();
+        bind_masked_decoupled(shape);
+        active_kind_ = Kind::MaskedDecoupled;
+        active_shape_ = shape;
+        return masked_decoupled_;
+    }
+
+    void LossWorkspaceArena::shrink_to_required() {
+        if (active_kind_ == Kind::None || active_shape_.empty()) {
+            reset();
+            return;
+        }
+
+        const Kind kind = active_kind_;
+        const std::vector<size_t> shape = active_shape_;
+        const size_t required_capacity = align_up_bytes(required_bytes());
+        if (storage_.is_valid() && capacity_bytes_ == required_capacity) {
+            return;
+        }
+
+        replace_storage_exact(required_capacity);
+        switch (kind) {
+        case Kind::Fused:
+            bind_fused(shape);
+            break;
+        case Kind::PureSSIM:
+            bind_pure_ssim(shape);
+            break;
+        case Kind::Decoupled:
+            bind_decoupled(shape);
+            break;
+        case Kind::MaskedFused:
+            bind_masked_fused(shape);
+            break;
+        case Kind::MaskedDecoupled:
+            bind_masked_decoupled(shape);
+            break;
+        case Kind::None:
+            return;
+        }
+        active_kind_ = kind;
+        active_shape_ = shape;
+    }
+
+    void LossWorkspaceArena::reset() {
+        clear_all_views();
+        storage_ = {};
+        capacity_bytes_ = 0;
+        active_kind_ = Kind::None;
+        active_shape_.clear();
     }
 
 } // namespace lfs::training::kernels

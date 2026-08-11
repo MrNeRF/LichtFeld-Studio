@@ -717,6 +717,7 @@ namespace lfs::vis {
                                          "depth_blit.image[{}x{}]",
                                          w,
                                          h);
+            vmaSetAllocationName(allocator, image_alloc, "Depth-blit image");
             image_vram_label = std::format("r32_float:{}x{}", w, h);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.depth_blit.image",

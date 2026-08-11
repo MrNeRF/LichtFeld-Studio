@@ -12,7 +12,11 @@ namespace lfs::vis {
     struct FramerateSettings {
         float time_window_seconds = 5.0f; // Time window to keep frame samples (seconds)
         size_t max_frame_samples = 1000;  // Maximum number of frame samples to keep
-        float training_frame_refresh_time_sec = 1;
+        // Passive live-preview splat re-render cadence while training (UI panels keep
+        // full rate; retained last splat image is shown between ticks). A few Hz:
+        // enough to feel live, low enough that step-boundary lock cost stays <<5%.
+        // Derived as a fixed runtime constant — no dataset/resolution knobs.
+        float training_frame_refresh_time_sec = 0.25f; // 4 Hz
     };
 
     class FramerateController {

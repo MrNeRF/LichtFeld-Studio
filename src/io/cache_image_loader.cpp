@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <fstream>
-#include <random>
 
 #ifdef __linux__
 #include <sys/sysinfo.h>
@@ -26,37 +25,6 @@
 #endif
 
 namespace lfs::io {
-
-    namespace {
-        std::filesystem::path get_lichtfeld_temp_folder() {
-            std::filesystem::path temp_base;
-#ifdef _WIN32
-            const char* temp = std::getenv("TEMP");
-            if (!temp)
-                temp = std::getenv("TMP");
-            temp_base = temp ? temp : "C:/Temp";
-#else
-            temp_base = "/tmp";
-#endif
-            return temp_base / "LichtFeld";
-        }
-
-        std::string generate_short_hash() {
-            static constexpr char hex_chars[] = "0123456789abcdef";
-
-            // Thread-safe: use local RNG objects to avoid data races
-            thread_local std::random_device rd;
-            thread_local std::mt19937 gen(rd());
-            std::uniform_int_distribution<> dis(0, 15);
-
-            std::string hash;
-            hash.reserve(8);
-            for (int i = 0; i < 8; ++i) {
-                hash += hex_chars[dis(gen)];
-            }
-            return hash;
-        }
-    } // anonymous namespace
 
     std::size_t get_total_physical_memory() {
 #ifdef __linux__
@@ -111,11 +79,10 @@ namespace lfs::io {
         return 1.0 - (static_cast<double>(available) / static_cast<double>(total));
     }
 
-    void CacheLoader::update_cache_params(bool use_cpu_memory, bool use_fs_cache, int num_expected_images,
+    void CacheLoader::update_cache_params(bool use_cpu_memory, int num_expected_images,
                                           float min_cpu_free_GB, float min_cpu_free_memory_ratio,
                                           bool print_cache_status, int print_status_freq_num) {
         use_cpu_memory_ = use_cpu_memory;
-        use_fs_cache_ = use_fs_cache;
         num_expected_images_ = num_expected_images;
         min_cpu_free_GB_ = min_cpu_free_GB;
         min_cpu_free_memory_ratio_ = min_cpu_free_memory_ratio;
@@ -126,9 +93,9 @@ namespace lfs::io {
     std::unique_ptr<CacheLoader> CacheLoader::instance_ = nullptr;
     std::once_flag CacheLoader::init_flag_;
 
-    CacheLoader& CacheLoader::getInstance(bool use_cpu_memory, bool use_fs_cache) {
+    CacheLoader& CacheLoader::getInstance(bool use_cpu_memory) {
         std::call_once(init_flag_, [&]() {
-            instance_.reset(new CacheLoader(use_cpu_memory, use_fs_cache));
+            instance_.reset(new CacheLoader(use_cpu_memory));
         });
         return *instance_;
     }
@@ -140,100 +107,15 @@ namespace lfs::io {
         return *instance_;
     }
 
-    namespace {
-
-        bool create_done_file(const std::filesystem::path& img_path) {
-            auto done_path = img_path;
-            done_path += ".done";
-            std::ofstream ofs;
-            return lfs::core::open_file_for_write(done_path, std::ios::trunc, ofs) && ofs.good();
-        }
-
-        bool does_cache_image_exist(const std::filesystem::path& img_path) {
-            auto done_path = img_path;
-            done_path += ".done";
-            return std::filesystem::exists(img_path) && std::filesystem::exists(done_path);
-        }
-
-    } // anonymous namespace
-
-    CacheLoader::CacheLoader(bool use_cpu_memory, bool use_fs_cache)
-        : use_cpu_memory_(use_cpu_memory),
-          use_fs_cache_(use_fs_cache) {
-        create_new_cache_folder();
+    CacheLoader::CacheLoader(bool use_cpu_memory)
+        : use_cpu_memory_(use_cpu_memory) {
         min_cpu_free_memory_ratio_ = std::clamp(min_cpu_free_memory_ratio_, 0.0f, 1.0f);
-    }
-
-    void CacheLoader::create_new_cache_folder() {
-        if (!use_fs_cache_)
-            return;
-
-        const auto cache_base = get_lichtfeld_temp_folder() / "cache";
-        const std::string unique_cache_path = std::string(CACHE_PREFIX) + generate_short_hash();
-        const std::filesystem::path cache_folder = cache_base / unique_cache_path;
-        std::error_code ec;
-
-        // Create LichtFeld temp folder if it doesn't exist
-        if (!std::filesystem::exists(cache_base.parent_path())) {
-            std::filesystem::create_directories(cache_base.parent_path(), ec);
-            if (ec) {
-                LOG_ERROR("Failed to create cache base path: {} - {}", lfs::core::path_to_utf8(cache_base.parent_path()), ec.message());
-                use_fs_cache_ = false;
-                return;
-            }
-            LOG_DEBUG("Created cache base path: {}", lfs::core::path_to_utf8(cache_base.parent_path()));
-        }
-
-        if (std::filesystem::exists(cache_folder)) {
-            std::filesystem::remove_all(cache_folder, ec);
-            if (ec) {
-                LOG_ERROR("Failed to wipe cache folder: {}", ec.message());
-                use_fs_cache_ = false;
-                return;
-            }
-        }
-
-        std::filesystem::create_directories(cache_folder, ec);
-        if (ec) {
-            LOG_ERROR("Failed to create cache directory: {}", ec.message());
-            use_fs_cache_ = false;
-            return;
-        }
-
-        cache_folder_ = cache_folder;
-        LOG_DEBUG("Cache directory: {}", lfs::core::path_to_utf8(cache_folder));
     }
 
     void CacheLoader::reset_cache() {
         clear_cpu_cache();
-        clean_cache_folders();
-        create_new_cache_folder();
         cache_mode_ = CacheMode::Undetermined;
         num_expected_images_ = 0;
-    }
-
-    void CacheLoader::clean_cache_folders() {
-        const auto cache_base = get_lichtfeld_temp_folder() / "cache";
-        if (!std::filesystem::exists(cache_base) || !std::filesystem::is_directory(cache_base)) {
-            return;
-        }
-
-        for (const auto& entry : std::filesystem::directory_iterator(cache_base)) {
-            if (!entry.is_directory())
-                continue;
-
-            const auto folder_name = lfs::core::path_to_utf8(entry.path().filename());
-            if (folder_name.rfind(CACHE_PREFIX, 0) != 0)
-                continue;
-            if (std::filesystem::exists(entry.path() / ".lock"))
-                continue;
-
-            std::error_code ec;
-            std::filesystem::remove_all(entry.path(), ec);
-            if (ec) {
-                LOG_ERROR("Failed to remove {}: {}", lfs::core::path_to_utf8(entry.path()), ec.message());
-            }
-        }
     }
 
     void CacheLoader::clear_cpu_cache() {
@@ -250,17 +132,15 @@ namespace lfs::io {
     bool CacheLoader::has_sufficient_memory(std::size_t required_bytes) const {
         const std::size_t available = get_available_physical_memory();
         const std::size_t total = get_total_physical_memory();
-        const std::size_t min_free_bytes = (std::max)(
-            static_cast<std::size_t>(total * min_cpu_free_memory_ratio_),
-            static_cast<std::size_t>(min_cpu_free_GB_ * BYTES_PER_GB));
+        const std::size_t min_free_bytes = (std::max)(static_cast<std::size_t>(total * min_cpu_free_memory_ratio_),
+                                                      static_cast<std::size_t>(min_cpu_free_GB_ * BYTES_PER_GB));
         return available > required_bytes + min_free_bytes;
     }
 
     void CacheLoader::evict_until_satisfied() {
         const std::size_t total = get_total_physical_memory();
-        const std::size_t min_free_bytes = (std::max)(
-            static_cast<std::size_t>(total * min_cpu_free_memory_ratio_),
-            static_cast<std::size_t>(min_cpu_free_GB_ * BYTES_PER_GB));
+        const std::size_t min_free_bytes = (std::max)(static_cast<std::size_t>(total * min_cpu_free_memory_ratio_),
+                                                      static_cast<std::size_t>(min_cpu_free_GB_ * BYTES_PER_GB));
 
         while (get_available_physical_memory() <= min_free_bytes) {
             std::lock_guard lock(cpu_cache_mutex_);
@@ -399,67 +279,15 @@ namespace lfs::io {
         return tensor;
     }
 
-    lfs::core::Tensor CacheLoader::load_cached_image_from_fs(
-        const std::filesystem::path& path, const LoadParams& params) {
-        using namespace lfs::core;
-
-        auto load_and_preprocess = [&params](unsigned char* data, int width, int height, int channels) {
-            return preprocess_loaded_rgb_image(data, width, height, channels, params.output_uint8);
-        };
-
-        if (cache_folder_.empty()) {
-            auto [data, w, h, c] = load_image(path, params.resize_factor, params.max_width);
-            return load_and_preprocess(data, w, h, c);
-        }
-
-        // Hash avoids Unicode path issues on Windows (operator/ interprets std::string as ANSI)
-        const std::string cache_key = generate_cache_key(path, params, false);
-        const auto cache_img_path = cache_folder_ / (std::to_string(std::hash<std::string>{}(cache_key)) + ".jpg");
-
-        std::tuple<unsigned char*, int, int, int> result;
-        if (does_cache_image_exist(cache_img_path)) {
-            result = load_image(cache_img_path);
-        } else if (params.skip_blob_cache) {
-            auto [data, w, h, c] = load_image(path, params.resize_factor, params.max_width);
-            return load_and_preprocess(data, w, h, c);
-        } else {
-            result = load_image(path, params.resize_factor, params.max_width);
-
-            bool is_being_saved = false;
-            const std::string path_key = lfs::core::path_to_utf8(path);
-            {
-                std::lock_guard lock(cache_mutex_);
-                is_being_saved = image_being_saved_.contains(path_key);
-                if (!is_being_saved) {
-                    image_being_saved_.insert(path_key);
-                }
-            }
-
-            if (!is_being_saved) {
-                if (!save_img_data(cache_img_path, result)) {
-                    throw std::runtime_error("Failed to save cache: " + lfs::core::path_to_utf8(cache_img_path));
-                }
-                if (!create_done_file(cache_img_path)) {
-                    throw std::runtime_error("Failed to create .done: " + lfs::core::path_to_utf8(cache_img_path));
-                }
-                std::lock_guard lock(cache_mutex_);
-                image_being_saved_.erase(path_key);
-            }
-        }
-
-        auto [data, w, h, c] = result;
-        return load_and_preprocess(data, w, h, c);
-    }
-
     void CacheLoader::determine_cache_mode(const std::filesystem::path& path, const LoadParams& params) {
         if (cache_mode_ != CacheMode::Undetermined)
             return;
 
-        std::lock_guard lock(cache_mutex_);
+        std::lock_guard lock(cache_mode_mutex_);
         if (cache_mode_ != CacheMode::Undetermined)
             return;
 
-        if (!use_cpu_memory_ && !use_fs_cache_) {
+        if (!use_cpu_memory_) {
             cache_mode_ = CacheMode::NoCache;
             return;
         }
@@ -488,13 +316,7 @@ namespace lfs::io {
         const double available_gb = static_cast<double>(get_available_physical_memory()) / BYTES_PER_GB;
         LOG_DEBUG("Required {:.2f}GB, available {:.2f}GB", required_gb, available_gb);
 
-        auto [org_width, org_height, org_channels] = lfs::core::get_image_info(path);
-        if (use_fs_cache_ && (params.resize_factor > 1 || params.max_width < org_width)) {
-            LOG_INFO("Cache mode: FileSystem");
-            cache_mode_ = CacheMode::FileSystem;
-        } else {
-            cache_mode_ = CacheMode::NoCache;
-        }
+        cache_mode_ = CacheMode::NoCache;
     }
 
     lfs::core::Tensor CacheLoader::load_cached_image(const std::filesystem::path& path, const LoadParams& params) {
@@ -511,9 +333,6 @@ namespace lfs::io {
         if (use_cpu_memory_ && cache_mode_ == CacheMode::CPU_memory) {
             print_cache_status();
             return load_cached_image_from_cpu(path, params);
-        }
-        if (use_fs_cache_ && cache_mode_ == CacheMode::FileSystem) {
-            return load_cached_image_from_fs(path, params);
         }
 
         auto [data, width, height, channels] = load_image(path, params.resize_factor, params.max_width);

@@ -100,6 +100,11 @@ namespace lfs::vis {
 
         constexpr double kResizeSettleMinWaitSeconds = 0.001;
         constexpr double kTooltipRevealMinWaitSeconds = 0.001;
+        constexpr double kScheduledRedrawMinWaitSeconds = 0.001;
+        constexpr double kGuiScheduledUpdateMinWaitSeconds = 0.001;
+        // Backstop cap for GUI-only continuous demand (python_redraw / gui_animation only).
+        // MAILBOX presents never block, so free-running would pin the GPU at full GUI cost.
+        constexpr double kGuiAnimationFrameInterval = 1.0 / 30.0;
 #if defined(__linux__)
         constexpr auto kWindowResizePaintDemandWindow = std::chrono::milliseconds(160);
 #endif
@@ -1613,11 +1618,21 @@ namespace lfs::vis {
 
         // Wake exactly when a pending tooltip is due so the reveal costs a single
         // frame instead of rendering continuously through the hover delay.
+        // Also min against RmlUi scheduled-update deadlines (CSS transitions, timers)
+        // so finite-delay panels wake on time without gui_animation spin.
         if (gui_manager_) {
             if (const auto tooltip_wait = gui_manager_->secondsUntilTooltipReveal())
                 wait_seconds = std::min(wait_seconds,
                                         std::max(kTooltipRevealMinWaitSeconds, *tooltip_wait));
+            if (const auto anim_wait = gui_manager_->secondsUntilNextAnimationFrame())
+                wait_seconds = std::min(wait_seconds,
+                                        std::max(kGuiScheduledUpdateMinWaitSeconds, *anim_wait));
         }
+
+        // Wake no later than a Python-scheduled redraw deadline (paced overlay animation).
+        if (const auto redraw_wait = python::seconds_until_scheduled_redraw())
+            wait_seconds = std::min(wait_seconds,
+                                    std::max(kScheduledRedrawMinWaitSeconds, *redraw_wait));
 
         window_manager_->waitEvents(wait_seconds);
     }
@@ -1820,6 +1835,12 @@ namespace lfs::vis {
             window_manager_->updateWindowSize("pre_gui_render");
             gui_manager_->render();
             window_manager_->refreshResizeCursor();
+            // Count presented frames (GUI-only included). Scene FPS still comes
+            // from framerate_controller_ inside renderVulkanFrame; this is
+            // measurement-only and does not affect pacing.
+            if (rendering_manager_) {
+                rendering_manager_->notePresentedFrame();
+            }
         } else {
             processRenderWorkQueue();
         }
@@ -1833,7 +1854,23 @@ namespace lfs::vis {
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
         const FrameDemand next_demand = collectFrameDemand(viewport_export_locked, false, false);
 
-        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={}",
+        // Continuous demand that is only python_redraw and/or gui_animation — pace it
+        // so GUI-only animation does not free-run against a MAILBOX swapchain.
+        const bool gui_only_animation =
+            next_demand.needsContinuousLoop() &&
+            !python::is_plugin_preload_running() &&
+            !next_demand.scene_dirty && !next_demand.continuous_input &&
+            !next_demand.python_animation && !next_demand.python_overlay &&
+            !next_demand.input_event && !next_demand.posted_work &&
+            !next_demand.render_work && !next_demand.store_dirty &&
+            !next_demand.swapchain_resize_pending && !next_demand.swapchain_resize_ready &&
+            !next_demand.window_resize_paint_pending && !next_demand.viewport_resize_deferring &&
+            !next_demand.viewport_resize_settle_ready && !next_demand.viewport_export_locked;
+
+        const auto py_redraw_due = python::seconds_until_scheduled_redraw();
+        const double py_redraw_due_in = py_redraw_due ? *py_redraw_due : -1.0;
+
+        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} gui_only_throttle={} py_redraw_due_in={:.4f}",
                  next_demand.scene_dirty,
                  next_demand.continuous_input,
                  next_demand.python_animation,
@@ -1848,10 +1885,25 @@ namespace lfs::vis {
                  next_demand.swapchain_resize_ready,
                  next_demand.window_resize_paint_pending,
                  next_demand.viewport_resize_deferring,
-                 next_demand.viewport_resize_settle_ready);
+                 next_demand.viewport_resize_settle_ready,
+                 gui_only_animation,
+                 py_redraw_due_in);
 
         if (next_demand.needsContinuousLoop()) {
-            window_manager_->pollEvents();
+            if (gui_only_animation) {
+                // GUI-only animation must not free-run against a MAILBOX swapchain.
+                // Cap at kGuiAnimationFrameInterval; waitEvents still wakes instantly on input.
+                const double elapsed = std::chrono::duration<double>(
+                                           std::chrono::high_resolution_clock::now() - last_frame_time_)
+                                           .count();
+                if (elapsed >= kGuiAnimationFrameInterval) {
+                    window_manager_->pollEvents();
+                } else {
+                    window_manager_->waitEvents(kGuiAnimationFrameInterval - elapsed);
+                }
+            } else {
+                window_manager_->pollEvents();
+            }
         } else {
             // Idle: wait to minimize CPU/GPU work. Mouse-motion-only viewport wakes
             // are filtered at the top of the next loop without presenting a GUI frame.

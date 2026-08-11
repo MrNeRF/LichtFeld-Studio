@@ -11,7 +11,11 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <limits>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -172,13 +176,22 @@ namespace lfs::python {
         std::atomic<bool> g_has_selection{false};
         std::atomic<bool> g_is_training{false};
 
-        // Redraw request flag
+        // Redraw request: immediate flag + optional deadline (steady_clock ns since epoch).
+        // Sentinel max() means no scheduled deadline. CAS-min keeps the earliest deadline.
+        constexpr int64_t kNoRedrawDeadlineNs = std::numeric_limits<int64_t>::max();
         std::atomic<bool> g_redraw_requested{false};
+        std::atomic<int64_t> g_redraw_deadline_ns{kNoRedrawDeadlineNs};
         std::atomic<uint64_t> g_redraw_generation{0};
         std::atomic<uint64_t> g_pre_scene_panel_sync_generation{0};
         MainLoopWakeCallback g_main_loop_wake_callback = nullptr;
         std::mutex g_startup_plugin_load_status_mutex;
         StartupPluginLoadStatus g_startup_plugin_load_status;
+
+        [[nodiscard]] int64_t steady_now_ns() {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        }
     } // namespace
 
     // Bridge API
@@ -222,12 +235,79 @@ namespace lfs::python {
             g_main_loop_wake_callback();
     }
 
+    void request_redraw_after(double delay_seconds) {
+        if (std::isnan(delay_seconds) || delay_seconds <= 0.0) {
+            request_redraw();
+            return;
+        }
+
+        const double delay_ns_d = delay_seconds * 1'000'000'000.0;
+        const int64_t delay_ns =
+            delay_ns_d >= static_cast<double>(std::numeric_limits<int64_t>::max())
+                ? std::numeric_limits<int64_t>::max()
+                : static_cast<int64_t>(delay_ns_d);
+        const int64_t now = steady_now_ns();
+        // Saturating add to avoid overflow on far-future delays.
+        const int64_t target =
+            (delay_ns > kNoRedrawDeadlineNs - now) ? kNoRedrawDeadlineNs : (now + delay_ns);
+
+        // CAS-min: keep the earlier of any pending deadline and this one.
+        int64_t current = g_redraw_deadline_ns.load(std::memory_order_acquire);
+        bool installed_earlier = false;
+        while (target < current) {
+            if (g_redraw_deadline_ns.compare_exchange_weak(
+                    current, target, std::memory_order_acq_rel, std::memory_order_acquire)) {
+                installed_earlier = true;
+                break;
+            }
+        }
+
+        g_redraw_generation.fetch_add(1, std::memory_order_acq_rel);
+        // Wake so waitForNextEvent re-mins against the new deadline (worker-thread safe).
+        if (installed_earlier && g_main_loop_wake_callback)
+            g_main_loop_wake_callback();
+    }
+
     bool has_redraw_request() {
-        return g_redraw_requested.load(std::memory_order_acquire);
+        if (g_redraw_requested.load(std::memory_order_acquire))
+            return true;
+        const int64_t deadline = g_redraw_deadline_ns.load(std::memory_order_acquire);
+        if (deadline == kNoRedrawDeadlineNs)
+            return false;
+        return deadline <= steady_now_ns();
     }
 
     bool consume_redraw_request() {
-        return g_redraw_requested.exchange(false, std::memory_order_acq_rel);
+        // Clear immediate flag. A future (not-yet-due) deadline must survive: consume
+        // can run on mouse-motion-filtered wakes without rendering a GUI frame.
+        const bool immediate = g_redraw_requested.exchange(false, std::memory_order_acq_rel);
+
+        bool due = false;
+        int64_t deadline = g_redraw_deadline_ns.load(std::memory_order_acquire);
+        const int64_t now = steady_now_ns();
+        while (deadline != kNoRedrawDeadlineNs && deadline <= now) {
+            if (g_redraw_deadline_ns.compare_exchange_weak(
+                    deadline, kNoRedrawDeadlineNs, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                due = true;
+                break;
+            }
+            // deadline reloaded by CAS failure; re-check against a fresh now only if needed
+            if (deadline != kNoRedrawDeadlineNs && deadline > steady_now_ns())
+                break;
+        }
+
+        return immediate || due;
+    }
+
+    std::optional<double> seconds_until_scheduled_redraw() {
+        const int64_t deadline = g_redraw_deadline_ns.load(std::memory_order_acquire);
+        if (deadline == kNoRedrawDeadlineNs)
+            return std::nullopt;
+        const int64_t now = steady_now_ns();
+        if (deadline <= now)
+            return std::nullopt; // already due — reported via has_redraw_request()
+        return static_cast<double>(deadline - now) * 1e-9;
     }
 
     uint64_t redraw_request_generation() {

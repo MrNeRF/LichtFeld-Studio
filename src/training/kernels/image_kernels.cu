@@ -17,18 +17,15 @@
 
 namespace lfs::filters {
 
-    // Adapted from spirulae-splat Densify.cu canny_edge_filter_kernel
-    // (Apache-2.0, commit 8f2ecddc76e6de2e04f88ba8ee5f03b2439766d4):
-    // https://github.com/harry7557558/spirulae-splat/blob/8f2ecddc76e6de2e04f88ba8ee5f03b2439766d4/spirulae_splat/splat/cuda/csrc/Densify.cu#L663
-    // Changes here: raw CHW input/output pointers instead of Spirulae's batched HWC TensorView.
-    __constant__ float SPIRULAE_BLUR_5x5[25] = {
+    // Adapted from a reference Canny edge filter implementation (Apache-2.0); raw CHW input/output pointers instead of batched HWC.
+    __constant__ float CANNY_GAUSSIAN_BLUR_5x5[25] = {
         2.f / 159.f, 4.f / 159.f, 5.f / 159.f, 4.f / 159.f, 2.f / 159.f,
         4.f / 159.f, 9.f / 159.f, 12.f / 159.f, 9.f / 159.f, 4.f / 159.f,
         5.f / 159.f, 12.f / 159.f, 15.f / 159.f, 12.f / 159.f, 5.f / 159.f,
         4.f / 159.f, 9.f / 159.f, 12.f / 159.f, 9.f / 159.f, 4.f / 159.f,
         2.f / 159.f, 4.f / 159.f, 5.f / 159.f, 4.f / 159.f, 2.f / 159.f};
 
-    __constant__ float SPIRULAE_CANNY_3x3[9] = {
+    __constant__ float CANNY_SOBEL_3x3[9] = {
         -1.0f, 0.0f, 1.0f,
         -2.0f, 0.0f, 2.0f,
         -1.0f, 0.0f, 1.0f};
@@ -96,7 +93,7 @@ namespace lfs::training::kernels {
             for (int cy = -2; cy <= 2; ++cy) {
 #pragma unroll
                 for (int cx = -2; cx <= 2; ++cx) {
-                    const float conv_weight = lfs::filters::SPIRULAE_BLUR_5x5[(cy + 2) * 5 + (cx + 2)];
+                    const float conv_weight = lfs::filters::CANNY_GAUSSIAN_BLUR_5x5[(cy + 2) * 5 + (cx + 2)];
                     const int yi = y - HALO1 + cy;
                     const int xi = x - HALO1 + cx;
                     total += conv_weight * shared_pixels[yi + HALO][xi + HALO];
@@ -122,8 +119,8 @@ namespace lfs::training::kernels {
             for (int cy = -1; cy <= 1; ++cy) {
 #pragma unroll
                 for (int cx = -1; cx <= 1; ++cx) {
-                    const float conv_weight_1 = lfs::filters::SPIRULAE_CANNY_3x3[(cy + 1) * 3 + (cx + 1)];
-                    const float conv_weight_2 = lfs::filters::SPIRULAE_CANNY_3x3[(cx + 1) * 3 + (cy + 1)];
+                    const float conv_weight_1 = lfs::filters::CANNY_SOBEL_3x3[(cy + 1) * 3 + (cx + 1)];
+                    const float conv_weight_2 = lfs::filters::CANNY_SOBEL_3x3[(cx + 1) * 3 + (cy + 1)];
                     const int yi = y - HALO2 + cy;
                     const int xi = x - HALO2 + cx;
                     const float value = shared_blurred[yi + HALO1][xi + HALO1];

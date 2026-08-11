@@ -1,6 +1,7 @@
 {
   "_language_name": "Français",
   "menu": {
+    "view.performance_hud": "Performance HUD",
     "file": "Fichier",
     "file.new_project": "Nouveau Projet",
     "file.import_dataset": "Importer un Dataset",
@@ -362,7 +363,6 @@
     "dataset.resize_factor": "Facteur de redimensionnement :",
     "dataset.max_width": "Largeur max. (px) :",
     "dataset.cpu_cache": "Cache CPU :",
-    "dataset.fs_cache": "Cache système de fichiers :",
     "dataset.use_16bit_color": "Couleur 16 bits :",
     "dataset.output": "Sortie :",
     "dataset.test_every": "Intervalle de test :",
@@ -441,7 +441,6 @@
     "tooltip.resize_factor": "Sous-échantillonner les images d'entraînement",
     "tooltip.max_width": "Largeur maximale de l'image en pixels",
     "tooltip.cpu_cache": "Cacher les images décodées en RAM",
-    "tooltip.fs_cache": "Cacher les images décodées sur disque",
     "tooltip.use_16bit_color": "Entraîner avec des images couleur 16 bits (HDR) ; cache sans perte en JPEG 2000",
     "tooltip.test_every": "Utiliser chaque N-ième image comme ensemble de test",
     "tooltip.enable_eval": "Activer l'évaluation pendant l'entraînement (calcule PSNR/SSIM sur l'ensemble de test). Réduit légèrement la vitesse d'entraînement.",
@@ -1223,6 +1222,7 @@
     "status_label": "Statut : %s"
   },
   "input_settings": {
+    "action.toggle_performance_hud": "Toggle Performance HUD",
     "active_profile": "Profil Actif :",
     "save_current_profile": "Sauvegarder le Profil Actuel",
     "reset_to_default": "Réinitialiser par Défaut",
@@ -1830,6 +1830,7 @@
     "secondary_view": "Vue secondaire",
     "split": "Division :",
     "gpu": "GPU",
+    "ui_fps": "UI FPS",
     "strategy_default": "Défaut"
   },
   "plugin_manager": {
@@ -2068,6 +2069,33 @@
     "redo_named": "Rétablir : {name}"
   },
   "ui": {
+    "perf_hud_title": "Performance",
+    "perf_this_process": "This process",
+    "perf_other_processes": "Other processes",
+    "perf_free": "Free",
+    "perf_cores": "cores",
+    "perf_process_cpu_note": "Process CPU, share of all cores",
+    "perf_tab_ledger": "Ledger",
+    "perf_ledger_closes": "Ledger closes",
+    "perf_ledger_gap": "Unattributed",
+    "perf_ledger_over": "Over-attributed, numbers unreliable",
+    "perf_ledger_attributed": "Attributed",
+    "perf_nested_disclosure": "Disclosure, not counted again",
+    "perf_no_owner": "No owner",
+    "perf_untracked": "Untracked",
+    "perf_retention": "Retention",
+    "perf_reclaimable": "Reclaimable",
+    "perf_required": "Required",
+    "perf_allocated": "Allocated",
+    "perf_slack": "Slack",
+    "perf_over_budget": "Over budget",
+    "perf_estimate_detected": "Estimate detected",
+    "perf_degenerate_pair": "Publisher reports required equal to allocated",
+    "perf_tracking_off": "Detailed memory tracking is off",
+    "perf_enable_tracking": "Enable",
+    "perf_expand": "Expand",
+    "perf_collapse": "Collapse",
+    "perf_hud_tooltip": "Show or hide the performance HUD",
     "near": "Proche",
     "far": "Éloigné",
     "color": "Couleur",

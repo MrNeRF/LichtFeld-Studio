@@ -1,9 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Phase 6C-P3 — device-fault reference kernel (index_select) + ValidatedIndexToken
-// + ABI / graph-capture / first-fault / device-trap coverage.
-// Spec: .codex_tmp/phase-6c-device-fault-spec.md §1.10, §3, §9.
+// Device-fault reference kernel and ValidatedIndexToken coverage for the ABI,
+// graph capture, first-fault handling, and device traps.
 
 #include "core/device_fault.hpp"
 #include "core/error.hpp"
@@ -291,41 +290,54 @@ namespace {
         cudaStream_t stream = nullptr;
         ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
 
-        // Allocate tensors BEFORE capture begins (allocations must not join the graph).
-        auto input = Tensor::from_vector(std::vector<float>{1.f, 2.f, 3.f},
-                                         {3}, Device::CUDA);
-        auto indices = Tensor::from_vector(std::vector<int>{0}, {1}, Device::CUDA);
-        input.set_stream(stream);
-        indices.set_stream(stream);
-        // Materialize a result tensor on the same stream for index_select_into.
-        auto out = Tensor::zeros({1}, Device::CUDA, DataType::Float32);
-        out.set_stream(stream);
-        ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
-
-        cudaGraph_t graph = nullptr;
-        ASSERT_EQ(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal), cudaSuccess);
-
         bool threw = false;
-        try {
-            // Host entry of checked index_select rejects capture with Unsupported.
-            // No GPU graph replay is required (spec §1.9 unit-test contract).
-            input.index_select_into(out, 0, indices, BoundaryMode::Assert);
-        } catch (const lfs::Exception& ex) {
-            threw = true;
-            EXPECT_EQ(ex.error().code(), lfs::ErrorCode::Unsupported);
-            EXPECT_EQ(ex.error().domain(), lfs::ErrorDomain::CUDA);
-        } catch (...) {
-            threw = true;
-            ADD_FAILURE() << "expected lfs::Exception(Unsupported), got other exception";
+        {
+            // Allocate tensors BEFORE capture begins (allocations must not join the graph).
+            // Keep tensor lifetimes nested inside the stream lifetime: free_routed bridges
+            // via the home stream. Destroying the stream first can fault in
+            // cuStreamWaitEvent on CUDA 13.3.
+            auto input = Tensor::from_vector(std::vector<float>{1.f, 2.f, 3.f},
+                                             {3}, Device::CUDA);
+            auto indices = Tensor::from_vector(std::vector<int>{0}, {1}, Device::CUDA);
+            input.set_stream(stream);
+            indices.set_stream(stream);
+            // Materialize a result tensor on the same stream for index_select_into.
+            auto out = Tensor::zeros({1}, Device::CUDA, DataType::Float32);
+            out.set_stream(stream);
+            ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+
+            cudaGraph_t graph = nullptr;
+            ASSERT_EQ(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal), cudaSuccess);
+
+            try {
+                // Host entry of checked index_select rejects capture with Unsupported.
+                // No GPU graph replay is required (spec §1.9 unit-test contract).
+                input.index_select_into(out, 0, indices, BoundaryMode::Assert);
+            } catch (const lfs::Exception& ex) {
+                threw = true;
+                EXPECT_EQ(ex.error().code(), lfs::ErrorCode::Unsupported);
+                EXPECT_EQ(ex.error().domain(), lfs::ErrorDomain::CUDA);
+            } catch (...) {
+                threw = true;
+                ADD_FAILURE() << "expected lfs::Exception(Unsupported), got other exception";
+            }
+
+            // End capture cleanly whether or not the op threw (capture may be empty).
+            const cudaError_t end_status = cudaStreamEndCapture(stream, &graph);
+            if (end_status == cudaSuccess && graph != nullptr) {
+                (void)cudaGraphDestroy(graph);
+            } else {
+                (void)cudaGetLastError();
+            }
+
+            // Rehome tensors off the capture stream before it is destroyed so pool free
+            // does not bridge/wait on a dead stream handle.
+            input.set_stream(nullptr);
+            indices.set_stream(nullptr);
+            out.set_stream(nullptr);
+            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
         }
 
-        // End capture cleanly whether or not the op threw (capture may be empty).
-        const cudaError_t end_status = cudaStreamEndCapture(stream, &graph);
-        if (end_status == cudaSuccess && graph != nullptr) {
-            (void)cudaGraphDestroy(graph);
-        } else {
-            (void)cudaGetLastError();
-        }
         ASSERT_EQ(cudaStreamDestroy(stream), cudaSuccess);
 
         EXPECT_TRUE(threw) << "checked index_select under capture must throw Unsupported";

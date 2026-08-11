@@ -54,7 +54,8 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params,
         const BilateralGrid* bilateral_grid,
         const PPISP* ppisp,
-        const PPISPControllerPool* ppisp_controller_pool) {
+        const PPISPControllerPool* ppisp_controller_pool,
+        const bool durable) {
 
         try {
             // Validate input path
@@ -67,7 +68,8 @@ namespace lfs::training {
             lfs::io::ScopedAtomicOutputFile atomic_checkpoint(
                 checkpoint_path,
                 lfs::io::AtomicOutputTempName::AppendSuffix,
-                lfs::io::AtomicOutputDurability::Durable);
+                durable ? lfs::io::AtomicOutputDurability::Durable
+                        : lfs::io::AtomicOutputDurability::Atomic);
             const auto& temp_checkpoint_path = atomic_checkpoint.temp_path();
 
             // Create checkpoint directory with error checking
@@ -392,7 +394,11 @@ namespace lfs::training {
                 throw std::runtime_error(
                     "Strategy does not support transactional checkpoint state adoption");
             }
-            if (checkpoint_adopter->has_checkpoint_runtime_state()) {
+            // Cold load (model-only, no optimizer constructed) is valid: the regression
+            // allocator path and early resume scaffolding never call initialize(). Do not
+            // dereference get_optimizer() unless the loaded strategy actually owns one.
+            if (auto* loaded_adopter = dynamic_cast<ICheckpointStateAdopter*>(loaded_strategy.get());
+                loaded_adopter && loaded_adopter->has_checkpoint_runtime_state()) {
                 loaded_strategy->get_optimizer().set_frozen_lr_scale(loaded_params.freeze_lr_scale);
             }
 

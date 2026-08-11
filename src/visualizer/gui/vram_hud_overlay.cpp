@@ -5,6 +5,8 @@
 #include "gui/vram_hud_overlay.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/events.hpp"
+#include "diagnostics/vram_ledger_model.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/string_keys.hpp"
 #include "visualizer/app_store.hpp"
@@ -52,11 +54,7 @@ namespace lfs::vis::gui {
             {"cuda_pool_reserved", "CUDA pool reserved"},
             {"cuda_pool_fragmentation", "Pool fragmentation"},
             {"pinned_host", "Pinned host"},
-            {"vulkan_budget", "Vulkan budget (raw)"},
             {"vulkan_blocks", "Vulkan VMA blocks"},
-            {"sampled", "Sampled subtotal (raw)"},
-            {"allocator_live", "Allocator live"},
-            {"process_gap", "Raw sampled gap"},
             {"allocator_peak", "Allocator peak"},
             {"events", "Events"},
             {"iter_events", "Events (iter)"},
@@ -180,340 +178,26 @@ namespace lfs::vis::gui {
             return out;
         }
 
-        [[nodiscard]] std::string_view lastTrainScopeComponent(std::string_view scope) {
-            std::string_view best;
-            std::size_t pos = 0;
-            while (pos < scope.size()) {
-                const std::size_t end = scope.find('/', pos);
-                const auto part = scope.substr(pos, end == std::string_view::npos ? scope.size() - pos : end - pos);
-                if (part.rfind("train.", 0) == 0 || part == "train") {
-                    best = part;
-                }
-                if (end == std::string_view::npos) {
-                    break;
-                }
-                pos = end + 1;
+        [[nodiscard]] const char* closureClass(
+            const lfs::diagnostics::LedgerClosureState state) noexcept {
+            using lfs::diagnostics::LedgerClosureState;
+            switch (state) {
+            case LedgerClosureState::Closed: return "closed";
+            case LedgerClosureState::Gap: return "gap";
+            case LedgerClosureState::Over: return "over";
             }
-            return best.empty() ? scope : best;
+            return "gap";
         }
 
-        [[nodiscard]] std::string firstScopeSegments(std::string_view scope, const std::size_t count) {
-            if (count == 0) {
-                return {};
+        [[nodiscard]] const char* closureGlyph(
+            const lfs::diagnostics::LedgerClosureState state) noexcept {
+            using lfs::diagnostics::LedgerClosureState;
+            switch (state) {
+            case LedgerClosureState::Closed: return "\xE2\x9C\x93";
+            case LedgerClosureState::Gap: return "\xE2\x9A\x91";
+            case LedgerClosureState::Over: return "\xE2\x80\xBC";
             }
-
-            std::size_t segments = 1;
-            for (std::size_t i = 0; i < scope.size(); ++i) {
-                if (scope[i] != '.' && scope[i] != '/') {
-                    continue;
-                }
-                if (segments == count) {
-                    return std::string(scope.substr(0, i));
-                }
-                ++segments;
-            }
-            return std::string(scope);
-        }
-
-        [[nodiscard]] std::string topSegment(std::string_view scope) {
-            const auto end = scope.find_first_of("/.");
-            return std::string(end == std::string_view::npos ? scope : scope.substr(0, end));
-        }
-
-        [[nodiscard]] std::string firstDotSegments(std::string_view scope, const std::size_t count) {
-            std::size_t pos = 0;
-            for (std::size_t i = 0; i < count; ++i) {
-                pos = scope.find('.', pos);
-                if (pos == std::string_view::npos)
-                    return std::string(scope);
-                ++pos;
-            }
-            return std::string(scope.substr(0, pos - 1));
-        }
-
-        [[nodiscard]] bool isFastGsLogicalRow(const lfs::diagnostics::VramMetricSnapshot& row) {
-            return row.scope.rfind("rasterizer.fastgs", 0) == 0;
-        }
-
-        [[nodiscard]] std::string breakdownLabel(const lfs::diagnostics::VramMetricSnapshot& row) {
-            const std::string_view scope = row.scope;
-            const std::string_view label = row.label;
-            if (label.rfind("rasterizer.arena.", 0) == 0) {
-                return "rasterizer.arena";
-            }
-            if (scope.rfind("io.", 0) == 0) {
-                const auto io_group = firstDotSegments(scope, 2);
-                if (io_group == "io.pipeline" && !row.label.empty()) {
-                    return io_group + "." + row.label;
-                }
-                return io_group;
-            }
-            if (scope.rfind("vulkan.", 0) == 0) {
-                return firstDotSegments(scope, 3);
-            }
-            if (scope == "shared.scratch" && !label.empty()) {
-                return "shared.scratch." + std::string(label);
-            }
-            if (scope.rfind("train.", 0) == 0 || scope.find("/train.") != std::string_view::npos) {
-                return firstScopeSegments(lastTrainScopeComponent(scope), 2);
-            }
-            return topSegment(scope);
-        }
-
-        struct VramBreakdownEntry {
-            std::string label;
-            std::size_t bytes = 0;
-            bool unaccounted = false;
-            bool total = false;
-        };
-
-        struct VramBreakdownAudit {
-            std::size_t process_used = 0;
-            std::size_t raw_sampled_subtotal = 0;
-            std::size_t overview_named_rows = 0;
-            std::size_t fastgs_logical_not_totaled = 0;
-            std::size_t named_slab_rows = 0;
-            std::size_t named_bucketed_rows = 0;
-            std::size_t named_async_rows = 0;
-            std::size_t named_direct_rows = 0;
-            std::size_t named_arena_rows = 0;
-            std::size_t named_external_rows = 0;
-            std::size_t named_unknown_rows = 0;
-            std::size_t cuda_pool_used = 0;
-            std::size_t cuda_pool_reserved = 0;
-            std::size_t cuda_pool_accounted_live = 0;
-            std::size_t cuda_slab_reserved = 0;
-            std::size_t cuda_slab_reserve_gap = 0;
-            std::size_t accounted_slab_live = 0;
-            std::size_t accounted_bucketed_live = 0;
-            std::size_t accounted_async_live = 0;
-            std::size_t accounted_direct_live = 0;
-            std::size_t accounted_arena_live = 0;
-            std::size_t accounted_external_live = 0;
-            std::size_t accounted_unknown_live = 0;
-            std::size_t cuda_pool_bucket_cache = 0;
-            std::size_t cuda_pool_untracked_used = 0;
-            std::size_t cuda_pool_overhead = 0;
-            std::size_t cuda_context_baseline = 0;
-            std::size_t cuda_context_phases = 0;
-            std::size_t cuda_context_residual = 0;
-            std::size_t vulkan_vma_blocks = 0;
-            std::size_t vulkan_named_rows = 0;
-            std::size_t vulkan_residual = 0;
-            std::size_t breakdown_totaled = 0;
-            std::size_t process_unresolved = 0;
-        };
-
-        struct VramBreakdownModel {
-            std::vector<VramBreakdownEntry> entries;
-            std::size_t denom = 0;
-            VramBreakdownAudit audit;
-        };
-
-        [[nodiscard]] VramBreakdownModel buildBreakdownModel(
-            const lfs::diagnostics::VramProfilerSnapshot& snapshot,
-            std::size_t process_used) {
-            VramBreakdownModel model;
-            model.audit.process_used = process_used;
-            model.audit.raw_sampled_subtotal = snapshot.sampled_live_bytes;
-            model.audit.cuda_pool_used =
-                snapshot.process.cuda_pool_valid ? snapshot.process.cuda_pool_used : 0;
-            model.audit.cuda_pool_reserved =
-                snapshot.process.cuda_pool_valid ? snapshot.process.cuda_pool_reserved : 0;
-            model.audit.cuda_pool_accounted_live = snapshot.accounted_cuda_pool_live_bytes;
-            model.audit.cuda_slab_reserved = snapshot.process.cuda_slab_reserved_bytes;
-            model.audit.accounted_slab_live = snapshot.accounted_slab_live_bytes;
-            model.audit.accounted_bucketed_live = snapshot.accounted_bucketed_live_bytes;
-            model.audit.accounted_async_live = snapshot.accounted_async_live_bytes;
-            model.audit.accounted_direct_live = snapshot.accounted_direct_live_bytes;
-            model.audit.accounted_arena_live = snapshot.accounted_arena_live_bytes;
-            model.audit.accounted_external_live = snapshot.accounted_external_live_bytes;
-            model.audit.accounted_unknown_live = snapshot.accounted_unknown_live_bytes;
-            model.audit.cuda_context_baseline = snapshot.process.cuda_context_baseline;
-            model.audit.vulkan_vma_blocks = snapshot.process.vulkan_vma_block_bytes;
-
-            const auto add_named_method = [&](const lfs::diagnostics::VramAllocationMethod method,
-                                              const std::size_t bytes) {
-                switch (method) {
-                case lfs::diagnostics::VramAllocationMethod::Slab:
-                    model.audit.named_slab_rows += bytes;
-                    break;
-                case lfs::diagnostics::VramAllocationMethod::Bucketed:
-                    model.audit.named_bucketed_rows += bytes;
-                    break;
-                case lfs::diagnostics::VramAllocationMethod::Async:
-                    model.audit.named_async_rows += bytes;
-                    break;
-                case lfs::diagnostics::VramAllocationMethod::Direct:
-                    model.audit.named_direct_rows += bytes;
-                    break;
-                case lfs::diagnostics::VramAllocationMethod::Arena:
-                    model.audit.named_arena_rows += bytes;
-                    break;
-                case lfs::diagnostics::VramAllocationMethod::External:
-                    model.audit.named_external_rows += bytes;
-                    break;
-                case lfs::diagnostics::VramAllocationMethod::Unknown:
-                default:
-                    model.audit.named_unknown_rows += bytes;
-                    break;
-                }
-            };
-
-            std::unordered_map<std::string, std::size_t> groups;
-            for (const auto& row : snapshot.rows) {
-                if (row.live_bytes == 0)
-                    continue;
-                if (isFastGsLogicalRow(row)) {
-                    model.audit.fastgs_logical_not_totaled += row.live_bytes;
-                    continue;
-                }
-                const std::string label = breakdownLabel(row);
-                groups[label] += row.live_bytes;
-                model.audit.overview_named_rows += row.live_bytes;
-                add_named_method(row.method, row.live_bytes);
-            }
-
-            model.entries.reserve(groups.size() + 16);
-            std::size_t tracked_total = 0;
-            for (auto& [label, bytes] : groups) {
-                tracked_total += bytes;
-                model.entries.push_back({label, bytes, false});
-            }
-
-            const auto synthetic_budget = [&]() -> std::size_t {
-                if (process_used == 0) {
-                    return std::numeric_limits<std::size_t>::max();
-                }
-                return process_used > tracked_total ? process_used - tracked_total : 0;
-            };
-            const auto add_synthetic_row =
-                [&](std::string label, const std::size_t bytes, const bool unaccounted = false) -> std::size_t {
-                const std::size_t capped = std::min(bytes, synthetic_budget());
-                if (capped == 0) {
-                    return 0;
-                }
-                tracked_total += capped;
-                model.entries.push_back({std::move(label), capped, unaccounted});
-                return capped;
-            };
-
-            const auto& proc = snapshot.process;
-            if (proc.cuda_slab_reserved_bytes > snapshot.accounted_slab_live_bytes) {
-                const std::size_t slab_gap =
-                    proc.cuda_slab_reserved_bytes - snapshot.accounted_slab_live_bytes;
-                model.audit.cuda_slab_reserve_gap = slab_gap;
-                add_synthetic_row("cuda.slab.reserve_gap", slab_gap);
-            }
-
-            if (proc.cuda_pool_valid && proc.cuda_pool_reserved > proc.cuda_pool_used) {
-                const std::size_t pool_overhead = proc.cuda_pool_reserved - proc.cuda_pool_used;
-                model.audit.cuda_pool_overhead = pool_overhead;
-                add_synthetic_row("cuda.pool.overhead", pool_overhead);
-            }
-
-            std::size_t pool_untracked = 0;
-            if (proc.cuda_pool_valid &&
-                proc.cuda_pool_used > snapshot.accounted_cuda_pool_live_bytes) {
-                pool_untracked = proc.cuda_pool_used - snapshot.accounted_cuda_pool_live_bytes;
-            }
-
-            const auto add_phase = [&](const char* label, std::size_t bytes) {
-                if (bytes == 0)
-                    return;
-                model.audit.cuda_context_phases += bytes;
-                const std::size_t capped = std::min(bytes, synthetic_budget());
-                if (capped == 0) {
-                    return;
-                }
-                tracked_total += capped;
-                model.entries.push_back({label, capped, false});
-            };
-            add_phase("cuda.primary_context", proc.cuda_phase_primary_context);
-            add_phase("cuda.default_pool", proc.cuda_phase_default_pool);
-            add_phase("cuda.curand_load", proc.cuda_phase_curand_load);
-
-            if (proc.cuda_context_baseline > model.audit.cuda_context_phases) {
-                const std::size_t residual =
-                    proc.cuda_context_baseline - model.audit.cuda_context_phases;
-                model.audit.cuda_context_residual = residual;
-                add_synthetic_row("cuda.context.residual", residual);
-            }
-            if (proc.cuda_warmup_bytes > 0) {
-                add_synthetic_row("cuda.modules", proc.cuda_warmup_bytes);
-            }
-            if (proc.vulkan_vma_block_bytes > 0) {
-                const auto vksplat_it = groups.find("vksplat");
-                const std::size_t vksplat_labeled =
-                    vksplat_it != groups.end() ? vksplat_it->second : 0;
-                std::size_t vulkan_labeled = 0;
-                for (const auto& [label, bytes] : groups) {
-                    if (label.rfind("vulkan.", 0) == 0) {
-                        vulkan_labeled += bytes;
-                    }
-                }
-                model.audit.vulkan_named_rows = vksplat_labeled + vulkan_labeled;
-                const std::size_t vulkan_residual =
-                    proc.vulkan_vma_block_bytes > model.audit.vulkan_named_rows
-                        ? proc.vulkan_vma_block_bytes - model.audit.vulkan_named_rows
-                        : 0;
-                if (vulkan_residual > 0) {
-                    model.audit.vulkan_residual = vulkan_residual;
-                    add_synthetic_row("vulkan.residual", vulkan_residual, true);
-                }
-            }
-
-            if (pool_untracked > 0) {
-                const std::size_t bucket_cache =
-                    std::min(proc.cuda_pool_bucket_cache_bytes, pool_untracked);
-                if (bucket_cache > 0) {
-                    model.audit.cuda_pool_bucket_cache = bucket_cache;
-                    add_synthetic_row("cuda.pool.bucket_cache", bucket_cache);
-                }
-                const std::size_t pool_remainder = pool_untracked - bucket_cache;
-                if (pool_remainder > 0) {
-                    model.audit.cuda_pool_untracked_used = pool_remainder;
-                    add_synthetic_row("cuda.pool.untracked_used", pool_remainder);
-                }
-            }
-
-            std::size_t unattributed_balance = 0;
-            if (process_used > tracked_total) {
-                unattributed_balance = process_used - tracked_total;
-                model.audit.process_unresolved = unattributed_balance;
-                tracked_total += unattributed_balance;
-            }
-
-            std::sort(model.entries.begin(), model.entries.end(),
-                      [](const VramBreakdownEntry& a, const VramBreakdownEntry& b) {
-                          return a.bytes > b.bytes;
-                      });
-
-            if (unattributed_balance > 0) {
-                // process_used is the NVML per-PID reading: CUDA context working set,
-                // driver-internal reservations, and heap fragmentation no per-allocation
-                // hook can observe. After every itemizable source is rowed above, this
-                // remainder is genuinely untrackable rather than a profiler miss.
-                model.entries.push_back(
-                    {"driver/context reserved (NVML, untracked)", unattributed_balance, true, false});
-            }
-
-            std::size_t row_sum = tracked_total;
-            if (process_used > 0) {
-                const std::size_t unaccounted =
-                    process_used > tracked_total ? process_used - tracked_total : 0;
-                if (unaccounted > 0) {
-                    model.entries.push_back({"(unaccounted)", unaccounted, true, false});
-                    row_sum += unaccounted;
-                }
-            }
-
-            model.audit.breakdown_totaled = row_sum;
-            model.entries.push_back({"\xE2\x80\x94 Sum", row_sum, false, true});
-            if (process_used > 0)
-                model.entries.push_back({"\xE2\x80\x94 Process VRAM", process_used, false, true});
-            model.denom = process_used > 0 ? process_used : tracked_total;
-            return model;
+            return "\xE2\x9A\x91";
         }
 
         [[nodiscard]] Rml::Vector2f contextSize(Rml::ElementDocument* document) {
@@ -592,14 +276,22 @@ namespace lfs::vis::gui {
         pos_y_ = ls.vram_hud_y;
         size_w_ = ls.vram_hud_width;
         size_h_ = ls.vram_hud_height;
-        if (ls.vram_hud_active_tab == "overview" || ls.vram_hud_active_tab == "allocations" ||
+        if (ls.vram_hud_active_tab == "overview" || ls.vram_hud_active_tab == "ledger" ||
+            ls.vram_hud_active_tab == "allocations" ||
             ls.vram_hud_active_tab == "annotations" || ls.vram_hud_active_tab == "tree") {
             active_tab_ = ls.vram_hud_active_tab;
         }
         collapsed_paths_.clear();
-        for (const auto& p : ls.vram_hud_collapsed_paths)
+        default_collapse_applied_ = false;
+        ledger_default_collapse_applied_ = false;
+        for (const auto& p : ls.vram_hud_collapsed_paths) {
             collapsed_paths_.insert(p);
-        default_collapse_applied_ = !collapsed_paths_.empty();
+            if (p.rfind("ledger/", 0) == 0) {
+                ledger_default_collapse_applied_ = true;
+            } else {
+                default_collapse_applied_ = true;
+            }
+        }
     }
 
     void VramHudOverlay::schedulePersistSave() {
@@ -628,6 +320,7 @@ namespace lfs::vis::gui {
         rows_by_path_.clear();
         counter_rows_by_key_.clear();
         allocs_rows_.clear();
+        ledger_rows_.clear();
         anno_rows_.clear();
         cached_allocs_summary_.clear();
         cached_anno_summary_.clear();
@@ -635,10 +328,40 @@ namespace lfs::vis::gui {
         cached_iteration_text_.clear();
         cached_throughput_text_.clear();
         cached_device_text_.clear();
+        cached_ledger_process_.clear();
+        cached_ledger_attributed_.clear();
+        cached_ledger_residual_.clear();
+        cached_ledger_epsilon_.clear();
+        cached_ledger_closure_.clear();
+        cached_ledger_over_banner_.clear();
         last_sequence_ = 0;
         has_language_generation_ = false;
         last_visible_ = false;
+        last_perf_snapshot_.reset();
+        last_perf_visible_ = false;
+        last_perf_expanded_ = true;
         root_ = nullptr;
+        perf_strip_ = nullptr;
+        perf_card_ = nullptr;
+        perf_rate_ = nullptr;
+        perf_vram_process_ = nullptr;
+        perf_vram_other_ = nullptr;
+        perf_vram_free_ = nullptr;
+        perf_vram_value_ = nullptr;
+        perf_vram_badge_ = nullptr;
+        perf_ram_process_ = nullptr;
+        perf_ram_other_ = nullptr;
+        perf_ram_free_ = nullptr;
+        perf_ram_value_ = nullptr;
+        perf_gpu_fill_ = nullptr;
+        perf_gpu_value_ = nullptr;
+        perf_cpu_fill_ = nullptr;
+        perf_cpu_value_ = nullptr;
+        perf_core_strip_ = nullptr;
+        spark_vram_root_ = nullptr;
+        spark_ram_root_ = nullptr;
+        spark_gpu_root_ = nullptr;
+        spark_cpu_root_ = nullptr;
         header_ = nullptr;
         resize_handle_ = nullptr;
         filter_input_ = nullptr;
@@ -648,12 +371,20 @@ namespace lfs::vis::gui {
         counters_root_ = nullptr;
         counters_empty_ = nullptr;
         panel_overview_ = nullptr;
+        panel_ledger_ = nullptr;
         panel_allocations_ = nullptr;
         panel_tree_ = nullptr;
         tabs_root_ = nullptr;
         allocs_rows_root_ = nullptr;
         allocs_summary_value_ = nullptr;
-        breakdown_root_ = nullptr;
+        tracking_off_ = nullptr;
+        ledger_process_ = nullptr;
+        ledger_attributed_ = nullptr;
+        ledger_residual_ = nullptr;
+        ledger_epsilon_ = nullptr;
+        ledger_closure_ = nullptr;
+        ledger_over_banner_ = nullptr;
+        ledger_rows_root_ = nullptr;
         panel_annotations_ = nullptr;
         anno_rows_root_ = nullptr;
         anno_summary_value_ = nullptr;
@@ -667,6 +398,27 @@ namespace lfs::vis::gui {
             return;
 
         root_ = document_->GetElementById("vram-hud-overlay");
+        perf_strip_ = document_->GetElementById("perf-hud-strip");
+        perf_card_ = document_->GetElementById("perf-hud-card");
+        perf_rate_ = document_->GetElementById("perf-hud-strip-rate");
+        perf_vram_process_ = document_->GetElementById("perf-hud-vram-process");
+        perf_vram_other_ = document_->GetElementById("perf-hud-vram-other");
+        perf_vram_free_ = document_->GetElementById("perf-hud-vram-free");
+        perf_vram_value_ = document_->GetElementById("perf-hud-vram-value");
+        perf_vram_badge_ = document_->GetElementById("perf-hud-vram-badge");
+        perf_ram_process_ = document_->GetElementById("perf-hud-ram-process");
+        perf_ram_other_ = document_->GetElementById("perf-hud-ram-other");
+        perf_ram_free_ = document_->GetElementById("perf-hud-ram-free");
+        perf_ram_value_ = document_->GetElementById("perf-hud-ram-value");
+        perf_gpu_fill_ = document_->GetElementById("perf-hud-gpu-fill");
+        perf_gpu_value_ = document_->GetElementById("perf-hud-gpu-value");
+        perf_cpu_fill_ = document_->GetElementById("perf-hud-cpu-fill");
+        perf_cpu_value_ = document_->GetElementById("perf-hud-cpu-value");
+        perf_core_strip_ = document_->GetElementById("perf-hud-core-strip");
+        spark_vram_root_ = document_->GetElementById("perf-hud-spark-vram");
+        spark_ram_root_ = document_->GetElementById("perf-hud-spark-ram");
+        spark_gpu_root_ = document_->GetElementById("perf-hud-spark-gpu");
+        spark_cpu_root_ = document_->GetElementById("perf-hud-spark-cpu");
         header_ = document_->GetElementById("vram-hud-header");
         resize_handle_ = document_->GetElementById("vram-hud-resize");
         filter_input_ = document_->GetElementById("vram-hud-filter");
@@ -677,12 +429,20 @@ namespace lfs::vis::gui {
         counters_root_ = document_->GetElementById("vram-hud-counters");
         counters_empty_ = document_->GetElementById("vram-hud-counters-empty");
         panel_overview_ = document_->GetElementById("vram-hud-panel-overview");
+        panel_ledger_ = document_->GetElementById("vram-hud-panel-ledger");
         panel_allocations_ = document_->GetElementById("vram-hud-panel-allocations");
         panel_tree_ = document_->GetElementById("vram-hud-panel-tree");
         tabs_root_ = document_->GetElementById("vram-hud-tabs");
         allocs_rows_root_ = document_->GetElementById("vram-hud-allocs-rows");
         allocs_summary_value_ = document_->GetElementById("vram-hud-allocs-summary-value");
-        breakdown_root_ = document_->GetElementById("vram-hud-breakdown");
+        tracking_off_ = document_->GetElementById("perf-hud-tracking-off");
+        ledger_process_ = document_->GetElementById("perf-hud-ledger-process");
+        ledger_attributed_ = document_->GetElementById("perf-hud-ledger-attributed");
+        ledger_residual_ = document_->GetElementById("perf-hud-ledger-residual");
+        ledger_epsilon_ = document_->GetElementById("perf-hud-ledger-epsilon");
+        ledger_closure_ = document_->GetElementById("perf-hud-ledger-closure");
+        ledger_over_banner_ = document_->GetElementById("perf-hud-ledger-over-banner");
+        ledger_rows_root_ = document_->GetElementById("perf-hud-ledger-rows");
         panel_annotations_ = document_->GetElementById("vram-hud-panel-annotations");
         anno_rows_root_ = document_->GetElementById("vram-hud-anno-rows");
         anno_summary_value_ = document_->GetElementById("vram-hud-anno-summary-value");
@@ -700,8 +460,8 @@ namespace lfs::vis::gui {
         }
         if (allocs_rows_root_)
             allocs_rows_root_->SetInnerRML("");
-        if (breakdown_root_)
-            breakdown_root_->SetInnerRML("");
+        if (ledger_rows_root_)
+            ledger_rows_root_->SetInnerRML("");
         if (anno_rows_root_)
             anno_rows_root_->SetInnerRML("");
 
@@ -757,12 +517,20 @@ namespace lfs::vis::gui {
         counters_root_ = nullptr;
         counters_empty_ = nullptr;
         panel_overview_ = nullptr;
+        panel_ledger_ = nullptr;
         panel_allocations_ = nullptr;
         panel_tree_ = nullptr;
         tabs_root_ = nullptr;
         allocs_rows_root_ = nullptr;
         allocs_summary_value_ = nullptr;
-        breakdown_root_ = nullptr;
+        tracking_off_ = nullptr;
+        ledger_process_ = nullptr;
+        ledger_attributed_ = nullptr;
+        ledger_residual_ = nullptr;
+        ledger_epsilon_ = nullptr;
+        ledger_closure_ = nullptr;
+        ledger_over_banner_ = nullptr;
+        ledger_rows_root_ = nullptr;
         panel_annotations_ = nullptr;
         anno_rows_root_ = nullptr;
         anno_summary_value_ = nullptr;
@@ -774,7 +542,7 @@ namespace lfs::vis::gui {
         rows_by_path_.clear();
         counter_rows_by_key_.clear();
         allocs_rows_.clear();
-        breakdown_rows_.clear();
+        ledger_rows_.clear();
         summary_by_key_.clear();
         listeners_attached_ = false;
         dragging_header_ = false;
@@ -785,12 +553,16 @@ namespace lfs::vis::gui {
     void VramHudOverlay::attachListeners() {
         if (listeners_attached_)
             return;
-        if (rows_root_)
-            rows_root_->AddEventListener(Rml::EventId::Click, &click_listener_);
+        if (root_) {
+            root_->AddEventListener(Rml::EventId::Click, &click_listener_);
+            // Expanded→compact return path: double-click the card header.
+            root_->AddEventListener(Rml::EventId::Dblclick, &click_listener_);
+        }
         if (header_) {
             header_->AddEventListener(Rml::EventId::Dragstart, &header_drag_listener_);
             header_->AddEventListener(Rml::EventId::Drag, &header_drag_listener_);
             header_->AddEventListener(Rml::EventId::Dragend, &header_drag_listener_);
+            header_->AddEventListener(Rml::EventId::Dblclick, &click_listener_);
         }
         if (resize_handle_) {
             resize_handle_->AddEventListener(Rml::EventId::Dragstart, &resize_drag_listener_);
@@ -871,7 +643,7 @@ namespace lfs::vis::gui {
 
     void VramHudOverlay::setActiveTab(std::string_view tab) {
         const std::string requested(tab);
-        if (requested != "overview" && requested != "allocations" &&
+        if (requested != "overview" && requested != "ledger" && requested != "allocations" &&
             requested != "annotations" && requested != "tree")
             return;
         if (active_tab_ == requested)
@@ -892,12 +664,22 @@ namespace lfs::vis::gui {
         }
         if (panel_overview_)
             panel_overview_->SetClass("hidden", active_tab_ != "overview");
+        if (panel_ledger_)
+            panel_ledger_->SetClass(
+                "hidden", active_tab_ != "ledger" || !state_.snapshot.enabled);
         if (panel_allocations_)
-            panel_allocations_->SetClass("hidden", active_tab_ != "allocations");
+            panel_allocations_->SetClass(
+                "hidden", active_tab_ != "allocations" || !state_.snapshot.enabled);
         if (panel_annotations_)
-            panel_annotations_->SetClass("hidden", active_tab_ != "annotations");
+            panel_annotations_->SetClass(
+                "hidden", active_tab_ != "annotations" || !state_.snapshot.enabled);
         if (panel_tree_)
-            panel_tree_->SetClass("hidden", active_tab_ != "tree");
+            panel_tree_->SetClass("hidden", active_tab_ != "tree" || !state_.snapshot.enabled);
+        if (tracking_off_) {
+            const bool detailed_tab = active_tab_ == "ledger" || active_tab_ == "allocations" ||
+                                      active_tab_ == "annotations" || active_tab_ == "tree";
+            tracking_off_->SetClass("hidden", !detailed_tab || state_.snapshot.enabled);
+        }
     }
 
     void VramHudOverlay::updateFilterClearVisibility() {
@@ -965,10 +747,14 @@ namespace lfs::vis::gui {
         const auto language_generation = lfs::vis::app_store().language_generation.get();
         const bool language_changed = !has_language_generation_ ||
                                       language_generation != last_language_generation_;
-        const bool visibility_changed = last_visible_ != state.visible;
+        const bool effective_visible = state.visible || state.perf_hud.visible;
+        const bool visibility_changed = last_visible_ != effective_visible;
         const bool data_changed = state.visible && last_sequence_ != state.snapshot.sequence;
+        const bool perf_changed = last_perf_visible_ != state.perf_hud.visible ||
+                                  last_perf_expanded_ != state.perf_hud.expanded ||
+                                  last_perf_snapshot_ != state.perf_hud.snapshot;
         state_ = std::move(state);
-        if (!visibility_changed && !data_changed && !language_changed)
+        if (!visibility_changed && !data_changed && !perf_changed && !language_changed)
             return;
         if (language_changed) {
             last_language_generation_ = language_generation;
@@ -980,7 +766,10 @@ namespace lfs::vis::gui {
                     lfs::event::LocalizationManager::getInstance().get("toolbar.waiting_training_diagnostics"));
             }
         }
-        last_visible_ = state_.visible;
+        last_visible_ = effective_visible;
+        last_perf_visible_ = state_.perf_hud.visible;
+        last_perf_expanded_ = state_.perf_hud.expanded;
+        last_perf_snapshot_ = state_.perf_hud.snapshot;
         last_sequence_ = state_.snapshot.sequence;
         apply();
     }
@@ -999,9 +788,30 @@ namespace lfs::vis::gui {
         if (!document_ || !root_)
             return;
 
-        root_->SetClass("hidden", !state_.visible);
+        const bool visible = state_.visible || state_.perf_hud.visible;
+        root_->SetClass("hidden", !visible);
+        root_->SetClass("perf-hud-compact", state_.perf_hud.visible && !state_.perf_hud.expanded);
+        if (!visible)
+            return;
+
+        applyCompactStrip();
+        if (sparkline_tick_due())
+            pushSparklineSample();
+        applySparklines();
+        const bool compact = state_.perf_hud.visible && !state_.perf_hud.expanded;
+        if (perf_strip_) {
+            perf_strip_->SetClass("hidden", !state_.perf_hud.visible || state_.perf_hud.expanded);
+            perf_strip_->SetProperty("display", compact ? "flex" : "none");
+        }
+        if (perf_card_) {
+            perf_card_->SetClass("hidden", compact);
+            perf_card_->SetProperty("display", compact ? "none" : "flex");
+        }
+
         if (!state_.visible)
             return;
+
+        refreshTabClasses();
 
         const auto& s = state_.snapshot;
         const auto process_used = bestProcessUsed(s);
@@ -1025,7 +835,9 @@ namespace lfs::vis::gui {
         }
 
         applySummary(process_used, process_total);
-        applyBreakdown(process_used);
+        snapshot_paths_.clear();
+        if (active_tab_ == "ledger" && s.enabled)
+            applyLedger();
         applyCounters();
         applyAllocations();
         applyAnnotations();
@@ -1039,10 +851,168 @@ namespace lfs::vis::gui {
         applyTree(process_used);
     }
 
+    void VramHudOverlay::applyCompactStrip() {
+        if (!state_.perf_hud.visible || !state_.perf_hud.snapshot)
+            return;
+        const auto& s = *state_.perf_hud.snapshot;
+        const auto ratio = [](std::size_t value, std::size_t total) {
+            return total == 0 ? 0.0f : std::clamp(100.0f * static_cast<float>(value) / static_cast<float>(total), 0.0f, 100.0f);
+        };
+        const auto percent = [](float value) { return std::clamp(value, 0.0f, 100.0f); };
+        const auto set_width = [](Rml::Element* element, const float value) {
+            if (element)
+                element->SetProperty("width", std::format("{:.2f}%", value));
+        };
+        const auto set_threshold = [](Rml::Element* element, const float value) {
+            if (!element)
+                return;
+            element->SetClass("warn", value >= 80.0f && value < 92.0f);
+            element->SetClass("crit", value >= 92.0f);
+        };
+        const auto vram_process = ratio(s.vram_process_bytes, s.vram_total_bytes);
+        const auto vram_used = ratio(s.vram_used_bytes, s.vram_total_bytes);
+        set_width(perf_vram_process_, vram_process);
+        set_width(perf_vram_other_, std::max(0.0f, vram_used - vram_process));
+        set_width(perf_vram_free_, std::max(0.0f, 100.0f - vram_used));
+        set_threshold(perf_vram_process_, vram_used);
+        if (perf_vram_value_)
+            perf_vram_value_->SetInnerRML(std::format("{} / {}", formatBytes(s.vram_used_bytes),
+                                                      formatBytes(s.vram_total_bytes)));
+        if (perf_vram_badge_) {
+            // Unknown when profiler off — no standing amber GAP.
+            if (!s.ledger_valid)
+                perf_vram_badge_->SetInnerRML("–");
+            else if (s.ledger_over)
+                perf_vram_badge_->SetInnerRML("\xE2\x80\xBC"); // ‼
+            else if (s.ledger_closed)
+                perf_vram_badge_->SetInnerRML("\xE2\x9C\x93"); // ✓
+            else
+                perf_vram_badge_->SetInnerRML("!");
+        }
+
+        const auto ram_process = ratio(s.ram_process_bytes, s.ram_total_bytes);
+        const auto ram_used = ratio(s.ram_used_bytes, s.ram_total_bytes);
+        set_width(perf_ram_process_, ram_process);
+        set_width(perf_ram_other_, std::max(0.0f, ram_used - ram_process));
+        set_width(perf_ram_free_, std::max(0.0f, 100.0f - ram_used));
+        set_threshold(perf_ram_process_, ram_used);
+        if (perf_ram_value_)
+            perf_ram_value_->SetInnerRML(std::format("{} / {}", formatBytes(s.ram_used_bytes),
+                                                     formatBytes(s.ram_total_bytes)));
+
+        const auto gpu = s.gpu_utilization_valid ? percent(s.gpu_utilization_percent) : 0.0f;
+        const auto cpu = s.cpu_valid ? percent(s.process_cpu_percent) : 0.0f;
+        set_width(perf_gpu_fill_, gpu);
+        set_width(perf_cpu_fill_, cpu);
+        // Utilization is not pressure — never paint GPU/CPU meters as warn/crit.
+        if (perf_gpu_fill_) {
+            perf_gpu_fill_->SetClass("warn", false);
+            perf_gpu_fill_->SetClass("crit", false);
+        }
+        if (perf_cpu_fill_) {
+            perf_cpu_fill_->SetClass("warn", false);
+            perf_cpu_fill_->SetClass("crit", false);
+        }
+        if (perf_gpu_value_)
+            perf_gpu_value_->SetInnerRML(s.gpu_utilization_valid ? std::format("{:.0f}%", gpu) : "--");
+        if (perf_cpu_value_)
+            perf_cpu_value_->SetInnerRML(s.cpu_valid ? std::format("{:.0f}%", cpu) : "--");
+        if (perf_rate_) {
+            // Keep unit literal off the SetInnerRML line (check_ui_hardcoded is line-based);
+            // fps is a design-exempt technical unit, same pattern as "{:.1f} iter/s" above.
+            const std::string rate_text =
+                s.rate > 0.0f ? std::format("{:.1f} fps", s.rate) : std::string("--");
+            perf_rate_->SetInnerRML(rate_text);
+        }
+
+        if (perf_core_strip_) {
+            std::string bars;
+            const std::size_t bucket_count = std::min<std::size_t>(32, s.per_core_cpu_percent.size());
+            if (bucket_count > 0) {
+                bars.reserve(bucket_count * 64);
+                for (std::size_t i = 0; i < bucket_count; ++i) {
+                    const auto begin = i * s.per_core_cpu_percent.size() / bucket_count;
+                    const auto end = std::max(begin + 1,
+                                              (i + 1) * s.per_core_cpu_percent.size() / bucket_count);
+                    float peak = 0.0f;
+                    for (std::size_t j = begin; j < end && j < s.per_core_cpu_percent.size(); ++j)
+                        peak = std::max(peak, s.per_core_cpu_percent[j]);
+                    bars += std::format("<span class=\"perf-hud-core-bar\" style=\"height:{:.1f}%\"></span>",
+                                        percent(peak));
+                }
+            }
+            perf_core_strip_->SetInnerRML(bars);
+        }
+    }
+
+    bool VramHudOverlay::sparkline_tick_due() const noexcept {
+        if (!state_.perf_hud.visible)
+            return false;
+        if (last_sparkline_sample_ == std::chrono::steady_clock::time_point{})
+            return true;
+        return std::chrono::steady_clock::now() - last_sparkline_sample_ >= std::chrono::seconds(1);
+    }
+
+    void VramHudOverlay::pushSparklineSample() {
+        if (!state_.perf_hud.snapshot)
+            return;
+        const auto& s = *state_.perf_hud.snapshot;
+        const auto ratio = [](std::size_t value, std::size_t total) {
+            return total == 0
+                       ? 0.0f
+                       : std::clamp(100.0f * static_cast<float>(value) /
+                                        static_cast<float>(total),
+                                    0.0f, 100.0f);
+        };
+        spark_vram_hist_[spark_write_] = ratio(s.vram_process_bytes, s.vram_total_bytes);
+        spark_ram_hist_[spark_write_] = ratio(s.ram_process_bytes, s.ram_total_bytes);
+        spark_gpu_hist_[spark_write_] =
+            s.gpu_utilization_valid ? std::clamp(s.gpu_utilization_percent, 0.0f, 100.0f) : 0.0f;
+        spark_cpu_hist_[spark_write_] =
+            s.cpu_valid ? std::clamp(s.process_cpu_percent, 0.0f, 100.0f) : 0.0f;
+        spark_write_ = (spark_write_ + 1) % kSparklineSamples;
+        if (spark_count_ < kSparklineSamples)
+            ++spark_count_;
+        last_sparkline_sample_ = std::chrono::steady_clock::now();
+        cached_spark_vram_.clear();
+        cached_spark_ram_.clear();
+        cached_spark_gpu_.clear();
+        cached_spark_cpu_.clear();
+    }
+
+    void VramHudOverlay::applySparklines() {
+        if (!state_.perf_hud.visible || spark_count_ == 0)
+            return;
+
+        const auto render_series = [&](Rml::Element* root, std::string& cache,
+                                       const std::array<float, kSparklineSamples>& hist) {
+            if (!root)
+                return;
+            std::string rml;
+            rml.reserve(spark_count_ * 72);
+            const std::size_t start =
+                spark_count_ < kSparklineSamples ? 0
+                                                 : spark_write_;
+            for (std::size_t i = 0; i < spark_count_; ++i) {
+                const float value = hist[(start + i) % kSparklineSamples];
+                rml += std::format(
+                    "<span class=\"histogram-bar-fill\" style=\"height:{:.1f}%\"></span>",
+                    value);
+            }
+            if (cache == rml)
+                return;
+            cache = rml;
+            root->SetInnerRML(cache);
+        };
+
+        render_series(spark_vram_root_, cached_spark_vram_, spark_vram_hist_);
+        render_series(spark_ram_root_, cached_spark_ram_, spark_ram_hist_);
+        render_series(spark_gpu_root_, cached_spark_gpu_, spark_gpu_hist_);
+        render_series(spark_cpu_root_, cached_spark_cpu_, spark_cpu_hist_);
+    }
+
     void VramHudOverlay::applySummary(std::size_t process_used, std::size_t process_total) {
         const auto& s = state_.snapshot;
-        const std::size_t gap =
-            process_used > s.sampled_live_bytes ? process_used - s.sampled_live_bytes : 0;
 
         const auto write = [&](std::string_view key, std::string value, std::string extra = {}) {
             auto it = summary_by_key_.find(std::string(key));
@@ -1065,14 +1035,7 @@ namespace lfs::vis::gui {
               std::format("{} cached / {} peak",
                           formatBytes(s.process.pinned_host_cached),
                           formatBytes(s.process.pinned_host_peak)));
-        write("vulkan_budget", formatBytes(s.process.vulkan_vma_used),
-              formatPercent(s.process.vulkan_vma_used, process_used));
         write("vulkan_blocks", formatBytes(s.process.vulkan_vma_block_bytes));
-        write("sampled", formatBytes(s.sampled_live_bytes),
-              formatPercent(s.sampled_live_bytes, process_used));
-        write("allocator_live", formatBytes(s.accounted_live_bytes),
-              formatPercent(s.accounted_live_bytes, process_used));
-        write("process_gap", formatBytes(gap), formatPercent(gap, process_used));
         write("allocator_peak", formatBytes(s.accounted_peak_bytes));
         write("events", std::format("{} alloc / {} free", s.allocation_events, s.free_events));
         write("iter_events",
@@ -1086,47 +1049,236 @@ namespace lfs::vis::gui {
         }
     }
 
-    void VramHudOverlay::applyBreakdown(std::size_t process_used) {
-        if (!breakdown_root_)
+    void VramHudOverlay::applyLedger() {
+        if (!document_ || !ledger_rows_root_)
             return;
 
-        const VramBreakdownModel model = buildBreakdownModel(state_.snapshot, process_used);
-        const auto& entries = model.entries;
-        const std::size_t denom = model.denom;
+        using lfs::diagnostics::AttributionState;
+        using lfs::diagnostics::LedgerClosureState;
+        using lfs::diagnostics::VramLedgerNode;
 
-        while (breakdown_rows_.size() > entries.size()) {
-            breakdown_root_->RemoveChild(breakdown_rows_.back().row);
-            breakdown_rows_.pop_back();
-        }
-        while (breakdown_rows_.size() < entries.size()) {
-            auto row_ptr = document_->CreateElement("div");
-            row_ptr->SetAttribute("class", "vram-hud-breakdown-row");
-            auto* row = breakdown_root_->AppendChild(std::move(row_ptr));
-            BreakdownRowElements e{};
-            e.row = row;
-            e.name = createSpan(document_, row, "vram-hud-breakdown-name");
-            e.bytes = createSpan(document_, row, "vram-hud-breakdown-bytes");
-            e.pct = createSpan(document_, row, "vram-hud-breakdown-pct");
-            breakdown_rows_.push_back(std::move(e));
+        const auto ledger = lfs::diagnostics::buildLiveLedger(state_.snapshot);
+        if (!ledger_default_collapse_applied_) {
+            primeDefaultLedgerCollapse(ledger);
+            ledger_default_collapse_applied_ = true;
         }
 
-        for (std::size_t i = 0; i < entries.size(); ++i) {
-            auto& row = breakdown_rows_[i];
-            std::string klass = "vram-hud-breakdown-row";
-            if (entries[i].unaccounted)
-                klass += " unaccounted";
-            if (entries[i].total)
-                klass += " total";
-            if (row.cached_classes != klass) {
-                row.cached_classes = klass;
-                row.row->SetAttribute("class", Rml::String(row.cached_classes));
+        setText(ledger_process_, cached_ledger_process_,
+                std::format("{} VRAM · {}", LOC("ui.perf_this_process"),
+                            formatBytes(ledger.process_used_bytes)));
+        setText(ledger_attributed_, cached_ledger_attributed_,
+                std::format("{} {}", LOC("ui.perf_ledger_attributed"),
+                            formatBytes(ledger.attributed_bytes)));
+
+        const std::size_t residual_magnitude =
+            lfs::diagnostics::signed_byte_magnitude(ledger.residual.signed_residual_bytes);
+        const char* residual_key = ledger.closure == LedgerClosureState::Over
+                                       ? "ui.perf_ledger_over"
+                                       : "ui.perf_ledger_gap";
+        setText(ledger_residual_, cached_ledger_residual_,
+                std::format("{} {}", LOC(residual_key), formatBytes(residual_magnitude)));
+        setText(ledger_epsilon_, cached_ledger_epsilon_,
+                std::format("\xCE\xB5 {}", formatBytes(ledger.epsilon_bytes)));
+
+        const char* closure_key = "ui.perf_ledger_closes";
+        if (ledger.closure == LedgerClosureState::Gap)
+            closure_key = "ui.perf_ledger_gap";
+        else if (ledger.closure == LedgerClosureState::Over)
+            closure_key = "ui.perf_ledger_over";
+        setText(ledger_closure_, cached_ledger_closure_,
+                std::format("{} {}", closureGlyph(ledger.closure), LOC(closure_key)));
+        if (ledger_closure_) {
+            ledger_closure_->SetAttribute(
+                "class", Rml::String(std::format("perf-hud-ledger-closure {}",
+                                                 closureClass(ledger.closure))));
+        }
+
+        if (ledger_over_banner_) {
+            ledger_over_banner_->SetClass("hidden", ledger.closure != LedgerClosureState::Over);
+            if (ledger.closure == LedgerClosureState::Over) {
+                setText(ledger_over_banner_, cached_ledger_over_banner_,
+                        std::format("{} · +{}", LOC("ui.perf_ledger_over"),
+                                    formatBytes(ledger.residual.over_claim_bytes)));
             }
-            setText(row.name, row.cached_name, std::string(entries[i].label));
-            setText(row.bytes, row.cached_bytes, formatBytes(entries[i].bytes));
-            // Hide the % column for totals (they are themselves the 100% reference).
-            const std::string pct = entries[i].total ? std::string("")
-                                                     : formatPercent(entries[i].bytes, denom);
-            setText(row.pct, row.cached_pct, std::string(pct));
+        }
+
+        struct VisibleLedgerNode {
+            const VramLedgerNode* node = nullptr;
+            std::string path;
+            std::size_t parent_bytes = 0;
+            std::size_t depth = 0;
+            bool collapsed = false;
+        };
+        std::vector<VisibleLedgerNode> visible;
+
+        const auto collect_paths = [&](auto&& self,
+                                       const VramLedgerNode& node,
+                                       const std::string& path) -> void {
+            snapshot_paths_.insert(path);
+            for (const auto& child : node.children)
+                self(self, child, path + "/" + child.name);
+        };
+        const auto collect_visible = [&](auto&& self,
+                                         const VramLedgerNode& node,
+                                         std::string path,
+                                         const std::size_t parent_bytes,
+                                         const std::size_t depth) -> void {
+            const bool collapsed = !node.children.empty() && collapsed_paths_.contains(path);
+            visible.push_back({&node, std::move(path), parent_bytes, depth, collapsed});
+            if (collapsed)
+                return;
+            const auto child_parent = node.measured_bytes;
+            const std::string parent_path = visible.back().path;
+            for (const auto& child : node.children)
+                self(self, child, parent_path + "/" + child.name, child_parent, depth + 1);
+        };
+
+        for (const auto& root : ledger.roots) {
+            const auto path = std::format("ledger/{}/{}",
+                                          static_cast<unsigned>(root.root_id), root.name);
+            collect_paths(collect_paths, root, path);
+            collect_visible(collect_visible, root, path, ledger.process_used_bytes, 0);
+        }
+
+        while (ledger_rows_.size() > visible.size()) {
+            ledger_rows_root_->RemoveChild(ledger_rows_.back().row);
+            ledger_rows_.pop_back();
+        }
+        while (ledger_rows_.size() < visible.size()) {
+            auto row_ptr = document_->CreateElement("div");
+            auto* row_element = ledger_rows_root_->AppendChild(std::move(row_ptr));
+            LedgerRowElements row{};
+            row.row = row_element;
+            row.name_cell = createSpan(document_, row_element, "perf-hud-ledger-name-cell");
+            row.toggle = createSpan(document_, row.name_cell, "perf-hud-ledger-toggle");
+            row.name = createSpan(document_, row.name_cell, "perf-hud-ledger-name");
+            row.note = createSpan(document_, row.name_cell, "perf-hud-ledger-note");
+            auto* share = createSpan(document_, row_element, "perf-hud-ledger-share");
+            row.share_fill = createSpan(document_, share, "perf-hud-ledger-share-fill");
+            row.disclosure = createSpan(document_, row_element, "perf-hud-ledger-disclosure");
+            row.allocated = createSpan(document_, row_element, "perf-hud-ledger-allocated");
+            row.badge = createSpan(document_, row_element, "perf-hud-ledger-badge");
+            ledger_rows_.push_back(std::move(row));
+        }
+
+        for (std::size_t i = 0; i < visible.size(); ++i) {
+            const auto& item = visible[i];
+            const auto& node = *item.node;
+            auto& row = ledger_rows_[i];
+
+            std::string classes = "perf-hud-ledger-row ";
+            classes += closureClass(node.closure);
+            if (item.depth == 0)
+                classes += " root";
+            if (!node.children.empty())
+                classes += " has-children";
+            if (item.collapsed)
+                classes += " is-collapsed";
+            if (node.state == AttributionState::Nested)
+                classes += " nested";
+            else if (node.state == AttributionState::Unjustified)
+                classes += " unjustified";
+
+            bool estimate = false;
+            const bool degenerate = node.has_required &&
+                                    node.name == "fastgs_raster_live" &&
+                                    node.required_bytes == node.measured_bytes;
+            if (node.has_required && node.required_bytes > 0) {
+                const double ratio = static_cast<double>(node.measured_bytes) /
+                                     static_cast<double>(node.required_bytes);
+                constexpr double kEstimateFactors[] = {1.2, 1.25, 1.5, 2.0};
+                estimate = std::any_of(
+                    std::begin(kEstimateFactors), std::end(kEstimateFactors),
+                    [ratio](const double factor) { return std::abs(ratio / factor - 1.0) <= 0.02; });
+                if (estimate)
+                    classes += " estimate";
+                else if (node.measured_bytes == node.required_bytes)
+                    classes += " exact";
+                else if (node.measured_bytes > node.required_bytes)
+                    classes += " slack";
+                else
+                    classes += " over-budget";
+            }
+            if (degenerate)
+                classes += " degenerate";
+            applyRowClasses(row.row, row.cached_classes, std::move(classes));
+
+            if (!node.children.empty()) {
+                row.row->SetAttribute("data-vram-node", Rml::String(item.path));
+                row.toggle->SetAttribute("data-vram-node", Rml::String(item.path));
+            } else {
+                row.row->RemoveAttribute("data-vram-node");
+                row.toggle->RemoveAttribute("data-vram-node");
+            }
+
+            std::string padding = std::format("padding-left: {}dp;", item.depth * kRowIndentPx);
+            if (row.cached_padding != padding) {
+                row.cached_padding = std::move(padding);
+                row.name_cell->SetAttribute("style", Rml::String(row.cached_padding));
+            }
+            const char* toggle = node.children.empty()
+                                     ? " "
+                                     : (item.collapsed ? "\xE2\x96\xB6" : "\xE2\x96\xBC");
+            if (row.cached_toggle != toggle) {
+                row.cached_toggle = toggle;
+                row.toggle->SetInnerRML(Rml::String(toggle));
+            }
+
+            setText(row.name, row.cached_name, std::string(node.name));
+            // Map stable English tokens from the ledger model onto locale keys (S9).
+            std::string note_text = node.note;
+            if (node.note == "retention")
+                note_text = std::string(LOC("ui.perf_retention"));
+            else if (node.note == "reclaimable")
+                note_text = std::string(LOC("ui.perf_reclaimable"));
+            else if (node.note == "untracked")
+                note_text = std::string(LOC("ui.perf_untracked"));
+            setText(row.note, row.cached_note, std::move(note_text));
+
+            const double share = item.parent_bytes == 0
+                                     ? 0.0
+                                     : std::min(100.0, 100.0 * static_cast<double>(node.measured_bytes) /
+                                                           static_cast<double>(item.parent_bytes));
+            std::string share_width = std::format("width: {:.2f}%;", share);
+            if (row.cached_share_width != share_width) {
+                row.cached_share_width = std::move(share_width);
+                row.share_fill->SetAttribute("style", Rml::String(row.cached_share_width));
+            }
+
+            std::string disclosure;
+            if (node.has_required) {
+                disclosure = std::format("{} {} / {} {}",
+                                         LOC("ui.perf_required"), formatBytes(node.required_bytes),
+                                         LOC("ui.perf_allocated"), formatBytes(node.measured_bytes));
+            }
+            setText(row.disclosure, row.cached_disclosure, std::move(disclosure));
+            setText(row.allocated, row.cached_allocated, formatBytes(node.measured_bytes));
+
+            const char* badge = closureGlyph(node.closure);
+            const char* badge_title = "ui.perf_ledger_closes";
+            if (node.closure == LedgerClosureState::Gap)
+                badge_title = "ui.perf_ledger_gap";
+            else if (node.closure == LedgerClosureState::Over)
+                badge_title = "ui.perf_ledger_over";
+            if (estimate) {
+                badge = "EST";
+                badge_title = "ui.perf_estimate_detected";
+            } else if (degenerate) {
+                badge = "=";
+                badge_title = "ui.perf_degenerate_pair";
+            } else if (node.has_required && node.measured_bytes > node.required_bytes) {
+                badge_title = "ui.perf_slack";
+            } else if (node.has_required && node.measured_bytes < node.required_bytes) {
+                badge_title = "ui.perf_over_budget";
+            } else if (node.state == AttributionState::Nested) {
+                badge = "\xE2\x86\xB3";
+                badge_title = "ui.perf_nested_disclosure";
+            } else if (node.state == AttributionState::Unjustified) {
+                badge = "\xE2\x9A\x91";
+                badge_title = "ui.perf_no_owner";
+            }
+            setText(row.badge, row.cached_badge, std::string(badge));
+            row.badge->SetAttribute("title", Rml::String(LOC(badge_title)));
         }
     }
 
@@ -1155,58 +1307,6 @@ namespace lfs::vis::gui {
                 vs = std::format("{:.3f}", v);
             }
             entries.push_back({g.key, std::move(vs)});
-        }
-
-        const std::size_t process_used = bestProcessUsed(state_.snapshot);
-        if (process_used > 0 || state_.snapshot.sampled_live_bytes > 0 || !state_.snapshot.rows.empty()) {
-            const VramBreakdownModel model = buildBreakdownModel(state_.snapshot, process_used);
-            const auto& audit = model.audit;
-            const auto add_audit = [&](std::string label, const std::size_t bytes, const bool always = false) {
-                if (!always && bytes == 0) {
-                    return;
-                }
-                entries.push_back({std::move(label), formatBytes(bytes)});
-            };
-
-            add_audit("vram.audit.process_used", audit.process_used, true);
-            add_audit("vram.audit.sampled_subtotal_raw", audit.raw_sampled_subtotal, true);
-            add_audit("vram.audit.sampled_gap_raw",
-                      audit.process_used > audit.raw_sampled_subtotal
-                          ? audit.process_used - audit.raw_sampled_subtotal
-                          : 0,
-                      true);
-            add_audit("vram.audit.overview_named_rows", audit.overview_named_rows, true);
-            add_audit("vram.audit.named.direct_rows", audit.named_direct_rows);
-            add_audit("vram.audit.named.async_rows", audit.named_async_rows);
-            add_audit("vram.audit.named.slab_rows", audit.named_slab_rows);
-            add_audit("vram.audit.named.bucketed_rows", audit.named_bucketed_rows);
-            add_audit("vram.audit.named.arena_rows", audit.named_arena_rows);
-            add_audit("vram.audit.named.external_rows", audit.named_external_rows);
-            add_audit("vram.audit.named.unknown_rows", audit.named_unknown_rows);
-            add_audit("vram.audit.fastgs_logical_not_totaled", audit.fastgs_logical_not_totaled);
-            add_audit("vram.audit.cuda_pool_used", audit.cuda_pool_used);
-            add_audit("vram.audit.cuda_pool_reserved", audit.cuda_pool_reserved);
-            add_audit("vram.audit.cuda_pool_accounted_live", audit.cuda_pool_accounted_live);
-            add_audit("vram.audit.cuda_slab_reserved", audit.cuda_slab_reserved);
-            add_audit("vram.audit.cuda_slab_reserve_gap", audit.cuda_slab_reserve_gap);
-            add_audit("vram.audit.accounted.slab_live", audit.accounted_slab_live);
-            add_audit("vram.audit.accounted.bucketed_live", audit.accounted_bucketed_live);
-            add_audit("vram.audit.accounted.async_live", audit.accounted_async_live);
-            add_audit("vram.audit.accounted.direct_live", audit.accounted_direct_live);
-            add_audit("vram.audit.accounted.arena_live", audit.accounted_arena_live);
-            add_audit("vram.audit.accounted.external_live", audit.accounted_external_live);
-            add_audit("vram.audit.accounted.unknown_live", audit.accounted_unknown_live);
-            add_audit("vram.audit.cuda_pool_bucket_cache", audit.cuda_pool_bucket_cache);
-            add_audit("vram.audit.cuda_pool_untracked_used", audit.cuda_pool_untracked_used);
-            add_audit("vram.audit.cuda_pool_overhead", audit.cuda_pool_overhead);
-            add_audit("vram.audit.cuda_context_baseline", audit.cuda_context_baseline);
-            add_audit("vram.audit.cuda_context_phases", audit.cuda_context_phases);
-            add_audit("vram.audit.cuda_context_residual", audit.cuda_context_residual);
-            add_audit("vram.audit.vulkan_vma_blocks", audit.vulkan_vma_blocks);
-            add_audit("vram.audit.vulkan_named_rows", audit.vulkan_named_rows);
-            add_audit("vram.audit.vulkan_residual", audit.vulkan_residual);
-            add_audit("vram.audit.breakdown_totaled", audit.breakdown_totaled, true);
-            add_audit("vram.audit.process_unresolved", audit.process_unresolved, true);
         }
 
         if (counters_empty_)
@@ -1470,6 +1570,25 @@ namespace lfs::vis::gui {
         }
     }
 
+    void VramHudOverlay::primeDefaultLedgerCollapse(
+        const lfs::diagnostics::VramLedgerTree& ledger) {
+        const auto visit = [&](auto&& self,
+                               const lfs::diagnostics::VramLedgerNode& node,
+                               const std::string& path,
+                               const std::size_t depth) -> void {
+            if (!node.children.empty() && depth >= kDefaultCollapseDepth)
+                collapsed_paths_.insert(path);
+            for (const auto& child : node.children)
+                self(self, child, path + "/" + child.name, depth + 1);
+        };
+        for (const auto& root : ledger.roots) {
+            const auto path = std::format("ledger/{}/{}",
+                                          static_cast<unsigned>(root.root_id), root.name);
+            visit(visit, root, path, 0);
+        }
+        schedulePersistSave();
+    }
+
     void VramHudOverlay::applyTree(std::size_t process_used) {
         if (!rows_root_)
             return;
@@ -1477,8 +1596,7 @@ namespace lfs::vis::gui {
         const auto& tree = state_.snapshot.tree;
         visible_paths_.clear();
         visible_paths_.reserve(tree.size());
-        snapshot_paths_.clear();
-        snapshot_paths_.reserve(tree.size());
+        snapshot_paths_.reserve(snapshot_paths_.size() + tree.size());
         filter_ancestors_.clear();
 
         const bool filter_active = !filter_text_lower_.empty();
@@ -1696,7 +1814,9 @@ namespace lfs::vis::gui {
     void VramHudOverlay::pruneCollapsedSet() {
         const bool changed_before = persistence_dirty_;
         for (auto it = collapsed_paths_.begin(); it != collapsed_paths_.end();) {
-            if (!snapshot_paths_.contains(*it)) {
+            const bool inactive_ledger_path = it->rfind("ledger/", 0) == 0 &&
+                                              active_tab_ != "ledger";
+            if (!inactive_ledger_path && !snapshot_paths_.contains(*it)) {
                 it = collapsed_paths_.erase(it);
                 persistence_dirty_ = true;
             } else {
@@ -1721,7 +1841,45 @@ namespace lfs::vis::gui {
         if (!owner)
             return;
         auto* target = event.GetTargetElement();
+        const bool is_dblclick = event.GetId() == Rml::EventId::Dblclick;
+
+        // Double-click expanded card header → collapse to strip.
+        if (is_dblclick) {
+            while (target) {
+                if (target->GetId() == "vram-hud-header" || target->GetId() == "perf-hud-card") {
+                    if (owner->state_.perf_hud.visible && owner->state_.perf_hud.expanded) {
+                        lfs::core::events::ui::TogglePerfHudExpanded{}.emit();
+                        event.StopPropagation();
+                    }
+                    return;
+                }
+                target = target->GetParentNode();
+            }
+            return;
+        }
+
+        target = event.GetTargetElement();
         while (target) {
+            const auto toggle_expanded = target->GetAttribute<Rml::String>("data-perf-toggle-expanded", "");
+            if (!toggle_expanded.empty()) {
+                lfs::core::events::ui::TogglePerfHudExpanded{}.emit();
+                event.StopPropagation();
+                return;
+            }
+            const auto perf_tab = target->GetAttribute<Rml::String>("data-perf-tab", "");
+            if (!perf_tab.empty()) {
+                lfs::core::events::ui::OpenPerfHudLedger{}.emit();
+                owner->setActiveTab("ledger");
+                event.StopPropagation();
+                return;
+            }
+            const auto enable_tracking =
+                target->GetAttribute<Rml::String>("data-perf-enable-tracking", "");
+            if (!enable_tracking.empty()) {
+                owner->enableDetailedTracking();
+                event.StopPropagation();
+                return;
+            }
             const auto key = target->GetAttribute<Rml::String>("data-vram-node", "");
             if (!key.empty()) {
                 owner->toggleNode(std::string(key));
@@ -1730,6 +1888,10 @@ namespace lfs::vis::gui {
             }
             target = target->GetParentNode();
         }
+    }
+
+    void VramHudOverlay::enableDetailedTracking() {
+        lfs::diagnostics::VramProfiler::instance().setEnabled(true);
     }
 
     void VramHudOverlay::HeaderDragListener::ProcessEvent(Rml::Event& event) {

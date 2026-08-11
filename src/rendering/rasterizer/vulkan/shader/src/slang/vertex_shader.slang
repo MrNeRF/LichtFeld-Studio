@@ -24,6 +24,18 @@ import spherical_harmonics;
 #define LFS_QUANT_POOL 0
 #endif
 
+// Standalone PLY/SOG SH rest: IEEE f16 float4-swizzle (same topology as fp32,
+// half the bytes). Mutually exclusive with LFS_QUANT_POOL / LFS_SHN_Q16.
+#ifndef LFS_SHN_F16
+#define LFS_SHN_F16 0
+#endif
+
+// Training-viewport exportable SH rest: pad-dropped q16 + per-256 float2
+// bounds. Mutually exclusive with LFS_QUANT_POOL / LFS_SHN_F16.
+#ifndef LFS_SHN_Q16
+#define LFS_SHN_Q16 0
+#endif
+
 
 struct Gaussian_3D : IDifferentiable
 {
@@ -58,7 +70,14 @@ Gaussian_3D load_gaussian_split(
     int32_t g_idx,
     StructuredBuffer<float> xyz_ws,
     StructuredBuffer<float> sh0,
+#if LFS_SHN_F16
+    StructuredBuffer<uint2> shN,
+#elif LFS_SHN_Q16
+    StructuredBuffer<uint> shN,
+    StructuredBuffer<float2> shN_bounds,
+#else
     StructuredBuffer<float4> shN,
+#endif
     StructuredBuffer<float4> rotations,
     StructuredBuffer<float> scaling_raw,
     StructuredBuffer<float> opacity_raw,
@@ -67,8 +86,18 @@ Gaussian_3D load_gaussian_split(
     uint shN_layout_slots
 ) {
     float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
+#if LFS_SHN_F16
+    SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split_f16(
+        g_idx, sh0, shN, active_sh, shN_layout_slots);
+#elif LFS_SHN_Q16
+    // shN_layout_slots carries n_cells (pad-dropped u16 cells per primitive)
+    // on the q16 path (host sets uniforms.shN_layout_slots = n_cells).
+    SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split_q16(
+        g_idx, sh0, shN, shN_bounds, active_sh, shN_layout_slots);
+#else
     SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split(
         g_idx, sh0, shN, active_sh, shN_layout_slots);
+#endif
     float4 g_rotations = rotations[g_idx];
     // Matches CUDA reference: clamp raw log-scale before activation so a
     // single broken splat cannot blow up into a screen-spanning haze floater
@@ -596,6 +625,18 @@ layout(binding=2) StructuredBuffer<uint> shN;  // s8x4 per swizzled slot
 layout(binding=3) StructuredBuffer<uint2> rotations;  // f16x4 (w,x,y,z)
 layout(binding=4) StructuredBuffer<uint2> scaling_raw;  // log f16x3 + pad
 layout(binding=5) StructuredBuffer<uint> opacity_raw;  // f16, 2 splats per uint
+#elif LFS_SHN_F16
+layout(binding=1) StructuredBuffer<float> sh0;  // 1*3 fp32 DC
+layout(binding=2) StructuredBuffer<uint2> shN;  // IEEE f16 float4-swizzle rest
+layout(binding=3) StructuredBuffer<float4> rotations;  // 4
+layout(binding=4) StructuredBuffer<float> scaling_raw;  // 3
+layout(binding=5) StructuredBuffer<float> opacity_raw;  // 1
+#elif LFS_SHN_Q16
+layout(binding=1) StructuredBuffer<float> sh0;  // 1*3 fp32 DC
+layout(binding=2) StructuredBuffer<uint> shN;  // pad-dropped q16 (2×u16/word)
+layout(binding=3) StructuredBuffer<float4> rotations;  // 4
+layout(binding=4) StructuredBuffer<float> scaling_raw;  // 3
+layout(binding=5) StructuredBuffer<float> opacity_raw;  // 1
 #else
 layout(binding=1) StructuredBuffer<float> sh0;  // 1*3
 layout(binding=2) StructuredBuffer<float4> shN;  // rest-only 15*3
@@ -663,6 +704,15 @@ layout(binding=28) RWStructuredBuffer<int32_t> out_orig_ids;
 layout(binding=29) StructuredBuffer<float4> page_frames;
 #else
 layout(binding=24) StructuredBuffer<float4> page_frames;
+#endif
+#endif
+#if LFS_SHN_Q16
+// Per-256-splat float2 (min,max) bounds for pad-dropped q16 SH rest.
+// Appended last like page_frames so the C++ buffer list just appends it.
+#if LFS_PROJECTION_SURVIVORS
+layout(binding=29) StructuredBuffer<float2> shN_bounds;
+#else
+layout(binding=24) StructuredBuffer<float2> shN_bounds;
 #endif
 #endif
 
@@ -813,6 +863,14 @@ void main(
         scaling_raw, opacity_raw,
         page_frames,
         uniforms.lod_page_splats,
+        uniforms.lod_enabled,
+        active_sh,
+        uniforms.shN_layout_slots
+      );
+    #elif LFS_SHN_Q16
+    Gaussian_3D gauss = load_gaussian_split(
+        g_idx, xyz_ws, sh0, shN, shN_bounds, rotations,
+        scaling_raw, opacity_raw,
         uniforms.lod_enabled,
         active_sh,
         uniforms.shN_layout_slots

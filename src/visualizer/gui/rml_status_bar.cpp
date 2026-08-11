@@ -59,13 +59,12 @@ namespace lfs::vis::gui {
             const std::string* commit_;
         };
 
-        // Clicking the GPU icon opens/closes the VRAM diagnostics HUD by toggling the
-        // profiler that gates it.
+        // Clicking the GPU icon toggles the performance HUD visibility. Profiler
+        // collection remains an independent deep-diagnostics concern.
         class VramHudToggleListener final : public Rml::EventListener {
         public:
             void ProcessEvent(Rml::Event& /*event*/) override {
-                auto& profiler = lfs::diagnostics::VramProfiler::instance();
-                profiler.setEnabled(!profiler.enabled());
+                lfs::core::events::ui::ToggleVramHud{}.emit();
             }
         };
 
@@ -533,6 +532,10 @@ namespace lfs::vis::gui {
         }));
         bind(store.mode_text);
         bind(store.account_state);
+        subscriptions_.push_back(store.perf_hud.subscribe([this](const lfs::vis::AppStore::PerfHud& state) {
+            setModelBool("gpu_panel_active", model_.gpu_panel_active, state.visible);
+            markModelDirty();
+        }));
     }
 
     void RmlStatusBar::markModelDirty() {
@@ -1206,7 +1209,7 @@ namespace lfs::vis::gui {
 
         ThemeColor mem_color = pct < 50.0f ? p.success : (pct < 75.0f ? p.warning : p.error);
         setModelBool("gpu_panel_active", model_.gpu_panel_active,
-                     lfs::diagnostics::VramProfiler::instance().enabled());
+                     lfs::vis::app_store().perf_hud.get().visible);
         setModelString("lfs_mem_text", model_.lfs_mem_text, std::format("LFS {:.2f} GiB", app_gib));
         setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(p.info));
         setModelBool("show_gpu_model", model_.show_gpu_model, !mem.device_name.empty());
@@ -1215,14 +1218,22 @@ namespace lfs::vis::gui {
                        std::format("{} {:.2f}/{:.2f} GiB", LOC("status_bar.gpu"), used_gib, total_gib));
         setModelString("gpu_mem_color", model_.gpu_mem_color, colorToRml(mem_color));
 
-        // FPS
-        float fps = reactive_fps_available_ ? reactive_fps_value_
-                                            : (rm ? rm->getAverageFPS() : 0.0f);
-        ThemeColor fps_col = fps >= 30.0f ? p.success : (fps >= 15.0f ? p.warning : p.error);
+        // FPS: prefer scene-render rate when scene frames are in the measurement
+        // window; when only GUI frames are presented, show that rate as ui-fps
+        // so a GUI-only spin is not invisible. True idle (no samples) stays 0.
+        const float scene_fps = reactive_fps_available_ ? reactive_fps_value_
+                                                        : (rm ? rm->getAverageFPS() : 0.0f);
+        const float presented_fps = rm ? rm->getPresentedAverageFPS() : 0.0f;
+        const bool ui_only_fps = scene_fps <= 0.0f && presented_fps > 0.0f;
+        const float fps = ui_only_fps ? presented_fps : scene_fps;
+        ThemeColor fps_col = ui_only_fps
+                                 ? p.text_dim
+                                 : (fps >= 30.0f ? p.success : (fps >= 15.0f ? p.warning : p.error));
         setModelString("fps_value", model_.fps_value, std::format("{:.0f}", fps));
         setModelString("fps_color", model_.fps_color, colorToRml(fps_col));
         setModelString("fps_label", model_.fps_label,
-                       std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
+                       ui_only_fps ? std::format(" {}", LOC("status_bar.ui_fps"))
+                                   : std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
         setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
 
         section_signature_ =

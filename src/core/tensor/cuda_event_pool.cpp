@@ -5,8 +5,26 @@
 #include "core/cuda_error.hpp"
 
 #include <format>
+#include <string_view>
 
 namespace lfs::core {
+
+    namespace {
+        std::atomic<bool> g_force_event_acquire_failure_for_testing{false};
+
+        void synchronize_stream_bridge_source(cudaStream_t from,
+                                              cudaStream_t to,
+                                              const std::string_view reason) {
+            const cudaError_t sync_status = cudaStreamSynchronize(from);
+            if (sync_status != cudaSuccess) {
+                ensure_cuda_success(
+                    sync_status, "cudaStreamSynchronize(tensor stream bridge fallback)",
+                    std::format("from_stream={}, to_stream={}; reason={}",
+                                static_cast<void*>(from), static_cast<void*>(to), reason),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+            }
+        }
+    } // namespace
 
     CudaEventPool& CudaEventPool::instance() {
         static CudaEventPool pool;
@@ -14,6 +32,9 @@ namespace lfs::core {
     }
 
     cudaEvent_t CudaEventPool::acquire() {
+        if (g_force_event_acquire_failure_for_testing.load(std::memory_order_acquire)) {
+            return nullptr;
+        }
         if (!shutdown_.load(std::memory_order_acquire)) {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!pool_.empty()) {
@@ -76,9 +97,29 @@ namespace lfs::core {
         shutdown();
     }
 
+    void set_cuda_event_acquire_failure_for_testing(const bool enabled) noexcept {
+        g_force_event_acquire_failure_for_testing.store(enabled, std::memory_order_release);
+    }
+
     void bridgeStreams(cudaStream_t from, cudaStream_t to) {
         if (from == to) {
             return;
+        }
+        // Null stream is the default stream — wait/record still valid, but a
+        // destroyed user stream handle can crash in the driver. Detect
+        // capture status first; any query failure means the stream is unusable.
+        if (from != nullptr) {
+            cudaStreamCaptureStatus capture = cudaStreamCaptureStatusNone;
+            if (cudaStreamIsCapturing(from, &capture) != cudaSuccess) {
+                (void)cudaGetLastError();
+                synchronize_stream_bridge_source(from, to, "capture status query failed");
+                return;
+            }
+            if (capture != cudaStreamCaptureStatusNone) {
+                // Cannot record events into an active capture without joining it.
+                synchronize_stream_bridge_source(from, to, "source stream is capturing");
+                return;
+            }
         }
 
         if (cudaEvent_t edge = CudaEventPool::instance().acquire()) {
@@ -106,14 +147,7 @@ namespace lfs::core {
             }
         }
 
-        const cudaError_t sync_status = cudaStreamSynchronize(from);
-        if (sync_status != cudaSuccess) {
-            ensure_cuda_success(
-                sync_status, "cudaStreamSynchronize(tensor stream bridge fallback)",
-                std::format("from_stream={}, to_stream={}; event edge also failed",
-                            static_cast<void*>(from), static_cast<void*>(to)),
-                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
-        }
+        synchronize_stream_bridge_source(from, to, "event edge unavailable or failed");
     }
 
 } // namespace lfs::core

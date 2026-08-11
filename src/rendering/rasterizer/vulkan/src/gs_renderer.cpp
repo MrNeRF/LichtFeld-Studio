@@ -1037,6 +1037,12 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     create_optional(pipeline_projection_forward_quant, "projection_forward_quant");
     create_optional(pipeline_projection_forward_quant_3dgut, "projection_forward_quant_3dgut");
     create_optional(pipeline_projection_forward_quant_survivors, "projection_forward_quant_survivors");
+    create_optional(pipeline_projection_forward_shn_f16, "projection_forward_shn_f16");
+    create_optional(pipeline_projection_forward_shn_f16_3dgut, "projection_forward_shn_f16_3dgut");
+    create_optional(pipeline_projection_forward_shn_f16_survivors, "projection_forward_shn_f16_survivors");
+    create_optional(pipeline_projection_forward_shn_q16, "projection_forward_shn_q16");
+    create_optional(pipeline_projection_forward_shn_q16_3dgut, "projection_forward_shn_q16_3dgut");
+    create_optional(pipeline_projection_forward_shn_q16_survivors, "projection_forward_shn_q16_survivors");
     create_optional(pipeline_prepare_visible_chain, "prepare_visible_chain");
     create_optional(pipeline_copy_visible_indices, "copy_visible_indices");
     create_optional(pipeline_cumsum_indirect.block_scan, "cumsum_block_scan_indirect");
@@ -1294,14 +1300,24 @@ void VulkanGSRenderer::executeProjectionForward(
     if (buffers.quant_pool) {
         projection_uniforms.lod_page_splats = buffers.pool_page_splats;
         tagged.push_back({buffers.page_frames.deviceBuffer, BufferUse::ComputeRead});
+    } else if (buffers.shN_q16) {
+        // Host packs n_cells into shN_layout_slots for the q16 shader path.
+        projection_uniforms.shN_layout_slots = buffers.shN_n_cells;
+        tagged.push_back({buffers.shN_bounds.deviceBuffer, BufferUse::ComputeRead});
     }
 
     auto& pipeline = buffers.quant_pool
                          ? (use_gut_projection ? pipeline_projection_forward_quant_3dgut
                                                : pipeline_projection_forward_quant)
+                     : buffers.shN_q16
+                         ? (use_gut_projection ? pipeline_projection_forward_shn_q16_3dgut
+                                               : pipeline_projection_forward_shn_q16)
+                     : buffers.shN_f16
+                         ? (use_gut_projection ? pipeline_projection_forward_shn_f16_3dgut
+                                               : pipeline_projection_forward_shn_f16)
                          : (use_gut_projection ? pipeline_projection_forward_3dgut
                                                : pipeline_projection_forward);
-    // Quant pipelines have 25 layouts; non-quant 24 — tagged size must match.
+    // Quant/q16 pipelines have 25 layouts; non-quant 24 — tagged size must match.
     executeCompute(
         {{num_splats, SUBGROUP_SIZE}},
         &projection_uniforms, sizeof(projection_uniforms),
@@ -2615,6 +2631,9 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     };
     if (buffers.quant_pool) {
         tagged.push_back({buffers.page_frames.deviceBuffer, BufferUse::ComputeRead}); // 29
+    } else if (buffers.shN_q16) {
+        survivor_uniforms.shN_layout_slots = buffers.shN_n_cells;
+        tagged.push_back({buffers.shN_bounds.deviceBuffer, BufferUse::ComputeRead}); // 29
     }
 
     // Indirect: plan() adds implicit IndirectRead on survivor_state (replaces L2629 handoff).
@@ -2623,6 +2642,8 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
         indirect::byteOffset(indirect::SurvivorState::kProjectionWordOffset),
         &survivor_uniforms, sizeof(survivor_uniforms),
         buffers.quant_pool ? pipeline_projection_forward_quant_survivors
+        : buffers.shN_q16  ? pipeline_projection_forward_shn_q16_survivors
+        : buffers.shN_f16  ? pipeline_projection_forward_shn_f16_survivors
                            : pipeline_projection_forward_survivors,
         tagged);
 }

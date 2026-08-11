@@ -34,6 +34,15 @@ namespace lfs::vis {
                                     std::size_t offset,
                                     std::size_t bytes);
 
+        // LIVE-CONTROL sub-view — offset/bytes re-resolved from SplatExportableStorage
+        // Control on every query. Matches resolve_exportable_device_ptr for CUDA so a
+        // capacity grow cannot leave the viewer binding a pre-grow region while FastGS
+        // already reads the live base.
+        VulkanExternalTensorStorage(
+            std::shared_ptr<VulkanExternalTensorStorage> parent,
+            std::shared_ptr<lfs::core::SplatExportableStorage::Control> control,
+            lfs::core::SplatExportableStorage::Region region);
+
         ~VulkanExternalTensorStorage();
 
         VulkanExternalTensorStorage(const VulkanExternalTensorStorage&) = delete;
@@ -44,7 +53,7 @@ namespace lfs::vis {
         [[nodiscard]] VkBuffer vkBuffer() const;
         [[nodiscard]] VkDeviceSize vkBufferSize() const;
         [[nodiscard]] VkDeviceSize vkOffset() const;
-        [[nodiscard]] std::size_t bytes() const { return bytes_; }
+        [[nodiscard]] std::size_t bytes() const;
 
     private:
         // Owned-variant members (only meaningful when parent_ is nullptr).
@@ -59,6 +68,11 @@ namespace lfs::vis {
         std::size_t bytes_ = 0;
         // Optional lifetime anchor (e.g. CUDA-side ExportableBlock). Released on dtor.
         std::shared_ptr<void> extra_owner_;
+        // Live-control sub-view (exportable SoA). When set, vkOffset()/bytes()
+        // re-resolve through Control rather than the baked offset_/bytes_.
+        std::shared_ptr<lfs::core::SplatExportableStorage::Control> live_control_;
+        lfs::core::SplatExportableStorage::Region live_region_ =
+            lfs::core::SplatExportableStorage::Means;
     };
 
     [[nodiscard]] std::expected<lfs::core::Tensor, std::string> makeVulkanExternalTensor(

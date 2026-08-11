@@ -1,6 +1,7 @@
 {
   "_language_name": "日本語",
   "menu": {
+    "view.performance_hud": "Performance HUD",
     "file": "ファイル",
     "file.new_project": "新規プロジェクト",
     "file.import_dataset": "データセットをインポート",
@@ -362,7 +363,6 @@
     "dataset.resize_factor": "リサイズ係数:",
     "dataset.max_width": "最大幅 (px):",
     "dataset.cpu_cache": "CPU キャッシュ:",
-    "dataset.fs_cache": "ファイルシステムキャッシュ:",
     "dataset.use_16bit_color": "16ビットカラー:",
     "dataset.output": "出力:",
     "dataset.test_every": "テスト間隔:",
@@ -441,7 +441,6 @@
     "tooltip.resize_factor": "トレーニング画像をダウンサンプル",
     "tooltip.max_width": "最大画像幅（ピクセル）",
     "tooltip.cpu_cache": "デコード済み画像をRAMにキャッシュ",
-    "tooltip.fs_cache": "デコード済み画像をディスクにキャッシュ",
     "tooltip.use_16bit_color": "16ビットカラー画像で学習（HDR）。キャッシュはロスレスJPEG 2000",
     "tooltip.test_every": "N枚ごとに画像をテストセットとして使用",
     "tooltip.enable_eval": "トレーニング中の評価を有効にする（テストセットでPSNR/SSIMを計算）。トレーニング速度がわずかに低下します。",
@@ -1223,6 +1222,7 @@
     "status_label": "ステータス: %s"
   },
   "input_settings": {
+    "action.toggle_performance_hud": "Toggle Performance HUD",
     "active_profile": "アクティブプロファイル:",
     "save_current_profile": "現在のプロファイルを保存",
     "reset_to_default": "デフォルトにリセット",
@@ -1830,6 +1830,7 @@
     "secondary_view": "セカンダリビュー",
     "split": "分割:",
     "gpu": "GPU",
+    "ui_fps": "UI FPS",
     "strategy_default": "デフォルト"
   },
   "plugin_manager": {
@@ -2068,6 +2069,33 @@
     "redo_named": "やり直す: {name}"
   },
   "ui": {
+    "perf_hud_title": "Performance",
+    "perf_this_process": "This process",
+    "perf_other_processes": "Other processes",
+    "perf_free": "Free",
+    "perf_cores": "cores",
+    "perf_process_cpu_note": "Process CPU, share of all cores",
+    "perf_tab_ledger": "Ledger",
+    "perf_ledger_closes": "Ledger closes",
+    "perf_ledger_gap": "Unattributed",
+    "perf_ledger_over": "Over-attributed, numbers unreliable",
+    "perf_ledger_attributed": "Attributed",
+    "perf_nested_disclosure": "Disclosure, not counted again",
+    "perf_no_owner": "No owner",
+    "perf_untracked": "Untracked",
+    "perf_retention": "Retention",
+    "perf_reclaimable": "Reclaimable",
+    "perf_required": "Required",
+    "perf_allocated": "Allocated",
+    "perf_slack": "Slack",
+    "perf_over_budget": "Over budget",
+    "perf_estimate_detected": "Estimate detected",
+    "perf_degenerate_pair": "Publisher reports required equal to allocated",
+    "perf_tracking_off": "Detailed memory tracking is off",
+    "perf_enable_tracking": "Enable",
+    "perf_expand": "Expand",
+    "perf_collapse": "Collapse",
+    "perf_hud_tooltip": "Show or hide the performance HUD",
     "near": "近距離",
     "far": "遠距離",
     "color": "カラー",

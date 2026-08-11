@@ -91,7 +91,7 @@ STRATEGY_LABEL_KEYS = {
     "igs+": "training.options.strategy.igs_plus",
 }
 
-DATASET_BOOL_PROPS = ["use_cpu_cache", "use_fs_cache", "use_16bit_color"]
+DATASET_BOOL_PROPS = ["use_cpu_cache", "use_16bit_color"]
 
 def _resolved_ppisp_activation_step(
     params,
@@ -365,7 +365,6 @@ class TrainingPanel(Panel):
         )
         model.bind_func("label_max_width", lambda: tr("training.dataset.max_width"))
         model.bind_func("label_cpu_cache", lambda: tr("training.dataset.cpu_cache"))
-        model.bind_func("label_fs_cache", lambda: tr("training.dataset.fs_cache"))
         model.bind_func(
             "label_use_16bit_color", lambda: tr("training.dataset.use_16bit_color")
         )
@@ -977,6 +976,8 @@ class TrainingPanel(Panel):
         def _status_mode():
             state = RuntimeState.trainer_state.value
             it = RuntimeState.iteration.value
+            if state == "stopping" and lf.trainer_saving_model():
+                return f"{tr('status.mode')} Saving model..."
             labels = {
                 "idle": tr("training_panel.idle"),
                 "ready": tr("status.ready") if it == 0 else tr("training_panel.resume"),
@@ -1295,6 +1296,8 @@ class TrainingPanel(Panel):
                 self._handle.dirty("progress_text")
                 self._handle.dirty("show_progress")
                 dirty = True
+            if state == "stopping":
+                self._handle.dirty("status_mode")
 
             ng = RuntimeState.num_gaussians.value
             if ng != self._last_num_gaussians:

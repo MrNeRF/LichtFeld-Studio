@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <tuple>
 
+// cstdint already provides std::uint64_t for preflight counters
+
 namespace fast_lfs::rasterization {
 
     struct FastGSSettings {
@@ -48,9 +50,12 @@ namespace fast_lfs::rasterization {
         void* grad_opacity_helper = nullptr;
         void* grad_color_helper = nullptr;
         void* primitive_normals = nullptr;
-        // Error handling for OOM
+        // Error handling for OOM / pathological frames
         bool success = false;
         bool resource_exhausted = false;
+        // 32-bit instance-count overflow (garbage extents). Soft
+        // fail the step, do not kill the training run.
+        bool instance_count_overflow = false;
         const char* error_message = nullptr;
     };
 
@@ -60,13 +65,15 @@ namespace fast_lfs::rasterization {
         const float* rotations_raw_ptr,        // Device pointer [N*4]
         const float* opacities_raw_ptr,        // Device pointer [N]
         const float* sh_coefficients_0_ptr,    // Device pointer [N*3]
-        const float* sh_coefficients_rest_ptr, // Device pointer to swizzled shN float buffer
+        const float* sh_coefficients_rest_ptr, // Device pointer to swizzled shN (float or u16 bitcast)
         const float* w2c_ptr,                  // Device pointer [4*4]
         const float* cam_position_ptr,         // Device pointer [3]
         float* image_ptr,                      // Device pointer [3*H*W]
         float* alpha_ptr,                      // Device pointer [H*W]
         float* depth_ptr,                      // Device pointer [H*W]
         float* normal_ptr,                     // Device pointer [3*H*W] or nullptr — enables the normal render channel
+        const float* bg_color_ptr,             // Device pointer [3] solid bg, or nullptr
+        const float* bg_image_ptr,             // Device pointer [3*H*W] CHW, or nullptr
         int n_primitives,
         int active_sh_bases,
         int sh_layout_bases,
@@ -79,7 +86,10 @@ namespace fast_lfs::rasterization {
         float near_plane,
         float far_plane,
         bool mip_filter = false,
-        cudaStream_t stream = nullptr); // nullptr → getCurrentCUDAStream()
+        cudaStream_t stream = nullptr,              // nullptr → getCurrentCUDAStream()
+        const float* sh_value_bounds_ptr = nullptr, // float2 per 256; null = fp32/IEEE-f16 shN
+        unsigned int sh_value_n_cells = 0,
+        unsigned int sh_value_bits = 0); // 0=fp32, 16=q16(+bounds) or IEEE f16
 
     void release_forward_context(const ForwardContext& forward_ctx);
 
@@ -117,9 +127,21 @@ namespace fast_lfs::rasterization {
         float center_y,
         bool mip_filter,
         DensificationType densification_type,
-        const FusedAdamSettings* fused_adam);
+        const FusedAdamSettings* fused_adam,
+        // shN representation binds, mirroring forward_raw. The backward
+        // kernel decodes sh_coefficients_rest with THESE, never with the fused
+        // Adam settings' copy — optimizer enablement (SH warmup) must not change
+        // how the coefficient buffer is interpreted. bits==16 with bounds → q16
+        // codes; bits==16 without bounds → IEEE f16 swizzle; bits==0 → fp32.
+        const float* shN_value_bounds_ptr = nullptr,
+        unsigned shN_value_n_cells = 0u,
+        unsigned shN_value_bits = 0u);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();
+
+    /// cudaPointerGetAttributes preflight call count (0 in Release/NDEBUG).
+    [[nodiscard]] std::uint64_t preflight_pointer_attr_call_count() noexcept;
+    void reset_preflight_pointer_attr_call_count() noexcept;
 
 } // namespace fast_lfs::rasterization

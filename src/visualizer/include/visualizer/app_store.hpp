@@ -8,10 +8,12 @@
 #include "core/reactive/store.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace lfs::diagnostics {
     struct VramProfilerSnapshot;
@@ -53,6 +55,35 @@ namespace lfs::vis {
 
             [[nodiscard]] bool operator==(const VramHud& other) const noexcept {
                 return visible == other.visible && snapshot == other.snapshot;
+            }
+        };
+
+        struct LFS_VIS_API PerfHudSnapshot {
+            std::size_t vram_process_bytes = 0;
+            std::size_t vram_used_bytes = 0;
+            std::size_t vram_total_bytes = 0;
+            std::size_t ram_process_bytes = 0;
+            std::size_t ram_used_bytes = 0;
+            std::size_t ram_total_bytes = 0;
+            float gpu_utilization_percent = -1.0f;
+            float process_cpu_percent = -1.0f;
+            std::vector<float> per_core_cpu_percent;
+            float rate = 0.0f;
+            bool gpu_utilization_valid = false;
+            bool cpu_valid = false;
+            bool ledger_valid = false; // false when profiler off → badge unknown (not GAP)
+            bool ledger_closed = false;
+            bool ledger_over = false;
+        };
+
+        struct LFS_VIS_API PerfHud {
+            bool visible = false;
+            bool expanded = true;
+            std::shared_ptr<const PerfHudSnapshot> snapshot;
+
+            [[nodiscard]] bool operator==(const PerfHud& other) const noexcept {
+                return visible == other.visible && expanded == other.expanded &&
+                       snapshot == other.snapshot;
             }
         };
 
@@ -149,6 +180,7 @@ namespace lfs::vis {
             CameraMetricsValue,
             GTMetricsOverlayConfigValue,
             VramHudValue,
+            PerfHudValue,
             ActiveTool,
             ActiveSubmode,
             TransformSpaceValue,
@@ -188,6 +220,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::optional<CameraMetrics>> camera_metrics;
         lfs::core::reactive::Observable<GTMetricsOverlayConfig> gt_metrics_overlay_config;
         lfs::core::reactive::Observable<VramHud> vram_hud;
+        lfs::core::reactive::Observable<PerfHud> perf_hud;
         lfs::core::reactive::Observable<std::string> active_tool;
         lfs::core::reactive::Observable<std::string> active_submode;
         lfs::core::reactive::Observable<int> transform_space;

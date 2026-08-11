@@ -2702,7 +2702,15 @@ namespace lfs::python {
 
         // Hot-reload redraw request functions
         m.def(
-            "request_redraw", []() { lfs::python::request_redraw(); }, "Request a UI redraw on next frame");
+            "request_redraw",
+            [](double delay) {
+                if (delay <= 0.0)
+                    lfs::python::request_redraw();
+                else
+                    lfs::python::request_redraw_after(delay);
+            },
+            nb::arg("delay") = 0.0,
+            "Request a UI redraw; with delay > 0, schedule it no later than that many seconds from now.");
         m.def(
             "consume_redraw_request", []() {
                 return lfs::python::consume_redraw_request();
@@ -4531,6 +4539,15 @@ namespace lfs::python {
 
         m.def("toggle_system_console", &toggle_system_console,
               "Toggle system console visibility");
+
+        m.def(
+            "toggle_vram_hud", []() { lfs::core::events::ui::ToggleVramHud{}.emit(); },
+            "Toggle the VRAM diagnostics HUD overlay");
+
+        m.def(
+            "is_perf_hud_visible",
+            []() -> bool { return lfs::vis::app_store().perf_hud.get().visible; },
+            "True when the performance HUD is currently shown");
 
         m.def(
             "is_windows_platform", []() -> bool {

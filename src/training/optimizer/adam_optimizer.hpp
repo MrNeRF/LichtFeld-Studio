@@ -6,6 +6,7 @@
 
 #include "core/splat_data.hpp"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cuda_runtime_api.h>
 #include <string>
@@ -43,15 +44,30 @@ namespace lfs::training {
     };
 
     struct AdamParamState {
-        lfs::core::Tensor grad;             // Gradient (transient, fp32)
-        lfs::core::Tensor exp_avg;          // Quantised first moment (m), uint8
-        lfs::core::Tensor exp_avg_sq;       // Quantised second moment (sqrt(v)), uint8
-        lfs::core::Tensor exp_avg_scale;    // Per-primitive m scale, fp32
-        lfs::core::Tensor exp_avg_sq_scale; // Per-primitive sqrt(v) scale, fp32
+        lfs::core::Tensor grad; // Gradient (transient, fp32)
+        // Legacy codec: separate uint8 m / sqrt(v) + per-primitive fp32 scales.
+        // Joint codec: exp_avg holds packed (u,log_s) bytes;
+        //   joint_bounds holds float4 per 256-splat block; exp_avg_sq/scales empty.
+        lfs::core::Tensor exp_avg;
+        lfs::core::Tensor exp_avg_sq;
+        lfs::core::Tensor exp_avg_scale;
+        lfs::core::Tensor exp_avg_sq_scale;
+        lfs::core::Tensor joint_bounds; // [n_bounds, 4] fp32; joint codec only
+        int joint_bits = 0;             // 0=legacy, 8=SH, 16=non-SH
         int64_t step_count = 0;
-        size_t capacity = 0; // Allocated capacity
+        size_t capacity = 0; // Allocated capacity (moment rows / float cells)
         size_t size = 0;     // Used size
+        [[nodiscard]] bool is_joint() const noexcept { return joint_bits != 0; }
     };
+
+    /// grow-only joint (u,log_s) bounds table. Reuses capacity via append_zeros
+    /// when possible; only driver-allocates when nb exceeds current capacity.
+    /// When @p zero_all is true (compact path), existing storage is zeroed in place.
+    void ensure_joint_bounds_capacity(lfs::core::Tensor& joint_bounds,
+                                      size_t n_prims,
+                                      size_t capacity_prims,
+                                      lfs::core::Device device,
+                                      bool zero_all = false);
 
     enum class ParamType {
         Means,
@@ -64,10 +80,14 @@ namespace lfs::training {
 
     struct FastGSFusedAdamParam {
         float* param = nullptr;
-        uint8_t* exp_avg_q = nullptr;
-        uint8_t* exp_avg_sq_q = nullptr;
-        float* exp_avg_scale = nullptr;
-        float* exp_avg_sq_scale = nullptr;
+        uint8_t* joint_packed = nullptr;
+        float* joint_bounds = nullptr;
+        int joint_bits = 0;
+        // SH value quant (shN only)
+        float* sh_value_bounds = nullptr;
+        int sh_value_bits = 0;
+        int sh_value_n_cells = 0;
+        int n_primitives = 0;
         const bool* frozen_mask = nullptr;
         int frozen_mask_size = 0;
         float frozen_lr_scale = 0.0f;
@@ -144,6 +164,11 @@ namespace lfs::training {
         // MCMC operations (atomically update params + optimizer state)
         void add_new_params(ParamType type, const lfs::core::Tensor& new_values, bool validate = false);
         void add_new_params_gather(ParamType type, const lfs::core::Tensor& indices);
+
+        // preflight exportable capacity for a densify grow of
+        /// `n_new` rows BEFORE any free_mask / param mutation. Returns false when
+        /// capacity-ensure fails so callers can abort with zero torn state.
+        [[nodiscard]] bool preflight_grow_capacity(size_t n_new);
         void relocate_params_at_indices_gpu(ParamType type, const int64_t* indices_device, size_t n_indices);
 
         // Low-level state manipulation
@@ -166,7 +191,13 @@ namespace lfs::training {
         // Control notifications for external mutations
         void reset_state(ParamType type);
 
+        /// Telemetry: times the capacity=0 / no-headroom slow grow path has fired
+        /// (process-wide). Loud LOG_WARN is emitted at each site; tests assert this counter.
+        [[nodiscard]] static uint64_t slow_path_grow_count() noexcept;
+        static void reset_slow_path_grow_count() noexcept;
+
     private:
+        static void note_slow_path_grow(const char* site, const std::string& name);
         AdamConfig config_;
         lfs::core::SplatData& splat_data_;
         std::unordered_map<std::string, AdamParamState> states_;
@@ -191,7 +222,6 @@ namespace lfs::training {
         // reset rows only need their scale zeroed.
         void alloc_quantized_state(ParamType type, AdamParamState& state, const lfs::core::Tensor& param,
                                    size_t moment_capacity, size_t prim_capacity);
-        void quantize_float_moments(ParamType type, AdamParamState& state, lfs::core::Tensor&& exp_avg, lfs::core::Tensor&& exp_avg_sq);
         size_t scale_row_count(ParamType type) const;
         const bool* frozen_mask_ptr() const;
         int frozen_mask_size() const;

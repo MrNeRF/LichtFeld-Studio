@@ -29,7 +29,6 @@ namespace lfs::core {
     public:
         struct Config {
             size_t virtual_size = 32ULL << 30; // 32GB virtual address space (free!)
-            size_t initial_commit = 128 << 20; // 128MB initial physical memory
             size_t max_physical = 8ULL << 30;  // 8GB max physical memory
             size_t granularity = 2 << 20;      // 2MB allocation granularity
             size_t alignment = 256;
@@ -65,6 +64,7 @@ namespace lfs::core {
 
         struct MemoryInfo {
             size_t arena_capacity = 0;
+            size_t required_bytes = 0;
             size_t current_usage = 0;
             size_t peak_usage = 0;
             size_t gpu_free = 0;
@@ -121,11 +121,33 @@ namespace lfs::core {
             int device = -1;
 
             // Statistics
+            // Logical high-water since the last explicit shrink/reset boundary.
             std::atomic<size_t> peak_usage{0};
+            // Lifetime high-water retained across boundary decommits so teardown
+            // diagnostics still report the work done before backing was released.
+            std::atomic<size_t> lifetime_peak_usage{0};
             std::atomic<size_t> peak_usage_period{0};
             std::atomic<size_t> total_allocated{0};
             std::atomic<size_t> realloc_count{0};
             std::chrono::steady_clock::time_point last_log_time;
+        };
+
+        struct GrowthTiming {
+            mutable std::mutex mutex;
+            uint64_t commit_attempts_warmup = 0;
+            uint64_t commit_attempts_steady = 0;
+            uint64_t commit_events_warmup = 0;
+            uint64_t commit_events_steady = 0;
+            uint64_t commit_time_us_warmup = 0;
+            uint64_t commit_time_us_steady = 0;
+            uint64_t growth_path_time_us_warmup = 0;
+            uint64_t growth_path_time_us_steady = 0;
+            uint64_t growth_sync_time_us_warmup = 0;
+            uint64_t growth_sync_time_us_steady = 0;
+            uint64_t b1_events = 0;
+            uint64_t b1_time_us = 0;
+            uint64_t b3_events = 0;
+            uint64_t b3_time_us = 0;
         };
 
         std::unordered_map<int, std::unique_ptr<Arena>> device_arenas_;
@@ -136,6 +158,7 @@ namespace lfs::core {
         mutable std::mutex frame_mutex_;
         std::atomic<uint64_t> frame_counter_{0};
         std::atomic<uint64_t> generation_counter_{0};
+        std::shared_ptr<GrowthTiming> growth_timing_ = std::make_shared<GrowthTiming>();
 
         // Performance tracking
         std::chrono::steady_clock::time_point creation_time_;
@@ -232,6 +255,12 @@ namespace lfs::core {
         std::vector<BufferHandle> get_frame_buffers(uint64_t frame_id) const;
         void reset_frame(uint64_t frame_id); // Keeps allocation, resets offset
         void cleanup_frames(int keep_recent = 3);
+        // Named EXACT-3 boundaries only. Both methods globally gate begin_frame,
+        // require zero active training/render frames, and device-synchronize
+        // before changing physical mappings. B1 is non-blocking because its caller
+        // holds topology locks; B3 waits for an already-active frame to finish.
+        bool shrink_to_current_at_boundary();
+        bool release_at_boundary();
         void full_reset();
         bool install_external_backing(ExternalBacking backing);
         bool try_install_external_backing(ExternalBacking backing);
@@ -273,8 +302,14 @@ namespace lfs::core {
         bool grow_arena(Arena& arena, size_t required_size);
         size_t align_size(size_t size) const;
         void record_allocation(uint64_t frame_id, const BufferHandle& handle);
-        bool commit_more_memory(Arena& arena, size_t required_size);
+        bool commit_more_memory(Arena& arena, size_t required_size, uint64_t frame_id);
         void decommit_unused_memory(Arena& arena);
+        bool shrink_at_boundary(bool release_all);
+        void record_commit_timing(uint64_t frame_id, uint64_t elapsed_us, bool committed);
+        void record_growth_path_timing(uint64_t frame_id, uint64_t elapsed_us,
+                                       uint64_t sync_elapsed_us);
+        void record_boundary_timing(bool release_all, uint64_t frame_count, uint64_t elapsed_us);
+        void dump_growth_timing() const;
         bool is_vmm_supported(int device) const;
         void empty_cuda_cache();
     };

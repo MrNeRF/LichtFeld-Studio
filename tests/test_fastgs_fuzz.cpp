@@ -74,10 +74,19 @@ namespace {
 
     void expect_adam_state_finite(const AdamOptimizer& opt, ParamType type) {
         const auto& state = adam_state(opt, type);
+        // Joint codec: exp_avg is uint8 packed, exp_avg_sq/scales empty; check bounds.
+        if (state.is_joint()) {
+            ASSERT_TRUE(state.joint_bounds.is_valid());
+            EXPECT_FALSE(has_nan(state.joint_bounds));
+            EXPECT_FALSE(has_inf(state.joint_bounds));
+            return;
+        }
         EXPECT_FALSE(has_nan(state.exp_avg));
         EXPECT_FALSE(has_inf(state.exp_avg));
-        EXPECT_FALSE(has_nan(state.exp_avg_sq));
-        EXPECT_FALSE(has_inf(state.exp_avg_sq));
+        if (state.exp_avg_sq.is_valid()) {
+            EXPECT_FALSE(has_nan(state.exp_avg_sq));
+            EXPECT_FALSE(has_inf(state.exp_avg_sq));
+        }
         if (state.exp_avg_scale.is_valid()) {
             EXPECT_FALSE(has_nan(state.exp_avg_scale));
             EXPECT_FALSE(has_inf(state.exp_avg_scale));
@@ -86,6 +95,29 @@ namespace {
             EXPECT_FALSE(has_nan(state.exp_avg_sq_scale));
             EXPECT_FALSE(has_inf(state.exp_avg_sq_scale));
         }
+    }
+
+    // |m| proxy: joint has no scales; zero-grad should leave moments near zero.
+    float first_moment_scale_proxy(const AdamParamState& state) {
+        if (state.is_joint()) {
+            // Zero codes under zero bounds → m=0; non-zero activity expands bounds.
+            if (!state.joint_bounds.is_valid())
+                return 0.0f;
+            return state.joint_bounds.abs().sum().item<float>();
+        }
+        if (state.exp_avg_scale.is_valid())
+            return state.exp_avg_scale.abs().sum().item<float>();
+        return 0.0f;
+    }
+
+    float second_moment_scale_proxy(const AdamParamState& state) {
+        if (state.is_joint()) {
+            // Joint packs (u,log_s) together; reuse bounds energy as v proxy.
+            return first_moment_scale_proxy(state);
+        }
+        if (state.exp_avg_sq_scale.is_valid())
+            return state.exp_avg_sq_scale.abs().sum().item<float>();
+        return 0.0f;
     }
 
     int count_nonzero(const Tensor& t) {
@@ -571,11 +603,11 @@ TEST_F(FastGSFuzzTest, Backward_ZeroGradient) {
     auto grad_out = Tensor::zeros_like(result->first.image);
     fast_rasterize_backward(result->second, grad_out, *splat, *opt, {});
 
-    // Quantized moments dequantize to zero when their scales are zero.
+    // Zero dL → moments stay at the zero fixed point (legacy scales 0; joint bounds 0).
     const auto& means_state = adam_state(*opt, ParamType::Means);
     expect_adam_state_finite(*opt, ParamType::Means);
-    EXPECT_LT(means_state.exp_avg_scale.abs().sum().item<float>(), 1e-6f);
-    EXPECT_LT(means_state.exp_avg_sq_scale.abs().sum().item<float>(), 1e-6f);
+    EXPECT_LT(first_moment_scale_proxy(means_state), 1e-6f);
+    EXPECT_LT(second_moment_scale_proxy(means_state), 1e-6f);
 }
 
 TEST_F(FastGSFuzzTest, Backward_LargeGradient) {
@@ -1171,10 +1203,10 @@ TEST_F(FastGSFuzzTest, GradientStability_MultipleIterations) {
 
         const auto& means_state = adam_state(*opt, ParamType::Means);
         expect_adam_state_finite(*opt, ParamType::Means);
-        EXPECT_GT(means_state.exp_avg_scale.abs().sum().item<float>(), 0.0f)
-            << "Adam first-moment scales were not written at iteration " << iter;
-        EXPECT_GT(means_state.exp_avg_sq_scale.abs().sum().item<float>(), 0.0f)
-            << "Adam second-moment scales were not written at iteration " << iter;
+        EXPECT_GT(first_moment_scale_proxy(means_state), 0.0f)
+            << "Adam first-moment activity not written at iteration " << iter;
+        EXPECT_GT(second_moment_scale_proxy(means_state), 0.0f)
+            << "Adam second-moment activity not written at iteration " << iter;
 
         cleanup_arena();
     }

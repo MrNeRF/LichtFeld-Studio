@@ -3,11 +3,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gsplat_rasterizer.hpp"
+#include "core/crash_handler.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
 #include "core/logger.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "gsplat/Ops.h"
+#include "lfs/training/sh_value_quant_kernels.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include <array>
 #include <cassert>
@@ -45,8 +49,6 @@ namespace lfs::training {
         auto& arena = core::GlobalArenaManager::instance().get_arena();
         uint64_t frame_id = arena.begin_frame(core::getCurrentCUDAStream());
         auto arena_allocator = arena.get_allocator(frame_id);
-        void* isect_ids_to_free = nullptr;
-        void* flatten_ids_to_free = nullptr;
         try {
 
             // Full image dimensions
@@ -94,7 +96,7 @@ namespace lfs::training {
             auto scales = ensure_contiguous(gaussian_model.get_scaling());    // [N, 3] exp applied
             auto quats = ensure_contiguous(gaussian_model.get_rotation());    // [N, 4] normalized
             auto sh0 = ensure_contiguous(gaussian_model.sh0());               // [N, 1, 3]
-            auto shN = ensure_contiguous(gaussian_model.shN());               // swizzled 1D SH-rest buffer
+            auto shN = ensure_contiguous(gaussian_model.shN());               // swizzled 1D SH-rest (float or q16)
             const uint32_t sh_degree = static_cast<uint32_t>(gaussian_model.get_active_sh_degree());
 
             // Squeeze opacities if needed
@@ -141,7 +143,40 @@ namespace lfs::training {
             const float* scales_ptr = scales.ptr<float>();
             const float* quats_ptr = quats.ptr<float>();
             const float* sh0_ptr = sh0.ptr<float>();
-            const float* shN_ptr = (sh_degree > 0 && shN.is_valid() && shN.numel() > 0) ? shN.ptr<float>() : nullptr;
+            // gsplat is float-native — dequant q16 shN into a temporary float4
+            // buffer (does not mutate resident storage). FastGS path decodes in-registers.
+            core::Tensor shN_dequant_temp;
+            const float* shN_ptr = nullptr;
+            if (sh_degree > 0 && shN.is_valid() && shN.numel() > 0) {
+                if (gaussian_model.shN_value_quantized() &&
+                    gaussian_model.shN_value_bounds().is_valid()) {
+                    const auto n_prims = static_cast<std::size_t>(gaussian_model.size());
+                    const auto rest =
+                        static_cast<std::uint32_t>(gaussian_model.max_sh_coeffs_rest());
+                    const auto n_floats = core::sh_swizzled_float_count(n_prims, rest);
+                    shN_dequant_temp = core::Tensor::zeros(
+                        core::TensorShape({n_floats}), core::Device::CUDA, core::DataType::Float32);
+                    const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
+                    lfs::training::sh_value::decode_shN_u16_to_float4(
+                        reinterpret_cast<const std::uint16_t*>(q16.codes),
+                        q16.bounds,
+                        shN_dequant_temp.ptr<float>(),
+                        n_prims,
+                        rest,
+                        fwd_stream);
+                    shN_ptr = shN_dequant_temp.ptr<float>();
+                } else {
+                    if (shN.dtype() != core::DataType::Float32) {
+                        LOG_ERROR(
+                            "gsplat SH-rest requires Float32 or valid q16 codes+bounds; "
+                            "refusing to reinterpret non-Float32 storage");
+                        throw std::runtime_error(
+                            "gsplat_rasterize_forward: unsupported SH-rest storage; "
+                            "expected Float32 or valid q16 codes+bounds");
+                    }
+                    shN_ptr = shN.ptr<float>();
+                }
+            }
 
             // Background color and image pointers
             // bg_color and bg_image are mutually exclusive - use one or the other
@@ -352,8 +387,8 @@ namespace lfs::training {
                 thin_prism_ptr,
                 result,
                 fwd_stream);
-            isect_ids_to_free = result.isect_ids;
-            flatten_ids_to_free = result.flatten_ids;
+            // isect_ids / flatten_ids are borrowed from TLS high-water cache —
+            // never transfer ownership or free on error paths.
 
             // Build RenderOutput - wrap raw pointers in tensor views
             RenderOutput render_output;
@@ -484,7 +519,7 @@ namespace lfs::training {
             ctx.last_ids_ptr = last_ids_ptr_out;
             ctx.compensations_ptr = compensations_ptr_out;
 
-            // Store flatten_ids from result (allocated by gsplat, must be freed later)
+            // Borrowed TLS high-water pointers (valid through backward; do not free)
             ctx.isect_ids_ptr = result.isect_ids;
             ctx.flatten_ids_ptr = result.flatten_ids;
             ctx.n_isects = result.n_isects;
@@ -495,7 +530,10 @@ namespace lfs::training {
             ctx.scales = scales;
             ctx.opacities = opacities;
             ctx.sh0 = sh0;
-            ctx.shN = shN;
+            // backward calls ctx.shN.ptr<float>(). When resident shN is q16
+            // (Float16 bit-patterns), the forward dequant temp is the float4 buffer
+            // the kernels actually read — must save that, not the raw codes.
+            ctx.shN = shN_dequant_temp.is_valid() ? shN_dequant_temp : shN;
 
             // Store camera pointers
             ctx.viewmat_ptr = viewmat_ptr;
@@ -539,12 +577,7 @@ namespace lfs::training {
 
             return std::pair{render_output, ctx};
         } catch (...) {
-            if (isect_ids_to_free != nullptr) {
-                cudaFree(isect_ids_to_free);
-            }
-            if (flatten_ids_to_free != nullptr) {
-                cudaFree(flatten_ids_to_free);
-            }
+            // Isect buffers are TLS high-water — leave them; only unwind arena.
             // End on the same stream begin_frame used (same guard → same value),
             // not the streamless device-sync path, so the arena frame chain stays
             // intact for the next frame instead of falling back to a full sync.
@@ -850,25 +883,10 @@ namespace lfs::training {
                     stream);
             }
 
-            // Free internally allocated buffers from forward
-            if (ctx.isect_ids_ptr != nullptr) {
-                cudaFreeAsync(ctx.isect_ids_ptr, stream);
-            }
-            if (ctx.flatten_ids_ptr != nullptr) {
-                cudaFreeAsync(ctx.flatten_ids_ptr, stream);
-            }
-
-            // End arena frame to release memory from forward pass — on the
-            // backward's stream (where its kernels ran), not the re-derived
-            // current stream.
+            // Isect/flatten ids stay in the TLS high-water cache for the next
+            // forward (no per-step cudaFree). Arena still ends with the frame.
             arena.end_frame(ctx.frame_id, stream);
         } catch (...) {
-            if (ctx.isect_ids_ptr != nullptr) {
-                cudaFreeAsync(ctx.isect_ids_ptr, stream);
-            }
-            if (ctx.flatten_ids_ptr != nullptr) {
-                cudaFreeAsync(ctx.flatten_ids_ptr, stream);
-            }
             arena.end_frame(ctx.frame_id, stream);
             throw;
         }
@@ -884,5 +902,16 @@ namespace lfs::training {
                !gsplat_thread_caches.alpha_chw.is_valid() &&
                !gsplat_thread_caches.depth_chw.is_valid();
     }
+
+    namespace {
+        // main-thread TLS gsplat caches released before pool shutdown.
+        const bool g_gsplat_tls_release_hook_registered = [] {
+            lfs::core::register_gpu_pre_shutdown_hook([]() noexcept {
+                (void)release_gsplat_rasterizer_thread_local_caches();
+                (void)gsplat_lfs::release_intersect_thread_local_cache();
+            });
+            return true;
+        }();
+    } // namespace
 
 } // namespace lfs::training

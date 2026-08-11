@@ -218,8 +218,7 @@
     background-color: @{viewport.metrics_bg};
 }
 
-.vram-hud-counters-header,
-.vram-hud-breakdown-header {
+.vram-hud-counters-header {
     color: @{text_dim};
 }
 
@@ -227,27 +226,95 @@
     color: @{text_dim};
 }
 
-.vram-hud-breakdown-name,
-.vram-hud-breakdown-bytes {
+.perf-hud-tracking-off,
+.perf-hud-ledger-header {
+    background-color: @{viewport.metrics_bg};
+    border-color: @{alpha(border,0.39)};
     color: @{text};
 }
 
-.vram-hud-breakdown-pct {
+.perf-hud-enable-tracking {
+    background-color: @{blend(surface,primary,button.tint_normal)};
+    border-color: @{blend(surface,primary,button.tint_normal)};
+    color: @{text};
+}
+
+.perf-hud-enable-tracking:hover {
+    background-color: @{blend(surface,primary,button.tint_hover)};
+    border-color: @{blend(surface,primary,button.tint_hover)};
+}
+
+.perf-hud-ledger-header-detail,
+.perf-hud-ledger-note,
+.perf-hud-ledger-disclosure,
+.perf-hud-ledger-row-header {
     color: @{text_dim};
 }
 
-.vram-hud-breakdown-row.unaccounted .vram-hud-breakdown-name,
-.vram-hud-breakdown-row.unaccounted .vram-hud-breakdown-bytes {
-    color: @{text_dim};
+.perf-hud-ledger-process,
+.perf-hud-ledger-name,
+.perf-hud-ledger-allocated {
+    color: @{text};
 }
 
-.vram-hud-breakdown-row.total {
+.perf-hud-ledger-row.root {
     border-top-color: @{alpha(border,0.39)};
 }
 
-.vram-hud-breakdown-row.total .vram-hud-breakdown-name,
-.vram-hud-breakdown-row.total .vram-hud-breakdown-bytes {
-    color: @{text};
+.perf-hud-ledger-row.has-children:hover {
+    background-color: @{viewport.hover_bg};
+}
+
+.perf-hud-ledger-toggle {
+    color: @{text_dim};
+}
+
+.perf-hud-ledger-share {
+    background-color: @{statusbar.progress_bg};
+}
+
+.perf-hud-ledger-share-fill {
+    background-color: @{primary};
+}
+
+.perf-hud-ledger-closure.closed,
+.perf-hud-ledger-row.closed .perf-hud-ledger-badge,
+.perf-hud-ledger-row.exact .perf-hud-ledger-badge {
+    border-color: @{success};
+    color: @{success};
+}
+
+.perf-hud-ledger-closure.gap,
+.perf-hud-ledger-row.gap .perf-hud-ledger-badge,
+.perf-hud-ledger-row.slack .perf-hud-ledger-badge,
+.perf-hud-ledger-row.over-budget .perf-hud-ledger-badge {
+    border-color: @{warning};
+    color: @{warning};
+}
+
+.perf-hud-ledger-closure.over,
+.perf-hud-ledger-row.over .perf-hud-ledger-badge,
+.perf-hud-ledger-row.estimate .perf-hud-ledger-badge,
+.perf-hud-ledger-row.degenerate .perf-hud-ledger-badge {
+    border-color: @{error};
+    color: @{error};
+}
+
+.perf-hud-ledger-over-banner {
+    background-color: @{alpha(error,0.12)};
+    border-color: @{error};
+    color: @{error};
+}
+
+.perf-hud-ledger-row.nested .perf-hud-ledger-name,
+.perf-hud-ledger-row.nested .perf-hud-ledger-allocated,
+.perf-hud-ledger-row.nested .perf-hud-ledger-badge {
+    color: @{text_dim};
+}
+
+.perf-hud-ledger-row.unjustified .perf-hud-ledger-name,
+.perf-hud-ledger-row.unjustified .perf-hud-ledger-allocated {
+    color: @{warning};
 }
 
 .vram-hud-allocs-summary-label,
@@ -295,13 +362,13 @@
     border-bottom-color: @{alpha(border,0.39)};
 }
 
-#vram-hud-filter {
+.vram-hud-filter-input {
     background-color: @{viewport.metrics_bg};
     border-color: @{alpha(border,0.39)};
     color: @{text};
 }
 
-#vram-hud-filter:focus {
+.vram-hud-filter-input:focus {
     border-color: @{primary};
 }
 
@@ -341,4 +408,29 @@
 .viewport-status-path,
 .viewport-status-stage {
     color: @{text_dim};
+}
+
+.perf-hud-strip {
+    background-color: @{viewport.panel_bg};
+    border-color: @{viewport.panel_border};
+    color: @{text};
+}
+.perf-hud-strip-rate, .perf-hud-strip-value { color: @{text_dim}; }
+.perf-hud-meter-track { background-color: @{statusbar.progress_bg}; }
+.perf-hud-meter-fill { background-color: @{primary}; }
+.perf-hud-meter-fill.process { background-color: @{primary}; }
+.perf-hud-meter-fill.other { background-color: @{alpha(text_dim,0.45)}; }
+.perf-hud-meter-fill.free { background-color: @{alpha(text_dim,0.20)}; }
+.perf-hud-strip-badge { color: @{success}; }
+.perf-hud-strip-meter.warn .perf-hud-meter-fill,
+.perf-hud-meter-fill.warn { background-color: @{warning}; }
+.perf-hud-strip-meter.crit .perf-hud-meter-fill,
+.perf-hud-meter-fill.crit { background-color: @{error}; }
+.perf-hud-core-bar { background-color: @{primary}; }
+
+.perf-hud-sparkline .histogram-bar-fill {
+    background-color: @{primary};
+}
+.perf-hud-meter-track {
+    background-color: @{statusbar.progress_bg};
 }

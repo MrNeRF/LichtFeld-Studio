@@ -1,6 +1,7 @@
 {
   "_language_name": "简体中文",
   "menu": {
+    "view.performance_hud": "Performance HUD",
     "file": "文件",
     "file.new_project": "新建项目",
     "file.import_dataset": "导入数据集",
@@ -362,7 +363,6 @@
     "dataset.resize_factor": "缩放系数:",
     "dataset.max_width": "最大宽度 (px):",
     "dataset.cpu_cache": "CPU 缓存:",
-    "dataset.fs_cache": "文件系统缓存:",
     "dataset.use_16bit_color": "16位色彩:",
     "dataset.output": "输出:",
     "dataset.test_every": "测试间隔:",
@@ -445,7 +445,6 @@
     "tooltip.resize_factor": "下采样训练图像",
     "tooltip.max_width": "最大图像宽度（像素）",
     "tooltip.cpu_cache": "将解码图像缓存到RAM",
-    "tooltip.fs_cache": "将解码图像缓存到磁盘",
     "tooltip.use_16bit_color": "使用16位色彩图像训练（HDR）；缓存为无损JPEG 2000",
     "tooltip.test_every": "每N张图像使用一张作为测试集",
     "tooltip.enable_eval": "启用训练期间的评估（在测试集上计算PSNR/SSIM）。会略微降低训练速度。",
@@ -1242,6 +1241,7 @@
     "status_label": "状态：%s"
   },
   "input_settings": {
+    "action.toggle_performance_hud": "Toggle Performance HUD",
     "title": "输入设置",
     "active_profile": "活动配置文件：",
     "save_current_profile": "保存当前配置文件",
@@ -1769,6 +1769,7 @@
     "secondary_view": "副视图",
     "split": "分割：",
     "gpu": "GPU",
+    "ui_fps": "UI FPS",
     "strategy_default": "默认"
   },
   "plugin_manager": {
@@ -2075,6 +2076,33 @@
     "redo_named": "重做：{name}"
   },
   "ui": {
+    "perf_hud_title": "Performance",
+    "perf_this_process": "This process",
+    "perf_other_processes": "Other processes",
+    "perf_free": "Free",
+    "perf_cores": "cores",
+    "perf_process_cpu_note": "Process CPU, share of all cores",
+    "perf_tab_ledger": "Ledger",
+    "perf_ledger_closes": "Ledger closes",
+    "perf_ledger_gap": "Unattributed",
+    "perf_ledger_over": "Over-attributed, numbers unreliable",
+    "perf_ledger_attributed": "Attributed",
+    "perf_nested_disclosure": "Disclosure, not counted again",
+    "perf_no_owner": "No owner",
+    "perf_untracked": "Untracked",
+    "perf_retention": "Retention",
+    "perf_reclaimable": "Reclaimable",
+    "perf_required": "Required",
+    "perf_allocated": "Allocated",
+    "perf_slack": "Slack",
+    "perf_over_budget": "Over budget",
+    "perf_estimate_detected": "Estimate detected",
+    "perf_degenerate_pair": "Publisher reports required equal to allocated",
+    "perf_tracking_off": "Detailed memory tracking is off",
+    "perf_enable_tracking": "Enable",
+    "perf_expand": "Expand",
+    "perf_collapse": "Collapse",
+    "perf_hud_tooltip": "Show or hide the performance HUD",
     "near": "近端",
     "far": "远端",
     "color": "颜色",

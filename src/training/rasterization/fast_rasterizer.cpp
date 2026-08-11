@@ -3,10 +3,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "fast_rasterizer.hpp"
+#include "core/crash_handler.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/sh_value_quant.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "training/kernels/grad_alpha.hpp"
+#include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -373,19 +378,48 @@ namespace lfs::training {
         // Use adjusted cx/cy for tile rendering
         fast_lfs::rasterization::ForwardContext forward_ctx;
         try {
+            const float* bg_image_ptr =
+                has_background_image(bg_image) ? bg_image.ptr<float>() : nullptr;
+            const float* bg_color_ptr =
+                bg_image_ptr != nullptr
+                    ? nullptr
+                    : (bg_color.is_valid() && bg_color.numel() >= 3 ? bg_color.ptr<float>() : nullptr);
+            // q16: Float16 codes + bounds. IEEE f16 float4-swizzle: Float16 without
+            // bounds (exportable GUI). fp32: Float32 float4-swizzle.
+            // Generation-checked fetch: never pass a baked exportable pointer that
+            // survived a capacity grow.
+            const bool shN_q16 = gaussian_model.shN_value_quantized();
+            const bool shN_f16 = gaussian_model.shN_ieee_f16();
+            const float* shN_ptr = nullptr;
+            const float* shN_bounds_ptr = nullptr;
+            unsigned shN_n_cells = 0u;
+            if (shN_q16) {
+                const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
+                shN_ptr = q16.codes;
+                shN_bounds_ptr = q16.bounds;
+                shN_n_cells = q16.n_cells_per_prim;
+            } else if (shN_f16) {
+                shN_ptr = static_cast<const float*>(
+                    lfs::core::resolve_exportable_device_ptr(gaussian_model.shN()));
+            } else {
+                shN_ptr = gaussian_model.shN().ptr<float>();
+            }
+            const unsigned shN_bits = (shN_q16 || shN_f16) ? 16u : 0u;
             forward_ctx = fast_lfs::rasterization::forward_raw(
                 means.ptr<float>(),
                 raw_scales.ptr<float>(),
                 raw_rotations.ptr<float>(),
                 raw_opacities.ptr<float>(),
                 sh0.ptr<float>(),
-                shN.ptr<float>(),
+                shN_ptr,
                 w2c_ptr,
                 cam_position_ptr,
                 image.ptr<float>(),
                 alpha.ptr<float>(),
                 depth.ptr<float>(),
                 render_normal ? normal.ptr<float>() : nullptr,
+                bg_color_ptr,
+                bg_image_ptr,
                 n_primitives,
                 active_sh_bases,
                 sh_layout_bases,
@@ -398,7 +432,10 @@ namespace lfs::training {
                 near_plane,
                 far_plane,
                 mip_filter,
-                raster_stream);
+                raster_stream,
+                shN_bounds_ptr,
+                shN_n_cells,
+                shN_bits);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
             dump_crash_data(
@@ -451,6 +488,19 @@ namespace lfs::training {
             const std::string message = forward_ctx.error_message
                                             ? forward_ctx.error_message
                                             : "unknown forward failure";
+            // instance-count overflow is a bad frame, not a run-killer.
+            // FailedPrecondition → trainer skips the step and continues.
+            if (forward_ctx.instance_count_overflow) {
+                return std::unexpected(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::CUDA,
+                    .user_message =
+                        "Pathological splat extents produced more tile instances "
+                        "than the 32-bit FastGS path can represent; skipping step.",
+                    .detail = message,
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
             return std::unexpected(lfs::make_error(lfs::ErrorInit{
                 .code = forward_ctx.resource_exhausted
                             ? lfs::ErrorCode::ResourceExhausted
@@ -473,7 +523,8 @@ namespace lfs::training {
         RenderOutput render_output;
         const cudaStream_t stream = image.stream();
 
-        compose_background_in_place(image, alpha, bg_color, bg_image, height, width, stream, false);
+        // background is composed inside blend_cu (single write).
+        // No separate full-image compose pass.
 
         render_output.image = image;
         render_output.alpha = alpha;
@@ -659,18 +710,24 @@ namespace lfs::training {
             }
         }
 
+        // blend_backward_cu does not read the image buffer
+        // ((void)image in the kernel) — it reconstructs transmittance from
+        // blended image in ctx (one-image VRAM already resident for the
+        // loss path); do not allocate a separate pre-blend cache.
         auto raw_image = ctx.image;
-        compose_background_in_place(raw_image, ctx.alpha, ctx.bg_color, ctx.bg_image, H, W, stream, true);
 
         fast_lfs::rasterization::FusedAdamSettings fused_adam;
         const auto optimizer_fused = optimizer.prepare_fastgs_fused_adam(iteration, stream);
         auto convert_param = [](const FastGSFusedAdamParam& src) {
             fast_lfs::rasterization::FusedAdamParam dst;
             dst.param = src.param;
-            dst.exp_avg_q = src.exp_avg_q;
-            dst.exp_avg_sq_q = src.exp_avg_sq_q;
-            dst.exp_avg_scale = src.exp_avg_scale;
-            dst.exp_avg_sq_scale = src.exp_avg_sq_scale;
+            dst.joint_packed = src.joint_packed;
+            dst.joint_bounds = src.joint_bounds;
+            dst.joint_bits = src.joint_bits;
+            dst.sh_value_bounds = src.sh_value_bounds;
+            dst.sh_value_bits = src.sh_value_bits;
+            dst.sh_value_n_cells = src.sh_value_n_cells;
+            dst.n_primitives = src.n_primitives;
             dst.frozen_mask = src.frozen_mask;
             dst.frozen_mask_size = src.frozen_mask_size;
             dst.frozen_lr_scale = src.frozen_lr_scale;
@@ -691,6 +748,8 @@ namespace lfs::training {
         fused_adam.scale_reg_weight = fused_extra_gradients.scale_reg_weight;
         fused_adam.flatten_reg_weight = fused_extra_gradients.flatten_reg_weight;
         fused_adam.opacity_reg_weight = fused_extra_gradients.opacity_reg_weight;
+        fused_adam.scale_reg_loss_out = fused_extra_gradients.scale_reg_loss_out;
+        fused_adam.opacity_reg_loss_out = fused_extra_gradients.opacity_reg_loss_out;
         fused_adam.sparsity_opa_sigmoid = fused_extra_gradients.sparsity_opa_sigmoid;
         fused_adam.sparsity_z = fused_extra_gradients.sparsity_z;
         fused_adam.sparsity_u = fused_extra_gradients.sparsity_u;
@@ -707,6 +766,32 @@ namespace lfs::training {
             throw std::runtime_error("FastGS fused Adam state is not available");
         }
 
+        // the backward binds shN-rest exactly like the forward
+        // generation-checked resolve plus EXPLICIT representation params
+        // (bounds / n_cells / bits). The fused Adam settings' sh_value_* copy is
+        // enablement-gated (null through SH warmup) and gates only the update
+        // path; the first ACTIVE_SH_BASES>1 backward lands on the degree-up
+        // iteration, which at default cadence (interval 1000 == warmup) decoded
+        // q16 u16 codes as fp32 float4-swizzle → ~3x region overread → Warp MMU
+        // fault on the exportable block's committed-page edge (GUI); silent
+        // garbage gradients on plain arenas (headless).
+        const float* bwd_shN_ptr = nullptr;
+        const float* bwd_shN_bounds_ptr = nullptr;
+        unsigned bwd_shN_n_cells = 0u;
+        unsigned bwd_shN_bits = 0u;
+        if (gaussian_model.shN_value_quantized()) {
+            const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
+            bwd_shN_ptr = q16.codes;
+            bwd_shN_bounds_ptr = q16.bounds;
+            bwd_shN_n_cells = q16.n_cells_per_prim;
+            bwd_shN_bits = 16u;
+        } else if (gaussian_model.shN_ieee_f16()) {
+            bwd_shN_ptr = static_cast<const float*>(
+                lfs::core::resolve_exportable_device_ptr(gaussian_model.shN()));
+            bwd_shN_bits = 16u;
+        } else if (ctx.shN.is_valid()) {
+            bwd_shN_ptr = ctx.shN.ptr<float>();
+        }
         auto backward_result = fast_lfs::rasterization::backward_raw(
             update_densification_info ? gaussian_model._densification_info.ptr<float>() : nullptr,
             use_pixel_error_densification ? error_map_2d.ptr<float>() : nullptr,
@@ -720,7 +805,7 @@ namespace lfs::training {
             ctx.raw_scales.ptr<float>(),
             ctx.raw_rotations.ptr<float>(),
             ctx.raw_opacities.ptr<float>(),
-            ctx.shN.ptr<float>(),
+            bwd_shN_ptr,
             ctx.w2c_ptr,
             ctx.cam_position_ptr,
             ctx.forward_ctx,
@@ -736,7 +821,10 @@ namespace lfs::training {
             ctx.center_y,
             ctx.mip_filter,
             densification_type,
-            &fused_adam);
+            &fused_adam,
+            bwd_shN_bounds_ptr,
+            bwd_shN_n_cells,
+            bwd_shN_bits);
 
         ctx.mark_forward_context_released();
 
@@ -764,4 +852,24 @@ namespace lfs::training {
                !fast_rasterizer_thread_caches.normal.is_valid() &&
                !fast_rasterizer_thread_caches.grad_alpha.is_valid();
     }
+
+    void release_fastgs_sort_workspace_buffers() noexcept {
+        fast_lfs::rasterization::release_sort_workspace_buffers();
+    }
+
+    namespace {
+        // training-thread release is not enough for the test binary
+        // process exit path — main-thread TLS FastGS sort + rasterizer caches
+        // survive until after CudaMemoryPool shutdown. Register the same
+        // release sequence as a process pre-shutdown hook.
+        void release_main_thread_fastgs_cuda_caches() noexcept {
+            (void)release_fast_rasterizer_thread_local_caches();
+            release_fastgs_sort_workspace_buffers();
+        }
+
+        const bool g_fastgs_tls_release_hook_registered = [] {
+            lfs::core::register_gpu_pre_shutdown_hook(release_main_thread_fastgs_cuda_caches);
+            return true;
+        }();
+    } // namespace
 } // namespace lfs::training

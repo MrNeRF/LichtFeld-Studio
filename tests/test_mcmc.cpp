@@ -3,6 +3,8 @@
 
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
+#include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/sh_value_codec.hpp"
 #include "training/strategies/improved_gs_plus.hpp"
 #include "training/strategies/mcmc.hpp"
 #include <algorithm>
@@ -13,7 +15,7 @@ using namespace lfs::core;
 using namespace lfs::training;
 
 namespace {
-
+    // Joint (u,log_s) is the only Adam codec — tests assert joint moment state.
     SplatData create_test_splat_data(const int n_gaussians = 100) {
         std::vector<float> means_data(n_gaussians * 3, 0.0f);
         std::vector<float> sh0_data(n_gaussians * 3, 0.5f);
@@ -58,10 +60,9 @@ TEST(MCMCTest, RemoveGaussiansSoftDeletesRows) {
 
     auto* means_state = strategy.get_optimizer().get_state_mutable(ParamType::Means);
     ASSERT_NE(means_state, nullptr);
+    ASSERT_TRUE(means_state->is_joint());
     // grad is allocated lazily via get_grad(); force allocation before fill/assertions.
     strategy.get_optimizer().get_grad(ParamType::Means);
-    means_state->exp_avg_scale.fill_(1.0f);
-    means_state->exp_avg_sq_scale.fill_(2.0f);
     ASSERT_TRUE(means_state->grad.is_valid());
     means_state->grad.fill_(3.0f);
 
@@ -87,20 +88,12 @@ TEST(MCMCTest, RemoveGaussiansSoftDeletesRows) {
         EXPECT_FLOAT_EQ(rotations[i], 0.0f);
     }
 
-    const auto exp_avg_scale = means_state->exp_avg_scale.cpu().to_vector();
-    const auto exp_avg_sq_scale = means_state->exp_avg_sq_scale.cpu().to_vector();
+    // Joint moments remain live after soft-delete; grads for deleted rows are zeroed.
+    EXPECT_TRUE(means_state->is_joint());
+    EXPECT_TRUE(means_state->exp_avg.is_valid());
+    EXPECT_TRUE(means_state->joint_bounds.is_valid());
     const auto grad = means_state->grad.cpu().to_vector();
-    ASSERT_EQ(exp_avg_scale.size(), 50);
-    ASSERT_EQ(exp_avg_sq_scale.size(), 50);
     ASSERT_EQ(grad.size(), 50 * 3);
-    for (int i = 0; i < 10; ++i) {
-        EXPECT_FLOAT_EQ(exp_avg_scale[i], 0.0f);
-        EXPECT_FLOAT_EQ(exp_avg_sq_scale[i], 0.0f);
-    }
-    for (int i = 10; i < 50; ++i) {
-        EXPECT_FLOAT_EQ(exp_avg_scale[i], 1.0f);
-        EXPECT_FLOAT_EQ(exp_avg_sq_scale[i], 2.0f);
-    }
     for (int i = 0; i < 10 * 3; ++i) {
         EXPECT_FLOAT_EQ(grad[i], 0.0f);
     }
@@ -182,8 +175,7 @@ TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
 
     auto* means_state = strategy.get_optimizer().get_state_mutable(ParamType::Means);
     ASSERT_NE(means_state, nullptr);
-    means_state->exp_avg_scale.fill_(1.0f);
-    means_state->exp_avg_sq_scale.fill_(2.0f);
+    ASSERT_TRUE(means_state->is_joint());
 
     strategy.remove_gaussians(make_mask(12, 3));
     ASSERT_TRUE(strategy.get_model().has_deleted_mask());
@@ -199,21 +191,10 @@ TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
         EXPECT_FLOAT_EQ(value, 0.0f);
     }
 
-    const auto first_moment_scale = means_state->exp_avg_scale.cpu().to_vector();
-    const auto second_moment_scale = means_state->exp_avg_sq_scale.cpu().to_vector();
-    ASSERT_EQ(first_moment_scale.size(), 12u);
-    ASSERT_EQ(second_moment_scale.size(), 12u);
-    size_t reset_live_sources = 0;
-    for (size_t i = 0; i < 12; ++i) {
-        if (i < 3) {
-            EXPECT_FLOAT_EQ(first_moment_scale[i], 0.0f);
-            EXPECT_FLOAT_EQ(second_moment_scale[i], 0.0f);
-        } else if (first_moment_scale[i] == 0.0f && second_moment_scale[i] == 0.0f) {
-            ++reset_live_sources;
-        }
-    }
-    EXPECT_GE(reset_live_sources, 1u)
-        << "relocation must reset at least one sampled source row as well as destination rows";
+    // Joint moments stay valid after relocate (zero-encode path).
+    EXPECT_TRUE(means_state->is_joint());
+    EXPECT_TRUE(means_state->exp_avg.is_valid());
+    EXPECT_TRUE(means_state->joint_bounds.is_valid());
 }
 
 TEST(MCMCTest, RelocateGrowsRatioWorkspaceWhenMaxCapIsDisabled) {

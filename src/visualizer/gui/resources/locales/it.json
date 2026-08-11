@@ -1,6 +1,7 @@
 {
   "_language_name": "Italiano",
   "menu": {
+    "view.performance_hud": "Performance HUD",
     "file": "File",
     "file.new_project": "Nuovo Progetto",
     "file.import_dataset": "Importa Dataset",
@@ -362,7 +363,6 @@
     "dataset.resize_factor": "Fattore ridimensionamento:",
     "dataset.max_width": "Larghezza massima (px):",
     "dataset.cpu_cache": "Cache CPU:",
-    "dataset.fs_cache": "Cache filesystem:",
     "dataset.use_16bit_color": "Colore a 16 bit:",
     "dataset.output": "Output:",
     "dataset.test_every": "Test ogni:",
@@ -441,7 +441,6 @@
     "tooltip.resize_factor": "Ridimensiona immagini di Training",
     "tooltip.max_width": "Larghezza massima immagine in pixel",
     "tooltip.cpu_cache": "Cache immagini decodificate in RAM",
-    "tooltip.fs_cache": "Cache immagini decodificate su disco",
     "tooltip.use_16bit_color": "Addestra con immagini a colori a 16 bit (HDR); cache senza perdita in JPEG 2000",
     "tooltip.test_every": "Usa ogni N-esima immagine come set di test",
     "tooltip.enable_eval": "Abilita la valutazione durante il Training (calcola PSNR/SSIM sul set di test). Riduce leggermente la velocità del Training.",
@@ -1223,6 +1222,7 @@
     "status_label": "Stato: %s"
   },
   "input_settings": {
+    "action.toggle_performance_hud": "Toggle Performance HUD",
     "active_profile": "Profilo Attivo:",
     "save_current_profile": "Salva Profilo Corrente",
     "reset_to_default": "Ripristina Predefinito",
@@ -1830,6 +1830,7 @@
     "secondary_view": "Vista secondaria",
     "split": "Divisione:",
     "gpu": "GPU",
+    "ui_fps": "UI FPS",
     "strategy_default": "Predefinito"
   },
   "plugin_manager": {
@@ -2068,6 +2069,33 @@
     "redo_named": "Ripeti: {name}"
   },
   "ui": {
+    "perf_hud_title": "Performance",
+    "perf_this_process": "This process",
+    "perf_other_processes": "Other processes",
+    "perf_free": "Free",
+    "perf_cores": "cores",
+    "perf_process_cpu_note": "Process CPU, share of all cores",
+    "perf_tab_ledger": "Ledger",
+    "perf_ledger_closes": "Ledger closes",
+    "perf_ledger_gap": "Unattributed",
+    "perf_ledger_over": "Over-attributed, numbers unreliable",
+    "perf_ledger_attributed": "Attributed",
+    "perf_nested_disclosure": "Disclosure, not counted again",
+    "perf_no_owner": "No owner",
+    "perf_untracked": "Untracked",
+    "perf_retention": "Retention",
+    "perf_reclaimable": "Reclaimable",
+    "perf_required": "Required",
+    "perf_allocated": "Allocated",
+    "perf_slack": "Slack",
+    "perf_over_budget": "Over budget",
+    "perf_estimate_detected": "Estimate detected",
+    "perf_degenerate_pair": "Publisher reports required equal to allocated",
+    "perf_tracking_off": "Detailed memory tracking is off",
+    "perf_enable_tracking": "Enable",
+    "perf_expand": "Expand",
+    "perf_collapse": "Collapse",
+    "perf_hud_tooltip": "Show or hide the performance HUD",
     "near": "Vicino",
     "far": "Lontano",
     "color": "Colore",

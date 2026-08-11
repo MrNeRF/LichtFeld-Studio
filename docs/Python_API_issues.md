@@ -64,7 +64,8 @@ coordinates.
 | `get_style_color()` / `set_style_color()` | Not exposed |
 | `get_style_var()` / `set_style_var()` | Not exposed |
 
-The push/pop style stack APIs are available (`push_style_var`, `push_style_var_vec2`, `push_style_color`, `pop_*`).
+Panel-local styling is expressed through RML/RCSS and composable sub-layout
+state; the legacy immediate-mode style stack is not exposed on `RmlUILayout`.
 
 ### GPU Memory UI API
 

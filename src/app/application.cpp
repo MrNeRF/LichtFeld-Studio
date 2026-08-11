@@ -76,6 +76,12 @@ namespace lfs::app {
             if (!params.dataset.output_name.empty())
                 checkpoint_params.dataset.output_name = params.dataset.output_name;
 
+            // Runtime-only CLI controls are not part of the serialized
+            // training state. Preserve them when a resume is requested so
+            // --perf-bench (and its warmup) still applies to the resumed run.
+            checkpoint_params.optimization.perf_bench = params.optimization.perf_bench;
+            checkpoint_params.optimization.perf_bench_warmup = params.optimization.perf_bench_warmup;
+
             if (checkpoint_params.dataset.data_path.empty()) {
                 return std::unexpected("Checkpoint has no dataset path and none provided via --data-path");
             }
@@ -362,7 +368,8 @@ namespace lfs::app {
                     static_cast<void>(trainer.release());
                 }
 
-                LOG_INFO("Headless training completed");
+                LOG_INFO("Headless training {}",
+                         coordinator.interrupted() ? "stopped by user" : "completed");
                 core::teardown_gpu_before_exit();
                 core::mark_clean_exit();
                 core::flush_and_exit(0);
@@ -716,9 +723,7 @@ namespace lfs::app {
         // lfs_visualizer.dll, giving each its own CacheLoader singleton.
         // The callback below executes in the exe's context, so the exe's
         // copy must be initialized before it is invoked.
-        lfs::io::CacheLoader::getInstance(
-            params->dataset.loading_params.use_cpu_memory,
-            params->dataset.loading_params.use_fs_cache);
+        lfs::io::CacheLoader::getInstance(params->dataset.loading_params.use_cpu_memory);
 
         lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
             return lfs::io::CacheLoader::getInstance().load_cached_image(

@@ -45,6 +45,8 @@ vcpkg_*/**
 vcpkg_*/
 build*/
 build*/**
+!tools/build/
+!tools/build/check_build_deps.sh
 
 *.pt
 !weights/*.pt

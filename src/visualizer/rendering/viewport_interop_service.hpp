@@ -139,16 +139,16 @@ namespace lfs::vis {
         void clearDepthBlitImage();
 
         // Throws std::runtime_error on hard interop failure (callers catch).
-        // Phase 1–2 of #1575: coalesce →GENERAL immediates + CUDA upload; defers
-        // GENERAL→READ_ONLY barriers to recordFrameBarriers.
+        // #1575: coalesces transitions to GENERAL and CUDA uploads, then defers
+        // transitions to READ_ONLY until recordFrameBarriers.
         void prepareFrame(VulkanContext& context, bool resize_deferring);
 
-        // F2-1: run layout-commit rollback + discard unrecorded frame barriers on
+        // Roll back layout commits and discard unrecorded frame barriers on
         // every GUI frame that may endFrame, including export-locked frames that
-        // skip prepareFrame Phases 1–2. prepareFrame calls this at its head.
+        // skip prepareFrame uploads. prepareFrame calls this at its head.
         void syncUnsubmittedLayoutCommits(VulkanContext& context);
 
-        // Phase 3 of #1575: record GENERAL→SHADER_READ_ONLY barriers into the open
+        // #1575: record GENERAL→SHADER_READ_ONLY barriers into the open
         // frame CB and attach CUDA S2 timeline waits to the frame submit. Call
         // immediately after beginFrame succeeds, before any sampling of interop images.
         void recordFrameBarriers(VkCommandBuffer frame_cb, VulkanContext& context);
@@ -191,7 +191,7 @@ namespace lfs::vis {
         struct PooledInteropUnit;
         struct VulkanSceneInteropTarget;
 
-        // Decision-pass plan: channel is ready for Phase 1–2 upload.
+        // A channel selected for upload during the decision pass.
         struct ChannelUploadPlan {
             Channel* channel = nullptr;
             VulkanSceneInteropTarget* target = nullptr;
@@ -212,7 +212,7 @@ namespace lfs::vis {
             std::uint64_t frame_submit_marker = 0;
         };
 
-        // Decision + setup only; may append to pending_uploads_ for Phase 1–2.
+        // Performs decision and setup only; may append to pending_uploads_.
         void prepareChannel(VulkanContext& context, Channel& channel, bool resize_deferring);
         void resetChannel(Channel& channel);
         void clearPublished(Channel& channel);
@@ -229,7 +229,7 @@ namespace lfs::vis {
         VulkanContext* teardown_context_ = nullptr;
         bool shut_down_ = false;
 
-        // Built during prepareFrame decision pass; consumed by Phase 1–2 in prepareFrame.
+        // Built and consumed within prepareFrame.
         std::vector<ChannelUploadPlan> pending_uploads_;
         // After CUDA signal: GENERAL→READ_ONLY + publish deferred to recordFrameBarriers.
         std::vector<PendingFrameBarrier> pending_frame_barriers_;

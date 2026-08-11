@@ -67,17 +67,18 @@ namespace lfs::python {
         });
 
         state::TrainingCompleted::when([](const auto& e) {
-            if (e.user_stopped)
-                return;
             if (!e.success)
                 return; // failures surface via the native ErrorBus bridge
 
             namespace Str = lichtfeld::Strings::Training::Button;
 
-            auto message = std::format(
-                "Training completed successfully.\n\n"
-                "{} iterations | loss {:.6f} | {}",
-                e.iteration, e.final_loss, formatDuration(e.elapsed_seconds));
+            auto message = e.user_stopped
+                               ? std::format("Training stopped by user at iteration {}.\n\n"
+                                             "Checkpoint saved; resume is available from the training panel.",
+                                             e.iteration)
+                               : std::format("Training completed successfully.\n\n"
+                                             "{} iterations | loss {:.6f} | {}",
+                                             e.iteration, e.final_loss, formatDuration(e.elapsed_seconds));
             std::optional<LatestEvaluationMetrics> eval_snapshot;
             {
                 std::lock_guard lock(g_latest_eval_metrics_mutex);
@@ -100,7 +101,7 @@ namespace lfs::python {
 
             const std::string edit_label = LOC(Str::SWITCH_EDIT_MODE);
             PyModalRegistry::instance().show_confirm(
-                "Training Complete", message,
+                e.user_stopped ? "Training Stopped" : "Training Complete", message,
                 {edit_label, "OK"},
                 [edit_label](const std::string& clicked) {
                     if (clicked == edit_label)

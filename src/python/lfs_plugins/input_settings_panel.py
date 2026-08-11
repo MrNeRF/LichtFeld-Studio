@@ -121,6 +121,7 @@ class InputSettingsPanel(Panel):
             lf.keymap.Action.TOGGLE_UI,
             lf.keymap.Action.TOGGLE_FULLSCREEN,
             lf.keymap.Action.HISTOGRAM_ZOOM_MARKED,
+            lf.keymap.Action.TOGGLE_PERFORMANCE_HUD,
         ],
         "sequencer_global": [
             lf.keymap.Action.SEQUENCER_ADD_KEYFRAME,

@@ -150,6 +150,169 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs(uint32_t g_idx, IArray<float4> s
 
 #endif  // USE_FLOAT4_BATCH_READ
 
+// Unpack one IEEE f16 float4 slot packed as uint2 (4×half).
+[ForceInline]
+float4 unpack_shn_slot_f16(uint2 packed) {
+    return float4(f16tof32(packed.x & 0xFFFFu), f16tof32(packed.x >> 16),
+                  f16tof32(packed.y & 0xFFFFu), f16tof32(packed.y >> 16));
+}
+
+// Pad-dropped q16 value codec (matches lfs/training/sh_value_codec.cuh).
+// Linear quant over float2 (min,max) per 256-splat block; all cells of a splat
+// share that block's bounds.
+static const float SH_Q16_INV_QMAX = 1.0 / 65535.0;
+
+[ForceInline]
+float decode_shn_q16_cell(uint q, float lo, float hi) {
+    return lo + (hi - lo) * (float(q) * SH_Q16_INV_QMAX);
+}
+
+// Cell-linear swizzle index: [ceil(N/R), n_cells, R] of uint16, R=SH_REORDER_SIZE.
+[ForceInline]
+uint shAtU16(uint primitive_idx, uint cell, uint n_cells) {
+    const uint block = primitive_idx / SH_REORDER_SIZE;
+    const uint lane = primitive_idx % SH_REORDER_SIZE;
+    return block * (n_cells * SH_REORDER_SIZE) + cell * SH_REORDER_SIZE + lane;
+}
+
+// Load one u16 from a uint-packed buffer (two cells per word).
+[ForceInline]
+uint load_shn_q16_u16(IArray<uint> shN_words, uint u16_index) {
+    const uint word = shN_words[u16_index >> 1];
+    return (u16_index & 1u) != 0u ? (word >> 16) : (word & 0xFFFFu);
+}
+
+// Pad-dropped q16 rest SH (exportable training zero-copy). shN_words is the
+// cell-linear u16 buffer packed as uint; bounds is float2 per 256-splat block.
+SpherHarmCoeffs read_spherical_harmonics_coeffs_split_q16(
+    uint32_t g_idx,
+    IArray<float> sh0,
+    IArray<uint> shN_words,
+    IArray<float2> bounds,
+    uint32_t active_sh,
+    uint32_t n_cells)
+{
+    float3 z = float3(0.0);
+    SpherHarmCoeffs g_sh_coeffs = { z, z,z,z, z,z,z,z,z, z,z,z,z,z,z,z };
+
+    g_sh_coeffs.coeff0 = float3(sh0[3*g_idx+0], sh0[3*g_idx+1], sh0[3*g_idx+2]);
+
+    if (active_sh == 0 || n_cells == 0)
+        return g_sh_coeffs;
+
+    const float2 mm = bounds[g_idx / 256u];
+    const float lo = mm.x;
+    const float hi = mm.y;
+
+    // Decode pad-dropped cells into rest float3s. rest_i (0..14) lives in
+    // coeff(rest_i+1); cells base = rest_i*3. Matches FastGS load_shN_coeffs.
+    #define _SHN_Q16_REST(rest_i, coeff_field) \
+        do { \
+            const uint base = uint(rest_i) * 3u; \
+            if (base + 2u < n_cells) { \
+                g_sh_coeffs.coeff_field = float3( \
+                    decode_shn_q16_cell(load_shn_q16_u16(shN_words, shAtU16(g_idx, base + 0u, n_cells)), lo, hi), \
+                    decode_shn_q16_cell(load_shn_q16_u16(shN_words, shAtU16(g_idx, base + 1u, n_cells)), lo, hi), \
+                    decode_shn_q16_cell(load_shn_q16_u16(shN_words, shAtU16(g_idx, base + 2u, n_cells)), lo, hi)); \
+            } \
+        } while (0)
+
+    // Band 1 (rest 0..2) → coeff1..3
+    _SHN_Q16_REST(0, coeff1);
+    _SHN_Q16_REST(1, coeff2);
+    _SHN_Q16_REST(2, coeff3);
+    if (active_sh > 1) {
+        _SHN_Q16_REST(3, coeff4);
+        _SHN_Q16_REST(4, coeff5);
+        _SHN_Q16_REST(5, coeff6);
+        _SHN_Q16_REST(6, coeff7);
+        _SHN_Q16_REST(7, coeff8);
+    }
+    if (active_sh > 2) {
+        _SHN_Q16_REST(8, coeff9);
+        _SHN_Q16_REST(9, coeff10);
+        _SHN_Q16_REST(10, coeff11);
+        _SHN_Q16_REST(11, coeff12);
+        _SHN_Q16_REST(12, coeff13);
+        _SHN_Q16_REST(13, coeff14);
+        _SHN_Q16_REST(14, coeff15);
+    }
+    #undef _SHN_Q16_REST
+
+    return g_sh_coeffs;
+}
+
+// IEEE f16 float4-swizzle rest SH (exportable GUI path). Same slot topology as
+// the fp32 path; each float4 slot is 8 bytes (uint2 of packed halfs).
+SpherHarmCoeffs read_spherical_harmonics_coeffs_split_f16(
+    uint32_t g_idx,
+    IArray<float> sh0,
+    IArray<uint2> shN,
+    uint32_t active_sh,
+    uint32_t shN_slots_per_primitive)
+{
+    float3 z = float3(0.0);
+    SpherHarmCoeffs g_sh_coeffs = { z, z,z,z, z,z,z,z,z, z,z,z,z,z,z,z };
+
+    g_sh_coeffs.coeff0 = float3(sh0[3*g_idx+0], sh0[3*g_idx+1], sh0[3*g_idx+2]);
+
+    if (active_sh == 0)
+        return g_sh_coeffs;
+
+    if (shN_slots_per_primitive == 0)
+        return g_sh_coeffs;
+
+  #if SH_REORDER_SIZE <= 1
+    uint32_t base = shN_slots_per_primitive*g_idx;
+    #define _SHN_F16_COEFF(idx) unpack_shn_slot_f16(shN[base+idx])
+  #else
+    uint32_t base = (g_idx/SH_REORDER_SIZE) * (shN_slots_per_primitive*SH_REORDER_SIZE);
+    uint32_t offset = g_idx%SH_REORDER_SIZE;
+    #define _SHN_F16_COEFF(idx) unpack_shn_slot_f16(shN[base+SH_REORDER_SIZE*idx+offset])
+  #endif
+
+    float4 temp0, temp1;
+
+    temp0 = _SHN_F16_COEFF(0);
+    g_sh_coeffs.coeff1 = temp0.xyz;
+    temp1 = _SHN_F16_COEFF(1);
+    g_sh_coeffs.coeff2 = float3(temp0.w, temp1.xy);
+    temp0 = _SHN_F16_COEFF(2);
+    g_sh_coeffs.coeff3 = float3(temp1.zw, temp0.x);
+    g_sh_coeffs.coeff4 = temp0.yzw;
+
+    if (active_sh > 1) {
+        temp0 = _SHN_F16_COEFF(3);
+        g_sh_coeffs.coeff5 = temp0.xyz;
+        temp1 = _SHN_F16_COEFF(4);
+        g_sh_coeffs.coeff6 = float3(temp0.w, temp1.xy);
+        temp0 = _SHN_F16_COEFF(5);
+        g_sh_coeffs.coeff7 = float3(temp1.zw, temp0.x);
+        g_sh_coeffs.coeff8 = temp0.yzw;
+    }
+
+    if (active_sh > 2) {
+        temp0 = _SHN_F16_COEFF(6);
+        g_sh_coeffs.coeff9 = temp0.xyz;
+        temp1 = _SHN_F16_COEFF(7);
+        g_sh_coeffs.coeff10 = float3(temp0.w, temp1.xy);
+        temp0 = _SHN_F16_COEFF(8);
+        g_sh_coeffs.coeff11 = float3(temp1.zw, temp0.x);
+        g_sh_coeffs.coeff12 = temp0.yzw;
+
+        temp0 = _SHN_F16_COEFF(9);
+        g_sh_coeffs.coeff13 = temp0.xyz;
+        temp1 = _SHN_F16_COEFF(10);
+        g_sh_coeffs.coeff14 = float3(temp0.w, temp1.xy);
+        temp0 = _SHN_F16_COEFF(11);
+        g_sh_coeffs.coeff15 = float3(temp1.zw, temp0.x);
+    }
+
+    #undef _SHN_F16_COEFF
+
+    return g_sh_coeffs;
+}
+
 SpherHarmCoeffs read_spherical_harmonics_coeffs_split(
     uint32_t g_idx,
     IArray<float> sh0,

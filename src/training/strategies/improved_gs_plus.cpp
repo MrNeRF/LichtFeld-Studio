@@ -11,6 +11,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "edge_rasterizer.hpp"
 #include "gsplat_rasterizer.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 
 #include "core/tensor/internal/memory_pool.hpp"
@@ -18,9 +19,11 @@
 #include "kernels/densification_kernels.hpp"
 #include "kernels/image_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
+#include "kernels/mrnf_kernels.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <numeric>
@@ -91,6 +94,13 @@ namespace lfs::training {
         }
 
         void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
+            if (tensor.device() == lfs::core::Device::CUDA &&
+                tensor.dtype() == lfs::core::DataType::Float32 &&
+                tensor.is_valid() && tensor.numel() > 0) {
+                kernels::launch_normalize_by_positive_median(
+                    tensor.ptr<float>(), tensor.numel());
+                return;
+            }
             tensor.masked_fill_(tensor.isnan(), 0.0f);
             auto valid = tensor.masked_select(tensor > 0.0f);
             if (valid.numel() == 0) {
@@ -98,15 +108,8 @@ namespace lfs::training {
                 return;
             }
             auto [sorted, _] = valid.sort();
-            if (tensor.device() == lfs::core::Device::CUDA) {
-                kernels::launch_normalize_by_device_scalar(
-                    tensor.ptr<float>(),
-                    tensor.numel(),
-                    sorted.ptr<float>() + valid.numel() / 2);
-            } else {
-                float median = sorted[valid.numel() / 2].item_as<float>();
-                tensor.div_(std::max(median, 1e-9f));
-            }
+            float median = sorted[valid.numel() / 2].item_as<float>();
+            tensor.div_(std::max(median, 1e-9f));
         }
 
         lfs::core::Tensor normalized_by_positive_median(const lfs::core::Tensor& tensor) {
@@ -158,19 +161,39 @@ namespace lfs::training {
                               ? lfs::core::Tensor::ones_bool({static_cast<size_t>(indices.numel())}, indices.device())
                               : lfs::core::Tensor::zeros_bool({static_cast<size_t>(indices.numel())}, indices.device());
             splat_data.deleted().index_put_(indices, values);
+            splat_data.notify_deleted_mask_changed();
         }
 
-        void append_live_deleted_rows(lfs::core::SplatData& splat_data, const lfs::core::Tensor& free_mask, size_t n_rows) {
-            if (n_rows == 0) {
+        void append_live_deleted_rows(lfs::core::SplatData& splat_data, const lfs::core::Tensor& free_mask) {
+            // safe before or after param growth — pad to size with live rows.
+            const size_t target_size = static_cast<size_t>(splat_data.size());
+            auto& deleted = splat_data.deleted();
+            const size_t desired_capacity = std::max(
+                deleted_mask_capacity(splat_data, free_mask),
+                target_size);
+
+            if (!deleted.is_valid()) {
+                if (target_size == 0) {
+                    return;
+                }
+                deleted = lfs::core::Tensor::zeros_bool({target_size}, splat_data.means().device());
+                deleted.reserve(desired_capacity);
+                splat_data.notify_deleted_mask_changed();
                 return;
             }
 
-            auto& deleted = splat_data.deleted();
-            if (!deleted.is_valid()) {
-                deleted = lfs::core::Tensor::zeros_bool({static_cast<size_t>(splat_data.size())}, splat_data.means().device());
+            const size_t cur = static_cast<size_t>(deleted.numel());
+            if (cur == target_size) {
+                deleted.reserve(desired_capacity);
+                return;
             }
-            deleted.reserve(deleted_mask_capacity(splat_data, free_mask));
-            deleted.append_zeros(n_rows);
+            if (cur < target_size) {
+                deleted.reserve(desired_capacity);
+                deleted.append_zeros(target_size - cur);
+                splat_data.notify_deleted_mask_changed();
+                return;
+            }
+            splat_data.reconcile_deleted_mask();
         }
 
         struct SampledScaleSummary {
@@ -315,11 +338,10 @@ namespace lfs::training {
 
     void ImprovedGSPlus::ensure_error_score_shape() {
         const size_t n = static_cast<size_t>(_splat_data->size());
-        if (!_error_score_max.is_valid() ||
-            _error_score_max.ndim() != 1 ||
-            _error_score_max.numel() != n) {
-            _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
-        }
+        const size_t reserve =
+            (_params && _params->max_cap > 0) ? static_cast<size_t>(_params->max_cap) : 0;
+        ensure_score_buffer_inplace(
+            _error_score_max, n, _splat_data->means().device(), reserve);
     }
 
     lfs::core::Tensor ImprovedGSPlus::damp_densification_scores(
@@ -414,7 +436,23 @@ namespace lfs::training {
     }
 
     void ImprovedGSPlus::LAS_densify(const lfs::core::Tensor& scores, const int64_t budget_for_alloc) {
-        const lfs::core::Tensor sampled_idxs = lfs::core::Tensor::multinomial(scores, budget_for_alloc, false);
+        // densify kernels read/write float shN; dequant q16 for the mutation
+        // window (mirrors MCMC ensure_shN_fp32_for_mutation).
+        const bool shN_expanded =
+            lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        lfs::training::sh_value::ShNCommitGuard shn_guard(
+            *_splat_data, shN_expanded, "ImprovedGSPlus::LAS_densify");
+
+        // Sample without replacement through the same Gumbel-top-k path as MCMC.
+        const size_t n_scores = scores.numel();
+        const size_t k_sample = static_cast<size_t>(budget_for_alloc);
+        auto sampled_idxs = lfs::core::Tensor::empty(
+            {k_sample}, scores.device(), lfs::core::DataType::Int64);
+        const auto seed = static_cast<uint64_t>(
+            std::chrono::high_resolution_clock::now().time_since_epoch().count());
+        lfs::training::mrnf_strategy::launch_gumbel_topk(
+            scores.ptr<float>(), n_scores, k_sample, seed,
+            sampled_idxs.ptr<int64_t>());
         const auto sampled_scale_summary = summarize_sampled_scales(_splat_data->scaling_raw(), sampled_idxs);
         if (_pending_failure_snapshot.valid) {
             _pending_failure_snapshot.sampled_scale_p95 = sampled_scale_summary.p95;
@@ -429,18 +467,16 @@ namespace lfs::training {
                              _splat_data->shN().numel() > 0;
 
         const lfs::core::Device device = _splat_data->means().device();
+        const size_t K = static_cast<size_t>(budget_for_alloc);
 
-        // Allocate temporary tensors for split results [budget_for_alloc, ...]
-        auto second_positions = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc), 3}, device);
-        auto second_rotations = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc), 4}, device);
-        auto second_scales = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc), 3}, device);
-        auto second_sh0 = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc), 3}, device);
-        lfs::core::Tensor second_shN;
-        if (use_shN) {
-            second_shN = lfs::core::Tensor::empty(
-                {static_cast<size_t>(budget_for_alloc), layout_rest, 3}, device);
-        }
-        auto second_opacities = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc)}, device);
+        // reusable densify child workspace (grow-only).
+        _densify_ws.ensure(K, layout_rest, use_shN, /*sh0_flat_layout=*/true, device);
+        auto second_positions = _densify_ws.means_view(K);
+        auto second_rotations = _densify_ws.rotations_view(K);
+        auto second_scales = _densify_ws.scales_view(K);
+        auto second_sh0 = _densify_ws.sh0_view(K);
+        lfs::core::Tensor second_shN = use_shN ? _densify_ws.shN_view(K) : lfs::core::Tensor();
+        auto second_opacities = _densify_ws.opacities_view(K);
 
         // SH is unchanged by LAS. Keep resident shN swizzled, run the split kernel without
         // SH, then gather selected child SH rows below.
@@ -472,51 +508,95 @@ namespace lfs::training {
                 layout_rest_u32);
         }
 
-        // Reset optimizer states for long-axis-split indices
-        auto reset_optimizer_state_at_indices = [&](ParamType param_type) {
-            auto* state = _optimizer->get_state_mutable(param_type);
-            if (!state)
-                return;
+        // Merge: joint-codec state must reset via the optimizer API (fused scale-zero is a
+        // no-op for joint state — no scales exist); legacy codec keeps the fused fast path.
+        {
+            auto* probe = _optimizer->get_state_mutable(ParamType::Means);
+            const bool joint_codec = probe && probe->is_joint();
+            if (joint_codec) {
+                auto reset_optimizer_state_at_indices = [&](ParamType param_type) {
+                    auto* state = _optimizer->get_state_mutable(param_type);
+                    if (!state)
+                        return;
 
-            // Quantised moments: reset a primitive by zeroing its per-primitive scales (a zero
-            // scale dequantises every moment to zero), for both contiguous and swizzled layouts.
-            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
-                return;
-            auto scale_zeros = lfs::core::Tensor::zeros(
-                lfs::core::TensorShape({sampled_idxs.numel()}), state->exp_avg_scale.device());
-            state->exp_avg_scale.index_put_(sampled_idxs, scale_zeros);
-            state->exp_avg_sq_scale.index_put_(sampled_idxs, scale_zeros);
+                    if (state->is_joint()) {
+                        auto idx_cpu = sampled_idxs.cpu();
+                        std::vector<int64_t> host_idx;
+                        host_idx.reserve(sampled_idxs.numel());
+                        if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
+                            const auto* p = idx_cpu.ptr<int64_t>();
+                            host_idx.assign(p, p + sampled_idxs.numel());
+                        } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
+                            const auto* p = idx_cpu.ptr<int32_t>();
+                            for (size_t i = 0; i < sampled_idxs.numel(); ++i)
+                                host_idx.push_back(static_cast<int64_t>(p[i]));
+                        }
+                        if (!host_idx.empty())
+                            _optimizer->reset_state_at_indices(param_type, host_idx);
+                        if (param_type == ParamType::ShN) {
+                            if (layout_rest_u32 != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                                auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
+                                                   ? sampled_idxs
+                                                   : sampled_idxs.to(lfs::core::DataType::Int32);
+                                lfs::core::shN_swizzled_zero_at_indices(
+                                    state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
+                            }
+                            return;
+                        }
+                    } else {
+                        // Legacy: zero scales → moments dequantise to zero.
+                        if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
+                            return;
+                        auto scale_zeros = lfs::core::Tensor::zeros(
+                            lfs::core::TensorShape({sampled_idxs.numel()}), state->exp_avg_scale.device());
+                        state->exp_avg_scale.index_put_(sampled_idxs, scale_zeros);
+                        state->exp_avg_sq_scale.index_put_(sampled_idxs, scale_zeros);
 
-            if (param_type == ParamType::ShN) {
-                if (layout_rest_u32 != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
-                    auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
-                                       ? sampled_idxs
-                                       : sampled_idxs.to(lfs::core::DataType::Int32);
-                    lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
+                        if (param_type == ParamType::ShN) {
+                            if (layout_rest_u32 != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                                auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
+                                                   ? sampled_idxs
+                                                   : sampled_idxs.to(lfs::core::DataType::Int32);
+                                lfs::core::shN_swizzled_zero_at_indices(
+                                    state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
+                            }
+                            return;
+                        }
+                    }
+
+                    if (state->grad.is_valid() && state->grad.numel() > 0) {
+                        const auto& shape = state->grad.shape();
+                        if (has_zero_dimension(shape))
+                            return;
+                        std::vector<size_t> dims = {static_cast<size_t>(budget_for_alloc)};
+                        for (size_t i = 1; i < shape.rank(); ++i) {
+                            dims.push_back(shape[i]);
+                        }
+                        auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->grad.device());
+                        state->grad.index_put_(sampled_idxs, zeros);
+                    }
+                };
+
+                reset_optimizer_state_at_indices(ParamType::Means);
+                reset_optimizer_state_at_indices(ParamType::Rotation);
+                reset_optimizer_state_at_indices(ParamType::Scaling);
+                reset_optimizer_state_at_indices(ParamType::Sh0);
+                reset_optimizer_state_at_indices(ParamType::ShN);
+                reset_optimizer_state_at_indices(ParamType::Opacity);
+            } else {
+                // fused Adam-scale zero for split parents (legacy codec fast path).
+                {
+                    float* adam_ptrs[12] = {};
+                    const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
+                    if (n_adam > 0) {
+                        kernels::launch_zero_adam_scales_at_indices(
+                            sampled_idxs.ptr<int64_t>(), K, adam_ptrs, n_adam,
+                            static_cast<size_t>(_splat_data->size()));
+                    }
                 }
-                return;
             }
-
-            if (state->grad.is_valid() && state->grad.numel() > 0) {
-                const auto& shape = state->grad.shape();
-                if (has_zero_dimension(shape))
-                    return;
-                std::vector<size_t> dims = {static_cast<size_t>(budget_for_alloc)};
-                for (size_t i = 1; i < shape.rank(); ++i) {
-                    dims.push_back(shape[i]);
-                }
-                auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->grad.device());
-                state->grad.index_put_(sampled_idxs, zeros);
-            }
-        };
-
-        reset_optimizer_state_at_indices(ParamType::Means);
-        reset_optimizer_state_at_indices(ParamType::Rotation);
-        reset_optimizer_state_at_indices(ParamType::Scaling);
-        reset_optimizer_state_at_indices(ParamType::Sh0);
-        reset_optimizer_state_at_indices(ParamType::ShN);
-        reset_optimizer_state_at_indices(ParamType::Opacity);
+            zero_adam_grads_at_indices(*_optimizer, sampled_idxs, layout_rest_u32);
+        }
 
         // Now place second split results: fill free slots first, then append
         auto [filled_indices, remaining] = fill_free_slots_with_data(
@@ -534,6 +614,16 @@ namespace lfs::training {
             const size_t old_size = static_cast<size_t>(_splat_data->size());
             const size_t n_remaining = static_cast<size_t>(remaining);
 
+            // preflight before multi-param append so a
+            // capacity-ensure failure cannot leave partial row growth.
+            if (!_optimizer->preflight_grow_capacity(n_remaining)) {
+                LOG_ERROR(
+                    "ImprovedGS+ densify aborted: capacity-ensure failed for {} -> {} rows "
+                    "(no params mutated)",
+                    old_size, old_size + n_remaining);
+                return;
+            }
+
             // Get the remaining data
             const auto append_positions = second_positions.slice(0, num_filled, budget_for_alloc);
             const auto append_rotations = second_rotations.slice(0, num_filled, budget_for_alloc);
@@ -549,8 +639,7 @@ namespace lfs::training {
             const auto new_indices = lfs::core::Tensor::from_vector(
                 new_indices_vec, lfs::core::TensorShape({n_remaining}), device);
 
-            // Extend and write data
-            append_live_deleted_rows(*_splat_data, _free_mask, n_remaining);
+            // Grow params first, then pad deleted mask to the new size.
             _splat_data->means().append_zeros(n_remaining);
             _splat_data->means().index_put_(new_indices, append_positions);
 
@@ -567,6 +656,7 @@ namespace lfs::training {
 
             _splat_data->opacity_raw().append_zeros(n_remaining);
             _splat_data->opacity_raw().index_put_(new_indices, append_opacities);
+            append_live_deleted_rows(*_splat_data, _free_mask);
 
             if (use_shN) {
                 auto append_shN = second_shN.slice(0, num_filled, budget_for_alloc);
@@ -641,10 +731,9 @@ namespace lfs::training {
 
         {
             const size_t n = static_cast<size_t>(_splat_data->size());
-            const auto& info = _splat_data->_densification_info;
-            if (!info.is_valid() || info.ndim() != 2 || info.shape()[0] < 2 || info.shape()[1] != n) {
-                _splat_data->_densification_info = lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
-            }
+            ensure_densification_info_shape_inplace(
+                _splat_data->_densification_info, n, _splat_data->means().device(),
+                _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
             ensure_error_score_shape();
 
             const auto& accum = _splat_data->_densification_info;
@@ -652,15 +741,14 @@ namespace lfs::training {
                 accum.ndim() == 2 &&
                 accum.shape()[0] >= 2 &&
                 accum.shape()[1] == _error_score_max.numel()) {
-                const float* error_row = accum.ptr<float>() + accum.shape()[1];
-                lfs::training::mcmc::launch_elementwise_max_inplace(
+                lfs::training::mcmc::launch_max_error_and_zero_densification(
                     _error_score_max.ptr<float>(),
-                    error_row,
+                    _splat_data->_densification_info.ptr<float>(),
                     _error_score_max.numel());
                 zero_frozen_scores_inplace(*_splat_data, _error_score_max);
+            } else if (accum.is_valid() && accum.numel() > 0) {
+                _splat_data->_densification_info.zero_();
             }
-
-            _splat_data->_densification_info.zero_();
         }
 
         if (is_refining(iter)) {
@@ -699,9 +787,12 @@ namespace lfs::training {
 
             lfs::core::Tensor::trim_memory_pool();
 
-            _splat_data->_densification_info = lfs::core::Tensor::zeros(
-                {2, static_cast<size_t>(_splat_data->size())},
-                _splat_data->means().device());
+            ensure_densification_info_shape_inplace(
+                _splat_data->_densification_info,
+                static_cast<size_t>(_splat_data->size()),
+                _splat_data->means().device(),
+                _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
+            _splat_data->_densification_info.zero_();
             ensure_error_score_shape();
             _error_score_max.zero_();
 
@@ -880,31 +971,63 @@ namespace lfs::training {
             _splat_data->rotation_raw().device());
         _splat_data->rotation_raw().index_put_(prune_indices, zero_rotation);
 
-        // Zero optimizer states in-place (preserves capacity)
+        // Zero optimizer states in-place (preserves capacity).
+        // joint codec has no exp_avg_scale — early-return left stale moments on
+        // pruned slots (reused after soft-delete). Mirror MCMC joint reset branch.
         auto zero_optimizer_state = [&](ParamType param_type) {
             auto* state = _optimizer->get_state_mutable(param_type);
             if (!state)
                 return;
 
-            // Quantised moments: zero per-primitive scales to reset moments to zero (both
-            // contiguous and swizzled layouts). grad keeps its native-layout zeroing.
-            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
-                return;
-            auto scale_zeros = lfs::core::Tensor::zeros(
-                lfs::core::TensorShape({prune_indices.numel()}), state->exp_avg_scale.device());
-            state->exp_avg_scale.index_put_(prune_indices, scale_zeros);
-            state->exp_avg_sq_scale.index_put_(prune_indices, scale_zeros);
-
-            if (param_type == ParamType::ShN) {
-                const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-                if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
-                    auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
-                                       ? prune_indices
-                                       : prune_indices.to(lfs::core::DataType::Int32);
-                    lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+            if (state->is_joint()) {
+                auto idx_cpu = prune_indices.cpu();
+                std::vector<int64_t> host_idx;
+                host_idx.reserve(static_cast<size_t>(num_pruned));
+                if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
+                    const auto* p = idx_cpu.ptr<int64_t>();
+                    host_idx.assign(p, p + num_pruned);
+                } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
+                    const auto* p = idx_cpu.ptr<int32_t>();
+                    for (int64_t i = 0; i < num_pruned; ++i)
+                        host_idx.push_back(static_cast<int64_t>(p[i]));
                 }
-                return;
+                if (!host_idx.empty())
+                    _optimizer->reset_state_at_indices(param_type, host_idx);
+                if (param_type == ParamType::ShN) {
+                    const auto layout_rest =
+                        static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
+                    if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                        auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
+                                           ? prune_indices
+                                           : prune_indices.to(lfs::core::DataType::Int32);
+                        lfs::core::shN_swizzled_zero_at_indices(
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(),
+                            layout_rest);
+                    }
+                    return;
+                }
+            } else {
+                // Legacy: zero scales → moments dequantise to zero.
+                if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
+                    return;
+                auto scale_zeros = lfs::core::Tensor::zeros(
+                    lfs::core::TensorShape({prune_indices.numel()}), state->exp_avg_scale.device());
+                state->exp_avg_scale.index_put_(prune_indices, scale_zeros);
+                state->exp_avg_sq_scale.index_put_(prune_indices, scale_zeros);
+
+                if (param_type == ParamType::ShN) {
+                    const auto layout_rest =
+                        static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
+                    if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                        auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
+                                           ? prune_indices
+                                           : prune_indices.to(lfs::core::DataType::Int32);
+                        lfs::core::shN_swizzled_zero_at_indices(
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(),
+                            layout_rest);
+                    }
+                    return;
+                }
             }
 
             if (state->grad.is_valid() && state->grad.numel() > 0) {
@@ -969,16 +1092,33 @@ namespace lfs::training {
         const int64_t slots_to_fill = std::min(count, num_free);
         auto target_indices = free_indices.slice(0, 0, slots_to_fill);
 
-        // Copy data to free slots
-        _splat_data->means().index_put_(target_indices, positions.slice(0, 0, slots_to_fill));
-        _splat_data->rotation_raw().index_put_(target_indices, rotations.slice(0, 0, slots_to_fill));
-        _splat_data->scaling_raw().index_put_(target_indices, scales.slice(0, 0, slots_to_fill));
+        float* adam_ptrs[12] = {};
+        const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
+        const int opacity_dim = (_splat_data->opacity_raw().ndim() == 2) ? 1 : 0;
+        auto pos_slice = positions.slice(0, 0, slots_to_fill);
+        auto rot_slice = rotations.slice(0, 0, slots_to_fill);
+        auto scale_slice = scales.slice(0, 0, slots_to_fill);
+        auto sh0_slice = sh0.slice(0, 0, slots_to_fill);
+        auto opac_slice = opacities.slice(0, 0, slots_to_fill);
 
-        // sh0 needs reshape from [slots_to_fill, 3] to [slots_to_fill, 1, 3]
-        auto sh0_reshaped = sh0.slice(0, 0, slots_to_fill).reshape(lfs::core::TensorShape({static_cast<size_t>(slots_to_fill), 1, 3}));
-        _splat_data->sh0().index_put_(target_indices, sh0_reshaped);
-
-        _splat_data->opacity_raw().index_put_(target_indices, opacities.slice(0, 0, slots_to_fill));
+        kernels::launch_fill_free_slots_fused(
+            target_indices.ptr<int64_t>(),
+            static_cast<size_t>(slots_to_fill),
+            pos_slice.ptr<float>(),
+            rot_slice.ptr<float>(),
+            scale_slice.ptr<float>(),
+            sh0_slice.ptr<float>(),
+            opac_slice.ptr<float>(),
+            _splat_data->means().ptr<float>(),
+            _splat_data->rotation_raw().ptr<float>(),
+            _splat_data->scaling_raw().ptr<float>(),
+            _splat_data->sh0().ptr<float>(),
+            _splat_data->opacity_raw().ptr<float>(),
+            opacity_dim,
+            adam_ptrs,
+            n_adam,
+            _free_mask.ptr<bool>(),
+            current_size);
 
         const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
         if (layout_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
@@ -996,54 +1136,88 @@ namespace lfs::training {
                 layout_rest);
         }
 
-        // Reset optimizer states for filled slots
-        auto reset_optimizer_state = [&](ParamType param_type) {
-            auto* state = _optimizer->get_state_mutable(param_type);
-            if (!state)
-                return;
+        // Zero residual grads so the post-densify Adam step does not use
+        // previous-occupant / pre-split gradients on rewritten rows.
+        zero_adam_grads_at_indices(*_optimizer, target_indices, layout_rest);
 
-            // Quantised moments: zero per-primitive scales to reset moments (contiguous + shN).
-            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
-                return;
-            auto scale_zeros = lfs::core::Tensor::zeros(
-                lfs::core::TensorShape({target_indices.numel()}), state->exp_avg_scale.device());
-            state->exp_avg_scale.index_put_(target_indices, scale_zeros);
-            state->exp_avg_sq_scale.index_put_(target_indices, scale_zeros);
+        // Merge: joint-codec state resets via optimizer API (fused scale-zero is a no-op
+        // for joint state); legacy codec relies on the fused fill kernel having zeroed scales.
+        {
+            auto* probe = _optimizer->get_state_mutable(ParamType::Means);
+            const bool joint_codec = probe && probe->is_joint();
+            if (joint_codec) {
+                auto reset_optimizer_state = [&](ParamType param_type) {
+                    auto* state = _optimizer->get_state_mutable(param_type);
+                    if (!state)
+                        return;
 
-            if (param_type == ParamType::ShN) {
-                if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
-                    auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
-                                       ? target_indices
-                                       : target_indices.to(lfs::core::DataType::Int32);
-                    lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
-                }
-                return;
+                    if (state->is_joint()) {
+                        auto idx_cpu = target_indices.cpu();
+                        std::vector<int64_t> host_idx;
+                        host_idx.reserve(target_indices.numel());
+                        if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
+                            const auto* p = idx_cpu.ptr<int64_t>();
+                            host_idx.assign(p, p + target_indices.numel());
+                        } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
+                            const auto* p = idx_cpu.ptr<int32_t>();
+                            for (size_t i = 0; i < target_indices.numel(); ++i)
+                                host_idx.push_back(static_cast<int64_t>(p[i]));
+                        }
+                        if (!host_idx.empty())
+                            _optimizer->reset_state_at_indices(param_type, host_idx);
+                        if (param_type == ParamType::ShN) {
+                            if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                                auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
+                                                   ? target_indices
+                                                   : target_indices.to(lfs::core::DataType::Int32);
+                                lfs::core::shN_swizzled_zero_at_indices(
+                                    state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+                            }
+                            return;
+                        }
+                    } else {
+                        // Legacy: zero scales → moments dequantise to zero.
+                        if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
+                            return;
+                        auto scale_zeros = lfs::core::Tensor::zeros(
+                            lfs::core::TensorShape({target_indices.numel()}), state->exp_avg_scale.device());
+                        state->exp_avg_scale.index_put_(target_indices, scale_zeros);
+                        state->exp_avg_sq_scale.index_put_(target_indices, scale_zeros);
+
+                        if (param_type == ParamType::ShN) {
+                            if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                                auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
+                                                   ? target_indices
+                                                   : target_indices.to(lfs::core::DataType::Int32);
+                                lfs::core::shN_swizzled_zero_at_indices(
+                                    state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+                            }
+                            return;
+                        }
+                    }
+
+                    if (state->grad.is_valid() && state->grad.numel() > 0) {
+                        const auto& shape = state->grad.shape();
+                        if (has_zero_dimension(shape))
+                            return;
+                        std::vector<size_t> dims = {static_cast<size_t>(slots_to_fill)};
+                        for (size_t i = 1; i < shape.rank(); ++i) {
+                            dims.push_back(shape[i]);
+                        }
+                        auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->grad.device());
+                        state->grad.index_put_(target_indices, zeros);
+                    }
+                };
+
+                reset_optimizer_state(ParamType::Means);
+                reset_optimizer_state(ParamType::Rotation);
+                reset_optimizer_state(ParamType::Scaling);
+                reset_optimizer_state(ParamType::Sh0);
+                reset_optimizer_state(ParamType::ShN);
+                reset_optimizer_state(ParamType::Opacity);
             }
+        }
 
-            if (state->grad.is_valid() && state->grad.numel() > 0) {
-                const auto& shape = state->grad.shape();
-                if (has_zero_dimension(shape))
-                    return;
-                std::vector<size_t> dims = {static_cast<size_t>(slots_to_fill)};
-                for (size_t i = 1; i < shape.rank(); ++i) {
-                    dims.push_back(shape[i]);
-                }
-                auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->grad.device());
-                state->grad.index_put_(target_indices, zeros);
-            }
-        };
-
-        reset_optimizer_state(ParamType::Means);
-        reset_optimizer_state(ParamType::Rotation);
-        reset_optimizer_state(ParamType::Scaling);
-        reset_optimizer_state(ParamType::Sh0);
-        reset_optimizer_state(ParamType::ShN);
-        reset_optimizer_state(ParamType::Opacity);
-
-        // Mark filled slots as active
-        auto false_vals = lfs::core::Tensor::zeros_bool({static_cast<size_t>(slots_to_fill)}, target_indices.device());
-        _free_mask.index_put_(target_indices, false_vals);
         set_deleted_mask_rows(*_splat_data, _free_mask, target_indices, false);
 
         if (_error_score_max.is_valid() && _error_score_max.ndim() == 1 && _error_score_max.numel() >= current_size) {

@@ -4,10 +4,14 @@
 
 #include "backward.h"
 #include "buffer_utils.h"
+#include "forward.h"
 #include "helper_math.h"
 #include "kernels_backward.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <functional>
 
 void fast_lfs::rasterization::backward(
@@ -50,6 +54,11 @@ void fast_lfs::rasterization::backward(
     bool mip_filter,
     DensificationType densification_type,
     FusedAdamSettings fused_adam,
+    // model-truth shN-rest decode binds (independent of fused Adam
+    // enablement, which is off during SH warmup while the buffer is already q16).
+    const float2* shN_value_bounds,
+    const uint shN_value_n_cells,
+    const uint shN_value_bits,
     cudaStream_t stream) {
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
@@ -62,6 +71,12 @@ void fast_lfs::rasterization::backward(
     auto* fastgs_status = per_primitive_buffers.forward_status;
 
     if (n_instances > 0) {
+        // cull mode + batch size via shared test hooks (production: cull ON,
+        // config::blend_batch_size). Mode is read at backward launch so tests can set it
+        // after forward returns.
+        const int warp_cull_mode = warp_cull_mode_for_testing();
+        const int blend_batch_override = blend_batch_size_for_testing();
+
         // Backward blend (template dispatch eliminates densification branch from inner loop)
         auto launch_blend_backward_typed = [&]<DensificationType DENS_TYPE, bool NORMAL_CHANNEL>() {
             kernels::backward::blend_backward_cu<DENS_TYPE, NORMAL_CHANNEL><<<n_tiles, config::block_size_blend_backward, 0, stream>>>(
@@ -93,7 +108,9 @@ void fast_lfs::rasterization::backward(
                 n_primitives,
                 width,
                 height,
-                grid.x);
+                grid.x,
+                warp_cull_mode,
+                blend_batch_override);
             LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.blend_backward");
         };
         auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {
@@ -144,7 +161,10 @@ void fast_lfs::rasterization::backward(
                 cx,
                 cy,
                 sh_layout_slots,
-                fused_adam);
+                fused_adam,
+                shN_value_bounds,
+                shN_value_n_cells,
+                shN_value_bits);
             LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.preprocess_backward");
         };
         auto launch_preprocess_backward_for_mip = [&]<int ACTIVE_SH_BASES>() {

@@ -21,7 +21,7 @@ TEST(ImageResizeParallelTest, LoadImagesWithResize) {
     const int NUM_IMAGES = 4;
 
     // Get singleton instance with CPU cache enabled
-    auto& loader = CacheLoader::getInstance(true, false); // use_cpu_memory=true, use_fs_cache=false
+    auto& loader = CacheLoader::getInstance(true);
 
     // Find test images
     std::vector<std::filesystem::path> image_paths;
@@ -130,7 +130,7 @@ TEST(ImageResizeParallelTest, LoadImagesWithResize) {
 }
 
 TEST(ImageResizeParallelTest, CompareWithNoResize) {
-    auto& loader = CacheLoader::getInstance(true, false); // use_cpu_memory=true, use_fs_cache=false
+    auto& loader = CacheLoader::getInstance(true);
 
     const std::filesystem::path data_dir =
         std::filesystem::path(TEST_DATA_DIR) / "bicycle/images_4";

@@ -17,6 +17,15 @@ namespace lfs::core {
     using ExportNativeHandle = int;
 #endif
 
+    // Ownership contract: `native` is the CUDA-side OPAQUE_FD
+    // WIN32 shareable handle for the *current* committed physical. Exactly one
+    // live export exists per block. growExportableDeviceBlock() closes the old
+    // fd (release_physical) and installs a fresh export into both OwnedAllocation
+    // and this handle atomically before returning. Vulkan import must destroy any
+    // prior VkDeviceMemory import, then dup and import the current handle.native
+    // (which the importer never owns or closes), and re-import after every
+    // successful grow because handle.size changed.
+    // Closing handle.native is solely the exportable block's job on release/teardown.
     struct ExportHandle {
         ExportNativeHandle native = ExportNativeHandle{};
         std::size_t size = 0;
@@ -59,6 +68,11 @@ namespace lfs::core {
     // address. Returns true if the block grew (handle/size changed, callers must
     // re-import into Vulkan), false if it already satisfied new_size. device_ptr
     // is unchanged on success. Must not run while the GPU is using the block.
+    //
+    // Ordering: any Vulkan import of the current export handle must be destroyed
+    // before this call (release_physical unmaps + cuMemRelease + closes the old
+    // fd). Holding a live VkDeviceMemory over that teardown can trigger
+    // "NVRM: VM: invalid mmap context".
     [[nodiscard]] std::expected<bool, std::string>
     growExportableDeviceBlock(const std::shared_ptr<ExportableBlock>& block, std::size_t new_size);
 

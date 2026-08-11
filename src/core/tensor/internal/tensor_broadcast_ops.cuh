@@ -737,6 +737,39 @@ namespace lfs::core::tensor_ops {
         size_t c_elements;
     };
 
+    // Same-shape early-out: no index math, optional float4 vectorization.
+    template <typename T, typename OutputT, typename BinaryOp>
+    __global__ void broadcast_binary_same_shape_kernel(
+        const T* __restrict__ a, const T* __restrict__ b, OutputT* __restrict__ c,
+        size_t n, BinaryOp op) {
+        size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx < n) {
+            c[idx] = op(a[idx], b[idx]);
+        }
+    }
+
+    template <typename BinaryOp>
+    __global__ void broadcast_binary_same_shape_vec4_kernel_float(
+        const float* __restrict__ a, const float* __restrict__ b, float* __restrict__ c,
+        size_t n, BinaryOp op) {
+        const size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        const size_t idx = vec_idx * 4;
+        if (idx + 3 < n) {
+            float4 av = reinterpret_cast<const float4*>(a)[vec_idx];
+            float4 bv = reinterpret_cast<const float4*>(b)[vec_idx];
+            float4 out;
+            out.x = op(av.x, bv.x);
+            out.y = op(av.y, bv.y);
+            out.z = op(av.z, bv.z);
+            out.w = op(av.w, bv.w);
+            reinterpret_cast<float4*>(c)[vec_idx] = out;
+        } else if (idx < n) {
+            for (size_t i = idx; i < n; ++i) {
+                c[i] = op(a[i], b[i]);
+            }
+        }
+    }
+
     template <typename T, typename OutputT, typename BinaryOp>
     __global__ void broadcast_binary_kernel(
         const T* a, const T* b, OutputT* c, BroadcastBinaryParams params,
@@ -967,39 +1000,61 @@ namespace lfs::core::tensor_ops {
             }
 
             case BroadcastPattern::Channel3D: {
-                // Channel3D broadcast: (H×W×C) op (1×1×C) - VECTORIZED FAST PATH!
-                // Critical for neural rendering: color transforms, normalization, etc.
+                // Channel3D: (H×W×C) op (1×1×C). Heuristic by C:
+                //   C <= 8  → per-pixel kernel (best for small C; float4/RGB specials)
+                //   C <= 128 and smem fits → smem kernel (channels reused from shared)
+                //   else    → coalesced warp kernel (large C, consecutive channels)
                 const size_t H = c_shape[0];
                 const size_t W = c_shape[1];
                 const size_t C = c_shape[2];
                 const bool a_is_broadcast = (a_shape[0] == 1 && a_shape[1] == 1);
-
-                // Grid: process all pixels in parallel
                 const size_t total_pixels = H * W;
-                const int grid_size = (total_pixels + block_size - 1) / block_size;
-                const int max_grid_dim = 65535; // CUDA limit
-
-                // Use 2D grid if 1D grid would exceed limit
-                dim3 grid;
-                if (grid_size <= max_grid_dim) {
-                    grid = dim3(grid_size, 1);
-                } else {
-                    // Split into 2D grid
-                    const int grid_x = (grid_size + max_grid_dim - 1) / max_grid_dim;
-                    const int grid_y = (grid_size + grid_x - 1) / grid_x;
-                    grid = dim3(grid_x, grid_y);
-                }
-
-                // NOTE: For C >= 16, memory coalescing becomes an issue with (H×W×C) layout
-                // Each thread processes one pixel (all C channels), causing strided access
-                // PyTorch likely uses different layout or transpose for better coalescing
-                // Our kernel is optimized for small C (3,4,8) which are most common in rendering
-                // For C=64, we're ~20% slower than PyTorch, but 10-12× faster for C=3,4!
+                const int max_grid_dim = 65535;
 
 #ifdef __CUDACC__
-                broadcast_channel3d_kernel_float<<<grid, block_size, 0, stream>>>(
-                    a, b, c, H, W, C, a_is_broadcast, op);
-                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.channel3d");
+                constexpr size_t kSmemChannelCap = 3072; // ~12 KiB float smem
+                if (C > 8 && C <= kSmemChannelCap) {
+                    // Shared-memory kernel: one thread per pixel, channels in smem
+                    const int grid_1d = static_cast<int>((total_pixels + block_size - 1) / block_size);
+                    dim3 grid;
+                    if (grid_1d <= max_grid_dim) {
+                        grid = dim3(grid_1d, 1);
+                    } else {
+                        const int grid_x = (grid_1d + max_grid_dim - 1) / max_grid_dim;
+                        const int grid_y = (grid_1d + grid_x - 1) / grid_x;
+                        grid = dim3(grid_x, grid_y);
+                    }
+                    const size_t smem_bytes = C * sizeof(float);
+                    broadcast_channel3d_smem_kernel_float<<<grid, block_size, smem_bytes, stream>>>(
+                        a, b, c, H, W, C, a_is_broadcast, op);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.channel3d_smem");
+                } else if (C > kSmemChannelCap) {
+                    // Coalesced: warps cooperate on channels; pixels assigned to warps
+                    const int warps_per_block = block_size / 32;
+                    const int grid_1d = static_cast<int>(
+                        (total_pixels + static_cast<size_t>(warps_per_block) - 1) /
+                        static_cast<size_t>(warps_per_block));
+                    const int grid_size = std::max(1, std::min(grid_1d, max_grid_dim));
+                    const size_t smem_bytes = C * sizeof(float);
+                    broadcast_channel3d_coalesced_kernel_float<<<grid_size, block_size,
+                                                                 smem_bytes, stream>>>(
+                        a, b, c, H, W, C, a_is_broadcast, op);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.channel3d_coalesced");
+                } else {
+                    // Small C (1,3,4,8): original per-pixel kernel with float4 specials
+                    const int grid_1d = static_cast<int>((total_pixels + block_size - 1) / block_size);
+                    dim3 grid;
+                    if (grid_1d <= max_grid_dim) {
+                        grid = dim3(grid_1d, 1);
+                    } else {
+                        const int grid_x = (grid_1d + max_grid_dim - 1) / max_grid_dim;
+                        const int grid_y = (grid_1d + grid_x - 1) / grid_x;
+                        grid = dim3(grid_x, grid_y);
+                    }
+                    broadcast_channel3d_kernel_float<<<grid, block_size, 0, stream>>>(
+                        a, b, c, H, W, C, a_is_broadcast, op);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.channel3d");
+                }
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -1049,6 +1104,41 @@ namespace lfs::core::tensor_ops {
 
         // Generic kernel for all types and complex patterns
         const int block_size = 256;
+
+        // same-shape early-out (no broadcast index math; float4 when aligned)
+        bool same_shape = (a_rank == c_rank && b_rank == c_rank);
+        if (same_shape) {
+            for (size_t i = 0; i < c_rank; ++i) {
+                if (a_shape[i] != c_shape[i] || b_shape[i] != c_shape[i]) {
+                    same_shape = false;
+                    break;
+                }
+            }
+        }
+        if (same_shape) {
+#ifdef __CUDACC__
+            if constexpr (std::is_same_v<T, float> && std::is_same_v<OutputT, float>) {
+                const bool a_al = (reinterpret_cast<uintptr_t>(a) % 16) == 0;
+                const bool b_al = (reinterpret_cast<uintptr_t>(b) % 16) == 0;
+                const bool c_al = (reinterpret_cast<uintptr_t>(c) % 16) == 0;
+                if (a_al && b_al && c_al && c_elements >= 4) {
+                    const size_t vec_n = (c_elements + 3) / 4;
+                    const int grid = static_cast<int>((vec_n + block_size - 1) / block_size);
+                    broadcast_binary_same_shape_vec4_kernel_float<<<grid, block_size, 0, stream>>>(
+                        a, b, c, c_elements, op);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.binary_same_shape_vec4");
+                    return;
+                }
+            }
+            const int grid = static_cast<int>((c_elements + block_size - 1) / block_size);
+            broadcast_binary_same_shape_kernel<<<grid, block_size, 0, stream>>>(
+                a, b, c, c_elements, op);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.binary_same_shape");
+#else
+            static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
+#endif
+            return;
+        }
 
         LFS_ASSERT_MSG(c_rank > 0,
                        "Generic binary broadcast requires a non-scalar output");

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/splat_data_mirror.hpp"
+#include "core/crash_handler.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
@@ -47,6 +48,22 @@ namespace lfs::core {
         std::mutex g_cache_mutex;
         MirrorCache g_cache;
 
+        void clear_mirror_cache() noexcept {
+            // g_cache is a non-local static constructed before the
+            // CudaMemoryPool singleton. Free CUDA mult tensors while the pool
+            // is still alive so static destruction finds empty holders.
+            std::lock_guard lock(g_cache_mutex);
+            for (int a = 0; a < 3; ++a) {
+                g_cache.pos_mult[a] = {};
+                g_cache.quat_mult[a] = {};
+                for (int d = 0; d < 3; ++d) {
+                    g_cache.sh_mult[a][d] = {};
+                }
+            }
+            g_cache.valid = false;
+            g_cache.device = Device::CPU;
+        }
+
         void ensure_cache(const Device device) {
             std::lock_guard lock(g_cache_mutex);
 
@@ -71,6 +88,11 @@ namespace lfs::core {
             g_cache.device = device;
             g_cache.valid = true;
         }
+
+        const bool g_mirror_cache_release_hook_registered = [] {
+            register_gpu_pre_shutdown_hook([]() noexcept { clear_mirror_cache(); });
+            return true;
+        }();
 
     } // namespace
 
@@ -132,30 +154,20 @@ namespace lfs::core {
             rot.index_copy_(0, indices, rot.index_select(0, indices) * g_cache.quat_mult[a]);
         }
 
-        // SH coefficients (degrees 1-3 only, shN excludes DC). Gather only selected
-        // rows to linear form, apply signs, then scatter back into swizzled storage.
+        // SH coefficients (degrees 1-3 only, shN excludes DC). Use
+        // shN_canonical() so q16-resident models dequant correctly (raw
+        // shN().ptr<float>() aborts on Float16 codes).
         const size_t layout_rest = splat_data.max_sh_coeffs_rest();
         if (splat_data.shN().is_valid() && splat_data.shN().numel() > 0 && layout_rest > 0) {
             const int degree = static_cast<int>(std::sqrt(layout_rest + 1)) - 1;
             if (degree >= 1 && degree <= 3) {
-                const auto layout_rest_u32 = static_cast<uint32_t>(layout_rest);
-                Tensor selected_shN = Tensor::empty(
-                    {static_cast<size_t>(indices.numel()), layout_rest, 3}, device);
-                shN_swizzled_gather_to_linear(
-                    splat_data.shN().ptr<float>(),
-                    indices.ptr<int>(),
-                    selected_shN.ptr<float>(),
-                    indices.numel(),
-                    layout_rest_u32,
-                    layout_rest_u32);
-                selected_shN = selected_shN * g_cache.sh_mult[a][degree - 1];
-                shN_swizzled_scatter_linear(
-                    splat_data.shN().ptr<float>(),
-                    indices.ptr<int>(),
-                    selected_shN.ptr<float>(),
-                    indices.numel(),
-                    layout_rest_u32,
-                    layout_rest_u32);
+                Tensor shN_canon = splat_data.shN_canonical();
+                if (shN_canon.device() != device)
+                    shN_canon = shN_canon.to(device);
+                const auto selected =
+                    shN_canon.index_select(0, indices) * g_cache.sh_mult[a][degree - 1];
+                shN_canon.index_copy_(0, indices, selected);
+                splat_data.shN_set_from_canonical(shN_canon, splat_data.means().capacity());
             }
         }
     }

@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -13,6 +15,7 @@
 #include "core/camera.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
@@ -20,7 +23,10 @@
 #include "core/tensor.hpp"
 #include "io/loader.hpp"
 #include "io/loaders/checkpoint_loader.hpp"
+#include "lfs/training/sh_value_codec.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "training/checkpoint.hpp"
+#include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 #include "training/strategies/mcmc.hpp"
 #include "training/strategies/strategy_factory.hpp"
@@ -84,6 +90,7 @@ namespace {
         const auto context = fast_lfs::rasterization::forward_raw(
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
             nullptr, nullptr, nullptr, nullptr,
+            /*bg_color_ptr=*/nullptr, /*bg_image_ptr=*/nullptr,
             0, 1, 1, 1, 1,
             1.0f, 1.0f, 0.5f, 0.5f, 0.01f, 100.0f, false, nullptr);
         EXPECT_FALSE(context.success);
@@ -125,7 +132,6 @@ namespace {
     TEST(TrainerRetrySemantics, GlobalArenaCanBeReconfiguredForCapacityInjection) {
         lfs::core::RasterizerMemoryArena::Config config;
         config.virtual_size = 128ULL << 20;
-        config.initial_commit = 64ULL << 20;
         config.max_physical = 64ULL << 20;
         config.granularity = 64ULL << 20;
         config.enable_vmm = false;
@@ -142,7 +148,6 @@ namespace {
 
         lfs::core::RasterizerMemoryArena::Config config;
         config.virtual_size = 128ULL << 20;
-        config.initial_commit = 64ULL << 20;
         config.max_physical = 64ULL << 20;
         config.granularity = 64ULL << 20;
         config.enable_vmm = false;
@@ -154,6 +159,7 @@ namespace {
             return fast_lfs::rasterization::forward_raw(
                 ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr,
                 ptr, ptr, ptr, nullptr,
+                /*bg_color_ptr=*/nullptr, /*bg_image_ptr=*/nullptr,
                 10'000'000, 1, 1, 1, 1,
                 1.0f, 1.0f, 0.5f, 0.5f, 0.01f, 100.0f, false, nullptr);
         };
@@ -202,7 +208,8 @@ namespace {
     constexpr const char* TEST_IMAGES = "images_4";
     std::unique_ptr<lfs::core::SplatData> make_checkpoint_test_splat(
         const size_t count,
-        const lfs::core::Device device = lfs::core::Device::CPU) {
+        const lfs::core::Device device = lfs::core::Device::CPU,
+        const int max_sh_degree = 0) {
         std::vector<float> means(count * 3, 0.0f);
         std::vector<float> rotations(count * 4, 0.0f);
         for (size_t i = 0; i < count; ++i) {
@@ -210,11 +217,25 @@ namespace {
             rotations[i * 4] = 1.0f;
         }
 
+        const size_t rest = max_sh_degree > 0
+                                ? static_cast<size_t>(max_sh_degree * (max_sh_degree + 2))
+                                : size_t{0};
+        auto shN = rest == 0
+                       ? lfs::core::Tensor::zeros({size_t{0}}, device, lfs::core::DataType::Float32)
+                       : lfs::core::Tensor::zeros({count, rest, size_t{3}}, device, lfs::core::DataType::Float32);
+        if (rest > 0 && shN.is_valid()) {
+            auto cpu = shN.cpu();
+            auto* p = cpu.ptr<float>();
+            for (size_t i = 0; i < count * rest * 3; ++i)
+                p[i] = 0.01f * static_cast<float>((i % 17) + 1);
+            shN = cpu.to(device);
+        }
+
         return std::make_unique<lfs::core::SplatData>(
-            0,
+            max_sh_degree,
             lfs::core::Tensor::from_vector(means, {count, size_t{3}}, device),
             lfs::core::Tensor::zeros({count, size_t{1}, size_t{3}}, device, lfs::core::DataType::Float32),
-            lfs::core::Tensor::zeros({size_t{0}}, device, lfs::core::DataType::Float32),
+            std::move(shN),
             lfs::core::Tensor::zeros({count, size_t{3}}, device, lfs::core::DataType::Float32),
             lfs::core::Tensor::from_vector(rotations, {count, size_t{4}}, device),
             lfs::core::Tensor::zeros({count, size_t{1}}, device, lfs::core::DataType::Float32),
@@ -333,6 +354,115 @@ namespace {
         EXPECT_EQ(scene.getTrainingModelGaussianCount(), static_cast<size_t>(target_splats));
 
         trainer->shutdown();
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    // joint Adam + optional q16 shN must survive save→load resume with both
+    // codec modes. Round-trips moments (joint_bits/packed) and dequantised shN.
+    TEST(CheckpointResumeRoundtripTest, JointCodecAndQ16ShN) {
+        namespace sh_value = lfs::training::sh_value;
+
+        sh_value::set_sh_value_quant_enabled_for_testing(true);
+
+        constexpr size_t count = 32;
+        constexpr size_t max_cap = 64;
+        constexpr int sh_degree = 1;
+
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_ckpt_joint_q16_roundtrip";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = temp_dir;
+        params.optimization.strategy = "mcmc";
+        params.optimization.max_cap = static_cast<int>(max_cap);
+        params.freeze_lr_scale = 0.25f;
+
+        auto source_model = make_checkpoint_test_splat(count, lfs::core::Device::CUDA, sh_degree);
+        ASSERT_TRUE(sh_value::apply_shN_value_quant(*source_model));
+        EXPECT_TRUE(source_model->shN_value_quantized() ||
+                    source_model->shN_raw().dtype() == lfs::core::DataType::Float16);
+
+        lfs::training::MCMC source_strategy(*source_model);
+        source_strategy.initialize(params.optimization);
+        source_strategy.get_optimizer().set_frozen_lr_scale(params.freeze_lr_scale);
+
+        // Touch one joint state so step_count is non-zero and packed tensors are live.
+        auto* means_state = source_strategy.get_optimizer().get_state_mutable(
+            lfs::training::ParamType::Means);
+        ASSERT_NE(means_state, nullptr);
+        ASSERT_TRUE(means_state->is_joint()) << "expected joint codec moments";
+        means_state->step_count = 11;
+        const int expected_joint_bits = means_state->joint_bits;
+        const auto packed_shape = means_state->exp_avg.shape();
+        const auto bounds_shape = means_state->joint_bounds.shape();
+
+        // Seed a non-trivial packed pattern so resume is not a pure zero-state check.
+        {
+            auto packed_cpu = means_state->exp_avg.cpu();
+            auto* bytes = packed_cpu.ptr<uint8_t>();
+            for (size_t i = 0; i < packed_cpu.numel(); ++i)
+                bytes[i] = static_cast<uint8_t>((i * 17 + 3) & 0xff);
+            means_state->exp_avg = packed_cpu.cuda();
+            auto bounds_cpu = means_state->joint_bounds.cpu();
+            auto* b = bounds_cpu.ptr<float>();
+            for (size_t i = 0; i < bounds_cpu.numel(); ++i)
+                b[i] = (i % 2 == 0) ? -0.5f : 0.5f;
+            means_state->joint_bounds = bounds_cpu.cuda();
+        }
+
+        auto shN_before = source_model->shN_canonical_cpu();
+
+        ASSERT_TRUE(lfs::training::save_checkpoint(temp_dir, 42, source_strategy, params).has_value());
+
+        auto target_model = make_checkpoint_test_splat(1, lfs::core::Device::CUDA, sh_degree);
+        lfs::training::MCMC target_strategy(*target_model);
+        target_strategy.initialize(params.optimization);
+        auto load_params = params;
+        const auto load_result = lfs::training::load_checkpoint(
+            lfs::training::checkpoint_output_path(temp_dir),
+            target_strategy, load_params, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(load_result.has_value()) << load_result.error();
+        EXPECT_EQ(*load_result, 42);
+        EXPECT_EQ(static_cast<size_t>(target_strategy.get_model().size()), count);
+
+        const auto& restored_opt = target_strategy.get_optimizer();
+        // freeze_lr_scale is adopted with optimizer state
+        // (set on the loaded optimizer before adopt).
+        const auto* restored_means = restored_opt.get_state(lfs::training::ParamType::Means);
+        ASSERT_NE(restored_means, nullptr);
+        EXPECT_TRUE(restored_means->is_joint());
+        EXPECT_EQ(restored_means->joint_bits, expected_joint_bits);
+        EXPECT_EQ(restored_means->step_count, 11);
+        EXPECT_EQ(restored_means->exp_avg.shape(), packed_shape);
+        EXPECT_EQ(restored_means->joint_bounds.shape(), bounds_shape);
+
+        {
+            auto got = restored_means->exp_avg.cpu();
+            auto* bytes = got.ptr<uint8_t>();
+            size_t mismatches = 0;
+            for (size_t i = 0; i < got.numel(); ++i) {
+                if (bytes[i] != static_cast<uint8_t>((i * 17 + 3) & 0xff))
+                    ++mismatches;
+            }
+            EXPECT_EQ(mismatches, 0u) << "joint packed moments did not round-trip";
+        }
+
+        auto shN_after = target_strategy.get_model().shN_canonical_cpu();
+        ASSERT_EQ(shN_before.shape(), shN_after.shape());
+        {
+            const auto* a = shN_before.ptr<float>();
+            const auto* b = shN_after.ptr<float>();
+            double max_abs = 0.0;
+            for (size_t i = 0; i < shN_before.numel(); ++i)
+                max_abs = std::max(max_abs, std::abs(static_cast<double>(a[i] - b[i])));
+            // q16 encode → disk dequant → re-quant on resume is lossy; tolerate
+            // a small absolute error on the synthetic 0.01-scale SH values.
+            EXPECT_LT(max_abs, 0.15) << "shN q16/canonical round-trip error too high";
+        }
+
+        sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
         std::filesystem::remove_all(temp_dir, ec);
     }
 
@@ -667,11 +797,11 @@ namespace {
         const auto& [strategy, sh_degree, checkpoint_iter, total_iter] = GetParam();
         LOG_INFO("Testing checkpoint resume: strategy={}, sh_degree={}", strategy, sh_degree);
         const int phase_one_iterations = checkpoint_iter + 1;
-        // Phase 1 always leaves the rotating checkpoint at the completed iteration because the
+        // The initial run leaves the rotating checkpoint at the completed iteration because the
         // final save path writes a .resume alongside the final PLY.
         const int checkpoint_iteration = phase_one_iterations;
 
-        // Phase 1: Write multiple checkpoints and verify the latest save is the only one retained.
+        // First write multiple checkpoints and verify only the latest is retained.
         {
             auto params = createParams(phase_one_iterations);
             params.optimization.save_steps = {
@@ -714,7 +844,7 @@ namespace {
         }
         EXPECT_EQ(resume_file_count, 1u);
 
-        // Phase 2: Load checkpoint and resume to final iteration
+        // Then load the retained checkpoint and resume to the final iteration.
         {
             auto checkpoint_params_result = lfs::core::load_checkpoint_params(checkpoint_path);
             ASSERT_TRUE(checkpoint_params_result.has_value())

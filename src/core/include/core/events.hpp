@@ -301,6 +301,8 @@ namespace lfs::core {
             EVENT(ToggleUI, );
             EVENT(ToggleFullscreen, );
             EVENT(ToggleVramHud, );
+            EVENT(TogglePerfHudExpanded, );
+            EVENT(OpenPerfHudLedger, );
         } // namespace ui
 
         // ============================================================================

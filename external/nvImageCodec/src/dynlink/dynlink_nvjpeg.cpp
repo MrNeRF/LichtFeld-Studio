@@ -50,17 +50,24 @@ namespace {
             if (GetModuleFileName(hm, dll_path, sizeof(dll_path)) != 0) {
                 fs::path path(dll_path);
                 // if this comes from a shared_object like in Python site-packages,
-                // go level up dir and add "nvjpeg2k/bin" to the path
+                // go level up dir and add "nvjpeg/bin" to the path
                 // Examples:
                 //  C:/Python39/Lib/site-packages/nvidia/nvimgcodec/extensions/nvjpeg_ext_0.dll
                 //                               |
                 //                               V
+                path = path.parent_path();
+                path = path.parent_path();
+                path = path.parent_path();
+#if CUDA_VERSION_MAJOR < 13
                 //  C:/Python39/Lib/site-packages/nvidia/nvjpeg/bin
-                path = path.parent_path();
-                path = path.parent_path();
-                path = path.parent_path();
                 path /= "nvjpeg";
                 path /= "bin";
+#else
+                //  C:/Python39/Lib/site-packages/nvidia/cu<CUDA_VERSION_MAJOR>/bin/x86_64
+                path /= "cu" STR(CUDA_VERSION_MAJOR);
+                path /= "bin";
+                path /= "x86_64";
+#endif
                 return path;
             }
         }

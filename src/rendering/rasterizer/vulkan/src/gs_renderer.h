@@ -367,6 +367,12 @@ protected:
     // per-page dequant frames appended last.
     _ComputePipeline pipeline_projection_forward_quant = _ComputePipeline(25);
     _ComputePipeline pipeline_projection_forward_quant_3dgut = _ComputePipeline(25);
+    // IEEE f16 SH rest (standalone PLY/SOG): same 24 bindings as fp32 split path.
+    _ComputePipeline pipeline_projection_forward_shn_f16 = _ComputePipeline(24);
+    _ComputePipeline pipeline_projection_forward_shn_f16_3dgut = _ComputePipeline(24);
+    // Pad-dropped q16 SH rest (exportable training): 24 + bounds binding last.
+    _ComputePipeline pipeline_projection_forward_shn_q16 = _ComputePipeline(25);
+    _ComputePipeline pipeline_projection_forward_shn_q16_3dgut = _ComputePipeline(25);
     _ComputePipeline pipeline_selection_mask = _ComputePipeline(11);
     _ComputePipeline pipeline_selection_polygon_rasterize = _ComputePipeline(2);
     _ComputePipeline pipeline_generate_keys_wave = _ComputePipeline(8);
@@ -386,6 +392,10 @@ protected:
     _ComputePipeline pipeline_projection_forward_survivors = _ComputePipeline(std::vector<int>{
         0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28});
     _ComputePipeline pipeline_projection_forward_quant_survivors = _ComputePipeline(std::vector<int>{
+        0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29});
+    _ComputePipeline pipeline_projection_forward_shn_f16_survivors = _ComputePipeline(std::vector<int>{
+        0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28});
+    _ComputePipeline pipeline_projection_forward_shn_q16_survivors = _ComputePipeline(std::vector<int>{
         0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29});
     _ComputePipeline pipeline_prepare_visible_chain = _ComputePipeline(4);
     _ComputePipeline pipeline_copy_visible_indices = _ComputePipeline(3);

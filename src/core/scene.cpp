@@ -684,8 +684,27 @@ namespace lfs::core {
         }
 
         Tensor shN;
+        lfs::core::SplatData::ShNLayout shN_layout = lfs::core::SplatData::ShNLayout::Swizzled;
         const auto layout_rest = static_cast<std::uint32_t>(source->max_sh_coeffs_rest());
-        if (layout_rest > 0 && source->shN_raw().is_valid() && source->shN_raw().numel() > 0) {
+        const bool shN_non_float32 =
+            layout_rest > 0 && source->shN_raw().is_valid() && source->shN_raw().numel() > 0 &&
+            (source->shN_raw().dtype() != DataType::Float32 || source->shN_value_quantized() ||
+             source->shN_ieee_f16());
+        if (shN_non_float32) {
+            // q16 / ieee-f16: compact on canonical float, rebuild via Canonical layout.
+            Tensor canon = source->shN_canonical();
+            if (canon.device() != device) {
+                canon = canon.to(device);
+            }
+            Tensor compact_canon =
+                Tensor::empty({new_size, static_cast<size_t>(layout_rest), 3}, device);
+            for (const auto& range : live_ranges) {
+                compact_canon.slice(0, range.dst_start, range.dst_start + range.count) =
+                    canon.slice(0, range.src_start, range.src_start + range.count);
+            }
+            shN = std::move(compact_canon);
+            shN_layout = lfs::core::SplatData::ShNLayout::Canonical;
+        } else if (layout_rest > 0 && source->shN_raw().is_valid() && source->shN_raw().numel() > 0) {
             const size_t shN_floats = lfs::core::sh_swizzled_float_count(new_size, layout_rest);
             if (alloc) {
                 shN = alloc(TensorShape({shN_floats}), shN_floats, DataType::Float32, "SplatData.shN");
@@ -717,7 +736,7 @@ namespace lfs::core {
             copy_live_ranges(source->rotation_raw(), "SplatData.rotation"),
             copy_live_ranges(source->opacity_raw(), "SplatData.opacity"),
             source->get_scene_scale(),
-            lfs::core::SplatData::ShNLayout::Swizzled);
+            shN_layout);
         compacted->set_active_sh_degree(source->get_active_sh_degree());
         compacted->set_tensor_allocator(snapshot.allocator);
 
@@ -1118,6 +1137,40 @@ namespace lfs::core {
         if (!include_hidden_splats && model_cache_valid_.load(std::memory_order_acquire))
             return;
 
+        // Permanent E1-class: while a trainer owns this scene (live_model_mutex_
+        // wired), Dataset training serves the live model via getTrainingModel()
+        // and status uses topology atomics. Rebuilding a combined cache from the
+        // live training SplatData races shN float-workspace swap+trim even under
+        // try-lock (async copy can outlive the CPU lock). Defer combined rebuild
+        // until the trainer detaches (mutex cleared). Consolidation (include
+        // hidden) still rebuilds under the step-boundary lock below.
+        if (!include_hidden_splats && liveModelMutex() != nullptr &&
+            !training_model_node_.empty()) {
+            // Point single-node cache at the training model without copying SH.
+            if (const auto* node = getNode(training_model_node_); node && node->model) {
+                single_node_model_ = node->model.get();
+                cached_combined_.reset();
+                model_cache_valid_.store(true, std::memory_order_release);
+            }
+            return;
+        }
+
+        // One-lock: serialize live-model reads with trainer densify commit/trim
+        // and the cadenced preview path (Trainer::render_mutex_). Nested acquires
+        // on the same thread (preview already holds shared + noteLiveModelLock*)
+        // are skipped. Prefer try_to_lock so status/UI never stalls densify; if
+        // densify holds exclusive, leave the cache invalid and retry next tick.
+        std::shared_lock<std::shared_mutex> live_lock;
+        if (std::shared_mutex* const live_mu = liveModelMutex()) {
+            if (live_model_lock_depth() == 0) {
+                live_lock = std::shared_lock<std::shared_mutex>(*live_mu, std::try_to_lock);
+                if (!live_lock.owns_lock()) {
+                    // Densify exclusive held: skip rebuild this tick.
+                    return;
+                }
+            }
+        }
+
         std::lock_guard<std::mutex> lock(combined_model_mutex_);
         if (!include_hidden_splats && model_cache_valid_.load(std::memory_order_acquire))
             return;
@@ -1286,14 +1339,38 @@ namespace lfs::core {
             if (stats.max_sh_degree > 0 && model->shN_raw().is_valid() && model->shN_raw().numel() > 0) {
                 const auto model_layout_rest = static_cast<std::uint32_t>(model->max_sh_coeffs_rest());
                 if (model_layout_rest > 0) {
-                    lfs::core::shN_swizzled_copy_contiguous(
-                        model->shN_raw().ptr<float>(),
-                        shN.ptr<float>(),
-                        size,
-                        offset,
-                        model_layout_rest,
-                        dst_layout_rest,
-                        shN.stream());
+                    // Training cache merge must not ptr<float>() q16/ieee-f16 codes.
+                    if (model->shN_raw().dtype() != DataType::Float32 || model->shN_value_quantized() ||
+                        model->shN_ieee_f16()) {
+                        auto float_piece = std::make_unique<lfs::core::SplatData>(
+                            model->get_max_sh_degree(),
+                            model->means_raw(),
+                            model->sh0_raw(),
+                            model->shN_canonical(),
+                            model->scaling_raw(),
+                            model->rotation_raw(),
+                            model->opacity_raw(),
+                            model->get_scene_scale(),
+                            lfs::core::SplatData::ShNLayout::Canonical);
+                        float_piece->set_active_sh_degree(model->get_active_sh_degree());
+                        lfs::core::shN_swizzled_copy_contiguous(
+                            float_piece->shN_raw().ptr<float>(),
+                            shN.ptr<float>(),
+                            size,
+                            offset,
+                            static_cast<std::uint32_t>(float_piece->max_sh_coeffs_rest()),
+                            dst_layout_rest,
+                            shN.stream());
+                    } else {
+                        lfs::core::shN_swizzled_copy_contiguous(
+                            model->shN_raw().ptr<float>(),
+                            shN.ptr<float>(),
+                            size,
+                            offset,
+                            model_layout_rest,
+                            dst_layout_rest,
+                            shN.stream());
+                    }
                 }
             }
 
@@ -1338,6 +1415,18 @@ namespace lfs::core {
 
         if (has_any_deleted) {
             cached_combined_->deleted() = std::move(deleted);
+        }
+
+        // Epoch fence: any CUDA copies from live training tensors must complete
+        // before this function returns and drops live_model / combined locks.
+        // Otherwise post-refine trim_memory_pool can decommit a float workspace
+        // still referenced by in-flight rebuild kernels.
+        if (liveModelMutex() != nullptr) {
+            const cudaError_t sync_err = cudaDeviceSynchronize();
+            if (sync_err != cudaSuccess) {
+                LOG_ERROR("rebuildModelCacheIfNeeded stream fence failed: {} ({})",
+                          cudaGetErrorName(sync_err), cudaGetErrorString(sync_err));
+            }
         }
 
         model_cache_valid_.store(true, std::memory_order_release);
@@ -2510,10 +2599,36 @@ namespace lfs::core {
             splats.begin(), splats.end(),
             [](const auto& entry) { return entry.second == IDENTITY; });
 
-        const auto clone_filtered_swizzled = [](const lfs::core::SplatData& src)
+        // q16 (Float16 codes + bounds) and IEEE-f16 shN cannot be read via
+        // ptr<float>() / float4-swizzle gather kernels. Materialise float
+        // canonical SH, filter, and rebuild with Canonical layout so the
+        // constructor re-swizzles to Float32 for ephemeral export/merge copies.
+        const auto shN_requires_float_materialize = [](const lfs::core::SplatData& src) {
+            return src.shN_raw().is_valid() && src.shN_raw().numel() > 0 &&
+                   (src.shN_raw().dtype() != lfs::core::DataType::Float32 ||
+                    src.shN_value_quantized() || src.shN_ieee_f16());
+        };
+
+        const auto clone_filtered_swizzled = [&](const lfs::core::SplatData& src)
             -> std::unique_ptr<lfs::core::SplatData> {
             if (!src.has_deleted_mask()) {
                 const int active_sh = src.get_active_sh_degree();
+                if (shN_requires_float_materialize(src)) {
+                    // Materialise float SH so the clone is export-safe without
+                    // requiring a transferred q16 bounds tensor.
+                    auto result = std::make_unique<lfs::core::SplatData>(
+                        src.get_max_sh_degree(),
+                        src.means_raw().clone(),
+                        src.sh0_raw().clone(),
+                        src.shN_canonical(),
+                        src.scaling_raw().clone(),
+                        src.rotation_raw().clone(),
+                        src.opacity_raw().clone(),
+                        src.get_scene_scale(),
+                        lfs::core::SplatData::ShNLayout::Canonical);
+                    result->set_active_sh_degree(active_sh);
+                    return result;
+                }
                 auto result = std::make_unique<lfs::core::SplatData>(
                     src.get_max_sh_degree(),
                     src.means_raw().clone(),
@@ -2525,6 +2640,9 @@ namespace lfs::core {
                     src.get_scene_scale(),
                     lfs::core::SplatData::ShNLayout::Swizzled);
                 result->set_active_sh_degree(active_sh);
+                if (src.shN_value_quantized() && src.shN_value_bounds().is_valid()) {
+                    result->shN_value_bounds() = src.shN_value_bounds().clone();
+                }
                 return result;
             }
 
@@ -2534,9 +2652,31 @@ namespace lfs::core {
                 return nullptr;
             }
 
-            lfs::core::Tensor shN;
             const int active_sh = src.get_active_sh_degree();
             const auto layout_rest = static_cast<std::uint32_t>(src.max_sh_coeffs_rest());
+
+            if (layout_rest > 0 && src.shN_raw().is_valid() && src.shN_raw().numel() > 0 &&
+                shN_requires_float_materialize(src)) {
+                lfs::core::Tensor shN_canon = src.shN_canonical();
+                if (shN_canon.device() != src.means_raw().device()) {
+                    shN_canon = shN_canon.to(src.means_raw().device());
+                }
+                shN_canon = shN_canon.index_select(0, keep_mask).contiguous();
+                auto result = std::make_unique<lfs::core::SplatData>(
+                    src.get_max_sh_degree(),
+                    src.means_raw().index_select(0, keep_mask).contiguous(),
+                    src.sh0_raw().index_select(0, keep_mask).contiguous(),
+                    std::move(shN_canon),
+                    src.scaling_raw().index_select(0, keep_mask).contiguous(),
+                    src.rotation_raw().index_select(0, keep_mask).contiguous(),
+                    src.opacity_raw().index_select(0, keep_mask).contiguous(),
+                    src.get_scene_scale(),
+                    lfs::core::SplatData::ShNLayout::Canonical);
+                result->set_active_sh_degree(active_sh);
+                return result;
+            }
+
+            lfs::core::Tensor shN;
             if (layout_rest > 0 && src.shN_raw().is_valid() && src.shN_raw().numel() > 0) {
                 auto kept_indices = keep_mask.nonzero();
                 if (kept_indices.ndim() == 2) {
@@ -2577,6 +2717,22 @@ namespace lfs::core {
 
                 if (storage_mode == MergeStorageMode::BorrowSingleIdentity && !src->has_deleted_mask()) {
                     const int active_sh = src->get_active_sh_degree();
+                    // q16/ieee-f16: materialise float SH for export/merge so
+                    // save_ply does not need bounds on the ephemeral SplatData.
+                    if (shN_requires_float_materialize(*src)) {
+                        auto result = std::make_unique<lfs::core::SplatData>(
+                            src->get_max_sh_degree(),
+                            src->means_raw(),
+                            src->sh0_raw(),
+                            src->shN_canonical(),
+                            src->scaling_raw(),
+                            src->rotation_raw(),
+                            src->opacity_raw(),
+                            src->get_scene_scale(),
+                            lfs::core::SplatData::ShNLayout::Canonical);
+                        result->set_active_sh_degree(active_sh);
+                        return result;
+                    }
                     auto result = std::make_unique<lfs::core::SplatData>(
                         src->get_max_sh_degree(),
                         src->means_raw(),
@@ -2588,6 +2744,9 @@ namespace lfs::core {
                         src->get_scene_scale(),
                         lfs::core::SplatData::ShNLayout::Swizzled);
                     result->set_active_sh_degree(active_sh);
+                    if (src->shN_value_quantized() && src->shN_value_bounds().is_valid()) {
+                        result->shN_value_bounds() = src->shN_value_bounds();
+                    }
                     return result;
                 }
 
@@ -2632,67 +2791,32 @@ namespace lfs::core {
 
             size_t offset = 0;
             for (const auto& [model, _] : splats) {
-                const bool has_deleted = model->has_deleted_mask();
-                const lfs::core::Tensor keep_mask = has_deleted ? model->deleted().logical_not() : lfs::core::Tensor{};
-                const size_t visible = has_deleted
-                                           ? static_cast<size_t>(keep_mask.sum_scalar())
-                                           : static_cast<size_t>(model->size());
-                if (visible == 0) {
+                // Route every source through clone_filtered_swizzled so q16 /
+                // ieee-f16 / deleted-mask cases materialise Float32 shN first.
+                auto piece = clone_filtered_swizzled(*model);
+                if (!piece || piece->size() == 0) {
                     continue;
                 }
+                const size_t visible = static_cast<size_t>(piece->size());
 
-                if (has_deleted) {
-                    means.slice(0, offset, offset + visible) = model->means_raw().index_select(0, keep_mask);
-                    sh0.slice(0, offset, offset + visible) = model->sh0_raw().index_select(0, keep_mask);
-                    scaling.slice(0, offset, offset + visible) = model->scaling_raw().index_select(0, keep_mask);
-                    rotation.slice(0, offset, offset + visible) = model->rotation_raw().index_select(0, keep_mask);
-                    opacity.slice(0, offset, offset + visible) = model->opacity_raw().index_select(0, keep_mask);
-                } else {
-                    means.slice(0, offset, offset + visible) = model->means_raw();
-                    sh0.slice(0, offset, offset + visible) = model->sh0_raw();
-                    scaling.slice(0, offset, offset + visible) = model->scaling_raw();
-                    rotation.slice(0, offset, offset + visible) = model->rotation_raw();
-                    opacity.slice(0, offset, offset + visible) = model->opacity_raw();
-                }
+                means.slice(0, offset, offset + visible) = piece->means_raw();
+                sh0.slice(0, offset, offset + visible) = piece->sh0_raw();
+                scaling.slice(0, offset, offset + visible) = piece->scaling_raw();
+                rotation.slice(0, offset, offset + visible) = piece->rotation_raw();
+                opacity.slice(0, offset, offset + visible) = piece->opacity_raw();
 
-                const auto src_layout_rest = static_cast<std::uint32_t>(model->max_sh_coeffs_rest());
-                if (shN.is_valid() && src_layout_rest > 0 && model->shN_raw().is_valid() && model->shN_raw().numel() > 0) {
-                    if (has_deleted) {
-                        auto kept_indices = keep_mask.nonzero();
-                        if (kept_indices.ndim() == 2) {
-                            kept_indices = kept_indices.squeeze(1);
-                        }
-                        kept_indices = kept_indices.to(lfs::core::DataType::Int32);
-                        auto compact_shN = lfs::core::Tensor::zeros_direct(
-                            lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(visible, src_layout_rest)}),
-                            lfs::core::sh_swizzled_float_count(visible, src_layout_rest),
-                            lfs::core::Device::CUDA);
-                        lfs::core::shN_swizzled_gather_self(
-                            model->shN_raw().ptr<float>(),
-                            compact_shN.ptr<float>(),
-                            kept_indices.ptr<int>(),
-                            visible,
-                            0,
-                            src_layout_rest,
-                            compact_shN.stream());
-                        lfs::core::shN_swizzled_copy_contiguous(
-                            compact_shN.ptr<float>(),
-                            shN.ptr<float>(),
-                            visible,
-                            offset,
-                            src_layout_rest,
-                            dst_layout_rest,
-                            shN.stream());
-                    } else {
-                        lfs::core::shN_swizzled_copy_contiguous(
-                            model->shN_raw().ptr<float>(),
-                            shN.ptr<float>(),
-                            visible,
-                            offset,
-                            src_layout_rest,
-                            dst_layout_rest,
-                            shN.stream());
-                    }
+                const auto src_layout_rest = static_cast<std::uint32_t>(piece->max_sh_coeffs_rest());
+                if (shN.is_valid() && src_layout_rest > 0 && piece->shN_raw().is_valid() &&
+                    piece->shN_raw().numel() > 0) {
+                    // piece is always Float32 float4-swizzle after clone_filtered.
+                    lfs::core::shN_swizzled_copy_contiguous(
+                        piece->shN_raw().ptr<float>(),
+                        shN.ptr<float>(),
+                        visible,
+                        offset,
+                        src_layout_rest,
+                        dst_layout_rest,
+                        shN.stream());
                 }
 
                 offset += visible;
@@ -3432,6 +3556,14 @@ namespace lfs::core {
                 }
             }
             return total;
+        }
+
+        // During training, status-bar polling must not force a live-model cache
+        // rebuild (that path races densify commit/trim). Prefer the topology
+        // atomic published by syncTrainingModelTopology whenever a training
+        // model node is registered.
+        if (!training_model_node_.empty()) {
+            return getTrainingModelGaussianCount();
         }
 
         const auto* model = getCombinedModel();
