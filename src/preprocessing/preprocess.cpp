@@ -1165,6 +1165,9 @@ namespace {
 namespace lfs::preprocessing {
 
     int run_preprocess(const lfs::core::param::PreprocessParameters& params) {
+        auto& logger = lfs::core::Logger::get();
+        if (!logger.is_ready())
+            logger.init();
         try {
             if (params.download_only) {
                 fs::path model_path = params.model_path;
