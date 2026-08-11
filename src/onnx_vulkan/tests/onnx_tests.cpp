@@ -499,6 +499,91 @@ namespace {
         return proto::model(proto::graph(nodes, initializers, inputs, outputs));
     }
 
+    [[nodiscard]] Bytes pow_clip_model() {
+        const std::array<std::int64_t, 2> shape{2, 3};
+        const std::array<std::int64_t, 0> scalar_shape{};
+        const std::array<float, 1> exponent{3.0f};
+        const std::array<float, 1> minimum{-4.0f};
+        const std::array<float, 1> maximum{10.0f};
+        const auto input = proto::value_info("x", 1, shape);
+        const auto output = proto::value_info("y", 1, shape);
+        const std::array initializers{
+            proto::raw_tensor("exponent", 1, scalar_shape, std::span<const float>(exponent)),
+            proto::raw_tensor("minimum", 1, scalar_shape, std::span<const float>(minimum)),
+            proto::raw_tensor("maximum", 1, scalar_shape, std::span<const float>(maximum)),
+        };
+        const std::array<std::string_view, 2> pow_inputs{"x", "exponent"};
+        const std::array<std::string_view, 1> pow_outputs{"powered"};
+        const std::array<std::string_view, 3> clip_inputs{"powered", "minimum", "maximum"};
+        const std::array<std::string_view, 1> clip_outputs{"y"};
+        const std::array nodes{
+            proto::node("integer_power", "Pow", pow_inputs, pow_outputs),
+            proto::node("bounded", "Clip", clip_inputs, clip_outputs),
+        };
+        const std::array inputs{input};
+        const std::array outputs{output};
+        return proto::model(proto::graph(nodes, initializers, inputs, outputs));
+    }
+
+    [[nodiscard]] Bytes matmul_model() {
+        const std::array<std::int64_t, 2> x_shape{2, 3};
+        const std::array<std::int64_t, 2> weight_shape{3, 2};
+        const std::array<std::int64_t, 2> y_shape{2, 2};
+        const std::array<float, 6> weights{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
+        const auto input = proto::value_info("x", 1, x_shape);
+        const auto output = proto::value_info("y", 1, y_shape);
+        const auto initializer = proto::raw_tensor("weights", 1, weight_shape,
+                                                   std::span<const float>(weights));
+        const std::array<std::string_view, 2> node_inputs{"x", "weights"};
+        const std::array<std::string_view, 1> node_outputs{"y"};
+        const auto matmul = proto::node("matrix_product", "MatMul", node_inputs, node_outputs);
+        const std::array nodes{matmul};
+        const std::array initializers{initializer};
+        const std::array inputs{input};
+        const std::array outputs{output};
+        return proto::model(proto::graph(nodes, initializers, inputs, outputs));
+    }
+
+    [[nodiscard]] Bytes grouped_conv_model() {
+        const std::array<std::int64_t, 4> x_shape{1, 2, 3, 3};
+        const std::array<std::int64_t, 4> weight_shape{2, 1, 2, 2};
+        const std::array<std::int64_t, 1> bias_shape{2};
+        const std::array<std::int64_t, 4> y_shape{1, 2, 2, 2};
+        const std::array<float, 8> weights{1.0f, 0.0f, 0.0f, -1.0f,
+                                          0.0f, 1.0f, 1.0f, 0.0f};
+        const std::array<float, 2> bias{0.5f, -1.0f};
+        const auto input = proto::value_info("x", 1, x_shape);
+        const auto output = proto::value_info("y", 1, y_shape);
+        const std::array initializers{
+            proto::raw_tensor("weights", 1, weight_shape, std::span<const float>(weights)),
+            proto::raw_tensor("bias", 1, bias_shape, std::span<const float>(bias)),
+        };
+        const auto group = proto::int_attribute("group", 2);
+        const std::array attributes{group};
+        const std::array<std::string_view, 3> node_inputs{"x", "weights", "bias"};
+        const std::array<std::string_view, 1> node_outputs{"y"};
+        const auto conv = proto::node("grouped_convolution", "Conv", node_inputs, node_outputs, attributes);
+        const std::array nodes{conv};
+        const std::array inputs{input};
+        const std::array outputs{output};
+        return proto::model(proto::graph(nodes, initializers, inputs, outputs));
+    }
+
+    [[nodiscard]] Bytes softmax_model() {
+        const std::array<std::int64_t, 2> shape{2, 3};
+        const auto input = proto::value_info("x", 1, shape);
+        const auto output = proto::value_info("y", 1, shape);
+        const auto axis = proto::int_attribute("axis", -1);
+        const std::array attributes{axis};
+        const std::array<std::string_view, 1> node_inputs{"x"};
+        const std::array<std::string_view, 1> node_outputs{"y"};
+        const auto softmax = proto::node("stable_softmax", "Softmax", node_inputs, node_outputs, attributes);
+        const std::array nodes{softmax};
+        const std::array inputs{input};
+        const std::array outputs{output};
+        return proto::model(proto::graph(nodes, {}, inputs, outputs));
+    }
+
     [[nodiscard]] Bytes reduction_model() {
         const std::array<std::int64_t, 2> x_shape{2, 3};
         const std::array<std::int64_t, 1> y_shape{3};
@@ -612,7 +697,7 @@ namespace {
                 "repeat run was not deterministic");
     }
 
-    void test_vulkan(const TemporaryDirectory& temporary) {
+    void test_vulkan_basics(const TemporaryDirectory& temporary) {
         const auto arithmetic_path = temporary.path() / "arithmetic.onnx";
         write_file(arithmetic_path, arithmetic_model());
         const std::array<std::int64_t, 2> arithmetic_shape{2, 1};
@@ -655,6 +740,51 @@ namespace {
             }
         }
     }
+
+    void test_vulkan_elementwise(const TemporaryDirectory& temporary) {
+        const auto path = temporary.path() / "pow_clip.onnx";
+        write_file(path, pow_clip_model());
+        const std::array<std::int64_t, 2> shape{2, 3};
+        const std::array<float, 6> input{-2.0f, -1.0f, 0.0f, 1.0f, 2.0f, 3.0f};
+        const std::array<float, 6> expected{-4.0f, -1.0f, 0.0f, 1.0f, 8.0f, 10.0f};
+        run_model(path, shape, input, expected);
+    }
+
+    void test_vulkan_matmul(const TemporaryDirectory& temporary) {
+        const auto path = temporary.path() / "matmul.onnx";
+        write_file(path, matmul_model());
+        const std::array<std::int64_t, 2> shape{2, 3};
+        const std::array<float, 6> input{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
+        const std::array<float, 4> expected{22.0f, 28.0f, 49.0f, 64.0f};
+        run_model(path, shape, input, expected);
+    }
+
+    void test_vulkan_grouped_conv(const TemporaryDirectory& temporary) {
+        const auto path = temporary.path() / "grouped_conv.onnx";
+        write_file(path, grouped_conv_model());
+        const std::array<std::int64_t, 4> shape{1, 2, 3, 3};
+        const std::array<float, 18> input{
+            1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f,
+            9.0f, 8.0f, 7.0f, 6.0f, 5.0f, 4.0f, 3.0f, 2.0f, 1.0f,
+        };
+        const std::array<float, 8> expected{-3.5f, -3.5f, -3.5f, -3.5f,
+                                             13.0f, 11.0f, 7.0f, 5.0f};
+        run_model(path, shape, input, expected);
+    }
+
+    void test_vulkan_softmax(const TemporaryDirectory& temporary) {
+        const auto path = temporary.path() / "softmax.onnx";
+        write_file(path, softmax_model());
+        const std::array<std::int64_t, 2> shape{2, 3};
+        const std::array<float, 6> input{1000.0f, 1001.0f, 1002.0f,
+                                         -1000.0f, -1000.0f, -1000.0f};
+        const float denominator = std::exp(-2.0f) + std::exp(-1.0f) + 1.0f;
+        const std::array<float, 6> expected{
+            std::exp(-2.0f) / denominator, std::exp(-1.0f) / denominator, 1.0f / denominator,
+            1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f,
+        };
+        run_model(path, shape, input, expected);
+    }
 }
 
 int main() {
@@ -676,7 +806,11 @@ int main() {
     run("parser", [&] { test_parser(temporary); });
     run("graph_validation", [&] { test_graph_validation(temporary); });
     run("operator_registry", test_registry);
-    run("vulkan_execution", [&] { test_vulkan(temporary); });
+    run("vulkan_basics", [&] { test_vulkan_basics(temporary); });
+    run("vulkan_elementwise", [&] { test_vulkan_elementwise(temporary); });
+    run("vulkan_matmul", [&] { test_vulkan_matmul(temporary); });
+    run("vulkan_grouped_conv", [&] { test_vulkan_grouped_conv(temporary); });
+    run("vulkan_softmax", [&] { test_vulkan_softmax(temporary); });
     if (failures != 0)
         std::cerr << failures << " ONNX Vulkan test group(s) failed\n";
     return failures == 0 ? 0 : 1;
