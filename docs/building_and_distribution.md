@@ -3,7 +3,6 @@
 ## Requirements
 
 - CUDA Toolkit 12.8+
-- cuDNN 9 for CUDA 12 (CI installs cuDNN 9.5.0 only when the runner image does not already provide it)
 - CMake 3.30+
 - vcpkg (`VCPKG_ROOT` environment variable set)
 - GCC 14+ (Linux) or Visual Studio 2022 v17.10+ (Windows)
@@ -18,17 +17,6 @@ example from the x64 Native Tools Command Prompt). **MSBuild support for LLVM
 selectable in Visual Studio IDE projects; the vcpkg port itself does not use
 MSBuild. The rest of LichtFeld Studio continues to use the configured Visual
 Studio/MSVC toolchain.
-
-On Windows, set `CUDNN_ROOT_DIR` to the cuDNN version root so the build can copy
-the CUDA-versioned cuDNN runtime DLLs next to the executable and into portable
-installs:
-
-```bat
-set CUDNN_ROOT_DIR=C:\Program Files\NVIDIA\CUDNN\v9.24
-```
-
-For unusual layouts, pass `-DLFS_CUDNN_BIN_DIR=...` directly to the cuDNN DLL
-directory, for example `...\bin\<cuda-version>\x64`.
 
 ## Contributor Setup
 
@@ -214,21 +202,52 @@ dist/
 | `LFS_ENFORCE_LINUX_GUI_BACKENDS` | ON | Linux only. Fail configure if SDL3 would be built without both X11 and Wayland |
 | `LFS_CUDA_COMPILER_CACHE` | *(empty)* | Compiler cache for CUDA only. Empty follows the auto-detected launcher; `OFF` disables CUDA caching; or name/path of a launcher such as `ccache`. Needed where nvcc cannot be wrapped by sccache |
 
-ONNX Runtime is consumed as a pinned prebuilt GPU SDK on x64 Windows and Linux
-instead of being built by vcpkg. The default SDK is controlled by
-`LFS_ONNXRUNTIME_VERSION`; set `LFS_ONNXRUNTIME_ROOT` to an unpacked ONNX Runtime
-SDK to use a local or custom build. Set `LFS_ONNXRUNTIME_USE_PREBUILT=OFF` to
-fall back to a package-provided `onnxruntime` CMake config.
+MoGe inference is provided by the repository's dependency-free ONNX parser and
+direct Vulkan compute runtime. Shaders are compiled to embedded SPIR-V at build
+time; installed applications do not need shader source files or a shader compiler.
 
 ## Preprocess Model Downloads
 
 The `preprocess` subcommand downloads the default MoGe-2 ONNX model on first
 use when `--model` is not provided. The cached model and every downloaded
-temporary file are SHA-256 verified on Windows and Linux before ONNX Runtime can
+temporary file are SHA-256 verified on Windows and Linux before inference can
 load them. A hash mismatch deletes the untrusted temporary file, rejects the
 cached model, and exits with an error. Use `preprocess --download-only` to
 preload and verify the cache, or `--no-download` to require an already verified
 cache entry.
+
+Inference selects a discrete Vulkan compute device first and then an integrated
+device. Pass `--vulkan-device <index>` to override that selection. The index is
+the position in the runtime's ranked list of Vulkan 1.1 compute devices.
+
+### Manual MoGe validation
+
+Full-model numerical validation is intentionally excluded from CTest and CI.
+Build the validator explicitly and point it at the captured raw references:
+
+```bash
+cmake --build cmake-build-release --target lfs_moge_validate -j8
+./cmake-build-release/src/onnx_vulkan/lfs_moge_validate \
+  --references ~/.lichtfeld/onnx/moge-2-vitb-normal-bicycle-reference
+```
+
+The defaults are the verified model at
+`~/.lichtfeld/onnx/moge-2-vitb-normal.onnx`, the bicycle fixture at
+`../data/360_v2/bicycle/images_8/_DSC8679.JPG`, `max-side=518`, and
+`num-tokens=1800`. Override the model, image, or compute device with `--model`,
+`--image`, or `--vulkan-device`. Reference files use the non-shipping
+`LFSMOGE1` capture format and are named `points.lfsref`, `normal.lfsref`,
+`mask.lfsref`, and `metric_scale.lfsref`.
+
+Reference provenance:
+
+- Model SHA-256: `bbf14e07a30f11e69d36ab861590123f5598ababcbc8946a063eb4a966f35a21`
+- Existing depth PNG SHA-256: `2e005d8c3e59386b55b4f27d958bb56e0fb69db3a434fc1404c9388b119e2df0`
+- Existing normals PNG SHA-256: `8698ac02dbd11d73438076eea6c477ce0ae7776b0471ee4804dc6a172f7c9e71`
+
+The validator requires identical shapes and finite/nonfinite locations, at
+least 99.9% of values within `1e-3 + 5e-3 * abs(reference)`, maximum absolute
+error below `5e-2`, and at least 99.9% mask agreement at the `0.5` threshold.
 
 ## Troubleshooting
 
