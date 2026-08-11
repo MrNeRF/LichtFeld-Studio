@@ -69,6 +69,9 @@ namespace lfs::vis {
         void resumeTraining();
         void stopTraining();
         void requestSaveProject();
+        // Suppress the completion notification modal for the next TrainingCompleted
+        // dispatch (stop initiated by New Project / app close / reset, issue #1604).
+        void suppressCompletionNotification() { suppress_completion_notification_.store(true, std::memory_order_relaxed); }
 
         // Temporary pause for short synchronization-sensitive operations; does not change UI state.
         struct TemporaryPauseResult {
@@ -257,6 +260,7 @@ namespace lfs::vis {
         bool training_joined_ = true;
         std::optional<TrainingCompletionData> pending_completion_;
         std::atomic<bool> completion_pending_{false};
+        std::atomic<bool> suppress_completion_notification_{false};
 
         static constexpr int COMPLETION_TIMEOUT_SEC = 30;
         static constexpr int MAX_LOSS_POINTS = 200;

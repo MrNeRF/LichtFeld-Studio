@@ -805,6 +805,7 @@ namespace lfs::vis {
 
         training_start_time_ = std::chrono::steady_clock::now();
         accumulated_training_time_ = std::chrono::steady_clock::duration{0};
+        suppress_completion_notification_.store(false, std::memory_order_relaxed);
 
         state::TrainingStarted{.total_iterations = getTotalIterations()}.emit();
 
@@ -1064,6 +1065,7 @@ namespace lfs::vis {
     }
 
     void TrainerManager::launchTrainingThread() {
+        suppress_completion_notification_.store(false, std::memory_order_relaxed);
         {
             std::lock_guard lock(completion_mutex_);
             training_joined_ = false;
@@ -1144,7 +1146,8 @@ namespace lfs::vis {
                 .resource_exhausted = completion.resource_exhausted,
                 .error_info = completion.typed_error
                                   ? std::optional(core::to_wire_error(*completion.typed_error))
-                                  : std::nullopt}
+                                  : std::nullopt,
+                .suppress_notification = suppress_completion_notification_.exchange(false, std::memory_order_relaxed)}
                 .emit();
         };
 

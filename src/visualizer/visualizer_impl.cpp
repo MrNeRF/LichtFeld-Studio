@@ -979,6 +979,7 @@ namespace lfs::vis {
                     pending_training_action_ =
                         PendingTrainingAction::
                             CloseDiscard;
+                    trainer_manager_->suppressCompletionNotification();
                     if (trainer_manager_->canStop()) {
                         trainer_manager_->stopTraining();
                     }
@@ -1230,6 +1231,7 @@ namespace lfs::vis {
             }
             if (trainer_manager_ &&
                 (trainer_manager_->isTrainingActive() || trainer_manager_->isCompletionPending())) {
+                trainer_manager_->suppressCompletionNotification();
                 if (pending_training_action_ == PendingTrainingAction::None) {
                     pending_training_action_ = PendingTrainingAction::Reset;
                 }
@@ -1489,6 +1491,7 @@ namespace lfs::vis {
                      ->isCompletionPending())) {
                 pending_training_action_ =
                     PendingTrainingAction::CloseDiscard;
+                trainer_manager_->suppressCompletionNotification();
                 if (trainer_manager_->canStop()) {
                     trainer_manager_->stopTraining();
                 }
@@ -1512,6 +1515,7 @@ namespace lfs::vis {
                      ->isCompletionPending())) {
                 pending_training_action_ =
                     PendingTrainingAction::CloseSave;
+                trainer_manager_->suppressCompletionNotification();
                 if (trainer_manager_->canStop()) {
                     trainer_manager_->stopTraining();
                 }
@@ -2433,6 +2437,7 @@ namespace lfs::vis {
             if (training_blocks_close()) {
                 pending_training_action_ =
                     PendingTrainingAction::CloseDiscard;
+                trainer_manager_->suppressCompletionNotification();
                 if (trainer_manager_->canStop()) {
                     trainer_manager_->stopTraining();
                 }
@@ -2716,6 +2721,7 @@ namespace lfs::vis {
             pending_training_action_ = PendingTrainingAction::NewProject;
             pending_new_project_disposition_ =
                 disposition;
+            trainer_manager_->suppressCompletionNotification();
             if (trainer_manager_->canStop()) {
                 trainer_manager_->stopTraining();
             }
