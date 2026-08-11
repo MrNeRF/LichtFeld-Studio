@@ -1,0 +1,37 @@
+#version 450
+
+layout(local_size_x = 64) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint b[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint c[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+void main() {
+    uint line = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    if (line >= p[1]) return;
+    uint axis = p[80], rank = p[2], axis_size = p[81];
+    uint coord[8];
+    uint cursor = line;
+    for (int i = int(rank) - 1; i >= 0; --i) {
+        if (uint(i) == axis) coord[i] = 0u;
+        else {
+            coord[i] = cursor % p[16u + uint(i)];
+            cursor /= p[16u + uint(i)];
+        }
+    }
+    uint input_base = p[82], output_base = 0u;
+    for (uint i = 0u; i < rank; ++i) {
+        input_base += coord[i] * p[24u + i];
+        output_base += coord[i] * p[32u + i];
+    }
+    float maximum = -1.0 / 0.0;
+    for (uint i = 0u; i < axis_size; ++i)
+        maximum = max(maximum, uintBitsToFloat(a[input_base + i * p[24u + axis]]));
+    float sum = 0.0;
+    for (uint i = 0u; i < axis_size; ++i)
+        sum += exp(uintBitsToFloat(a[input_base + i * p[24u + axis]]) - maximum);
+    for (uint i = 0u; i < axis_size; ++i)
+        o[output_base + i * p[32u + axis]] =
+            floatBitsToUint(exp(uintBitsToFloat(a[input_base + i * p[24u + axis]]) - maximum) / sum);
+}

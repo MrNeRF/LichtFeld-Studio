@@ -1,0 +1,53 @@
+#version 450
+
+layout(local_size_x = 64) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint b[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint c[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+void main() {
+    uint id = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    if (id >= p[1]) return;
+    uint n_size = p[80], m_size = p[81], k_size = p[82];
+    uint n = id % n_size;
+    uint m = (id / n_size) % m_size;
+    uint batch = id / (n_size * m_size);
+    uint batch_coord[8];
+    uint batch_rank = p[2] - 2u;
+    for (int axis = int(batch_rank) - 1; axis >= 0; --axis) {
+        uint extent = p[16u + uint(axis)];
+        batch_coord[axis] = batch % extent;
+        batch /= extent;
+    }
+    uint a_base = p[83], b_base = p[84];
+    uint a_rank = p[3], b_rank = p[4];
+    for (uint axis = 0u; axis + 2u < a_rank; ++axis) {
+        uint out_axis = batch_rank - (a_rank - 2u) + axis;
+        uint coord = p[24u + axis] == 1u ? 0u : batch_coord[out_axis];
+        a_base += coord * p[32u + axis];
+    }
+    for (uint axis = 0u; axis + 2u < b_rank; ++axis) {
+        uint out_axis = batch_rank - (b_rank - 2u) + axis;
+        uint coord = p[40u + axis] == 1u ? 0u : batch_coord[out_axis];
+        b_base += coord * p[48u + axis];
+    }
+    bool trans_a = p[85] != 0u, trans_b = p[86] != 0u;
+    uint a_m_stride = p[32u + a_rank - (trans_a ? 1u : 2u)];
+    uint a_k_stride = p[32u + a_rank - (trans_a ? 2u : 1u)];
+    uint b_k_stride = p[48u + b_rank - (trans_b ? 1u : 2u)];
+    uint b_n_stride = p[48u + b_rank - (trans_b ? 2u : 1u)];
+    float sum = 0.0;
+    for (uint k = 0u; k < k_size; ++k)
+        sum += uintBitsToFloat(a[a_base + m * a_m_stride + k * a_k_stride]) *
+               uintBitsToFloat(b[b_base + k * b_k_stride + n * b_n_stride]);
+    float alpha = uintBitsToFloat(p[87]);
+    float beta = uintBitsToFloat(p[88]);
+    float value = alpha * sum;
+    if (p[89] != 0u) {
+        uint c_index = p[90] + (p[91] == 1u ? n * p[92] : m * p[92] + n * p[93]);
+        value += beta * uintBitsToFloat(c[c_index]);
+    }
+    o[id] = floatBitsToUint(value);
+}

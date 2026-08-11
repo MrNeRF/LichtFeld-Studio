@@ -1,0 +1,38 @@
+#version 450
+
+layout(local_size_x = 64) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint w[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint bias[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+void main() {
+    uint id = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    if (id >= p[1]) return;
+    uint ow_size = p[80], oh_size = p[81], oc_size = p[82];
+    uint ow = id % ow_size;
+    uint oh = (id / ow_size) % oh_size;
+    uint oc = (id / (ow_size * oh_size)) % oc_size;
+    uint n = id / (ow_size * oh_size * oc_size);
+    uint groups = p[83], ic_size = p[84], kh_size = p[85], kw_size = p[86];
+    uint ic_per_group = ic_size / groups;
+    uint oc_per_group = oc_size / groups;
+    uint group = oc / oc_per_group;
+    float sum = p[95] != 0u ? uintBitsToFloat(bias[p[96] + oc * p[97]]) : 0.0;
+    for (uint ic_local = 0u; ic_local < ic_per_group; ++ic_local) {
+        uint ic = group * ic_per_group + ic_local;
+        for (uint kh = 0u; kh < kh_size; ++kh) {
+            int ih = int(oh * p[87] + kh * p[89]) - int(p[91]);
+            if (ih < 0 || ih >= int(p[93])) continue;
+            for (uint kw = 0u; kw < kw_size; ++kw) {
+                int iw = int(ow * p[88] + kw * p[90]) - int(p[92]);
+                if (iw < 0 || iw >= int(p[94])) continue;
+                uint ai = p[98] + n * p[32] + ic * p[33] + uint(ih) * p[34] + uint(iw) * p[35];
+                uint wi = p[99] + oc * p[48] + ic_local * p[49] + kh * p[50] + kw * p[51];
+                sum += uintBitsToFloat(a[ai]) * uintBitsToFloat(w[wi]);
+            }
+        }
+    }
+    o[id] = floatBitsToUint(sum);
+}

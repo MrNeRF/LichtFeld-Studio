@@ -1,0 +1,169 @@
+#version 450
+
+layout(local_size_x = 256) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint b[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint c[]; };
+layout(std430, set = 0, binding = 3) buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+void decode(uint linear, uint rank, uint dims_base, out uint coord[8]) {
+    for (int axis = int(rank) - 1; axis >= 0; --axis) {
+        uint extent = p[dims_base + uint(axis)];
+        coord[axis] = extent == 0u ? 0u : linear % extent;
+        linear = extent == 0u ? 0u : linear / extent;
+    }
+}
+
+uint offset_of(uint rank, uint strides_base, uint offset, uint coord[8]) {
+    uint result = offset;
+    for (uint axis = 0u; axis < rank; ++axis)
+        result += coord[axis] * p[strides_base + axis];
+    return result;
+}
+
+int reflect_coord(int value, int extent) {
+    if (extent <= 1) return 0;
+    int period = 2 * extent - 2;
+    int folded = value % period;
+    if (folded < 0) folded += period;
+    return folded < extent ? folded : period - folded;
+}
+
+float cubic_weight(float distance, float coefficient) {
+    float x = abs(distance);
+    if (x <= 1.0)
+        return ((coefficient + 2.0) * x - (coefficient + 3.0)) * x * x + 1.0;
+    if (x < 2.0)
+        return ((coefficient * x - 5.0 * coefficient) * x + 8.0 * coefficient) * x
+               - 4.0 * coefficient;
+    return 0.0;
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    if (id >= p[1]) return;
+    uint op = p[0];
+    uint rank = p[2];
+    uint coord[8];
+    decode(id, rank, 16u, coord);
+
+    if (op == 0u) { // materialize/view copy
+        uint input_index = offset_of(rank, 24u, p[80], coord);
+        o[id] = a[input_index];
+    } else if (op == 1u) { // scalar fill
+        o[id] = p[80];
+    } else if (op == 2u) { // concat scatter
+        uint input_index = offset_of(rank, 24u, p[80], coord);
+        coord[p[81]] += p[82];
+        uint output_index = offset_of(rank, 32u, 0u, coord);
+        o[output_index] = a[input_index];
+    } else if (op == 3u) { // pad gather: 0 constant, 1 reflect, 2 edge
+        bool inside = true;
+        uint input_coord[8];
+        for (uint axis = 0u; axis < rank; ++axis) {
+            int source = int(coord[axis]) - int(p[40u + axis]);
+            int extent = int(p[48u + axis]);
+            if (source < 0 || source >= extent) inside = false;
+            if (p[81] == 1u) source = reflect_coord(source, extent);
+            if (p[81] == 2u) source = clamp(source, 0, extent - 1);
+            input_coord[axis] = uint(max(source, 0));
+        }
+        if (!inside && p[81] == 0u) o[id] = p[80];
+        else o[id] = a[offset_of(rank, 24u, p[82], input_coord)];
+    } else if (op == 4u) { // Gather
+        uint axis = p[80];
+        uint data_rank = p[3];
+        uint indices_rank = p[4];
+        uint data_coord[8];
+        uint indices_coord[8];
+        for (uint i = 0u; i < axis; ++i) data_coord[i] = coord[i];
+        for (uint i = 0u; i < indices_rank; ++i) indices_coord[i] = coord[axis + i];
+        int gathered = int(b[offset_of(indices_rank, 40u, p[82], indices_coord)]);
+        int axis_extent = int(p[56u + axis]);
+        if (gathered < 0) gathered += axis_extent;
+        data_coord[axis] = uint(gathered);
+        for (uint i = axis + 1u; i < data_rank; ++i)
+            data_coord[i] = coord[indices_rank + i - 1u];
+        o[id] = a[offset_of(data_rank, 24u, p[81], data_coord)];
+    } else if (op == 5u) { // nearest/linear Resize
+        uint input_coord[8];
+        float source[8];
+        for (uint axis = 0u; axis < rank; ++axis) {
+            float scale = uintBitsToFloat(p[40u + axis]);
+            uint in_extent = p[48u + axis];
+            uint out_extent = p[16u + axis];
+            uint transform = p[81];
+            if (transform == 1u) source[axis] = (float(coord[axis]) + 0.5) / scale - 0.5; // half_pixel
+            else if (transform == 2u) source[axis] = out_extent > 1u ? float(coord[axis]) * float(in_extent - 1u) / float(out_extent - 1u) : 0.0; // align_corners
+            else if (transform == 3u) source[axis] = (float(coord[axis]) + 0.5) / scale; // asymmetric-ish pytorch_half_pixel fallback
+            else source[axis] = float(coord[axis]) / scale; // asymmetric
+        }
+        if (p[80] == 0u) {
+            for (uint axis = 0u; axis < rank; ++axis) {
+                float rounded = p[82] == 0u ? floor(source[axis]) :
+                                p[82] == 1u ? ceil(source[axis]) :
+                                p[82] == 2u ? round(source[axis]) : floor(source[axis] + 0.5);
+                input_coord[axis] = uint(clamp(int(rounded), 0, int(p[48u + axis]) - 1));
+            }
+            o[id] = a[offset_of(rank, 24u, p[83], input_coord)];
+        } else if (p[80] == 1u) {
+            // Multilinear interpolation over at most four resized dimensions.
+            uint varying_axes[8]; uint varying_count = 0u;
+            uint lower_coord[8]; float fraction[8];
+            for (uint axis = 0u; axis < rank; ++axis) {
+                float clamped = clamp(source[axis], 0.0, float(p[48u + axis] - 1u));
+                lower_coord[axis] = uint(floor(clamped));
+                fraction[axis] = clamped - floor(clamped);
+                if (p[48u + axis] != p[16u + axis]) varying_axes[varying_count++] = axis;
+            }
+            float value = 0.0;
+            uint corners = 1u << varying_count;
+            for (uint corner = 0u; corner < corners; ++corner) {
+                float weight = 1.0;
+                for (uint axis = 0u; axis < rank; ++axis) input_coord[axis] = lower_coord[axis];
+                for (uint bit = 0u; bit < varying_count; ++bit) {
+                    uint axis = varying_axes[bit];
+                    bool upper = ((corner >> bit) & 1u) != 0u;
+                    if (upper) input_coord[axis] = min(lower_coord[axis] + 1u, p[48u + axis] - 1u);
+                    weight *= upper ? fraction[axis] : 1.0 - fraction[axis];
+                }
+                value += weight * uintBitsToFloat(a[offset_of(rank, 24u, p[83], input_coord)]);
+            }
+            o[id] = floatBitsToUint(value);
+        } else {
+            // Separable Keys cubic interpolation. Indices are clamped while
+            // weights retain their unclamped sample positions, matching the
+            // default ONNX edge treatment when exclude_outside is false.
+            uint varying_axes[8]; uint varying_count = 0u;
+            int first_index[8];
+            for (uint axis = 0u; axis < rank; ++axis) {
+                first_index[axis] = int(floor(source[axis])) - 1;
+                if (p[48u + axis] != p[16u + axis]) varying_axes[varying_count++] = axis;
+                input_coord[axis] = uint(clamp(int(round(source[axis])), 0, int(p[48u + axis]) - 1));
+            }
+            float coefficient = uintBitsToFloat(p[84]);
+            float value = 0.0;
+            float total_weight = 0.0;
+            uint sample_count = 1u << (2u * varying_count);
+            for (uint sample_index = 0u; sample_index < sample_count; ++sample_index) {
+                uint digits = sample_index;
+                float weight = 1.0;
+                bool outside = false;
+                for (uint bit = 0u; bit < varying_count; ++bit) {
+                    uint axis = varying_axes[bit];
+                    int raw_index = first_index[axis] + int(digits & 3u);
+                    digits >>= 2u;
+                    outside = outside || raw_index < 0 || raw_index >= int(p[48u + axis]);
+                    weight *= cubic_weight(source[axis] - float(raw_index), coefficient);
+                    input_coord[axis] = uint(clamp(raw_index, 0, int(p[48u + axis]) - 1));
+                }
+                if (p[85] != 0u && outside)
+                    continue;
+                value += weight * uintBitsToFloat(a[offset_of(rank, 24u, p[83], input_coord)]);
+                total_weight += weight;
+            }
+            o[id] = floatBitsToUint(total_weight != 0.0 ? value / total_weight : 0.0);
+        }
+    }
+}

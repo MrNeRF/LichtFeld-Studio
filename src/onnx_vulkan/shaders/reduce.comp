@@ -1,0 +1,49 @@
+#version 450
+
+layout(local_size_x = 64) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint b[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint c[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+void main() {
+    uint id = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    if (id >= p[1]) return;
+    uint output_rank = p[2];
+    uint input_rank = p[83];
+    uint output_coord[8];
+    uint cursor = id;
+    for (int axis = int(output_rank) - 1; axis >= 0; --axis) {
+        uint extent = p[16u + uint(axis)];
+        output_coord[axis] = cursor % extent;
+        cursor /= extent;
+    }
+    uint input_coord[8];
+    uint output_axis = 0u;
+    for (uint input_axis = 0u; input_axis < input_rank; ++input_axis) {
+        bool reduced_axis = (p[80] & (1u << input_axis)) != 0u;
+        input_coord[input_axis] = reduced_axis ? 0u : output_coord[output_axis];
+        if (!reduced_axis || p[84] != 0u)
+            ++output_axis;
+    }
+    uint reduced_count = p[81];
+    float sum = 0.0;
+    for (uint reduced = 0u; reduced < reduced_count; ++reduced) {
+        uint r = reduced;
+        uint input_index = p[82];
+        for (int axis = int(input_rank) - 1; axis >= 0; --axis) {
+            uint coord = input_coord[axis];
+            if ((p[80] & (1u << uint(axis))) != 0u) {
+                coord = r % p[24u + uint(axis)];
+                r /= p[24u + uint(axis)];
+            }
+            input_index += coord * p[32u + uint(axis)];
+        }
+        float value = uintBitsToFloat(a[input_index]);
+        sum += p[0] == 2u ? value * value : value;
+    }
+    if (p[0] == 1u) sum /= float(reduced_count);
+    if (p[0] == 2u) sum = sqrt(sum);
+    o[id] = floatBitsToUint(sum);
+}

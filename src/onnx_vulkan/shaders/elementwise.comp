@@ -1,0 +1,100 @@
+#version 450
+
+layout(local_size_x = 256) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint b[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint c[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+const uint FLOAT32 = 1u;
+const uint INT32 = 6u;
+const uint BOOL = 9u;
+
+uint source_index(uint linear, uint rank, uint dims_base, uint strides_base, uint offset_word) {
+    uint out_rank = p[2];
+    uint result = p[offset_word];
+    for (int axis = int(out_rank) - 1; axis >= 0; --axis) {
+        uint extent = p[16u + uint(axis)];
+        uint coord = extent == 0u ? 0u : linear % extent;
+        linear = extent == 0u ? 0u : linear / extent;
+        int input_axis = axis - int(out_rank - rank);
+        if (input_axis >= 0 && p[dims_base + uint(input_axis)] != 1u)
+            result += coord * p[strides_base + uint(input_axis)];
+    }
+    return result;
+}
+
+float load_float_a(uint index) { return p[6] == FLOAT32 ? uintBitsToFloat(a[index]) : float(int(a[index])); }
+float load_float_b(uint index) { return p[7] == FLOAT32 ? uintBitsToFloat(b[index]) : float(int(b[index])); }
+float load_float_c(uint index) { return p[8] == FLOAT32 ? uintBitsToFloat(c[index]) : float(int(c[index])); }
+
+float erf_approx(float x) {
+    float sign_value = x < 0.0 ? -1.0 : 1.0;
+    float z = abs(x);
+    float t = 1.0 / (1.0 + 0.3275911 * z);
+    float polynomial = (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
+                         - 0.284496736) * t + 0.254829592) * t;
+    return sign_value * (1.0 - polynomial * exp(-z * z));
+}
+
+float onnx_pow(float base, float exponent) {
+    // GLSL leaves pow(x, y) undefined for negative x, even when y is an
+    // integer. ONNX follows real-valued tensor arithmetic, so preserve the
+    // defined integer-exponent cases used by variance and L2 calculations.
+    if (base < 0.0 && !isnan(exponent) && !isinf(exponent) && exponent == trunc(exponent)) {
+        float magnitude = pow(-base, exponent);
+        return mod(abs(exponent), 2.0) == 1.0 ? -magnitude : magnitude;
+    }
+    return pow(base, exponent);
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    if (id >= p[1])
+        return;
+    uint ai = source_index(id, p[3], 24u, 32u, 80u);
+    uint bi = source_index(id, p[4], 40u, 48u, 81u);
+    uint ci = source_index(id, p[5], 56u, 64u, 82u);
+    float x = load_float_a(ai);
+    float y = load_float_b(bi);
+    float z = load_float_c(ci);
+    uint op = p[0];
+
+    if (op == 7u) {
+        o[id] = x == y ? 1u : 0u;
+        return;
+    }
+    if (op == 8u) {
+        o[id] = c[ci] != 0u ? a[ai] : b[bi];
+        return;
+    }
+    if (op == 18u) {
+        if (p[9] == FLOAT32) o[id] = floatBitsToUint(x);
+        else if (p[9] == INT32) o[id] = uint(int(x));
+        else if (p[9] == BOOL) o[id] = x != 0.0 ? 1u : 0u;
+        return;
+    }
+
+    float value = x;
+    if (op == 1u) value = x + y;
+    else if (op == 2u) value = x - y;
+    else if (op == 3u) value = x * y;
+    else if (op == 4u) value = x / y;
+    else if (op == 5u) value = onnx_pow(x, y);
+    else if (op == 6u) value = p[83] != 0u ? x - trunc(x / y) * y : mod(mod(x, y) + y, y);
+    else if (op == 9u) value = -x;
+    else if (op == 10u) value = exp(x);
+    else if (op == 11u) value = erf_approx(x);
+    else if (op == 12u) value = 1.0 / x;
+    else if (op == 13u) value = max(x, 0.0);
+    else if (op == 14u) value = sqrt(x);
+    else if (op == 15u) value = 1.0 / (1.0 + exp(-x));
+    else if (op == 16u) value = roundEven(x);
+    else if (op == 17u) {
+        float minimum = p[83] != 0u ? y : -1.0 / 0.0;
+        float maximum = p[84] != 0u ? z : 1.0 / 0.0;
+        value = min(max(x, minimum), maximum);
+    }
+    o[id] = floatBitsToUint(value);
+}

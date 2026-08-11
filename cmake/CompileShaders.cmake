@@ -28,12 +28,19 @@ function(compile_shader target source output symbol)
     string(MAKE_C_IDENTIFIER "${target}_${symbol}_shader" _shader_target)
     set_source_files_properties("${_output}" PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE)
 
+    if(ARGC GREATER 4)
+        set(_namespace "${ARGV4}")
+    else()
+        set(_namespace "lfs::vis::viewport_shaders")
+    endif()
+
     add_custom_command(
         OUTPUT "${_output}"
         COMMAND $<TARGET_FILE:lfs_shader_compiler>
                 --input "${_source}"
                 --output "${_output}"
                 --symbol "${symbol}"
+                --namespace "${_namespace}"
         DEPENDS "${_source}" lfs_shader_compiler
         COMMENT "Compiling shader ${source}"
         VERBATIM)
