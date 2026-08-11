@@ -27,6 +27,8 @@ namespace {
     constexpr int kWidth = 16;
     constexpr int kHeight = 16;
     constexpr int kChannels = 3;
+    constexpr int kFixtureFrameCount = 50;
+    constexpr double kFixtureEndTime = 0.5;
 
     struct TempDir {
         explicit TempDir(const std::string_view label) {
@@ -130,6 +132,7 @@ namespace {
         params.frame_interval = 1;
         params.format = lfs::io::ImageFormat::PNG;
         params.generate_metadata = true;
+        params.end_time = kFixtureEndTime;
         return params;
     }
 
@@ -159,7 +162,7 @@ TEST(VideoFrameExtractorOutputNaming, IntervalUsesSourceFrameNumbers) {
     std::filesystem::create_directories(output_dir);
 
     std::string error;
-    ASSERT_TRUE(writeEncodedVideo(video_path, 5, 10, error)) << error;
+    ASSERT_TRUE(writeEncodedVideo(video_path, kFixtureFrameCount, 10, error)) << error;
 
     auto params = extractionParams(video_path, output_dir);
     params.frame_interval = 2;
@@ -183,7 +186,7 @@ TEST(VideoFrameExtractorOutputNaming, TrimmedRangeKeepsOriginalSourceFrameNumber
     std::filesystem::create_directories(output_dir);
 
     std::string error;
-    ASSERT_TRUE(writeEncodedVideo(video_path, 40, 10, error)) << error;
+    ASSERT_TRUE(writeEncodedVideo(video_path, kFixtureFrameCount, 10, error)) << error;
 
     auto params = extractionParams(video_path, output_dir);
     params.start_time = 2.3;
@@ -207,7 +210,7 @@ TEST(VideoFrameExtractorOutputNaming, RepeatedSourceFramesAreWrittenOnce) {
     std::filesystem::create_directories(output_dir);
 
     std::string error;
-    ASSERT_TRUE(writeEncodedVideo(video_path, 5, 10, error)) << error;
+    ASSERT_TRUE(writeEncodedVideo(video_path, kFixtureFrameCount, 10, error)) << error;
 
     auto params = extractionParams(video_path, output_dir);
     params.mode = ExtractionMode::FPS;
