@@ -2279,13 +2279,6 @@ class DatasetParams:
     def use_cpu_cache(self, arg: bool, /) -> None: ...
 
     @property
-    def use_fs_cache(self) -> bool:
-        """Use filesystem cache for images"""
-
-    @use_fs_cache.setter
-    def use_fs_cache(self, arg: bool, /) -> None: ...
-
-    @property
     def use_16bit_color(self) -> bool:
         """Train with 16-bit color images (HDR); caches losslessly as JPEG 2000"""
 

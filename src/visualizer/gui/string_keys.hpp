@@ -97,7 +97,6 @@ namespace lichtfeld::Strings {
             inline constexpr const char* RESIZE_FACTOR = "training.dataset.resize_factor";
             inline constexpr const char* MAX_WIDTH = "training.dataset.max_width";
             inline constexpr const char* CPU_CACHE = "training.dataset.cpu_cache";
-            inline constexpr const char* FS_CACHE = "training.dataset.fs_cache";
             inline constexpr const char* OUTPUT = "training.dataset.output";
         } // namespace Dataset
 
@@ -200,7 +199,6 @@ namespace lichtfeld::Strings {
             inline constexpr const char* RESIZE_FACTOR = "training.tooltip.resize_factor";
             inline constexpr const char* MAX_WIDTH = "training.tooltip.max_width";
             inline constexpr const char* CPU_CACHE = "training.tooltip.cpu_cache";
-            inline constexpr const char* FS_CACHE = "training.tooltip.fs_cache";
             inline constexpr const char* SAVE_STEPS = "training.tooltip.save_steps";
             inline constexpr const char* LR_POSITION = "training.tooltip.lr_position";
             inline constexpr const char* LR_SH_COEFF = "training.tooltip.lr_sh_coeff";

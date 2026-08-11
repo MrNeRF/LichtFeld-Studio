@@ -91,7 +91,7 @@ STRATEGY_LABEL_KEYS = {
     "igs+": "training.options.strategy.igs_plus",
 }
 
-DATASET_BOOL_PROPS = ["use_cpu_cache", "use_fs_cache", "use_16bit_color"]
+DATASET_BOOL_PROPS = ["use_cpu_cache", "use_16bit_color"]
 
 def _resolved_ppisp_activation_step(
     params,
@@ -365,7 +365,6 @@ class TrainingPanel(Panel):
         )
         model.bind_func("label_max_width", lambda: tr("training.dataset.max_width"))
         model.bind_func("label_cpu_cache", lambda: tr("training.dataset.cpu_cache"))
-        model.bind_func("label_fs_cache", lambda: tr("training.dataset.fs_cache"))
         model.bind_func(
             "label_use_16bit_color", lambda: tr("training.dataset.use_16bit_color")
         )

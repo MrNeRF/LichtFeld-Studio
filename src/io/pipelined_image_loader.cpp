@@ -20,6 +20,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <charconv>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -30,6 +32,16 @@
 #include <semaphore>
 #include <sstream>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <csignal>
+#include <unistd.h>
+#endif
 
 namespace lfs::io {
 
@@ -219,6 +231,69 @@ namespace lfs::io {
 #else
             return std::filesystem::path("/tmp");
 #endif
+        }
+
+        [[nodiscard]] std::uint64_t current_process_id() {
+#ifdef _WIN32
+            return static_cast<std::uint64_t>(GetCurrentProcessId());
+#else
+            return static_cast<std::uint64_t>(getpid());
+#endif
+        }
+
+        [[nodiscard]] bool process_is_alive(const std::uint64_t pid) {
+#ifdef _WIN32
+            HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+            if (!handle)
+                return false;
+            DWORD exit_code = 0;
+            const bool alive = GetExitCodeProcess(handle, &exit_code) && exit_code == STILL_ACTIVE;
+            CloseHandle(handle);
+            return alive;
+#else
+            return kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM;
+#endif
+        }
+
+        [[nodiscard]] std::filesystem::path run_spill_base() {
+            return get_temp_folder() / "LichtFeld" / "pipeline_runs";
+        }
+
+        void remove_stale_run_spill_directories() {
+            const auto base = run_spill_base();
+            std::error_code ec;
+            if (!std::filesystem::is_directory(base, ec) || ec)
+                return;
+
+            constexpr std::string_view prefix = "ppl_run_";
+            for (const auto& entry : std::filesystem::directory_iterator(base, ec)) {
+                if (ec)
+                    break;
+                if (!entry.is_directory(ec) || ec) {
+                    ec.clear();
+                    continue;
+                }
+                const auto name = entry.path().filename().string();
+                if (!name.starts_with(prefix))
+                    continue;
+
+                const auto pid_start = prefix.size();
+                const auto pid_end = name.find('_', pid_start);
+                std::uint64_t pid = 0;
+                const auto parse_end = pid_end == std::string::npos ? name.size() : pid_end;
+                const auto [ptr, parse_ec] = std::from_chars(
+                    name.data() + pid_start, name.data() + parse_end, pid);
+                const bool parsed = parse_ec == std::errc{} && ptr == name.data() + parse_end;
+                if (parsed && process_is_alive(pid))
+                    continue;
+
+                std::error_code remove_ec;
+                std::filesystem::remove_all(entry.path(), remove_ec);
+                if (remove_ec) {
+                    LOG_WARN("[PipelinedImageLoader] Failed to remove stale run spill {}: {}",
+                             lfs::core::path_to_utf8(entry.path()), remove_ec.message());
+                }
+            }
         }
 
         std::mutex& get_nvcodec_mutex() {
@@ -414,6 +489,7 @@ namespace lfs::io {
         : config_(std::move(config)),
           output_queue_(std::max<size_t>(1, config_.output_queue_size)) {
 
+        cleanup_stale_run_spill_directories();
         config_.jpeg_batch_size = std::clamp<size_t>(config_.jpeg_batch_size, 1, 12);
         if (config_.max_cache_bytes == 0)
             config_.max_cache_bytes = static_cast<size_t>(
@@ -437,18 +513,22 @@ namespace lfs::io {
         LOG_INFO("[PipelinedImageLoader] host compressed cache cap: {:.1f} GiB",
                  config_.max_cache_bytes / (1024.0 * 1024.0 * 1024.0));
 
-        if (config_.use_filesystem_cache) {
-            const auto cache_base = get_temp_folder() / "LichtFeld" / "pipeline_cache";
-            fs_cache_folder_ = cache_base / "ppl_j2k_unified_v1";
-
+        {
+            const auto base = run_spill_base();
             std::error_code ec;
-            std::filesystem::create_directories(fs_cache_folder_, ec);
+            std::filesystem::create_directories(base, ec);
+            if (!ec) {
+                run_spill_folder_ = base /
+                                    ("ppl_run_" + std::to_string(current_process_id()) + "_" +
+                                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+                std::filesystem::create_directories(run_spill_folder_, ec);
+            }
             if (ec) {
-                LOG_WARN("[PipelinedImageLoader] Cache folder creation failed: {}", ec.message());
-                config_.use_filesystem_cache = false;
+                LOG_WARN("[PipelinedImageLoader] Run spill folder creation failed: {}", ec.message());
+                run_spill_folder_.clear();
             } else {
-                LOG_INFO("[PipelinedImageLoader] filesystem cache: {}",
-                         lfs::core::path_to_utf8(fs_cache_folder_));
+                LOG_INFO("[PipelinedImageLoader] run spill folder: {}",
+                         lfs::core::path_to_utf8(run_spill_folder_));
             }
         }
 
@@ -545,11 +625,13 @@ namespace lfs::io {
                  stats_.total_images_loaded, stats_.hot_path_hits, stats_.cold_path_misses);
         {
             std::lock_guard<std::mutex> cache_lock(jpeg_cache_mutex_);
-            LOG_INFO("[PipelinedImageLoader] compressed cache retained: {} entries, {:.1f} MiB RAM, fs={}",
+            LOG_INFO("[PipelinedImageLoader] compressed run cache: {} RAM entries, {:.1f} MiB RAM, {} spill entries, {:.1f} MiB spill",
                      jpeg_cache_.size(),
                      jpeg_cache_bytes_.load() / (1024.0 * 1024.0),
-                     fs_cache_folder_.empty() ? std::string("(disabled)") : lfs::core::path_to_utf8(fs_cache_folder_));
+                     spill_cache_.size(),
+                     spill_cache_bytes_ / (1024.0 * 1024.0));
         }
+        cleanup_run_spill_directory();
     }
 
     void PipelinedImageLoader::prefetch(const std::vector<ImageRequest>& requests) {
@@ -606,6 +688,30 @@ namespace lfs::io {
             in_flight_.fetch_add(1, std::memory_order_acq_rel);
         }
         (void)prefetch_queue_.push(std::move(request));
+    }
+
+    void PipelinedImageLoader::canonicalize(const std::vector<ImageRequest>& requests) {
+        constexpr size_t CHUNK_SIZE = 32;
+        for (size_t offset = 0; offset < requests.size(); offset += CHUNK_SIZE) {
+            const size_t count = std::min(CHUNK_SIZE, requests.size() - offset);
+            std::vector<ImageRequest> chunk;
+            chunk.reserve(count);
+            chunk.insert(chunk.end(), requests.begin() + static_cast<std::ptrdiff_t>(offset),
+                         requests.begin() + static_cast<std::ptrdiff_t>(offset + count));
+            prefetch(chunk);
+
+            for (size_t i = 0; i < count; ++i) {
+                auto completion = get_completion();
+                if (!completion) {
+                    throw std::runtime_error(legacy_message_from(completion.error()));
+                }
+                if (!completion->outcome) {
+                    throw std::runtime_error(legacy_message_from(completion->outcome.error()));
+                }
+                // Destroying the completion here releases decoded GPU payloads;
+                // only the final encoded run-cache/spill representation remains.
+            }
+        }
     }
 
     ReadyImage PipelinedImageLoader::get() {
@@ -816,6 +922,8 @@ namespace lfs::io {
             std::lock_guard<std::mutex> cache_lock(jpeg_cache_mutex_);
             s.jpeg_cache_entries = jpeg_cache_.size();
             s.jpeg_cache_bytes = jpeg_cache_bytes_.load();
+            s.spill_cache_entries = spill_cache_.size();
+            s.spill_cache_bytes = spill_cache_bytes_;
         }
         {
             std::lock_guard<std::mutex> pairs_lock(pending_pairs_mutex_);
@@ -844,6 +952,10 @@ namespace lfs::io {
         s.pending_normal_bytes = gpu_stats.pending_normal_bytes;
         publish_loader_vram_gauges();
         return s;
+    }
+
+    std::filesystem::path PipelinedImageLoader::run_spill_directory() const {
+        return run_spill_folder_;
     }
 
     PipelinedImageLoader::GpuMemoryStats PipelinedImageLoader::get_gpu_memory_stats() const {
@@ -890,7 +1002,6 @@ namespace lfs::io {
             auto data = std::make_shared<std::vector<uint8_t>>(read_file(path));
             if (!needs_requested_processing) {
                 put_in_jpeg_cache(cache_key, data);
-                save_to_fs_cache(cache_key, *data);
             }
 
             if (is_nvcodec_available()) {
@@ -960,7 +1071,6 @@ namespace lfs::io {
                 try {
                     auto nvcodec = acquire_nvcodec_loader(config_.decoder_pool_size);
                     auto jpeg_bytes = nvcodec->encode_to_jpeg(decoded, config_.cache_jpeg_quality, nullptr);
-                    save_to_fs_cache(cache_key, jpeg_bytes);
                     auto jpeg_shared = std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes));
                     put_in_jpeg_cache(cache_key, jpeg_shared);
 
@@ -1005,11 +1115,6 @@ namespace lfs::io {
         return key;
     }
 
-    std::filesystem::path PipelinedImageLoader::get_fs_cache_path(const std::string& cache_key) const {
-        // Hash avoids Unicode path issues on Windows (operator/ interprets std::string as ANSI)
-        return fs_cache_folder_ / (std::to_string(std::hash<std::string>{}(cache_key)) + ".jpg");
-    }
-
     bool PipelinedImageLoader::is_jpeg_data(const std::vector<uint8_t>& data) const {
         if (data.size() < 3)
             return false;
@@ -1033,26 +1138,7 @@ namespace lfs::io {
 
     std::shared_ptr<std::vector<uint8_t>> PipelinedImageLoader::load_cached_jpeg_blob(
         const std::string& cache_key) {
-        if (auto cached = get_from_jpeg_cache(cache_key))
-            return cached;
-
-        if (!config_.use_filesystem_cache)
-            return {};
-
-        const auto fs_path = get_fs_cache_path(cache_key);
-        auto done_path = fs_path;
-        done_path += ".done";
-        if (!is_regular_file_no_throw(fs_path) || !is_regular_file_no_throw(done_path))
-            return {};
-
-        try {
-            auto data = std::make_shared<std::vector<uint8_t>>(read_file(fs_path));
-            put_in_jpeg_cache(cache_key, data);
-            return data;
-        } catch (const std::exception& e) {
-            LOG_DEBUG("[PipelinedImageLoader] Cache read skipped for key {}: {}", cache_key, e.what());
-            return {};
-        }
+        return get_from_jpeg_cache(cache_key);
     }
 
     lfs::core::Tensor PipelinedImageLoader::decode_file_on_cpu(
@@ -1135,7 +1221,6 @@ namespace lfs::io {
             auto bytes = config_.use_16bit_color
                              ? nvcodec.encode_to_jpeg2k(tensor, cuda_stream)
                              : nvcodec.encode_to_jpeg(tensor, config_.cache_jpeg_quality, cuda_stream);
-            save_to_fs_cache(cache_key, bytes);
             put_in_jpeg_cache(cache_key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
         } catch (...) {
             const auto message = describe_current_exception("non-standard nvImageCodec exception");
@@ -1223,7 +1308,6 @@ namespace lfs::io {
                     static_cast<cudaStream_t>(cuda_stream));
                 bytes = nvcodec.encode_to_jpeg2k(hwc, cuda_stream);
             }
-            save_to_fs_cache(item.cache_key, bytes);
             put_in_jpeg_cache(item.cache_key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
         } catch (...) {
             const auto message = describe_current_exception("non-standard nvImageCodec exception");
@@ -1316,12 +1400,35 @@ namespace lfs::io {
     }
 
     std::shared_ptr<std::vector<uint8_t>> PipelinedImageLoader::get_from_jpeg_cache(const std::string& cache_key) {
-        std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
-        const auto it = jpeg_cache_.find(cache_key);
-        if (it == jpeg_cache_.end())
+        std::filesystem::path spill_path;
+        {
+            std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
+            if (const auto it = jpeg_cache_.find(cache_key); it != jpeg_cache_.end()) {
+                it->second.last_access = std::chrono::steady_clock::now();
+                return it->second.data;
+            }
+            if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
+                it->second.last_access = std::chrono::steady_clock::now();
+                spill_path = it->second.path;
+            }
+        }
+
+        if (spill_path.empty())
             return nullptr;
-        it->second.last_access = std::chrono::steady_clock::now();
-        return it->second.data;
+        try {
+            return std::make_shared<std::vector<uint8_t>>(read_file(spill_path));
+        } catch (const std::exception& e) {
+            LOG_WARN("[PipelinedImageLoader] Run spill read failed for {}: {}",
+                     lfs::core::path_to_utf8(spill_path), e.what());
+            std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
+            if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
+                spill_cache_bytes_ -= it->second.size_bytes;
+                std::error_code ec;
+                std::filesystem::remove(it->second.path, ec);
+                spill_cache_.erase(it);
+            }
+            return nullptr;
+        }
     }
 
     void PipelinedImageLoader::put_in_jpeg_cache(const std::string& cache_key, std::shared_ptr<std::vector<uint8_t>> data) {
@@ -1334,9 +1441,19 @@ namespace lfs::io {
                 jpeg_cache_bytes_ -= it->second.size_bytes;
                 jpeg_cache_.erase(it);
             }
+            if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
+                spill_cache_bytes_ -= it->second.size_bytes;
+                std::error_code ec;
+                std::filesystem::remove(it->second.path, ec);
+                spill_cache_.erase(it);
+            }
             evict_jpeg_cache_if_needed(size);
-            jpeg_cache_[cache_key] = JpegCacheEntry{data, std::chrono::steady_clock::now(), size};
-            jpeg_cache_bytes_ += size;
+            if (size > config_.max_cache_bytes) {
+                spill_cache_entry_locked(cache_key, data);
+            } else {
+                jpeg_cache_[cache_key] = JpegCacheEntry{data, std::chrono::steady_clock::now(), size};
+                jpeg_cache_bytes_ += size;
+            }
         }
     }
 
@@ -1345,25 +1462,17 @@ namespace lfs::io {
     }
 
     void PipelinedImageLoader::invalidate_cache_entry(const std::string& cache_key) {
-        {
-            std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
-            if (const auto it = jpeg_cache_.find(cache_key); it != jpeg_cache_.end()) {
-                jpeg_cache_bytes_ -= it->second.size_bytes;
-                jpeg_cache_.erase(it);
-            }
+        std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
+        if (const auto it = jpeg_cache_.find(cache_key); it != jpeg_cache_.end()) {
+            jpeg_cache_bytes_ -= it->second.size_bytes;
+            jpeg_cache_.erase(it);
         }
-
-        if (!config_.use_filesystem_cache || fs_cache_folder_.empty()) {
-            return;
+        if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
+            spill_cache_bytes_ -= it->second.size_bytes;
+            std::error_code ec;
+            std::filesystem::remove(it->second.path, ec);
+            spill_cache_.erase(it);
         }
-
-        std::lock_guard<std::mutex> lock(fs_cache_mutex_);
-        const auto path = get_fs_cache_path(cache_key);
-        auto done_path = path;
-        done_path += ".done";
-        std::error_code ec;
-        std::filesystem::remove(path, ec);
-        std::filesystem::remove(done_path, ec);
     }
 
     void PipelinedImageLoader::evict_jpeg_cache_if_needed(size_t required_bytes) {
@@ -1383,39 +1492,53 @@ namespace lfs::io {
                     oldest = it;
                 }
             }
+            const auto key = oldest->first;
+            const auto data = oldest->second.data;
             jpeg_cache_bytes_ -= oldest->second.size_bytes;
             jpeg_cache_.erase(oldest);
+            spill_cache_entry_locked(key, data);
         }
     }
 
-    void PipelinedImageLoader::save_to_fs_cache(const std::string& cache_key, const std::vector<uint8_t>& data) {
-        if (!config_.use_filesystem_cache)
+    void PipelinedImageLoader::spill_cache_entry_locked(
+        const std::string& cache_key,
+        const std::shared_ptr<std::vector<uint8_t>>& data) {
+        if (!data || run_spill_folder_.empty())
             return;
 
-        std::lock_guard<std::mutex> lock(fs_cache_mutex_);
-        if (files_being_written_.contains(cache_key))
-            return;
-        files_being_written_.insert(cache_key);
-
-        const auto path = get_fs_cache_path(cache_key);
+        const auto path = run_spill_folder_ /
+                          ("blob_" + std::to_string(++spill_sequence_) + ".bin");
         std::ofstream file;
-        if (lfs::core::open_file_for_write(path, std::ios::binary, file)) {
-            file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
-            if (!file.good()) {
-                LOG_WARN("[PipelinedImageLoader] Failed to write cache: {}", lfs::core::path_to_utf8(path));
-            } else {
-                file.close();
-                auto done_path = path;
-                done_path += ".done";
-                std::ofstream done_file;
-                if (!lfs::core::open_file_for_write(done_path, done_file) || !done_file.good()) {
-                    LOG_WARN("[PipelinedImageLoader] Failed to create .done marker: {}", lfs::core::path_to_utf8(path));
-                }
-            }
-        } else {
-            LOG_WARN("[PipelinedImageLoader] Failed to open cache file for writing: {}", lfs::core::path_to_utf8(path));
+        if (!lfs::core::open_file_for_write(path, std::ios::binary, file)) {
+            LOG_WARN("[PipelinedImageLoader] Failed to open run spill: {}", lfs::core::path_to_utf8(path));
+            return;
         }
-        files_being_written_.erase(cache_key);
+        file.write(reinterpret_cast<const char*>(data->data()), static_cast<std::streamsize>(data->size()));
+        if (!file.good()) {
+            LOG_WARN("[PipelinedImageLoader] Failed to write run spill: {}", lfs::core::path_to_utf8(path));
+            return;
+        }
+        spill_cache_[cache_key] = SpillCacheEntry{path, std::chrono::steady_clock::now(), data->size()};
+        spill_cache_bytes_ += data->size();
+    }
+
+    void PipelinedImageLoader::cleanup_run_spill_directory() {
+        if (run_spill_folder_.empty())
+            return;
+        std::error_code ec;
+        std::filesystem::remove_all(run_spill_folder_, ec);
+        if (ec) {
+            LOG_WARN("[PipelinedImageLoader] Failed to remove run spill {}: {}",
+                     lfs::core::path_to_utf8(run_spill_folder_), ec.message());
+        }
+        run_spill_folder_.clear();
+        std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
+        spill_cache_.clear();
+        spill_cache_bytes_ = 0;
+    }
+
+    void PipelinedImageLoader::cleanup_stale_run_spill_directories() {
+        remove_stale_run_spill_directories();
     }
 
     void PipelinedImageLoader::add_output_ready_bytes(const ReadyImage& ready) {
@@ -1996,7 +2119,10 @@ namespace lfs::io {
             result.undistort = request.undistort;
 
             try {
-                const bool needs_requested_processing = load_params_need_processing(request.params);
+                // Every source is canonicalized once for this run before it is
+                // consumed from the encoded run cache. Never treat an original
+                // JPEG as an already-canonical blob.
+                const bool needs_requested_processing = true;
 
                 if (auto cached = load_cached_jpeg_blob(result.cache_key)) {
                     result.jpeg_data = std::move(cached);
@@ -2015,20 +2141,10 @@ namespace lfs::io {
                         stats_.total_bytes_read += result.raw_bytes.size();
                     }
 
-                    if (result.is_original_jpeg && !needs_requested_processing) {
-                        auto data = std::make_shared<std::vector<uint8_t>>(std::move(result.raw_bytes));
-                        put_in_jpeg_cache(result.cache_key, data);
-                        result.jpeg_data = data;
-                        result.is_cache_hit = true;
-                        hot_queue_.push(std::move(result));
-                        std::lock_guard<std::mutex> lock(stats_mutex_);
-                        ++stats_.hot_path_hits;
-                    } else {
-                        result.needs_processing = true;
-                        cold_queue_.push(std::move(result));
-                        std::lock_guard<std::mutex> lock(stats_mutex_);
-                        ++stats_.cold_path_misses;
-                    }
+                    result.needs_processing = needs_requested_processing;
+                    cold_queue_.push(std::move(result));
+                    std::lock_guard<std::mutex> lock(stats_mutex_);
+                    ++stats_.cold_path_misses;
                 }
             } catch (const std::exception& e) {
                 LOG_ERROR("[PipelinedImageLoader] Prefetch error {}: {}", lfs::core::path_to_utf8(request.path), e.what());
@@ -2061,37 +2177,6 @@ namespace lfs::io {
                             hot_queue_.push(std::move(mask_result));
                             std::lock_guard<std::mutex> lock(stats_mutex_);
                             ++stats_.mask_cache_hits;
-                        } else if (config_.use_filesystem_cache) {
-                            const auto fs_path = get_fs_cache_path(mask_result.cache_key);
-                            auto done_path = fs_path;
-                            done_path += ".done";
-                            std::error_code cache_ec;
-                            const bool cache_ready =
-                                std::filesystem::exists(fs_path, cache_ec) && !cache_ec &&
-                                std::filesystem::exists(done_path, cache_ec) && !cache_ec;
-                            if (cache_ready) {
-                                auto data = std::make_shared<std::vector<uint8_t>>(read_file(fs_path));
-                                put_in_jpeg_cache(mask_result.cache_key, data);
-                                mask_result.jpeg_data = data;
-                                mask_result.is_cache_hit = true;
-                                hot_queue_.push(std::move(mask_result));
-                                std::lock_guard<std::mutex> lock(stats_mutex_);
-                                ++stats_.mask_cache_hits;
-                            } else {
-                                mask_result.raw_bytes = read_file(*request.mask_path);
-                                mask_result.is_original_jpeg = is_jpeg_data(mask_result.raw_bytes);
-                                mask_result.is_cache_hit = false;
-
-                                {
-                                    std::lock_guard<std::mutex> lock(stats_mutex_);
-                                    stats_.total_bytes_read += mask_result.raw_bytes.size();
-                                }
-
-                                mask_result.needs_processing = true;
-                                cold_queue_.push(std::move(mask_result));
-                                std::lock_guard<std::mutex> lock(stats_mutex_);
-                                ++stats_.mask_cache_misses;
-                            }
                         } else {
                             mask_result.raw_bytes = read_file(*request.mask_path);
                             mask_result.is_original_jpeg = is_jpeg_data(mask_result.raw_bytes);
@@ -2542,13 +2627,11 @@ namespace lfs::io {
                     if (is_nvcodec_available()) {
                         try {
                             auto rgb_jpeg = nvcodec->encode_to_jpeg(rgb, config_.cache_jpeg_quality, nullptr);
-                            save_to_fs_cache(item.cache_key, rgb_jpeg);
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(rgb_jpeg)));
 
                             const auto alpha_key = make_mask_cache_key(item.path, item.params);
                             auto alpha_jpeg = nvcodec->encode_grayscale_to_jpeg2k(alpha, nullptr, true, true);
-                            save_to_fs_cache(alpha_key, alpha_jpeg);
                             put_in_jpeg_cache(alpha_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(alpha_jpeg)));
                         } catch (...) {
@@ -2665,7 +2748,6 @@ namespace lfs::io {
                     if (item.is_mask && is_nvcodec_available()) {
                         try {
                             auto jpeg_bytes = nvcodec->encode_grayscale_to_jpeg2k(aux_tensor, nullptr, true, true);
-                            save_to_fs_cache(item.cache_key, jpeg_bytes);
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
                         } catch (...) {

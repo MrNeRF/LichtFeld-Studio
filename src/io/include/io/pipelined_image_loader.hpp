@@ -77,7 +77,6 @@ namespace lfs::io {
         size_t io_threads = config::DEFAULT_IO_THREADS;
         size_t cold_process_threads = config::DEFAULT_COLD_THREADS;
         size_t max_cache_bytes = config::DEFAULT_MAX_CACHE_BYTES;
-        bool use_filesystem_cache = true;
         int cache_jpeg_quality = config::DEFAULT_JPEG_QUALITY;
         std::chrono::milliseconds batch_collect_timeout{config::DEFAULT_BATCH_TIMEOUT_MS};
         std::chrono::milliseconds output_wait_timeout{config::DEFAULT_OUTPUT_TIMEOUT_MS};
@@ -170,6 +169,8 @@ namespace lfs::io {
         struct CacheStats {
             size_t jpeg_cache_entries = 0;
             size_t jpeg_cache_bytes = 0;
+            size_t spill_cache_entries = 0;
+            size_t spill_cache_bytes = 0;
             size_t hot_path_hits = 0;
             size_t cold_path_misses = 0;
             size_t gpu_batch_decodes = 0;
@@ -216,6 +217,9 @@ namespace lfs::io {
 
         void prefetch(const std::vector<ImageRequest>& requests);
         void prefetch(size_t sequence_id, const std::filesystem::path& path, const LoadParams& params);
+        // Canonicalize a run's source set before normal training consumption.
+        // The encoded results remain available only in this loader's run cache.
+        void canonicalize(const std::vector<ImageRequest>& requests);
 
         ReadyImage get();
         std::optional<ReadyImage> try_get();
@@ -240,6 +244,7 @@ namespace lfs::io {
         bool is_running() const { return running_.load(); }
         CacheStats get_stats() const;
         GpuMemoryStats get_gpu_memory_stats() const;
+        [[nodiscard]] std::filesystem::path run_spill_directory() const;
 
     private:
         struct PrefetchedImage {
@@ -402,10 +407,8 @@ namespace lfs::io {
         void cold_process_thread_func(size_t worker_index);
 
         std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
-        std::filesystem::path get_fs_cache_path(const std::string& cache_key) const;
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;
         std::vector<uint8_t> read_file(const std::filesystem::path& path) const;
-        void save_to_fs_cache(const std::string& cache_key, const std::vector<uint8_t>& data);
         std::shared_ptr<std::vector<uint8_t>> load_cached_jpeg_blob(const std::string& cache_key);
         lfs::core::Tensor decode_file_on_cpu(const std::filesystem::path& path,
                                              const LoadParams& params) const;
@@ -436,6 +439,10 @@ namespace lfs::io {
         void put_in_jpeg_cache(const std::string& cache_key, std::vector<uint8_t>&& data);
         void invalidate_cache_entry(const std::string& cache_key);
         void evict_jpeg_cache_if_needed(size_t required_bytes);
+        void spill_cache_entry_locked(const std::string& cache_key,
+                                      const std::shared_ptr<std::vector<uint8_t>>& data);
+        void cleanup_run_spill_directory();
+        static void cleanup_stale_run_spill_directories();
 
         // Auxiliary image pairing helpers
         std::string make_mask_cache_key(
@@ -506,13 +513,19 @@ namespace lfs::io {
         mutable std::mutex jpeg_cache_mutex_;
         std::atomic<size_t> jpeg_cache_bytes_{0};
 
+        struct SpillCacheEntry {
+            std::filesystem::path path;
+            std::chrono::steady_clock::time_point last_access;
+            size_t size_bytes = 0;
+        };
+        std::unordered_map<std::string, SpillCacheEntry> spill_cache_;
+        std::filesystem::path run_spill_folder_;
+        size_t spill_cache_bytes_ = 0;
+        std::uint64_t spill_sequence_ = 0;
+
         struct DecodedFrameRing;
         std::shared_ptr<DecodedFrameRing> decoded_frame_ring_;
         std::vector<lfs::core::Tensor> decode_hwc_workspace_;
-
-        std::filesystem::path fs_cache_folder_;
-        std::mutex fs_cache_mutex_;
-        std::set<std::string> files_being_written_;
 
         // Cleared on the first failed JPEG 2000 encode (e.g. nvjpeg2k extension not
         // built) so 16-bit runs degrade to uncached decoding with a single error.

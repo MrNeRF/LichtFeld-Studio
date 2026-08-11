@@ -92,7 +92,6 @@ namespace {
         checkpoint_params.dataset.max_width = 1536;
         checkpoint_params.dataset.test_every = 4;
         checkpoint_params.dataset.loading_params.use_cpu_memory = false;
-        checkpoint_params.dataset.loading_params.use_fs_cache = false;
         checkpoint_params.dataset.invert_masks = true;
         checkpoint_params.dataset.mask_threshold = 0.75f;
 
@@ -119,7 +118,6 @@ namespace {
         EXPECT_EQ(dataset.max_width, 1536);
         EXPECT_EQ(dataset.test_every, 4);
         EXPECT_FALSE(dataset.loading_params.use_cpu_memory);
-        EXPECT_FALSE(dataset.loading_params.use_fs_cache);
         EXPECT_TRUE(dataset.invert_masks);
         EXPECT_FLOAT_EQ(dataset.mask_threshold, 0.75f);
 

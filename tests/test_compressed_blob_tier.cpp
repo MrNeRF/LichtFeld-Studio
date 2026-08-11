@@ -54,7 +54,6 @@ TEST(CompressedBlobTier, HostCacheHit) {
         GTEST_SKIP() << "bicycle dataset is absent: " << path;
 
     lfs::io::PipelinedLoaderConfig config;
-    config.use_filesystem_cache = false;
     config.jpeg_batch_size = 1;
     config.prefetch_count = 2;
     config.output_queue_size = 1;
@@ -89,7 +88,6 @@ TEST(CompressedBlobTier, CacheHitMatchesProcessedReferenceWithResizeAndUndistort
     undistort.num_distortion = 1;
 
     lfs::io::PipelinedLoaderConfig config;
-    config.use_filesystem_cache = false;
     config.jpeg_batch_size = 1;
     config.prefetch_count = 2;
     config.output_queue_size = 1;

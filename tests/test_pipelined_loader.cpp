@@ -85,7 +85,6 @@ namespace {
             result.io_threads = 1;
             result.cold_process_threads = 1;
             result.max_cache_bytes = 64 * 1024 * 1024;
-            result.use_filesystem_cache = false;
             return result;
         }
 

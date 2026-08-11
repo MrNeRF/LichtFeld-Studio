@@ -2968,11 +2968,9 @@ namespace lfs::training {
 
             // Initialize image cache loader before any code path that calls getInstance()
             auto& cache_loader = lfs::io::CacheLoader::getInstance(
-                params_.dataset.loading_params.use_cpu_memory,
-                params_.dataset.loading_params.use_fs_cache);
+                params_.dataset.loading_params.use_cpu_memory);
             cache_loader.update_cache_params(
                 params_.dataset.loading_params.use_cpu_memory,
-                params_.dataset.loading_params.use_fs_cache,
                 train_dataset_size_,
                 params_.dataset.loading_params.min_cpu_free_GB,
                 params_.dataset.loading_params.min_cpu_free_memory_ratio,
@@ -5957,7 +5955,6 @@ namespace lfs::training {
         try {
             cache_loader.reset_cache();
             cache_loader.update_cache_params(params_.dataset.loading_params.use_cpu_memory,
-                                             params_.dataset.loading_params.use_fs_cache,
                                              train_dataset_size_,
                                              params_.dataset.loading_params.min_cpu_free_GB,
                                              params_.dataset.loading_params.min_cpu_free_memory_ratio,

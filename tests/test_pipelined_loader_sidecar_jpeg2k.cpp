@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "core/path_utils.hpp"
+#include "core/cuda/undistort/undistort.hpp"
 #include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 
@@ -12,16 +13,13 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -98,78 +96,6 @@ namespace {
         return write_depth_png_from_bicycle_content("lfs_pipelined_sidecar_jpeg2k_depth16.png", 0u);
     }
 
-    fs::path pipeline_cache_dir() {
-        return fs::path("/tmp") / "LichtFeld" / "pipeline_cache" / "ppl_j2k_unified_v1";
-    }
-
-    void clear_pipeline_cache_dir() {
-        std::error_code ec;
-        fs::remove_all(pipeline_cache_dir(), ec);
-    }
-
-    std::vector<fs::path> list_pipeline_cache_dirs() {
-        const fs::path base = fs::path("/tmp") / "LichtFeld" / "pipeline_cache";
-        std::vector<fs::path> dirs;
-        std::error_code ec;
-        if (!fs::is_directory(base, ec) || ec) {
-            return dirs;
-        }
-        for (const auto& entry : fs::directory_iterator(base, ec)) {
-            if (ec) {
-                break;
-            }
-            if (!entry.is_directory(ec) || ec) {
-                ec.clear();
-                continue;
-            }
-            const auto name = entry.path().filename().string();
-            if (name.starts_with("ppl_")) {
-                dirs.push_back(entry.path());
-            }
-        }
-        return dirs;
-    }
-
-    fs::path find_new_pipeline_cache_dir(const std::vector<fs::path>& before) {
-        std::unordered_set<std::string> before_set;
-        for (const auto& dir : before) {
-            before_set.insert(dir.string());
-        }
-
-        for (const auto& dir : list_pipeline_cache_dirs()) {
-            if (!before_set.contains(dir.string())) {
-                return dir;
-            }
-        }
-        throw std::runtime_error("Failed to find new pipelined loader cache directory");
-    }
-
-    std::vector<fs::path> corrupt_cache_payloads(const fs::path& cache_dir) {
-        std::vector<fs::path> corrupted;
-        std::error_code ec;
-        for (const auto& entry : fs::directory_iterator(cache_dir, ec)) {
-            if (ec) {
-                break;
-            }
-            if (!entry.is_regular_file(ec) || ec || entry.path().extension() != ".jpg") {
-                ec.clear();
-                continue;
-            }
-
-            std::fstream file(entry.path(), std::ios::binary | std::ios::in | std::ios::out);
-            if (!file) {
-                continue;
-            }
-            file.seekp(0, std::ios::beg);
-            const std::array<char, 16> poison{};
-            file.write(poison.data(), static_cast<std::streamsize>(poison.size()));
-            if (file.good()) {
-                corrupted.push_back(entry.path());
-            }
-        }
-        return corrupted;
-    }
-
     lfs::io::ReadyImage wait_for_ready(lfs::io::PipelinedImageLoader& loader) {
         auto ready = loader.try_get_for(std::chrono::seconds(20));
         if (!ready) {
@@ -194,8 +120,6 @@ TEST(PipelinedImageLoaderSidecarJpeg2k, DepthFirstTouchTranscodesThenHotDecodes)
     ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
     ASSERT_GT(device_count, 0);
     ASSERT_TRUE(lfs::io::NvCodecImageLoader::is_available());
-    clear_pipeline_cache_dir();
-
     const TempFileGuard depth_file{write_depth_png_from_bicycle_content()};
     const fs::path& depth_path = depth_file.path;
 
@@ -206,7 +130,6 @@ TEST(PipelinedImageLoaderSidecarJpeg2k, DepthFirstTouchTranscodesThenHotDecodes)
     config.decoder_pool_size = 2;
     config.output_queue_size = 2;
     config.prefetch_count = 2;
-    config.use_filesystem_cache = true;
     config.max_cache_bytes = 512ULL * 1024ULL * 1024ULL;
 
     lfs::io::PipelinedImageLoader loader(config);
@@ -247,17 +170,13 @@ TEST(PipelinedImageLoaderSidecarJpeg2k, DepthFirstTouchTranscodesThenHotDecodes)
     }
 }
 
-TEST(PipelinedImageLoaderSidecarJpeg2k, CorruptFilesystemSidecarFallsBackAndRepairs) {
+TEST(PipelinedImageLoaderSidecarJpeg2k, SmallRamBudgetSpillsAndCleansOnExit) {
     int device_count = 0;
     ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
     ASSERT_GT(device_count, 0);
     ASSERT_TRUE(lfs::io::NvCodecImageLoader::is_available());
-    clear_pipeline_cache_dir();
-
-    const TempFileGuard depth_a{
-        write_depth_png_from_bicycle_content("lfs_pipelined_sidecar_jpeg2k_depth16_a.png", 0u)};
-    const TempFileGuard depth_b{
-        write_depth_png_from_bicycle_content("lfs_pipelined_sidecar_jpeg2k_depth16_b.png", 0x1357u)};
+    const TempFileGuard depth_file{
+        write_depth_png_from_bicycle_content("lfs_pipelined_sidecar_jpeg2k_spill_depth16.png", 0u)};
 
     lfs::io::PipelinedLoaderConfig config;
     config.io_threads = 1;
@@ -266,55 +185,97 @@ TEST(PipelinedImageLoaderSidecarJpeg2k, CorruptFilesystemSidecarFallsBackAndRepa
     config.decoder_pool_size = 2;
     config.output_queue_size = 2;
     config.prefetch_count = 2;
-    config.use_filesystem_cache = true;
     config.max_cache_bytes = 1;
 
-    const auto cache_dirs_before = list_pipeline_cache_dirs();
-    lfs::io::PipelinedImageLoader loader(config);
-    const fs::path cache_dir = find_new_pipeline_cache_dir(cache_dirs_before);
+    fs::path spill_dir;
+    std::vector<float> first_values;
+    {
+        lfs::io::PipelinedImageLoader loader(config);
+        spill_dir = loader.run_spill_directory();
+        ASSERT_FALSE(spill_dir.empty());
 
-    lfs::io::ImageRequest first;
-    first.sequence_id = 1;
-    first.path = bicycle_image_path();
-    first.depth_path = depth_a.path;
-    first.params.output_uint8 = false;
+        lfs::io::ImageRequest first;
+        first.sequence_id = 1;
+        first.path = bicycle_image_path();
+        first.depth_path = depth_file.path;
+        first.params.output_uint8 = false;
 
-    loader.prefetch(std::vector<lfs::io::ImageRequest>{first});
-    auto first_ready = wait_for_ready(loader);
-    ASSERT_TRUE(first_ready.depth.has_value());
-    const std::vector<float> first_values = first_ready.depth->cpu().to_vector();
+        loader.prefetch(std::vector<lfs::io::ImageRequest>{first});
+        auto first_ready = wait_for_ready(loader);
+        ASSERT_TRUE(first_ready.depth.has_value());
+        first_values = first_ready.depth->cpu().to_vector();
+        const auto stats = loader.get_stats();
+        EXPECT_GT(stats.spill_cache_entries, size_t{0});
+        EXPECT_GT(stats.spill_cache_bytes, size_t{0});
+        EXPECT_TRUE(fs::is_directory(spill_dir));
 
-    const auto corrupted = corrupt_cache_payloads(cache_dir);
-    ASSERT_GE(corrupted.size(), size_t{1});
+        std::error_code remove_ec;
+        fs::remove(depth_file.path, remove_ec);
+        ASSERT_FALSE(fs::exists(depth_file.path));
 
-    lfs::io::ImageRequest evicting_request = first;
-    evicting_request.sequence_id = 2;
-    evicting_request.depth_path = depth_b.path;
-    loader.prefetch(std::vector<lfs::io::ImageRequest>{evicting_request});
-    auto evicting_ready = wait_for_ready(loader);
-    ASSERT_TRUE(evicting_ready.depth.has_value());
-
-    lfs::io::ImageRequest repaired_request = first;
-    repaired_request.sequence_id = 3;
-    loader.prefetch(std::vector<lfs::io::ImageRequest>{repaired_request});
-    auto repaired_ready = wait_for_ready(loader);
-    ASSERT_TRUE(repaired_ready.depth.has_value());
-
-    const std::vector<float> repaired_values = repaired_ready.depth->cpu().to_vector();
-    ASSERT_EQ(repaired_values.size(), first_values.size());
-    constexpr float kTolerance = 1.0f / 65535.0f;
-    for (size_t i = 0; i < first_values.size(); ++i) {
-        ASSERT_LE(std::abs(repaired_values[i] - first_values[i]), kTolerance)
-            << "repaired depth mismatch at element " << i;
+        first.sequence_id = 2;
+        loader.prefetch(std::vector<lfs::io::ImageRequest>{first});
+        auto streamed = wait_for_ready(loader);
+        ASSERT_TRUE(streamed.depth.has_value());
+        const auto streamed_values = streamed.depth->cpu().to_vector();
+        ASSERT_EQ(streamed_values.size(), first_values.size());
+        constexpr float kTolerance = 1.0f / 65535.0f;
+        for (size_t i = 0; i < first_values.size(); ++i) {
+            ASSERT_LE(std::abs(streamed_values[i] - first_values[i]), kTolerance)
+                << "spilled depth mismatch at element " << i;
+        }
     }
+    EXPECT_FALSE(fs::exists(spill_dir));
+}
 
-    std::error_code remove_ec;
-    fs::remove(depth_a.path, remove_ec);
-    ASSERT_FALSE(fs::exists(depth_a.path));
+TEST(PipelinedImageLoaderSidecarJpeg2k, ParameterChangesCanonicalizeFreshPerRun) {
+    const auto path = bicycle_image_path();
+    if (!fs::is_regular_file(path))
+        GTEST_SKIP() << "bicycle dataset is absent: " << path;
 
-    lfs::io::ImageRequest hot_after_repair_request = first;
-    hot_after_repair_request.sequence_id = 4;
-    loader.prefetch(std::vector<lfs::io::ImageRequest>{hot_after_repair_request});
-    auto hot_after_repair_ready = wait_for_ready(loader);
-    ASSERT_TRUE(hot_after_repair_ready.depth.has_value());
+    lfs::core::UndistortParams undistort{};
+    undistort.src_fx = 1800.0f;
+    undistort.src_fy = 1800.0f;
+    undistort.src_cx = 1920.0f;
+    undistort.src_cy = 1080.0f;
+    undistort.dst_fx = 1750.0f;
+    undistort.dst_fy = 1750.0f;
+    undistort.dst_cx = 960.0f;
+    undistort.dst_cy = 540.0f;
+    undistort.src_width = 3840;
+    undistort.src_height = 2160;
+    undistort.dst_width = 1920;
+    undistort.dst_height = 1080;
+    undistort.model_type = lfs::core::CameraModelType::PINHOLE;
+    undistort.distortion[0] = -0.08f;
+    undistort.num_distortion = 1;
+
+    const auto run = [&](const int resize_factor, const int max_width,
+                         const lfs::core::UndistortParams* params) {
+        lfs::io::PipelinedLoaderConfig config;
+        config.jpeg_batch_size = 1;
+        config.prefetch_count = 1;
+        config.output_queue_size = 1;
+        lfs::io::PipelinedImageLoader loader(config);
+        lfs::io::ImageRequest request;
+        request.sequence_id = 1;
+        request.path = path;
+        request.params.resize_factor = resize_factor;
+        request.params.max_width = max_width;
+        request.undistort = params;
+        request.params.undistort = params;
+        loader.prefetch({request});
+        const auto ready = loader.get();
+        EXPECT_TRUE(ready.error.empty()) << ready.error;
+        EXPECT_TRUE(ready.tensor.is_valid());
+        return ready.tensor.shape();
+    };
+
+    const auto run_a = run(2, 900, &undistort);
+    const auto run_b = run(1, 0, nullptr);
+    const auto run_c = run(4, 0, nullptr);
+
+    EXPECT_NE(run_a, run_b) << "undistort/resize-off run reused run A output";
+    EXPECT_NE(run_b, run_c) << "resize change reused run B output";
+    EXPECT_NE(run_a, run_c) << "all parameter variants must remain distinct";
 }

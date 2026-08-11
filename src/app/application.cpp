@@ -716,9 +716,7 @@ namespace lfs::app {
         // lfs_visualizer.dll, giving each its own CacheLoader singleton.
         // The callback below executes in the exe's context, so the exe's
         // copy must be initialized before it is invoked.
-        lfs::io::CacheLoader::getInstance(
-            params->dataset.loading_params.use_cpu_memory,
-            params->dataset.loading_params.use_fs_cache);
+        lfs::io::CacheLoader::getInstance(params->dataset.loading_params.use_cpu_memory);
 
         lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
             return lfs::io::CacheLoader::getInstance().load_cached_image(

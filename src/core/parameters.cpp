@@ -615,9 +615,6 @@ namespace lfs::core {
             if (j.contains("min_cpu_free_GB")) {
                 params.min_cpu_free_GB = j["min_cpu_free_GB"];
             }
-            if (j.contains("use_fs_cache")) {
-                params.use_fs_cache = j["use_fs_cache"];
-            }
             if (j.contains("print_cache_status")) {
                 params.print_cache_status = j["print_cache_status"];
             }
@@ -638,7 +635,6 @@ namespace lfs::core {
             loading_json["use_cpu_memory"] = use_cpu_memory;
             loading_json["min_cpu_free_memory_ratio"] = min_cpu_free_memory_ratio;
             loading_json["min_cpu_free_GB"] = min_cpu_free_GB;
-            loading_json["use_fs_cache"] = use_fs_cache;
             loading_json["print_cache_status"] = print_cache_status;
             loading_json["print_status_freq_num"] = print_status_freq_num;
             loading_json["use_16bit_color"] = use_16bit_color;

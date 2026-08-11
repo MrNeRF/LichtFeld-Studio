@@ -1484,7 +1484,6 @@ TEST_F(PythonIOTest, PipelinedLoaderStatsRemainResponsiveDuringCompletions) {
     config.output_queue_size = 64;
     config.io_threads = 2;
     config.cold_process_threads = 2;
-    config.use_filesystem_cache = false;
 
     PipelinedImageLoader loader(config);
     LoadParams params{.resize_factor = 1, .max_width = 0};
@@ -1519,7 +1518,6 @@ TEST_F(PythonIOTest, PipelinedLoaderReportsPrimaryImageFailure) {
     config.output_queue_size = 1;
     config.io_threads = 1;
     config.cold_process_threads = 1;
-    config.use_filesystem_cache = false;
 
     PipelinedImageLoader loader(config);
     const auto missing_path = temp_dir / "missing_training_image.png";
@@ -1554,7 +1552,6 @@ TEST_F(PythonIOTest, PipelinedLoaderShutdownReleasesQueuedGpuTensorsBeforeDecode
     config.output_queue_size = 1;
     config.io_threads = 1;
     config.cold_process_threads = 1;
-    config.use_filesystem_cache = false;
 
     PipelinedImageLoader loader(config);
     loader.prefetch(0, image_path, LoadParams{});

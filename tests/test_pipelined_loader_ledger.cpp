@@ -99,7 +99,6 @@ namespace {
         result.decoder_pool_size = 4;
         result.io_threads = 2;
         result.cold_process_threads = 2;
-        result.use_filesystem_cache = false;
         result.max_cache_bytes = 128ULL * 1024ULL * 1024ULL;
         return result;
     }

@@ -15,6 +15,7 @@
 #include <condition_variable>
 #include <format>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <queue>
@@ -368,7 +369,30 @@ namespace lfs::training {
               loader_(std::make_shared<lfs::io::PipelinedImageLoader>(config)),
               shutdown_(false) {
 
-            // Prefetch initial batch
+            // Canonicalize every source once for this training run. The loader
+            // retains only final encoded blobs in its run-local RAM/spill tier;
+            // normal iteration is decode-only consumption of those blobs.
+            if (dataset_->size() > 0) {
+                std::vector<lfs::io::ImageRequest> run_requests;
+                run_requests.reserve(dataset_->size());
+                const size_t sequence_base =
+                    std::numeric_limits<size_t>::max() - dataset_->size();
+                for (size_t local_idx = 0; local_idx < dataset_->size(); ++local_idx) {
+                    run_requests.push_back(make_request(
+                        dataset_->local_to_source(local_idx), sequence_base + local_idx));
+                }
+                loader_->canonicalize(run_requests);
+
+                // Canonicalization is a named pre-training boundary.  All
+                // decode leases are dead here, so release their ring storage
+                // and trim every transient allocator before the first training
+                // frame can overlap this import phase.
+                loader_->reclaim_idle_decoded_frames();
+                lfs::core::Tensor::trim_memory_pool();
+                LOG_INFO("[PipelinedDataLoader] canonicalization boundary trim complete");
+            }
+
+            // Prefetch initial batch from the now-canonical run cache.
             prefetch_next_batch();
         }
 
@@ -475,6 +499,58 @@ namespace lfs::training {
         std::shared_ptr<lfs::io::PipelinedImageLoader> get_loader_shared() const { return loader_; }
 
     private:
+        lfs::io::ImageRequest make_request(const size_t camera_idx,
+                                           const size_t seq_id) const {
+            auto& cam = dataset_->get_cameras()[camera_idx];
+            lfs::io::ImageRequest request;
+            request.sequence_id = seq_id;
+            request.path = cam->image_path();
+            request.params.resize_factor = dataset_->get_resize_factor();
+            request.params.max_width = dataset_->get_max_width();
+            request.params.output_uint8 = !config_.use_16bit_color;
+            if (!cam->image_size_loaded() ||
+                (dataset_->get_max_width() > 0 &&
+                 (cam->image_height() > dataset_->get_max_width() ||
+                  cam->image_width() > dataset_->get_max_width()))) {
+                cam->load_image_size(dataset_->get_resize_factor(), dataset_->get_max_width());
+            }
+            request.aux_target_width = cam->image_width();
+            request.aux_target_height = cam->image_height();
+            if (cam->is_undistort_prepared()) {
+                request.undistort = &cam->undistort_params();
+                request.params.undistort = request.undistort;
+            }
+
+            if (aux_config_.load_masks && cam->has_mask()) {
+                request.mask_path = cam->mask_path();
+                request.mask_params.invert = aux_config_.invert_masks;
+                request.mask_params.threshold = aux_config_.mask_threshold;
+            } else if (aux_config_.use_alpha_as_mask && cam->has_alpha()) {
+                request.extract_alpha_as_mask = true;
+                request.alpha_mask_params.invert = aux_config_.invert_masks;
+                request.alpha_mask_params.threshold = aux_config_.mask_threshold;
+            }
+            if (aux_config_.load_depths && cam->has_depth()) {
+                request.depth_path = cam->depth_path();
+            }
+            if (aux_config_.load_normals && cam->has_normal()) {
+                request.normal_path = cam->normal_path();
+                request.normal_flip_yz = aux_config_.normal_flip_yz;
+                request.normal_srgb = aux_config_.normal_srgb;
+                request.normal_transform_world_to_camera = aux_config_.normal_world_space;
+                if (aux_config_.normal_world_space) {
+                    if (camera_idx < aux_config_.normal_world_to_camera_by_source.size()) {
+                        request.normal_world_to_camera =
+                            aux_config_.normal_world_to_camera_by_source[camera_idx];
+                    } else {
+                        request.normal_world_to_camera = camera_world_to_camera_normal_matrix(
+                            *cam, aux_config_.normal_world_rotation);
+                    }
+                }
+            }
+            return request;
+        }
+
         void prefetch_next_batch() {
             while (loader_->in_flight_count() < loader_->adaptive_prefetch_target()) {
                 const auto indices = sampler_.next(1);
@@ -483,57 +559,9 @@ namespace lfs::training {
 
                 const size_t local_idx = (*indices)[0];
                 const size_t camera_idx = dataset_->local_to_source(local_idx);
-                auto& cam = dataset_->get_cameras()[camera_idx];
                 const size_t seq_id = next_sequence_id_++;
                 sequence_to_camera_[seq_id] = camera_idx;
-
-                lfs::io::ImageRequest request;
-                request.sequence_id = seq_id;
-                request.path = cam->image_path();
-                request.params.resize_factor = dataset_->get_resize_factor();
-                request.params.max_width = dataset_->get_max_width();
-                request.params.output_uint8 = !config_.use_16bit_color;
-                if (!cam->image_size_loaded() ||
-                    (dataset_->get_max_width() > 0 &&
-                     (cam->image_height() > dataset_->get_max_width() ||
-                      cam->image_width() > dataset_->get_max_width()))) {
-                    cam->load_image_size(dataset_->get_resize_factor(), dataset_->get_max_width());
-                }
-                request.aux_target_width = cam->image_width();
-                request.aux_target_height = cam->image_height();
-                if (cam->is_undistort_prepared()) {
-                    request.undistort = &cam->undistort_params();
-                    request.params.undistort = request.undistort;
-                }
-
-                if (aux_config_.load_masks && cam->has_mask()) {
-                    request.mask_path = cam->mask_path();
-                    request.mask_params.invert = aux_config_.invert_masks;
-                    request.mask_params.threshold = aux_config_.mask_threshold;
-                } else if (aux_config_.use_alpha_as_mask && cam->has_alpha()) {
-                    request.extract_alpha_as_mask = true;
-                    request.alpha_mask_params.invert = aux_config_.invert_masks;
-                    request.alpha_mask_params.threshold = aux_config_.mask_threshold;
-                }
-                if (aux_config_.load_depths && cam->has_depth()) {
-                    request.depth_path = cam->depth_path();
-                }
-                if (aux_config_.load_normals && cam->has_normal()) {
-                    request.normal_path = cam->normal_path();
-                    request.normal_flip_yz = aux_config_.normal_flip_yz;
-                    request.normal_srgb = aux_config_.normal_srgb;
-                    request.normal_transform_world_to_camera = aux_config_.normal_world_space;
-                    if (aux_config_.normal_world_space) {
-                        if (camera_idx < aux_config_.normal_world_to_camera_by_source.size()) {
-                            request.normal_world_to_camera =
-                                aux_config_.normal_world_to_camera_by_source[camera_idx];
-                        } else {
-                            request.normal_world_to_camera = camera_world_to_camera_normal_matrix(
-                                *cam, aux_config_.normal_world_rotation);
-                        }
-                    }
-                }
-
+                auto request = make_request(camera_idx, seq_id);
                 loader_->prefetch({request});
             }
         }
