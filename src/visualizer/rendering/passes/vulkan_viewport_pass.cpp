@@ -17,6 +17,7 @@
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_result.hpp"
 
+#include "rendering/vulkan_scene_upscaler_controller.hpp"
 #include "viewport/frustum.vert.spv.h"
 #include "viewport/grid.frag.spv.h"
 #include "viewport/grid.vert.spv.h"
@@ -264,6 +265,12 @@ namespace lfs::vis {
             bool temporal_ready = false;
             bool split_temporal_ready = false;
             bool temporal_output_bound = false;
+            bool optional_ready = false;
+            bool split_optional_ready = false;
+            VulkanSceneMotionParams optional_motion{};
+            std::array<VulkanSceneMotionParams, 2> split_optional_motion{};
+            glm::ivec2 bound_scene_valid_extent{0, 0};
+            glm::ivec2 bound_scene_allocation_extent{0, 0};
         };
         std::vector<FrameResources> frame_resources;
 
@@ -276,6 +283,7 @@ namespace lfs::vis {
         VulkanDepthBlitPass depth_blit_pass;
         VulkanSceneMotionPass scene_motion_pass;
         VulkanSceneTemporalResolvePass scene_temporal_resolve_pass;
+        VulkanSceneUpscalerController optional_upscaler{optionalSceneUpscalerRegistry()};
         VulkanSplitViewPass split_view_pass;
         struct TemporalViewState {
             glm::mat4 previous_view_projection{1.0f};
@@ -339,6 +347,14 @@ namespace lfs::vis {
                               static_cast<double>(temporal.resident_views));
             profiler.setGauge("viewer.upscaler.motion.pipeline_initialized",
                               scene_motion_pass.initialized() ? 1.0 : 0.0);
+            const auto& optional = optional_upscaler.status();
+            profiler.setGauge("viewer.upscaler.optional.active", optional.active() ? 1.0 : 0.0);
+            profiler.setGauge("viewer.upscaler.optional.failure",
+                              static_cast<double>(optional.failure));
+            profiler.setGauge("viewer.upscaler.optional.generation",
+                              static_cast<double>(optional.generation));
+            profiler.setGauge("viewer.upscaler.optional.fallback_count",
+                              static_cast<double>(optional.fallback_count));
         }
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
@@ -2127,6 +2143,18 @@ namespace lfs::vis {
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
         }
 
+        [[nodiscard]] SceneUpscalerProbeContext upscalerProbeContext() const {
+            SceneUpscalerProbeContext probe{};
+            if (!context || context->physicalDevice() == VK_NULL_HANDLE)
+                return probe;
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(context->physicalDevice(), &properties);
+            probe.graphics_api_version = properties.apiVersion;
+            probe.vendor_id = properties.vendorID;
+            probe.device_id = properties.deviceID;
+            return probe;
+        }
+
         void prepare(const VulkanViewportPassParams& params) {
             if (params.scene_upscaler == SceneUpscalerBackend::Spatial)
                 static_cast<void>(ensureSpatialScenePipeline());
@@ -2155,7 +2183,14 @@ namespace lfs::vis {
             frame.temporal_ready = false;
             frame.split_temporal_ready = false;
             frame.temporal_output_bound = false;
+            frame.optional_ready = false;
+            frame.split_optional_ready = false;
             frame.effective_split_view = params.split_view;
+            frame.bound_scene_valid_extent = params.scene_image_size;
+            frame.bound_scene_allocation_extent =
+                params.scene_image_alloc_size.x > 0 && params.scene_image_alloc_size.y > 0
+                    ? params.scene_image_alloc_size
+                    : params.scene_image_size;
 
             VulkanMeshPassParams mesh_params{
                 .view_projection = params.mesh_view_projection,
@@ -2168,6 +2203,65 @@ namespace lfs::vis {
             environment_pass.prepare(params.environment, params.frame_slot);
             depth_blit_pass.prepare(params.depth_blit, params.frame_slot);
             split_view_pass.prepare(params.split_view, params.frame_slot);
+
+            const bool optional_requested =
+                !sceneUpscalerBackendFromId(params.scene_upscaler_id).has_value();
+            const bool optional_active =
+                optional_requested &&
+                optional_upscaler.select(params.scene_upscaler_id,
+                                         upscalerProbeContext(),
+                                         *context);
+            if (!optional_requested) {
+                optional_upscaler.deactivate();
+            }
+            if (optional_active) {
+                const auto requirements = optional_upscaler.requirements();
+                frame.optional_ready =
+                    !params.split_view.enabled && params.external_scene_image != VK_NULL_HANDLE &&
+                    params.external_scene_image_view != VK_NULL_HANDLE;
+                frame.split_optional_ready =
+                    params.split_view.enabled && params.split_view.left.external_image != VK_NULL_HANDLE &&
+                    params.split_view.left.external_image_view != VK_NULL_HANDLE &&
+                    params.split_view.right.external_image != VK_NULL_HANDLE &&
+                    params.split_view.right.external_image_view != VK_NULL_HANDLE;
+                if (requirements.motion_vectors) {
+                    frame.optional_motion = {
+                        .enabled = true,
+                        .depth_view = depth_blit_pass.depthView(params.frame_slot),
+                        .depth_generation = params.depth_blit.external_image_generation,
+                        .inverse_current_view_projection = glm::inverse(params.mesh_view_projection),
+                        .previous_view_projection = temporalState(TemporalViewId::Main).previous_valid
+                                                        ? temporalState(TemporalViewId::Main).previous_view_projection
+                                                        : params.mesh_view_projection,
+                        .render_extent = params.scene_image_size,
+                        .includes_jitter = requirements.jitter,
+                        .flip_y = params.scene_image_flip_y,
+                    };
+                    if (params.split_view.enabled && params.mesh_panels.size() >= 2) {
+                        constexpr std::array<TemporalViewId, 2> views{
+                            TemporalViewId::SplitLeft, TemporalViewId::SplitRight};
+                        const std::array<const VulkanSplitViewPanel*, 2> panels{
+                            &params.split_view.left, &params.split_view.right};
+                        for (std::size_t index = 0; index < views.size(); ++index) {
+                            const auto& panel = *panels[index];
+                            const auto& mesh_panel = params.mesh_panels[index];
+                            const auto& state = temporalState(views[index]);
+                            frame.split_optional_motion[index] = {
+                                .enabled = true,
+                                .depth_view = panel.depth_image_view,
+                                .depth_generation = panel.depth_image_generation,
+                                .inverse_current_view_projection = glm::inverse(mesh_panel.view_projection),
+                                .previous_view_projection = state.previous_valid
+                                                                ? state.previous_view_projection
+                                                                : mesh_panel.view_projection,
+                                .render_extent = panel.image_size,
+                                .includes_jitter = requirements.jitter,
+                                .flip_y = panel.flip_y,
+                            };
+                        }
+                    }
+                }
+            }
 
             const bool temporal_requested =
                 params.scene_upscaler == SceneUpscalerBackend::Temporal;
@@ -2271,6 +2365,8 @@ namespace lfs::vis {
                         scene_temporal_resolve_pass.outputView(TemporalViewId::Main),
                         VK_IMAGE_LAYOUT_GENERAL);
                     frame.temporal_output_bound = true;
+                    frame.bound_scene_valid_extent = {history.width, history.height};
+                    frame.bound_scene_allocation_extent = frame.bound_scene_valid_extent;
                 } else {
                     frame.temporal_motion = {
                         .enabled = true,
@@ -2390,6 +2486,9 @@ namespace lfs::vis {
 
         [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const {
             const auto& frame = resourcesForFrame(params.frame_slot);
+            if (frame.optional_ready || frame.split_optional_ready) {
+                return true;
+            }
             if (scene_upscaler_selection.effective == SceneUpscalerBackend::Temporal &&
                 (frame.temporal_ready || frame.split_temporal_ready)) {
                 return true;
@@ -2403,11 +2502,188 @@ namespace lfs::vis {
             if (!hasPreRenderWork(params) || command_buffer == VK_NULL_HANDLE) {
                 return false;
             }
+            auto& frame = resourcesForFrame(params.frame_slot);
+            if (frame.optional_ready || frame.split_optional_ready) {
+                const auto requirements = optional_upscaler.requirements();
+                if (requirements.motion_vectors && !scene_motion_pass.initialized() &&
+                    !scene_motion_pass.init(*context)) {
+                    optional_upscaler.deactivate();
+                    frame.optional_ready = false;
+                    frame.split_optional_ready = false;
+                    return false;
+                }
+                const auto make_resource = [](const VkImage image,
+                                              const VkImageView view,
+                                              const VkImageLayout layout,
+                                              const glm::ivec2 valid_extent,
+                                              const glm::ivec2 allocation_extent,
+                                              const std::uint64_t generation) {
+                    return VulkanSceneUpscalerResource{
+                        .image = image,
+                        .view = view,
+                        .layout = layout,
+                        .valid_extent = valid_extent,
+                        .allocation_extent = allocation_extent,
+                        .generation = generation,
+                    };
+                };
+                const auto record_optional = [&](const TemporalViewId view,
+                                                 const VulkanSceneUpscalerResource& color,
+                                                 const VulkanSceneUpscalerResource& depth,
+                                                 const VulkanSceneMotionParams& motion_params,
+                                                 const std::size_t motion_slot,
+                                                 const glm::ivec2 output_extent) {
+                    VulkanSceneUpscalerResource motion_resource{};
+                    if (requirements.motion_vectors) {
+                        if (!scene_motion_pass.record(command_buffer, motion_params, motion_slot))
+                            return false;
+                        const auto contract = scene_motion_pass.contract(motion_slot);
+                        motion_resource = make_resource(scene_motion_pass.motionImage(motion_slot),
+                                                        scene_motion_pass.motionView(motion_slot),
+                                                        VK_IMAGE_LAYOUT_GENERAL,
+                                                        {contract.width, contract.height},
+                                                        {contract.width, contract.height},
+                                                        color.generation);
+                    }
+                    auto& state = temporalState(view);
+                    const auto reset_reasons = temporalHistoryResetReasons(
+                        state.previous_valid,
+                        state.scene_identity,
+                        params.scene_identity,
+                        state.reset_generation,
+                        params.scene_temporal_reset_generation,
+                        state.quality,
+                        params.scene_temporal_quality);
+                    const VulkanSceneUpscalerDispatch dispatch{
+                        .view = view,
+                        .color = color,
+                        .depth = depth,
+                        .motion = motion_resource,
+                        .output_extent = output_extent,
+                        .sequence = color.generation,
+                        .reset_reasons = reset_reasons,
+                        .quality = params.scene_temporal_quality,
+                    };
+                    if (!optional_upscaler.record(command_buffer, dispatch))
+                        return false;
+                    state.previous_view_projection =
+                        view == TemporalViewId::Main
+                            ? params.mesh_view_projection
+                            : params.mesh_panels[view == TemporalViewId::SplitLeft ? 0 : 1]
+                                  .view_projection;
+                    state.previous_valid = true;
+                    state.scene_identity = params.scene_identity;
+                    state.reset_generation = params.scene_temporal_reset_generation;
+                    state.quality = params.scene_temporal_quality;
+                    return true;
+                };
+
+                if (frame.split_optional_ready) {
+                    const glm::ivec2 total_output =
+                        params.scene_output_extent.x > 0 && params.scene_output_extent.y > 0
+                            ? params.scene_output_extent
+                            : glm::ivec2{
+                                  std::max(1, static_cast<int>(std::lround(
+                                                  params.viewport_size.x * params.framebuffer_scale.x))),
+                                  std::max(1, static_cast<int>(std::lround(
+                                                  params.viewport_size.y * params.framebuffer_scale.y)))};
+                    constexpr std::array<TemporalViewId, 2> views{
+                        TemporalViewId::SplitLeft, TemporalViewId::SplitRight};
+                    const std::array<const VulkanSplitViewPanel*, 2> source_panels{
+                        &params.split_view.left, &params.split_view.right};
+                    std::array<VulkanSplitViewPanel*, 2> output_panels{
+                        &frame.effective_split_view.left, &frame.effective_split_view.right};
+                    bool success = true;
+                    for (std::size_t index = 0; index < views.size(); ++index) {
+                        const auto& panel = *source_panels[index];
+                        const auto output_extent = splitTemporalOutputExtent(
+                            total_output, panel.start_position, panel.end_position);
+                        const auto color = make_resource(
+                            panel.external_image,
+                            panel.external_image_view,
+                            panel.external_image_layout,
+                            panel.image_size,
+                            panel.allocation_size.x > 0 && panel.allocation_size.y > 0
+                                ? panel.allocation_size
+                                : panel.image_size,
+                            panel.external_image_generation);
+                        const auto depth = make_resource(panel.depth_image,
+                                                         panel.depth_image_view,
+                                                         panel.depth_image_layout,
+                                                         panel.image_size,
+                                                         panel.image_size,
+                                                         panel.depth_image_generation);
+                        if (!record_optional(views[index],
+                                             color,
+                                             depth,
+                                             frame.split_optional_motion[index],
+                                             temporalMotionResourceSlot(params.frame_slot,
+                                                                        views[index]),
+                                             output_extent)) {
+                            success = false;
+                            break;
+                        }
+                        const auto output = optional_upscaler.output(views[index]).color;
+                        auto& panel_output = *output_panels[index];
+                        panel_output.external_image = output.image;
+                        panel_output.external_image_view = output.view;
+                        panel_output.external_image_layout = output.layout;
+                        panel_output.external_image_generation = output.generation;
+                        panel_output.image_size = output.valid_extent;
+                        panel_output.allocation_size = output.allocation_extent;
+                        panel_output.uv_scale = {1.0f, 1.0f};
+                        panel_output.uv_clamp_max = {1.0f, 1.0f};
+                    }
+                    frame.split_optional_ready = false;
+                    if (success) {
+                        split_view_pass.prepare(frame.effective_split_view, params.frame_slot);
+                        return true;
+                    }
+                    frame.effective_split_view = params.split_view;
+                    split_view_pass.prepare(frame.effective_split_view, params.frame_slot);
+                    return false;
+                }
+
+                const glm::ivec2 output_extent =
+                    params.scene_output_extent.x > 0 && params.scene_output_extent.y > 0
+                        ? params.scene_output_extent
+                        : params.scene_image_size;
+                const auto allocation_extent =
+                    params.scene_image_alloc_size.x > 0 && params.scene_image_alloc_size.y > 0
+                        ? params.scene_image_alloc_size
+                        : params.scene_image_size;
+                const auto color = make_resource(params.external_scene_image,
+                                                 params.external_scene_image_view,
+                                                 params.external_scene_image_layout,
+                                                 params.scene_image_size,
+                                                 allocation_extent,
+                                                 params.external_scene_image_generation);
+                const auto depth = make_resource(depth_blit_pass.depthImage(params.frame_slot),
+                                                 depth_blit_pass.depthView(params.frame_slot),
+                                                 depth_blit_pass.depthLayout(params.frame_slot),
+                                                 params.scene_image_size,
+                                                 params.scene_image_size,
+                                                 params.depth_blit.external_image_generation);
+                const bool success = record_optional(
+                    TemporalViewId::Main,
+                    color,
+                    depth,
+                    frame.optional_motion,
+                    temporalMotionResourceSlot(params.frame_slot, TemporalViewId::Main),
+                    output_extent);
+                frame.optional_ready = false;
+                if (!success)
+                    return false;
+                const auto output = optional_upscaler.output(TemporalViewId::Main).color;
+                bindSceneImageView(frame, output.view, output.layout);
+                frame.bound_scene_valid_extent = output.valid_extent;
+                frame.bound_scene_allocation_extent = output.allocation_extent;
+                return true;
+            }
+
             if (!scene_motion_pass.initialized() && !scene_motion_pass.init(*context)) {
                 return false;
             }
-
-            auto& frame = resourcesForFrame(params.frame_slot);
             if (scene_upscaler_selection.effective == SceneUpscalerBackend::Temporal &&
                 frame.split_temporal_ready) {
                 const glm::ivec2 total_output =
@@ -2583,6 +2859,8 @@ namespace lfs::vis {
             main_temporal.source_image = params.external_scene_image;
             main_temporal.source_generation = params.external_scene_image_generation;
             const auto history = scene_temporal_resolve_pass.contract(TemporalViewId::Main);
+            frame.bound_scene_valid_extent = {history.width, history.height};
+            frame.bound_scene_allocation_extent = frame.bound_scene_valid_extent;
             profiler.setGauge("viewer.temporal.history_valid",
                               history.available() ? 1.0 : 0.0);
             profiler.setGauge("viewer.temporal.history_sequence",
@@ -2807,15 +3085,8 @@ namespace lfs::vis {
                                         &frame.scene_descriptor_set,
                                         0,
                                         nullptr);
-                const glm::ivec2 valid = frame.temporal_output_bound
-                                             ? glm::ivec2(rect.width, rect.height)
-                                             : params.scene_image_size;
-                const glm::ivec2 alloc = frame.temporal_output_bound
-                                             ? valid
-                                             : (params.scene_image_alloc_size.x > 0 &&
-                                                        params.scene_image_alloc_size.y > 0
-                                                    ? params.scene_image_alloc_size
-                                                    : valid);
+                const glm::ivec2 valid = frame.bound_scene_valid_extent;
+                const glm::ivec2 alloc = frame.bound_scene_allocation_extent;
                 const ScenePush scene_push{
                     .uv_scale = outputUvScale(valid, alloc),
                     .uv_clamp_max = outputUvClampMax(valid, alloc),
@@ -3205,6 +3476,7 @@ namespace lfs::vis {
                 depth_blit_pass.shutdown();
                 scene_motion_pass.shutdown();
                 scene_temporal_resolve_pass.shutdown();
+                optional_upscaler.deactivate();
                 split_view_pass.shutdown();
                 if (scene_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_pipeline, nullptr);

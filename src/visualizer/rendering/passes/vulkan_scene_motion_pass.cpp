@@ -507,6 +507,11 @@ namespace lfs::vis {
                    : VK_NULL_HANDLE;
     }
 
+    VkImage VulkanSceneMotionPass::motionImage(const std::size_t frame_slot) const {
+        return impl_ && frame_slot < impl_->frames.size() ? impl_->frames[frame_slot].image
+                                                          : VK_NULL_HANDLE;
+    }
+
     SceneMotionContract VulkanSceneMotionPass::contract(const std::size_t frame_slot) const {
         return impl_ && frame_slot < impl_->frames.size()
                    ? impl_->frames[frame_slot].contract

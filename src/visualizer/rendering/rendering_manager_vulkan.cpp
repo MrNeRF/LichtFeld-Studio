@@ -2147,6 +2147,8 @@ namespace lfs::vis {
             VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             std::uint64_t external_image_generation = 0;
             VkImageView depth_image_view = VK_NULL_HANDLE;
+            VkImage depth_image = VK_NULL_HANDLE;
+            VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::uint64_t depth_image_generation = 0;
             bool flip_y = false;
             glm::ivec2 size{0, 0};
@@ -2415,6 +2417,8 @@ namespace lfs::vis {
                                          .external_image_layout = result->image_layout,
                                          .external_image_generation = result->generation,
                                          .depth_image_view = result->depth_image_view,
+                                         .depth_image = result->depth_image,
+                                         .depth_image_layout = result->depth_image_layout,
                                          .depth_image_generation = result->depth_generation,
                                          .flip_y = result->flip_y,
                                          .size = result->size,
@@ -2448,6 +2452,8 @@ namespace lfs::vis {
                     .external_image_layout = panel.external_image_layout,
                     .external_image_generation = panel.external_image_generation,
                     .depth_image_view = panel.depth_image_view,
+                    .depth_image = panel.depth_image,
+                    .depth_image_layout = panel.depth_image_layout,
                     .depth_image_generation = panel.depth_image_generation,
                     .image_size = valid,
                     .allocation_size = alloc,
@@ -3387,6 +3393,8 @@ namespace lfs::vis {
                         // Hardware depth attachment stores Vulkan-native NDC z; the
                         // depth-blit pass can use it directly without near/far conversion.
                         mesh_frame.depth_blit.external_image_view = render_result->depth_image_view;
+                        mesh_frame.depth_blit.external_image = render_result->depth_image;
+                        mesh_frame.depth_blit.external_image_layout = render_result->depth_image_layout;
                         mesh_frame.depth_blit.external_image_generation = render_result->depth_generation;
                         mesh_frame.depth_blit.depth_is_ndc = true;
                         mesh_frame.depth_blit.flip_y = render_result->flip_y;
@@ -3662,6 +3670,8 @@ namespace lfs::vis {
                                 populate_independent_split_mesh_panels(mesh_frame);
                                 if (render_result.depth_image_view != VK_NULL_HANDLE) {
                                     mesh_frame.depth_blit.external_image_view = render_result.depth_image_view;
+                                    mesh_frame.depth_blit.external_image = render_result.depth_image;
+                                    mesh_frame.depth_blit.external_image_layout = render_result.depth_image_layout;
                                     mesh_frame.depth_blit.external_image_generation = render_result.depth_generation;
                                     mesh_frame.depth_blit.depth_is_ndc = false;
                                     mesh_frame.depth_blit.flip_y = render_result.flip_y;

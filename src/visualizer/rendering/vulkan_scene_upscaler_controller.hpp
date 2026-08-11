@@ -45,6 +45,8 @@ namespace lfs::vis {
 
         VulkanSceneUpscalerController(const VulkanSceneUpscalerController&) = delete;
         VulkanSceneUpscalerController& operator=(const VulkanSceneUpscalerController&) = delete;
+        VulkanSceneUpscalerController(VulkanSceneUpscalerController&&) noexcept = default;
+        VulkanSceneUpscalerController& operator=(VulkanSceneUpscalerController&&) noexcept = default;
 
         [[nodiscard]] bool select(std::string_view id,
                                   const SceneUpscalerProbeContext& probe_context,

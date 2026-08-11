@@ -502,6 +502,37 @@ namespace lfs::vis {
         EXPECT_EQ(vulkan_shutdown_calls, 1);
     }
 
+    TEST(VulkanSceneUpscalerController, FailedSelectionDoesNotRetryUntilSelectionChanges) {
+        OptionalSceneUpscalerRegistry registry;
+        ASSERT_TRUE(registry.registerAdapter(optionalDescriptor(), makeReadyVulkanAdapter));
+        auto& context = inertVulkanContext();
+        VulkanSceneUpscalerController controller(registry);
+        resetVulkanAdapterCounters();
+        ASSERT_TRUE(controller.select("optional_test", {.vendor_id = 1}, context));
+        vulkan_record_succeeds = false;
+
+        const glm::ivec2 extent{1280, 720};
+        const VulkanSceneUpscalerDispatch dispatch{
+            .color = testResource(0x1000, extent),
+            .depth = testResource(0x2000, extent),
+            .motion = testResource(0x3000, extent),
+            .output_extent = extent,
+        };
+        EXPECT_FALSE(controller.record(
+            reinterpret_cast<VkCommandBuffer>(static_cast<std::uintptr_t>(0x5000)), dispatch));
+        ASSERT_EQ(factory_calls, 1);
+
+        EXPECT_FALSE(controller.select("optional_test", {.vendor_id = 1}, context));
+        EXPECT_EQ(factory_calls, 1);
+        EXPECT_EQ(controller.status().failure, VulkanSceneUpscalerFailure::Record);
+
+        EXPECT_FALSE(controller.select("native", {.vendor_id = 1}, context));
+        vulkan_record_succeeds = true;
+        EXPECT_TRUE(controller.select("optional_test", {.vendor_id = 1}, context));
+        EXPECT_EQ(factory_calls, 2);
+        EXPECT_TRUE(controller.status().active());
+    }
+
     TEST(VulkanSceneUpscalerController, RejectsSafeModeAndNonVulkanAdapters) {
         auto& context = inertVulkanContext();
         {

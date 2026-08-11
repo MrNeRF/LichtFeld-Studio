@@ -51,6 +51,7 @@ namespace lfs::vis {
         void shutdown();
 
         [[nodiscard]] VkImageView motionView(std::size_t frame_slot) const;
+        [[nodiscard]] VkImage motionImage(std::size_t frame_slot) const;
         [[nodiscard]] SceneMotionContract contract(std::size_t frame_slot) const;
         [[nodiscard]] bool initialized() const;
 

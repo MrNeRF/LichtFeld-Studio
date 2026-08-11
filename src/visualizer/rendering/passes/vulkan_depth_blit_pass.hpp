@@ -25,6 +25,8 @@ namespace lfs::vis {
         // When set, the pass binds this VkImageView (a CUDA/Vulkan interop depth view
         // published by the viewport interop path) and skips the staging upload path.
         VkImageView external_image_view = VK_NULL_HANDLE;
+        VkImage external_image = VK_NULL_HANDLE;
+        VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         std::uint64_t external_image_generation = 0;
         // Valid-region UV for padded depth images (default identity).
         glm::vec2 uv_scale{1.0f, 1.0f};
@@ -55,6 +57,8 @@ namespace lfs::vis {
         // Bound after prepare(). Lets other passes sample the splat depth
         // surface without re-uploading it.
         [[nodiscard]] VkImageView depthView(std::size_t frame_slot) const;
+        [[nodiscard]] VkImage depthImage(std::size_t frame_slot) const;
+        [[nodiscard]] VkImageLayout depthLayout(std::size_t frame_slot) const;
 
     private:
         struct Impl;

@@ -19,10 +19,8 @@ namespace lfs::vis {
         const std::string_view id,
         const SceneUpscalerProbeContext& probe_context,
         VulkanContext& context) noexcept {
-        status_.requested_id = id;
-        status_.failure = VulkanSceneUpscalerFailure::None;
-
         if (sceneUpscalerBackendFromId(id)) {
+            status_.failure = VulkanSceneUpscalerFailure::None;
             deactivate();
             status_.requested_id = id;
             status_.availability = SceneUpscalerAvailabilityReason::Ready;
@@ -31,9 +29,14 @@ namespace lfs::vis {
         if (adapter_ && status_.active_id == id) {
             return true;
         }
+        if (!adapter_ && status_.requested_id == id &&
+            status_.failure != VulkanSceneUpscalerFailure::None) {
+            return false;
+        }
 
         deactivate();
         status_.requested_id = id;
+        status_.failure = VulkanSceneUpscalerFailure::None;
         const auto descriptor = registry_->descriptor(id);
         if (!descriptor) {
             fail(VulkanSceneUpscalerFailure::Unavailable,

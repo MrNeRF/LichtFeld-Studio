@@ -30,6 +30,8 @@ namespace lfs::vis {
         VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         std::uint64_t external_image_generation = 0;
         VkImageView depth_image_view = VK_NULL_HANDLE;
+        VkImage depth_image = VK_NULL_HANDLE;
+        VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         std::uint64_t depth_image_generation = 0;
         glm::ivec2 image_size{0, 0};
         glm::ivec2 allocation_size{0, 0};
