@@ -241,3 +241,44 @@ def test_migrated_index_round_trips(tmp_path: Path):
     on_disk = json.loads(library_path.read_text(encoding="utf-8"))
     assert "folders" in on_disk
     assert "projects" not in on_disk
+
+
+def test_migration_save_failure_logs_and_load_still_succeeds(
+    tmp_path: Path, monkeypatch, caplog
+):
+    """In-memory migration remains valid if persist fails; load returns True."""
+    import logging
+
+    from lfs_plugins import asset_index as asset_index_module
+
+    library_path = tmp_path / "library.json"
+    project_id = "proj-save-fail"
+    _write_library(library_path, _legacy_library(project_id=project_id))
+
+    index = AssetIndex(library_path=library_path)
+
+    def failing_save(self):
+        return False
+
+    monkeypatch.setattr(AssetIndex, "save", failing_save)
+
+    with caplog.at_level(logging.ERROR, logger=asset_index_module.__name__):
+        assert index.load() is True
+
+    # In-memory catalog is still migrated.
+    assert project_id in index._folders
+    assert index._scenes["scene-1"].folder_id == project_id
+    assert index._assets["asset-1"].folder_id == project_id
+
+    # Stale legacy file remains on disk when save fails.
+    on_disk = json.loads(library_path.read_text(encoding="utf-8"))
+    assert "projects" in on_disk
+    assert "folders" not in on_disk
+
+    error_msgs = [
+        rec.getMessage() for rec in caplog.records if rec.levelno >= logging.ERROR
+    ]
+    assert any(
+        "Failed to persist migrated library.json" in msg and str(library_path) in msg
+        for msg in error_msgs
+    ), error_msgs
