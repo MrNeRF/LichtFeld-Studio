@@ -228,6 +228,9 @@ def session() -> Session:
 def trainer_state() -> str:
     """Get trainer state"""
 
+def trainer_saving_model() -> bool:
+    """Whether the terminal stop/completion model save is in progress"""
+
 def finish_reason() -> str | None:
     """Get finish reason if training finished"""
 
