@@ -587,7 +587,6 @@
     "masking.invert_masks": "反转:",
     "tooltip.keep_model": "保留训练模型，丢弃数据集",
     "tooltip.gradient_thr": "密度化梯度阈值",
-    "tooltip.btn_save_checkpoint": "保存当前状态",
     "status.enabled": "已启用",
     "status.disabled": "已禁用",
     "status.yes": "是",
@@ -597,7 +596,6 @@
     "button.pause": "暂停",
     "button.stop": "停止训练",
     "button.reset": "重置训练",
-    "button.save_checkpoint": "保存检查点",
     "button.add": "添加",
     "button.remove": "移除"
   },
@@ -975,8 +973,6 @@
     "no_dataset_loaded": "未加载数据集",
     "iters_per_sec": "次迭代/秒",
     "sparsity": "稀疏性设置",
-    "save_checkpoint": "保存检查点",
-    "checkpoint_saved": "检查点已保存！",
     "finished": "已完成",
     "save_steps": "保存/评估步骤",
     "new_step": "新建步骤",
@@ -1206,6 +1202,9 @@
     "items": "项目",
     "and_more": "... 和",
     "cannot_open": "无法打开"
+  },
+  "file_drop": {
+    "blocked_during_training": "Stop training before loading a new scene."
   },
   "export_dialog": {
     "format": "格式",
@@ -2289,7 +2288,8 @@
     "start_blank": "从空白开始",
     "recoverable_badge": "可恢复的更改",
     "crash_notice": "LichtFeld Studio 意外关闭。是否恢复上次会话？",
-    "last_opened": "上次打开"
+    "last_opened": "上次打开",
+    "project_missing": "Project file not found: {name}"
   },
   "messages": {
     "no_data_loaded": "未加载数据",

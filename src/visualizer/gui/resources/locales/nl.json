@@ -587,7 +587,6 @@
     "masking.invert_masks": "Omkeren:",
     "tooltip.keep_model": "Behoud getraind model, verwijder dataset",
     "tooltip.gradient_thr": "Gradiëntdrempel voor verdichting",
-    "tooltip.btn_save_checkpoint": "Huidige staat opslaan",
     "status.enabled": "Ingeschakeld",
     "status.disabled": "Uitgeschakeld",
     "status.yes": "Ja",
@@ -597,7 +596,6 @@
     "button.pause": "Pauzeren",
     "button.stop": "Training stoppen",
     "button.reset": "Training resetten",
-    "button.save_checkpoint": "Controlepunt Opslaan",
     "button.add": "Toevoegen",
     "button.remove": "Verwijderen"
   },
@@ -975,8 +973,6 @@
     "no_dataset_loaded": "Geen dataset geladen",
     "iters_per_sec": "iter/s",
     "sparsity": "Sparsity Instellingen",
-    "save_checkpoint": "Controlepunt Opslaan",
-    "checkpoint_saved": "Controlepunt opgeslagen!",
     "finished": "Voltooid",
     "save_steps": "Bewaar/Eval Stappen",
     "new_step": "Nieuwe Stap",
@@ -1206,6 +1202,9 @@
     "items": "items",
     "and_more": "... en",
     "cannot_open": "Kan niet openen"
+  },
+  "file_drop": {
+    "blocked_during_training": "Stop training before loading a new scene."
   },
   "export_dialog": {
     "format": "FORMAAT",
@@ -2289,7 +2288,8 @@
     "start_blank": "Leeg starten",
     "recoverable_badge": "Herstelbare wijzigingen",
     "crash_notice": "LichtFeld Studio is onverwacht afgesloten. Laatste sessie herstellen?",
-    "last_opened": "Laatst geopend"
+    "last_opened": "Laatst geopend",
+    "project_missing": "Project file not found: {name}"
   },
   "messages": {
     "no_data_loaded": "Geen data geladen",

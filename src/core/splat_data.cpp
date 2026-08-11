@@ -863,6 +863,17 @@ namespace lfs::core {
         return out;
     }
 
+    Tensor SplatData::clone_shN_storage() const {
+        if (!_shN.is_valid()) {
+            return {};
+        }
+        Tensor cloned = _shN.clone();
+        if (cloned.capacity() < _shN.capacity()) {
+            cloned.reserve(_shN.capacity());
+        }
+        return cloned;
+    }
+
     Tensor SplatData::shN_canonical_cpu() const {
         const size_t n = static_cast<size_t>(size());
         const size_t k = max_sh_coeffs_rest();

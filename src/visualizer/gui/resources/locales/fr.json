@@ -587,7 +587,6 @@
     "masking.invert_masks": "Inverser:",
     "tooltip.keep_model": "Conserver le modèle entraîné, supprimer le dataset",
     "tooltip.gradient_thr": "Seuil de gradient pour densification",
-    "tooltip.btn_save_checkpoint": "Sauvegarder l'état actuel",
     "status.enabled": "Activé",
     "status.disabled": "Désactivé",
     "status.yes": "Oui",
@@ -597,7 +596,6 @@
     "button.pause": "Pause",
     "button.stop": "Arrêter l'Entraînement",
     "button.reset": "Réinitialiser l'Entraînement",
-    "button.save_checkpoint": "Sauvegarder le Point de Contrôle",
     "button.add": "Ajouter",
     "button.remove": "Retirer"
   },
@@ -975,8 +973,6 @@
     "no_dataset_loaded": "Aucun jeu de données chargé",
     "iters_per_sec": "iter/s",
     "sparsity": "Paramètres de Sparsité",
-    "save_checkpoint": "Sauvegarder le Point de Contrôle",
-    "checkpoint_saved": "Point de contrôle sauvegardé !",
     "finished": "Terminé",
     "save_steps": "Étapes de Sauvegarde/Éval",
     "new_step": "Nouvelle Étape",
@@ -1206,6 +1202,9 @@
     "items": "éléments",
     "and_more": "... et",
     "cannot_open": "Impossible d'ouvrir"
+  },
+  "file_drop": {
+    "blocked_during_training": "Stop training before loading a new scene."
   },
   "export_dialog": {
     "format": "FORMAT",
@@ -2289,7 +2288,8 @@
     "start_blank": "Démarrer vide",
     "recoverable_badge": "Modifications récupérables",
     "crash_notice": "LichtFeld Studio s'est fermé de façon inattendue. Récupérer la dernière session ?",
-    "last_opened": "Dernière ouverture"
+    "last_opened": "Dernière ouverture",
+    "project_missing": "Project file not found: {name}"
   },
   "messages": {
     "no_data_loaded": "Aucune donnée chargée",

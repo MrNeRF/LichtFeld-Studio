@@ -252,8 +252,39 @@ class StartupRecentPanel(Panel):
         self._open_path(path)
 
     def _open_path(self, path: str) -> None:
-        lf.project_open(path, True)
+        path_text = str(path)
+        name = display_name_for_path(path_text)
+        missing_message = lf.ui.tr("startup_recent.project_missing").format(name=name)
+
+        # Pre-check existence so a deleted MRU entry does not raise into RmlUI.
+        if not Path(path_text).is_file():
+            self._report_open_error(missing_message)
+            return
+
+        try:
+            lf.project_open(path_text, True)
+        except Exception as exc:
+            # NotFoundError subclasses FileNotFoundError; other open failures
+            # surface their error text on the same user-visible path.
+            if isinstance(exc, FileNotFoundError):
+                message = missing_message
+            else:
+                message = str(exc).strip() or missing_message
+            self._report_open_error(message)
+            return
+
         self._dismiss()
+
+    def _report_open_error(self, message: str) -> None:
+        try:
+            lf.ui.confirm_dialog(
+                lf.ui.tr("startup_recent.title"),
+                message,
+                [lf.ui.tr("common.ok")],
+                lambda _button: None,
+            )
+        except Exception as exc:
+            print(f"startup_recent: failed to show open-error dialog: {exc}")
 
     def _on_open_other(self, _handle, _event, _args):
         # Empty path opens the existing project file dialog.

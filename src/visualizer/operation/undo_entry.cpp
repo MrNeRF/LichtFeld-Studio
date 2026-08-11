@@ -687,12 +687,14 @@ namespace lfs::vis::op {
                 src.get_max_sh_degree(),
                 src.means_raw().clone(),
                 src.sh0_raw().clone(),
-                src.shN_raw().is_valid() ? src.shN_raw().clone() : lfs::core::Tensor{},
+                src.clone_shN_storage(),
                 src.scaling_raw().clone(),
                 src.rotation_raw().clone(),
                 src.opacity_raw().clone(),
                 src.get_scene_scale(),
                 lfs::core::SplatData::ShNLayout::Swizzled);
+            if (src.shN_value_bounds().is_valid())
+                cloned->shN_value_bounds() = src.shN_value_bounds().clone();
             cloned->set_active_sh_degree(src.get_active_sh_degree());
             cloned->set_max_sh_degree(src.get_max_sh_degree());
             if (src.has_deleted_mask()) {

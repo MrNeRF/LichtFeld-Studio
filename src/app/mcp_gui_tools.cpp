@@ -2522,6 +2522,91 @@ namespace lfs::app {
                 return trainer_manager ? trainer_manager->lastTrainingError() : std::nullopt;
             }});
 
+        // CommandCenter's generated session.resume only sets the trainer flag. A
+        // checkpoint-installed trainer has no worker yet, so route GUI MCP session
+        // controls through TrainerManager to keep the state machine and worker
+        // flags in sync.
+        registry.register_tool(
+            McpTool{
+                .name = "session.pause",
+                .description = "Pause training in the current runtime",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "training",
+                    .kind = "command",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer_impl](const json&) -> json {
+                auto result = post_and_wait(viewer_impl, [viewer_impl]() -> std::expected<void, std::string> {
+                    auto* const trainer_manager = viewer_impl->getTrainerManager();
+                    if (!trainer_manager)
+                        return std::unexpected("Trainer manager is not initialized");
+                    if (!trainer_manager->canPause())
+                        return std::unexpected(std::string(trainer_manager->getActionBlockedReason(
+                            vis::TrainingAction::Pause)));
+                    trainer_manager->pauseTraining();
+                    return {};
+                });
+                if (!result)
+                    return json{{"error", result.error()}};
+                return json{{"success", true}, {"operation", "session.pause"}};
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "session.resume",
+                .description = "Resume training in the current runtime",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "training",
+                    .kind = "command",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer_impl](const json&) -> json {
+                auto result = post_and_wait(viewer_impl, [viewer_impl]() -> std::expected<void, std::string> {
+                    auto* const trainer_manager = viewer_impl->getTrainerManager();
+                    if (!trainer_manager)
+                        return std::unexpected("Trainer manager is not initialized");
+                    if (!trainer_manager->canResume())
+                        return std::unexpected(std::string(trainer_manager->getActionBlockedReason(
+                            vis::TrainingAction::Resume)));
+                    trainer_manager->resumeTraining();
+                    return {};
+                });
+                if (!result)
+                    return json{{"error", result.error()}};
+                return json{{"success", true}, {"operation", "session.resume"}};
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "session.request_stop",
+                .description = "Stop training in the current runtime",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "training",
+                    .kind = "command",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer_impl](const json&) -> json {
+                auto result = post_and_wait(viewer_impl, [viewer_impl]() -> std::expected<void, std::string> {
+                    auto* const trainer_manager = viewer_impl->getTrainerManager();
+                    if (!trainer_manager)
+                        return std::unexpected("Trainer manager is not initialized");
+                    if (!trainer_manager->canStop())
+                        return std::unexpected(std::string(trainer_manager->getActionBlockedReason(
+                            vis::TrainingAction::Stop)));
+                    trainer_manager->stopTraining();
+                    return {};
+                });
+                if (!result)
+                    return json{{"error", result.error()}};
+                return json{{"success", true}, {"operation", "session.request_stop"}};
+            });
+
         registry.register_tool(
             McpTool{
                 .name = "render.capture_window",

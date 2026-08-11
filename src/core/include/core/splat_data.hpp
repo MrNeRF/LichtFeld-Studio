@@ -303,6 +303,9 @@ namespace lfs::core {
         // to CPU first and unpacks there, avoiding a full canonical SH allocation on CUDA.
         Tensor shN_canonical_cpu() const;
 
+        // Clone resident SH storage while retaining capacity headroom required by q16.
+        [[nodiscard]] Tensor clone_shN_storage() const;
+
         // Replace _shN with the swizzled form of a canonical-layout source tensor.
         // `canonical` may be [N, K, 3] or [N, K*3]; K may be 0 for SH degree 0. The
         // swizzled buffer is allocated/resized to fit N with optional `capacity`.

@@ -587,7 +587,6 @@
     "masking.invert_masks": "반전:",
     "tooltip.keep_model": "학습된 모델 유지, 데이터셋 폐기",
     "tooltip.gradient_thr": "밀도화 그래디언트 임계값",
-    "tooltip.btn_save_checkpoint": "현재 상태 저장",
     "status.enabled": "활성화됨",
     "status.disabled": "비활성화됨",
     "status.yes": "예",
@@ -597,7 +596,6 @@
     "button.pause": "일시정지",
     "button.stop": "학습 중지",
     "button.reset": "학습 재설정",
-    "button.save_checkpoint": "체크포인트 저장",
     "button.add": "추가",
     "button.remove": "제거"
   },
@@ -975,8 +973,6 @@
     "no_dataset_loaded": "데이터셋이 로드되지 않았습니다",
     "iters_per_sec": "iter/초",
     "sparsity": "희소성 설정",
-    "save_checkpoint": "체크포인트 저장",
-    "checkpoint_saved": "체크포인트가 저장되었습니다!",
     "finished": "완료됨",
     "save_steps": "저장/평가 단계",
     "new_step": "새 단계",
@@ -1206,6 +1202,9 @@
     "items": "항목",
     "and_more": "... 외",
     "cannot_open": "열 수 없음"
+  },
+  "file_drop": {
+    "blocked_during_training": "Stop training before loading a new scene."
   },
   "export_dialog": {
     "format": "형식",
@@ -2289,7 +2288,8 @@
     "start_blank": "빈 세션으로 시작",
     "recoverable_badge": "복구 가능한 변경 사항",
     "crash_notice": "LichtFeld Studio가 예기치 않게 종료되었습니다. 마지막 세션을 복구할까요?",
-    "last_opened": "최근 열림"
+    "last_opened": "최근 열림",
+    "project_missing": "Project file not found: {name}"
   },
   "messages": {
     "no_data_loaded": "데이터가 로드되지 않음",

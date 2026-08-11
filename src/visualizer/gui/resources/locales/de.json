@@ -587,7 +587,6 @@
     "masking.invert_masks": "Invertieren:",
     "tooltip.keep_model": "Trainiertes Modell behalten, Datensatz verwerfen",
     "tooltip.gradient_thr": "Gradienten-Schwellenwert für Densifikation",
-    "tooltip.btn_save_checkpoint": "Aktuellen Stand speichern",
     "status.enabled": "Aktiviert",
     "status.disabled": "Deaktiviert",
     "status.yes": "Ja",
@@ -597,7 +596,6 @@
     "button.pause": "Pausieren",
     "button.stop": "Training stoppen",
     "button.reset": "Training zurücksetzen",
-    "button.save_checkpoint": "Checkpoint speichern",
     "button.add": "Hinzufügen",
     "button.remove": "Entfernen"
   },
@@ -975,8 +973,6 @@
     "no_dataset_loaded": "Kein Datensatz geladen",
     "iters_per_sec": "Iter/s",
     "sparsity": "Sparsity Einstellungen",
-    "save_checkpoint": "Checkpoint speichern",
-    "checkpoint_saved": "Checkpoint gespeichert!",
     "finished": "Abgeschlossen",
     "save_steps": "Speicher-/Eval-Schritte",
     "new_step": "Neuer Schritt",
@@ -1206,6 +1202,9 @@
     "items": "Elemente",
     "and_more": "... und",
     "cannot_open": "Kann nicht öffnen"
+  },
+  "file_drop": {
+    "blocked_during_training": "Training stoppen, bevor eine neue Szene geladen wird."
   },
   "export_dialog": {
     "format": "FORMAT",
@@ -2289,7 +2288,8 @@
     "start_blank": "Leer starten",
     "recoverable_badge": "Wiederherstellbare Änderungen",
     "crash_notice": "LichtFeld Studio wurde unerwartet beendet. Letzte Sitzung wiederherstellen?",
-    "last_opened": "Zuletzt geöffnet"
+    "last_opened": "Zuletzt geöffnet",
+    "project_missing": "Project file not found: {name}"
   },
   "messages": {
     "no_data_loaded": "Keine Daten geladen",

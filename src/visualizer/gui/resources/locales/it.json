@@ -587,7 +587,6 @@
     "masking.invert_masks": "Inverti:",
     "tooltip.keep_model": "Mantieni il modello addestrato, scarta il dataset",
     "tooltip.gradient_thr": "Soglia gradiente per densificazione",
-    "tooltip.btn_save_checkpoint": "Salva stato attuale",
     "status.enabled": "Abilitato",
     "status.disabled": "Disabilitato",
     "status.yes": "Sì",
@@ -597,7 +596,6 @@
     "button.pause": "Pausa",
     "button.stop": "Interrompi Training",
     "button.reset": "Resetta Training",
-    "button.save_checkpoint": "Salva Checkpoint",
     "button.add": "Aggiungi",
     "button.remove": "Rimuovi"
   },
@@ -975,8 +973,6 @@
     "no_dataset_loaded": "Nessun dataset caricato",
     "iters_per_sec": "iter/s",
     "sparsity": "Impostazioni di Sparsità",
-    "save_checkpoint": "Salva Checkpoint",
-    "checkpoint_saved": "Checkpoint salvato!",
     "finished": "Completato",
     "save_steps": "Passi di Salvataggio/Valutazione",
     "new_step": "Nuovo Passo",
@@ -1206,6 +1202,9 @@
     "items": "elementi",
     "and_more": "... e",
     "cannot_open": "Impossibile aprire"
+  },
+  "file_drop": {
+    "blocked_during_training": "Stop training before loading a new scene."
   },
   "export_dialog": {
     "format": "FORMATO",
@@ -2289,7 +2288,8 @@
     "start_blank": "Inizia vuoto",
     "recoverable_badge": "Modifiche recuperabili",
     "crash_notice": "LichtFeld Studio si è chiuso inaspettatamente. Recuperare l'ultima sessione?",
-    "last_opened": "Ultima apertura"
+    "last_opened": "Ultima apertura",
+    "project_missing": "Project file not found: {name}"
   },
   "messages": {
     "no_data_loaded": "Nessun dato caricato",

@@ -2847,6 +2847,10 @@ namespace lfs::vis {
     std::expected<void, std::string> VisualizerImpl::startTraining() {
         if (!trainer_manager_)
             return std::unexpected("Trainer manager not initialized");
+        if (trainer_manager_->isPaused()) {
+            trainer_manager_->resumeTraining();
+            return {};
+        }
         if (!trainer_manager_->startTraining())
             return std::unexpected("Failed to start training");
         return {};

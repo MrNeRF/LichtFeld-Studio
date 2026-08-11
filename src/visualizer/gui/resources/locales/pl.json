@@ -587,7 +587,6 @@
     "masking.invert_masks": "Odwróć:",
     "tooltip.keep_model": "Zachowaj wytrenowany model, odrzuć zbiór danych",
     "tooltip.gradient_thr": "Próg gradientu dla zagęszczania",
-    "tooltip.btn_save_checkpoint": "Zapisz bieżący stan",
     "status.enabled": "Włączony",
     "status.disabled": "Wyłączony",
     "status.yes": "Tak",
@@ -597,7 +596,6 @@
     "button.pause": "Pauza",
     "button.stop": "Zatrzymaj Trening",
     "button.reset": "Resetuj Trening",
-    "button.save_checkpoint": "Zapisz Punkt Kontrolny",
     "button.add": "Dodaj",
     "button.remove": "Usuń"
   },
@@ -975,8 +973,6 @@
     "no_dataset_loaded": "Brak załadowanego zbioru danych",
     "iters_per_sec": "iter/s",
     "sparsity": "Ustawienia Rzadkości",
-    "save_checkpoint": "Zapisz Punkt Kontrolny",
-    "checkpoint_saved": "Punkt kontrolny zapisany!",
     "finished": "Ukończono",
     "save_steps": "Kroki Zapisu/Evaluacji",
     "new_step": "Nowy Krok",
@@ -1206,6 +1202,9 @@
     "items": "elementy",
     "and_more": "... i",
     "cannot_open": "Nie można otworzyć"
+  },
+  "file_drop": {
+    "blocked_during_training": "Stop training before loading a new scene."
   },
   "export_dialog": {
     "format": "FORMAT",
@@ -2289,7 +2288,8 @@
     "start_blank": "Zacznij od pustego",
     "recoverable_badge": "Odzyskiwalne zmiany",
     "crash_notice": "LichtFeld Studio zakończył działanie nieoczekiwanie. Odzyskać ostatnią sesję?",
-    "last_opened": "Ostatnio otwarto"
+    "last_opened": "Ostatnio otwarto",
+    "project_missing": "Project file not found: {name}"
   },
   "messages": {
     "no_data_loaded": "Nie załadowano danych",

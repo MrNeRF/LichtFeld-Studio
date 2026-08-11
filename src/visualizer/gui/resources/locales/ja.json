@@ -587,7 +587,6 @@
     "masking.invert_masks": "反転:",
     "tooltip.keep_model": "トレーニング済みモデルを保持し、データセットを破棄",
     "tooltip.gradient_thr": "密度化の勾配しきい値",
-    "tooltip.btn_save_checkpoint": "現在の状態を保存",
     "status.enabled": "有効",
     "status.disabled": "無効",
     "status.yes": "はい",
@@ -597,7 +596,6 @@
     "button.pause": "一時停止",
     "button.stop": "トレーニングを停止",
     "button.reset": "トレーニングをリセット",
-    "button.save_checkpoint": "チェックポイントを保存",
     "button.add": "追加",
     "button.remove": "削除"
   },
@@ -975,8 +973,6 @@
     "no_dataset_loaded": "データセットが読み込まれていません",
     "iters_per_sec": "iter/秒",
     "sparsity": "スパース設定",
-    "save_checkpoint": "チェックポイントを保存",
-    "checkpoint_saved": "チェックポイントを保存しました！",
     "finished": "完了",
     "save_steps": "保存/評価ステップ",
     "new_step": "新規ステップ",
@@ -1206,6 +1202,9 @@
     "items": "項目",
     "and_more": "... 他",
     "cannot_open": "開けません"
+  },
+  "file_drop": {
+    "blocked_during_training": "Stop training before loading a new scene."
   },
   "export_dialog": {
     "format": "フォーマット",
@@ -2289,7 +2288,8 @@
     "start_blank": "空白で開始",
     "recoverable_badge": "復旧可能な変更",
     "crash_notice": "LichtFeld Studio が予期せず終了しました。前回のセッションを復元しますか？",
-    "last_opened": "最終オープン"
+    "last_opened": "最終オープン",
+    "project_missing": "Project file not found: {name}"
   },
   "messages": {
     "no_data_loaded": "データが読み込まれていません",

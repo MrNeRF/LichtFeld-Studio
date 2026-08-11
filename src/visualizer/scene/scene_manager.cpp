@@ -174,16 +174,23 @@ namespace lfs::vis {
 
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData> cloneSplatDataToCpu(
             const lfs::core::SplatData& src) {
+            auto shN = src.clone_shN_storage();
+            if (shN.is_valid()) {
+                shN = shN.cpu();
+                shN.reserve(src.shN_raw().capacity());
+            }
             auto result = std::make_unique<lfs::core::SplatData>(
                 src.get_max_sh_degree(),
                 src.means_raw().cpu(),
                 src.sh0_raw().cpu(),
-                src.shN_raw().is_valid() ? src.shN_raw().cpu() : lfs::core::Tensor{},
+                std::move(shN),
                 src.scaling_raw().cpu(),
                 src.rotation_raw().cpu(),
                 src.opacity_raw().cpu(),
                 src.get_scene_scale(),
                 lfs::core::SplatData::ShNLayout::Swizzled);
+            if (src.shN_value_bounds().is_valid())
+                result->shN_value_bounds() = src.shN_value_bounds().cpu();
             result->set_active_sh_degree(src.get_active_sh_degree());
             return result;
         }

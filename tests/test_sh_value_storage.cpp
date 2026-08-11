@@ -177,6 +177,36 @@ TEST(ShValueStorageTest, CanonicalExportIsFp32BitCompat) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
+TEST(ShValueStorageTest, Q16CloneCarriesBoundsAndDecodesIdentically) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto source = make_random_sh3(kN);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(source));
+    source.set_active_sh_degree(1);
+
+    auto clone = std::make_unique<SplatData>(
+        source.get_max_sh_degree(),
+        source.means_raw().clone(),
+        source.sh0_raw().clone(),
+        source.clone_shN_storage(),
+        source.scaling_raw().clone(),
+        source.rotation_raw().clone(),
+        source.opacity_raw().clone(),
+        source.get_scene_scale(),
+        SplatData::ShNLayout::Swizzled);
+    clone->shN_value_bounds() = source.shN_value_bounds().clone();
+    clone->set_active_sh_degree(source.get_active_sh_degree());
+    clone->set_max_sh_degree(source.get_max_sh_degree());
+
+    ASSERT_TRUE(clone->shN_value_quantized());
+    EXPECT_EQ(clone->shN_value_bounds().shape(), source.shN_value_bounds().shape());
+    const auto source_canonical = source.shN_canonical().cpu().contiguous();
+    const auto clone_canonical = clone->shN_canonical().cpu().contiguous();
+    EXPECT_EQ(source_canonical.numel(), clone_canonical.numel());
+    EXPECT_LT(mse_tensors(source_canonical, clone_canonical), 1e-12);
+
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
 TEST(ShValueStorageTest, ViewerExternalBindAcceptsCompleteQ16PairWithoutRehome) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(64);

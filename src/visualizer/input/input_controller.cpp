@@ -2272,14 +2272,14 @@ namespace lfs::vis {
 
             if (ext == ".resume") {
                 cmd::ShowResumeCheckpointPopup{.checkpoint_path = filepath}.emit();
-                return;
+                continue;
             } else if (ext == ".json") {
                 if (lfs::io::Loader::isDatasetPath(filepath)) {
                     dataset_path = filepath;
                 } else {
                     cmd::LoadConfigFile{.path = filepath}.emit();
                     LOG_INFO("Loading config via drag-and-drop: {}", lfs::core::path_to_utf8(filepath.filename()));
-                    return;
+                    continue;
                 }
             } else if (isEnvironmentMapExtension(ext)) {
                 if (!environment_map_path) {
@@ -2303,7 +2303,7 @@ namespace lfs::vis {
                     if (lfs::io::Loader::isColmapSparsePath(parent)) {
                         cmd::ImportColmapCameras{.sparse_path = parent}.emit();
                         LOG_INFO("Importing COLMAP cameras from: {}", lfs::core::path_to_utf8(parent));
-                        return;
+                        continue;
                     }
                 }
                 unrecognized_files.push_back(lfs::core::path_to_utf8(filepath));
@@ -2318,7 +2318,7 @@ namespace lfs::vis {
                     // COLMAP sparse folder - cameras only (no images required)
                     cmd::ImportColmapCameras{.sparse_path = filepath}.emit();
                     LOG_INFO("Importing COLMAP cameras from: {}", lfs::core::path_to_utf8(filepath));
-                    return;
+                    continue;
                 } else {
                     // Check if it's a SOG directory (WebP-based format)
                     if (std::filesystem::exists(filepath / "meta.json") &&
