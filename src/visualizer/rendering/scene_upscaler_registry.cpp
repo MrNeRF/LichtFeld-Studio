@@ -5,7 +5,10 @@
 #include "rendering/scene_upscaler_registry.hpp"
 
 #include <array>
+#include <mutex>
 #include <ranges>
+#include <shared_mutex>
+#include <utility>
 
 namespace lfs::vis {
     namespace {
@@ -83,5 +86,99 @@ namespace lfs::vis {
             .effective = SceneUpscalerBackend::Native,
             .fallback = true,
         };
+    }
+
+    bool OptionalSceneUpscalerRegistry::registerAdapter(
+        OptionalSceneUpscalerDescriptor descriptor,
+        const SceneUpscalerAdapterFactory factory) {
+        if (descriptor.id.empty() || descriptor.label_key.empty() || factory == nullptr ||
+            sceneUpscalerBackendFromId(descriptor.id).has_value()) {
+            return false;
+        }
+        const std::unique_lock lock(mutex_);
+        const auto duplicate = std::ranges::find(
+            registrations_, descriptor.id, [](const Registration& registration) {
+                return std::string_view(registration.descriptor.id);
+            });
+        if (duplicate != registrations_.end())
+            return false;
+        registrations_.push_back({std::move(descriptor), factory});
+        return true;
+    }
+
+    std::vector<OptionalSceneUpscalerDescriptor> OptionalSceneUpscalerRegistry::descriptors() const {
+        const std::shared_lock lock(mutex_);
+        std::vector<OptionalSceneUpscalerDescriptor> result;
+        result.reserve(registrations_.size());
+        for (const auto& registration : registrations_)
+            result.push_back(registration.descriptor);
+        return result;
+    }
+
+    std::optional<OptionalSceneUpscalerDescriptor> OptionalSceneUpscalerRegistry::descriptor(
+        const std::string_view id) const {
+        const std::shared_lock lock(mutex_);
+        const auto registration = std::ranges::find(
+            registrations_, id, [](const Registration& candidate) {
+                return std::string_view(candidate.descriptor.id);
+            });
+        if (registration == registrations_.end())
+            return std::nullopt;
+        return registration->descriptor;
+    }
+
+    SceneUpscalerAvailability OptionalSceneUpscalerRegistry::probe(
+        const std::string_view id,
+        const SceneUpscalerProbeContext& context) const {
+        SceneUpscalerAdapterFactory factory = nullptr;
+        {
+            const std::shared_lock lock(mutex_);
+            const auto registration = std::ranges::find(
+                registrations_, id, [](const Registration& candidate) {
+                    return std::string_view(candidate.descriptor.id);
+                });
+            if (registration == registrations_.end())
+                return {};
+            factory = registration->factory;
+        }
+        if (context.safe_mode)
+            return {.reason = SceneUpscalerAvailabilityReason::SafeMode};
+        auto result = factory();
+        if (!result.has_value())
+            return {.reason = result.error()};
+        auto& adapter = result.value();
+        return adapter ? adapter->probe(context)
+                       : SceneUpscalerAvailability{
+                             .reason = SceneUpscalerAvailabilityReason::ProbeFailed};
+    }
+
+    std::unique_ptr<SceneUpscalerAdapter> OptionalSceneUpscalerRegistry::createAvailable(
+        const std::string_view id,
+        const SceneUpscalerProbeContext& context) const {
+        SceneUpscalerAdapterFactory factory = nullptr;
+        {
+            const std::shared_lock lock(mutex_);
+            const auto registration = std::ranges::find(
+                registrations_, id, [](const Registration& candidate) {
+                    return std::string_view(candidate.descriptor.id);
+                });
+            if (registration == registrations_.end())
+                return nullptr;
+            factory = registration->factory;
+        }
+        if (context.safe_mode)
+            return nullptr;
+        auto result = factory();
+        if (!result.has_value())
+            return nullptr;
+        auto adapter = std::move(result.value());
+        if (!adapter || !adapter->probe(context).available())
+            return nullptr;
+        return adapter;
+    }
+
+    OptionalSceneUpscalerRegistry& optionalSceneUpscalerRegistry() {
+        static OptionalSceneUpscalerRegistry registry;
+        return registry;
     }
 } // namespace lfs::vis

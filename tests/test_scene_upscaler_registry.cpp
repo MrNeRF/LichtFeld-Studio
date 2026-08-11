@@ -6,7 +6,68 @@
 
 #include <gtest/gtest.h>
 
+#include <memory>
+#include <new>
+#include <utility>
+
 namespace lfs::vis {
+    namespace {
+        int factory_calls = 0;
+
+        class ReadyOptionalAdapter final : public SceneUpscalerAdapter {
+        public:
+            SceneUpscalerAvailability probe(
+                const SceneUpscalerProbeContext& context) const noexcept override {
+                if (context.graphics_api != SceneUpscalerGraphicsApi::Vulkan) {
+                    return {.reason =
+                                SceneUpscalerAvailabilityReason::GraphicsApiUnsupported};
+                }
+                if (context.vendor_id == 0) {
+                    return {.reason = SceneUpscalerAvailabilityReason::DeviceUnsupported};
+                }
+                return {.reason = SceneUpscalerAvailabilityReason::Ready};
+            }
+        };
+
+        class MissingRuntimeAdapter final : public SceneUpscalerAdapter {
+        public:
+            SceneUpscalerAvailability probe(
+                const SceneUpscalerProbeContext&) const noexcept override {
+                return {.reason = SceneUpscalerAvailabilityReason::RuntimeMissing};
+            }
+        };
+
+        SceneUpscalerAdapterFactoryResult makeReadyAdapter() noexcept {
+            ++factory_calls;
+            auto adapter = std::unique_ptr<SceneUpscalerAdapter>(
+                new (std::nothrow) ReadyOptionalAdapter());
+            if (!adapter)
+                return std::unexpected(SceneUpscalerAvailabilityReason::ProbeFailed);
+            return adapter;
+        }
+
+        SceneUpscalerAdapterFactoryResult makeMissingRuntimeAdapter() noexcept {
+            ++factory_calls;
+            auto adapter = std::unique_ptr<SceneUpscalerAdapter>(
+                new (std::nothrow) MissingRuntimeAdapter());
+            if (!adapter)
+                return std::unexpected(SceneUpscalerAvailabilityReason::ProbeFailed);
+            return adapter;
+        }
+
+        OptionalSceneUpscalerDescriptor optionalDescriptor(std::string id = "optional_test") {
+            return {
+                .id = std::move(id),
+                .label_key = "preferences.scene_upscaler_optional_test",
+                .requirements = {
+                    .depth = true,
+                    .motion_vectors = true,
+                    .jitter = true,
+                    .history = true,
+                },
+            };
+        }
+    } // namespace
 
     TEST(SceneUpscalerRegistry, RegistersInternalBackends) {
         const auto descriptors = sceneUpscalerDescriptors();
@@ -87,5 +148,71 @@ namespace lfs::vis {
             SceneUpscalerBackend::Temporal, true);
         EXPECT_EQ(temporal.effective, SceneUpscalerBackend::Temporal);
         EXPECT_FALSE(temporal.fallback);
+    }
+
+    TEST(SceneUpscalerAdapterRegistry, RejectsInvalidDuplicateAndBuiltinRegistrations) {
+        OptionalSceneUpscalerRegistry registry;
+
+        EXPECT_FALSE(registry.registerAdapter({}, makeReadyAdapter));
+        EXPECT_FALSE(registry.registerAdapter(optionalDescriptor("native"), makeReadyAdapter));
+        EXPECT_TRUE(registry.registerAdapter(optionalDescriptor(), makeReadyAdapter));
+        EXPECT_FALSE(registry.registerAdapter(optionalDescriptor(), makeReadyAdapter));
+        ASSERT_EQ(registry.descriptors().size(), 1U);
+    }
+
+    TEST(SceneUpscalerAdapterRegistry, PreservesOwnedDescriptorAndRequirements) {
+        OptionalSceneUpscalerRegistry registry;
+        auto source = optionalDescriptor();
+        ASSERT_TRUE(registry.registerAdapter(source, makeReadyAdapter));
+        source.id = "changed_after_registration";
+
+        const auto stored = registry.descriptor("optional_test");
+        ASSERT_TRUE(stored.has_value());
+        EXPECT_EQ(stored->label_key, "preferences.scene_upscaler_optional_test");
+        EXPECT_TRUE(stored->requirements.depth);
+        EXPECT_TRUE(stored->requirements.temporal());
+        EXPECT_FALSE(registry.descriptor(source.id).has_value());
+    }
+
+    TEST(SceneUpscalerAdapterRegistry, SafeModeRejectsBeforeFactoryOrRuntimeProbe) {
+        OptionalSceneUpscalerRegistry registry;
+        ASSERT_TRUE(registry.registerAdapter(optionalDescriptor(), makeReadyAdapter));
+        factory_calls = 0;
+
+        const auto availability = registry.probe(
+            "optional_test", {.vendor_id = 1, .safe_mode = true});
+        EXPECT_EQ(availability.reason, SceneUpscalerAvailabilityReason::SafeMode);
+        EXPECT_FALSE(availability.available());
+        EXPECT_EQ(factory_calls, 0);
+        EXPECT_EQ(registry.createAvailable(
+                      "optional_test", {.vendor_id = 1, .safe_mode = true}),
+                  nullptr);
+        EXPECT_EQ(factory_calls, 0);
+    }
+
+    TEST(SceneUpscalerAdapterRegistry, ReportsUnknownRuntimeAndDeviceFailuresExplicitly) {
+        OptionalSceneUpscalerRegistry registry;
+        ASSERT_TRUE(registry.registerAdapter(optionalDescriptor(), makeReadyAdapter));
+        ASSERT_TRUE(registry.registerAdapter(optionalDescriptor("missing_runtime"),
+                                             makeMissingRuntimeAdapter));
+
+        EXPECT_EQ(registry.probe("unknown", {}).reason,
+                  SceneUpscalerAvailabilityReason::NotCompiled);
+        EXPECT_EQ(registry.probe("optional_test", {}).reason,
+                  SceneUpscalerAvailabilityReason::DeviceUnsupported);
+        EXPECT_EQ(registry.probe("missing_runtime", {.vendor_id = 1}).reason,
+                  SceneUpscalerAvailabilityReason::RuntimeMissing);
+    }
+
+    TEST(SceneUpscalerAdapterRegistry, CreatesOnlyAdaptersThatPassCapabilityProbe) {
+        OptionalSceneUpscalerRegistry registry;
+        ASSERT_TRUE(registry.registerAdapter(optionalDescriptor(), makeReadyAdapter));
+        ASSERT_TRUE(registry.registerAdapter(optionalDescriptor("missing_runtime"),
+                                             makeMissingRuntimeAdapter));
+
+        EXPECT_NE(registry.createAvailable("optional_test", {.vendor_id = 1}), nullptr);
+        EXPECT_EQ(registry.createAvailable("optional_test", {}), nullptr);
+        EXPECT_EQ(registry.createAvailable("missing_runtime", {.vendor_id = 1}), nullptr);
+        EXPECT_EQ(registry.createAvailable("unknown", {.vendor_id = 1}), nullptr);
     }
 } // namespace lfs::vis
