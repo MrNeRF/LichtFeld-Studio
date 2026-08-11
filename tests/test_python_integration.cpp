@@ -980,7 +980,7 @@ TEST_F(PythonIntegrationTest, SceneCameraExposesVisualizerRenderContract) {
 import lichtfeld as lf
 import warnings
 result = lf.io.load(r")PY") +
-                        dataset_dir.string() + R"PY(", resize_factor=8, images_folder="images_8")
+                        dataset_dir.string() + R"PY(", resize_factor=4, images_folder="images_4")
 camera = result.cameras[0]
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always", DeprecationWarning)
