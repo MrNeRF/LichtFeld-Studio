@@ -220,34 +220,6 @@ Inference selects a discrete Vulkan compute device first and then an integrated
 device. Pass `--vulkan-device <index>` to override that selection. The index is
 the position in the runtime's ranked list of Vulkan 1.1 compute devices.
 
-### Manual MoGe validation
-
-Full-model numerical validation is intentionally excluded from CTest and CI.
-Build the validator explicitly and point it at the captured raw references:
-
-```bash
-cmake --build cmake-build-release --target lfs_moge_validate -j8
-./cmake-build-release/src/onnx_vulkan/lfs_moge_validate \
-  --references ~/.lichtfeld/onnx/moge-2-vitb-normal-bicycle-reference
-```
-
-The defaults are the verified model at
-`~/.lichtfeld/onnx/moge-2-vitb-normal.onnx`, the bicycle fixture at
-`../data/360_v2/bicycle/images_8/_DSC8679.JPG`, `max-side=518`, and
-`num-tokens=1800`. Override the model, image, or compute device with `--model`,
-`--image`, or `--vulkan-device`. Reference files use the non-shipping
-`LFSMOGE1` capture format and are named `points.lfsref`, `normal.lfsref`,
-`mask.lfsref`, and `metric_scale.lfsref`.
-
-Reference provenance:
-
-- Model SHA-256: `bbf14e07a30f11e69d36ab861590123f5598ababcbc8946a063eb4a966f35a21`
-- Existing depth PNG SHA-256: `2e005d8c3e59386b55b4f27d958bb56e0fb69db3a434fc1404c9388b119e2df0`
-- Existing normals PNG SHA-256: `8698ac02dbd11d73438076eea6c477ce0ae7776b0471ee4804dc6a172f7c9e71`
-
-The validator requires identical shapes and finite/nonfinite locations, at
-least 99.9% of values within `1e-3 + 5e-3 * abs(reference)`, maximum absolute
-error below `5e-2`, and at least 99.9% mask agreement at the `0.5` threshold.
 
 ## Troubleshooting
 
