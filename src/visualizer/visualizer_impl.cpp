@@ -1120,6 +1120,7 @@ namespace lfs::vis {
             }
             if (trainer_manager_ &&
                 (trainer_manager_->isTrainingActive() || trainer_manager_->isCompletionPending())) {
+                trainer_manager_->suppressCompletionNotification();
                 if (pending_training_action_ == PendingTrainingAction::None) {
                     pending_training_action_ = PendingTrainingAction::Reset;
                 }
@@ -1921,6 +1922,7 @@ namespace lfs::vis {
                 (!trainer_manager_->isTrainingActive() && !trainer_manager_->isCompletionPending())) {
                 return false;
             }
+            trainer_manager_->suppressCompletionNotification();
             pending_training_action_ = PendingTrainingAction::Close;
             if (trainer_manager_->canStop()) {
                 trainer_manager_->stopTraining();
@@ -2113,6 +2115,7 @@ namespace lfs::vis {
             (!trainer_manager_->canPerform(TrainingAction::ClearScene) ||
              trainer_manager_->isCompletionPending())) {
             pending_training_action_ = PendingTrainingAction::NewProject;
+            trainer_manager_->suppressCompletionNotification();
             if (trainer_manager_->canStop()) {
                 trainer_manager_->stopTraining();
             }
