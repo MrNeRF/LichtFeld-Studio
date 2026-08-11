@@ -988,7 +988,10 @@
     "no_dataset_loaded": "未加载数据集",
     "iters_per_sec": "次迭代/秒",
     "sparsity": "稀疏性设置",
-    "mrnf_params": "MRNF参数"
+    "mrnf_params": "MRNF参数",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   },
   "tooltip": {
     "gt_compare_mode": "选择 RGB、法线或深度真值比较",

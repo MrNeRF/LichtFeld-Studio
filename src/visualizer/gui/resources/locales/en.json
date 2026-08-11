@@ -981,7 +981,10 @@
     "no_dataset_loaded": "No dataset loaded",
     "iters_per_sec": "iters/sec",
     "sparsity": "Sparsity Settings",
-    "mrnf_params": "MRNF Parameters"
+    "mrnf_params": "MRNF Parameters",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   },
   "tooltip": {
     "gut_mode": "For fisheye/distorted/equirect cameras",

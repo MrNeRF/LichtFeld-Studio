@@ -1332,7 +1332,10 @@
     "no_dataset_loaded": "No hay dataset cargado",
     "iters_per_sec": "iters/seg",
     "sparsity": "Ajustes de Dispersión",
-    "mrnf_params": "Parámetros de MRNF"
+    "mrnf_params": "Parámetros de MRNF",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   },
   "training_params": {
     "strategy": "Estrategia:",

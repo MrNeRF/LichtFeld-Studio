@@ -21,10 +21,13 @@ def _import_tools_with_runtime_stub(monkeypatch, lf_stub):
 
     tools = import_module("lfs_plugins.tools")
     op_context = import_module("lfs_plugins.op_context")
+    # can_transform is read straight off the context by the tool poll
+    # predicates (_poll_can_transform / _poll_can_cropbox); without it every
+    # transform-gated tool reports "cannot activate".
     monkeypatch.setattr(
         op_context,
         "get_context",
-        lambda: SimpleNamespace(has_scene=True, num_gaussians=100),
+        lambda: SimpleNamespace(has_scene=True, num_gaussians=100, can_transform=True),
         raising=False,
     )
     tools.ToolRegistry._active_tool_id = ""
@@ -99,3 +102,40 @@ def test_clear_active_clears_cpp_toolbar_tool(monkeypatch):
     assert ("set_tool", "none") in calls
     assert ("clear_active_operator",) in calls
     assert tools.ToolRegistry.get_active_id() == ""
+
+
+def test_set_active_refuses_tool_whose_poll_rejects_context(monkeypatch):
+    """A tool that cannot activate must be refused, not silently activated.
+
+    Without this, deleting the ``can_activate`` gate in ``ToolRegistry.set_active``
+    leaves every existing test green: they all exercise the accepting path only.
+    """
+    calls = []
+    lf_stub = ModuleType("lichtfeld")
+    lf_stub.ui = SimpleNamespace(
+        ops=SimpleNamespace(cancel_modal=lambda: calls.append(("cancel_modal",))),
+        get_content_type=lambda: "splat_files",
+        clear_gizmo=lambda: calls.append(("clear_gizmo",)),
+        set_active_tool=lambda tool_id: calls.append(("set_active_tool", tool_id)),
+        set_active_operator=lambda tool_id, gizmo="": calls.append(("set_active_operator", tool_id, gizmo)),
+        set_gizmo_type=lambda gizmo: calls.append(("set_gizmo_type", gizmo)),
+        clear_active_operator=lambda: calls.append(("clear_active_operator",)),
+        set_tool=lambda tool: calls.append(("set_tool", tool)),
+    )
+    lf_stub.can_transform_selection = lambda: False
+
+    tools = _import_tools_with_runtime_stub(monkeypatch, lf_stub)
+    op_context = import_module("lfs_plugins.op_context")
+
+    # No scene: every builtin poll starts from _poll_has_scene.
+    monkeypatch.setattr(
+        op_context,
+        "get_context",
+        lambda: SimpleNamespace(has_scene=False, num_gaussians=0, can_transform=False),
+        raising=False,
+    )
+
+    assert tools.ToolRegistry.set_active("builtin.cropbox") is False
+    assert tools.ToolRegistry.get_active_id() == ""
+    # A refused activation must not touch the native tool state at all.
+    assert not any(name.startswith("set_active") or name == "set_gizmo_type" for name, *_ in calls)

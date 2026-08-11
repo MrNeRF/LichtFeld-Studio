@@ -969,7 +969,10 @@
     "no_trainer_loaded": "トレーナーが読み込まれていません",
     "parameters_unavailable": "パラメータが利用できません",
     "no_dataset_loaded": "データセットが読み込まれていません",
-    "iters_per_sec": "iter/秒"
+    "iters_per_sec": "iter/秒",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   },
   "tooltip": {
     "gt_compare_mode": "RGB、法線、または深度のグラウンドトゥルース比較を選択",
