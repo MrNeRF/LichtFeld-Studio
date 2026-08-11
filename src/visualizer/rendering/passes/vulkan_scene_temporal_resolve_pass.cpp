@@ -37,6 +37,7 @@ namespace lfs::vis {
             VkImage image = VK_NULL_HANDLE;
             VmaAllocation allocation = VK_NULL_HANDLE;
             VkImageView view = VK_NULL_HANDLE;
+            std::size_t allocation_bytes = 0;
             bool initialized = false;
             std::string vram_label;
         };
@@ -241,11 +242,31 @@ namespace lfs::vis {
                 return false;
             image.vram_label = std::format("view{}:ping{}:{}x{}",
                                            viewIndex(view), ping, extent.x, extent.y);
+            image.allocation_bytes = static_cast<std::size_t>(allocation_result.size);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.scene_temporal.history",
                 image.vram_label,
-                static_cast<std::size_t>(allocation_result.size));
+                image.allocation_bytes);
             return true;
+        }
+
+        [[nodiscard]] VulkanSceneTemporalResourceStats resourceStats() const {
+            VulkanSceneTemporalResourceStats stats{
+                .static_resources_initialized = pipeline != VK_NULL_HANDLE,
+            };
+            for (const auto& resource : views) {
+                bool view_resident = false;
+                for (const auto& image : resource.images) {
+                    if (image.image == VK_NULL_HANDLE)
+                        continue;
+                    stats.history_bytes += image.allocation_bytes;
+                    ++stats.history_images;
+                    view_resident = true;
+                }
+                if (view_resident)
+                    ++stats.resident_views;
+            }
+            return stats;
         }
 
         [[nodiscard]] bool ensureView(const TemporalViewId view, const glm::ivec2 extent) {
@@ -421,5 +442,9 @@ namespace lfs::vis {
 
     bool VulkanSceneTemporalResolvePass::initialized() const {
         return impl_ && impl_->pipeline != VK_NULL_HANDLE;
+    }
+
+    VulkanSceneTemporalResourceStats VulkanSceneTemporalResolvePass::resourceStats() const {
+        return impl_ ? impl_->resourceStats() : VulkanSceneTemporalResourceStats{};
     }
 } // namespace lfs::vis

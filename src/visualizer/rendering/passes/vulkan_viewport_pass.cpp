@@ -324,6 +324,23 @@ namespace lfs::vis {
             state.last_logged_quality = quality;
         }
 
+        void publishUpscalerResourceDiagnostics(
+            lfs::diagnostics::VramProfiler& profiler) const {
+            const auto temporal = scene_temporal_resolve_pass.resourceStats();
+            profiler.setGauge("viewer.upscaler.spatial.pipeline_initialized",
+                              scene_spatial_pipeline != VK_NULL_HANDLE ? 1.0 : 0.0);
+            profiler.setGauge("viewer.upscaler.temporal.pipeline_initialized",
+                              temporal.static_resources_initialized ? 1.0 : 0.0);
+            profiler.setGauge("viewer.upscaler.temporal.history_bytes",
+                              static_cast<double>(temporal.history_bytes));
+            profiler.setGauge("viewer.upscaler.temporal.history_images",
+                              static_cast<double>(temporal.history_images));
+            profiler.setGauge("viewer.upscaler.temporal.resident_views",
+                              static_cast<double>(temporal.resident_views));
+            profiler.setGauge("viewer.upscaler.motion.pipeline_initialized",
+                              scene_motion_pass.initialized() ? 1.0 : 0.0);
+        }
+
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
 
@@ -2368,6 +2385,7 @@ namespace lfs::vis {
                 }
                 logged_scene_upscaler_selection = scene_upscaler_selection;
             }
+            publishUpscalerResourceDiagnostics(profiler);
         }
 
         [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const {

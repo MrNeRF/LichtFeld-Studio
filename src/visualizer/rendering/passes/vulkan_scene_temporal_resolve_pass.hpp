@@ -16,6 +16,13 @@
 namespace lfs::vis {
     class VulkanContext;
 
+    struct VulkanSceneTemporalResourceStats {
+        std::size_t history_bytes = 0;
+        std::size_t history_images = 0;
+        std::size_t resident_views = 0;
+        bool static_resources_initialized = false;
+    };
+
     [[nodiscard]] constexpr std::size_t nextTemporalHistoryWriteIndex(
         const bool has_history, const std::size_t read_index) {
         return has_history ? 1u - std::min<std::size_t>(read_index, 1u) : 0u;
@@ -71,6 +78,7 @@ namespace lfs::vis {
         [[nodiscard]] VkImageView outputView(TemporalViewId view) const;
         [[nodiscard]] SceneHistoryContract contract(TemporalViewId view) const;
         [[nodiscard]] bool initialized() const;
+        [[nodiscard]] VulkanSceneTemporalResourceStats resourceStats() const;
 
     private:
         struct Impl;
