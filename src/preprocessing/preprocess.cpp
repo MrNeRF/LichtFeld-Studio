@@ -709,6 +709,9 @@ namespace {
     class MogeVulkanSession {
     public:
         MogeVulkanSession(const fs::path& model_path, std::optional<std::uint32_t> device) {
+            LOG_INFO("MoGe Vulkan: loading model {} (device={})",
+                     path_to_string(model_path),
+                     device ? std::to_string(*device) : std::string("automatic"));
             lfs::onnx_vulkan::SessionOptions options;
             options.vulkan_device = device;
             auto session = lfs::onnx_vulkan::VulkanSession::create(model_path, std::move(options));
@@ -718,9 +721,19 @@ namespace {
             if (std::ranges::find(session_->inputs(), "image", &lfs::onnx_vulkan::ValueInfo::name) ==
                 session_->inputs().end())
                 throw std::runtime_error("ONNX model has no 'image' input");
+            LOG_INFO("MoGe Vulkan: session ready on {} (inputs={}, outputs={})",
+                     session_->device_name(), session_->inputs().size(), session_->outputs().size());
+            for (const auto& input : session_->inputs())
+                LOG_DEBUG("MoGe Vulkan: input '{}' type={} rank={}",
+                          input.name, static_cast<int>(input.type), input.shape.size());
+            for (const auto& output : session_->outputs())
+                LOG_DEBUG("MoGe Vulkan: output '{}' type={} rank={}",
+                          output.name, static_cast<int>(output.type), output.shape.size());
         }
 
         MogeOutputs run(const Image& image, int64_t num_tokens) {
+            LOG_DEBUG("MoGe Vulkan: inference start image={}x{} num_tokens={}",
+                      image.width, image.height, num_tokens);
             std::vector<float> chw = hwc_to_nchw(image);
             std::array<int64_t, 4> image_shape = {1, 3, image.height, image.width};
             std::vector<lfs::onnx_vulkan::NamedTensorView> inputs;
@@ -738,10 +751,16 @@ namespace {
             }
             constexpr std::array<std::string_view, 4> requested{
                 "points", "normal", "mask", "metric_scale"};
+            const auto inference_start = std::chrono::steady_clock::now();
             auto result = session_->run(inputs, requested);
             if (!result)
                 throw std::runtime_error(result.error().message);
             auto outputs = std::move(*result);
+            const auto inference_ms = std::chrono::duration<double, std::milli>(
+                                          std::chrono::steady_clock::now() - inference_start)
+                                          .count();
+            LOG_DEBUG("MoGe Vulkan: inference complete in {:.2f} ms (outputs={})",
+                      inference_ms, outputs.size());
 
             std::unordered_map<std::string, std::size_t> output_index;
             for (std::size_t i = 0; i < outputs.size(); ++i)
@@ -1050,8 +1069,11 @@ namespace {
                          const PreprocessPlan& plan) {
         print_plan_summary(params, plan, &model_path);
 
+        LOG_INFO("Preprocess: initializing MoGe for {} pending image(s), {} skipped",
+                 plan.jobs.size(), plan.skipped);
         MogeVulkanSession session(model_path, params.vulkan_device);
         std::cout << "Vulkan device: " << session.device_name() << "\n";
+        LOG_INFO("Preprocess: using Vulkan device {}", session.device_name());
 
         const auto load_job = [&params](const PreprocessJob& job) {
             LoadedImage loaded{.original = load_image_rgb(job.image_path)};
@@ -1135,6 +1157,7 @@ namespace {
         if (bar)
             bar->complete();
         std::cout << "Done. processed=" << plan.jobs.size() << " skipped=" << plan.skipped << "\n";
+        LOG_INFO("Preprocess: completed {} image(s), skipped {}", plan.jobs.size(), plan.skipped);
     }
 
 } // namespace
@@ -1171,6 +1194,7 @@ namespace lfs::preprocessing {
             precompute_depth_anchors(params);
             return 0;
         } catch (const std::exception& e) {
+            LOG_ERROR("Preprocess failed: {}", e.what());
             std::cerr << "preprocess: " << e.what() << "\n";
             return 1;
         }
