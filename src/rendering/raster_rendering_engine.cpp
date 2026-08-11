@@ -15,6 +15,7 @@
 #include "point_cloud_raster.cuh"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
+#include "rendering/video_composite_utils.hpp"
 #include "screen_overlay_renderer.hpp"
 #include <OpenImageIO/imageio.h>
 #include <algorithm>
@@ -675,20 +676,51 @@ namespace lfs::rendering {
                     }
                 }
 
-                if (primary_metadata && primary_metadata->primaryDepth() &&
-                    primary_metadata->primaryDepth()->is_valid()) {
-                    Tensor depth_cpu = primary_metadata->primaryDepth()->cpu().contiguous();
-                    if (depth_cpu.ndim() == 3 && depth_cpu.dtype() == lfs::core::DataType::Float32) {
+                if (primary_metadata) {
+                    const size_t panel_count = std::min(
+                        primary_metadata->depth_panel_count > 0
+                            ? primary_metadata->depth_panel_count
+                            : (primary_metadata->primaryDepth() ? size_t{1} : size_t{0}),
+                        primary_metadata->depth_panels.size());
+                    for (size_t panel_index = 0; panel_index < panel_count; ++panel_index) {
+                        const auto& panel = primary_metadata->depth_panels[panel_index];
+                        if (!panel.depth || !panel.depth->is_valid()) {
+                            continue;
+                        }
+                        Tensor depth_cpu = panel.depth->cpu().contiguous();
+                        if (depth_cpu.ndim() != 3 ||
+                            depth_cpu.size(0) != 1u ||
+                            depth_cpu.dtype() != lfs::core::DataType::Float32) {
+                            continue;
+                        }
+
+                        const int panel_start = std::clamp(
+                            static_cast<int>(std::lround(static_cast<float>(width) * panel.start_position)),
+                            0,
+                            width);
+                        const int panel_end = std::clamp(
+                            static_cast<int>(std::lround(static_cast<float>(width) * panel.end_position)),
+                            panel_start,
+                            width);
+                        const int panel_width = panel_end - panel_start;
+                        if (panel_width <= 0) {
+                            continue;
+                        }
+
                         const int depth_h = static_cast<int>(depth_cpu.size(1));
                         const int depth_w = static_cast<int>(depth_cpu.size(2));
+                        if (depth_h <= 0 || depth_w <= 0) {
+                            continue;
+                        }
                         const float* depth_src = depth_cpu.ptr<float>();
                         for (int y = 0; y < height; ++y) {
                             const int sy = std::clamp(static_cast<int>(
                                                           static_cast<float>(y) * depth_h / std::max(height, 1)),
                                                       0, depth_h - 1);
-                            for (int x = 0; x < width; ++x) {
+                            for (int x = panel_start; x < panel_end; ++x) {
+                                const int panel_x = x - panel_start;
                                 const int sx = std::clamp(static_cast<int>(
-                                                              static_cast<float>(x) * depth_w / std::max(width, 1)),
+                                                              static_cast<float>(panel_x) * depth_w / panel_width),
                                                           0, depth_w - 1);
                                 depth[static_cast<size_t>(y) * width + x] =
                                     depth_src[static_cast<size_t>(sy) * depth_w + sx];
@@ -719,8 +751,8 @@ namespace lfs::rendering {
                 const float* rgba = mesh_rgba.ptr<float>();
                 const float* view_depth = mesh_depth.ptr<float>();
                 for (size_t pixel = 0; pixel < pixel_count; ++pixel) {
-                    if (rgba[3u * pixel_count + pixel] > 0.0f &&
-                        view_depth[pixel] < depth[pixel]) {
+                    if (detail::meshFragmentPassesDepthTest(
+                            rgba[3u * pixel_count + pixel], view_depth[pixel], depth[pixel])) {
                         image[pixel] = rgba[pixel];
                         image[pixel_count + pixel] = rgba[pixel_count + pixel];
                         image[2u * pixel_count + pixel] = rgba[2u * pixel_count + pixel];
