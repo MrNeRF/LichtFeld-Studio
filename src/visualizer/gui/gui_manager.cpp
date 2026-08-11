@@ -5627,8 +5627,19 @@ namespace lfs::vis::gui {
                 if (rendering) {
                     // #1575: GENERAL→READ_ONLY barriers + CUDA S2 waits on the frame
                     // submit, before any sampling of interop images (slot B).
+                    // beginFrame opens dynamic rendering, while image layout
+                    // transitions are forbidden inside that scope. Bracket
+                    // the interop barrier recording with an explicit end/restart.
+                    if (!vulkan_context->finishActiveRendering(frame.command_buffer)) {
+                        LOG_ERROR("Unable to close dynamic rendering before viewport interop barriers: {}",
+                                  vulkan_context->lastError());
+                    }
                     rendering->viewportInterop().recordFrameBarriers(frame.command_buffer,
                                                                      *vulkan_context);
+                    if (!vulkan_context->restartActiveRendering(frame.command_buffer, frame)) {
+                        LOG_ERROR("Unable to restart dynamic rendering after viewport interop barriers: {}",
+                                  vulkan_context->lastError());
+                    }
                     const auto completion = rendering->viewportInterop().frameCompletion();
                     if (completion.semaphore != VK_NULL_HANDLE && completion.value != 0) {
                         LOG_TIMER_THRESHOLD("gui_render.vksplat_completion_wait_submit", 0.25);

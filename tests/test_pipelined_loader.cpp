@@ -220,3 +220,22 @@ TEST_F(PipelinedImageLoaderTest, MultipleRequestsPreserveIdsAndOptionalMask) {
     EXPECT_EQ(mask_by_sequence,
               (std::map<size_t, bool>{{11u, false}, {12u, true}}));
 }
+
+TEST(SidecarResumeSampler, DeterministicCameraStreamContinuesAtCheckpointOffset) {
+    constexpr std::uint64_t seed = 0x4c46535f73616d70ULL;
+    constexpr size_t dataset_size = 17;
+    constexpr size_t checkpoint_iteration = 31;
+
+    lfs::training::InfiniteRandomSampler uninterrupted(dataset_size, seed, 0);
+    lfs::training::InfiniteRandomSampler resumed(dataset_size, seed, checkpoint_iteration);
+
+    for (size_t i = 0; i < 40; ++i) {
+        const auto expected = uninterrupted.next(1);
+        ASSERT_TRUE(expected.has_value());
+        if (i < checkpoint_iteration)
+            continue;
+        const auto actual = resumed.next(1);
+        ASSERT_TRUE(actual.has_value());
+        EXPECT_EQ(*actual, *expected) << "camera stream diverged at post-resume sample " << i;
+    }
+}

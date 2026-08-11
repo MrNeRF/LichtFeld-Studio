@@ -255,6 +255,11 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
+        // Dynamic rendering must be closed while external-image layout barriers
+        // are recorded. These helpers bracket that interop window.
+        [[nodiscard]] bool finishActiveRendering(VkCommandBuffer command_buffer);
+        [[nodiscard]] bool restartActiveRendering(VkCommandBuffer command_buffer,
+                                                   const Frame& frame);
         [[nodiscard]] bool endFrame();
         [[nodiscard]] bool hasActiveFrame() const noexcept { return frame_active_; }
         [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba();
@@ -404,7 +409,6 @@ namespace lfs::vis {
         bool createDebugMessenger();
         bool createPipelineCache();
         bool recreateSwapchain();
-        bool finishActiveRendering(VkCommandBuffer command_buffer);
         void deferSwapchainResizeRecreate(bool requires_recreate = true,
                                           std::optional<bool> allow_headroom = std::nullopt);
         void requireSwapchainRecreateAfterOutOfDate();

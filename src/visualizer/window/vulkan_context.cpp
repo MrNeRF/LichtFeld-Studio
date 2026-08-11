@@ -1381,6 +1381,48 @@ namespace lfs::vis {
         return true;
     }
 
+    bool VulkanContext::restartActiveRendering(const VkCommandBuffer command_buffer,
+                                                const Frame& frame) {
+        if (!frame_active_)
+            return fail("Cannot restart Vulkan rendering without an active frame");
+        if (frame_rendering_active_)
+            return fail("Cannot restart Vulkan rendering while rendering is already active");
+        if (command_buffer == VK_NULL_HANDLE || command_buffer != frame.command_buffer)
+            return fail("Cannot restart Vulkan rendering with a different command buffer");
+        if (frame.depth_stencil_image_view == VK_NULL_HANDLE ||
+            frame.swapchain_image_view == VK_NULL_HANDLE ||
+            frame.extent.width == 0 || frame.extent.height == 0) {
+            return fail("Cannot restart Vulkan rendering with incomplete frame attachments");
+        }
+
+        VkRenderingAttachmentInfo color_attachment{};
+        color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        color_attachment.imageView = frame.swapchain_image_view;
+        color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingAttachmentInfo depth_attachment{};
+        depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depth_attachment.imageView = frame.depth_stencil_image_view;
+        depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingInfo rendering_info{};
+        rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        rendering_info.renderArea.offset = {0, 0};
+        rendering_info.renderArea.extent = frame.extent;
+        rendering_info.layerCount = 1;
+        rendering_info.colorAttachmentCount = 1;
+        rendering_info.pColorAttachments = &color_attachment;
+        rendering_info.pDepthAttachment = &depth_attachment;
+        rendering_info.pStencilAttachment = &depth_attachment;
+        vkCmdBeginRendering(command_buffer, &rendering_info);
+        frame_rendering_active_ = true;
+        return true;
+    }
+
     bool VulkanContext::endFrame() {
         if (!frame_active_) {
             return fail(std::format(

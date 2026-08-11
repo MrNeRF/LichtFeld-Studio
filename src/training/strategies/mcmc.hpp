@@ -97,6 +97,7 @@ namespace lfs::training {
         lfs::core::Tensor _ones_int32; // Cached ones for ratio counting; grows with the live model.
         lfs::core::Tensor _error_score_max;
         int _error_score_windows = 0;
+        int _current_iteration = 0;
     };
 
 } // namespace lfs::training

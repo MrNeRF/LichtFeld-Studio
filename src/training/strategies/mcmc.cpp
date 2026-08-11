@@ -10,7 +10,6 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
@@ -19,6 +18,20 @@
 namespace lfs::training {
 
     namespace {
+        [[nodiscard]] std::uint64_t deterministic_mcmc_seed(const int iteration,
+                                                             const std::uint64_t stream) {
+            // Derive each stochastic operation from the absolute training
+            // iteration.  A resumed trainer therefore emits the same MCMC
+            // mutations as an uninterrupted run without serializing a CUDA
+            // generator's opaque state.
+            std::uint64_t value = static_cast<std::uint64_t>(std::max(iteration, 0));
+            value ^= 0x9e3779b97f4a7c15ULL + stream + (value << 6) + (value >> 2);
+            value += 0x9e3779b97f4a7c15ULL;
+            value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+            value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+            return value ^ (value >> 31);
+        }
+
         [[nodiscard]] inline bool has_zero_dimension(const lfs::core::TensorShape& shape) {
             for (size_t i = 0; i < shape.rank(); ++i) {
                 if (shape[i] == 0) {
@@ -269,8 +282,7 @@ namespace lfs::training {
             sampled_opacities = Tensor::empty({n_dead}, Device::CUDA, DataType::Float32);
             sampled_scales = Tensor::empty({n_dead, 3}, Device::CUDA, DataType::Float32);
 
-            static thread_local uint64_t seed_counter = 0;
-            const uint64_t seed = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count()) + seed_counter++;
+            const uint64_t seed = deterministic_mcmc_seed(_current_iteration, 0x52454c4f43415445ULL);
 
             // does multinomial sampling + gathering in one pass
             mcmc::launch_multinomial_sample_and_gather(
@@ -463,7 +475,7 @@ namespace lfs::training {
             sampled_scales = Tensor::empty({n_new, 3}, Device::CUDA, DataType::Float32);
 
             // Generate random seed
-            auto seed = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+            const auto seed = deterministic_mcmc_seed(_current_iteration, 0x4144445f4e4557ULL);
 
             // Call fused CUDA kernel
             mcmc::launch_multinomial_sample_all(
@@ -703,8 +715,7 @@ namespace lfs::training {
 
         // one fused kernel (curand + cov transform + add); no noise buffer.
         const auto frozen_mask = make_frozen_mask(*_splat_data, n, Device::CUDA);
-        const auto seed = static_cast<uint64_t>(
-            std::chrono::high_resolution_clock::now().time_since_epoch().count());
+        const auto seed = deterministic_mcmc_seed(_current_iteration, 0x494e4a454354ULL);
         mcmc::launch_inject_noise_kernel(
             _splat_data->opacity_raw().ptr<float>(),
             _splat_data->scaling_raw().ptr<float>(),
@@ -719,6 +730,7 @@ namespace lfs::training {
 
     void MCMC::post_backward(int iter, RenderOutput& render_output) {
         LOG_TIMER("MCMC::post_backward");
+        _current_iteration = iter;
 
         // Increment SH degree every sh_degree_interval iterations
         if (iter % _params->sh_degree_interval == 0) {

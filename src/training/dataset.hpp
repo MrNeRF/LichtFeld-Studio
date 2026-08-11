@@ -110,8 +110,10 @@ namespace lfs::training {
     /// Random sampler that shuffles indices once and iterates through them
     class RandomSampler {
     public:
-        explicit RandomSampler(size_t size) : size_(size),
-                                              index_(0) {
+        explicit RandomSampler(size_t size, std::optional<std::uint64_t> seed = std::nullopt)
+            : size_(size),
+              index_(0),
+              seed_(seed) {
             reset();
         }
 
@@ -127,12 +129,21 @@ namespace lfs::training {
                 indices_[i] = i;
             }
 
-            // Shuffle using random device
-            std::random_device rd;
-            std::mt19937 gen(rd());
+            // Training can recreate a loader when resuming.  An optional seed
+            // makes that recreation produce the same camera order; callers
+            // that omit it retain the historical random-device behavior.
+            std::mt19937 gen;
+            if (seed_) {
+                const auto epoch_seed = *seed_ + epoch_ * 0x9e3779b97f4a7c15ULL;
+                gen.seed(static_cast<std::uint32_t>(epoch_seed ^ (epoch_seed >> 32)));
+            } else {
+                std::random_device rd;
+                gen.seed(rd());
+            }
             std::shuffle(indices_.begin(), indices_.end(), gen);
 
             index_ = 0;
+            ++epoch_;
         }
 
         /// Get next batch of indices
@@ -150,16 +161,27 @@ namespace lfs::training {
 
         size_t size() const { return size_; }
 
+    protected:
+        size_t current_index() const { return index_; }
+        void set_current_index(size_t index) { index_ = index; }
+
     private:
         size_t size_;
         size_t index_;
         std::vector<size_t> indices_;
+        std::optional<std::uint64_t> seed_;
+        std::uint64_t epoch_ = 0;
     };
 
     /// Infinite random sampler - automatically resets when exhausted
     class InfiniteRandomSampler : public RandomSampler {
     public:
-        explicit InfiniteRandomSampler(size_t size) : RandomSampler(size) {}
+        explicit InfiniteRandomSampler(size_t size,
+                                       std::optional<std::uint64_t> seed = std::nullopt,
+                                       size_t start_offset = 0)
+            : RandomSampler(size, seed) {
+            skip(start_offset);
+        }
 
         std::optional<std::vector<size_t>> next(size_t batch_size) {
             auto batch = RandomSampler::next(batch_size);
@@ -168,6 +190,18 @@ namespace lfs::training {
                 batch = RandomSampler::next(batch_size);
             }
             return batch;
+        }
+
+        void skip(size_t count) {
+            while (count > 0 && size() > 0) {
+                const size_t remaining = size() - current_index();
+                if (count < remaining) {
+                    set_current_index(current_index() + count);
+                    return;
+                }
+                count -= remaining;
+                reset();
+            }
         }
     };
 
@@ -581,16 +615,24 @@ namespace lfs::training {
     template <typename SamplerType = RandomSampler>
     inline auto create_pipelined_dataloader(std::shared_ptr<CameraDataset> dataset,
                                             lfs::io::PipelinedLoaderConfig config = {},
-                                            PipelinedAuxiliaryImageConfig aux_config = {}) {
+                                            PipelinedAuxiliaryImageConfig aux_config = {},
+                                            std::optional<std::uint64_t> sampler_seed = std::nullopt) {
         const size_t dataset_size = dataset->size();
         return std::make_unique<PipelinedDataLoader<SamplerType>>(
-            dataset, SamplerType(dataset_size), config, aux_config);
+            dataset, SamplerType(dataset_size, sampler_seed), config, aux_config);
     }
 
     inline auto create_infinite_pipelined_dataloader(std::shared_ptr<CameraDataset> dataset,
                                                      lfs::io::PipelinedLoaderConfig config = {},
-                                                     PipelinedAuxiliaryImageConfig aux_config = {}) {
-        return create_pipelined_dataloader<InfiniteRandomSampler>(dataset, config, aux_config);
+                                                     PipelinedAuxiliaryImageConfig aux_config = {},
+                                                     std::optional<std::uint64_t> sampler_seed = std::nullopt,
+                                                     size_t sampler_offset = 0) {
+        const size_t dataset_size = dataset->size();
+        return std::make_unique<PipelinedDataLoader<InfiniteRandomSampler>>(
+            dataset,
+            InfiniteRandomSampler(dataset_size, sampler_seed, sampler_offset),
+            config,
+            aux_config);
     }
 
 } // namespace lfs::training

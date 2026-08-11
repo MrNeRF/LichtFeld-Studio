@@ -6170,8 +6170,17 @@ namespace lfs::training {
             pipelined_config = tunePipelinedLoaderConfig(
                 pipelined_config, train_dataset_, aux_pipeline_config);
 
+            // Keep the camera stream stable across checkpoint resume.  The
+            // loader is intentionally rebuilt after the checkpoint is loaded;
+            // replaying the same seeded permutations from the saved iteration
+            // prevents sidecar losses from seeing a different camera sequence.
+            constexpr std::uint64_t TRAINING_SAMPLER_SEED = 0x4c46535f73616d70ULL;
             auto train_dataloader = create_infinite_pipelined_dataloader(
-                train_dataset_, pipelined_config, aux_pipeline_config);
+                train_dataset_,
+                pipelined_config,
+                aux_pipeline_config,
+                TRAINING_SAMPLER_SEED,
+                static_cast<size_t>(std::max(0, iter - 1)));
             auto active_image_loader_guard = makeScopeGuard([this]() {
                 clearActiveImageLoader();
             });

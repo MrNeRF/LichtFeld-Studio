@@ -76,6 +76,12 @@ namespace lfs::app {
             if (!params.dataset.output_name.empty())
                 checkpoint_params.dataset.output_name = params.dataset.output_name;
 
+            // Runtime-only CLI controls are not part of the serialized
+            // training state. Preserve them when a resume is requested so
+            // --perf-bench (and its warmup) still applies to the resumed run.
+            checkpoint_params.optimization.perf_bench = params.optimization.perf_bench;
+            checkpoint_params.optimization.perf_bench_warmup = params.optimization.perf_bench_warmup;
+
             if (checkpoint_params.dataset.data_path.empty()) {
                 return std::unexpected("Checkpoint has no dataset path and none provided via --data-path");
             }
