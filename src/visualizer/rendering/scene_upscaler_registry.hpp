@@ -132,6 +132,8 @@ namespace lfs::vis {
             std::string_view id, const SceneUpscalerProbeContext& context) const;
         [[nodiscard]] std::unique_ptr<SceneUpscalerAdapter> createAvailable(
             std::string_view id, const SceneUpscalerProbeContext& context) const;
+        [[nodiscard]] SceneUpscalerAdapterFactoryResult createAvailableResult(
+            std::string_view id, const SceneUpscalerProbeContext& context) const;
 
     private:
         struct Registration {

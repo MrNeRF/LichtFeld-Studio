@@ -168,6 +168,13 @@ namespace lfs::vis {
     std::unique_ptr<SceneUpscalerAdapter> OptionalSceneUpscalerRegistry::createAvailable(
         const std::string_view id,
         const SceneUpscalerProbeContext& context) const {
+        auto result = createAvailableResult(id, context);
+        return result ? std::move(*result) : nullptr;
+    }
+
+    SceneUpscalerAdapterFactoryResult OptionalSceneUpscalerRegistry::createAvailableResult(
+        const std::string_view id,
+        const SceneUpscalerProbeContext& context) const {
         SceneUpscalerAdapterFactory factory = nullptr;
         {
             const std::shared_lock lock(mutex_);
@@ -176,17 +183,20 @@ namespace lfs::vis {
                     return std::string_view(candidate.descriptor.id);
                 });
             if (registration == registrations_.end())
-                return nullptr;
+                return std::unexpected(SceneUpscalerAvailabilityReason::NotCompiled);
             factory = registration->factory;
         }
         if (context.safe_mode)
-            return nullptr;
+            return std::unexpected(SceneUpscalerAvailabilityReason::SafeMode);
         auto result = factory();
         if (!result.has_value())
-            return nullptr;
+            return std::unexpected(result.error());
         auto adapter = std::move(result.value());
-        if (!adapter || !adapter->probe(context).available())
-            return nullptr;
+        if (!adapter)
+            return std::unexpected(SceneUpscalerAvailabilityReason::ProbeFailed);
+        const auto availability = adapter->probe(context);
+        if (!availability.available())
+            return std::unexpected(availability.reason);
         return adapter;
     }
 

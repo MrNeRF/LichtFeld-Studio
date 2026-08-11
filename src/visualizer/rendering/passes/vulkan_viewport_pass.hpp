@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
+#include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -221,6 +222,7 @@ namespace lfs::vis {
         // until the render extent settles. Do not replace that binding with an
         // incompletely prepared image during the deferral window.
         bool preserve_scene_image_binding = false;
+        std::string scene_upscaler_id = "native";
         SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
         SceneTemporalQuality scene_temporal_quality = SceneTemporalQuality::Balanced;
         bool scene_temporal_projection_supported = true;
