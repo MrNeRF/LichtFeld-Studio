@@ -6182,9 +6182,9 @@ namespace lfs::training {
             setActiveImageLoader(train_dataloader->get_loader_shared());
             strategy_->set_image_loader(train_dataloader->get_loader());
 
-            if (train_dataset_ && train_dataloader->get_loader()) {
-                train_dataloader->reset();
-            }
+            // PipelinedDataLoader prefetched its initial batch in the constructor.
+            // Do not reset it here: reset() clears those requests and immediately
+            // refills the queue, producing avoidable startup cancellations.
 
             LOG_DEBUG("Starting training iterations");
             bool logged_epoch2_loader_cache = false;
