@@ -217,7 +217,7 @@ namespace lfs::rendering {
         uint64_t lod_generation = 0;
         const uint32_t* lod_touched_chunks = nullptr;
         size_t lod_touched_chunk_count = 0;
-        GaussianLodGpuTraversalState lod_gpu_traversal;
+        GaussianLodGpuTraversalState lod_gpu_traversal = {};
         bool lod_debug_mode = false;
     };
 

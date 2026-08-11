@@ -6179,7 +6179,7 @@ namespace lfs::vis {
     }
 
     std::expected<std::uint64_t, std::string> VksplatViewportRenderer::submitReadbackTicket(
-        VulkanContext& context,
+        VulkanContext& /*context*/,
         const std::size_t cell,
         const VkCommandBuffer command_buffer,
         const VkQueue submit_queue,

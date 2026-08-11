@@ -58,7 +58,7 @@ namespace lfs::core {
             EVENT(StopTraining, );
             EVENT(ResetTraining, );
             EVENT(SaveCheckpoint, std::optional<int> iteration;);
-            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path; std::filesystem::path init_path; std::string centralize_dataset; std::optional<int> max_width; std::optional<int> min_track_length; bool apply_auto_crop = false;);
+            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false;);
             EVENT(LoadCheckpointForTraining, std::filesystem::path checkpoint_path; std::filesystem::path dataset_path; std::filesystem::path output_path;);
             EVENT(ImportColmapCameras, std::filesystem::path sparse_path;);
             EVENT(LoadConfigFile, std::filesystem::path path;);
@@ -135,7 +135,7 @@ namespace lfs::core {
             EVENT(SequencerPlayPause, );
             // Empty path opens the save dialog; a path set by a script exports straight
             // to it, since a modal dialog cannot be answered from an automation client.
-            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf; std::string path;);
+            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf; std::string path = {};);
             EVENT(SequencerGoToKeyframe, size_t keyframe_index;);
             EVENT(SequencerSelectKeyframe, size_t keyframe_index;);
             EVENT(SequencerDeleteKeyframe, size_t keyframe_index;);
@@ -246,7 +246,7 @@ namespace lfs::core {
                   size_t freed_bytes;
                   bool recovered;);
 
-            EVENT(ExportFailed, std::string error; bool cancelled = false; std::optional<core::WireError> error_info;);
+            EVENT(ExportFailed, std::string error; bool cancelled = false; std::optional<core::WireError> error_info = {};);
             EVENT(VideoExportCompleted, std::filesystem::path path; int total_frames;);
             EVENT(VideoExportFailed, std::string error;);
             EVENT(Mesh2SplatCompleted, std::string source_name; std::string node_name; size_t num_gaussians;);

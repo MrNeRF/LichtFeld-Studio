@@ -52,7 +52,7 @@ namespace lfs::core {
             float scalar = 0.0f;
             // Optional second operand for AddTensor/SubTensor/MulTensor/DivTensor.
             // Held by shared_ptr so fusion recipes keep storage alive until launch.
-            std::shared_ptr<Tensor> rhs;
+            std::shared_ptr<Tensor> rhs = {};
         };
 
         struct LazyPlanNodeDebug {

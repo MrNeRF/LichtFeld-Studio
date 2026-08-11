@@ -5646,9 +5646,12 @@ namespace lfs::vis::gui {
                         // VkSplat color/split/depth outputs are first consumed only by
                         // fragment sampling in the viewport pass graph. Earlier graphics
                         // work can proceed while the async compute submission finishes.
-                        vulkan_context->addFrameTimelineWait(completion.semaphore,
-                                                             completion.value,
-                                                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                        if (!vulkan_context->addFrameTimelineWait(completion.semaphore,
+                                                                  completion.value,
+                                                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)) {
+                            LOG_ERROR("Unable to wait on VkSplat frame completion timeline: {}",
+                                      vulkan_context->lastError());
+                        }
                     }
                 }
                 VulkanViewportPassParams viewport_params{};
