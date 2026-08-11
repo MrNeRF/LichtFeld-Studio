@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -17,7 +18,10 @@ namespace {
 
     class TestPanel final : public lfs::vis::gui::IPanel {
     public:
-        explicit TestPanel(bool animation) : animation_(animation) {}
+        explicit TestPanel(bool animation,
+                           std::optional<double> scheduled_delay = std::nullopt)
+            : animation_(animation),
+              scheduled_delay_(scheduled_delay) {}
 
         void draw(const lfs::vis::gui::PanelDrawContext&) override {}
 
@@ -25,8 +29,13 @@ namespace {
             return animation_;
         }
 
+        std::optional<double> nextScheduledAnimationDelay() const override {
+            return scheduled_delay_;
+        }
+
     private:
         bool animation_ = false;
+        std::optional<double> scheduled_delay_;
     };
 
     class RecordingPanel final : public lfs::vis::gui::IPanel {
@@ -91,14 +100,15 @@ namespace {
         static void registerPanel(std::string id,
                                   lfs::vis::gui::PanelSpace space,
                                   bool animation,
-                                  std::string parent_id = {}) {
+                                  std::string parent_id = {},
+                                  std::optional<double> scheduled_delay = std::nullopt) {
             lfs::vis::gui::PanelInfo info;
             info.id = std::move(id);
             info.label = info.id;
             info.space = space;
             info.parent_id = std::move(parent_id);
             info.is_native = false;
-            info.panel = std::make_shared<TestPanel>(animation);
+            info.panel = std::make_shared<TestPanel>(animation, scheduled_delay);
             ASSERT_TRUE(lfs::vis::gui::PanelRegistry::instance().register_panel(std::move(info)));
         }
 
@@ -114,6 +124,103 @@ namespace {
     };
 
 } // namespace
+
+TEST_F(PanelRegistryAnimationDemandTest, LeftDockDemandRespectsLeftDockVisibility) {
+    using namespace lfs::vis::gui;
+
+    registerPanel("test.left", PanelSpace::LeftDock, true);
+
+    const auto visible = PanelRegistry::instance().animationDemandForVisiblePanels({
+        .active_main_tab = "test.main",
+        .ui_visible = true,
+        .right_panel_visible = true,
+        .bottom_dock_visible = true,
+        .left_dock_visible = true,
+    });
+    EXPECT_TRUE(visible.left_dock);
+    EXPECT_TRUE(visible.any());
+    EXPECT_TRUE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels({
+        .active_main_tab = "test.main",
+        .ui_visible = true,
+        .right_panel_visible = true,
+        .bottom_dock_visible = true,
+        .left_dock_visible = true,
+    }));
+
+    const auto left_hidden = PanelRegistry::instance().animationDemandForVisiblePanels({
+        .active_main_tab = "test.main",
+        .ui_visible = true,
+        .right_panel_visible = true,
+        .bottom_dock_visible = true,
+        .left_dock_visible = false,
+    });
+    EXPECT_FALSE(left_hidden.left_dock);
+    EXPECT_FALSE(left_hidden.any());
+    EXPECT_FALSE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels({
+        .active_main_tab = "test.main",
+        .ui_visible = true,
+        .right_panel_visible = true,
+        .bottom_dock_visible = true,
+        .left_dock_visible = false,
+    }));
+
+    const auto ui_hidden = PanelRegistry::instance().animationDemandForVisiblePanels({
+        .active_main_tab = "test.main",
+        .ui_visible = false,
+        .right_panel_visible = true,
+        .bottom_dock_visible = true,
+        .left_dock_visible = true,
+    });
+    EXPECT_FALSE(ui_hidden.left_dock);
+    EXPECT_FALSE(ui_hidden.any());
+    EXPECT_FALSE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels({
+        .active_main_tab = "test.main",
+        .ui_visible = false,
+        .right_panel_visible = true,
+        .bottom_dock_visible = true,
+        .left_dock_visible = true,
+    }));
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, ScheduledDelaySkipsHiddenLeftDock) {
+    using namespace lfs::vis::gui;
+
+    registerPanel("test.left.scheduled", PanelSpace::LeftDock, false, {}, 0.25);
+
+    const auto visible_delay =
+        PanelRegistry::instance().nextScheduledAnimationDelayForVisiblePanels({
+            .active_main_tab = "test.main",
+            .ui_visible = true,
+            .right_panel_visible = true,
+            .bottom_dock_visible = true,
+            .left_dock_visible = true,
+        });
+    ASSERT_TRUE(visible_delay.has_value());
+    EXPECT_NEAR(*visible_delay, 0.25, 1e-9);
+
+    const auto hidden_delay =
+        PanelRegistry::instance().nextScheduledAnimationDelayForVisiblePanels({
+            .active_main_tab = "test.main",
+            .ui_visible = true,
+            .right_panel_visible = true,
+            .bottom_dock_visible = true,
+            .left_dock_visible = false,
+        });
+    EXPECT_FALSE(hidden_delay.has_value());
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, DefaultLeftDockVisibleTrue) {
+    using namespace lfs::vis::gui;
+
+    // Callers must set left_dock_visible explicitly; the field defaults to true (#1597).
+    const PanelAnimationVisibility v{
+        .active_main_tab = "test.main",
+        .ui_visible = true,
+        .right_panel_visible = true,
+        .bottom_dock_visible = true,
+    };
+    EXPECT_TRUE(v.left_dock_visible);
+}
 
 TEST_F(PanelRegistryAnimationDemandTest, ViewportOverlayAnimationDoesNotMarkRightPanel) {
     using namespace lfs::vis::gui;

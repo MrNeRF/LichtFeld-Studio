@@ -207,6 +207,7 @@ namespace lfs::vis {
 
             [[nodiscard]] bool isVramHudOverlayVisible() const;
             [[nodiscard]] bool isVramHudPublishDue(std::chrono::steady_clock::time_point now) const;
+            [[nodiscard]] PanelAnimationVisibility panelAnimationVisibility() const;
             [[nodiscard]] bool drainVulkanFramesForInteractiveTransition(
                 lfs::vis::WindowManager& window_manager,
                 const char* transition_name);

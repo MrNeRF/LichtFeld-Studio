@@ -664,7 +664,7 @@ namespace lfs::vis::gui {
         auto& reg = PanelRegistry::instance();
         if (!show_main_panel || ui_hidden || screen.work_size.x <= 0 || screen.work_size.y <= 0 ||
             !reg.has_panels(PanelSpace::LeftDock)) {
-            drawLeftDockResizeIndicator(draw_ctx, 1.0f, false, false);
+            drawLeftDockResizeIndicator(draw_ctx, lfs::python::get_shared_dpi_scale(), false, false);
             left_dock_hovering_edge_ = false;
             left_dock_resizing_ = false;
             left_dock_visible_ = false;
@@ -788,7 +788,7 @@ namespace lfs::vis::gui {
                                                   const PanelInputState& input,
                                                   const ScreenState& screen) {
         LOG_TIMER("gui_render.panel_layout.renderLeftDock.cached");
-        drawLeftDockResizeIndicator(draw_ctx, 1.0f, false, false);
+        drawLeftDockResizeIndicator(draw_ctx, lfs::python::get_shared_dpi_scale(), false, false);
         auto& reg = PanelRegistry::instance();
         if (!show_main_panel || ui_hidden || screen.work_size.x <= 0 || screen.work_size.y <= 0 ||
             !reg.has_panels(PanelSpace::LeftDock)) {

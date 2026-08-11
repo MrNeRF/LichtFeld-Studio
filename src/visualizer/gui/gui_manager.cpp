@@ -4648,18 +4648,11 @@ namespace lfs::vis::gui {
         const bool has_floating_panels = reg.has_panels(PanelSpace::Floating);
         const bool has_status_bar_panels = reg.has_panels(PanelSpace::StatusBar);
         const bool has_viewport_overlay_panels = reg.has_panels(PanelSpace::ViewportOverlay);
-        const bool right_panel_visible = show_main_panel_ && !ui_hidden_;
         PanelAnimationDemand panel_animation_demand;
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_animation_demand", 0.01);
             panel_animation_demand =
-                reg.animationDemandForVisiblePanels({
-                    .active_main_tab = panel_layout_.getActiveTab(),
-                    .ui_visible = !ui_hidden_,
-                    .right_panel_visible = right_panel_visible,
-                    .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
-                    .left_dock_visible = panel_layout_.isLeftDockVisible(),
-                });
+                reg.animationDemandForVisiblePanels(panelAnimationVisibility());
         }
         const bool panel_registry_needs_animation = panel_animation_demand.any();
         const bool right_panel_registry_needs_animation = panel_animation_demand.rightPanel();
@@ -6754,14 +6747,20 @@ namespace lfs::vis::gui {
         if (rml_right_panel_.needsAnimationFrame())
             return true;
         if (!python::is_plugin_preload_running() &&
-            PanelRegistry::instance().needsAnimationFrameForVisiblePanels({
-                .active_main_tab = panel_layout_.getActiveTab(),
-                .ui_visible = !ui_hidden_,
-                .right_panel_visible = show_main_panel_ && !ui_hidden_,
-                .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
-            }))
+            PanelRegistry::instance().needsAnimationFrameForVisiblePanels(
+                panelAnimationVisibility()))
             return true;
         return false;
+    }
+
+    PanelAnimationVisibility GuiManager::panelAnimationVisibility() const {
+        return {
+            .active_main_tab = panel_layout_.getActiveTab(),
+            .ui_visible = !ui_hidden_,
+            .right_panel_visible = show_main_panel_ && !ui_hidden_,
+            .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
+            .left_dock_visible = panel_layout_.isLeftDockVisible(),
+        };
     }
 
     std::optional<double> GuiManager::secondsUntilNextAnimationFrame() const {
@@ -6777,12 +6776,8 @@ namespace lfs::vis::gui {
 
         if (!python::is_plugin_preload_running()) {
             result = min_delay(result,
-                               PanelRegistry::instance().nextScheduledAnimationDelayForVisiblePanels({
-                                   .active_main_tab = panel_layout_.getActiveTab(),
-                                   .ui_visible = !ui_hidden_,
-                                   .right_panel_visible = show_main_panel_ && !ui_hidden_,
-                                   .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
-                               }));
+                               PanelRegistry::instance().nextScheduledAnimationDelayForVisiblePanels(
+                                   panelAnimationVisibility()));
         }
 
         result = min_delay(result, rml_viewport_overlay_.nextScheduledUpdateDelay());
