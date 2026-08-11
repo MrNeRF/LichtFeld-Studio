@@ -49,6 +49,8 @@ def _install_lichtfeld_stub(monkeypatch):
         set_ui_scale=lambda scale: state.__setitem__("ui_scale", scale),
         show_python_console=lambda: state.__setitem__("python_console_shown", state["python_console_shown"] + 1),
         toggle_system_console=lambda: state.__setitem__("python_console_shown", state["python_console_shown"] + 1),
+        toggle_vram_hud=lambda: state.__setitem__("vram_hud_toggled", True),
+        is_perf_hud_visible=lambda: False,
         set_panel_enabled=lambda _panel_id, _enabled: None,
         is_windows_platform=lambda: False,
         are_file_associations_registered=lambda: False,
@@ -199,6 +201,12 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert view_items[1]["type"] == "submenu"
     assert view_items[0]["items"][0]["selected"] is True
     assert view_items[1]["items"][1]["label"] == "100%"
-    assert view_items[4]["label"] == "tr:main_panel.console"
-    view_items[4]["callback"]()
+    # theme, ui_scale, separator, performance_hud, reset_view, console
+    assert view_items[3]["label"] == "tr:menu.view.performance_hud"
+    assert view_items[3]["shortcut"] == "F10"
+    view_items[3]["callback"]()
+    assert state.get("vram_hud_toggled") is True
+    assert view_items[4]["label"] == "tr:image_preview.reset_view"
+    assert view_items[5]["label"] == "tr:main_panel.console"
+    view_items[5]["callback"]()
     assert state["python_console_shown"] == 1

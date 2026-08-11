@@ -19,24 +19,29 @@ namespace {
 
         void draw(const lfs::vis::gui::PanelDrawContext&) override {}
 
-        void preloadDirect(float, float, const lfs::vis::gui::PanelDrawContext&,
-                           float = -1.0f, float = -1.0f,
-                           const lfs::vis::gui::PanelInputState* = nullptr) override {
-            ++preload_count;
+        lfs::vis::gui::PanelRenderCapabilities renderCapabilities() const override {
+            return {.direct = true};
         }
 
-        void drawDirect(float, float, float, float,
-                        const lfs::vis::gui::PanelDrawContext&) override {
-            ++draw_count;
+        lfs::vis::gui::PanelDirectRenderResult renderDirect(
+            const lfs::vis::gui::PanelDirectRenderRequest& request,
+            const lfs::vis::gui::PanelDrawContext&) override {
+            using lfs::vis::gui::PanelDirectRenderMode;
+            switch (request.mode) {
+            case PanelDirectRenderMode::Measure:
+                break;
+            case PanelDirectRenderMode::Preload:
+                ++preload_count;
+                break;
+            case PanelDirectRenderMode::Draw:
+                ++draw_count;
+                break;
+            case PanelDirectRenderMode::Cached:
+                ++cached_draw_count;
+                break;
+            }
+            return {.handled = true, .height = height_};
         }
-
-        bool drawDirectCached(float, float, float, float,
-                              const lfs::vis::gui::PanelDrawContext&) override {
-            ++cached_draw_count;
-            return true;
-        }
-
-        float getDirectDrawHeight() const override { return height_; }
 
         int preload_count = 0;
         int draw_count = 0;

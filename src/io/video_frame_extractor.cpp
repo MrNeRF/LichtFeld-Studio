@@ -906,52 +906,69 @@ namespace lfs::io {
                                                      : "CPU software");
                 }
 
-                codec_ctx = avcodec_alloc_context3(codec);
-                if (!codec_ctx) {
-                    error = "Failed to allocate codec context";
-                    if (hw_device_ctx)
-                        av_buffer_unref(&hw_device_ctx);
-                    avformat_close_input(&fmt_ctx);
-                    return false;
-                }
-
-                if (avcodec_parameters_to_context(codec_ctx, video_stream->codecpar) < 0) {
-                    error = "Failed to copy codec parameters";
-                    avcodec_free_context(&codec_ctx);
-                    if (hw_device_ctx)
-                        av_buffer_unref(&hw_device_ctx);
-                    avformat_close_input(&fmt_ctx);
-                    return false;
-                }
-
-                if (using_hw_decode) {
-                    codec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
-                    if (!codec_ctx->hw_device_ctx) {
-                        error = "Failed to retain CUDA video decoder context";
-                        avcodec_free_context(&codec_ctx);
-                        av_buffer_unref(&hw_device_ctx);
+                while (true) {
+                    codec_ctx = avcodec_alloc_context3(codec);
+                    if (!codec_ctx) {
+                        error = "Failed to allocate codec context";
+                        if (hw_device_ctx)
+                            av_buffer_unref(&hw_device_ctx);
                         avformat_close_input(&fmt_ctx);
                         return false;
                     }
-                    codec_ctx->get_format = get_hw_format;
-                } else {
-                    const unsigned int hardware_threads = std::max(1U, std::thread::hardware_concurrency());
-                    codec_ctx->thread_count = std::min(MAX_SW_DECODE_THREADS,
-                                                       static_cast<int>(hardware_threads));
-                    codec_ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
-                    LOG_INFO("FFmpeg software decoder threads: {}", codec_ctx->thread_count);
-                }
+
+                    if (avcodec_parameters_to_context(codec_ctx, video_stream->codecpar) < 0) {
+                        error = "Failed to copy codec parameters";
+                        avcodec_free_context(&codec_ctx);
+                        if (hw_device_ctx)
+                            av_buffer_unref(&hw_device_ctx);
+                        avformat_close_input(&fmt_ctx);
+                        return false;
+                    }
+
+                    if (using_hw_decode) {
+                        codec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+                        if (!codec_ctx->hw_device_ctx) {
+                            error = "Failed to retain CUDA video decoder context";
+                            avcodec_free_context(&codec_ctx);
+                            av_buffer_unref(&hw_device_ctx);
+                            avformat_close_input(&fmt_ctx);
+                            return false;
+                        }
+                        codec_ctx->get_format = get_hw_format;
+                    } else {
+                        const unsigned int hardware_threads = std::max(1U, std::thread::hardware_concurrency());
+                        codec_ctx->thread_count = std::min(MAX_SW_DECODE_THREADS,
+                                                           static_cast<int>(hardware_threads));
+                        codec_ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+                        LOG_INFO("FFmpeg software decoder threads: {}", codec_ctx->thread_count);
+                    }
 #ifdef AV_CODEC_EXPORT_DATA_DOVI_RPU
-                codec_ctx->export_side_data |= AV_CODEC_EXPORT_DATA_DOVI_RPU;
+                    codec_ctx->export_side_data |= AV_CODEC_EXPORT_DATA_DOVI_RPU;
 #endif
 
-                if (avcodec_open2(codec_ctx, codec, nullptr) < 0) {
-                    error = "Failed to open codec";
+                    if (avcodec_open2(codec_ctx, codec, nullptr) >= 0)
+                        break;
+
+                    if (!using_hw_decode) {
+                        error = "Failed to open codec";
+                        avcodec_free_context(&codec_ctx);
+                        if (hw_device_ctx)
+                            av_buffer_unref(&hw_device_ctx);
+                        avformat_close_input(&fmt_ctx);
+                        return false;
+                    }
+
+                    LOG_WARN("Failed to open NVDEC hardware decoder {}, falling back to CPU", hw_decoder_name);
                     avcodec_free_context(&codec_ctx);
-                    if (hw_device_ctx)
-                        av_buffer_unref(&hw_device_ctx);
-                    avformat_close_input(&fmt_ctx);
-                    return false;
+                    av_buffer_unref(&hw_device_ctx);
+                    using_hw_decode = false;
+                    codec = avcodec_find_decoder(codec_id);
+                    if (!codec) {
+                        error = "Unsupported codec";
+                        avformat_close_input(&fmt_ctx);
+                        return false;
+                    }
+                    LOG_INFO("Using CPU software decoder");
                 }
 
                 const int src_width = codec_ctx->width;

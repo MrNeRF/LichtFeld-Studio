@@ -165,18 +165,40 @@ namespace lfs::vis::gui {
         if (demand.scene_header_live) {
             {
                 LOG_TIMER_THRESHOLD("gui_render.panel_layout.scene_header.preload", 0.25);
-                reg.preload_panels_direct(PanelSpace::SceneHeader, content_w, scene_h, draw_ctx,
-                                          -1.0f, -1.0f, &masked_panel_input);
+                reg.render_panels({
+                                      .target = PanelRenderTarget::for_space(PanelSpace::SceneHeader),
+                                      .mode = PanelRenderMode::DirectPreload,
+                                      .width = content_w,
+                                      .height = scene_h,
+                                      .input = &masked_panel_input,
+                                  },
+                                  draw_ctx);
             }
             {
                 LOG_TIMER_THRESHOLD("gui_render.panel_layout.scene_header.draw", 0.25);
-                reg.draw_panels_direct(PanelSpace::SceneHeader, content_x, content_top,
-                                       content_w, scene_h, draw_ctx, &masked_panel_input);
+                reg.render_panels({
+                                      .target = PanelRenderTarget::for_space(PanelSpace::SceneHeader),
+                                      .mode = PanelRenderMode::Direct,
+                                      .x = content_x,
+                                      .y = content_top,
+                                      .width = content_w,
+                                      .height = scene_h,
+                                      .input = &masked_panel_input,
+                                  },
+                                  draw_ctx);
             }
         } else {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.scene_header.draw_cached", 0.25);
-            reg.draw_panels_direct_cached(PanelSpace::SceneHeader, content_x, content_top,
-                                          content_w, scene_h, draw_ctx, &masked_panel_input);
+            reg.render_panels({
+                                  .target = PanelRenderTarget::for_space(PanelSpace::SceneHeader),
+                                  .mode = PanelRenderMode::DirectCached,
+                                  .x = content_x,
+                                  .y = content_top,
+                                  .width = content_w,
+                                  .height = scene_h,
+                                  .input = &masked_panel_input,
+                              },
+                              draw_ctx);
         }
 
         std::vector<PanelSummary> main_tabs;
@@ -205,15 +227,29 @@ namespace lfs::vis::gui {
             float preloaded_child_h = 0.0f;
             {
                 LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_tab.preload", 0.25);
-                preloaded_main_h =
-                    reg.preload_single_panel_direct(active_tab_id_, content_w, kPreloadMaxHeight, draw_ctx,
-                                                    clip_y_min, clip_y_max, &masked_panel_input);
+                preloaded_main_h = reg.render_panels({
+                                                         .target = PanelRenderTarget::for_panel(active_tab_id_),
+                                                         .mode = PanelRenderMode::DirectPreload,
+                                                         .width = content_w,
+                                                         .height = kPreloadMaxHeight,
+                                                         .clip_y_min = clip_y_min,
+                                                         .clip_y_max = clip_y_max,
+                                                         .input = &masked_panel_input,
+                                                     },
+                                                     draw_ctx);
             }
             {
                 LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_children.preload", 0.25);
-                preloaded_child_h =
-                    reg.preload_child_panels_direct(active_tab_id_, content_w, kPreloadMaxHeight, draw_ctx,
-                                                    clip_y_min, clip_y_max, &masked_panel_input);
+                preloaded_child_h = reg.render_panels({
+                                                          .target = PanelRenderTarget::for_children(active_tab_id_),
+                                                          .mode = PanelRenderMode::DirectPreload,
+                                                          .width = content_w,
+                                                          .height = kPreloadMaxHeight,
+                                                          .clip_y_min = clip_y_min,
+                                                          .clip_y_max = clip_y_max,
+                                                          .input = &masked_panel_input,
+                                                      },
+                                                      draw_ctx);
             }
             const float preloaded_total_h = preloaded_main_h + preloaded_child_h;
             scroll_limit = std::max(0.0f, preloaded_total_h - tab_content_h);
@@ -240,30 +276,64 @@ namespace lfs::vis::gui {
         if (demand.active_tab_live) {
             {
                 LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_tab.draw", 0.25);
-                main_h = reg.draw_single_panel_direct(active_tab_id_,
-                                                      content_x, y_cursor, content_w, kPreloadMaxHeight, draw_ctx,
-                                                      clip_y_min, clip_y_max, &masked_panel_input);
+                main_h = reg.render_panels({
+                                               .target = PanelRenderTarget::for_panel(active_tab_id_),
+                                               .mode = PanelRenderMode::Direct,
+                                               .x = content_x,
+                                               .y = y_cursor,
+                                               .width = content_w,
+                                               .height = kPreloadMaxHeight,
+                                               .clip_y_min = clip_y_min,
+                                               .clip_y_max = clip_y_max,
+                                               .input = &masked_panel_input,
+                                           },
+                                           draw_ctx);
             }
             {
                 LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_children.draw", 0.25);
-                child_h = reg.draw_child_panels_direct(active_tab_id_,
-                                                       content_x, y_cursor + main_h, content_w, kPreloadMaxHeight, draw_ctx,
-                                                       clip_y_min, clip_y_max, &masked_panel_input);
+                child_h = reg.render_panels({
+                                                .target = PanelRenderTarget::for_children(active_tab_id_),
+                                                .mode = PanelRenderMode::Direct,
+                                                .x = content_x,
+                                                .y = y_cursor + main_h,
+                                                .width = content_w,
+                                                .height = kPreloadMaxHeight,
+                                                .clip_y_min = clip_y_min,
+                                                .clip_y_max = clip_y_max,
+                                                .input = &masked_panel_input,
+                                            },
+                                            draw_ctx);
             }
         } else {
             {
                 LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_tab.draw_cached", 0.25);
-                main_h = reg.draw_single_panel_direct_cached(active_tab_id_,
-                                                             content_x, y_cursor, content_w,
-                                                             kPreloadMaxHeight, draw_ctx,
-                                                             clip_y_min, clip_y_max, &masked_panel_input);
+                main_h = reg.render_panels({
+                                               .target = PanelRenderTarget::for_panel(active_tab_id_),
+                                               .mode = PanelRenderMode::DirectCached,
+                                               .x = content_x,
+                                               .y = y_cursor,
+                                               .width = content_w,
+                                               .height = kPreloadMaxHeight,
+                                               .clip_y_min = clip_y_min,
+                                               .clip_y_max = clip_y_max,
+                                               .input = &masked_panel_input,
+                                           },
+                                           draw_ctx);
             }
             {
                 LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_children.draw_cached", 0.25);
-                child_h = reg.draw_child_panels_direct_cached(active_tab_id_,
-                                                              content_x, y_cursor + main_h,
-                                                              content_w, kPreloadMaxHeight, draw_ctx,
-                                                              clip_y_min, clip_y_max, &masked_panel_input);
+                child_h = reg.render_panels({
+                                                .target = PanelRenderTarget::for_children(active_tab_id_),
+                                                .mode = PanelRenderMode::DirectCached,
+                                                .x = content_x,
+                                                .y = y_cursor + main_h,
+                                                .width = content_w,
+                                                .height = kPreloadMaxHeight,
+                                                .clip_y_min = clip_y_min,
+                                                .clip_y_max = clip_y_max,
+                                                .input = &masked_panel_input,
+                                            },
+                                            draw_ctx);
             }
         }
 
@@ -335,8 +405,16 @@ namespace lfs::vis::gui {
         auto& reg = PanelRegistry::instance();
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.scene_header.draw_cached", 0.25);
-            reg.draw_panels_direct_cached(PanelSpace::SceneHeader, content_x, content_top,
-                                          content_w, scene_h, draw_ctx, &input);
+            reg.render_panels({
+                                  .target = PanelRenderTarget::for_space(PanelSpace::SceneHeader),
+                                  .mode = PanelRenderMode::DirectCached,
+                                  .x = content_x,
+                                  .y = content_top,
+                                  .width = content_w,
+                                  .height = scene_h,
+                                  .input = &input,
+                              },
+                              draw_ctx);
         }
 
         std::vector<PanelSummary> main_tabs;
@@ -366,17 +444,33 @@ namespace lfs::vis::gui {
         float child_h = 0.0f;
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_tab.draw_cached", 0.25);
-            main_h = reg.draw_single_panel_direct_cached(active_tab_id_,
-                                                         content_x, y_cursor, content_w,
-                                                         kPreloadMaxHeight, draw_ctx,
-                                                         clip_y_min, clip_y_max, &input);
+            main_h = reg.render_panels({
+                                           .target = PanelRenderTarget::for_panel(active_tab_id_),
+                                           .mode = PanelRenderMode::DirectCached,
+                                           .x = content_x,
+                                           .y = y_cursor,
+                                           .width = content_w,
+                                           .height = kPreloadMaxHeight,
+                                           .clip_y_min = clip_y_min,
+                                           .clip_y_max = clip_y_max,
+                                           .input = &input,
+                                       },
+                                       draw_ctx);
         }
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_children.draw_cached", 0.25);
-            child_h = reg.draw_child_panels_direct_cached(active_tab_id_,
-                                                          content_x, y_cursor + main_h,
-                                                          content_w, kPreloadMaxHeight, draw_ctx,
-                                                          clip_y_min, clip_y_max, &input);
+            child_h = reg.render_panels({
+                                            .target = PanelRenderTarget::for_children(active_tab_id_),
+                                            .mode = PanelRenderMode::DirectCached,
+                                            .x = content_x,
+                                            .y = y_cursor + main_h,
+                                            .width = content_w,
+                                            .height = kPreloadMaxHeight,
+                                            .clip_y_min = clip_y_min,
+                                            .clip_y_max = clip_y_max,
+                                            .input = &input,
+                                        },
+                                        draw_ctx);
         }
 
         tab_content_total_h_ = main_h + child_h;
@@ -474,9 +568,16 @@ namespace lfs::vis::gui {
         float preloaded_h = 0.0f;
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.bottom_dock.preload", 0.25);
-            preloaded_h =
-                reg.preload_panels_direct(PanelSpace::BottomDock, panel_w, panel_h, draw_ctx,
-                                          panel_y, panel_y + panel_h, &dock_input);
+            preloaded_h = reg.render_panels({
+                                                .target = PanelRenderTarget::for_space(PanelSpace::BottomDock),
+                                                .mode = PanelRenderMode::DirectPreload,
+                                                .width = panel_w,
+                                                .height = panel_h,
+                                                .clip_y_min = panel_y,
+                                                .clip_y_max = panel_y + panel_h,
+                                                .input = &dock_input,
+                                            },
+                                            draw_ctx);
         }
         bottom_dock_visible_ = preloaded_h > 0.0f;
         bottom_dock_top_y_ = bottom_dock_visible_ ? panel_y : -1.0f;
@@ -485,13 +586,16 @@ namespace lfs::vis::gui {
 
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.bottom_dock.draw", 0.25);
-            reg.draw_panels_direct(PanelSpace::BottomDock,
-                                   screen.work_pos.x,
-                                   panel_y,
-                                   panel_w,
-                                   panel_h,
-                                   draw_ctx,
-                                   &dock_input);
+            reg.render_panels({
+                                  .target = PanelRenderTarget::for_space(PanelSpace::BottomDock),
+                                  .mode = PanelRenderMode::Direct,
+                                  .x = screen.work_pos.x,
+                                  .y = panel_y,
+                                  .width = panel_w,
+                                  .height = panel_h,
+                                  .input = &dock_input,
+                              },
+                              draw_ctx);
         }
     }
 
@@ -536,13 +640,16 @@ namespace lfs::vis::gui {
 
         const float panel_h = bottom_dock_height_;
         const float panel_y = screen.work_pos.y + screen.work_size.y - panel_h;
-        const float drawn_h = reg.draw_panels_direct_cached(PanelSpace::BottomDock,
-                                                            screen.work_pos.x,
-                                                            panel_y,
-                                                            panel_w,
-                                                            panel_h,
-                                                            draw_ctx,
-                                                            &input);
+        const float drawn_h = reg.render_panels({
+                                                    .target = PanelRenderTarget::for_space(PanelSpace::BottomDock),
+                                                    .mode = PanelRenderMode::DirectCached,
+                                                    .x = screen.work_pos.x,
+                                                    .y = panel_y,
+                                                    .width = panel_w,
+                                                    .height = panel_h,
+                                                    .input = &input,
+                                                },
+                                                draw_ctx);
         bottom_dock_visible_ = drawn_h > 0.0f;
         bottom_dock_top_y_ = bottom_dock_visible_ ? panel_y : -1.0f;
         prev_mouse_y_ = input.mouse_y;
@@ -638,9 +745,16 @@ namespace lfs::vis::gui {
         float preloaded_h = 0.0f;
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.left_dock.preload", 0.25);
-            preloaded_h =
-                reg.preload_panels_direct(PanelSpace::LeftDock, panel_w, panel_h, draw_ctx,
-                                          screen.work_pos.y, screen.work_pos.y + panel_h, &dock_input);
+            preloaded_h = reg.render_panels({
+                                                .target = PanelRenderTarget::for_space(PanelSpace::LeftDock),
+                                                .mode = PanelRenderMode::DirectPreload,
+                                                .width = panel_w,
+                                                .height = panel_h,
+                                                .clip_y_min = screen.work_pos.y,
+                                                .clip_y_max = screen.work_pos.y + panel_h,
+                                                .input = &dock_input,
+                                            },
+                                            draw_ctx);
         }
         left_dock_visible_ = preloaded_h > 0.0f;
         if (!left_dock_visible_) {
@@ -650,13 +764,16 @@ namespace lfs::vis::gui {
 
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.left_dock.draw", 0.25);
-            reg.draw_panels_direct(PanelSpace::LeftDock,
-                                   panel_x,
-                                   screen.work_pos.y,
-                                   panel_w,
-                                   panel_h,
-                                   draw_ctx,
-                                   &dock_input);
+            reg.render_panels({
+                                  .target = PanelRenderTarget::for_space(PanelSpace::LeftDock),
+                                  .mode = PanelRenderMode::Direct,
+                                  .x = panel_x,
+                                  .y = screen.work_pos.y,
+                                  .width = panel_w,
+                                  .height = panel_h,
+                                  .input = &dock_input,
+                              },
+                              draw_ctx);
         }
 
         drawLeftDockResizeIndicator(
@@ -704,13 +821,16 @@ namespace lfs::vis::gui {
 
         const float panel_w = left_dock_width_;
         const float panel_x = screen.work_pos.x + icon_bar_w;
-        const float drawn_h = reg.draw_panels_direct_cached(PanelSpace::LeftDock,
-                                                            panel_x,
-                                                            screen.work_pos.y,
-                                                            panel_w,
-                                                            panel_h,
-                                                            draw_ctx,
-                                                            &input);
+        const float drawn_h = reg.render_panels({
+                                                    .target = PanelRenderTarget::for_space(PanelSpace::LeftDock),
+                                                    .mode = PanelRenderMode::DirectCached,
+                                                    .x = panel_x,
+                                                    .y = screen.work_pos.y,
+                                                    .width = panel_w,
+                                                    .height = panel_h,
+                                                    .input = &input,
+                                                },
+                                                draw_ctx);
         left_dock_visible_ = drawn_h > 0.0f;
         prev_mouse_x_ = input.mouse_x;
     }

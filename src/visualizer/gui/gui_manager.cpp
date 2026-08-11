@@ -4769,8 +4769,12 @@ namespace lfs::vis::gui {
             draw_ctx.is_training = cc->snapshot().is_running;
 
         if (has_side_panel_plugins) {
-            LOG_TIMER_THRESHOLD("gui_render.panel_setup.legacy_side_panel_preload", 0.25);
-            reg.preload_panels(PanelSpace::SidePanel, draw_ctx);
+            LOG_TIMER_THRESHOLD("gui_render.panel_setup.side_panel_preload", 0.25);
+            reg.render_panels({
+                                  .target = PanelRenderTarget::for_space(PanelSpace::SidePanel),
+                                  .mode = PanelRenderMode::StandardPreload,
+                              },
+                              draw_ctx);
         }
 
         s_frame_input = &sdl_input;
@@ -5436,8 +5440,11 @@ namespace lfs::vis::gui {
             }
 
             if (has_viewport_overlay_panels) {
-                LOG_TIMER_THRESHOLD("gui_render.draw_panels.ViewportOverlay", 0.25);
-                reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
+                LOG_TIMER_THRESHOLD("gui_render.render_panels.ViewportOverlay", 0.25);
+                reg.render_panels({
+                                      .target = PanelRenderTarget::for_space(PanelSpace::ViewportOverlay),
+                                  },
+                                  draw_ctx);
             }
 
             if (has_overlay_popups) {
@@ -5465,8 +5472,12 @@ namespace lfs::vis::gui {
         PanelInputState floating_input = panel_input;
         panel_setup_timer.reset();
         if (has_floating_panels) {
-            LOG_TIMER_THRESHOLD("gui_render.draw_panels.Floating", 0.25);
-            reg.draw_panels(PanelSpace::Floating, draw_ctx, &floating_input);
+            LOG_TIMER_THRESHOLD("gui_render.render_panels.Floating", 0.25);
+            reg.render_panels({
+                                  .target = PanelRenderTarget::for_space(PanelSpace::Floating),
+                                  .input = &floating_input,
+                              },
+                              draw_ctx);
         }
 
         applyFrameInputCapture(&rml_right_panel_);
@@ -5514,7 +5525,11 @@ namespace lfs::vis::gui {
                     .width = status_bar_w,
                     .height = status_bar_height,
                 };
-                reg.draw_panels(PanelSpace::StatusBar, status_draw_ctx, &panel_input);
+                reg.render_panels({
+                                      .target = PanelRenderTarget::for_space(PanelSpace::StatusBar),
+                                      .input = &panel_input,
+                                  },
+                                  status_draw_ctx);
             }
         }
 
@@ -6684,10 +6699,26 @@ namespace lfs::vis::gui {
         const float clip_y_min = tab_content_y;
         const float clip_y_max = tab_content_y + tab_content_h;
 
-        reg.preload_single_panel_direct(active_tab, content_w, kPreloadMaxHeight, draw_ctx,
-                                        clip_y_min, clip_y_max, &input);
-        reg.preload_child_panels_direct(active_tab, content_w, kPreloadMaxHeight, draw_ctx,
-                                        clip_y_min, clip_y_max, &input);
+        reg.render_panels({
+                              .target = PanelRenderTarget::for_panel(active_tab),
+                              .mode = PanelRenderMode::DirectPreload,
+                              .width = content_w,
+                              .height = kPreloadMaxHeight,
+                              .clip_y_min = clip_y_min,
+                              .clip_y_max = clip_y_max,
+                              .input = &input,
+                          },
+                          draw_ctx);
+        reg.render_panels({
+                              .target = PanelRenderTarget::for_children(active_tab),
+                              .mode = PanelRenderMode::DirectPreload,
+                              .width = content_w,
+                              .height = kPreloadMaxHeight,
+                              .clip_y_min = clip_y_min,
+                              .clip_y_max = clip_y_max,
+                              .input = &input,
+                          },
+                          draw_ctx);
     }
 
     bool GuiManager::needsAnimationFrame() const {

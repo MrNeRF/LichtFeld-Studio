@@ -453,6 +453,48 @@ namespace lfs::vis::gui {
         syncPanel(ctx);
     }
 
+    PanelDirectRenderResult NativeScenePanel::renderDirect(
+        const PanelDirectRenderRequest& request,
+        const PanelDrawContext& ctx) {
+        host_.setFloating(request.space == PanelSpace::Floating);
+        if (request.mode == PanelDirectRenderMode::Measure)
+            return {.handled = true, .height = host_.getContentHeight()};
+
+        host_.setInputClipY(request.clip_y_min, request.clip_y_max);
+        host_.setInput(request.input);
+        host_.setForcedHeight(request.forced_height);
+
+        bool handled = true;
+        try {
+            switch (request.mode) {
+            case PanelDirectRenderMode::Measure:
+                break;
+            case PanelDirectRenderMode::Draw:
+                drawDirect(request.x, request.y, request.width, request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Cached:
+                handled = drawDirectCached(request.x, request.y, request.width,
+                                           request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Preload:
+                preloadDirect(request.width, request.height, ctx,
+                              request.clip_y_min, request.clip_y_max, request.input);
+                break;
+            }
+        } catch (...) {
+            host_.setForcedHeight(0.0f);
+            host_.setInput(nullptr);
+            host_.setInputClipY(-1.0f, -1.0f);
+            throw;
+        }
+
+        const float height = host_.getContentHeight();
+        host_.setForcedHeight(0.0f);
+        host_.setInput(nullptr);
+        host_.setInputClipY(-1.0f, -1.0f);
+        return {.handled = handled, .height = height};
+    }
+
     void NativeScenePanel::preloadDirect(const float w, const float h,
                                          const PanelDrawContext& ctx,
                                          const float clip_y_min,

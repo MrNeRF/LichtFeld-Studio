@@ -79,6 +79,7 @@ protected:
     void TearDown() override {
         splat_.reset();
         camera_.reset();
+        release_fastgs_sort_workspace_buffers();
         cleanup_arena();
     }
 

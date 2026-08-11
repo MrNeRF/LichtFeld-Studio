@@ -415,7 +415,11 @@ class AssetIndex:
                 _log.info(
                     "Migrated legacy library.json schema (projects -> folders)"
                 )
-                self.save()
+                if not self.save():
+                    _log.error(
+                        "Failed to persist migrated library.json schema at %s",
+                        self._library_path,
+                    )
             return True
 
         except json.JSONDecodeError as exc:

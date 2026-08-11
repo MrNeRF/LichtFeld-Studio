@@ -16,6 +16,7 @@ def _install_recording_lf(monkeypatch):
     registered = []
     enabled = []
     step_side_effects = []
+    log_errors = []
 
     panel_space = SimpleNamespace(
         SIDE_PANEL="SIDE_PANEL",
@@ -246,11 +247,23 @@ def _install_recording_lf(monkeypatch):
     lf_stub.get_current_view = lambda: SimpleNamespace(width=1920, height=1080)
     lf_stub.get_selected_node_name = lambda: ""
     lf_stub.get_vulkan_capabilities = lambda: {}
+    def log_error(*args, **kwargs):
+        # Support both printf-style and preformatted single-string calls.
+        if len(args) == 1:
+            log_errors.append(str(args[0]))
+        elif args:
+            try:
+                log_errors.append(args[0] % args[1:])
+            except Exception:
+                log_errors.append(" ".join(str(a) for a in args))
+        else:
+            log_errors.append("")
+
     lf_stub.log = SimpleNamespace(
         debug=lambda *args, **kwargs: None,
         info=lambda *args, **kwargs: None,
         warn=lambda *args, **kwargs: None,
-        error=lambda *args, **kwargs: None,
+        error=log_error,
     )
     lf_stub.has_scene = lambda: False
 
@@ -266,6 +279,7 @@ def _install_recording_lf(monkeypatch):
         enabled=enabled,
         side_effects=step_side_effects,
         lf=lf_stub,
+        log_errors=log_errors,
     )
     return state
 
@@ -317,6 +331,13 @@ def test_isolation_mid_step_failure_still_registers_later_panels(panels_module, 
 
     # Earlier step still registered.
     assert "RenderingPanel" in state.registered
+
+    # Failures are routed through lf.log.error (not bare print).
+    assert any(
+        "input_settings_panel" in msg and "failed" in msg for msg in state.log_errors
+    ), state.log_errors
+    assert any("step(s) failed" in msg for msg in state.log_errors), state.log_errors
+    assert any("Traceback" in msg for msg in state.log_errors), state.log_errors
 
 
 def test_all_good_registers_in_order_with_rendering_first(panels_module):
@@ -439,3 +460,10 @@ def test_step_runner_isolation_with_synthetic_steps(monkeypatch):
     assert "after_broken" in state.registered
     assert "last" in state.registered
     assert "broken" not in state.registered
+
+    assert any(
+        "step 'broken' failed" in msg and "Traceback" in msg for msg in state.log_errors
+    ), state.log_errors
+    assert any(
+        "1 step(s) failed" in msg and "broken" in msg for msg in state.log_errors
+    ), state.log_errors

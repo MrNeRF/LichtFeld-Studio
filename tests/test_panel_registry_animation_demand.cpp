@@ -4,11 +4,14 @@
 
 #include <gtest/gtest.h>
 
+#include <visualizer/gui/panel_layout.hpp>
 #include <visualizer/gui/panel_registry.hpp>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -30,10 +33,49 @@ namespace {
     public:
         void draw(const lfs::vis::gui::PanelDrawContext&) override {}
 
-        bool supportsDirectDraw() const override { return true; }
+        lfs::vis::gui::PanelRenderCapabilities renderCapabilities() const override {
+            return {.direct = true};
+        }
 
-        void drawDirect(float, float, float, float,
-                        const lfs::vis::gui::PanelDrawContext&) override {}
+        lfs::vis::gui::PanelDirectRenderResult renderDirect(
+            const lfs::vis::gui::PanelDirectRenderRequest& request,
+            const lfs::vis::gui::PanelDrawContext&) override {
+            using lfs::vis::gui::PanelDirectRenderMode;
+            requests.emplace_back(request.mode, request.space);
+            switch (request.mode) {
+            case PanelDirectRenderMode::Measure:
+                return {.handled = true, .height = height};
+            case PanelDirectRenderMode::Draw:
+                ++draw_count;
+                return {.handled = true, .height = height};
+            case PanelDirectRenderMode::Preload:
+                ++preload_count;
+                return {.handled = true, .height = height};
+            case PanelDirectRenderMode::Cached:
+                ++cached_count;
+                return {.handled = cache_hit, .height = height};
+            }
+            return {};
+        }
+
+        bool poll(const lfs::vis::gui::PanelDrawContext&) override {
+            ++poll_count;
+            if (poll_action)
+                poll_action();
+            return poll_result;
+        }
+
+        int draw_count = 0;
+        int preload_count = 0;
+        int cached_count = 0;
+        int poll_count = 0;
+        float height = 24.0f;
+        bool cache_hit = true;
+        bool poll_result = true;
+        std::function<void()> poll_action;
+        std::vector<std::pair<lfs::vis::gui::PanelDirectRenderMode,
+                              lfs::vis::gui::PanelSpace>>
+            requests;
     };
 
     class PanelRegistryAnimationDemandTest : public ::testing::Test {
@@ -166,4 +208,214 @@ TEST_F(PanelRegistryAnimationDemandTest, BringPanelToFrontIgnoresDisabledFloatin
     auto panels = PanelRegistry::instance().get_panels_for_space(PanelSpace::Floating);
     ASSERT_EQ(panels.size(), 1u);
     EXPECT_EQ(panels.front().id, "test.second");
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, UnifiedRenderRequestCoversSpacePanelAndChildrenTargets) {
+    using namespace lfs::vis::gui;
+
+    auto parent = std::make_shared<RecordingPanel>();
+    PanelInfo parent_info;
+    parent_info.id = "test.parent";
+    parent_info.label = parent_info.id;
+    parent_info.space = PanelSpace::MainPanelTab;
+    parent_info.is_native = false;
+    parent_info.panel = parent;
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(parent_info)));
+
+    auto child = std::make_shared<RecordingPanel>();
+    PanelInfo child_info;
+    child_info.id = "test.child";
+    child_info.label = child_info.id;
+    child_info.parent_id = "test.parent";
+    child_info.space = PanelSpace::MainPanelTab;
+    child_info.is_native = false;
+    child_info.panel = child;
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(child_info)));
+
+    PanelDrawContext ctx;
+    const float space_height = PanelRegistry::instance().render_panels({
+                                                                           .target = PanelRenderTarget::for_space(PanelSpace::MainPanelTab),
+                                                                           .mode = PanelRenderMode::Direct,
+                                                                           .width = 320.0f,
+                                                                           .height = 200.0f,
+                                                                       },
+                                                                       ctx);
+    EXPECT_FLOAT_EQ(space_height, parent->height);
+    EXPECT_EQ(parent->draw_count, 1);
+    EXPECT_EQ(child->draw_count, 0);
+
+    const float panel_height = PanelRegistry::instance().render_panels({
+                                                                           .target = PanelRenderTarget::for_panel("test.parent"),
+                                                                           .mode = PanelRenderMode::DirectPreload,
+                                                                           .width = 320.0f,
+                                                                           .height = 200.0f,
+                                                                       },
+                                                                       ctx);
+    EXPECT_FLOAT_EQ(panel_height, parent->height);
+    EXPECT_EQ(parent->preload_count, 1);
+
+    const float children_height = PanelRegistry::instance().render_panels({
+                                                                              .target = PanelRenderTarget::for_children("test.parent"),
+                                                                              .mode = PanelRenderMode::DirectCached,
+                                                                              .width = 320.0f,
+                                                                              .height = 200.0f,
+                                                                          },
+                                                                          ctx);
+    EXPECT_FLOAT_EQ(children_height, child->height);
+    EXPECT_EQ(child->cached_count, 1);
+    EXPECT_EQ(child->draw_count, 0);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, CachedMissPollsAndFallsBackToLiveDraw) {
+    using namespace lfs::vis::gui;
+
+    auto panel = std::make_shared<RecordingPanel>();
+    panel->cache_hit = false;
+    PanelInfo info;
+    info.id = "test.cached_miss";
+    info.label = info.id;
+    info.space = PanelSpace::MainPanelTab;
+    info.is_native = false;
+    info.panel = panel;
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));
+
+    PanelDrawContext ctx;
+    const float height = PanelRegistry::instance().render_panels({
+                                                                     .target = PanelRenderTarget::for_panel("test.cached_miss"),
+                                                                     .mode = PanelRenderMode::DirectCached,
+                                                                     .width = 320.0f,
+                                                                     .height = 200.0f,
+                                                                 },
+                                                                 ctx);
+
+    EXPECT_FLOAT_EQ(height, panel->height);
+    EXPECT_EQ(panel->cached_count, 1);
+    EXPECT_EQ(panel->poll_count, 1);
+    EXPECT_EQ(panel->draw_count, 1);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, FloatingInteractionExistsOnlyWhilePanelIsFloating) {
+    using namespace lfs::vis::gui;
+
+    registerRecordingPanel("test.floating");
+    const auto floating_before = PanelRegistry::instance().get_panel("test.floating");
+    ASSERT_TRUE(floating_before.has_value());
+    EXPECT_GT(floating_before->float_stack_order, 0u);
+
+    ASSERT_TRUE(PanelRegistry::instance().set_panel_space(
+        "test.floating", PanelSpace::MainPanelTab));
+    const auto docked = PanelRegistry::instance().get_panel("test.floating");
+    ASSERT_TRUE(docked.has_value());
+    EXPECT_EQ(docked->float_stack_order, 0u);
+
+    ASSERT_TRUE(PanelRegistry::instance().set_panel_space(
+        "test.floating", PanelSpace::Floating));
+    const auto floating_after = PanelRegistry::instance().get_panel("test.floating");
+    ASSERT_TRUE(floating_after.has_value());
+    EXPECT_GT(floating_after->float_stack_order,
+              floating_before->float_stack_order);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, StandardRenderingUsesSnapshotSpace) {
+    using namespace lfs::vis::gui;
+
+    auto panel = std::make_shared<RecordingPanel>();
+    PanelInfo info;
+    info.id = "test.space_snapshot";
+    info.label = info.id;
+    info.space = PanelSpace::MainPanelTab;
+    info.is_native = false;
+    info.panel = panel;
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));
+
+    PanelDrawContext ctx;
+    PanelRegistry::instance().render_panels({
+                                                .target = PanelRenderTarget::for_panel("test.space_snapshot"),
+                                                .mode = PanelRenderMode::Standard,
+                                            },
+                                            ctx);
+    ASSERT_FALSE(panel->requests.empty());
+    EXPECT_EQ(panel->requests.back().first, PanelDirectRenderMode::Draw);
+    EXPECT_EQ(panel->requests.back().second, PanelSpace::MainPanelTab);
+
+    ASSERT_TRUE(PanelRegistry::instance().set_panel_space(
+        "test.space_snapshot", PanelSpace::Floating));
+    ASSERT_TRUE(PanelRegistry::instance().set_panel_space(
+        "test.space_snapshot", PanelSpace::SidePanel));
+    PanelRegistry::instance().render_panels({
+                                                .target = PanelRenderTarget::for_panel("test.space_snapshot"),
+                                                .mode = PanelRenderMode::Standard,
+                                            },
+                                            ctx);
+    EXPECT_EQ(panel->requests.back().second, PanelSpace::SidePanel);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, MeasureReceivesPanelSpace) {
+    using namespace lfs::vis::gui;
+
+    auto panel = std::make_shared<RecordingPanel>();
+    PanelInfo info;
+    info.id = "test.measure_space";
+    info.label = info.id;
+    info.space = PanelSpace::Floating;
+    info.is_native = false;
+    info.panel = panel;
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));
+
+    ViewportLayout viewport;
+    viewport.size = {1280.0f, 720.0f};
+    PanelDrawContext ctx;
+    ctx.viewport = &viewport;
+    ctx.scene_generation = 1;
+    PanelRegistry::instance().render_panels({
+                                                .target = PanelRenderTarget::for_space(PanelSpace::Floating),
+                                                .mode = PanelRenderMode::Standard,
+                                            },
+                                            ctx);
+
+    ASSERT_FALSE(panel->requests.empty());
+    EXPECT_EQ(panel->requests.front().first, PanelDirectRenderMode::Measure);
+    EXPECT_EQ(panel->requests.front().second, PanelSpace::Floating);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, DockDuringFloatingPollSkipsInteractionState) {
+    using namespace lfs::vis::gui;
+
+    auto panel = std::make_shared<RecordingPanel>();
+    PanelInfo info;
+    info.id = "test.dock_during_poll";
+    info.label = info.id;
+    info.space = PanelSpace::Floating;
+    info.is_native = false;
+    info.panel = panel;
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));
+
+    ViewportLayout viewport;
+    viewport.size = {1280.0f, 720.0f};
+    PanelDrawContext ctx;
+    ctx.viewport = &viewport;
+    PanelRegistry::instance().render_panels({
+                                                .target = PanelRenderTarget::for_space(PanelSpace::Floating),
+                                                .mode = PanelRenderMode::Standard,
+                                            },
+                                            ctx);
+    EXPECT_TRUE(PanelRegistry::instance().isPositionOverFloatingPanel(640.0, 360.0));
+
+    panel->poll_action = [&] {
+        panel->poll_action = {};
+        EXPECT_TRUE(PanelRegistry::instance().set_panel_space(
+            "test.dock_during_poll", PanelSpace::MainPanelTab));
+    };
+    ctx.scene_generation = 2;
+    PanelRegistry::instance().render_panels({
+                                                .target = PanelRenderTarget::for_space(PanelSpace::Floating),
+                                                .mode = PanelRenderMode::Standard,
+                                            },
+                                            ctx);
+
+    EXPECT_FALSE(PanelRegistry::instance().isPositionOverFloatingPanel(640.0, 360.0));
+    const auto panel_details = PanelRegistry::instance().get_panel("test.dock_during_poll");
+    ASSERT_TRUE(panel_details.has_value());
+    EXPECT_EQ(panel_details->space, PanelSpace::MainPanelTab);
+    EXPECT_EQ(panel_details->float_stack_order, 0u);
 }

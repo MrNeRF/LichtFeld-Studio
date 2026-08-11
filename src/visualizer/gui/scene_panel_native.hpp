@@ -31,21 +31,11 @@ namespace lfs::vis::gui {
 
         void draw(const PanelDrawContext& ctx) override;
         void preload(const PanelDrawContext& ctx) override;
-        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
-                           float clip_y_min, float clip_y_max,
-                           const PanelInputState* input) override;
-        bool supportsDirectDraw() const override { return true; }
-        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) override;
-        bool drawDirectCached(float x, float y, float w, float h,
-                              const PanelDrawContext& ctx) override;
-        float getDirectDrawHeight() const override { return host_.getContentHeight(); }
-        void setInputClipY(float y_min, float y_max) override { host_.setInputClipY(y_min, y_max); }
-        void setInput(const PanelInputState* input) override { host_.setInput(input); }
-        void setForcedHeight(float h) override { host_.setForcedHeight(h); }
-        void setPanelSpace(PanelSpace space) override {
-            host_.setFloating(space == PanelSpace::Floating);
+        PanelRenderCapabilities renderCapabilities() const override {
+            return {.direct = true};
         }
-        bool wantsKeyboard() const override { return host_.wantsKeyboard(); }
+        PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
+                                             const PanelDrawContext& ctx) override;
         bool needsAnimationFrame() const override { return host_.needsAnimationFrame(); }
         std::optional<double> nextScheduledAnimationDelay() const override {
             return host_.nextScheduledUpdateDelay();
@@ -92,6 +82,12 @@ namespace lfs::vis::gui {
         };
 
         bool ensureInitialized();
+        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
+                           float clip_y_min, float clip_y_max,
+                           const PanelInputState* input);
+        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx);
+        bool drawDirectCached(float x, float y, float w, float h,
+                              const PanelDrawContext& ctx);
         void clearElementCache();
         void cacheElements();
         void syncPanel(const PanelDrawContext& ctx);

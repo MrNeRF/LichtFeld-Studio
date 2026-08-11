@@ -969,7 +969,10 @@
     "no_trainer_loaded": "트레이너가 로드되지 않았습니다",
     "parameters_unavailable": "매개변수를 사용할 수 없습니다",
     "no_dataset_loaded": "데이터셋이 로드되지 않았습니다",
-    "iters_per_sec": "iter/초"
+    "iters_per_sec": "iter/초",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   },
   "tooltip": {
     "gt_compare_mode": "RGB, 법선 또는 깊이 정답 비교 선택",

@@ -33,22 +33,13 @@ namespace lfs::vis::gui {
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
         void preload(const PanelDrawContext& ctx) override;
-        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
-                           float clip_y_min, float clip_y_max,
-                           const PanelInputState* input) override;
-        bool supportsDirectDraw() const override { return true; }
-        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) override;
-        bool drawDirectCached(float x, float y, float w, float h,
-                              const PanelDrawContext& ctx) override;
-        float getDirectDrawHeight() const override;
-        void setInputClipY(float y_min, float y_max) override;
-        void setInput(const PanelInputState* input) override;
-        void setForcedHeight(float h) override;
-        bool wantsKeyboard() const override;
+        PanelRenderCapabilities renderCapabilities() const override {
+            return {.direct = true};
+        }
+        PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
+                                             const PanelDrawContext& ctx) override;
         bool needsAnimationFrame() const override;
         std::optional<double> nextScheduledAnimationDelay() const override;
-        bool wantsExternalFloatingShadow() const override { return !foreground_; }
-        void setPanelSpace(PanelSpace space) override;
         void reloadRmlResources() override;
         void setForeground(bool fg);
 
@@ -73,6 +64,17 @@ namespace lfs::vis::gui {
         void setLifecycleState(LifecycleState next_state);
         void resetLifecycle();
         void syncDirectLayout(float w, float h);
+        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
+                           float clip_y_min, float clip_y_max,
+                           const PanelInputState* input);
+        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx);
+        bool drawDirectCached(float x, float y, float w, float h,
+                              const PanelDrawContext& ctx);
+        float getDirectDrawHeight() const;
+        void setInput(const PanelInputState* input);
+        void setInputClipY(float y_min, float y_max);
+        void setForcedHeight(float h);
+        void setPanelSpace(PanelSpace space);
         void drawImmediateLayout(Rml::ElementDocument* doc, const PanelDrawContext* ctx);
         Rml::ElementDocument* prepareForRender(const PanelDrawContext* ctx);
         std::chrono::milliseconds updateInterval() const;

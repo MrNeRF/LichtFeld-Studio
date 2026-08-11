@@ -969,7 +969,10 @@
     "no_trainer_loaded": "Kein Trainer geladen",
     "parameters_unavailable": "Parameter nicht verfügbar",
     "no_dataset_loaded": "Kein Datensatz geladen",
-    "iters_per_sec": "Iter/s"
+    "iters_per_sec": "Iter/s",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   },
   "tooltip": {
     "gt_compare_mode": "RGB-, Normalen- oder Tiefen-Referenzvergleich auswählen",
