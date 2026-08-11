@@ -227,7 +227,7 @@ class Scene:
         """Create from dictionary."""
         return cls(
             id=data["id"],
-            folder_id=data["folder_id"],
+            folder_id=data.get("folder_id") or DEFAULT_FOLDER_ID,
             name=data["name"],
             description=data.get("description", ""),
             created_at=data.get("created_at", datetime.now().isoformat()),
@@ -365,6 +365,21 @@ class AssetIndex:
             with open(self._library_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
+            # Shape-based migration from pre-#1265 schema (projects -> folders).
+            # Legacy files still claim version "1.0.0", so this must not rely on version.
+            migrated = False
+            if "folders" not in data and "projects" in data:
+                data["folders"] = data.pop("projects")
+                migrated = True
+            for scene_data in data.get("scenes", {}).values():
+                if "folder_id" not in scene_data and "project_id" in scene_data:
+                    scene_data["folder_id"] = scene_data.pop("project_id")
+                    migrated = True
+            for asset_data in data.get("assets", {}).values():
+                if "folder_id" not in asset_data and "project_id" in asset_data:
+                    asset_data["folder_id"] = asset_data.pop("project_id")
+                    migrated = True
+
             self._version = data.get("version", LIBRARY_VERSION)
             self._created_at = data.get("created_at", datetime.now().isoformat())
             self._modified_at = data.get("modified_at", datetime.now().isoformat())
@@ -396,6 +411,11 @@ class AssetIndex:
                 len(self._scenes),
                 len(self._assets),
             )
+            if migrated:
+                _log.info(
+                    "Migrated legacy library.json schema (projects -> folders)"
+                )
+                self.save()
             return True
 
         except json.JSONDecodeError as exc:
