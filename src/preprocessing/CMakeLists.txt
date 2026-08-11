@@ -41,3 +41,14 @@ set_target_properties(lfs_preprocessing PROPERTIES
     CXX_STANDARD_REQUIRED ON
     POSITION_INDEPENDENT_CODE ON
 )
+
+add_executable(lfs_preprocess_cli_tests EXCLUDE_FROM_ALL tests/preprocess_cli_tests.cpp)
+target_compile_features(lfs_preprocess_cli_tests PRIVATE cxx_std_23)
+target_include_directories(lfs_preprocess_cli_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/include
+)
+target_link_libraries(lfs_preprocess_cli_tests PRIVATE lfs_core)
+if(BUILD_TESTS)
+    add_test(NAME preprocess_cli_arguments COMMAND lfs_preprocess_cli_tests)
+    set_tests_properties(preprocess_cli_arguments PROPERTIES LABELS "fast;cli" TIMEOUT 30)
+endif()
