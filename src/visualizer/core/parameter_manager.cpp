@@ -312,24 +312,6 @@ namespace lfs::vis {
         LOG_INFO("Session: strategy={}, iter={}, resize={}", opt.strategy, opt.iterations, dataset_config_.resize_factor);
     }
 
-    void ParameterManager::setCurrentParams(const lfs::core::param::OptimizationParameters& params) {
-        std::lock_guard lock(params_mutex_);
-        if (!params.strategy.empty()) {
-            setActiveStrategy(params.strategy);
-        }
-        if (active_strategy_ == "mcmc") {
-            mcmc_current_ = params;
-            mcmc_current_references_ = {};
-        } else if (lfs::core::param::is_mrnf_strategy(active_strategy_)) {
-            mrnf_current_ = params;
-            mrnf_current_references_ = {};
-        } else if (active_strategy_ == "igs+") {
-            igs_current_ = params;
-            igs_current_references_ = {};
-        }
-        LOG_DEBUG("Current params updated: strategy={}, iter={}, sh={}", params.strategy, params.iterations, params.sh_degree);
-    }
-
     void ParameterManager::importParams(const lfs::core::param::OptimizationParameters& params) {
         std::lock_guard lock(params_mutex_);
         if (!params.strategy.empty()) {

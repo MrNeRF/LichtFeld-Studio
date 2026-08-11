@@ -135,6 +135,21 @@ struct VulkanGSPipelineBuffers {
     Buffer<float> page_frames; // (pages, 16) floats
     bool quant_pool = false;
     uint32_t pool_page_splats = 0;
+    // Training-viewport IEEE f16 float4-swizzle SH rest (standalone PLY/SOG).
+    // When set, shN holds half components (uint2 per float4 slot) and projection
+    // uses the *_shn_f16 pipeline. Mutually exclusive with quant_pool / shN_q16.
+    bool shN_f16 = false;
+    // Non-SH display attrs (rotation / log-scale / opacity) as IEEE f16 with
+    // lodq packing (8+8+2 B). Means stay fp32. Training exportable path keeps
+    // these fp32 and zero-copies them; set only when tensors/pool are half.
+    bool attrs_f16 = false;
+    // Training-viewport pad-dropped q16 SH rest (exportable zero-copy). When set,
+    // shN holds uint16 codes, shN_bounds holds float2 per 256-splat block, and
+    // projection uses the *_shn_q16 pipeline. Mutually exclusive with quant_pool
+    // / shN_f16.
+    bool shN_q16 = false;
+    Buffer<float> shN_bounds; // (n_blocks, 2) float2 min/max when shN_q16
+    uint32_t shN_n_cells = 0; // pad-dropped u16 cells per primitive when shN_q16
 
     // projection outputs
     Buffer<int32_t> tiles_touched;    // (N,)

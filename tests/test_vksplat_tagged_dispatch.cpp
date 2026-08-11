@@ -7,6 +7,7 @@
 #include "rendering/rasterizer/vulkan/src/barrier_planner.h"
 #include "rendering/rasterizer/vulkan/src/gs_pipeline.h"
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
+#include "rendering/rasterizer/vulkan/src/viewport_scratch_bucket.h"
 #include "rendering/vulkan_wait.hpp"
 
 #include <gtest/gtest.h>
@@ -349,15 +350,18 @@ namespace {
             commandBatchInProgress = false;
             last_timeline_signal_values_.clear();
             pending_timeline_waits_.clear();
+            buffer_retire_timeline_ = fakeVkHandle<VkSemaphore>(0x5001);
+            next_buffer_retire_value_ = 1;
+            retired_buffer_shells_.clear();
+            test_buffer_handle_counter_ = 0xB1000;
+            current_vram = 0;
+            peak_vram = 0;
 
             deviceInfo.subgroupSize = 32;
             deviceInfo.sharedSize = 48 * 1024;
             deviceInfo.maxGroupsX = 65535;
             deviceInfo.maxGroupsY = 65535;
             deviceInfo.maxGroupsZ = 65535;
-            deviceInfo.maxThreadsX = 1024;
-            deviceInfo.maxThreadsY = 1024;
-            deviceInfo.maxThreadsZ = 64;
 
             // Injectable no-op push-descriptor proc (spec §3.3).
             vk_cmd_push_descriptor_set_ = &DispatchScript::push_descriptor_set;
@@ -375,6 +379,10 @@ namespace {
                 slot.command_buffer = VK_NULL_HANDLE;
                 slot.timestamp_query_pool = VK_NULL_HANDLE;
             }
+            // Force-free retired shells without real VMA (allocator already null).
+            retired_buffer_shells_.clear();
+            buffer_retire_timeline_ = VK_NULL_HANDLE;
+            next_buffer_retire_value_ = 1;
             command_buffer = VK_NULL_HANDLE;
             timestamp_query_pool = VK_NULL_HANDLE;
             fence = VK_NULL_HANDLE;
@@ -386,6 +394,7 @@ namespace {
             allocator = VK_NULL_HANDLE;
             vk_cmd_push_descriptor_set_ = nullptr;
             barrier_planner_.reset();
+            current_vram = 0;
         }
 
         // Expose protected dispatch / barrier APIs for scripted tests.
@@ -925,15 +934,18 @@ namespace {
             commandBatchInProgress = false;
             last_timeline_signal_values_.clear();
             pending_timeline_waits_.clear();
+            buffer_retire_timeline_ = fakeVkHandle<VkSemaphore>(0x5101);
+            next_buffer_retire_value_ = 1;
+            retired_buffer_shells_.clear();
+            test_buffer_handle_counter_ = 0xC1000;
+            current_vram = 0;
+            peak_vram = 0;
 
             deviceInfo.subgroupSize = 32;
             deviceInfo.sharedSize = 48 * 1024;
             deviceInfo.maxGroupsX = 65535;
             deviceInfo.maxGroupsY = 65535;
             deviceInfo.maxGroupsZ = 65535;
-            deviceInfo.maxThreadsX = 1024;
-            deviceInfo.maxThreadsY = 1024;
-            deviceInfo.maxThreadsZ = 64;
 
             vk_cmd_push_descriptor_set_ = &DispatchScript::push_descriptor_set;
 
@@ -1065,6 +1077,9 @@ namespace {
                 slot.command_buffer = VK_NULL_HANDLE;
                 slot.timestamp_query_pool = VK_NULL_HANDLE;
             }
+            retired_buffer_shells_.clear();
+            buffer_retire_timeline_ = VK_NULL_HANDLE;
+            next_buffer_retire_value_ = 1;
             command_buffer = VK_NULL_HANDLE;
             timestamp_query_pool = VK_NULL_HANDLE;
             fence = VK_NULL_HANDLE;
@@ -1076,6 +1091,7 @@ namespace {
             allocator = VK_NULL_HANDLE;
             vk_cmd_push_descriptor_set_ = nullptr;
             barrier_planner_.reset();
+            current_vram = 0;
 
             // Skip vmaDestroy on forged readbacks.
             lod_selection_readback_initialized_ = false;
@@ -2263,24 +2279,35 @@ namespace {
         forge_owned_i32(buffers._cumsum_blockSums, 0xF616, 64);
         forge_owned_i32(buffers._cumsum_blockSums2, 0xF617, 64);
 
-        // Viewport: 16×16 image, 4×4 tiles → small pixel/tile buffers.
-        const std::size_t num_tiles =
-            static_cast<std::size_t>(kAuditWaveGrid) * kAuditWaveGrid;
-        const std::size_t num_pixels =
-            static_cast<std::size_t>(kAuditWaveImage) * kAuditWaveImage;
-        forge_owned_i32(buffers.tile_ranges, 0xF620, num_tiles + 1);
-        forge_owned_f(buffers.pixel_state, 0xF621, 4 * num_pixels);
-        forge_owned_f(buffers.pixel_depth, 0xF622, num_pixels);
-        forge_owned_f(buffers.pixel_depth_weight, 0xF623, num_pixels);
-        forge_owned_i32(buffers.n_contributors, 0xF624, num_pixels);
+        // Viewport: 16×16 image → forge at the ceil64-bucketed capacities the
+        // production resize path requests (#1565); a smaller forge would grow
+        // mid-batch and trip the HOST_GUARD fence on the scripted dispatch.
+        const auto scratch_bucket = lfs::rendering::vulkan::viewportScratchBucket(
+            kAuditWaveImage, kAuditWaveImage);
+        const std::size_t alloc_tiles = scratch_bucket.alloc_tiles;
+        const std::size_t alloc_pixels = scratch_bucket.alloc_pixels;
+        forge_owned_i32(buffers.tile_ranges, 0xF620, alloc_tiles + 1);
+        forge_owned_f(buffers.pixel_state, 0xF621, 4 * alloc_pixels);
+        forge_owned_f(buffers.pixel_depth, 0xF622, alloc_pixels);
+        forge_owned_f(buffers.pixel_depth_weight, 0xF623, alloc_pixels);
+        forge_owned_i32(buffers.n_contributors, 0xF624, alloc_pixels);
 
         // Macro workspace (also used by macro path resizes).
-        forge_owned_i32(buffers.tile_batch_counts, 0xF630, num_tiles);
-        forge_owned_i32(buffers.tile_batch_offsets, 0xF631, num_tiles);
+        forge_owned_i32(buffers.tile_batch_counts, 0xF630, alloc_tiles);
+        forge_owned_i32(buffers.tile_batch_offsets, 0xF631, alloc_tiles);
         // macro_wave_args: 2 * HIGS_RASTER_MAX_WAVES * 3 = 96 words
         forge_owned(buffers.macro_wave_args, 0xF632, 96);
-        // partials / active_mask sized for max_batches ≈ K/1024 + num_macro
-        const std::size_t max_batches = (K + 1023u) / 1024u + 4u;
+        // partials / active_mask sized like the production macro path:
+        // ceil(K / RASTER_BATCH_SIZE) + macro tiles over the bucketed grid.
+        const std::size_t alloc_grid_w = _CEIL_DIV(scratch_bucket.alloc_w,
+                                                   static_cast<std::uint32_t>(TILE_WIDTH));
+        const std::size_t alloc_grid_h = _CEIL_DIV(scratch_bucket.alloc_h,
+                                                   static_cast<std::uint32_t>(TILE_HEIGHT));
+        const std::size_t alloc_macro_tiles =
+            _CEIL_DIV(alloc_grid_w, std::size_t{HIGS_MACRO_T16_W}) *
+            _CEIL_DIV(alloc_grid_h, std::size_t{HIGS_MACRO_T16_H});
+        const std::size_t max_batches =
+            _CEIL_DIV(K, std::size_t{RASTER_BATCH_SIZE}) + alloc_macro_tiles;
         // macro_partials is half storage; size in elements matches float path capacity.
         forge_owned_u16(buffers.macro_partials, 0xF633, max_batches * 32u * 64u * 4u);
         forge_owned(buffers.macro_active_mask, 0xF634, max_batches);

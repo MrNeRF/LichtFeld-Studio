@@ -2,7 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "adam.h"
 #include "adam_api.h"
 #include "adam_kernels.cuh"
 #include "optimizer_config.h"
@@ -10,53 +9,10 @@
 
 namespace fast_lfs::optimizer {
 
-    void adam_step_raw(
+    void adam_step_joint_contiguous_raw(
         float* param,
-        float* exp_avg,
-        float* exp_avg_sq,
-        const float* param_grad,
-        const int n_elements,
-        const float lr,
-        const float beta1,
-        const float beta2,
-        const float eps,
-        const float bias_correction1_rcp,
-        const float bias_correction2_sqrt_rcp,
-        cudaStream_t stream) {
-
-        // Validate pointers
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg, "exp_avg");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq, "exp_avg_sq");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(param_grad, "param_grad");
-
-        // Validate parameters
-        if (n_elements <= 0) {
-            throw std::runtime_error("n_elements must be positive");
-        }
-
-        // Call the actual implementation
-        adam_step(
-            param,
-            exp_avg,
-            exp_avg_sq,
-            param_grad,
-            n_elements,
-            lr,
-            beta1,
-            beta2,
-            eps,
-            bias_correction1_rcp,
-            bias_correction2_sqrt_rcp,
-            stream);
-    }
-
-    void adam_step_quantized_raw(
-        float* param,
-        std::uint8_t* exp_avg_q,
-        float* exp_avg_scale,
-        std::uint8_t* exp_avg_sq_q,
-        float* exp_avg_sq_scale,
+        std::uint8_t* packed,
+        float* bounds,
         const float* param_grad,
         const bool* frozen_mask,
         const int frozen_mask_size,
@@ -64,8 +20,9 @@ namespace fast_lfs::optimizer {
         const bool* crop_damping_mask,
         const int crop_damping_mask_size,
         const float cropbox_lr_scale,
-        const int n_rows,
-        const int row_size,
+        const int n_prims,
+        const int n_attr,
+        const int bits,
         const float lr,
         const float beta1,
         const float beta2,
@@ -73,169 +30,123 @@ namespace fast_lfs::optimizer {
         const float bias_correction1_rcp,
         const float bias_correction2_sqrt_rcp,
         cudaStream_t stream) {
-
         LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_q, "exp_avg_q");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_scale, "exp_avg_scale");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_q, "exp_avg_sq_q");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_scale, "exp_avg_sq_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(packed, "joint_packed");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(bounds, "joint_bounds");
         LFS_VALIDATE_CUDA_DEVICE_POINTER(param_grad, "param_grad");
-        if (n_rows <= 0 || row_size <= 0) {
-            throw std::runtime_error("n_rows and row_size must be positive");
+        if (n_prims <= 0 || n_attr <= 0) {
+            throw std::runtime_error("adam_step_joint_contiguous: n_prims and n_attr must be positive");
         }
-
-        adam_step_quantized(
-            param, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale,
-            param_grad, frozen_mask, frozen_mask_size, frozen_lr_scale,
-            crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
-            n_rows, row_size, lr,
-            beta1, beta2, eps, bias_correction1_rcp, bias_correction2_sqrt_rcp, stream);
-    }
-
-    void adam_step_quantized_swizzled_raw(
-        float* param,
-        std::uint8_t* exp_avg_q,
-        float* exp_avg_scale,
-        std::uint8_t* exp_avg_sq_q,
-        float* exp_avg_sq_scale,
-        const float* param_grad,
-        const bool* frozen_mask,
-        const int frozen_mask_size,
-        const float frozen_lr_scale,
-        const bool* crop_damping_mask,
-        const int crop_damping_mask_size,
-        const float cropbox_lr_scale,
-        const int n_primitives,
-        const int slots_per_primitive,
-        const float lr,
-        const float beta1,
-        const float beta2,
-        const float eps,
-        const float bias_correction1_rcp,
-        const float bias_correction2_sqrt_rcp,
-        cudaStream_t stream) {
-
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_q, "exp_avg_q");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_scale, "exp_avg_scale");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_q, "exp_avg_sq_q");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_scale, "exp_avg_sq_scale");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(param_grad, "param_grad");
-        if (n_primitives <= 0 || slots_per_primitive <= 0) {
-            throw std::runtime_error("n_primitives and slots_per_primitive must be positive");
+        constexpr int kBS = 256;
+        const int n_blocks = (n_prims + kBS - 1) / kBS;
+        if (bits == 16) {
+            kernels::adam::adam_step_joint_contiguous_cu<16><<<n_blocks, kBS, 0, stream>>>(
+                param, packed, bounds, param_grad,
+                frozen_mask, frozen_mask_size, frozen_lr_scale,
+                crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
+                n_prims, n_attr, lr, beta1, beta2, eps,
+                bias_correction1_rcp, bias_correction2_sqrt_rcp);
+        } else if (bits == 8) {
+            kernels::adam::adam_step_joint_contiguous_cu<8><<<n_blocks, kBS, 0, stream>>>(
+                param, packed, bounds, param_grad,
+                frozen_mask, frozen_mask_size, frozen_lr_scale,
+                crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
+                n_prims, n_attr, lr, beta1, beta2, eps,
+                bias_correction1_rcp, bias_correction2_sqrt_rcp);
+        } else {
+            throw std::runtime_error("adam_step_joint_contiguous: bits must be 8 or 16");
         }
-
-        adam_step_quantized_swizzled(
-            param, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale,
-            param_grad, frozen_mask, frozen_mask_size, frozen_lr_scale,
-            crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
-            n_primitives,
-            slots_per_primitive, lr, beta1, beta2, eps, bias_correction1_rcp,
-            bias_correction2_sqrt_rcp, stream);
+        LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_joint_contiguous_raw");
     }
 
-    void quantize_adam_moments_raw(
-        const float* exp_avg,
-        const float* exp_avg_sq,
-        std::uint8_t* exp_avg_q,
-        float* exp_avg_scale,
-        std::uint8_t* exp_avg_sq_q,
-        float* exp_avg_sq_scale,
-        const int n_rows,
-        const int row_size,
-        cudaStream_t stream) {
-
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg, "exp_avg");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq, "exp_avg_sq");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_q, "exp_avg_q");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_scale, "exp_avg_scale");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_q, "exp_avg_sq_q");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_scale, "exp_avg_sq_scale");
-        if (n_rows <= 0 || row_size <= 0)
-            return;
-
-        kernels::adam::quantize_adam_moments_cu<<<div_round_up(n_rows, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
-            exp_avg, exp_avg_sq, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale, n_rows, row_size);
-
-        LFS_CUDA_LAUNCH_CHECK(stream, "quantize_adam_moments");
-    }
-
-    void quantize_adam_moments_swizzled_raw(
-        const float* exp_avg,
-        const float* exp_avg_sq,
-        std::uint8_t* exp_avg_q,
-        float* exp_avg_scale,
-        std::uint8_t* exp_avg_sq_q,
-        float* exp_avg_sq_scale,
-        const int n_primitives,
-        const int slots_per_primitive,
-        cudaStream_t stream) {
-
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg, "exp_avg");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq, "exp_avg_sq");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_q, "exp_avg_q");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_scale, "exp_avg_scale");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_q, "exp_avg_sq_q");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_scale, "exp_avg_sq_scale");
-        if (n_primitives <= 0 || slots_per_primitive <= 0)
-            return;
-
-        kernels::adam::quantize_adam_moments_swizzled_cu<<<div_round_up(n_primitives, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
-            exp_avg, exp_avg_sq, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale, n_primitives, slots_per_primitive);
-
-        LFS_CUDA_LAUNCH_CHECK(stream, "quantize_adam_moments_swizzled");
-    }
-
-    void zero_rows_at_indices(
-        float* tensor,
+    void joint_encode_zero_rows_at_indices(
+        std::uint8_t* packed,
+        float* bounds,
         const int64_t* indices_device,
         const int n_indices,
-        const int row_size,
+        const int n_attr,
+        const int bits,
+        const int n_prims,
         cudaStream_t stream) {
-
-        // Validate pointers
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(tensor, "tensor");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(indices_device, "indices_device");
-
-        // Validate parameters
-        if (n_indices <= 0)
-            return; // Nothing to do
-        if (row_size <= 0) {
-            throw std::runtime_error("row_size must be positive");
-        }
-
-        // Launch kernel: one thread per index
-        kernels::adam::zero_rows_cu<<<div_round_up(n_indices, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
-            tensor,
-            indices_device,
-            n_indices,
-            row_size);
-
-        LFS_CUDA_LAUNCH_CHECK(stream, "zero_rows_at_indices");
-    }
-
-    void zero_quantized_rows_at_indices(
-        std::uint8_t* tensor_q,
-        float* scales,
-        const int64_t* indices_device,
-        const int n_indices,
-        const int row_size,
-        const std::uint8_t zero_point,
-        cudaStream_t stream) {
-
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(tensor_q, "tensor_q");
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(scales, "scales");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(packed, "packed");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(bounds, "bounds");
         LFS_VALIDATE_CUDA_DEVICE_POINTER(indices_device, "indices_device");
         if (n_indices <= 0)
             return;
-        if (row_size <= 0) {
-            throw std::runtime_error("row_size must be positive");
+        if (n_attr <= 0)
+            throw std::runtime_error("n_attr must be positive");
+        const dim3 grid(div_round_up(n_indices, config::block_size_adam_step));
+        const dim3 block(config::block_size_adam_step);
+        if (bits == 16) {
+            kernels::adam::joint_encode_zero_rows_cu<16><<<grid, block, 0, stream>>>(
+                packed, bounds, indices_device, n_indices, n_attr, n_prims);
+        } else if (bits == 8) {
+            kernels::adam::joint_encode_zero_rows_cu<8><<<grid, block, 0, stream>>>(
+                packed, bounds, indices_device, n_indices, n_attr, n_prims);
+        } else {
+            throw std::runtime_error("joint_encode_zero_rows: bits must be 8 or 16");
         }
+        LFS_CUDA_LAUNCH_CHECK(stream, "joint_encode_zero_rows_at_indices");
+    }
 
-        kernels::adam::zero_quantized_rows_cu<<<div_round_up(n_indices, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
-            tensor_q, scales, indices_device, n_indices, row_size, zero_point);
+    void joint_encode_zero_shN_at_indices(
+        std::uint8_t* packed,
+        float* bounds,
+        const int64_t* indices_device,
+        const int n_indices,
+        const int slots_per_primitive,
+        const int bits,
+        const int n_prims,
+        cudaStream_t stream) {
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(packed, "packed");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(bounds, "bounds");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(indices_device, "indices_device");
+        if (n_indices <= 0)
+            return;
+        if (slots_per_primitive <= 0)
+            return;
+        const dim3 grid(div_round_up(n_indices, config::block_size_adam_step));
+        const dim3 block(config::block_size_adam_step);
+        if (bits == 16) {
+            kernels::adam::joint_encode_zero_shN_cu<16><<<grid, block, 0, stream>>>(
+                packed, bounds, indices_device, n_indices, slots_per_primitive, n_prims);
+        } else if (bits == 8) {
+            kernels::adam::joint_encode_zero_shN_cu<8><<<grid, block, 0, stream>>>(
+                packed, bounds, indices_device, n_indices, slots_per_primitive, n_prims);
+        } else {
+            throw std::runtime_error("joint_encode_zero_shN: bits must be 8 or 16");
+        }
+        LFS_CUDA_LAUNCH_CHECK(stream, "joint_encode_zero_shN_at_indices");
+    }
 
-        LFS_CUDA_LAUNCH_CHECK(stream, "zero_quantized_rows_at_indices");
+    void joint_transcode_gathered_rows_at_indices(
+        std::uint8_t* packed,
+        const float* bounds,
+        const int64_t* indices_device,
+        const int n_new,
+        const int old_N,
+        const int n_attr,
+        const int bits,
+        cudaStream_t stream) {
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(packed, "packed");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(bounds, "bounds");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(indices_device, "indices_device");
+        if (n_new <= 0)
+            return;
+        if (n_attr <= 0)
+            throw std::runtime_error("n_attr must be positive");
+        const dim3 grid(div_round_up(n_new, config::block_size_adam_step));
+        const dim3 block(config::block_size_adam_step);
+        if (bits == 16) {
+            kernels::adam::joint_transcode_gathered_rows_cu<16><<<grid, block, 0, stream>>>(
+                packed, bounds, indices_device, n_new, old_N, n_attr);
+        } else if (bits == 8) {
+            kernels::adam::joint_transcode_gathered_rows_cu<8><<<grid, block, 0, stream>>>(
+                packed, bounds, indices_device, n_new, old_N, n_attr);
+        } else {
+            throw std::runtime_error("joint_transcode_gathered_rows: bits must be 8 or 16");
+        }
+        LFS_CUDA_LAUNCH_CHECK(stream, "joint_transcode_gathered_rows_at_indices");
     }
 
 } // namespace fast_lfs::optimizer

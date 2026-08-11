@@ -763,7 +763,6 @@ namespace {
         ASSERT_EQ(psnr.size(), 2u);
         EXPECT_FLOAT_EQ(loss.back(), 0.4f);
         EXPECT_FLOAT_EQ(psnr.back(), 23.0f);
-        EXPECT_FLOAT_EQ(manager.getLastPSNR(), 23.0f);
         EXPECT_NEAR(
             manager.getElapsedSeconds(),
             125.5f, 0.001f);
@@ -771,6 +770,7 @@ namespace {
             manager.getLastEvaluationMetrics();
         ASSERT_TRUE(last);
         EXPECT_EQ(last->iteration, 9);
+        EXPECT_FLOAT_EQ(last->psnr, 23.0f);
         EXPECT_FLOAT_EQ(last->ssim, 0.93f);
 
         const auto recaptured =

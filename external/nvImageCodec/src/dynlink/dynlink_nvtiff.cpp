@@ -108,3 +108,16 @@ void* NvtiffLoadSymbol(const char* name) {
         return nullptr;
     }
 }
+
+bool nvtiffIsSymbolAvailable(const char* name) {
+    static std::mutex symbol_mutex;
+    static std::unordered_map<std::string, void*> symbol_map;
+    std::lock_guard<std::mutex> lock(symbol_mutex);
+    auto it = symbol_map.find(name);
+    if (it == symbol_map.end()) {
+        auto* ptr = NvtiffLoadSymbol(name);
+        symbol_map.insert({name, ptr});
+        return ptr != nullptr;
+    }
+    return it->second != nullptr;
+}

@@ -384,10 +384,10 @@ namespace lfs::core {
                             Tensor left_broadcast = left_tensor;
                             Tensor right_broadcast = right_tensor;
                             if (left_tensor.shape() != shape) {
-                                left_broadcast = left_tensor.broadcast_to(shape);
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
                             }
                             if (right_tensor.shape() != shape) {
-                                right_broadcast = right_tensor.broadcast_to(shape);
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
                             const __half* left_ptr = left_broadcast.template ptr<__half>();
@@ -438,10 +438,10 @@ namespace lfs::core {
                             Tensor left_broadcast = left_tensor;
                             Tensor right_broadcast = right_tensor;
                             if (left_tensor.shape() != shape) {
-                                left_broadcast = left_tensor.broadcast_to(shape);
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
                             }
                             if (right_tensor.shape() != shape) {
-                                right_broadcast = right_tensor.broadcast_to(shape);
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
                             const int64_t* left_ptr = left_broadcast.template ptr<int64_t>();
@@ -490,10 +490,10 @@ namespace lfs::core {
                             Tensor left_broadcast = left_tensor;
                             Tensor right_broadcast = right_tensor;
                             if (left_tensor.shape() != shape) {
-                                left_broadcast = left_tensor.broadcast_to(shape);
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
                             }
                             if (right_tensor.shape() != shape) {
-                                right_broadcast = right_tensor.broadcast_to(shape);
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
                             const uint8_t* left_ptr = left_broadcast.template ptr<uint8_t>();
@@ -542,10 +542,10 @@ namespace lfs::core {
                             Tensor left_broadcast = left_tensor;
                             Tensor right_broadcast = right_tensor;
                             if (left_tensor.shape() != shape) {
-                                left_broadcast = left_tensor.broadcast_to(shape);
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
                             }
                             if (right_tensor.shape() != shape) {
-                                right_broadcast = right_tensor.broadcast_to(shape);
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
                             const int* left_ptr = left_broadcast.template ptr<int>();
@@ -598,10 +598,10 @@ namespace lfs::core {
                             Tensor left_broadcast = left_tensor;
                             Tensor right_broadcast = right_tensor;
                             if (left_tensor.shape() != shape) {
-                                left_broadcast = left_tensor.broadcast_to(shape);
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
                             }
                             if (right_tensor.shape() != shape) {
-                                right_broadcast = right_tensor.broadcast_to(shape);
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
                             const float* left_ptr = left_broadcast.template ptr<float>();
@@ -682,10 +682,10 @@ namespace lfs::core {
                             Tensor left_broadcast = left_tensor;
                             Tensor right_broadcast = right_tensor;
                             if (left_tensor.shape() != shape) {
-                                left_broadcast = left_tensor.broadcast_to(shape);
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
                             }
                             if (right_tensor.shape() != shape) {
-                                right_broadcast = right_tensor.broadcast_to(shape);
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
                             const unsigned char* left_ptr = left_broadcast.template ptr<unsigned char>();
@@ -736,10 +736,10 @@ namespace lfs::core {
                             Tensor left_broadcast = left_tensor;
                             Tensor right_broadcast = right_tensor;
                             if (left_tensor.shape() != shape) {
-                                left_broadcast = left_tensor.broadcast_to(shape);
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
                             }
                             if (right_tensor.shape() != shape) {
-                                right_broadcast = right_tensor.broadcast_to(shape);
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
                             const __half* left_ptr = left_broadcast.template ptr<__half>();
@@ -790,10 +790,10 @@ namespace lfs::core {
                             Tensor left_broadcast = left_tensor;
                             Tensor right_broadcast = right_tensor;
                             if (left_tensor.shape() != shape) {
-                                left_broadcast = left_tensor.broadcast_to(shape);
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
                             }
                             if (right_tensor.shape() != shape) {
-                                right_broadcast = right_tensor.broadcast_to(shape);
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
                             const int64_t* left_ptr = left_broadcast.template ptr<int64_t>();
@@ -842,10 +842,10 @@ namespace lfs::core {
                             Tensor left_broadcast = left_tensor;
                             Tensor right_broadcast = right_tensor;
                             if (left_tensor.shape() != shape) {
-                                left_broadcast = left_tensor.broadcast_to(shape);
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
                             }
                             if (right_tensor.shape() != shape) {
-                                right_broadcast = right_tensor.broadcast_to(shape);
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
                             const int* left_ptr = left_broadcast.template ptr<int>();
@@ -894,10 +894,10 @@ namespace lfs::core {
                             Tensor left_broadcast = left_tensor;
                             Tensor right_broadcast = right_tensor;
                             if (left_tensor.shape() != shape) {
-                                left_broadcast = left_tensor.broadcast_to(shape);
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
                             }
                             if (right_tensor.shape() != shape) {
-                                right_broadcast = right_tensor.broadcast_to(shape);
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
                             const uint8_t* left_ptr = left_broadcast.template ptr<uint8_t>();
@@ -946,10 +946,10 @@ namespace lfs::core {
                             Tensor left_broadcast = left_tensor;
                             Tensor right_broadcast = right_tensor;
                             if (left_tensor.shape() != shape) {
-                                left_broadcast = left_tensor.broadcast_to(shape);
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
                             }
                             if (right_tensor.shape() != shape) {
-                                right_broadcast = right_tensor.broadcast_to(shape);
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
                             const float* left_ptr = left_broadcast.template ptr<float>();

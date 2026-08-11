@@ -99,15 +99,8 @@ namespace lfs::python {
             .def("new_line", &RmlImModeLayout::new_line)
             .def("indent", &RmlImModeLayout::indent, nb::arg("width") = 0.0f)
             .def("unindent", &RmlImModeLayout::unindent, nb::arg("width") = 0.0f)
-            .def("set_next_item_width", &RmlImModeLayout::set_next_item_width, nb::arg("width"))
             // Grouping
-            .def("begin_group", &RmlImModeLayout::begin_group)
-            .def("end_group", &RmlImModeLayout::end_group)
             .def("collapsing_header", &RmlImModeLayout::collapsing_header, nb::arg("label"), nb::arg("default_open") = false)
-            .def("tree_node", &RmlImModeLayout::tree_node, nb::arg("label"))
-            .def("tree_node_ex", &RmlImModeLayout::tree_node_ex, nb::arg("label"), nb::arg("flags") = "")
-            .def("set_next_item_open", &RmlImModeLayout::set_next_item_open, nb::arg("is_open"))
-            .def("tree_pop", &RmlImModeLayout::tree_pop)
             // Tables
             .def("begin_table", &RmlImModeLayout::begin_table, nb::arg("id"), nb::arg("columns"))
             .def("table_setup_column", &RmlImModeLayout::table_setup_column, nb::arg("label"), nb::arg("width") = 0.0f)
@@ -139,14 +132,6 @@ namespace lfs::python {
             .def("menu_item", &RmlImModeLayout::menu_item, nb::arg("label"), nb::arg("enabled") = true, nb::arg("selected") = false)
             .def("begin_menu", &RmlImModeLayout::begin_menu, nb::arg("label"))
             .def("end_menu", &RmlImModeLayout::end_menu)
-            // Focus control
-            .def("set_keyboard_focus_here", &RmlImModeLayout::set_keyboard_focus_here)
-            .def("is_window_focused", &RmlImModeLayout::is_window_focused)
-            .def("is_window_hovered", &RmlImModeLayout::is_window_hovered)
-            .def("capture_keyboard_from_app", &RmlImModeLayout::capture_keyboard_from_app, nb::arg("capture") = true)
-            .def("capture_mouse_from_app", &RmlImModeLayout::capture_mouse_from_app, nb::arg("capture") = true)
-            // Scrolling
-            .def("set_scroll_here_y", &RmlImModeLayout::set_scroll_here_y, nb::arg("center_y_ratio") = 0.5f)
             // Cursor / content
             .def("get_cursor_screen_pos", &RmlImModeLayout::get_cursor_screen_pos)
             .def("get_mouse_pos", &RmlImModeLayout::get_mouse_pos)
@@ -157,15 +142,8 @@ namespace lfs::python {
             .def("begin_popup_modal", &RmlImModeLayout::begin_popup_modal, nb::arg("title"))
             .def("end_popup_modal", &RmlImModeLayout::end_popup_modal)
             .def("close_current_popup", &RmlImModeLayout::close_current_popup)
-            .def("set_next_window_pos_center", &RmlImModeLayout::set_next_window_pos_center)
-            .def("set_next_window_pos_viewport_center", &RmlImModeLayout::set_next_window_pos_viewport_center, nb::arg("always") = false)
-            .def("set_next_window_focus", &RmlImModeLayout::set_next_window_focus)
-            .def("push_modal_style", &RmlImModeLayout::push_modal_style)
-            .def("pop_modal_style", &RmlImModeLayout::pop_modal_style)
             // Content region
             .def("get_content_region_avail", &RmlImModeLayout::get_content_region_avail)
-            .def("get_cursor_pos", &RmlImModeLayout::get_cursor_pos)
-            .def("set_cursor_pos_x", &RmlImModeLayout::set_cursor_pos_x, nb::arg("x"))
             .def("calc_text_size", &RmlImModeLayout::calc_text_size, nb::arg("text"))
             // Disabled state
             .def("begin_disabled", &RmlImModeLayout::begin_disabled, nb::arg("disabled") = true)
@@ -181,7 +159,6 @@ namespace lfs::python {
                  nb::arg("size"), nb::arg("selected") = false, nb::arg("disabled") = false,
                  nb::arg("tooltip") = "")
             .def("invisible_button", &RmlImModeLayout::invisible_button, nb::arg("id"), nb::arg("size"))
-            .def("set_cursor_pos", &RmlImModeLayout::set_cursor_pos, nb::arg("pos"))
             // Child windows
             .def("begin_child", &RmlImModeLayout::begin_child, nb::arg("id"), nb::arg("size"), nb::arg("border") = false)
             .def("end_child", &RmlImModeLayout::end_child)
@@ -193,27 +170,10 @@ namespace lfs::python {
             .def("push_id", &RmlImModeLayout::push_id, nb::arg("id"))
             .def("push_id_int", &RmlImModeLayout::push_id_int, nb::arg("id"))
             .def("pop_id", &RmlImModeLayout::pop_id)
-            // Window
-            .def("begin_window", &RmlImModeLayout::begin_window, nb::arg("title"), nb::arg("flags") = 0)
-            .def("begin_window_closable", &RmlImModeLayout::begin_window_closable, nb::arg("title"), nb::arg("flags") = 0)
-            .def("end_window", &RmlImModeLayout::end_window)
-            .def("push_window_style", &RmlImModeLayout::push_window_style)
-            .def("pop_window_style", &RmlImModeLayout::pop_window_style)
-            // Window positioning
-            .def("set_next_window_pos", &RmlImModeLayout::set_next_window_pos, nb::arg("pos"), nb::arg("first_use") = false)
-            .def("set_next_window_size", &RmlImModeLayout::set_next_window_size, nb::arg("size"), nb::arg("first_use") = false)
-            .def("set_next_window_pos_centered", &RmlImModeLayout::set_next_window_pos_centered, nb::arg("first_use") = false)
-            .def("set_next_window_bg_alpha", &RmlImModeLayout::set_next_window_bg_alpha, nb::arg("alpha"))
             .def("get_viewport_pos", &RmlImModeLayout::get_viewport_pos)
             .def("get_viewport_size", &RmlImModeLayout::get_viewport_size)
             .def("get_dpi_scale", &RmlImModeLayout::get_dpi_scale)
             .def("set_mouse_cursor_hand", &RmlImModeLayout::set_mouse_cursor_hand)
-            // Style control
-            .def("push_style_var", &RmlImModeLayout::push_style_var_float, nb::arg("var"), nb::arg("value"))
-            .def("push_style_var_vec2", &RmlImModeLayout::push_style_var_vec2, nb::arg("var"), nb::arg("value"))
-            .def("pop_style_var", &RmlImModeLayout::pop_style_var, nb::arg("count") = 1)
-            .def("push_style_color", &RmlImModeLayout::push_style_color, nb::arg("col"), nb::arg("color"))
-            .def("pop_style_color", &RmlImModeLayout::pop_style_color, nb::arg("count") = 1)
             // Property binding
             .def("prop", &RmlImModeLayout::prop, nb::arg("data"), nb::arg("prop_id"), nb::arg("text") = nb::none())
             .def("row", &RmlImModeLayout::row)
@@ -225,29 +185,6 @@ namespace lfs::python {
             .def("operator_", &RmlImModeLayout::operator_, nb::arg("operator_id"), nb::arg("text") = "", nb::arg("icon") = "")
             .def("prop_search", &RmlImModeLayout::prop_search, nb::arg("data"), nb::arg("prop_id"), nb::arg("search_data"), nb::arg("search_prop"), nb::arg("text") = "")
             .def("template_list", &RmlImModeLayout::template_list, nb::arg("list_type_id"), nb::arg("list_id"), nb::arg("data"), nb::arg("prop_id"), nb::arg("active_data"), nb::arg("active_prop"), nb::arg("rows") = 5)
-            .def("menu", &RmlImModeLayout::menu, nb::arg("menu_id"), nb::arg("text") = "", nb::arg("icon") = "")
-            .def("popover", &RmlImModeLayout::popover, nb::arg("panel_id"), nb::arg("text") = "", nb::arg("icon") = "")
-            // Drawing
-            .def("draw_circle", &RmlImModeLayout::draw_circle, nb::arg("x"), nb::arg("y"), nb::arg("radius"), nb::arg("color"), nb::arg("segments") = 32, nb::arg("thickness") = 1.0f)
-            .def("draw_circle_filled", &RmlImModeLayout::draw_circle_filled, nb::arg("x"), nb::arg("y"), nb::arg("radius"), nb::arg("color"), nb::arg("segments") = 32)
-            .def("draw_rect", &RmlImModeLayout::draw_rect, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f)
-            .def("draw_rect_filled", &RmlImModeLayout::draw_rect_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("background") = false)
-            .def("draw_rect_rounded", &RmlImModeLayout::draw_rect_rounded, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), nb::arg("thickness") = 1.0f, nb::arg("background") = false)
-            .def("draw_rect_rounded_filled", &RmlImModeLayout::draw_rect_rounded_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), nb::arg("background") = false)
-            .def("draw_triangle_filled", &RmlImModeLayout::draw_triangle_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"), nb::arg("color"), nb::arg("background") = false)
-            .def("draw_line", &RmlImModeLayout::draw_line, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f)
-            .def("draw_polyline", &RmlImModeLayout::draw_polyline, nb::arg("points"), nb::arg("color"), nb::arg("closed") = false, nb::arg("thickness") = 1.0f)
-            .def("draw_poly_filled", &RmlImModeLayout::draw_poly_filled, nb::arg("points"), nb::arg("color"))
-            .def("draw_text", &RmlImModeLayout::draw_text, nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"), nb::arg("background") = false)
-            .def("draw_window_rect_filled", &RmlImModeLayout::draw_window_rect_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"))
-            .def("draw_window_rect", &RmlImModeLayout::draw_window_rect, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f)
-            .def("draw_window_rect_rounded", &RmlImModeLayout::draw_window_rect_rounded, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), nb::arg("thickness") = 1.0f)
-            .def("draw_window_rect_rounded_filled", &RmlImModeLayout::draw_window_rect_rounded_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"))
-            .def("draw_window_line", &RmlImModeLayout::draw_window_line, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f)
-            .def("draw_window_text", &RmlImModeLayout::draw_window_text, nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"))
-            .def("draw_window_triangle_filled", &RmlImModeLayout::draw_window_triangle_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"), nb::arg("color"))
-            .def("crf_curve_preview", &RmlImModeLayout::crf_curve_preview, nb::arg("label"), nb::arg("gamma"), nb::arg("toe"), nb::arg("shoulder"), nb::arg("gamma_r") = 0.0f, nb::arg("gamma_g") = 0.0f, nb::arg("gamma_b") = 0.0f, "Unsupported in layout APIs; use the retained RmlUi <crf-curve> custom element.")
-            .def("chromaticity_diagram", &RmlImModeLayout::chromaticity_diagram, nb::arg("label"), nb::arg("red_x"), nb::arg("red_y"), nb::arg("green_x"), nb::arg("green_y"), nb::arg("blue_x"), nb::arg("blue_y"), nb::arg("neutral_x"), nb::arg("neutral_y"), nb::arg("range") = 0.5f, "Unsupported in layout APIs; use the retained RmlUi <chromaticity-diagram> custom element.")
             // Progress
             .def("progress_bar", &RmlImModeLayout::progress_bar, nb::arg("fraction"), nb::arg("overlay") = "", nb::arg("width") = 0.0f, nb::arg("height") = 0.0f)
             .def("set_tooltip", &RmlImModeLayout::set_tooltip, nb::arg("text"))
@@ -257,14 +194,7 @@ namespace lfs::python {
             .def("is_mouse_double_clicked", &RmlImModeLayout::is_mouse_double_clicked, nb::arg("button") = 0)
             .def("is_mouse_dragging", &RmlImModeLayout::is_mouse_dragging, nb::arg("button") = 0)
             .def("get_mouse_wheel", &RmlImModeLayout::get_mouse_wheel)
-            .def("get_mouse_delta", &RmlImModeLayout::get_mouse_delta)
-            // Drag-drop
-            .def("begin_drag_drop_source", &RmlImModeLayout::begin_drag_drop_source)
-            .def("set_drag_drop_payload", &RmlImModeLayout::set_drag_drop_payload, nb::arg("type"), nb::arg("data"))
-            .def("end_drag_drop_source", &RmlImModeLayout::end_drag_drop_source)
-            .def("begin_drag_drop_target", &RmlImModeLayout::begin_drag_drop_target)
-            .def("accept_drag_drop_payload", &RmlImModeLayout::accept_drag_drop_payload, nb::arg("type"))
-            .def("end_drag_drop_target", &RmlImModeLayout::end_drag_drop_target);
+            .def("get_mouse_delta", &RmlImModeLayout::get_mouse_delta);
 
         nb::class_<RmlSubLayout>(m, "RmlSubLayout")
             .def("__enter__", &RmlSubLayout::enter, nb::rv_policy::reference)
@@ -317,8 +247,6 @@ namespace lfs::python {
             .def("same_line", &RmlSubLayout::same_line, nb::arg("offset") = 0.0f, nb::arg("spacing") = -1.0f)
             .def("new_line", &RmlSubLayout::new_line)
             .def("collapsing_header", &RmlSubLayout::collapsing_header, nb::arg("label"), nb::arg("default_open") = false)
-            .def("tree_node", &RmlSubLayout::tree_node, nb::arg("label"))
-            .def("tree_pop", &RmlSubLayout::tree_pop)
             .def("begin_table", &RmlSubLayout::begin_table, nb::arg("id"), nb::arg("columns"))
             .def("table_setup_column", &RmlSubLayout::table_setup_column, nb::arg("label"), nb::arg("width") = 0.0f)
             .def("table_next_row", &RmlSubLayout::table_next_row, kTableNextRowDoc)

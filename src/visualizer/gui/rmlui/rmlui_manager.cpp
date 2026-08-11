@@ -770,16 +770,30 @@ namespace lfs::vis::gui {
                         lfs::core::ScopedTimer timer(
                             timer_name + ".cache_refresh", 0.25,
                             lfs::core::LogLevel::Performance, LFS_SOURCE_SITE_CURRENT());
-                        if (command.cache->texture != 0)
+                        // Same capture extent → reuse the existing image (copy into it).
+                        // Extent change → deferred-delete the old image and allocate fresh.
+                        const Rml::TextureHandle reuse_texture =
+                            (command.cache->texture != 0 && command.cache->width == vis_w &&
+                             command.cache->height == vis_h)
+                                ? command.cache->texture
+                                : Rml::TextureHandle{};
+                        if (command.cache->texture != 0 && reuse_texture == 0)
                             releaseCachedVulkanContext(*command.cache);
 
                         vulkan_render_interface_->ResetContextRenderState();
+                        vulkan_render_interface_->BeginCacheCapture(left, top, vis_w, vis_h);
+                        vulkan_render_interface_->SetContextOffset(command.offset_x, command.offset_y);
+                        vulkan_render_interface_->SetContextClipRect(fleft, ftop, fright, fbottom);
                         const Rml::LayerHandle layer = vulkan_render_interface_->PushLayer();
                         if (layer != 0) {
-                            vulkan_render_interface_->SetContextOffset(command.offset_x, command.offset_y);
-                            vulkan_render_interface_->SetContextClipRect(fleft, ftop, fright, fbottom);
                             command.context->Render();
-                            command.cache->texture = vulkan_render_interface_->SaveLayerAsTexture();
+                            const Rml::TextureHandle saved_texture =
+                                vulkan_render_interface_->SaveLayerAsTexture(reuse_texture);
+                            if (reuse_texture != 0 && saved_texture != 0 && saved_texture != reuse_texture)
+                                vulkan_render_interface_->ReleaseTexture(reuse_texture);
+                            // On save failure keep a still-valid reuse handle (avoid leaking it).
+                            command.cache->texture =
+                                saved_texture != 0 ? saved_texture : reuse_texture;
                             vulkan_render_interface_->SetTextureDebugName(command.cache->texture,
                                                                           command.context_name);
                             vulkan_render_interface_->PopLayer();
@@ -794,6 +808,7 @@ namespace lfs::vis::gui {
                             command.cache->clip_y2 = fbottom;
                             recordPreviewDependency(*command.cache, saved);
                         }
+                        vulkan_render_interface_->EndCacheCapture();
                     }
 
                     if (command.cache->texture != 0) {
@@ -835,19 +850,31 @@ namespace lfs::vis::gui {
                     lfs::core::ScopedTimer timer(
                         timer_name + ".cache_refresh", 0.25,
                         lfs::core::LogLevel::Performance, LFS_SOURCE_SITE_CURRENT());
-                    if (command.cache->texture != 0)
+                    const Rml::TextureHandle reuse_texture =
+                        (command.cache->texture != 0 && command.cache->width == command.cache_width &&
+                         command.cache->height == command.cache_height)
+                            ? command.cache->texture
+                            : Rml::TextureHandle{};
+                    if (command.cache->texture != 0 && reuse_texture == 0)
                         releaseCachedVulkanContext(*command.cache);
 
                     vulkan_render_interface_->ResetContextRenderState();
+                    vulkan_render_interface_->BeginCacheCapture(0, 0, command.cache_width, command.cache_height);
+                    vulkan_render_interface_->SetContextOffset(0.0f, 0.0f);
+                    vulkan_render_interface_->SetContextClipRect(0.0f,
+                                                                 0.0f,
+                                                                 static_cast<float>(command.cache_width),
+                                                                 static_cast<float>(command.cache_height));
                     const Rml::LayerHandle layer = vulkan_render_interface_->PushLayer();
                     if (layer != 0) {
-                        vulkan_render_interface_->SetContextOffset(0.0f, 0.0f);
-                        vulkan_render_interface_->SetContextClipRect(0.0f,
-                                                                     0.0f,
-                                                                     static_cast<float>(command.cache_width),
-                                                                     static_cast<float>(command.cache_height));
                         command.context->Render();
-                        command.cache->texture = vulkan_render_interface_->SaveLayerAsTexture();
+                        const Rml::TextureHandle saved_texture =
+                            vulkan_render_interface_->SaveLayerAsTexture(reuse_texture);
+                        if (reuse_texture != 0 && saved_texture != 0 && saved_texture != reuse_texture)
+                            vulkan_render_interface_->ReleaseTexture(reuse_texture);
+                        // On save failure keep a still-valid reuse handle (avoid leaking it).
+                        command.cache->texture =
+                            saved_texture != 0 ? saved_texture : reuse_texture;
                         vulkan_render_interface_->SetTextureDebugName(command.cache->texture,
                                                                       command.context_name);
                         vulkan_render_interface_->PopLayer();
@@ -856,6 +883,7 @@ namespace lfs::vis::gui {
                         command.cache->height = saved ? command.cache_height : 0;
                         recordPreviewDependency(*command.cache, saved);
                     }
+                    vulkan_render_interface_->EndCacheCapture();
                 }
 
                 if (command.cache->texture != 0) {

@@ -140,10 +140,6 @@ namespace lfs::vis {
             return gui_session_restore_.hasPending();
         }
         // FPS monitoring
-        [[nodiscard]] float getCurrentFPS() const {
-            return rendering_manager_ ? rendering_manager_->getCurrentFPS() : 0.0f;
-        }
-
         [[nodiscard]] float getAverageFPS() const {
             return rendering_manager_ ? rendering_manager_->getAverageFPS() : 0.0f;
         }

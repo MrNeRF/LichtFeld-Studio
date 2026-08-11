@@ -63,7 +63,6 @@ namespace lfs::vis {
         void showWindow();
         void updateWindowSize(const char* reason = "manual",
                               ResizeIntent intent = ResizeIntent::Exact);
-        void swapBuffers();
         void pollEvents();
         void waitEvents(double timeout_seconds);
         bool shouldClose() const;
@@ -150,6 +149,7 @@ namespace lfs::vis {
         std::vector<std::string> pending_drop_files_;
 
         void beginTitlebarNativeMove();
+        void installX11ErrorHandlers();
         [[nodiscard]] ResizeEdge resizeEdgeAt(int x, int y) const;
         void setResizeCursorForEdge(ResizeEdge edge);
         void updateResizeCursor(int x, int y);

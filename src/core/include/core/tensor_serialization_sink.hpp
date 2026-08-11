@@ -17,6 +17,7 @@ namespace lfs::core {
     enum class TensorPayloadEncoding : std::uint8_t {
         NativeContiguous = 0,
         SwizzledShToCanonical = 1,
+        QuantizedShToCanonical = 2,
     };
 
     struct TensorSerializationDescriptor {
@@ -39,6 +40,7 @@ namespace lfs::core {
         virtual void write_tensor_payload(
             std::ostream& destination,
             const Tensor& source,
+            const Tensor* auxiliary_source,
             const TensorSerializationDescriptor& descriptor) = 0;
     };
 
@@ -68,6 +70,7 @@ namespace lfs::core {
     LFS_CORE_API void serialize_tensor_with_descriptor(
         std::ostream& destination,
         const Tensor& source,
-        const TensorSerializationDescriptor& descriptor);
+        const TensorSerializationDescriptor& descriptor,
+        const Tensor* auxiliary_source = nullptr);
 
 } // namespace lfs::core

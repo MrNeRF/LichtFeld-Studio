@@ -17,6 +17,7 @@
 #include "io/project_recovery.hpp"
 #include "kernels/depth_loss.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "losses/mask_loss.hpp"
 #include "losses/photometric_loss.hpp"
 #include "metrics/metrics.hpp"
 #include "optimizer/scheduler.hpp"
@@ -53,6 +54,7 @@ namespace lfs::vis {
 namespace lfs::training {
     class AdamOptimizer;
     struct TrainerRetryTestAccess;
+    struct TrainerCropboxMaskTestAccess;
     struct PPISPFileMetadata;
 
     struct PPISPViewportOverrides {
@@ -141,12 +143,6 @@ namespace lfs::training {
             Explicit,
             Autosave,
         };
-
-        // Legacy constructor - takes ownership of strategy and shares datasets
-        Trainer(std::shared_ptr<CameraDataset> dataset,
-                std::unique_ptr<IStrategy> strategy,
-                std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits);
-
         /**
          * @brief Constructor - takes Scene reference (Scene owns all data)
          *
@@ -210,6 +206,7 @@ namespace lfs::training {
         bool is_running() const { return is_running_.load(); }
         bool is_training_complete() const { return training_complete_.load(); }
         bool has_stopped() const { return stop_requested_.load(); }
+        bool is_saving_model() const { return saving_model_.load(std::memory_order_acquire); }
 
         // Set Python script paths to execute once before training; scripts register per-iteration callbacks.
         void set_python_scripts(std::vector<std::filesystem::path> scripts) {
@@ -267,6 +264,30 @@ namespace lfs::training {
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
         }
+
+        /// densify re-encodes pad-dropped q16 into the live
+        /// exportable block. TrainerManager installs begin/end that drop the
+        /// Vulkan import for the exclusive densify window and re-import after
+        /// commit — same exclusion principle as growExportableForDensify.
+        /// Headless leaves both empty (no-op).
+        void setExportableDensifyBarrier(std::function<bool()> begin,
+                                         std::function<bool()> end) {
+            exportable_densify_barrier_begin_ = std::move(begin);
+            exportable_densify_barrier_end_ = std::move(end);
+        }
+
+        enum class ExportableDensifyBarrierBegin {
+            NotInstalled,
+            Acquired,
+            Failed,
+        };
+
+        /// Begin densify-window Vulkan exclusion. Headless callers proceed on
+        /// NotInstalled; Failed means the mutation must be aborted.
+        [[nodiscard]] ExportableDensifyBarrierBegin beginExportableDensifyBarrier();
+        /// Release one nesting level. A failed outermost callback is logged and
+        /// stops training because the post-mutation device state is not known safe.
+        [[nodiscard]] bool endExportableDensifyBarrier();
 
         void setOnIterationStart(std::function<void()> cb) { on_iteration_start_ = std::move(cb); }
 
@@ -327,6 +348,7 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
         friend struct TrainerRetryTestAccess;
+        friend struct TrainerCropboxMaskTestAccess;
 
         // Helper for deferred event emission to prevent deadlocks
         struct DeferredEvents {
@@ -591,6 +613,7 @@ namespace lfs::training {
         std::shared_ptr<CameraLossHeatmapState> camera_loss_heatmap_;
 
         // Pre-loaded mask from pipelined dataloader (used in train_step)
+        // Sidecars are not ring-backed; if that changes, carry their ring lease here too.
         lfs::core::Tensor pipelined_mask_;
         lfs::core::Tensor pipelined_depth_;
         lfs::core::Tensor pipelined_normal_;
@@ -601,7 +624,7 @@ namespace lfs::training {
         // PPISP for physically-plausible ISP appearance modeling (optional)
         std::unique_ptr<PPISP> ppisp_;
 
-        // PPISP controller pool for novel view synthesis (Phase 2 distillation)
+        // PPISP controller pool for novel-view distillation.
         // Shared CNN and per-camera FC weights for memory efficiency
         std::unique_ptr<PPISPControllerPool> ppisp_controller_pool_;
 
@@ -672,6 +695,16 @@ namespace lfs::training {
 
         // Cached GPU scalar to avoid per-iteration allocation
         core::Tensor loss_accumulator_;
+        // persistent FastGS scale/opacity reg loss scalars (filled in fused bwd)
+        core::Tensor fused_scale_reg_loss_;
+        core::Tensor fused_opacity_reg_loss_;
+        // cropbox damping mask cache (rebuild on cropbox/topology change only)
+        core::Tensor cropbox_damping_cached_mask_;
+        size_t cropbox_damping_cached_n_ = 0;
+        size_t cropbox_damping_geom_fp_ = 0;
+        float cropbox_damping_cached_scale_ = 1.0f;
+        bool cropbox_damping_cache_valid_ = false;
+        std::uint64_t cropbox_damping_rebuild_count_ = 0;
         core::Tensor depth_loss_scalar_;
         core::Tensor depth_loss_grad_;
         core::Tensor depth_loss_grad_alpha_;
@@ -698,9 +731,12 @@ namespace lfs::training {
 
         // Pre-allocated SSIM-map workspace for densification error maps.
         lfs::training::kernels::SSIMMapWorkspace densification_ssim_workspace_;
-        lfs::training::kernels::MaskedFusedL1SSIMWorkspace masked_fused_workspace_;
-        lfs::training::kernels::DecoupledFusedL1SSIMWorkspace decoupled_fused_workspace_;
-        lfs::training::kernels::MaskedDecoupledFusedL1SSIMWorkspace masked_decoupled_fused_workspace_;
+        // masked / decoupled / fused / pure-SSIM workspaces live in
+        // photometric_loss_.arena() (mutually exclusive, single grow-only region).
+
+        // Mask preprocess workspace: photometric weight / opacity penalty / alpha-consistent
+        // (fused kernels; grow-only for allocation-free steady state when masks/ROI on).
+        lfs::training::losses::MaskPreprocessWorkspace mask_preprocess_workspace_;
 
         // Pre-allocated error map buffer for densification (avoids per-iteration allocation)
         core::Tensor densification_error_map_;
@@ -727,6 +763,7 @@ namespace lfs::training {
         std::atomic<bool> is_paused_{false};
         std::atomic<bool> is_running_{false};
         std::atomic<bool> training_complete_{false};
+        std::atomic<bool> saving_model_{false};
         std::atomic<bool> ready_to_start_{false};
         std::atomic<bool> initialized_{false};
         std::atomic<bool> shutdown_complete_{false};
@@ -801,7 +838,7 @@ namespace lfs::training {
         std::array<LossReadbackSlot, LOSS_RING> loss_slots_{};
         size_t loss_slot_head_ = 0;
 
-        // Always-compiled fault-injection seam used only by the Phase 5 OOM
+        // Always-compiled fault-injection seam used only by the OOM
         // recovery tests. Empty in production, where cudaDeviceSynchronize is
         // called directly.
         std::function<cudaError_t()> recovery_sync_for_testing_;
@@ -813,6 +850,25 @@ namespace lfs::training {
         std::vector<std::filesystem::path> python_scripts_;
 
         std::function<void()> on_iteration_start_;
+        std::function<bool()> exportable_densify_barrier_begin_;
+        std::function<bool()> exportable_densify_barrier_end_;
+        int exportable_densify_barrier_depth_ = 0;
         GTLoadConfigSnapshot gt_load_config_snapshot_;
+    };
+
+    // test hook for cropbox damping mask cache.
+    struct TrainerCropboxMaskTestAccess {
+        static void install(Trainer& t, core::SplatData& model, AdamOptimizer& optimizer) {
+            t.install_cropbox_step_damping(model, optimizer);
+        }
+        static void set_cropbox_lr_scale(Trainer& t, float scale) {
+            t.params_.optimization.cropbox_lr_scale = scale;
+        }
+        [[nodiscard]] static std::uint64_t rebuild_count(const Trainer& t) noexcept {
+            return t.cropbox_damping_rebuild_count_;
+        }
+        static void reset_rebuild_count(Trainer& t) noexcept {
+            t.cropbox_damping_rebuild_count_ = 0;
+        }
     };
 } // namespace lfs::training

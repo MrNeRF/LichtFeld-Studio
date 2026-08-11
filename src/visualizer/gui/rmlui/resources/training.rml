@@ -347,10 +347,6 @@
             <span class="prop-label">{{label_cpu_cache}}</span>
             <input type="checkbox" data-checked="use_cpu_cache" />
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.fs_cache" data-if="!pv_search_active">
-            <span class="prop-label">{{label_fs_cache}}</span>
-            <input type="checkbox" data-checked="use_fs_cache" />
-          </div>
           <div class="setting-row" data-tooltip="training.tooltip.use_16bit_color" data-if="!pv_search_active">
             <span class="prop-label">{{label_use_16bit_color}}</span>
             <input type="checkbox" data-checked="use_16bit_color" />

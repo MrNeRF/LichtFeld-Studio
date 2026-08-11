@@ -478,6 +478,48 @@ namespace lfs::vis::gui {
         ops.draw(host_, &ctx);
     }
 
+    PanelDirectRenderResult RmlPythonPanelAdapter::renderDirect(
+        const PanelDirectRenderRequest& request,
+        const PanelDrawContext& ctx) {
+        setPanelSpace(request.space);
+        if (request.mode == PanelDirectRenderMode::Measure)
+            return {.handled = true, .height = getDirectDrawHeight()};
+
+        setInputClipY(request.clip_y_min, request.clip_y_max);
+        setInput(request.input);
+        setForcedHeight(request.forced_height);
+
+        bool handled = true;
+        try {
+            switch (request.mode) {
+            case PanelDirectRenderMode::Measure:
+                break;
+            case PanelDirectRenderMode::Draw:
+                drawDirect(request.x, request.y, request.width, request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Cached:
+                handled = drawDirectCached(request.x, request.y, request.width,
+                                           request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Preload:
+                preloadDirect(request.width, request.height, ctx,
+                              request.clip_y_min, request.clip_y_max, request.input);
+                break;
+            }
+        } catch (...) {
+            setForcedHeight(0.0f);
+            setInput(nullptr);
+            setInputClipY(-1.0f, -1.0f);
+            throw;
+        }
+
+        const float height = getDirectDrawHeight();
+        setForcedHeight(0.0f);
+        setInput(nullptr);
+        setInputClipY(-1.0f, -1.0f);
+        return {.handled = handled, .height = height};
+    }
+
     void RmlPythonPanelAdapter::drawDirect(float x, float y, float w, float h,
                                            const PanelDrawContext& ctx) {
         const auto& ops = lfs::python::get_rml_panel_host_ops();
@@ -587,10 +629,6 @@ namespace lfs::vis::gui {
         }
     }
 
-    bool RmlPythonPanelAdapter::wantsKeyboard() const {
-        return false;
-    }
-
     bool RmlPythonPanelAdapter::needsAnimationFrame() const {
         if (content_dirty_)
             return true;
@@ -619,6 +657,37 @@ namespace lfs::vis::gui {
         }
 
         return ops.needs_animation ? ops.needs_animation(host_) : false;
+    }
+
+    std::optional<double> RmlPythonPanelAdapter::nextScheduledAnimationDelay() const {
+        std::optional<double> min_delay;
+
+        if (host_) {
+            const auto& ops = lfs::python::get_rml_panel_host_ops();
+            if (ops.next_scheduled_update_delay) {
+                double host_delay = 0.0;
+                if (ops.next_scheduled_update_delay(host_, &host_delay))
+                    min_delay = host_delay;
+            }
+        }
+
+        // Interval-policy panels: remaining time until next_update_at_ when it is
+        // still in the future. When unset/expired, needsAnimationFrame() is true.
+        if (!dirty_driven_updates_) {
+            if (next_update_at_ != std::chrono::steady_clock::time_point{}) {
+                const auto now = std::chrono::steady_clock::now();
+                if (now < next_update_at_) {
+                    const double remaining =
+                        std::chrono::duration<double>(next_update_at_ - now).count();
+                    if (remaining > 0.0) {
+                        if (!min_delay || remaining < *min_delay)
+                            min_delay = remaining;
+                    }
+                }
+            }
+        }
+
+        return min_delay;
     }
 
     void RmlPythonPanelAdapter::setForeground(bool fg) {

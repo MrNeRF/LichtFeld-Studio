@@ -136,6 +136,48 @@ namespace lfs::vis::gui {
         ops.draw(host_, &ctx);
     }
 
+    PanelDirectRenderResult RmlImModePanelAdapter::renderDirect(
+        const PanelDirectRenderRequest& request,
+        const PanelDrawContext& ctx) {
+        setPanelSpace(request.space);
+        if (request.mode == PanelDirectRenderMode::Measure)
+            return {.handled = true, .height = getDirectDrawHeight()};
+
+        setInputClipY(request.clip_y_min, request.clip_y_max);
+        setInput(request.input);
+        setForcedHeight(request.forced_height);
+
+        bool handled = true;
+        try {
+            switch (request.mode) {
+            case PanelDirectRenderMode::Measure:
+                break;
+            case PanelDirectRenderMode::Draw:
+                drawDirect(request.x, request.y, request.width, request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Cached:
+                handled = drawDirectCached(request.x, request.y, request.width,
+                                           request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Preload:
+                preloadDirect(request.width, request.height, ctx,
+                              request.clip_y_min, request.clip_y_max, request.input);
+                break;
+            }
+        } catch (...) {
+            setForcedHeight(0.0f);
+            setInput(nullptr);
+            setInputClipY(-1.0f, -1.0f);
+            throw;
+        }
+
+        const float height = getDirectDrawHeight();
+        setForcedHeight(0.0f);
+        setInput(nullptr);
+        setInputClipY(-1.0f, -1.0f);
+        return {.handled = handled, .height = height};
+    }
+
     void RmlImModePanelAdapter::preloadDirect(float w, float h, const PanelDrawContext& ctx,
                                               float clip_y_min, float clip_y_max,
                                               const PanelInputState* input) {
@@ -243,6 +285,18 @@ namespace lfs::vis::gui {
             return false;
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         return ops.needs_animation ? ops.needs_animation(host_) : false;
+    }
+
+    std::optional<double> RmlImModePanelAdapter::nextScheduledAnimationDelay() const {
+        if (!host_)
+            return std::nullopt;
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        if (!ops.next_scheduled_update_delay)
+            return std::nullopt;
+        double host_delay = 0.0;
+        if (!ops.next_scheduled_update_delay(host_, &host_delay))
+            return std::nullopt;
+        return host_delay;
     }
 
     void RmlImModePanelAdapter::reloadRmlResources() {

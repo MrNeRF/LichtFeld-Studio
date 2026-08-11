@@ -80,8 +80,8 @@ namespace lfs::core::prop {
         std::string name;
         std::string identifier;
         int value;
-        std::string locale_key;
-        std::string wire_value;
+        std::string locale_key = {};
+        std::string wire_value = {};
     };
 
     using PropDefault = std::variant<bool, int64_t, double, std::string,

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -47,7 +48,7 @@ namespace lfs::vis::editor {
             int start_character = 0;
             int length = 0;
             std::string type;
-            uint32_t modifiers = 0;
+            std::uint32_t modifiers = 0;
         };
 
         struct SemanticTokenList {

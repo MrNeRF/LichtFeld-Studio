@@ -963,8 +963,6 @@ namespace {
         EXPECT_FLOAT_EQ(
             reopened_parameters->dataset.loading_params.min_cpu_free_GB,
             3.5f);
-        EXPECT_FALSE(
-            reopened_parameters->dataset.loading_params.use_fs_cache);
         EXPECT_EQ(
             reopened_parameters->dataset.loading_params
                 .print_status_freq_num,
@@ -1147,7 +1145,7 @@ namespace {
         lfs::training::test::expect_optimizer_moment_bytes_equal(
             expected_checkpoint.optimizer_moments, target_strategy.get_optimizer());
         prove_ckpt("CKPT-129");
-        EXPECT_NE(target_strategy.get_scheduler(), nullptr);
+        EXPECT_TRUE(target_strategy.has_checkpoint_runtime_state());
         prove_ckpt("CKPT-130");
         EXPECT_STREQ(target_strategy.strategy_type(), lfs::core::param::kStrategyMCMC.data());
         prove_ckpt("CKPT-131");

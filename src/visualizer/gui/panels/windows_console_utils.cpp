@@ -15,7 +15,7 @@ namespace lfs::vis::gui::panels {
 
     void DrawSystemConsoleButton(const UIContext&) {}
 
-    void ToggleSystemConsole(const UIContext& ctx) {
+    void ToggleSystemConsole([[maybe_unused]] const UIContext& ctx) {
 #ifdef WIN32
         bool& visible = ctx.window_states->at("system_console");
         HWND hwnd = GetConsoleWindow();

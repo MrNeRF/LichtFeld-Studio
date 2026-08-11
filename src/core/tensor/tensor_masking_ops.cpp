@@ -4,6 +4,7 @@
 #include "core/device_fault.hpp"
 #include "core/logger.hpp"
 #include "internal/cuda_stream_context.hpp"
+#include "internal/memory_pool.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 #include <algorithm>
@@ -134,6 +135,11 @@ namespace lfs::core {
     } // namespace
 
     // ============= Masking Operations =============
+    // These kernels scan data and mask as dense
+    // linear buffers. Non-contiguous inputs MUST go through contiguous_read /
+    // linear buffers. Non-contiguous inputs must go through contiguous_read /
+    // mutate_logical_view materialize firewalls before the linear path. Do not
+    // add a strided bypass without a matching stride-aware kernel and regression tests.
     Tensor Tensor::masked_select(const Tensor& mask) const {
         LFS_CUDA_BREADCRUMB_STREAM("tensor.masked_select", stream());
         tensor_contract::require_valid(
@@ -149,6 +155,9 @@ namespace lfs::core {
                        std::format("masked_select cannot broadcast mask shape {} to {}",
                                    mask.shape().str(), shape_.str()));
 
+        // Materialize firewall: dense input + dense (broadcast) mask, then recurse.
+        // Without this, linear kernels scan physical storage (for example,
+        // transposed [[1,2,3],[4,5,6]] + mask T F T F F T → got [1,3,6] vs ref [1,2,6]).
         Tensor input_materialized;
         Tensor broadcast_mask;
         const Tensor* logical_mask = &mask;
@@ -249,6 +258,8 @@ namespace lfs::core {
         detail::require_scalar_representable(dtype_, value, "masked_fill_");
         const float stored_value = dtype_ == DataType::Bool && value != 0.0f ? 1.0f : value;
 
+        // In-place linear fill would clobber sibling storage on a
+        // strided view. Stage densify → fill → strided copy_from writeback.
         if (!is_contiguous()) {
             return mutate_logical_view(
                 [&](Tensor& materialized) {
@@ -1429,6 +1440,9 @@ namespace lfs::core {
         LFS_ASSERT_MSG(is_integer_index_dtype(idx.dtype()),
                        "index_put_ indices must be Int32 or Int64");
 
+        // Non-contiguous destinations must not be written with a dense
+        // linear scatter (overwrites allocation base / wrong cells). Contiguous
+        // offset views are safe because data_ptr() already applies storage_offset_.
         if (!is_contiguous()) {
             return mutate_logical_view(
                 [&](Tensor& materialized) {
@@ -1766,22 +1780,26 @@ namespace lfs::core {
         }
 
         if (device_ == Device::CUDA) {
-            // Use CUDA kernel for counting
+            // Use CUDA kernel for counting. Route the 8-byte counter through the
+            // slab pool so we never touch the untracked classic cudaMalloc heap.
             size_t count = 0;
-            size_t* d_count = nullptr;
-            LFS_CUDA_CHECK(cudaMalloc(&d_count, sizeof(size_t)));
-            LFS_CUDA_CHECK(cudaMemset(d_count, 0, sizeof(size_t)));
+            cudaStream_t s = stream();
+            size_t* d_count = static_cast<size_t*>(
+                CudaMemoryPool::instance().allocate(sizeof(size_t), s));
+            LFS_ASSERT_MSG(d_count != nullptr,
+                           "count_nonzero failed to allocate pooled d_count");
+            LFS_CUDA_CHECK(cudaMemsetAsync(d_count, 0, sizeof(size_t), s));
 
             if (is_bool_like(dtype_)) {
-                tensor_ops::launch_count_nonzero_bool(ptr<unsigned char>(), d_count, numel(), stream());
+                tensor_ops::launch_count_nonzero_bool(ptr<unsigned char>(), d_count, numel(), s);
             } else if (dtype_ == DataType::Float32) {
-                tensor_ops::launch_count_nonzero_float(ptr<float>(), d_count, numel(), stream());
+                tensor_ops::launch_count_nonzero_float(ptr<float>(), d_count, numel(), s);
             }
 
             // API BOUNDARY: Sync before reading result from GPU
-            LFS_CUDA_CHECK(cudaDeviceSynchronize());
+            LFS_CUDA_CHECK(cudaStreamSynchronize(s));
             LFS_CUDA_CHECK(cudaMemcpy(&count, d_count, sizeof(size_t), cudaMemcpyDeviceToHost));
-            LFS_CUDA_CHECK(cudaFree(d_count));
+            CudaMemoryPool::instance().deallocate(d_count, s);
 
             return count;
         } else {

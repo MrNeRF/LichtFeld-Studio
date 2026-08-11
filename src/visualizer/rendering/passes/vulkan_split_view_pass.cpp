@@ -818,6 +818,9 @@ namespace lfs::vis {
                                          side,
                                          w,
                                          h);
+            vmaSetAllocationName(allocator, p.alloc,
+                                 side[0] == 'l' ? "Split-view left panel image"
+                                                : "Split-view right panel image");
             p.image_vram_label = std::format("{}:{}x{}", side, w, h);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.split_view.panel_image",

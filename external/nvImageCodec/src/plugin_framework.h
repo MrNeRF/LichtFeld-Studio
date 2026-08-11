@@ -19,6 +19,7 @@
 
 #include "idirectory_scaner.h"
 #include "ilibrary_loader.h"
+#include <filesystem>
 #include <map>
 #include <nvimgcodec.h>
 #include <string>
@@ -33,6 +34,10 @@ namespace nvimgcodec {
 
     std::string GetDefaultExtensionsPath();
     char GetPathSeparator();
+    // Build the default extensions search path from a libnvimgcodec dynamic-library
+    // directory. Returns "<so_dir>/extensions".
+    // Exposed for unit tests.
+    std::string BuildDefaultExtensionsPathFromSoDir(const std::filesystem::path& so_dir);
     class PluginFramework {
     public:
         explicit PluginFramework(ILogger* logger, ICodecRegistry* codec_registry, std::unique_ptr<IEnvironment> env,

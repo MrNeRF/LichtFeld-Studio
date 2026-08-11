@@ -44,8 +44,7 @@ namespace nvimgcodec {
          * Assumes, that `lo <= hi`, i.e. every coordinate of `lo` will be lower or equal to
          * corresponding coordinate of `hi`.
          */
-        constexpr NVIMGCODEC_HOST_DEV Box(const corner_t& lo, const corner_t& hi) : lo(lo),
-                                                                                    hi(hi) {}
+        constexpr NVIMGCODEC_HOST_DEV Box(const corner_t& lo, const corner_t& hi) : lo(lo), hi(hi) {}
 
         constexpr NVIMGCODEC_HOST_DEV corner_t extent() const {
             return hi - lo;

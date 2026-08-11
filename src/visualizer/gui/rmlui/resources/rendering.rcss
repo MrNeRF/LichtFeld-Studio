@@ -19,7 +19,6 @@ body {
 #content {
     min-width: 0;
 }
-
 .color-picker-popup {
     display: none;
     position: absolute;

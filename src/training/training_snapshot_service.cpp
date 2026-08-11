@@ -9,7 +9,10 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error_typed.hpp"
 #include "core/logger.hpp"
+#include "core/sh_value_quant.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor_serialization_sink.hpp"
+#include "lfs/training/sh_value_quant_kernels.hpp"
 #include "strategies/istrategy.hpp"
 
 #include <algorithm>
@@ -214,6 +217,14 @@ namespace lfs::training {
             lfs::core::Device source_device =
                 lfs::core::Device::CPU;
             cudaStream_t source_stream = nullptr;
+            std::uint64_t source_bytes = 0;
+            const void* auxiliary_source_pointer = nullptr;
+            lfs::core::TensorShape auxiliary_source_shape;
+            lfs::core::DataType auxiliary_source_dtype =
+                lfs::core::DataType::Float32;
+            lfs::core::Device auxiliary_source_device =
+                lfs::core::Device::CPU;
+            cudaStream_t auxiliary_source_stream = nullptr;
             lfs::core::TensorSerializationDescriptor descriptor;
             std::uint64_t payload_offset = 0;
             std::uint64_t payload_bytes = 0;
@@ -308,9 +319,11 @@ namespace lfs::training {
             void write_tensor_payload(
                 std::ostream& destination,
                 const lfs::core::Tensor& source,
+                const lfs::core::Tensor* auxiliary_source,
                 const lfs::core::TensorSerializationDescriptor&
                     descriptor) override {
-                validate_tensor_source(source, descriptor);
+                validate_tensor_source(
+                    source, auxiliary_source, descriptor);
                 const auto position = destination.tellp();
                 if (position == std::streampos(-1)) {
                     throw std::runtime_error(
@@ -318,11 +331,34 @@ namespace lfs::training {
                 }
                 const auto bytes = descriptor.payload_bytes();
                 witnesses_.push_back(TensorLayoutWitness{
-                    .source_pointer = source.data_ptr(),
+                    .source_pointer =
+                        resolve_source_pointer(source),
                     .source_shape = source.shape(),
                     .source_dtype = source.dtype(),
                     .source_device = source.device(),
                     .source_stream = source.stream(),
+                    .source_bytes = source.bytes(),
+                    .auxiliary_source_pointer =
+                        auxiliary_source
+                            ? resolve_source_pointer(
+                                  *auxiliary_source)
+                            : nullptr,
+                    .auxiliary_source_shape =
+                        auxiliary_source
+                            ? auxiliary_source->shape()
+                            : lfs::core::TensorShape{},
+                    .auxiliary_source_dtype =
+                        auxiliary_source
+                            ? auxiliary_source->dtype()
+                            : lfs::core::DataType::Float32,
+                    .auxiliary_source_device =
+                        auxiliary_source
+                            ? auxiliary_source->device()
+                            : lfs::core::Device::CPU,
+                    .auxiliary_source_stream =
+                        auxiliary_source
+                            ? auxiliary_source->stream()
+                            : nullptr,
                     .descriptor = descriptor,
                     .payload_offset =
                         static_cast<std::uint64_t>(
@@ -352,6 +388,7 @@ namespace lfs::training {
 
             static void validate_tensor_source(
                 const lfs::core::Tensor& source,
+                const lfs::core::Tensor* auxiliary_source,
                 const lfs::core::TensorSerializationDescriptor&
                     descriptor) {
                 if (!source.is_valid()) {
@@ -365,7 +402,8 @@ namespace lfs::training {
                 if (descriptor.encoding ==
                     lfs::core::TensorPayloadEncoding::
                         NativeContiguous) {
-                    if (source.shape() !=
+                    if (auxiliary_source ||
+                        source.shape() !=
                             descriptor.serialized_shape ||
                         source.dtype() != descriptor.dtype ||
                         source.bytes() !=
@@ -375,14 +413,11 @@ namespace lfs::training {
                     }
                     return;
                 }
-                if (descriptor.encoding !=
-                        lfs::core::TensorPayloadEncoding::
-                            SwizzledShToCanonical ||
-                    source.device() !=
+                if (source.device() !=
                         lfs::core::Device::CUDA ||
-                    source.dtype() !=
-                        lfs::core::DataType::Float32 ||
                     source.ndim() != 1 ||
+                    descriptor.dtype !=
+                        lfs::core::DataType::Float32 ||
                     descriptor.serialized_shape.rank() != 3 ||
                     descriptor.serialized_shape[0] !=
                         descriptor.sh_primitives ||
@@ -390,14 +425,61 @@ namespace lfs::training {
                         descriptor.sh_coefficients_rest ||
                     descriptor.serialized_shape[2] !=
                         lfs::core::kShChannels ||
-                    source.numel() !=
-                        lfs::core::sh_swizzled_float_count(
-                            descriptor.sh_primitives,
-                            descriptor
-                                .sh_layout_coefficients_rest)) {
+                    descriptor.sh_layout_coefficients_rest <
+                        descriptor.sh_coefficients_rest) {
                     throw std::runtime_error(
                         "Swizzled SH snapshot dimensions are inconsistent");
                 }
+                if (descriptor.encoding ==
+                    lfs::core::TensorPayloadEncoding::
+                        SwizzledShToCanonical) {
+                    if (auxiliary_source ||
+                        (source.dtype() !=
+                             lfs::core::DataType::Float32 &&
+                         source.dtype() !=
+                             lfs::core::DataType::Float16) ||
+                        source.numel() !=
+                            lfs::core::sh_swizzled_float_count(
+                                descriptor.sh_primitives,
+                                descriptor
+                                    .sh_layout_coefficients_rest)) {
+                        throw std::runtime_error(
+                            "Swizzled SH snapshot dimensions are inconsistent");
+                    }
+                    return;
+                }
+                if (descriptor.encoding !=
+                        lfs::core::TensorPayloadEncoding::
+                            QuantizedShToCanonical ||
+                    source.dtype() !=
+                        lfs::core::DataType::Float16 ||
+                    source.numel() !=
+                        lfs::core::sh_value_quant::
+                            sh_value_u16_count(
+                                descriptor.sh_primitives,
+                                descriptor
+                                    .sh_layout_coefficients_rest) ||
+                    !auxiliary_source ||
+                    !auxiliary_source->is_valid() ||
+                    !auxiliary_source->is_contiguous() ||
+                    auxiliary_source->device() !=
+                        lfs::core::Device::CUDA ||
+                    auxiliary_source->dtype() !=
+                        lfs::core::DataType::Float32 ||
+                    auxiliary_source->numel() <
+                        lfs::core::sh_value_quant::
+                                n_bounds_for_prims(
+                                    descriptor.sh_primitives) *
+                            2) {
+                    throw std::runtime_error(
+                        "Quantized SH snapshot dimensions are inconsistent");
+                }
+            }
+
+            static const void* resolve_source_pointer(
+                const lfs::core::Tensor& source) {
+                return lfs::core::resolve_exportable_device_ptr(
+                    source);
             }
 
         private:
@@ -663,10 +745,10 @@ namespace lfs::training {
                 std::ranges::any_of(
                     layout,
                     [](const TensorLayoutWitness& witness) {
-                        return witness.descriptor.encoding ==
+                        return witness.descriptor.encoding !=
                                lfs::core::
                                    TensorPayloadEncoding::
-                                       SwizzledShToCanonical;
+                                       NativeContiguous;
                     });
             if (needs_sh_scratch && !sh_scratch) {
                 require_cuda(
@@ -698,6 +780,12 @@ namespace lfs::training {
                         lfs::core::Device::CUDA &&
                     witness.source_stream) {
                     streams.insert(witness.source_stream);
+                }
+                if (witness.auxiliary_source_device ==
+                        lfs::core::Device::CUDA &&
+                    witness.auxiliary_source_stream) {
+                    streams.insert(
+                        witness.auxiliary_source_stream);
                 }
             }
             for (const auto stream : streams) {
@@ -820,17 +908,7 @@ namespace lfs::training {
 
         static std::uint64_t source_raw_bytes(
             const TensorLayoutWitness& witness) {
-            if (witness.descriptor.encoding ==
-                lfs::core::TensorPayloadEncoding::
-                    NativeContiguous) {
-                return witness.payload_bytes;
-            }
-            return static_cast<std::uint64_t>(
-                       lfs::core::sh_swizzled_float_count(
-                           witness.descriptor.sh_primitives,
-                           witness.descriptor
-                               .sh_layout_coefficients_rest)) *
-                   sizeof(float);
+            return witness.source_bytes;
         }
 
         [[nodiscard]] std::size_t
@@ -887,18 +965,69 @@ namespace lfs::training {
                 throw std::runtime_error(
                     "Bounded SH snapshot band is misaligned");
             }
-            lfs::core::
-                undo_reorder_sh_range_from_swizzled(
-                    static_cast<const float*>(
-                        witness.source_pointer),
-                    static_cast<float*>(sh_scratch),
-                    tensor_byte_offset / sizeof(float),
-                    bytes / sizeof(float),
-                    witness.descriptor.sh_primitives,
-                    witness.descriptor.sh_coefficients_rest,
-                    witness.descriptor
-                        .sh_layout_coefficients_rest,
-                    d2h_stream);
+            const auto encoding =
+                witness.descriptor.encoding;
+            if (encoding ==
+                lfs::core::TensorPayloadEncoding::
+                    QuantizedShToCanonical) {
+                lfs::training::sh_value::
+                    decode_shN_u16_range_to_canonical(
+                        static_cast<const std::uint16_t*>(
+                            witness.source_pointer),
+                        static_cast<const float*>(
+                            witness
+                                .auxiliary_source_pointer),
+                        static_cast<float*>(sh_scratch),
+                        tensor_byte_offset /
+                            sizeof(float),
+                        bytes / sizeof(float),
+                        witness.descriptor.sh_primitives,
+                        witness.descriptor
+                            .sh_coefficients_rest,
+                        witness.descriptor
+                            .sh_layout_coefficients_rest,
+                        d2h_stream);
+            } else if (encoding ==
+                           lfs::core::
+                               TensorPayloadEncoding::
+                                   SwizzledShToCanonical &&
+                       witness.source_dtype ==
+                           lfs::core::DataType::Float16) {
+                lfs::training::sh_value::
+                    decode_shN_f16_range_to_canonical(
+                        static_cast<const std::uint16_t*>(
+                            witness.source_pointer),
+                        static_cast<float*>(sh_scratch),
+                        tensor_byte_offset /
+                            sizeof(float),
+                        bytes / sizeof(float),
+                        witness.descriptor.sh_primitives,
+                        witness.descriptor
+                            .sh_coefficients_rest,
+                        witness.descriptor
+                            .sh_layout_coefficients_rest,
+                        d2h_stream);
+            } else if (encoding ==
+                       lfs::core::TensorPayloadEncoding::
+                           SwizzledShToCanonical) {
+                lfs::core::
+                    undo_reorder_sh_range_from_swizzled(
+                        static_cast<const float*>(
+                            witness.source_pointer),
+                        static_cast<float*>(sh_scratch),
+                        tensor_byte_offset /
+                            sizeof(float),
+                        bytes / sizeof(float),
+                        witness.descriptor.sh_primitives,
+                        witness.descriptor
+                            .sh_coefficients_rest,
+                        witness.descriptor
+                            .sh_layout_coefficients_rest,
+                        d2h_stream);
+            } else {
+                throw std::runtime_error(
+                    "Unsupported SH snapshot encoding");
+            }
             require_cuda(
                 cudaMemcpyAsync(
                     static_cast<std::byte*>(
@@ -1387,6 +1516,7 @@ namespace lfs::training {
             void write_tensor_payload(
                 std::ostream& destination,
                 const lfs::core::Tensor& source,
+                const lfs::core::Tensor* auxiliary_source,
                 const lfs::core::TensorSerializationDescriptor&
                     descriptor) override {
                 if (index_ >= layout_.size()) {
@@ -1394,7 +1524,7 @@ namespace lfs::training {
                         "Snapshot layout gained a tensor");
                 }
                 CountingTensorSink::validate_tensor_source(
-                    source, descriptor);
+                    source, auxiliary_source, descriptor);
                 const auto position = destination.tellp();
                 if (position == std::streampos(-1)) {
                     throw std::runtime_error(
@@ -1407,7 +1537,27 @@ namespace lfs::training {
                             position));
                 const auto bytes =
                     descriptor.payload_bytes();
-                if (source.data_ptr() !=
+                const auto auxiliary_matches =
+                    auxiliary_source
+                        ? expected
+                                      .auxiliary_source_pointer ==
+                                  CountingTensorSink::
+                                      resolve_source_pointer(
+                                          *auxiliary_source) &&
+                              expected
+                                      .auxiliary_source_shape ==
+                                  auxiliary_source->shape() &&
+                              expected
+                                      .auxiliary_source_dtype ==
+                                  auxiliary_source->dtype() &&
+                              expected
+                                      .auxiliary_source_device ==
+                                  auxiliary_source->device()
+                        : expected
+                                  .auxiliary_source_pointer ==
+                              nullptr;
+                if (CountingTensorSink::
+                            resolve_source_pointer(source) !=
                         expected.source_pointer ||
                     source.shape() !=
                         expected.source_shape ||
@@ -1415,6 +1565,9 @@ namespace lfs::training {
                         expected.source_dtype ||
                     source.device() !=
                         expected.source_device ||
+                    source.bytes() !=
+                        expected.source_bytes ||
+                    !auxiliary_matches ||
                     !descriptors_equal(
                         descriptor,
                         expected.descriptor) ||
@@ -1433,7 +1586,7 @@ namespace lfs::training {
                             bytes));
                 } else {
                     append_device_tensor(
-                        source, descriptor, expected,
+                        descriptor, expected,
                         offset, bytes);
                     destination.seekp(
                         static_cast<std::streamoff>(
@@ -1466,7 +1619,6 @@ namespace lfs::training {
 
         private:
             void append_device_tensor(
-                const lfs::core::Tensor& source,
                 const lfs::core::
                     TensorSerializationDescriptor&
                         descriptor,
@@ -1490,10 +1642,10 @@ namespace lfs::training {
                             std::min<std::uint64_t>(
                                 available,
                                 bytes - tensor_offset));
-                    if (descriptor.encoding ==
+                    if (descriptor.encoding !=
                         lfs::core::
                             TensorPayloadEncoding::
-                                SwizzledShToCanonical) {
+                                NativeContiguous) {
                         count -=
                             count % sizeof(float);
                     }
@@ -1510,7 +1662,7 @@ namespace lfs::training {
                             *active_slot_,
                             active_slot_bytes_,
                             static_cast<const std::byte*>(
-                                source.data_ptr()) +
+                                witness.source_pointer) +
                                 tensor_offset,
                             count);
                     } else {
@@ -1971,6 +2123,12 @@ namespace lfs::training {
                     witness.source_stream) {
                     streams.insert(
                         witness.source_stream);
+                }
+                if (witness.auxiliary_source_device ==
+                        lfs::core::Device::CUDA &&
+                    witness.auxiliary_source_stream) {
+                    streams.insert(
+                        witness.auxiliary_source_stream);
                 }
             }
             for (const auto stream : streams) {

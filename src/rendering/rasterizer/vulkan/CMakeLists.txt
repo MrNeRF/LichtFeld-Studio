@@ -209,6 +209,12 @@ _vulkan_add_slang_shader(projection_forward_3dgut  vertex_shader.slang EXPORT_MO
 # Canonical quantized LOD pool variants (lod_pool_quant.hpp)
 _vulkan_add_slang_shader(projection_forward_quant       vertex_shader.slang EXPORT_MODE=0 LFS_QUANT_POOL=1)
 _vulkan_add_slang_shader(projection_forward_quant_3dgut vertex_shader.slang EXPORT_MODE=0 LFS_3DGUT_PROJECTION=1 LFS_QUANT_POOL=1)
+# Standalone PLY/SOG IEEE f16 SH rest
+_vulkan_add_slang_shader(projection_forward_shn_f16       vertex_shader.slang EXPORT_MODE=0 LFS_SHN_F16=1)
+_vulkan_add_slang_shader(projection_forward_shn_f16_3dgut vertex_shader.slang EXPORT_MODE=0 LFS_3DGUT_PROJECTION=1 LFS_SHN_F16=1)
+# Training-viewport exportable pad-dropped q16 SH rest (zero-copy dequant)
+_vulkan_add_slang_shader(projection_forward_shn_q16       vertex_shader.slang EXPORT_MODE=0 LFS_SHN_Q16=1)
+_vulkan_add_slang_shader(projection_forward_shn_q16_3dgut vertex_shader.slang EXPORT_MODE=0 LFS_3DGUT_PROJECTION=1 LFS_SHN_Q16=1)
 
 # selection_mask.slang → compact 1-byte-per-splat brush/rectangle/polygon masks
 _vulkan_add_slang_shader(selection_mask            selection_mask.slang)
@@ -239,6 +245,8 @@ _vulkan_add_slang_shader(cull_splats                  cull_splats.slang EXPORT_M
 _vulkan_add_slang_shader(cull_prepare                 cull_splats.slang EXPORT_MODE=0 CULL_ENTRY=2)
 _vulkan_add_slang_shader(projection_forward_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1)
 _vulkan_add_slang_shader(projection_forward_quant_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_QUANT_POOL=1)
+_vulkan_add_slang_shader(projection_forward_shn_f16_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_SHN_F16=1)
+_vulkan_add_slang_shader(projection_forward_shn_q16_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_SHN_Q16=1)
 _vulkan_add_slang_shader(prepare_visible_chain        prepare_visible_chain.slang)
 _vulkan_add_slang_shader(copy_visible_indices         copy_visible_indices.slang)
 _vulkan_add_slang_shader(cumsum_block_scan_indirect        cumsum.slang CUMSUM_PHASE=1 CUMSUM_INDIRECT=1)

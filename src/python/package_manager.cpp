@@ -296,10 +296,6 @@ namespace lfs::python {
 #endif
     }
 
-    bool PackageManager::is_venv_ready() const {
-        return m_venv_ready && std::filesystem::exists(venv_python());
-    }
-
     bool PackageManager::ensure_venv() {
         std::lock_guard lock(m_mutex);
 
@@ -498,90 +494,6 @@ namespace lfs::python {
                 return true;
         }
         return false;
-    }
-
-    bool PackageManager::install_async(const std::string& package,
-                                       UvRunner::OutputCallback on_output,
-                                       UvRunner::CompletionCallback on_complete) {
-        if (!ensure_venv())
-            return false;
-
-        if (!m_runner) {
-            m_runner = std::make_unique<UvRunner>();
-        }
-
-        if (m_runner->is_running()) {
-            LOG_ERROR("Another UV operation is already running");
-            return false;
-        }
-
-        LOG_INFO("Installing {} (async)", package);
-
-        m_runner->set_output_callback(std::move(on_output));
-        m_runner->set_completion_callback(std::move(on_complete));
-
-        return m_runner->start({"pip", "install", package, "--python", lfs::core::path_to_utf8(venv_python())});
-    }
-
-    bool PackageManager::uninstall_async(const std::string& package,
-                                         UvRunner::OutputCallback on_output,
-                                         UvRunner::CompletionCallback on_complete) {
-        if (!ensure_venv())
-            return false;
-
-        if (!m_runner) {
-            m_runner = std::make_unique<UvRunner>();
-        }
-
-        if (m_runner->is_running()) {
-            LOG_ERROR("Another UV operation is already running");
-            return false;
-        }
-
-        LOG_INFO("Uninstalling {} (async)", package);
-
-        m_runner->set_output_callback(std::move(on_output));
-        m_runner->set_completion_callback(std::move(on_complete));
-
-        return m_runner->start({"pip", "uninstall", package, "-y", "--python", lfs::core::path_to_utf8(venv_python())});
-    }
-
-    bool PackageManager::install_torch_async(const std::string& cuda_version,
-                                             const std::string& torch_version,
-                                             UvRunner::OutputCallback on_output,
-                                             UvRunner::CompletionCallback on_complete) {
-        if (!ensure_venv())
-            return false;
-
-        if (!m_runner) {
-            m_runner = std::make_unique<UvRunner>();
-        }
-
-        if (m_runner->is_running()) {
-            LOG_ERROR("Another UV operation is already running");
-            return false;
-        }
-
-        const std::string cuda_tag = core::get_pytorch_cuda_tag(cuda_version);
-        LOG_INFO("PyTorch CUDA tag (async): {}", cuda_tag);
-
-        std::string package = "torch";
-        if (!torch_version.empty())
-            package += "==" + torch_version;
-
-        const std::string index_url = std::string(PYTORCH_INDEX) + cuda_tag;
-
-        LOG_INFO("Installing {} from {} (async)", package, cuda_tag);
-
-        m_runner->set_output_callback(std::move(on_output));
-        m_runner->set_completion_callback(std::move(on_complete));
-
-        std::vector<std::string> args = {"pip", "install", package, "--extra-index-url", index_url,
-                                         "--python", lfs::core::path_to_utf8(venv_python())};
-        if (torch_version.empty())
-            args.push_back("--upgrade");
-
-        return m_runner->start(args);
     }
 
     bool PackageManager::install_async_raw(const std::string& package,

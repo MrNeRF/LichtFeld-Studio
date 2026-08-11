@@ -45,7 +45,10 @@
     "view.ui_scale.auto": "Auto",
     "help": "Help",
     "help.getting_started": "Getting Started",
-    "help.about": "About LichtFeld Studio"
+    "help.about": "About LichtFeld Studio",
+    "view.performance_hud": "Performance HUD",
+    "edit.preferences": "Preferences...",
+    "view.debug_info": "Debug Info..."
   },
   "window": {
     "input_settings": "Input Settings",
@@ -53,7 +56,10 @@
     "scene": "Scene",
     "rendering": "Rendering",
     "training": "Training",
-    "histogram": "Histogram"
+    "histogram": "Histogram",
+    "about": "About LichtFeld Studio",
+    "debug_info": "Debug Info",
+    "preferences": "Preferences"
   },
   "getting_started": {
     "title": "Getting Started",
@@ -562,7 +568,38 @@
           "8": "Train at one-eighth image resolution"
         }
       }
-    }
+    },
+    "section.masking": "Mask Settings",
+    "section.thresholds": "Thresholds",
+    "section.save_steps": "Save/Eval Steps",
+    "section.sparsity": "Sparsity Settings",
+    "opt.strategy": "Strategy:",
+    "opt.iterations": "Iterations:",
+    "opt.sh_degree": "SH Degree:",
+    "opt.use_bilateral": "Bilateral Grid:",
+    "opt.mask_mode": "Mask Mode:",
+    "opt.sparsity": "Sparsity:",
+    "opt.gut": "GUT:",
+    "opt.undistort": "Undistort:",
+    "opt.mip_filter": "Mip Filter:",
+    "opt.bg_modulation": "BG Modulation:",
+    "refinement.gradient_thr": "  Gradient Thr:",
+    "masking.invert_masks": "Invert:",
+    "tooltip.keep_model": "Keep trained model, discard dataset",
+    "tooltip.gradient_thr": "Gradient threshold for densification",
+    "tooltip.btn_save_checkpoint": "Save current state to disk",
+    "status.enabled": "Enabled",
+    "status.disabled": "Disabled",
+    "status.yes": "Yes",
+    "status.no": "No",
+    "button.start": "Start Training",
+    "button.resume": "Resume",
+    "button.pause": "Pause",
+    "button.stop": "Stop Training",
+    "button.reset": "Reset Training",
+    "button.save_checkpoint": "Save Checkpoint",
+    "button.add": "Add",
+    "button.remove": "Remove"
   },
   "rendering": "Rendering",
   "scene": {
@@ -628,7 +665,21 @@
     "log_critical": "Critical",
     "log_off": "Off",
     "go_to_image": "Go to Image",
-    "open_in_gt_compare": "Open in GT Compare"
+    "open_in_gt_compare": "Open in GT Compare",
+    "save_asset_as": "Save Asset As...",
+    "go_to_cam_view": "Go to Cam View",
+    "images": "Images ({}):",
+    "no_images": "No images loaded.",
+    "move_node": "Move: %s",
+    "filter": "Filter...",
+    "no_models_loaded": "No models loaded",
+    "right_click_to_add": "Right-click to add...",
+    "no_actions": "(No actions)",
+    "no_groups_available": "No groups available",
+    "cannot_delete_training": "Cannot delete while training is in progress",
+    "background": "Background",
+    "training_enabled_tooltip": "Included in training",
+    "training_disabled_tooltip": "Excluded from training"
   },
   "export": {
     "overwrite": "Overwrite",
@@ -646,7 +697,12 @@
     "export": "Export",
     "complete": "Complete",
     "failed": "Failed",
-    "select_at_least_one": "Select at least one model"
+    "select_at_least_one": "Select at least one model",
+    "title": "Export",
+    "select_models": "Select Models:",
+    "exporting": "Exporting...",
+    "writing_ply": "Writing PLY",
+    "writing_spz": "Writing SPZ"
   },
   "common": {
     "ok": "OK",
@@ -668,7 +724,9 @@
     "reset": "Reset",
     "auto": "Auto",
     "undo": "Undo",
-    "redo": "Redo"
+    "redo": "Redo",
+    "edit": "Edit",
+    "double_click_reset": "dbl-click reset"
   },
   "status": {
     "ready": "Ready",
@@ -690,19 +748,28 @@
     "eta": "ETA",
     "psnr": "PSNR",
     "ssim": "SSIM",
-    "unknown": "Unknown"
+    "unknown": "Unknown",
+    "dataset_no_trainer": "Dataset (No Trainer)",
+    "dataset_ready": "Dataset (Ready)",
+    "training_paused": "Training (Paused)",
+    "training_finished": "Training Finished",
+    "ply_models_count": "PLY Models: {}"
   },
   "mode": {
     "empty": "Empty",
     "dataset": "Dataset",
-    "viewer": "Viewer"
+    "viewer": "Viewer",
+    "edit_mode": "Edit Mode",
+    "ply_models": "PLY Models:"
   },
   "controls": {
     "wasd": "WASD",
     "zoom": "Zoom"
   },
   "preferences": {
-    "language": "Language:"
+    "language": "Language:",
+    "title": "Preferences",
+    "select_language": "Select Language"
   },
   "main_panel": {
     "console": "Console",
@@ -763,7 +830,21 @@
     "environment": "Environment",
     "environment_map_path": "Environment Map",
     "environment_exposure": "Exposure",
-    "environment_rotation": "Rotation"
+    "environment_rotation": "Rotation",
+    "windows": "Windows",
+    "scene_panel": "Scene Panel",
+    "show_console": "Show system Console",
+    "hide_console": "Hide system Console",
+    "background": "Background",
+    "visible_axes": "Visible Axes:",
+    "plane_yz": "YZ (X-plane)",
+    "plane_xz": "XZ (Y-plane)",
+    "plane_xy": "XY (Z-plane)",
+    "fov_info": "FOV",
+    "gut_mode": "GUT (3DGUT)",
+    "ppisp_mode_manual": "Manual",
+    "ppisp_mode_auto": "Auto (Controller)",
+    "selection_colors": "Selection Colors"
   },
   "tool_defs": {
     "select": "Select",
@@ -831,7 +912,11 @@
     "fly_camera": "Fly Camera",
     "drone_camera": "Drone Camera",
     "transform_tools": "Transform Tools",
-    "unselect": "Unselect"
+    "unselect": "Unselect",
+    "resize_bounds": "Resize Bounds",
+    "reset_default": "Reset to Default",
+    "fullscreen": "Fullscreen",
+    "toggle_ui": "Toggle UI"
   },
   "transform": {
     "node": "Node: %s",
@@ -844,7 +929,12 @@
     "reset_transform": "Reset Transform",
     "nodes_selected": "%zu nodes selected",
     "bake_transform": "Bake Transform",
-    "tool": "Transform"
+    "tool": "Transform",
+    "space": "Space: %s",
+    "rotation": "Rotation:",
+    "rotation_degrees": "Rotation (degrees):",
+    "uniform_scale": "Uniform Scale",
+    "use_gizmo": "Use gizmo to transform"
   },
   "selection": {
     "operation_failed": "Selection Operation Failed",
@@ -884,7 +974,16 @@
     "parameters_unavailable": "Parameters not available",
     "no_dataset_loaded": "No dataset loaded",
     "iters_per_sec": "iters/sec",
-    "sparsity": "Sparsity Settings"
+    "sparsity": "Sparsity Settings",
+    "save_checkpoint": "Save Checkpoint",
+    "checkpoint_saved": "Checkpoint saved!",
+    "finished": "Finished",
+    "save_steps": "Save/Eval Steps",
+    "new_step": "New Step",
+    "mrnf_params": "MRNF Parameters",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   },
   "tooltip": {
     "mip_filter": "Reduce aliasing for sub-pixel Gaussians",
@@ -1057,7 +1156,15 @@
         "manual": "Manual: adjust correction sliders directly",
         "auto": "Auto: use the trained controller for correction"
       }
-    }
+    },
+    "gut_mode": "For fisheye/distorted/equirect cameras",
+    "ppisp_color_rgb": "Shift chromaticity for this color channel",
+    "locked": "Locked: other groups cannot overwrite",
+    "unlocked": "Unlocked: can be overwritten",
+    "point_size": "Point Size",
+    "scale_camera": "Scale",
+    "fov": "Camera field of view in degrees",
+    "selection_colors": "Colors for selection visualization"
   },
   "exit_popup": {
     "title": "Exit Application?",
@@ -1067,7 +1174,8 @@
     "training_title": "Stop Training and Exit?",
     "training_message": "Training is still in progress. Stop & Save ends training and saves the project. Discard & Exit ends training without keeping the training project as the current project.",
     "stop_and_save": "Stop & Save",
-    "discard_and_exit": "Discard & Exit"
+    "discard_and_exit": "Discard & Exit",
+    "exit": "Exit"
   },
   "load_dataset_popup": {
     "title": "Load Dataset",
@@ -1096,7 +1204,8 @@
     "directory": "directory",
     "file": "file",
     "items": "items",
-    "and_more": "... and"
+    "and_more": "... and",
+    "cannot_open": "Cannot Open"
   },
   "export_dialog": {
     "format": "FORMAT",
@@ -1126,7 +1235,10 @@
     "import_failed": "Import failed: %s",
     "import_complete_title": "Import Complete",
     "import_failed_title": "Import Failed",
-    "num_splats": "num Splats: %s"
+    "num_splats": "num Splats: %s",
+    "loss": "Loss:",
+    "gaussians_count": "%s Gaussians",
+    "status_label": "Status: %s"
   },
   "input_settings": {
     "title": "INPUT SETTINGS",
@@ -1256,10 +1368,16 @@
     "trigger.double_click": " Double-Click",
     "trigger.drag": " Drag",
     "trigger.scroll": "Scroll",
-    "trigger.unknown": "Unknown"
+    "trigger.unknown": "Unknown",
+    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "binding": "Binding"
   },
   "debug_info": {
-    "clear_history": "Clear History"
+    "clear_history": "Clear History",
+    "free_memory": "Free: %.2f GB",
+    "enable_tracing": "Enable Operation Tracing",
+    "recorded_operations": "Recorded operations: %zu",
+    "print_to_log": "Print to Log"
   },
   "training_params": {
     "strategy": "Strategy:",
@@ -1300,7 +1418,25 @@
     "ppisp_freeze_gaussians": "Freeze Gaussians:",
     "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
     "ppisp_sidecar_path": "Sidecar Path:",
-    "enable_eval": "Enable Eval:"
+    "enable_eval": "Enable Eval:",
+    "opacity_penalty_weight": "  Opacity Penalty Weight:",
+    "opacity_penalty_power": "  Opacity Penalty Power:",
+    "mask_threshold": "  Mask Threshold:",
+    "bg_settings": "Background Settings",
+    "bg_mode_color": "Color",
+    "bg_mode_modulation": "Modulation",
+    "bg_mode_image": "Image",
+    "bg_mode_random": "Random",
+    "bg_modulation": "BG Modulation:",
+    "init_opacity": "Init Opacity:",
+    "init_scaling": "Init Scaling:",
+    "random_init": "Random Init:",
+    "num_points": "  Num Points:",
+    "extent": "  Extent:",
+    "prune_opacity": "Prune Opacity:",
+    "ppisp_settings": "PPISP Settings",
+    "ppisp_enable_controller": "Enable Controller:",
+    "disabled": "Disabled"
   },
   "image_preview": {
     "title": "Image Preview",
@@ -1339,7 +1475,32 @@
     "storage_section": "STORAGE",
     "color_picker": "Pick",
     "rotate_left": "Rotate 90° Left",
-    "rotate_right": "Rotate 90° Right"
+    "rotate_right": "Rotate 90° Right",
+    "show_info_panel": "Show Info Panel",
+    "actual_size": "Actual Size",
+    "previous": "Previous",
+    "next": "Next",
+    "first": "First",
+    "last": "Last",
+    "name": "Name: %s",
+    "size_mb": "Size: %.2f MB",
+    "size_kb": "Size: %.1f KB",
+    "size_bytes": "Size: %zu bytes",
+    "modified": "Modified: %s",
+    "color_space": "Color Space: %s",
+    "camera": "Camera: %s",
+    "lens": "Lens: %s",
+    "focal_length": "Focal Length: %s",
+    "focal_35mm": "35mm Equiv: %s",
+    "exposure": "Exposure: %s",
+    "aperture": "Aperture: %s",
+    "date": "Date: %s",
+    "software": "Software: %s",
+    "fit_status": "Fit to Window: %s",
+    "overlay_status": "Overlay: %s",
+    "file_label": "File: %s",
+    "visible": "Visible",
+    "hidden": "Hidden"
   },
   "startup": {
     "supported_by": "Supported by",
@@ -1351,7 +1512,10 @@
     "drop_to_import": "Drop to Import",
     "drop_to_import_subtitle": "PLY, SOG, SPZ, RAD, USD, COLMAP dataset, or Project",
     "discord": "Discord",
-    "donate": "Donate"
+    "donate": "Donate",
+    "discovering_plugins": "Discovering startup plugins...",
+    "loading_plugin": "Loading {}/{}: {}",
+    "plugin_loading_skipped": "Startup plugin loading skipped"
   },
   "python_console": {
     "new": "New",
@@ -1423,7 +1587,8 @@
   "axis": {
     "x": "X:",
     "y": "Y:",
-    "z": "Z:"
+    "z": "Z:",
+    "u": "U:"
   },
   "resume_checkpoint_popup": {
     "title": "Resume Checkpoint",
@@ -1462,7 +1627,9 @@
     "instruction": "Please free up disk space or choose a different location.",
     "cancel": "Cancel",
     "change_location": "Change Location",
-    "retry": "Retry"
+    "retry": "Retry",
+    "title": "Insufficient Disk Space",
+    "select_output_location": "Select Output Location"
   },
   "video_extractor": {
     "title": "Extract Frames from Video",
@@ -1549,7 +1716,8 @@
     "overwrite_cancel": "Cancel",
     "rotate_cw": "Rotate clockwise",
     "rotate_ccw": "Rotate counter-clockwise",
-    "discarded_format": " ({} discarded)"
+    "discarded_format": " ({} discarded)",
+    "extracting": "Extracting: %d / %d frames"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -1600,7 +1768,9 @@
     "primary_view": "Primary View",
     "secondary_view": "Secondary View",
     "gpu": "GPU",
-    "strategy_default": "Default"
+    "strategy_default": "Default",
+    "split": "Split:",
+    "ui_fps": "UI FPS"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL or shorthand:",
@@ -1700,7 +1870,19 @@
     "rotate": "Rotate",
     "playback_time": "Playback {:.2f}s",
     "keyframe_preview": "Keyframe {} Preview",
-    "edit_delta": "{:.3f}m  {:.1f}{}"
+    "edit_delta": "{:.3f}m  {:.1f}{}",
+    "focal_length_mm": "Focal Length (mm)",
+    "go_to_first_keyframe": "Go to first keyframe",
+    "stop": "Stop",
+    "pause": "Pause (Space)",
+    "go_to_last_keyframe": "Go to last keyframe",
+    "loop_on": "Loop: ON",
+    "loop_off": "Loop: OFF",
+    "edit_time": "Edit Time...",
+    "easing_tooltip": "Easing controls outgoing motion\n(last keyframe has no outgoing segment)",
+    "time_seconds": "Time (s)",
+    "loop_point_tooltip": "Loop Point @ {} (returns to start)",
+    "keyframe_tooltip": "Keyframe @ {} (double-click to edit)"
   },
   "file_association": {
     "title": "Set as Default Application",
@@ -1709,7 +1891,8 @@
     "not_now": "Not Now",
     "dont_ask": "Don't Ask Again",
     "menu_register": "Set as Default Application...",
-    "menu_unregister": "Remove as Default Application..."
+    "menu_unregister": "Remove as Default Application...",
+    "success": "File associations registered successfully."
   },
   "error_actions": {
     "retry": "Retry",
@@ -1969,7 +2152,34 @@
     "calls": "Calls",
     "delta": "Delta",
     "time": "Time",
-    "gpu": "GPU"
+    "gpu": "GPU",
+    "perf_hud_title": "Performance",
+    "perf_this_process": "This process",
+    "perf_other_processes": "Other processes",
+    "perf_free": "Free",
+    "perf_cores": "cores",
+    "perf_process_cpu_note": "Process CPU, share of all cores",
+    "perf_tab_ledger": "Ledger",
+    "perf_ledger_closes": "Ledger closes",
+    "perf_ledger_gap": "Unattributed",
+    "perf_ledger_over": "Over-attributed, numbers unreliable",
+    "perf_ledger_attributed": "Attributed",
+    "perf_nested_disclosure": "Disclosure, not counted again",
+    "perf_no_owner": "No owner",
+    "perf_untracked": "Untracked",
+    "perf_retention": "Retention",
+    "perf_reclaimable": "Reclaimable",
+    "perf_required": "Required",
+    "perf_allocated": "Allocated",
+    "perf_slack": "Slack",
+    "perf_over_budget": "Over budget",
+    "perf_estimate_detected": "Estimate detected",
+    "perf_degenerate_pair": "Publisher reports required equal to allocated",
+    "perf_tracking_off": "Detailed memory tracking is off",
+    "perf_enable_tracking": "Enable",
+    "perf_expand": "Expand",
+    "perf_collapse": "Collapse",
+    "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {
     "grouped_changes": "Grouped changes",
@@ -2080,5 +2290,19 @@
     "recoverable_badge": "Recoverable changes",
     "crash_notice": "LichtFeld Studio closed unexpectedly. Recover last session?",
     "last_opened": "Last opened"
+  },
+  "messages": {
+    "no_data_loaded": "No data loaded",
+    "use_file_menu": "Use File menu to import",
+    "no_models_loaded": "No models loaded",
+    "right_click_to_add": "Right-click to add...",
+    "training_complete": "Training Complete",
+    "training_stopped": "Training Stopped",
+    "training_error": "Training Error",
+    "param_manager_unavailable": "ParameterManager not available",
+    "failed_to_load_params": "Failed to load params:",
+    "err_distorted_images": "Distorted images detected. Enable --gut or --undistort to train on cameras with distortion.",
+    "err_ortho_not_supported": "Training on cameras with ortho model is not supported yet.",
+    "err_non_pinhole": "Enable --gut or --undistort to train on cameras with non-pinhole model."
   }
 }

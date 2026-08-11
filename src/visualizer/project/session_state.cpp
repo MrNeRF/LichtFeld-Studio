@@ -760,7 +760,7 @@ namespace lfs::vis::project {
                     "depth_filter_transform",
                     [](const RenderSettings& settings) {
                         return Json{{"rotation", json_array(matrix_array(
-                                                     settings.depth_filter_transform.getRotationMat()))},
+                                                     glm::mat3_cast(settings.depth_filter_transform.getRotation())))},
                                     {"translation", vec3_json(
                                                         settings.depth_filter_transform.getTranslation())}};
                     },

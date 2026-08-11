@@ -429,7 +429,23 @@ namespace lfs::core {
         auto cropped_sh0 = splat_data._sh0.index_select(0, indices).contiguous();
         Tensor cropped_shN;
         const size_t layout_rest = splat_data.max_sh_coeffs_rest();
-        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0) {
+        const bool use_canonical_shN =
+            splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0 &&
+            (splat_data._shN.dtype() != DataType::Float32 || splat_data.shN_value_quantized() ||
+             splat_data.shN_ieee_f16());
+        if (use_canonical_shN) {
+            // q16 / IEEE-f16: dequant to [N,K,3] then index_select (no ptr<float> on codes).
+            Tensor canon = splat_data.shN_canonical();
+            if (canon.device() != splat_data._means.device()) {
+                canon = canon.to(splat_data._means.device());
+            }
+            auto indices_for_select = indices;
+            if (indices_for_select.dtype() != DataType::Int32 &&
+                indices_for_select.dtype() != DataType::Int64) {
+                indices_for_select = indices_for_select.to(DataType::Int32);
+            }
+            cropped_shN = canon.index_select(0, indices_for_select).contiguous();
+        } else if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0) {
             cropped_shN = Tensor::empty({static_cast<size_t>(points_selected), layout_rest, 3},
                                         splat_data._shN.device());
             if (indices.dtype() == DataType::Int64) {
@@ -632,9 +648,20 @@ namespace lfs::core {
             splat_data._means.device());
 
         Tensor shN_selected_swizzled;
+        Tensor shN_selected_canonical;
         const auto layout_rest = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
-        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 &&
-            layout_rest > 0) {
+        const bool q16_or_f16 =
+            splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0 &&
+            (splat_data._shN.dtype() != DataType::Float32 || splat_data.shN_value_quantized() ||
+             splat_data.shN_ieee_f16());
+        if (q16_or_f16) {
+            Tensor canon = splat_data.shN_canonical();
+            if (canon.device() != splat_data._means.device()) {
+                canon = canon.to(splat_data._means.device());
+            }
+            shN_selected_canonical = canon.index_select(0, indices_tensor).contiguous();
+        } else if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 &&
+                   layout_rest > 0) {
             shN_selected_swizzled = Tensor::zeros_direct(
                 {sh_swizzled_float_count(static_cast<size_t>(num_required_splat), layout_rest)},
                 sh_swizzled_float_count(static_cast<size_t>(num_required_splat), layout_rest),
@@ -653,7 +680,11 @@ namespace lfs::core {
 
         splat_data._means = splat_data._means.index_select(0, indices_tensor).contiguous();
         splat_data._sh0 = splat_data._sh0.index_select(0, indices_tensor).contiguous();
-        if (shN_selected_swizzled.is_valid() && shN_selected_swizzled.numel() > 0) {
+        if (shN_selected_canonical.is_valid() && shN_selected_canonical.numel() > 0) {
+            splat_data._shN_value_bounds = Tensor{};
+            splat_data.shN_set_from_canonical(shN_selected_canonical,
+                                              static_cast<size_t>(num_required_splat));
+        } else if (shN_selected_swizzled.is_valid() && shN_selected_swizzled.numel() > 0) {
             splat_data._shN = std::move(shN_selected_swizzled);
         }
         splat_data._scaling = splat_data._scaling.index_select(0, indices_tensor).contiguous();
@@ -674,6 +705,27 @@ namespace lfs::core {
                        splat_data._densification_info.size(1) == num_points) {
                 splat_data._densification_info =
                     splat_data._densification_info.index_select(1, indices_tensor).contiguous();
+            }
+        }
+
+        // keep deleted mask sized to the new N (or invalidate).
+        if (splat_data.has_deleted_mask()) {
+            if (static_cast<size_t>(splat_data.deleted().numel()) == static_cast<size_t>(num_points)) {
+                Tensor gathered = splat_data.deleted()
+                                      .index_select(0, indices_tensor)
+                                      .contiguous();
+                if (gathered.dtype() != DataType::Bool) {
+                    gathered = gathered.to(DataType::Bool);
+                }
+                if (gathered.device() != Device::CUDA) {
+                    gathered = gathered.cuda();
+                }
+                gathered.set_name("splat.deleted_mask");
+                splat_data.deleted() = std::move(gathered);
+                splat_data.refresh_deleted_count();
+                splat_data.notify_deleted_mask_changed();
+            } else {
+                splat_data.reconcile_deleted_mask();
             }
         }
 
@@ -788,7 +840,22 @@ namespace lfs::core {
 
         Tensor shN_selected;
         const size_t layout_rest = splat_data.max_sh_coeffs_rest();
-        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0) {
+        const bool use_canonical_shN =
+            splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0 &&
+            (splat_data._shN.dtype() != DataType::Float32 || splat_data.shN_value_quantized() ||
+             splat_data.shN_ieee_f16());
+        if (use_canonical_shN) {
+            Tensor canon = splat_data.shN_canonical();
+            if (canon.device() != splat_data._means.device()) {
+                canon = canon.to(splat_data._means.device());
+            }
+            auto indices_for_select = indices;
+            if (indices_for_select.dtype() != DataType::Int32 &&
+                indices_for_select.dtype() != DataType::Int64) {
+                indices_for_select = indices_for_select.to(DataType::Int32);
+            }
+            shN_selected = canon.index_select(0, indices_for_select).contiguous();
+        } else if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0) {
             shN_selected = Tensor::empty({static_cast<size_t>(count), layout_rest, 3},
                                          splat_data._shN.device());
             if (indices.dtype() == DataType::Int64) {

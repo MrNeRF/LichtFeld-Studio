@@ -131,13 +131,6 @@ namespace lfs::vis {
         return makeSplitViewPanelLayouts(total_width, settings.split_position);
     }
 
-    std::optional<int> SplitViewService::dividerPixel(const RenderSettings& settings, const int total_width) const {
-        if (!isActive(settings) || total_width <= 0) {
-            return std::nullopt;
-        }
-        return splitViewDividerPixel(total_width, settings.split_position);
-    }
-
     std::optional<glm::ivec2> SplitViewService::gtContentDimensions() const {
         if (!hasValidGTContext()) {
             return std::nullopt;

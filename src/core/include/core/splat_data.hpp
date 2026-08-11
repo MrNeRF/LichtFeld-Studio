@@ -268,8 +268,35 @@ namespace lfs::core {
         inline Tensor& shN_raw() { return _shN; }
         inline const Tensor& shN_raw() const { return _shN; }
 
+        // float2 bounds per 256-splat block when SH value quant is ON.
+        inline Tensor& shN_value_bounds() { return _shN_value_bounds; }
+        inline const Tensor& shN_value_bounds() const { return _shN_value_bounds; }
+        // q16 pad-dropped codes: Float16 bit-patterns + per-block bounds.
+        // IEEE f16 float4-swizzle (exportable viewer path) is also Float16 but has
+        // no bounds — do not treat it as q16.
+        [[nodiscard]] bool shN_value_quantized() const {
+            return _shN.is_valid() && _shN.dtype() == DataType::Float16 &&
+                   _shN_value_bounds.is_valid() && _shN_value_bounds.numel() > 0;
+        }
+        // IEEE half float4-swizzle (same topology as fp32, 2 B/component). Used by
+        // the GUI exportable block so the Vulkan viewer can zero-copy bind half SH.
+        [[nodiscard]] bool shN_ieee_f16() const {
+            return _shN.is_valid() && _shN.dtype() == DataType::Float16 && !shN_value_quantized();
+        }
+
+        // Non-SH display attrs (rotation / log-scale / logit opacity) as IEEE f16.
+        // Means stay Float32. Used by the viewer layout when a path stores half
+        // attrs (lodq pool / future exportable packing). Training exportable
+        // currently keeps these as Float32 and zero-copies them into the viewport.
+        [[nodiscard]] bool non_sh_attrs_f16() const {
+            return _rotation.is_valid() && _rotation.dtype() == DataType::Float16 &&
+                   _scaling.is_valid() && _scaling.dtype() == DataType::Float16 &&
+                   _opacity.is_valid() && _opacity.dtype() == DataType::Float16;
+        }
+
         // Materialise a deswizzled [N, K, 3] copy of resident shN storage where
         // K = sh_rest_coeffs of the max SH degree. Always allocates a new tensor — not a view.
+        // When quantized, dequants to fp32 first (PLY/checkpoint bit-compat).
         Tensor shN_canonical() const;
 
         // Host-side variant for export/checkpoint paths. Copies the resident swizzled buffer
@@ -319,6 +346,22 @@ namespace lfs::core {
         void undelete(const Tensor& mask);
         void clear_deleted();
 
+        // VkSplat (and other consumers) require: if a deleted mask is present it
+        // must be a contiguous CUDA bool tensor of numel == size(). Call this
+        // after any N-mutating path (densify grow, compact, load, random_choose)
+        // that may have left the mask stale. Legal outcomes:
+        //   - mask matches the contract (possibly rebuilt / resized in place)
+        //   - mask cleared (has_deleted_mask()==false)
+        // Bumps deleted_mask_version() when the mask storage or content changes.
+        void reconcile_deleted_mask();
+
+        // True when has_deleted_mask() and the packer contract holds.
+        [[nodiscard]] bool deleted_mask_matches_size() const;
+
+        // Bump deleted_mask_version after external writers replace/mutate
+        // deleted() storage (strategies, compact gathers, exportable rebind).
+        void notify_deleted_mask_changed();
+
         // Permanently remove deleted gaussians (compacts data)
         // Returns number of gaussians removed
         size_t apply_deleted();
@@ -329,6 +372,9 @@ namespace lfs::core {
 
         // ========== SH degree management ==========
         void increment_sh_degree();
+        // Non-q16 shN verify/resize shared by degree setters (fail-loud on
+        // unclassifiable Float16 storage). Internal maintenance helper.
+        void verify_or_resize_non_q16_shN(size_t n, size_t cap, uint32_t layout_rest);
         void set_active_sh_degree(int sh_degree);
         void set_max_sh_degree(int sh_degree);
         bool set_sh_degree(int sh_degree);
@@ -343,6 +389,65 @@ namespace lfs::core {
         // the default device allocator.
         void set_tensor_allocator(SplatTensorAllocator allocator) {
             _tensor_allocator = std::move(allocator);
+        }
+        [[nodiscard]] bool has_tensor_allocator() const noexcept {
+            return static_cast<bool>(_tensor_allocator);
+        }
+        // Allocate a named param tensor via the active backing allocator when set
+        // (exportable / Vulkan-external), otherwise zeros_direct. Used by SH q16
+        // encode to keep codes+bounds inside the exportable block.
+        [[nodiscard]] Tensor allocate_named_param(
+            const TensorShape& shape,
+            std::size_t capacity,
+            DataType dtype,
+            std::string_view name);
+
+        // Optional hook for exportable / external storage growth.
+        // When densification needs more rows than the committed exportable block,
+        // AdamOptimizer calls this before falling back to Tensor::cat (which would
+        // leave the Vulkan zero-copy path). Returns true if capacity >= needed.
+        using CapacityEnsureFn = std::function<bool(std::size_t needed_rows)>;
+        void set_capacity_ensure(CapacityEnsureFn fn) {
+            _capacity_ensure = std::move(fn);
+        }
+        // Full-model rebuilds must transfer and reinstall this hook. A fresh
+        // SplatData has none, so densification would otherwise abort when its
+        // committed capacity is exhausted.
+        [[nodiscard]] bool has_capacity_ensure() const noexcept {
+            return static_cast<bool>(_capacity_ensure);
+        }
+        [[nodiscard]] CapacityEnsureFn release_capacity_ensure() {
+            return std::move(_capacity_ensure);
+        }
+        // Bumped by rebindSplatData / exportable grow so densify code that holds
+        // Tensor& locals across ensure_param_capacity can detect invalidated
+        // references after a grow.
+        [[nodiscard]] std::uint64_t param_layout_generation() const noexcept {
+            return _param_layout_generation;
+        }
+        void note_param_layout_changed() noexcept {
+            ++_param_layout_generation;
+        }
+        // needed_rows growth hook. When layout_changed is non-null, sets it true
+        // iff the hook rebased parameter tensors (generation advanced). Callers
+        // that held Tensor& across the call MUST re-fetch via get_param / means_raw.
+        [[nodiscard]] bool ensure_param_capacity(std::size_t needed_rows,
+                                                 bool* layout_changed = nullptr) {
+            if (layout_changed) {
+                *layout_changed = false;
+            }
+            if (means_raw().is_valid() && means_raw().capacity() >= needed_rows) {
+                return true;
+            }
+            if (!_capacity_ensure) {
+                return false;
+            }
+            const std::uint64_t gen0 = _param_layout_generation;
+            const bool ok = _capacity_ensure(needed_rows);
+            if (layout_changed) {
+                *layout_changed = (_param_layout_generation != gen0);
+            }
+            return ok;
         }
 
     public:
@@ -360,7 +465,12 @@ namespace lfs::core {
         // Parameters
         Tensor _means;
         Tensor _sh0;
+        // When sh_value quant is ON: Float16 bit-pattern u16 codes,
+        // pad-dropped cell-linear layout (n_cells = coeffs_rest*3). When OFF: Float32
+        // float4-swizzled as before. Access via shN() / data_ptr(); do not assume dtype.
         Tensor _shN;
+        // float2 bounds per 256-splat block (only when quant ON); empty when fp32.
+        Tensor _shN_value_bounds;
         Tensor _scaling;
         Tensor _rotation;
         Tensor _opacity;
@@ -376,6 +486,9 @@ namespace lfs::core {
 
         // Backing allocator for parameter tensors (see set_tensor_allocator).
         SplatTensorAllocator _tensor_allocator;
+        CapacityEnsureFn _capacity_ensure;
+        // Monotonic; advanced when exportable rebind rewrites param tensor VAs.
+        std::uint64_t _param_layout_generation = 0;
         std::vector<FrozenRange> _frozen_ranges;
 
         // Allow free functions in splat_data_transform.cpp to access private members

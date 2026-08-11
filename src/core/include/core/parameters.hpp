@@ -235,6 +235,12 @@ namespace lfs::core {
             float init_rho = 0.0005f;
             float prune_ratio = 0.6f;
 
+            // Perf / profiling instruments (CLI-only; no env toggles)
+            bool perf_bench = false;     // --perf-bench → write perf_bench.json
+            int perf_bench_warmup = 200; // --perf-bench-warmup=N
+            int profile_start_iter = -1; // --profile-window=START:STOP
+            int profile_stop_iter = -1;  // one-past-last profiled iteration
+
             std::string config_file = "";
 
             void scale_steps(float ratio);
@@ -259,7 +265,6 @@ namespace lfs::core {
             bool use_cpu_memory = true;
             float min_cpu_free_memory_ratio = 0.1f; // make sure at least 10% RAM is free
             float min_cpu_free_GB = 1.0f;           // min GB we want to be free
-            bool use_fs_cache = true;
             bool print_cache_status = true;
             int print_status_freq_num = 500; // every print_status_freq_num calls for load print cache status
             bool use_16bit_color = false;

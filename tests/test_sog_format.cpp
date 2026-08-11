@@ -120,14 +120,24 @@ namespace {
 class SogFormatTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Test files
-        test_dir = fs::path("/home/paja/projects/gaussian-splatting-cuda/test_formats");
-        sog_bundle = test_dir / "test.sog";
-        original_ply = fs::path("/home/paja/projects/gaussian-splatting-cuda/output/splat_30000.ply");
-
-        // Create test directory if it doesn't exist
-        if (!fs::exists(test_dir)) {
-            fs::create_directories(test_dir);
+        // External fixtures are optional; tests that require unavailable fixtures skip.
+        for (const auto& candidate : {
+                 fs::path("test_formats"),
+                 fs::path("tests/data/sog"),
+             }) {
+            if (fs::exists(candidate)) {
+                test_dir = candidate;
+                break;
+            }
+        }
+        sog_bundle = test_dir.empty() ? fs::path{} : test_dir / "test.sog";
+        for (const auto& candidate : {
+                 fs::path("output/splat_30000.ply"),
+             }) {
+            if (fs::exists(candidate)) {
+                original_ply = candidate;
+                break;
+            }
         }
     }
 
@@ -552,22 +562,94 @@ TEST_F(SogFormatTest, ExportRoundtrip) {
     fs::remove_all(export_path);
 }
 
+// Synthetic SOG export/import roundtrip with SH-rest (degree 1). Exercises the
+// dequant/reformat path for resident float swizzled shN (and q16 when enabled).
+TEST_F(SogFormatTest, SyntheticExportRoundtripWithShN) {
+    constexpr size_t N = 64;
+    constexpr int sh_degree = 1; // 3 rest coeffs
+
+    std::vector<float> means(N * 3), sh0(N * 3), shN(N * 3 * 3), scales(N * 3),
+        rots(N * 4), opac(N);
+    for (size_t i = 0; i < N; ++i) {
+        means[i * 3 + 0] = static_cast<float>(i) * 0.01f;
+        means[i * 3 + 1] = static_cast<float>(i % 7) * 0.02f;
+        means[i * 3 + 2] = static_cast<float>(i % 5) * 0.03f;
+        sh0[i * 3 + 0] = 0.1f * static_cast<float>(i % 3);
+        sh0[i * 3 + 1] = 0.2f;
+        sh0[i * 3 + 2] = -0.1f;
+        for (int k = 0; k < 9; ++k)
+            shN[i * 9 + k] = 0.01f * static_cast<float>((i + k) % 11);
+        scales[i * 3 + 0] = scales[i * 3 + 1] = scales[i * 3 + 2] = -3.0f;
+        rots[i * 4] = 1.0f;
+        opac[i] = 0.5f;
+    }
+
+    auto splat = lfs::core::SplatData(
+        sh_degree,
+        lfs::core::Tensor::from_vector(means, {N, size_t{3}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(sh0, {N, size_t{1}, size_t{3}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(shN, {N, size_t{3}, size_t{3}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(scales, {N, size_t{3}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(rots, {N, size_t{4}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(opac, {N, size_t{1}}, lfs::core::Device::CUDA),
+        1.0f);
+
+    ScopedSogDirectory out_dir;
+    const fs::path export_path = out_dir.path() / "synthetic_shN.sog";
+    lfs::io::SogSaveOptions options{
+        .output_path = export_path,
+        .kmeans_iterations = 5};
+    auto write_result = lfs::io::save_sog(splat, options);
+    ASSERT_TRUE(write_result.has_value()) << "SOG export failed: " << write_result.error().format();
+
+    auto reimport = lfs::io::load_sog(export_path);
+    ASSERT_TRUE(reimport.has_value()) << "SOG reimport failed: " << reimport.error();
+    EXPECT_EQ(reimport->size(), N);
+    EXPECT_EQ(reimport->get_max_sh_degree(), sh_degree);
+    EXPECT_TRUE(reimport->means().is_valid());
+    EXPECT_TRUE(reimport->sh0().is_valid());
+    EXPECT_TRUE(reimport->shN_raw().is_valid() || reimport->shN_canonical().is_valid());
+
+    // Lossy k-means: compare SH0 average as a coarse integrity check.
+    auto orig_sh0 = splat.sh0().cpu();
+    auto re_sh0 = reimport->sh0().cpu();
+    double o = 0.0, r = 0.0;
+    for (size_t i = 0; i < N * 3; ++i) {
+        o += orig_sh0.ptr<float>()[i];
+        r += re_sh0.ptr<float>()[i];
+    }
+    EXPECT_NEAR(r / (N * 3), o / (N * 3), 0.5);
+}
+
 // Regression: a SOG loaded through the full Loader must route its tensors through the
 // supplied splat allocator (Vulkan-external storage), or the Vulkan splat renderer rejects
 // it ("refusing full input-copy fallback"). The SOG decoder ignores the allocator, so the
 // LoaderService migrates the model post-load. Before the fix the allocator was never called.
 TEST_F(SogFormatTest, LoaderRoutesSogThroughSplatAllocator) {
-    fs::path sog_path;
-    for (const auto& candidate : {sog_bundle,
-                                  fs::path("/home/paja/projects/gaussian-splatting-cuda/splat_30000.sog")}) {
-        if (fs::exists(candidate)) {
-            sog_path = candidate;
-            break;
-        }
+    // Build a tiny SOG in-process so the allocator routing test does not depend on
+    // external fixture files under /home/paja/...
+    constexpr size_t N = 16;
+    std::vector<float> means(N * 3, 0.0f), sh0(N * 3, 0.1f), scales(N * 3, -3.0f),
+        rots(N * 4, 0.0f), opac(N, 0.5f);
+    for (size_t i = 0; i < N; ++i) {
+        means[i * 3] = static_cast<float>(i) * 0.05f;
+        rots[i * 4] = 1.0f;
     }
-    if (sog_path.empty()) {
-        GTEST_SKIP() << "No SOG test file available (test.sog or splat_30000.sog)";
-    }
+    auto source_splat = lfs::core::SplatData(
+        0,
+        lfs::core::Tensor::from_vector(means, {N, size_t{3}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(sh0, {N, size_t{1}, size_t{3}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::zeros({size_t{0}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(scales, {N, size_t{3}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(rots, {N, size_t{4}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(opac, {N, size_t{1}}, lfs::core::Device::CUDA),
+        1.0f);
+
+    ScopedSogDirectory out_dir;
+    const fs::path sog_path = out_dir.path() / "allocator_route.sog";
+    lfs::io::SogSaveOptions save_opts{.output_path = sog_path, .kmeans_iterations = 3};
+    auto save = lfs::io::save_sog(source_splat, save_opts);
+    ASSERT_TRUE(save.has_value()) << save.error().format();
 
     std::vector<std::string> allocated_names;
     lfs::io::LoadOptions options;

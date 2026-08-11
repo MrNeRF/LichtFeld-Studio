@@ -70,6 +70,12 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API void launch_clamp_scalar(float* data, float min_val, float max_val, size_t n, cudaStream_t stream);
     LFS_CORE_API void launch_clamp_fused(const float* src, float* dst, float min_val, float max_val, size_t n, cudaStream_t stream);
     LFS_CORE_API void launch_clamp_scalar_int(int* data, int min_val, int max_val, size_t n, cudaStream_t stream);
+    // Float16 clamp kernels exist, but host dispatch must reject them until its
+    // dtype gate is wired.
+    LFS_CORE_API void launch_clamp_scalar_half(__half* data, float min_val, float max_val, size_t n,
+                                               cudaStream_t stream);
+    LFS_CORE_API void launch_clamp_fused_half(const __half* src, __half* dst, float min_val, float max_val,
+                                              size_t n, cudaStream_t stream);
 
     LFS_CORE_API void launch_reduce_op(const void* input, void* output,
                                        const size_t* shape, size_t rank,
@@ -102,6 +108,31 @@ namespace lfs::core::tensor_ops {
     // Faster than transpose+contiguous+reduce for column sums
     LFS_CORE_API void launch_column_reduce(const float* input, float* output,
                                            size_t M, size_t N, ReduceOp op, cudaStream_t stream);
+
+    // ============= Fast general strided reduce (outer, reduce, inner) =============
+    // Column-style 2D grid, SM-capped, vectorized where possible. Beats transpose+copy
+    // for many large-inner shapes; host heuristic chooses path.
+    LFS_CORE_API void launch_strided_reduce_fast(const float* input, float* output,
+                                                 size_t outer_size, size_t reduce_size,
+                                                 size_t inner_size, ReduceOp op,
+                                                 cudaStream_t stream);
+
+    // Host heuristic: true → prefer strided_fast over permute+contiguous.
+    [[nodiscard]] LFS_CORE_API bool should_prefer_strided_over_transpose(
+        size_t outer_size, size_t reduce_size, size_t inner_size) noexcept;
+
+    // Test/debug hooks for path selection
+    enum class ReducePathForTesting : int {
+        None = 0,
+        StridedFast,
+        Transpose,
+        Column,
+        Default,
+    };
+    LFS_CORE_API void set_reduce_path_override_for_testing(ReducePathForTesting path) noexcept;
+    [[nodiscard]] LFS_CORE_API ReducePathForTesting reduce_path_override_for_testing() noexcept;
+    [[nodiscard]] LFS_CORE_API ReducePathForTesting reduce_last_path_for_testing() noexcept;
+    LFS_CORE_API void set_reduce_last_path_for_testing(ReducePathForTesting path) noexcept;
 
     // ============= Direct Scalar Reductions (Fast Path) =============
     LFS_CORE_API float direct_sum_scalar(const float* data, size_t n, cudaStream_t stream);
@@ -378,6 +409,13 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API void launch_count_nonzero_float(const float* data, size_t* count,
                                                  size_t n, cudaStream_t stream);
 
+    // Multi-block device-side count (no host round-trip). Used by Tensor::count_nonzero
+    // and the masking wrappers above.
+    LFS_CORE_API void launch_count_nonzero_scalar_float(const float* data, size_t* result,
+                                                        size_t n, cudaStream_t stream);
+    LFS_CORE_API void launch_count_nonzero_scalar_bool(const unsigned char* data, size_t* result,
+                                                       size_t n, cudaStream_t stream);
+
     // ============= Indexing Operations =============
     LFS_CORE_API void launch_index_select(const float* input, const int* indices, float* output,
                                           const size_t* shape, size_t rank, int dim,
@@ -566,14 +604,21 @@ namespace lfs::core::tensor_ops {
     static constexpr int FUSED_POINTWISE_MAX_OPS = 16;
 
     struct FusedPointwiseOp {
-        uint8_t kind;
-        float scalar;
+        uint8_t kind = 0;
+        float scalar = 0.0f;
+        // Device pointer for tensor-binary stages (kinds 4-7). Null for scalar/unary.
+        const float* rhs = nullptr;
     };
 
     struct FusedPointwiseOpChain {
         FusedPointwiseOp ops[FUSED_POINTWISE_MAX_OPS];
-        int num_ops;
+        int num_ops = 0;
     };
+
+    // Optional test/diagnostic counter of tensor-lib kernel launches (fused + binary).
+    LFS_CORE_API void reset_tensor_kernel_launch_count() noexcept;
+    LFS_CORE_API uint64_t tensor_kernel_launch_count() noexcept;
+    LFS_CORE_API void record_tensor_kernel_launch(uint64_t n = 1) noexcept;
 
     LFS_CORE_API void launch_fused_pointwise_chain(const float* input, float* output,
                                                    size_t n, const FusedPointwiseOpChain& chain,

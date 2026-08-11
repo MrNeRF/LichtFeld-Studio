@@ -1008,18 +1008,13 @@ while interactive controls warn once and return inert defaults.
 | `new_line()`                                        | `None`  | Force new line           |
 | `indent(width=0)`                                   | `None`  | Increase indent          |
 | `unindent(width=0)`                                 | `None`  | Decrease indent          |
-| `begin_group()` / `end_group()`                     | `None`  | Logical widget group     |
-| `set_next_item_width(width)`                        | `None`  | Width for next widget    |
 | `dummy(size)`                                       | `None`  | Empty space placeholder  |
 
-### Collapsible / Tree
+### Collapsible
 
 | Method                                              | Returns | Description                    |
 |-----------------------------------------------------|---------|--------------------------------|
 | `collapsing_header(label, default_open=False)`      | `bool`  | Collapsible section            |
-| `tree_node(label)`                                  | `bool`  | Tree node (call `tree_pop()`)  |
-| `tree_node_ex(label, flags='')`                     | `bool`  | Extended tree node             |
-| `tree_pop()`                                        | `None`  | Close tree node                |
 
 ### Tables
 
@@ -1087,17 +1082,6 @@ tex = lf.ui.DynamicTexture(tensor)    # From tensor
 
 Calling `update()` with a different resolution automatically recreates the backend texture. Textures are freed on plugin unload via `lf.ui.free_plugin_textures(name)`.
 
-### Drag & Drop
-
-| Method                                              | Returns       | Description              |
-|-----------------------------------------------------|---------------|--------------------------|
-| `begin_drag_drop_source()`                          | `bool`        | Start drag source        |
-| `set_drag_drop_payload(type, data)`                 | `None`        | Set drag payload         |
-| `end_drag_drop_source()`                            | `None`        | End drag source          |
-| `begin_drag_drop_target()`                          | `bool`        | Start drag target        |
-| `accept_drag_drop_payload(type)`                    | `str or None` | Accept payload           |
-| `end_drag_drop_target()`                            | `None`        | End drag target          |
-
 ### Popups & Menus
 
 | Method                                              | Returns | Description              |
@@ -1115,27 +1099,26 @@ Calling `update()` with a different resolution automatically recreates the backe
 | `menu_item(label, enabled=True)`                    | `bool`  | Menu item                |
 | `menu_item_toggle(label, shortcut, selected)`       | `bool`  | Toggle menu item         |
 | `menu_item_shortcut(label, shortcut, enabled=True)` | `bool`  | Menu item with shortcut  |
-| `menu(menu_id, text='', icon='')`                   | `None`  | Inline menu reference    |
-| `popover(panel_id, text='', icon='')`               | `None`  | Panel popover            |
 
-### Windows & Children
+### Child Regions
 
 | Method                                                        | Returns        | Description           |
 |---------------------------------------------------------------|----------------|-----------------------|
-| `begin_window(title, flags=0)`                                | `bool`         | Start window          |
-| `begin_window_closable(title, flags=0)`                       | `(bool, bool)` | Closable window       |
-| `end_window()`                                                | `None`         | End window            |
 | `begin_child(id, size=(0,0), border=False)`                   | `bool`         | Start child region    |
 | `end_child()`                                                 | `None`         | End child region      |
+
+### Overlay Window State
+
+These methods belong to viewport-overlay `UILayout`; they are not exposed on
+panel `RmlUILayout`, whose containing panel already owns position and size.
+
+| Method                                                        | Returns        | Description           |
+|---------------------------------------------------------------|----------------|-----------------------|
+| `begin_window(title, flags=0)`                                | `bool`         | Start overlay window state |
+| `end_window()`                                                | `None`         | End overlay window state |
 | `set_next_window_pos(pos, first_use=False)`                   | `None`         | Set window position   |
 | `set_next_window_size(size, first_use=False)`                 | `None`         | Set window size       |
-| `set_next_window_pos_center()`                                | `None`         | Center window         |
 | `set_next_window_pos_centered(first_use=False)`               | `None`         | Center next window (main viewport) |
-| `set_next_window_pos_viewport_center()`                       | `None`         | Viewport center       |
-| `set_next_window_focus()`                                     | `None`         | Focus next window     |
-| `set_next_window_bg_alpha(alpha)`                             | `None`         | Set next window BG alpha |
-| `push_window_style()` / `pop_window_style()`                  | `None`         | Window style stack    |
-| `push_modal_style()` / `pop_modal_style()`                    | `None`         | Modal style stack     |
 
 ### Drawing (Viewport)
 
@@ -1193,8 +1176,6 @@ guarantee.
 | `is_item_hovered()`                                 | `bool`  | Last item hovered        |
 | `is_item_clicked(button=0)`                         | `bool`  | Last item clicked        |
 | `is_item_active()`                                  | `bool`  | Last item active         |
-| `is_window_focused()`                               | `bool`  | Window has focus         |
-| `is_window_hovered()`                               | `bool`  | Window is hovered        |
 | `is_mouse_double_clicked(button=0)`                 | `bool`  | Double click detected    |
 | `is_mouse_dragging(button=0)`                       | `bool`  | Mouse dragging           |
 | `get_mouse_wheel()`                                 | `float` | Scroll wheel delta       |
@@ -1204,7 +1185,6 @@ guarantee.
 
 | Method                                              | Returns | Description              |
 |-----------------------------------------------------|---------|--------------------------|
-| `get_cursor_pos()`                                  | `tuple` | Cursor position          |
 | `get_cursor_screen_pos()`                           | `tuple` | Cursor screen position   |
 | `get_window_pos()`                                  | `tuple` | Window position          |
 | `get_window_width()`                                | `float` | Window width             |
@@ -1219,37 +1199,19 @@ guarantee.
 
 | Method                                              | Returns | Description              |
 |-----------------------------------------------------|---------|--------------------------|
-| `push_style_var(var, value)`                        | `None`  | Push float style var     |
-| `push_style_var_vec2(var, value)`                   | `None`  | Push vec2 style var      |
-| `pop_style_var(count=1)`                            | `None`  | Pop style vars           |
-| `push_style_color(col, color)`                      | `None`  | Push color override      |
-| `pop_style_color(count=1)`                          | `None`  | Pop color overrides      |
 | `push_item_width(width)` / `pop_item_width()`      | `None`  | Item width stack         |
 | `begin_disabled(disabled=True)` / `end_disabled()`  | `None`  | Disable widget region. For composable disabled regions, prefer `SubLayout.enabled` (see Layout Composition below). |
 
-### Keyboard / Mouse Capture
+### Pointer
 
 | Method                                              | Returns | Description              |
 |-----------------------------------------------------|---------|--------------------------|
-| `set_keyboard_focus_here()`                         | `None`  | Focus next widget        |
-| `capture_keyboard_from_app(capture=True)`           | `None`  | Capture keyboard input   |
-| `capture_mouse_from_app(capture=True)`              | `None`  | Capture mouse input      |
 | `set_mouse_cursor_hand()`                           | `None`  | Set hand cursor          |
-
-### Cursor Control
-
-| Method                                              | Returns | Description              |
-|-----------------------------------------------------|---------|--------------------------|
-| `set_cursor_pos(pos)`                               | `None`  | Set cursor position      |
-| `set_cursor_pos_x(x)`                               | `None`  | Set cursor X             |
-| `set_scroll_here_y(ratio=0.5)`                      | `None`  | Scroll to current Y      |
 
 ### Specialized Widgets
 
 | Method                                                                            | Returns        | Description           |
 |-----------------------------------------------------------------------------------|----------------|-----------------------|
-| `crf_curve_preview(label, gamma, toe, shoulder, gamma_r=0, gamma_g=0, gamma_b=0)`| `None`         | Unsupported layout method; warns once. Use retained `<crf-curve>`. |
-| `chromaticity_diagram(label, rx, ry, gx, gy, bx, by, nx, ny, range=0.5)`         | `(bool, list)` | Unsupported layout method; warns once. Use retained `<chromaticity-diagram>`. |
 | `template_list(list_type_id, list_id, data, prop_id, active_data, active_prop, rows=5)` | `(int, int)` | Live on `RmlUILayout`. Compatibility `UILayout` raises `TypeError` outside draw hooks and warns/returns inert values in draw hooks. |
 
 ### Layout Composition

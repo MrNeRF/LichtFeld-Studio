@@ -232,6 +232,7 @@ set(TEST_FILES
     test_assert_hardening.cpp
     test_cuda_error.cpp
     test_exportable_storage.cpp
+    test_vram_leak_regression.cpp
     test_cuda_error_typed.cpp
     test_cuda_launch_check.cpp
     test_tensor_launch_check.cpp
@@ -242,6 +243,27 @@ set(TEST_FILES
     test_tensor_ops.cpp
     test_tensor_memory.cpp
     test_allocator_policy.cpp
+    test_alloc_counter.cpp
+    test_joint_bounds_grow_only.cpp
+    test_steady_alloc_invariant.cpp
+    test_allocator_hygiene.cpp
+    test_pinned_stream_teardown.cpp
+    test_fastgs_sort_buffers.cpp
+    test_warp_cull_blend.cpp
+    test_warp_cull_bwd.cpp
+    test_fused_reg_loss.cpp
+    test_fused_bg_blend.cpp
+    test_photometric_hygiene.cpp
+    test_persistent_masks.cpp
+    test_fused_noise_injection.cpp
+    test_densification_info_zero.cpp
+    test_densify_events_4x.cpp
+    test_training_state_ledger.cpp
+    test_vram_ledger_model.cpp
+    test_host_metrics.cpp
+    test_joint_adam_codec.cpp
+    test_sh_value_codec.cpp
+    test_sh_value_storage.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
     test_tensor_views.cpp
@@ -251,7 +273,10 @@ set(TEST_FILES
     test_slice_mm_bug.cpp
     test_tensor_random.cpp
     test_tensor_broadcast.cpp
+    test_zero_stride_expand.cpp
+    test_strided_reduce_w2.cpp
     test_tensor_masking.cpp
+    test_strided_tensor_ops.cpp
     test_tensor_lazy_gather.cpp
     test_zip_gather.cpp
     test_tensor_ordering_distance.cpp
@@ -269,6 +294,9 @@ set(TEST_FILES
     test_expression_templates.cpp
     test_lfs_scheduler.cpp
     test_mrnf_strategy.cpp
+    test_compact_splats_peak.cpp
+    test_adam_capacity_invariant.cpp
+    test_dual_rep_optimizer.cpp
     test_sparsity_optimizer.cpp
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
@@ -281,6 +309,7 @@ set(TEST_FILES
     test_tensor_inplace_capacity.cpp
     test_sog_format.cpp
     test_ply_error_taxonomy.cpp
+    test_ply_io_throughput.cpp
     test_gsplat_rasterizer.cpp
     test_spz_format.cpp
     test_converter_usd.cpp
@@ -291,6 +320,7 @@ set(TEST_FILES
     test_densification_tensor_ops.cpp
     test_tensor_zero_dimension.cpp
     test_mask_loss.cpp
+    test_mask_preprocess_fusion.cpp
     test_roi_weight_map.cpp
     test_roi_weighted_losses.cpp
     test_checkpoint_resume.cpp
@@ -310,6 +340,7 @@ set(TEST_FILES
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp
     test_crash_handler.cpp
+    test_gpu_teardown_order.cpp
     test_logger.cpp
     test_system_info.cpp
     test_parameter_manager.cpp
@@ -339,6 +370,7 @@ set(TEST_FILES
     test_expanded_tensor_ops.cpp
     test_bool_any_all.cpp
     test_fused_l1_ssim.cpp
+    test_loss_workspace_union.cpp
     test_image_kernels.cpp
     test_add_new_gs_tensor_ops.cpp
     test_cpu_dtype_conversions.cpp
@@ -348,6 +380,9 @@ set(TEST_FILES
     test_tensor_deferred_d1_copy_registry.cpp
     test_tensor_deferred_d3_pin_operands.cpp
     test_tensor_lazy_ir.cpp
+    test_tensor_dispatch_6a.cpp
+    test_tensor_kernels_6c.cpp
+    test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
     test_fastgs_fuzz.cpp
@@ -374,6 +409,7 @@ set(TEST_FILES
     test_normal_prior_decode.cpp
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
+    test_compressed_blob_tier.cpp
     test_pipelined_loader.cpp
     test_pipelined_loader_ledger.cpp
     test_pipelined_loader_sidecar_jpeg2k.cpp
@@ -428,6 +464,7 @@ set(TEST_FILES
     test_error_envelope.cpp
 )
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
+list(APPEND TEST_FILES test_viewer_sh_zerocopy_triad.cpp)
 # Phase 7A: bounded-wait machine + SubmissionState + QW-6 (GPU-free).
 list(APPEND TEST_FILES test_vulkan_wait_bounded.cpp)
 list(APPEND TEST_FILES test_submission_state_transitions.cpp)
@@ -435,10 +472,18 @@ list(APPEND TEST_FILES test_vksplat_failed_submit_no_publish.cpp)
 # Epic #1496: computed barriers (GPU-free planner/tracker suites).
 list(APPEND TEST_FILES test_vksplat_barrier_planner.cpp)
 list(APPEND TEST_FILES test_vksplat_tagged_dispatch.cpp)
+list(APPEND TEST_FILES test_vksplat_buffer_retire.cpp)
 list(APPEND TEST_FILES test_vulkan_image_tracker.cpp)
 list(APPEND TEST_FILES test_vulkan_gpu_census.cpp)
 # Epic #1497: output image pool (GPU-free host bookkeeping).
 list(APPEND TEST_FILES test_output_image_pool.cpp)
+# Epic #1568 / #1567: output slot ring (GPU-free host bookkeeping).
+list(APPEND TEST_FILES test_output_slot_ring.cpp)
+# Epic #1577 / #1574: readback ticket ring (GPU-free host bookkeeping).
+list(APPEND TEST_FILES test_readback_ticket_ring.cpp)
+# Epic #1568 / #1566: payload-generic GpuResourcePool + subrect fit helper.
+list(APPEND TEST_FILES test_gpu_resource_pool.cpp)
+list(APPEND TEST_FILES test_viewport_scratch_bucket.cpp)
 list(APPEND TEST_FILES test_lod_page_cache.cpp)
 list(APPEND TEST_FILES test_lod_page_dequant.cpp)
 list(APPEND TEST_FILES test_lod_upload_engine.cpp)
@@ -466,6 +511,10 @@ list(APPEND TEST_SOURCES
 
 # Create test executable
 add_executable(lichtfeld_tests ${TEST_SOURCES})
+
+# USD (pxr) headers from vcpkg pull in deprecated <ext/hash_set> and emit
+# #warning (-Wcpp). Third-party; suppress only for this translation unit.
+set_source_files_properties(test_usd_format.cpp PROPERTIES COMPILE_OPTIONS "-Wno-cpp")
 
 # Python integration tests import the in-tree extension at runtime.
 add_dependencies(lichtfeld_tests lfs_py)
@@ -777,6 +826,8 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_http.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_import_dialog_panels.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_input_settings_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_io_hygiene_regressions.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_verified_dead_code_cleanup.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_layout_composition.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_manage_stubs.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh.py
@@ -801,6 +852,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tool_registry_activation.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_manager_regressions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tools_new.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_panel_regressions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_transform_controls_panel.py

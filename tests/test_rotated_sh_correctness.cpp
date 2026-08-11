@@ -60,8 +60,12 @@ namespace {
         out.sh0 = data.sh0().contiguous().to(lfs::core::Device::CPU);
         out.sh0_ptr = out.sh0.ptr<float>();
 
+        // shN() is the resident float4-swizzled storage.  The appearance checks
+        // below consume canonical [N, K, 3] coefficients, so use the public
+        // materialization API rather than interpreting the packed buffer as a
+        // rank-3 tensor (which reports zero rest coefficients).
         if (data.shN().is_valid()) {
-            out.shN = data.shN().contiguous().to(lfs::core::Device::CPU);
+            out.shN = data.shN_canonical().contiguous().to(lfs::core::Device::CPU);
             out.rest_coeffs = out.shN.ndim() >= 2 ? static_cast<int>(out.shN.size(1)) : 0;
             if (out.rest_coeffs > 0) {
                 out.shN_ptr = out.shN.ptr<float>();
@@ -161,7 +165,8 @@ namespace {
             src.scaling_raw().clone(),
             src.rotation_raw().clone(),
             src.opacity_raw().clone(),
-            src.get_scene_scale());
+            src.get_scene_scale(),
+            lfs::core::SplatData::ShNLayout::Swizzled);
         dst.set_active_sh_degree(src.get_active_sh_degree());
         return dst;
     }

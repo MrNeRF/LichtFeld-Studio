@@ -139,6 +139,5 @@ namespace lfs::training {
         // Helper functions
         lfs::core::Tensor load_eval_mask(lfs::core::Camera* cam, lfs::core::Tensor& gt_image,
                                          bool alpha_as_mask) const;
-        lfs::core::Tensor apply_depth_colormap(const lfs::core::Tensor& depth_normalized) const;
     };
 } // namespace lfs::training

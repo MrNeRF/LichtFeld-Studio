@@ -168,6 +168,7 @@ namespace lfs::vis {
             out.vram_label = vram_label.empty()
                                  ? std::format("buffer.{}B", static_cast<std::size_t>(bi.size))
                                  : std::string(vram_label);
+            vmaSetAllocationName(allocator, out.allocation, out.vram_label.c_str());
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 out.vram_scope,
                 out.vram_label,
@@ -1041,6 +1042,7 @@ namespace lfs::vis {
                                          "point_cloud.output[{}].color",
                                          slot_index);
             slot.color_vram_label = std::format("color.slot{}:{}x{}", slot_index, size.x, size.y);
+            vmaSetAllocationName(allocator, slot.color_alloc, "Point-cloud color target");
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.point_cloud.output_image",
                 slot.color_vram_label,
@@ -1099,6 +1101,7 @@ namespace lfs::vis {
                                          "point_cloud.output[{}].depth",
                                          slot_index);
             slot.depth_vram_label = std::format("depth.slot{}:{}x{}", slot_index, size.x, size.y);
+            vmaSetAllocationName(allocator, slot.depth_alloc, "Point-cloud depth target");
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.point_cloud.output_image",
                 slot.depth_vram_label,

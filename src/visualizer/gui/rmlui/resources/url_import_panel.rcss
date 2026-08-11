@@ -58,7 +58,6 @@
     line-height: 1.5;
     color: #a9a093;
 }
-
 .urlimp-progress {
     display: flex;
     flex-direction: column;

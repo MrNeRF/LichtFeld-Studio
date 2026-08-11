@@ -106,29 +106,4 @@ namespace gsplat_lfs {
     // rasterize_to_indices_3dgs
     /////////////////////////////////////////////////
 
-    void launch_rasterize_to_indices_3dgs_kernel(
-        uint32_t range_start,
-        uint32_t range_end,
-        const float* transmittances, // [C, image_height, image_width]
-        // Gaussian parameters
-        const float* means2d,   // [C, N, 2]
-        const float* conics,    // [C, N, 3]
-        const float* opacities, // [C, N]
-        // dimensions
-        uint32_t C,
-        uint32_t N,
-        uint32_t image_width,
-        uint32_t image_height,
-        uint32_t tile_size,
-        // intersections
-        const int32_t* tile_offsets, // [C, tile_height, tile_width]
-        const int32_t* flatten_ids,  // [n_isects]
-        // helper for double pass
-        const int32_t* chunk_starts, // [C, image_height, image_width] optional
-        // outputs
-        int32_t* chunk_cnts,   // [C, image_height, image_width] optional
-        int32_t* gaussian_ids, // [n_elems] optional
-        int32_t* pixel_ids,    // [n_elems] optional
-        cudaStream_t stream = nullptr);
-
 } // namespace gsplat_lfs

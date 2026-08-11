@@ -12,6 +12,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -28,6 +29,7 @@
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
+#include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "gui/rotation_gizmo.hpp"
 #include "gui/scale_gizmo.hpp"
 #include "gui/scene_panel_native.hpp"
@@ -3002,6 +3004,12 @@ namespace lfs::vis::gui {
           async_tasks_(viewer) {
 
         panel_layout_.loadState();
+        {
+            LayoutState state;
+            state.load();
+            show_vram_hud_ = state.perf_hud_visible;
+            perf_hud_expanded_ = state.perf_hud_expanded;
+        }
 
         // Create components
         menu_bar_ = std::make_unique<MenuBar>();
@@ -3454,6 +3462,14 @@ namespace lfs::vis::gui {
         };
         ops.needs_animation = [](void* host) -> bool {
             return static_cast<RmlPanelHost*>(host)->needsAnimationFrame();
+        };
+        ops.next_scheduled_update_delay = [](void* host, double* out_seconds) -> bool {
+            const auto delay =
+                static_cast<RmlPanelHost*>(host)->nextScheduledUpdateDelay();
+            if (!delay || !out_seconds)
+                return false;
+            *out_seconds = *delay;
+            return true;
         };
         lfs::python::set_rml_panel_host_ops(ops);
 
@@ -4765,8 +4781,12 @@ namespace lfs::vis::gui {
             draw_ctx.is_training = cc->snapshot().is_running;
 
         if (has_side_panel_plugins) {
-            LOG_TIMER_THRESHOLD("gui_render.panel_setup.legacy_side_panel_preload", 0.25);
-            reg.preload_panels(PanelSpace::SidePanel, draw_ctx);
+            LOG_TIMER_THRESHOLD("gui_render.panel_setup.side_panel_preload", 0.25);
+            reg.render_panels({
+                                  .target = PanelRenderTarget::for_space(PanelSpace::SidePanel),
+                                  .mode = PanelRenderMode::StandardPreload,
+                              },
+                              draw_ctx);
         }
 
         s_frame_input = &sdl_input;
@@ -5283,6 +5303,11 @@ namespace lfs::vis::gui {
         const auto publish_vram_hud_overlay_if_due = [&]() {
             const auto now = std::chrono::steady_clock::now();
             if (!isVramHudOverlayVisible()) {
+                perf_sampler_.stop();
+                if (perf_hud_visible_published_) {
+                    app_store().perf_hud.set(AppStore::PerfHud{});
+                    perf_hud_visible_published_ = false;
+                }
                 if (vram_hud_visible_published_) {
                     app_store().vram_hud.set(AppStore::VramHud{});
                     vram_hud_visible_published_ = false;
@@ -5291,27 +5316,77 @@ namespace lfs::vis::gui {
                 return;
             }
 
+            perf_sampler_.start();
+
             if (isVramHudPublishDue(now)) {
+                const auto memory = queryGpuMemory();
+                auto perf_snapshot = std::make_shared<AppStore::PerfHudSnapshot>();
+                perf_snapshot->vram_process_bytes = memory.process_used;
+                perf_snapshot->vram_used_bytes = memory.total_used;
+                perf_snapshot->vram_total_bytes = memory.total;
+                if (const auto sample = perf_sampler_.latest()) {
+                    perf_snapshot->ram_process_bytes = sample->host.process_rss_bytes;
+                    perf_snapshot->ram_used_bytes = sample->host.system_used_bytes;
+                    perf_snapshot->ram_total_bytes = sample->host.system_total_bytes;
+                    perf_snapshot->gpu_utilization_percent = sample->gpu_utilization_percent;
+                    perf_snapshot->gpu_utilization_valid = sample->gpu_utilization_valid;
+                    perf_snapshot->process_cpu_percent = sample->host.process_cpu_percent;
+                    perf_snapshot->per_core_cpu_percent = sample->host.per_core_cpu_percent;
+                    perf_snapshot->cpu_valid = sample->host.cpu_valid;
+                }
+                // FPS: same fallback chain as the status bar (rml_status_bar.cpp).
+                // app_store().fps is only set from Python; viewer path uses RM rates.
+                float rate = app_store().fps.get();
+                if (rate <= 0.0f) {
+                    if (auto* const rm = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+                        const float scene_fps = rm->getAverageFPS();
+                        const float presented_fps = rm->getPresentedAverageFPS();
+                        rate = scene_fps > 0.0f ? scene_fps : presented_fps;
+                    }
+                }
+                perf_snapshot->rate = rate;
+
                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
-                {
+                if (profiler.enabled()) {
                     LOG_TIMER("gui_render.vram_hud_sample");
                     profiler.sampleCudaMemory();
-                    const auto memory = queryGpuMemory();
+                    // Design trap 4: process memory + VMA must land BEFORE the
+                    // single snapshot used for both the strip badge and Ledger tab.
                     profiler.updateProcessMemory(memory.process_used,
                                                  memory.total_used,
                                                  memory.total,
                                                  memory.device_name);
                     if (auto* const wm = viewer_ ? viewer_->getWindowManager() : nullptr) {
                         if (auto* const vk = wm->getVulkanContext()) {
-                            profiler.setVulkanVmaUsed(vk->queryVmaUsedBytes());
+                            const auto rmlui_vma = rmlui_manager_.getVulkanRenderInterface()
+                                                       ? rmlui_manager_.getVulkanRenderInterface()->QueryVmaStatistics()
+                                                       : RenderInterface_VK::VmaStatistics{};
+                            profiler.setVulkanVmaUsed(vk->queryVmaUsedBytes(
+                                static_cast<std::size_t>(rmlui_vma.block_bytes),
+                                static_cast<std::size_t>(rmlui_vma.allocation_bytes)));
                         }
                     }
+                    const auto snapshot = profiler.snapshot();
+                    const auto ledger = lfs::diagnostics::buildLiveLedger(snapshot);
+                    perf_snapshot->ledger_valid = true;
+                    perf_snapshot->ledger_closed =
+                        ledger.closure == lfs::diagnostics::LedgerClosureState::Closed;
+                    perf_snapshot->ledger_over =
+                        ledger.closure == lfs::diagnostics::LedgerClosureState::Over;
+                    app_store().vram_hud.set(AppStore::VramHud{
+                        .visible = true,
+                        .snapshot = std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(
+                            snapshot)});
+                    vram_hud_visible_published_ = true;
+                } else if (vram_hud_visible_published_) {
+                    app_store().vram_hud.set(AppStore::VramHud{});
+                    vram_hud_visible_published_ = false;
                 }
-                app_store().vram_hud.set(AppStore::VramHud{
+                app_store().perf_hud.set(AppStore::PerfHud{
                     .visible = true,
-                    .snapshot = std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(
-                        profiler.snapshot())});
-                vram_hud_visible_published_ = true;
+                    .expanded = perf_hud_expanded_,
+                    .snapshot = std::move(perf_snapshot)});
+                perf_hud_visible_published_ = true;
                 next_vram_hud_publish_ = now + std::chrono::milliseconds(250);
             }
         };
@@ -5377,8 +5452,11 @@ namespace lfs::vis::gui {
             }
 
             if (has_viewport_overlay_panels) {
-                LOG_TIMER_THRESHOLD("gui_render.draw_panels.ViewportOverlay", 0.25);
-                reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
+                LOG_TIMER_THRESHOLD("gui_render.render_panels.ViewportOverlay", 0.25);
+                reg.render_panels({
+                                      .target = PanelRenderTarget::for_space(PanelSpace::ViewportOverlay),
+                                  },
+                                  draw_ctx);
             }
 
             if (has_overlay_popups) {
@@ -5406,8 +5484,12 @@ namespace lfs::vis::gui {
         PanelInputState floating_input = panel_input;
         panel_setup_timer.reset();
         if (has_floating_panels) {
-            LOG_TIMER_THRESHOLD("gui_render.draw_panels.Floating", 0.25);
-            reg.draw_panels(PanelSpace::Floating, draw_ctx, &floating_input);
+            LOG_TIMER_THRESHOLD("gui_render.render_panels.Floating", 0.25);
+            reg.render_panels({
+                                  .target = PanelRenderTarget::for_space(PanelSpace::Floating),
+                                  .input = &floating_input,
+                              },
+                              draw_ctx);
         }
 
         applyFrameInputCapture(&rml_right_panel_);
@@ -5455,7 +5537,11 @@ namespace lfs::vis::gui {
                     .width = status_bar_w,
                     .height = status_bar_height,
                 };
-                reg.draw_panels(PanelSpace::StatusBar, status_draw_ctx, &panel_input);
+                reg.render_panels({
+                                      .target = PanelRenderTarget::for_space(PanelSpace::StatusBar),
+                                      .input = &panel_input,
+                                  },
+                                  status_draw_ctx);
             }
         }
 
@@ -5533,19 +5619,26 @@ namespace lfs::vis::gui {
 
             bool interop_prepare_ok = true;
             auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
-            if (vulkan_context && !isViewportExportLocked()) {
-                LOG_TIMER_THRESHOLD("gui_render.prepareVulkanSceneInterop", 0.25);
-                try {
-                    if (rendering) {
-                        rendering->prepareViewportInterop(*vulkan_context);
+            if (vulkan_context) {
+                if (!isViewportExportLocked()) {
+                    LOG_TIMER_THRESHOLD("gui_render.prepareVulkanSceneInterop", 0.25);
+                    try {
+                        if (rendering) {
+                            rendering->prepareViewportInterop(*vulkan_context);
+                        }
+                    } catch (const std::exception& error) {
+                        interop_prepare_ok = false;
+                        LOG_ERROR("Skipping Vulkan GUI frame after CUDA/Vulkan interop failure: {}",
+                                  error.what());
+                    } catch (...) {
+                        interop_prepare_ok = false;
+                        LOG_ERROR(
+                            "Skipping Vulkan GUI frame after unknown CUDA/Vulkan interop failure");
                     }
-                } catch (const std::exception& error) {
-                    interop_prepare_ok = false;
-                    LOG_ERROR("Skipping Vulkan GUI frame after CUDA/Vulkan interop failure: {}",
-                              error.what());
-                } catch (...) {
-                    interop_prepare_ok = false;
-                    LOG_ERROR("Skipping Vulkan GUI frame after unknown CUDA/Vulkan interop failure");
+                } else if (rendering) {
+                    // Export-locked frames still run begin/endFrame, so layout-commit
+                    // markers must be evaluated every frame even when Phases 1–2 uploads skip.
+                    rendering->viewportInterop().syncUnsubmittedLayoutCommits(*vulkan_context);
                 }
             }
 
@@ -5559,15 +5652,33 @@ namespace lfs::vis::gui {
             }
             if (begin_ok) {
                 if (rendering) {
+                    // #1575: GENERAL→READ_ONLY barriers + CUDA S2 waits on the frame
+                    // submit, before any sampling of interop images (slot B).
+                    // beginFrame opens dynamic rendering, while image layout
+                    // transitions are forbidden inside that scope. Bracket
+                    // the interop barrier recording with an explicit end/restart.
+                    if (!vulkan_context->finishActiveRendering(frame.command_buffer)) {
+                        LOG_ERROR("Unable to close dynamic rendering before viewport interop barriers: {}",
+                                  vulkan_context->lastError());
+                    }
+                    rendering->viewportInterop().recordFrameBarriers(frame.command_buffer,
+                                                                     *vulkan_context);
+                    if (!vulkan_context->restartActiveRendering(frame.command_buffer, frame)) {
+                        LOG_ERROR("Unable to restart dynamic rendering after viewport interop barriers: {}",
+                                  vulkan_context->lastError());
+                    }
                     const auto completion = rendering->viewportInterop().frameCompletion();
                     if (completion.semaphore != VK_NULL_HANDLE && completion.value != 0) {
                         LOG_TIMER_THRESHOLD("gui_render.vksplat_completion_wait_submit", 0.25);
                         // VkSplat color/split/depth outputs are first consumed only by
                         // fragment sampling in the viewport pass graph. Earlier graphics
                         // work can proceed while the async compute submission finishes.
-                        vulkan_context->addFrameTimelineWait(completion.semaphore,
-                                                             completion.value,
-                                                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                        if (!vulkan_context->addFrameTimelineWait(completion.semaphore,
+                                                                  completion.value,
+                                                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)) {
+                            LOG_ERROR("Unable to wait on VkSplat frame completion timeline: {}",
+                                      vulkan_context->lastError());
+                        }
                     }
                 }
                 VulkanViewportPassParams viewport_params{};
@@ -6202,6 +6313,30 @@ namespace lfs::vis::gui {
         ui::ToggleVramHud::when([this](const auto&) {
             show_vram_hud_ = !show_vram_hud_;
             next_vram_hud_publish_ = {};
+            LayoutState state;
+            state.load();
+            state.perf_hud_visible = show_vram_hud_;
+            state.perf_hud_expanded = perf_hud_expanded_;
+            state.saveUserPreferences();
+        });
+
+        ui::TogglePerfHudExpanded::when([this](const auto&) {
+            perf_hud_expanded_ = !perf_hud_expanded_;
+            LayoutState state;
+            state.load();
+            state.perf_hud_visible = show_vram_hud_;
+            state.perf_hud_expanded = perf_hud_expanded_;
+            state.saveUserPreferences();
+        });
+
+        ui::OpenPerfHudLedger::when([this](const auto&) {
+            perf_hud_expanded_ = true;
+            LayoutState state;
+            state.load();
+            state.perf_hud_visible = show_vram_hud_;
+            state.perf_hud_expanded = true;
+            state.vram_hud_active_tab = "ledger";
+            state.saveUserPreferences();
         });
 
         ui::ToggleFullscreen::when([this](const auto&) {
@@ -6436,7 +6571,7 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isVramHudOverlayVisible() const {
-        return show_vram_hud_ && lfs::diagnostics::VramProfiler::instance().enabled();
+        return show_vram_hud_;
     }
 
     bool GuiManager::isVramHudPublishDue(const std::chrono::steady_clock::time_point now) const {
@@ -6542,10 +6677,26 @@ namespace lfs::vis::gui {
         const float clip_y_min = tab_content_y;
         const float clip_y_max = tab_content_y + tab_content_h;
 
-        reg.preload_single_panel_direct(active_tab, content_w, kPreloadMaxHeight, draw_ctx,
-                                        clip_y_min, clip_y_max, &input);
-        reg.preload_child_panels_direct(active_tab, content_w, kPreloadMaxHeight, draw_ctx,
-                                        clip_y_min, clip_y_max, &input);
+        reg.render_panels({
+                              .target = PanelRenderTarget::for_panel(active_tab),
+                              .mode = PanelRenderMode::DirectPreload,
+                              .width = content_w,
+                              .height = kPreloadMaxHeight,
+                              .clip_y_min = clip_y_min,
+                              .clip_y_max = clip_y_max,
+                              .input = &input,
+                          },
+                          draw_ctx);
+        reg.render_panels({
+                              .target = PanelRenderTarget::for_children(active_tab),
+                              .mode = PanelRenderMode::DirectPreload,
+                              .width = content_w,
+                              .height = kPreloadMaxHeight,
+                              .clip_y_min = clip_y_min,
+                              .clip_y_max = clip_y_max,
+                              .input = &input,
+                          },
+                          draw_ctx);
     }
 
     bool GuiManager::needsAnimationFrame() const {
@@ -6591,12 +6742,46 @@ namespace lfs::vis::gui {
         return false;
     }
 
-    bool GuiManager::isViewportExportLocked() const {
-        return async_tasks_.isExporting() || async_tasks_.isExportingVideo();
+    std::optional<double> GuiManager::secondsUntilNextAnimationFrame() const {
+        auto min_delay = [](std::optional<double> a, std::optional<double> b) -> std::optional<double> {
+            if (!a)
+                return b;
+            if (!b)
+                return a;
+            return std::min(*a, *b);
+        };
+
+        std::optional<double> result;
+
+        if (!python::is_plugin_preload_running()) {
+            result = min_delay(result,
+                               PanelRegistry::instance().nextScheduledAnimationDelayForVisiblePanels({
+                                   .active_main_tab = panel_layout_.getActiveTab(),
+                                   .ui_visible = !ui_hidden_,
+                                   .right_panel_visible = show_main_panel_ && !ui_hidden_,
+                                   .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
+                               }));
+        }
+
+        result = min_delay(result, rml_viewport_overlay_.nextScheduledUpdateDelay());
+
+        // VRAM HUD cadence: when armed and not yet due, wake at the publish deadline.
+        if (isVramHudOverlayVisible()) {
+            const auto now = std::chrono::steady_clock::now();
+            if (next_vram_hud_publish_ != std::chrono::steady_clock::time_point{} &&
+                now < next_vram_hud_publish_) {
+                const double remaining =
+                    std::chrono::duration<double>(next_vram_hud_publish_ - now).count();
+                if (remaining > 0.0)
+                    result = min_delay(result, remaining);
+            }
+        }
+
+        return result;
     }
 
-    void GuiManager::dismissStartupOverlay() {
-        startup_overlay_.dismiss();
+    bool GuiManager::isViewportExportLocked() const {
+        return async_tasks_.isExporting() || async_tasks_.isExportingVideo();
     }
 
     void GuiManager::setStartupPluginLoadState(const bool started,

@@ -36,10 +36,10 @@ Critical correctness + truth-in-docs. No new features.
 - `vkWaitForFences` with 2s timeout; on timeout, log a `LOG_ERROR` naming the leaked submission and continue teardown.
 - **Accept**: Inject a never-signaling fence in a debug build; shutdown completes within 3s.
 
-### 0.4 Surface format & colorspace logging + `hasHdr()` flag
+### 0.4 Surface format & colorspace logging + HDR detection
 - `vulkan_context.cpp::chooseSurfaceFormat`
 - `LOG_INFO` chosen format and colorspace at swapchain create.
-- Add `hasHdr()` accessor returning true when a non-`VK_COLOR_SPACE_SRGB_NONLINEAR_KHR` format was selected.
+- Internal `has_hdr_` tracks non-`VK_COLOR_SPACE_SRGB_NONLINEAR_KHR` selection for logging (public `hasHdr()` accessor removed as unused).
 - **Accept**: Manual log inspection on RTX (sRGB) and HDR display (BT.2020).
 
 ### 0.5 External-image tracker leak fix
@@ -114,7 +114,7 @@ ldd build/LichtFeld-Studio 2>/dev/null | rg -i 'imgui|implot'
 Three orthogonal wins, all enabled by the timeline-semaphore plumbing that's already in place.
 
 ### 2.1 Indirect dispatch in `vulkan`
-**Biggest single win.** Removes the synchronous GPU→CPU readback at `gs_renderer.cpp:376`.
+**Biggest single win.** Removes the synchronous GPU→CPU readback at `gs_renderer.cpp (historical line reference removed)`.
 
 - `src/rendering/rasterizer/vulkan/src/gs_renderer.cpp`
 - Replace `int num_indices = readElement<int32_t>(...)` + scalar dispatch with `vkCmdDispatchIndirect(cmd, count_buffer, offset)`. The cumsum tail already lives in `index_buffer_offset.deviceBuffer` — point the indirect dispatch at the last 12 bytes (groupCountX/Y/Z).
@@ -193,7 +193,7 @@ Lean on Vulkan 1.3+ features that are probed but unused.
 - **Accept**: cold-start pipeline compile time drops ~3×; shader hot-reload (dev mode) ≤100 ms.
 
 ### 4.3 Push descriptor on the viewport pass
-- Already probed (`hasPushDescriptor()`). Use `vkCmdPushDescriptorSetKHR` for transient overlay descriptors so the pass stops touching descriptor sets at all.
+- Push-descriptor support is probed via `has_push_descriptor_` / PFN (public `hasPushDescriptor()` getter removed as unused). Use `vkCmdPushDescriptorSetKHR` for transient overlay descriptors so the pass stops touching descriptor sets at all.
 
 ### 4.4 Mutable descriptor type for RmlUi texture slots
 - `VK_EXT_mutable_descriptor_type` — probe + enable.
@@ -282,7 +282,7 @@ Pick at most one based on user demand.
 - 0.1 Per-image acquire semaphores. `image_available_` moved to swapchain lifecycle; `next_acquire_index_` rotation; submit waits on the same index passed to acquire. Eliminates the >2-image-swapchain reuse hazard.
 - 0.2 `vkQueueWaitIdle(present_queue_)` removed from swapchain recreate. `waitForFrameFences()` now waits on `in_flight_` ∪ `swapchain_images_in_flight_` with a 2 s bound.
 - 0.3 Immediate-submit drain bounded to 2 s per fence; logs and leaks on timeout instead of hanging shutdown.
-- 0.4 Surface format/colorspace logged at swapchain create. `hasHdr()` accessor added; flips true on any non-`SRGB_NONLINEAR` colorspace.
+- 0.4 Surface format/colorspace logged at swapchain create. Internal HDR flag tracks any non-`SRGB_NONLINEAR` colorspace (public accessor later removed as unused).
 - 0.5 `VulkanImageBarrierTracker` separates external images via `external_images_` set; `clearSwapchainOnly()` preserves them across swapchain recreate. `vksplat_viewport_renderer` registers `output_image_` with `external=true`.
 - 0.6 `vulkan_result.hpp` + `vkResultToString` helper. 46 sites converted across `vulkan_context.cpp`, `vulkan_loader_probe.cpp`, `vksplat_viewport_renderer.cpp` (the two with VkResult sites in scope).
 - 0.7 `vulkan-rendering-pipeline.md` updated — `cudaStreamSynchronize` claim removed; per-frame timeline-semaphore handoff is documented as already in place.
@@ -308,7 +308,7 @@ Pick at most one based on user demand.
 - Mechanical greps in §1.5 pass empty.
 
 **Phase 2 — fully landed**
-- 2.1 **Indirect dispatch + deferred readback in `vulkan`**. New tiny Slang shader `setup_dispatch_indirect.slang` reads `index_buffer_offset[num_splats-1]` on the GPU and writes a `VkDispatchIndirectCommand` for `compute_tile_ranges`. `compute_tile_ranges` now reads `num_isects` from `index_buffer_offset` directly via a new binding 2 (no more `uniforms.active_sh` dependency). The synchronous mid-frame `readElement` is gone; `executeCalculateIndexBufferOffset` records an async `vkCmdCopyBuffer` of the cumsum tail into a host-visible coherent + persistently-mapped buffer for the next frame to consume. `executeGenerateKeys` pre-fills `unsorted_keys` with the `0xFFFFFFFF` sentinel so the radix sort's tail (when capacity > actual num_indices) sorts to the end harmlessly. CPU-side high-water-mark + 2× safety factor sizes the sort buffers; first frame uses an `8 × num_splats` heuristic seed; `resetNumIndicesEstimate()` is called on model-identity change so a fresh model can't under-size the buffers. New `executeComputeIndirect` helper + new `INDIRECT_DISPATCH_READ` barrier mask. Net effect: the per-frame `vkQueueWaitIdle` previously baked into `readElement` → `HOST_GUARD` is gone.
+- 2.1 **[DONE] Indirect dispatch + deferred readback in `vulkan`**. (Historical plan bullet; implementation landed.) New tiny Slang shader `setup_dispatch_indirect.slang` reads `index_buffer_offset[num_splats-1]` on the GPU and writes a `VkDispatchIndirectCommand` for `compute_tile_ranges`. `compute_tile_ranges` now reads `num_isects` from `index_buffer_offset` directly via a new binding 2 (no more `uniforms.active_sh` dependency). The synchronous mid-frame `readElement` is gone; `executeCalculateIndexBufferOffset` records an async `vkCmdCopyBuffer` of the cumsum tail into a host-visible coherent + persistently-mapped buffer for the next frame to consume. `executeGenerateKeys` pre-fills `unsorted_keys` with the `0xFFFFFFFF` sentinel so the radix sort's tail (when capacity > actual num_indices) sorts to the end harmlessly. CPU-side high-water-mark + 2× safety factor sizes the sort buffers; first frame uses an `8 × num_splats` heuristic seed; `resetNumIndicesEstimate()` is called on model-identity change so a fresh model can't under-size the buffers. New `executeComputeIndirect` helper + new `INDIRECT_DISPATCH_READ` barrier mask. Net effect: the per-frame `vkQueueWaitIdle` previously baked into `readElement` → `HOST_GUARD` is gone.
 - 2.2 **Async compute queue**. `findQueueFamilies` now probes for a compute-only family (NVIDIA family 2, AMD family 1, etc.). When present, `VulkanContext` exposes `computeQueue() / computeQueueFamily() / hasDedicatedComputeQueue()`; `vksplat_viewport_renderer` initializes the rasterizer on that queue so the splat dispatch chain overlaps graphics-queue work (RmlUi, viewport overlays). External images and external buffers switch to `VK_SHARING_MODE_CONCURRENT` listing both families when distinct, eliminating the need for ownership-transfer barriers; the existing per-frame timeline-semaphore wait already provides cross-queue ordering between the rasterizer's output and the swapchain pass that samples it. When no dedicated family exists the compute queue aliases graphics so call sites stay unconditional.
 - 2.3 **Coalesced CUDA→Vulkan upload**. `_VulkanBuffer` gains a `VkDeviceSize offset` field (default 0). `executeCompute` / `executeComputeIndirect` use it for descriptor binding so a single `VkBuffer` can be bound as multiple sub-regions. `CudaInputSlot` collapses from 4 buffers per ring slot to **1**: a single CUDA-imported `VkBuffer` holds `xyz | rotations | scales+opacs | sh` packed back-to-back with 256-byte alignment. Setup cost drops from 4× `cudaImportExternalMemory` + 4× `cudaExternalMemoryGetMappedBuffer` to 1× of each per ring slot. `cuda_inputs_` shape changes from `array<array<CudaInputSlot, 4>, kInputRingSize>` to `array<CudaInputSlot, kInputRingSize>`. New offset-aware `CudaVulkanBufferInterop::copyFromTensor` overload writes each tensor to its sub-region.
 - 2.4 Grow-only ring buffer policy — **already in place**. `gs_pipeline.h` declares `resizeDeviceBuffer` with `no_shrink=true` default; no per-frame realloc churn.

@@ -427,7 +427,6 @@ progress fill {
     margin-left: 4dp;
     flex-shrink: 0;
 }
-
 .setting-row--aligned {
     min-width: 0;
 }

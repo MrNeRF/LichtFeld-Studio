@@ -64,23 +64,20 @@ const char* getErrorString(nvjpeg2kStatus_t eStatus_) {
 }
 
 NvJpeg2kException NvJpeg2kException::FromNvJpeg2kError(nvjpeg2kStatus_t status, const std::string& where) {
-    NvJpeg2kException e;
-    e.status_ = NVIMGCODEC_STATUS_EXTENSION_INTERNAL_ERROR;
+    auto nvimgcodec_status = NVIMGCODEC_STATUS_EXTENSION_INTERNAL_ERROR;
     auto it = nvjpeg2k_to_nvimgcodec_error_map.find(status);
-    if (it != nvjpeg2k_to_nvimgcodec_error_map.end())
-        e.status_ = it->second;
+    if (it != nvjpeg2k_to_nvimgcodec_error_map.end()) {
+        nvimgcodec_status = it->second;
+    }
+
     std::stringstream ss;
-    ss << "nvjpeg2k error #" << static_cast<int>(status) << " (" << getErrorString(status) << ")"
-       << " when running " << where;
-    e.info_ = ss.str();
-    return e;
+    ss << "nvjpeg2k error #" << static_cast<int>(status) << " (" << getErrorString(status) << ")" << " when running " << where;
+
+    return {nvimgcodec_status, ss.str()};
 }
 
 NvJpeg2kException NvJpeg2kException::FromCUDAError(cudaError_t status, const std::string& where) {
-    NvJpeg2kException e;
-    e.status_ = NVIMGCODEC_STATUS_EXTENSION_CUDA_CALL_ERROR;
     std::stringstream ss;
     ss << "CUDA error #" << static_cast<int>(status) << " when running " << where;
-    e.info_ = ss.str();
-    return e;
+    return {NVIMGCODEC_STATUS_EXTENSION_CUDA_CALL_ERROR, ss.str()};
 }

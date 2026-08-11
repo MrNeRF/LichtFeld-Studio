@@ -40,7 +40,9 @@ namespace lfs::training {
         int32_t* last_ids_ptr = nullptr;     // [C, H, W]
         float* compensations_ptr = nullptr;  // [C, N] or nullptr
 
-        // Internally allocated by gsplat (must cudaFree in backward)
+        // Borrowed from gsplat TLS high-water isect cache (do NOT cudaFree).
+        // Valid from forward through backward on this thread; released only at
+        // release_intersect_thread_local_cache() / thread shutdown.
         int64_t* isect_ids_ptr = nullptr;
         int32_t* flatten_ids_ptr = nullptr;
         int32_t n_isects = 0;
@@ -146,27 +148,11 @@ namespace lfs::training {
         if (!result) {
             throw std::runtime_error(result.error());
         }
-        // Free internally allocated buffers since backward won't be called.
-        // Stream-ordered so the arena chain stays intact (a streamless
-        // end_frame would force a device sync on the calling — often UI —
-        // thread every inference render).
+        // Isect/flatten ids are TLS high-water (not owned by the context) —
+        // leave them resident. Stream-ordered arena end_frame keeps the frame
+        // chain intact (a streamless end_frame would force a device sync on
+        // the calling — often UI — thread every inference render).
         const cudaStream_t stream = result->second.stream;
-#if CUDART_VERSION >= 11020
-        if (result->second.isect_ids_ptr != nullptr) {
-            cudaFreeAsync(result->second.isect_ids_ptr, stream);
-        }
-        if (result->second.flatten_ids_ptr != nullptr) {
-            cudaFreeAsync(result->second.flatten_ids_ptr, stream);
-        }
-#else
-        if (result->second.isect_ids_ptr != nullptr) {
-            cudaFree(result->second.isect_ids_ptr);
-        }
-        if (result->second.flatten_ids_ptr != nullptr) {
-            cudaFree(result->second.flatten_ids_ptr);
-        }
-#endif
-        // Release arena frame since no backward will be called
         auto& arena = core::GlobalArenaManager::instance().get_arena();
         arena.end_frame(result->second.frame_id, stream);
         return result->first;

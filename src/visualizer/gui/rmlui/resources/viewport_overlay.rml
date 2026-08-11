@@ -1012,28 +1012,105 @@
     </div>
 
     <div id="vram-hud-overlay" class="vram-hud-overlay hidden">
-        <div class="vram-hud-card">
+        <div id="perf-hud-strip" class="perf-hud-strip hidden">
+            <div class="perf-hud-strip-header" data-perf-toggle-expanded="true">
+                <span class="perf-hud-strip-title">@tr:ui.perf_hud_title</span>
+                <span id="perf-hud-strip-rate" class="perf-hud-strip-rate"></span>
+                <span class="perf-hud-strip-chevron" title="@tr:ui.perf_expand">⌄</span>
+            </div>
+            <div class="perf-hud-strip-meter" data-perf-tab="ledger" title="@tr:ui.perf_this_process">
+                <span class="perf-hud-strip-label">VRAM</span>
+                <div class="perf-hud-meter-track">
+                    <span id="perf-hud-vram-process" class="perf-hud-meter-fill process" title="@tr:ui.perf_this_process"></span>
+                    <span id="perf-hud-vram-other" class="perf-hud-meter-fill other" title="@tr:ui.perf_other_processes"></span>
+                    <span id="perf-hud-vram-free" class="perf-hud-meter-fill free" title="@tr:ui.perf_free"></span>
+                </div>
+                <span id="perf-hud-vram-value" class="perf-hud-strip-value"></span>
+                <span id="perf-hud-vram-badge" class="perf-hud-strip-badge"></span>
+            </div>
+            <div class="perf-hud-strip-meter" title="@tr:ui.perf_this_process">
+                <span class="perf-hud-strip-label">RAM</span>
+                <div class="perf-hud-meter-track">
+                    <span id="perf-hud-ram-process" class="perf-hud-meter-fill process" title="@tr:ui.perf_this_process"></span>
+                    <span id="perf-hud-ram-other" class="perf-hud-meter-fill other" title="@tr:ui.perf_other_processes"></span>
+                    <span id="perf-hud-ram-free" class="perf-hud-meter-fill free" title="@tr:ui.perf_free"></span>
+                </div>
+                <span id="perf-hud-ram-value" class="perf-hud-strip-value"></span>
+            </div>
+            <div class="perf-hud-strip-meter" title="GPU">
+                <span class="perf-hud-strip-label">GPU</span>
+                <div class="perf-hud-meter-track"><span id="perf-hud-gpu-fill" class="perf-hud-meter-fill"></span></div>
+                <span id="perf-hud-gpu-value" class="perf-hud-strip-value"></span>
+            </div>
+            <div class="perf-hud-strip-meter" title="@tr:ui.perf_process_cpu_note">
+                <span class="perf-hud-strip-label">CPU</span>
+                <div class="perf-hud-meter-track"><span id="perf-hud-cpu-fill" class="perf-hud-meter-fill"></span></div>
+                <span id="perf-hud-cpu-value" class="perf-hud-strip-value"></span>
+            </div>
+            <div id="perf-hud-core-strip" class="perf-hud-core-strip" title="@tr:ui.perf_cores"></div>
+        </div>
+        <div id="perf-hud-card" class="vram-hud-card">
             <div id="vram-hud-header" class="vram-hud-header">
-                <span class="vram-hud-title">VRAM</span>
+                <span class="vram-hud-title">@tr:ui.perf_hud_title</span>
                 <span class="vram-hud-header-meta">
                     <span id="vram-hud-throughput" class="vram-hud-throughput hidden"></span>
                     <span id="vram-hud-iteration" class="vram-hud-iteration"></span>
+                    <span class="perf-hud-card-chevron" data-perf-toggle-expanded="true" title="@tr:ui.perf_collapse">⌃</span>
                 </span>
             </div>
             <div id="vram-hud-tabs" class="vram-hud-tabs">
                 <button id="vram-hud-tab-overview" class="vram-hud-tab active" data-vram-tab="overview">@tr:ui.vram_tab_overview</button>
+                <button id="perf-hud-tab-ledger" class="vram-hud-tab" data-vram-tab="ledger">@tr:ui.perf_tab_ledger</button>
                 <button id="vram-hud-tab-allocations" class="vram-hud-tab" data-vram-tab="allocations">@tr:ui.vram_tab_allocations</button>
                 <button id="vram-hud-tab-annotations" class="vram-hud-tab" data-vram-tab="annotations">@tr:ui.vram_tab_annotations</button>
                 <button id="vram-hud-tab-tree" class="vram-hud-tab" data-vram-tab="tree">@tr:ui.vram_tab_drill_down</button>
             </div>
+            <div id="perf-hud-tracking-off" class="perf-hud-tracking-off hidden">
+                <span>@tr:ui.perf_tracking_off</span>
+                <button class="perf-hud-enable-tracking" data-perf-enable-tracking="true">@tr:ui.perf_enable_tracking</button>
+            </div>
             <div id="vram-hud-panel-overview" class="vram-hud-panel">
                 <div id="vram-hud-summary" class="vram-hud-summary"></div>
-                <div class="vram-hud-breakdown-header">@tr:ui.breakdown_process_vram</div>
-                <div id="vram-hud-breakdown" class="vram-hud-breakdown"></div>
-                <div class="vram-hud-counters-header">@tr:ui.counters_this_iter</div>
-                <div id="vram-hud-counters" class="vram-hud-counters">
-                    <div id="vram-hud-counters-empty" class="vram-hud-counters-empty">@tr:ui.none</div>
+                <div class="perf-hud-overview-meters">
+                    <div class="perf-hud-sparkline-row">
+                        <span class="perf-hud-sparkline-label">VRAM</span>
+                        <div id="perf-hud-spark-vram" class="perf-hud-sparkline" title="VRAM"></div>
+                    </div>
+                    <div class="perf-hud-sparkline-row">
+                        <span class="perf-hud-sparkline-label">RAM</span>
+                        <div id="perf-hud-spark-ram" class="perf-hud-sparkline" title="RAM"></div>
+                    </div>
+                    <div class="perf-hud-sparkline-row">
+                        <span class="perf-hud-sparkline-label">GPU</span>
+                        <div id="perf-hud-spark-gpu" class="perf-hud-sparkline" title="GPU"></div>
+                    </div>
+                    <div class="perf-hud-sparkline-row">
+                        <span class="perf-hud-sparkline-label">CPU</span>
+                        <div id="perf-hud-spark-cpu" class="perf-hud-sparkline" title="@tr:ui.perf_process_cpu_note"></div>
+                    </div>
                 </div>
+            </div>
+            <div id="vram-hud-panel-ledger" class="vram-hud-panel hidden">
+                <div class="perf-hud-ledger-header">
+                    <div class="perf-hud-ledger-header-line">
+                        <span id="perf-hud-ledger-process" class="perf-hud-ledger-process"></span>
+                        <span id="perf-hud-ledger-closure" class="perf-hud-ledger-closure closed"></span>
+                    </div>
+                    <div class="perf-hud-ledger-header-line perf-hud-ledger-header-detail">
+                        <span id="perf-hud-ledger-attributed"></span>
+                        <span id="perf-hud-ledger-residual"></span>
+                        <span id="perf-hud-ledger-epsilon"></span>
+                    </div>
+                </div>
+                <div id="perf-hud-ledger-over-banner" class="perf-hud-ledger-over-banner hidden"></div>
+                <div class="perf-hud-ledger-row perf-hud-ledger-row-header">
+                    <span class="perf-hud-ledger-name-cell">@tr:ui.name</span>
+                    <span class="perf-hud-ledger-share"></span>
+                    <span class="perf-hud-ledger-disclosure"><span>@tr:ui.perf_required</span> / <span>@tr:ui.perf_allocated</span></span>
+                    <span class="perf-hud-ledger-allocated">@tr:ui.perf_allocated</span>
+                    <span class="perf-hud-ledger-badge"></span>
+                </div>
+                <div id="perf-hud-ledger-rows" class="perf-hud-ledger-rows"></div>
             </div>
             <div id="vram-hud-panel-allocations" class="vram-hud-panel hidden">
                 <div class="vram-hud-allocs-summary">
@@ -1044,7 +1121,7 @@
             </div>
             <div id="vram-hud-panel-annotations" class="vram-hud-panel hidden">
                 <div class="vram-hud-filter-row">
-                    <input id="vram-hud-anno-filter" type="text" placeholder="@tr:ui.search_annotations" />
+                    <input id="vram-hud-anno-filter" class="vram-hud-filter-input" type="text" placeholder="@tr:ui.search_annotations" />
                     <button id="vram-hud-anno-filter-clear" class="vram-hud-filter-clear hidden">X</button>
                 </div>
                 <div class="vram-hud-anno-summary">
@@ -1064,7 +1141,7 @@
             </div>
             <div id="vram-hud-panel-tree" class="vram-hud-panel hidden">
                 <div class="vram-hud-filter-row">
-                    <input id="vram-hud-filter" type="text" placeholder="@tr:common.filter" />
+                    <input id="vram-hud-filter" class="vram-hud-filter-input" type="text" placeholder="@tr:common.filter" />
                     <button id="vram-hud-filter-clear" class="vram-hud-filter-clear hidden">X</button>
                 </div>
                 <div class="vram-hud-tree-row vram-hud-row-header">
@@ -1076,6 +1153,10 @@
                     <span class="vram-hud-col-gpu">@tr:ui.gpu</span>
                 </div>
                 <div id="vram-hud-rows" class="vram-hud-rows"></div>
+                <div class="vram-hud-counters-header">@tr:ui.counters_this_iter</div>
+                <div id="vram-hud-counters" class="vram-hud-counters">
+                    <div id="vram-hud-counters-empty" class="vram-hud-counters-empty">@tr:ui.none</div>
+                </div>
             </div>
             <div id="vram-hud-resize" class="vram-hud-resize"></div>
         </div>

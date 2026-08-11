@@ -100,10 +100,6 @@ namespace lfs::vis {
             std::int32_t grid_index = 0;
         };
 
-        struct OverlayPush {
-            glm::vec4 padding{0.0f};
-        };
-
         struct PivotPush {
             glm::vec4 center_size{0.0f};
             glm::vec4 color_opacity{0.26f, 0.59f, 0.98f, 1.0f};
@@ -1142,6 +1138,9 @@ namespace lfs::vis {
             context->setDebugObjectName(VK_OBJECT_TYPE_IMAGE,
                                         shape_overlay_dummy_depth_image,
                                         "viewport.shape_overlay.depth.dummy");
+            vmaSetAllocationName(allocator,
+                                 shape_overlay_dummy_depth_alloc,
+                                 "Viewport shape-overlay dummy depth");
             shape_overlay_dummy_depth_vram_label = "r32_float:1x1";
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.viewport.shape_overlay_dummy_depth",

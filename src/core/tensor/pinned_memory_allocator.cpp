@@ -442,6 +442,7 @@ namespace lfs::core {
         }
 
         AllocationInfo allocation;
+        bool caller_stream_live = true;
         {
             std::lock_guard lock(mutex_);
             const auto it = allocated_blocks_.find(ptr);
@@ -455,10 +456,18 @@ namespace lfs::core {
             stats_.allocated_bytes -= allocation.size;
             ++stats_.num_deallocs;
             publish_stats_locked();
+
+            // Severed streams were drained in release_stream() and may already
+            // be destroyed handles: recording on them is driver-side UAF.
+            std::erase_if(allocation.extra_streams, [this](const cudaStream_t s) {
+                return severed_streams_.contains(s);
+            });
+            caller_stream_live = !severed_streams_.contains(stream);
         }
 
-        if (std::find(allocation.extra_streams.begin(), allocation.extra_streams.end(), stream) ==
-            allocation.extra_streams.end()) {
+        if (caller_stream_live &&
+            std::find(allocation.extra_streams.begin(), allocation.extra_streams.end(), stream) ==
+                allocation.extra_streams.end()) {
             allocation.extra_streams.push_back(stream);
         }
 
@@ -469,6 +478,10 @@ namespace lfs::core {
             block.release_events();
             block.ptr = nullptr;
             return;
+        }
+        if (!block.ready_events.empty()) {
+            std::lock_guard lock(mutex_);
+            stats_.use_events_recorded += block.ready_events.size();
         }
 
         const bool cache_block =
@@ -513,6 +526,9 @@ namespace lfs::core {
             return;
         }
         std::lock_guard lock(mutex_);
+        // A handle value recorded on a live allocation is live by definition;
+        // if it matches an old severed handle, CUDA recycled the value.
+        severed_streams_.erase(stream);
         const auto it = allocated_blocks_.find(ptr);
         if (it == allocated_blocks_.end()) {
             return;
@@ -536,16 +552,18 @@ namespace lfs::core {
         if (!stream) {
             return;
         }
+        // Best-effort drain. Even when the sync fails the caller is about to
+        // destroy the handle, so the sever below must happen unconditionally —
+        // a later cudaEventRecord on the destroyed handle is a driver-side
+        // use-after-free (GUI train-end SIGSEGV).
         const cudaError_t status = cudaStreamSynchronize(stream);
-        if (status != cudaSuccess && !is_cuda_shutdown(status)) {
-            ensure_cuda_success(status, "cudaStreamSynchronize(pinned release_stream)",
-                                std::format("stream={}", static_cast<void*>(stream)),
-                                LFS_SOURCE_SITE_CURRENT(),
-                                CudaFailureDisposition::LogOnly);
-            cudaGetLastError();
-            return;
-        }
-        if (is_cuda_shutdown(status)) {
+        if (status != cudaSuccess) {
+            if (!is_cuda_shutdown(status)) {
+                ensure_cuda_success(status, "cudaStreamSynchronize(pinned release_stream)",
+                                    std::format("stream={}", static_cast<void*>(stream)),
+                                    LFS_SOURCE_SITE_CURRENT(),
+                                    CudaFailureDisposition::LogOnly);
+            }
             cudaGetLastError();
         }
 
@@ -553,6 +571,7 @@ namespace lfs::core {
         for (auto& [ptr, info] : allocated_blocks_) {
             std::erase(info.extra_streams, stream);
         }
+        severed_streams_.insert(stream);
     }
 
     void PinnedMemoryAllocator::empty_cache_impl(const bool publish_stats) {

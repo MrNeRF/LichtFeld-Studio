@@ -120,7 +120,6 @@ namespace lfs::vis {
         bool isInitialized() const { return initialized_; }
 
         // Main render function
-        void renderFrame(const RenderContext& context);
         VulkanFrameResult renderVulkanFrame(const RenderContext& context);
         [[nodiscard]] std::expected<void, std::string> ensureVksplatTrainingSharedScratchReady(
             VulkanContext& context,
@@ -257,8 +256,6 @@ namespace lfs::vis {
         void setOrthographic(bool enabled, float viewport_height, float distance_to_pivot);
 
         float getFovDegrees() const;
-        float getScalingModifier() const;
-        void setScalingModifier(float s);
         float getFocalLengthMm() const;
         void setFocalLength(float focal_mm);
 
@@ -368,19 +365,18 @@ namespace lfs::vis {
             bool used_mask = false;
         };
 
-        void setLatestCameraMetrics(CameraMetricsOverlayState metrics);
         void clearLatestCameraMetrics();
-        [[nodiscard]] std::optional<CameraMetricsOverlayState> getLatestCameraMetrics() const;
 
-        // FPS monitoring
-        float getCurrentFPS() const { return framerate_controller_.getCurrentFPS(); }
+        // FPS monitoring (scene renders vs. swapchain-presented GUI frames)
         float getAverageFPS() const { return framerate_controller_.getAverageFPS(); }
+        float getPresentedAverageFPS() const {
+            return presented_framerate_controller_.getAverageFPS();
+        }
+        // Measurement only — does not affect scene render pacing/limiting.
+        void notePresentedFrame() { presented_framerate_controller_.beginFrame(); }
 
         // Access to the auxiliary rendering engine used by point-cloud, mesh, and readback paths.
         lfs::rendering::RenderingEngine* getRenderingEngine();
-        [[nodiscard]] lfs::rendering::RenderingEngine* getRenderingEngineIfInitialized() const {
-            return initialized_ ? engine_.get() : nullptr;
-        }
         [[nodiscard]] lfs::rendering::ScreenOverlayRenderer* getScreenOverlayRenderer() {
             return &screen_overlay_renderer_;
         }
@@ -422,9 +418,6 @@ namespace lfs::vis {
         };
         [[nodiscard]] FramebufferViewportRect framebufferViewportRect() const {
             return framebuffer_viewport_rect_;
-        }
-        [[nodiscard]] uint64_t getViewportArtifactGeneration() const {
-            return viewport_artifact_service_.artifactGeneration();
         }
         [[nodiscard]] uint64_t getViewportProjectionGeneration() const {
             return viewport_projection_generation_;
@@ -553,9 +546,6 @@ namespace lfs::vis {
         }
         [[nodiscard]] int getHoveredGaussianId() const { return viewport_overlay_service_.hoveredGaussianId(); }
 
-        // Sync selection group colors to GPU constant memory
-        void syncSelectionGroupColor(int group_id, const glm::vec3& color);
-
         // Gizmo state for wireframe sync during manipulation
         void setCropboxGizmoState(bool active, const glm::vec3& min, const glm::vec3& max,
                                   const glm::mat4& world_transform, bool affects_render,
@@ -592,12 +582,9 @@ namespace lfs::vis {
         [[nodiscard]] double secondsUntilViewportResizeSettleReady() const {
             return frame_lifecycle_service_.secondsUntilResizeSettleReady();
         }
-        bool consumeResizeCompleted() { return frame_lifecycle_service_.consumeResizeCompleted(); }
-
         // LOD management
         void setLodAvailable(bool available);
         void setLodEnabled(bool enabled);
-        [[nodiscard]] bool isLodEnabled() const;
         [[nodiscard]] SparkLodController::Stats getLodStats() const;
 
     private:
@@ -766,6 +753,9 @@ namespace lfs::vis {
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
         lfs::rendering::ScreenOverlayRenderer screen_overlay_renderer_;
         mutable FramerateController framerate_controller_;
+        // Parallel presented-frame counter (GUI-only frames included). Does not
+        // drive pacing — scene path still uses framerate_controller_ alone.
+        mutable FramerateController presented_framerate_controller_;
 
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
@@ -840,6 +830,17 @@ namespace lfs::vis {
         uint64_t gt_comparison_image_request_generation_ = 0;
         std::condition_variable_any gt_comparison_image_cv_;
         std::jthread gt_comparison_image_worker_;
+        // #1574 GT depth/normal async hold-then-swap: at most one outstanding ticket.
+        // Panel keeps gt_async_held_display_ until the next ticket delivers (never blank).
+        std::uint64_t gt_async_depth_ticket_ = 0;
+        lfs::core::Tensor gt_async_depth_dest_{};
+        GTComparisonMode gt_async_ticket_mode_ = GTComparisonMode::RGB;
+        std::optional<lfs::rendering::CameraIntrinsics> gt_async_ticket_intrinsics_;
+        bool gt_async_ticket_flip_y_ = false;
+        lfs::rendering::FrameMetadata gt_async_ticket_metadata_{};
+        std::shared_ptr<lfs::core::Tensor> gt_async_held_display_;
+        bool gt_async_held_flip_y_ = false;
+        lfs::rendering::FrameMetadata gt_async_held_metadata_{};
         TrainerManager* resize_training_pause_trainer_ = nullptr;
         bool resize_training_pause_active_ = false;
 
@@ -873,9 +874,6 @@ namespace lfs::vis {
         bool lod_available_ = false;
 
         ViewportInteractionContext viewport_interaction_context_;
-
-        // Debug tracking
-        uint64_t render_count_ = 0;
 
         ViewportOverlayService viewport_overlay_service_;
 

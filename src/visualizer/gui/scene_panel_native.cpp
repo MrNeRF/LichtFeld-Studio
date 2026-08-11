@@ -453,6 +453,48 @@ namespace lfs::vis::gui {
         syncPanel(ctx);
     }
 
+    PanelDirectRenderResult NativeScenePanel::renderDirect(
+        const PanelDirectRenderRequest& request,
+        const PanelDrawContext& ctx) {
+        host_.setFloating(request.space == PanelSpace::Floating);
+        if (request.mode == PanelDirectRenderMode::Measure)
+            return {.handled = true, .height = host_.getContentHeight()};
+
+        host_.setInputClipY(request.clip_y_min, request.clip_y_max);
+        host_.setInput(request.input);
+        host_.setForcedHeight(request.forced_height);
+
+        bool handled = true;
+        try {
+            switch (request.mode) {
+            case PanelDirectRenderMode::Measure:
+                break;
+            case PanelDirectRenderMode::Draw:
+                drawDirect(request.x, request.y, request.width, request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Cached:
+                handled = drawDirectCached(request.x, request.y, request.width,
+                                           request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Preload:
+                preloadDirect(request.width, request.height, ctx,
+                              request.clip_y_min, request.clip_y_max, request.input);
+                break;
+            }
+        } catch (...) {
+            host_.setForcedHeight(0.0f);
+            host_.setInput(nullptr);
+            host_.setInputClipY(-1.0f, -1.0f);
+            throw;
+        }
+
+        const float height = host_.getContentHeight();
+        host_.setForcedHeight(0.0f);
+        host_.setInput(nullptr);
+        host_.setInputClipY(-1.0f, -1.0f);
+        return {.handled = handled, .height = height};
+    }
+
     void NativeScenePanel::preloadDirect(const float w, const float h,
                                          const PanelDrawContext& ctx,
                                          const float clip_y_min,
@@ -804,7 +846,11 @@ namespace lfs::vis::gui {
 
         if (logging_level_select_el_ &&
             logging_level_select_el_->GetSelection() != desired_selection) {
+            // Guard the Change listener so programmatic selection does not re-enter
+            // applyLogLevelSelection → setLoggingFeedback → dirty latch.
+            syncing_logging_selection_ = true;
             logging_level_select_el_->SetSelection(desired_selection);
+            syncing_logging_selection_ = false;
             changed = true;
         }
 
@@ -922,6 +968,11 @@ namespace lfs::vis::gui {
         if (type == "change") {
             const Rml::String current_id = current ? current->GetId() : "";
             if (current_id == "logging-level-select") {
+                // Ignore Change events raised by programmatic SetSelection during sync.
+                if (syncing_logging_selection_) {
+                    event.StopPropagation();
+                    return true;
+                }
                 applyLogLevelSelection();
                 event.StopPropagation();
                 return true;
@@ -1024,6 +1075,11 @@ namespace lfs::vis::gui {
 
         const core::LogLevel selected_level =
             logLevelFromSelection(logging_level_select_el_->GetSelection());
+        // No-op when the selection already matches the applied level — avoids
+        // re-dirtying via setLoggingFeedback on programmatic Change events.
+        if (selected_level == core::Logger::get().level())
+            return;
+
         core::Logger::get().set_level(selected_level);
         setLoggingFeedback(LOCF("runtime.log_level_set", logLevelLabel(selected_level)),
                            FeedbackTone::Success);
@@ -1079,6 +1135,8 @@ namespace lfs::vis::gui {
     }
 
     void NativeScenePanel::setLoggingFeedback(std::string message, const FeedbackTone tone) {
+        if (message == logging_feedback_text_ && tone == logging_feedback_tone_)
+            return;
         logging_feedback_text_ = std::move(message);
         logging_feedback_tone_ = tone;
         logging_feedback_dirty_ = true;

@@ -33,6 +33,17 @@ namespace lfs::rendering {
         R32Sfloat,
     };
 
+    // GPU-free size check: tensor may be a top-left subrect of a padded import surface.
+    // Returns true when tensor extents are positive and fit within the imported surface.
+    [[nodiscard]] inline bool cudaVulkanTensorFitsImport(
+        const std::uint32_t tensor_width,
+        const std::uint32_t tensor_height,
+        const std::uint32_t import_width,
+        const std::uint32_t import_height) noexcept {
+        return tensor_width > 0 && tensor_height > 0 && tensor_width <= import_width &&
+               tensor_height <= import_height;
+    }
+
     struct CudaVulkanExternalImageImport {
         CudaVulkanExternalHandle memory_handle = kInvalidCudaVulkanExternalHandle;
         std::size_t allocation_size = 0;
@@ -105,8 +116,6 @@ namespace lfs::rendering {
     class CudaVulkanInterop {
     public:
         CudaVulkanInterop() = default;
-        CudaVulkanInterop(CudaVulkanExternalImageImport image,
-                          CudaVulkanExternalSemaphoreImport semaphore);
         ~CudaVulkanInterop();
 
         CudaVulkanInterop(const CudaVulkanInterop&) = delete;
@@ -120,8 +129,6 @@ namespace lfs::rendering {
 
         [[nodiscard]] bool valid() const;
         [[nodiscard]] const std::string& lastError() const { return last_error_; }
-        [[nodiscard]] CudaVulkanExtent2D extent() const { return extent_; }
-        [[nodiscard]] CudaVulkanImageFormat format() const { return format_; }
 
         // flip_y: when true, vertically mirror the image during the surface copy. The rasterizer
         // emits images with OpenGL's bottom-left origin (FrameMetadata::flip_y); pass true when
@@ -191,7 +198,6 @@ namespace lfs::rendering {
     class CudaVulkanBufferInterop {
     public:
         CudaVulkanBufferInterop() = default;
-        explicit CudaVulkanBufferInterop(CudaVulkanExternalBufferImport buffer);
         ~CudaVulkanBufferInterop();
 
         CudaVulkanBufferInterop(const CudaVulkanBufferInterop&) = delete;
@@ -206,9 +212,6 @@ namespace lfs::rendering {
         [[nodiscard]] const std::string& lastError() const { return last_error_; }
         [[nodiscard]] void* devicePointer() const { return device_ptr_; }
         [[nodiscard]] std::size_t size() const { return size_; }
-        [[nodiscard]] bool copyFromTensor(const lfs::core::Tensor& tensor,
-                                          std::size_t byte_count,
-                                          cudaStream_t stream) const;
         // Offset-aware variant for coalesced layouts where one CUDA-imported
         // VkBuffer holds multiple sub-regions (xyz | rotations | scales+opacs |
         // sh) instead of four separate allocations.

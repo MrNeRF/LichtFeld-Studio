@@ -40,8 +40,6 @@ namespace lfs::vis::gui::panels {
         void clear();
 
         void addToHistory(const std::string& cmd);
-        void historyUp();
-        void historyDown();
 
         terminal::TerminalWidget* getTerminal();
         terminal::TerminalWidget* getOutputTerminal();

@@ -1,4 +1,3 @@
-/* Watched Directories dialog — minimal overrides on import_dialog.rcss */
 
 .watchdirs-progress {
     display: flex;

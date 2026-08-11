@@ -21,7 +21,9 @@
 #include <RmlUi/Core/Input.h>
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <format>
+#include <limits>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -435,12 +437,18 @@ namespace lfs::vis::gui {
         gt_metrics_config_ = store.gt_metrics_overlay_config.get();
         camera_metrics_ = store.camera_metrics.get();
 
-        const auto vram_hud_state = store.vram_hud.get();
-        RmlViewportOverlay::VramHudOverlayState overlay_state;
-        if (vram_hud_state.visible && vram_hud_state.snapshot) {
-            overlay_state.visible = true;
-            overlay_state.snapshot = *vram_hud_state.snapshot;
-        }
+        const auto make_overlay_state = [&store]() {
+            RmlViewportOverlay::VramHudOverlayState overlay_state;
+            const auto vram_hud_state = store.vram_hud.get();
+            const auto perf_hud_state = store.perf_hud.get();
+            if (vram_hud_state.visible && vram_hud_state.snapshot) {
+                overlay_state.visible = true;
+                overlay_state.snapshot = *vram_hud_state.snapshot;
+            }
+            overlay_state.perf_hud = perf_hud_state;
+            return overlay_state;
+        };
+        const auto overlay_state = make_overlay_state();
         setVramHudOverlay(std::move(overlay_state));
 
         gt_metrics_config_subscription_ = store.gt_metrics_overlay_config.subscribe(
@@ -460,7 +468,19 @@ namespace lfs::vis::gui {
                     overlay.visible = true;
                     overlay.snapshot = *state.snapshot;
                 }
+                overlay.perf_hud = lfs::vis::app_store().perf_hud.get();
                 setVramHudOverlay(std::move(overlay));
+            });
+        perf_hud_subscription_ = store.perf_hud.subscribe(
+            [this](const lfs::vis::AppStore::PerfHud& state) {
+                auto overlay = lfs::vis::app_store().vram_hud.get();
+                VramHudOverlayState combined;
+                combined.perf_hud = state;
+                if (overlay.visible && overlay.snapshot) {
+                    combined.visible = true;
+                    combined.snapshot = *overlay.snapshot;
+                }
+                setVramHudOverlay(std::move(combined));
             });
 
         auto mark_document_dirty = [this](const auto&) {
@@ -1006,7 +1026,9 @@ namespace lfs::vis::gui {
             rml_context_->SetDimensions(Rml::Vector2i(w, h));
             rml_context_->Update();
             queueCachedVulkanContext(true);
-            animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
+            const double next_delay = rml_context_->GetNextUpdateDelay();
+            next_update_delay_ = next_delay;
+            animation_active_ = (next_delay == 0.0);
             return;
         }
         const bool can_reuse = theme_current && !render_needed_ && !animation_active_ &&
@@ -1123,12 +1145,20 @@ namespace lfs::vis::gui {
         queueCachedVulkanContext(true);
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.next_delay", 0.25);
-            animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
+            const double next_delay = rml_context_->GetNextUpdateDelay();
+            next_update_delay_ = next_delay;
+            animation_active_ = (next_delay == 0.0);
         }
         render_needed_ = false;
         render_reason_bits_ = 0;
         last_render_w_ = w;
         last_render_h_ = h;
+    }
+
+    std::optional<double> RmlViewportOverlay::nextScheduledUpdateDelay() const {
+        if (std::isfinite(next_update_delay_) && next_update_delay_ > 0.0)
+            return next_update_delay_;
+        return std::nullopt;
     }
 
 } // namespace lfs::vis::gui

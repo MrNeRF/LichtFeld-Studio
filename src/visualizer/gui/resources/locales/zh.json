@@ -45,7 +45,10 @@
     "view.ui_scale.auto": "自动",
     "help": "帮助",
     "help.getting_started": "入门指南",
-    "help.about": "关于LichtFeld Studio"
+    "help.about": "关于LichtFeld Studio",
+    "view.performance_hud": "Performance HUD",
+    "edit.preferences": "偏好设置...",
+    "view.debug_info": "调试信息..."
   },
   "window": {
     "input_settings": "输入设置",
@@ -53,7 +56,10 @@
     "scene": "场景",
     "rendering": "渲染",
     "training": "训练",
-    "histogram": "Histogram"
+    "histogram": "Histogram",
+    "about": "关于LichtFeld Studio",
+    "debug_info": "调试信息",
+    "preferences": "偏好设置"
   },
   "getting_started": {
     "title": "入门指南",
@@ -507,13 +513,6 @@
     "button.clear": "清除",
     "button.switch_edit_mode": "编辑模式",
     "tooltip": {
-      "use_normal_loss": "从 normals/ 文件夹加载法线图，并在训练期间监督渲染的表面法线",
-      "normal_loss_weight": "法线损失权重",
-      "normal_consistency_weight": "深度-法线一致性项的权重",
-      "normal_flatten_weight": "法线监督启用时对每个 splat 最小缩放轴施加的 L1 惩罚",
-      "opt.depth_loss_mode.ssi": "按图像自动检测先验是视差型还是深度型",
-      "opt.depth_loss_mode.ssi_disparity": "先验类似视差（数值越大越近），例如 Depth Anything 或 MiDaS 的输出",
-      "opt.depth_loss_mode.ssi_depth": "先验类似深度（数值越大越远），例如度量深度模型",
       "btn_switch_edit": "切换到已训练场景的编辑模式",
       "ppisp_freeze_from_sidecar": "从 sidecar 文件加载 PPISP 权重",
       "ppisp_sidecar_path": "PPISP sidecar 文件路径",
@@ -569,7 +568,38 @@
           "8": "以八分之一图像分辨率训练"
         }
       }
-    }
+    },
+    "section.masking": "掩码设置",
+    "section.thresholds": "阈值",
+    "section.save_steps": "保存/评估步骤",
+    "section.sparsity": "稀疏性设置",
+    "opt.strategy": "策略:",
+    "opt.iterations": "迭代次数:",
+    "opt.sh_degree": "SH 阶数:",
+    "opt.use_bilateral": "双边网格:",
+    "opt.mask_mode": "遮罩模式:",
+    "opt.sparsity": "稀疏化:",
+    "opt.gut": "GUT:",
+    "opt.undistort": "去畸变:",
+    "opt.mip_filter": "Mip Filter:",
+    "opt.bg_modulation": "背景调制:",
+    "refinement.gradient_thr": "  梯度阈值:",
+    "masking.invert_masks": "反转:",
+    "tooltip.keep_model": "保留训练模型，丢弃数据集",
+    "tooltip.gradient_thr": "密度化梯度阈值",
+    "tooltip.btn_save_checkpoint": "保存当前状态",
+    "status.enabled": "已启用",
+    "status.disabled": "已禁用",
+    "status.yes": "是",
+    "status.no": "否",
+    "button.start": "开始训练",
+    "button.resume": "继续",
+    "button.pause": "暂停",
+    "button.stop": "停止训练",
+    "button.reset": "重置训练",
+    "button.save_checkpoint": "保存检查点",
+    "button.add": "添加",
+    "button.remove": "移除"
   },
   "rendering": "渲染",
   "scene": {
@@ -611,8 +641,6 @@
     "keyframe_node_label": "关键帧 {}（{:.2f}秒）",
     "search": "搜索",
     "show_in_file_manager": "在文件管理器中显示",
-    "go_to_image": "转到图像",
-    "open_in_gt_compare": "在 GT 比较中打开",
     "history": "历史记录",
     "logging": "日志",
     "history_shared": "共享历史记录",
@@ -635,7 +663,23 @@
     "log_warn": "警告",
     "log_error": "错误",
     "log_critical": "严重",
-    "log_off": "关闭"
+    "log_off": "关闭",
+    "go_to_image": "转到图像",
+    "open_in_gt_compare": "在 GT 比较中打开",
+    "save_asset_as": "另存资产为...",
+    "go_to_cam_view": "转到相机视图",
+    "images": "图像 ({})：",
+    "no_images": "未加载图像。",
+    "move_node": "移动：%s",
+    "filter": "过滤器...",
+    "no_models_loaded": "未加载模型",
+    "right_click_to_add": "右键单击以添加...",
+    "no_actions": "(无操作)",
+    "no_groups_available": "没有可用的组",
+    "cannot_delete_training": "训练进行中无法删除",
+    "background": "背景",
+    "training_enabled_tooltip": "已包含在训练中",
+    "training_disabled_tooltip": "已从训练中排除"
   },
   "export": {
     "overwrite": "覆盖",
@@ -653,7 +697,12 @@
     "export": "导出",
     "complete": "完成",
     "failed": "失败",
-    "select_at_least_one": "至少选择一个模型"
+    "select_at_least_one": "至少选择一个模型",
+    "title": "导出",
+    "select_models": "选择模型：",
+    "exporting": "导出中...",
+    "writing_ply": "写入PLY",
+    "writing_spz": "写入SPZ"
   },
   "common": {
     "ok": "确定",
@@ -675,7 +724,9 @@
     "reset": "重置",
     "auto": "自动",
     "undo": "撤销",
-    "redo": "重做"
+    "redo": "重做",
+    "edit": "编辑",
+    "double_click_reset": "双击重置"
   },
   "status": {
     "ready": "就绪",
@@ -697,19 +748,28 @@
     "eta": "预计剩余时间",
     "psnr": "PSNR",
     "ssim": "SSIM",
-    "unknown": "未知"
+    "unknown": "未知",
+    "dataset_no_trainer": "数据集（无训练器）",
+    "dataset_ready": "数据集（就绪）",
+    "training_paused": "训练（已暂停）",
+    "training_finished": "训练完成",
+    "ply_models_count": "PLY模型：{}"
   },
   "mode": {
     "empty": "空",
     "dataset": "数据集",
-    "viewer": "查看器"
+    "viewer": "查看器",
+    "edit_mode": "编辑模式",
+    "ply_models": "PLY模型："
   },
   "controls": {
     "wasd": "WASD",
     "zoom": "缩放"
   },
   "preferences": {
-    "language": "语言："
+    "language": "语言：",
+    "title": "偏好设置",
+    "select_language": "选择语言"
   },
   "main_panel": {
     "console": "控制台",
@@ -770,7 +830,21 @@
     "environment": "环境",
     "environment_map_path": "环境贴图",
     "environment_exposure": "曝光",
-    "environment_rotation": "旋转"
+    "environment_rotation": "旋转",
+    "windows": "窗口",
+    "scene_panel": "场景面板",
+    "show_console": "显示系统控制台",
+    "hide_console": "隐藏系统控制台",
+    "background": "背景",
+    "visible_axes": "可见轴：",
+    "plane_yz": "YZ（X平面）",
+    "plane_xz": "XZ（Y平面）",
+    "plane_xy": "XY（Z平面）",
+    "fov_info": "视场角",
+    "gut_mode": "GUT（3DGUT）",
+    "ppisp_mode_manual": "手动",
+    "ppisp_mode_auto": "自动（控制器）",
+    "selection_colors": "选择颜色"
   },
   "tool_defs": {
     "select": "选择",
@@ -838,7 +912,11 @@
     "fly_camera": "飞行相机",
     "drone_camera": "无人机相机",
     "transform_tools": "变换工具",
-    "unselect": "取消选择"
+    "unselect": "取消选择",
+    "resize_bounds": "调整边界大小",
+    "reset_default": "重置为默认",
+    "fullscreen": "全屏",
+    "toggle_ui": "切换UI"
   },
   "transform": {
     "node": "节点：%s",
@@ -851,7 +929,12 @@
     "reset_transform": "重置变换",
     "nodes_selected": "已选择%zu个节点",
     "bake_transform": "应用变换",
-    "tool": "变换"
+    "tool": "变换",
+    "space": "空间：%s",
+    "rotation": "旋转：",
+    "rotation_degrees": "旋转（度）：",
+    "uniform_scale": "均匀缩放",
+    "use_gizmo": "使用小工具变换"
   },
   "selection": {
     "operation_failed": "选择操作失败",
@@ -891,10 +974,18 @@
     "parameters_unavailable": "参数不可用",
     "no_dataset_loaded": "未加载数据集",
     "iters_per_sec": "次迭代/秒",
-    "sparsity": "稀疏性设置"
+    "sparsity": "稀疏性设置",
+    "save_checkpoint": "保存检查点",
+    "checkpoint_saved": "检查点已保存！",
+    "finished": "已完成",
+    "save_steps": "保存/评估步骤",
+    "new_step": "新建步骤",
+    "mrnf_params": "MRNF参数",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   },
   "tooltip": {
-    "gt_compare_mode": "选择 RGB、法线或深度真值比较",
     "mip_filter": "减少亚像素高斯的锯齿",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -992,6 +1083,7 @@
     "depth_view_panel": "深度图控件",
     "depth_view_tool": "活动深度图视图",
     "depth_view_mode": "选择深度图颜色模式",
+    "gt_compare_mode": "选择 RGB、法线或深度真值比较",
     "depth_view_range": "深度图可视化范围",
     "depth_view_near": "深度范围近端",
     "depth_view_far": "深度范围远端",
@@ -1064,7 +1156,15 @@
         "manual": "手动：直接调整校正滑块",
         "auto": "自动：使用训练好的控制器进行校正"
       }
-    }
+    },
+    "gut_mode": "用于鱼眼/畸变/等距柱状相机",
+    "ppisp_color_rgb": "调整该颜色通道的色度",
+    "locked": "已锁定：其他组无法覆盖",
+    "unlocked": "已解锁：可以覆盖",
+    "point_size": "点大小",
+    "scale_camera": "缩放",
+    "fov": "相机视场角（度）",
+    "selection_colors": "选区可视化颜色"
   },
   "exit_popup": {
     "title": "退出应用程序？",
@@ -1074,7 +1174,8 @@
     "training_title": "停止训练并退出？",
     "training_message": "训练仍在进行中。“停止并保存”会结束训练并保存项目。“丢弃并退出”会结束训练，但不会将训练项目保留为当前项目。",
     "stop_and_save": "停止并保存",
-    "discard_and_exit": "丢弃并退出"
+    "discard_and_exit": "丢弃并退出",
+    "exit": "退出"
   },
   "load_dataset_popup": {
     "title": "加载数据集",
@@ -1103,7 +1204,8 @@
     "directory": "文件夹",
     "file": "文件",
     "items": "项目",
-    "and_more": "... 和"
+    "and_more": "... 和",
+    "cannot_open": "无法打开"
   },
   "export_dialog": {
     "format": "格式",
@@ -1133,7 +1235,10 @@
     "import_failed": "导入失败：%s",
     "import_complete_title": "导入完成",
     "import_failed_title": "导入失败",
-    "num_splats": "Splat数量：%s"
+    "num_splats": "Splat数量：%s",
+    "loss": "损失：",
+    "gaussians_count": "%s高斯",
+    "status_label": "状态：%s"
   },
   "input_settings": {
     "title": "输入设置",
@@ -1263,10 +1368,16 @@
     "trigger.double_click": " 双击",
     "trigger.drag": " 拖动",
     "trigger.scroll": "滚动",
-    "trigger.unknown": "未知"
+    "trigger.unknown": "未知",
+    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "binding": "绑定"
   },
   "debug_info": {
-    "clear_history": "清除历史"
+    "clear_history": "清除历史",
+    "free_memory": "可用：%.2f GB",
+    "enable_tracing": "启用操作追踪",
+    "recorded_operations": "已记录的操作：%zu",
+    "print_to_log": "打印到日志"
   },
   "training_params": {
     "strategy": "策略:",
@@ -1307,7 +1418,25 @@
     "ppisp_freeze_gaussians": "冻结高斯:",
     "ppisp_freeze_from_sidecar": "冻结的 sidecar:",
     "ppisp_sidecar_path": "sidecar 路径:",
-    "enable_eval": "启用评估:"
+    "enable_eval": "启用评估:",
+    "opacity_penalty_weight": "  不透明度惩罚权重:",
+    "opacity_penalty_power": "  不透明度惩罚指数:",
+    "mask_threshold": "  遮罩阈值:",
+    "bg_settings": "背景设置",
+    "bg_mode_color": "颜色",
+    "bg_mode_modulation": "调制",
+    "bg_mode_image": "图像",
+    "bg_mode_random": "随机",
+    "bg_modulation": "背景调制:",
+    "init_opacity": "初始不透明度:",
+    "init_scaling": "初始缩放:",
+    "random_init": "随机初始化:",
+    "num_points": "  点数:",
+    "extent": "  范围:",
+    "prune_opacity": "不透明度修剪:",
+    "ppisp_settings": "PPISP设置",
+    "ppisp_enable_controller": "启用控制器:",
+    "disabled": "已禁用"
   },
   "image_preview": {
     "title": "图像预览",
@@ -1346,7 +1475,32 @@
     "storage_section": "存储",
     "color_picker": "取色",
     "rotate_left": "向左旋转 90°",
-    "rotate_right": "向右旋转 90°"
+    "rotate_right": "向右旋转 90°",
+    "show_info_panel": "显示信息面板",
+    "actual_size": "实际大小",
+    "previous": "上一个",
+    "next": "下一个",
+    "first": "第一个",
+    "last": "最后一个",
+    "name": "名称：%s",
+    "size_mb": "大小：%.2f MB",
+    "size_kb": "大小：%.1f KB",
+    "size_bytes": "大小：%zu字节",
+    "modified": "修改时间：%s",
+    "color_space": "色彩空间：%s",
+    "camera": "相机：%s",
+    "lens": "镜头：%s",
+    "focal_length": "焦距：%s",
+    "focal_35mm": "35mm等效：%s",
+    "exposure": "曝光：%s",
+    "aperture": "光圈：%s",
+    "date": "日期：%s",
+    "software": "软件：%s",
+    "fit_status": "适应窗口：%s",
+    "overlay_status": "叠加：%s",
+    "file_label": "文件：%s",
+    "visible": "可见",
+    "hidden": "隐藏"
   },
   "startup": {
     "supported_by": "支持：",
@@ -1358,7 +1512,10 @@
     "drop_to_import": "放下以导入",
     "drop_to_import_subtitle": "PLY、SOG、SPZ、RAD、USD、COLMAP数据集或项目",
     "discord": "Discord",
-    "donate": "捐赠"
+    "donate": "捐赠",
+    "discovering_plugins": "正在查找启动插件...",
+    "loading_plugin": "加载中 {}/{}: {}",
+    "plugin_loading_skipped": "已跳过启动插件加载"
   },
   "python_console": {
     "new": "新建",
@@ -1402,8 +1559,6 @@
     "save_scan": "保存并扫描",
     "scan_cancelling": "正在取消扫描...",
     "scan_no_directories": "没有要扫描的受监视文件夹。",
-    "scan_preparing_one": "正在准备扫描 1 个文件夹...",
-    "scan_preparing_many": "正在准备扫描 {count} 个文件夹...",
     "scan_backend_unavailable": "扫描失败：资源管理器后端不可用。",
     "scan_cancelled": "扫描已取消。",
     "scan_path": "正在扫描 {path}",
@@ -1420,6 +1575,8 @@
     "scan_save_failed_summary": "扫描已结束，但保存失败。找到 {discovered} 个，添加 {added} 个。",
     "scan_complete_no_new": "扫描完成。找到 {discovered} 个，未添加新资源。",
     "scan_finish_failed": "无法完成扫描：{error}",
+    "scan_preparing_one": "正在准备扫描 1 个文件夹...",
+    "scan_preparing_many": "正在准备扫描 {count} 个文件夹...",
     "scan_log_queued": "排队中",
     "scan_log_no_assets": "无资源",
     "scan_log_scanning_found": "正在扫描（找到 {count} 个）",
@@ -1430,7 +1587,8 @@
   "axis": {
     "x": "X:",
     "y": "Y:",
-    "z": "Z:"
+    "z": "Z:",
+    "u": "U:"
   },
   "resume_checkpoint_popup": {
     "title": "恢复检查点",
@@ -1469,7 +1627,9 @@
     "instruction": "请释放磁盘空间或选择其他位置。",
     "cancel": "取消",
     "change_location": "更改位置",
-    "retry": "重试"
+    "retry": "重试",
+    "title": "磁盘空间不足",
+    "select_output_location": "选择输出位置"
   },
   "video_extractor": {
     "title": "从视频提取帧",
@@ -1556,7 +1716,8 @@
     "overwrite_cancel": "取消",
     "rotate_cw": "顺时针旋转",
     "rotate_ccw": "逆时针旋转",
-    "discarded_format": " ({} 已丢弃)"
+    "discarded_format": " ({} 已丢弃)",
+    "extracting": "正在提取: %d / %d 帧"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -1607,7 +1768,9 @@
     "primary_view": "主视图",
     "secondary_view": "副视图",
     "gpu": "GPU",
-    "strategy_default": "默认"
+    "strategy_default": "默认",
+    "split": "分割：",
+    "ui_fps": "UI FPS"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL 或简写：",
@@ -1707,7 +1870,19 @@
     "rotate": "旋转",
     "playback_time": "播放 {:.2f} 秒",
     "keyframe_preview": "关键帧 {} 预览",
-    "edit_delta": "{:.3f}m  {:.1f}{}"
+    "edit_delta": "{:.3f}m  {:.1f}{}",
+    "focal_length_mm": "焦距 (mm)",
+    "go_to_first_keyframe": "转到第一个关键帧",
+    "stop": "停止",
+    "pause": "暂停 (空格键)",
+    "go_to_last_keyframe": "转到最后一个关键帧",
+    "loop_on": "循环：开",
+    "loop_off": "循环：关",
+    "edit_time": "编辑时间...",
+    "easing_tooltip": "缓动控制离去运动\n（最后一个关键帧没有离去段）",
+    "time_seconds": "时间 (秒)",
+    "loop_point_tooltip": "循环点 @ {}（返回起点）",
+    "keyframe_tooltip": "关键帧 @ {}（双击编辑）"
   },
   "file_association": {
     "title": "设为默认应用程序",
@@ -1716,7 +1891,8 @@
     "not_now": "暂不",
     "dont_ask": "不再询问",
     "menu_register": "设为默认应用程序...",
-    "menu_unregister": "移除默认应用程序..."
+    "menu_unregister": "移除默认应用程序...",
+    "success": "文件关联注册成功。"
   },
   "error_actions": {
     "retry": "重试",
@@ -1976,7 +2152,34 @@
     "calls": "调用次数",
     "delta": "差值",
     "time": "时间",
-    "gpu": "GPU"
+    "gpu": "GPU",
+    "perf_hud_title": "Performance",
+    "perf_this_process": "This process",
+    "perf_other_processes": "Other processes",
+    "perf_free": "Free",
+    "perf_cores": "cores",
+    "perf_process_cpu_note": "Process CPU, share of all cores",
+    "perf_tab_ledger": "Ledger",
+    "perf_ledger_closes": "Ledger closes",
+    "perf_ledger_gap": "Unattributed",
+    "perf_ledger_over": "Over-attributed, numbers unreliable",
+    "perf_ledger_attributed": "Attributed",
+    "perf_nested_disclosure": "Disclosure, not counted again",
+    "perf_no_owner": "No owner",
+    "perf_untracked": "Untracked",
+    "perf_retention": "Retention",
+    "perf_reclaimable": "Reclaimable",
+    "perf_required": "Required",
+    "perf_allocated": "Allocated",
+    "perf_slack": "Slack",
+    "perf_over_budget": "Over budget",
+    "perf_estimate_detected": "Estimate detected",
+    "perf_degenerate_pair": "Publisher reports required equal to allocated",
+    "perf_tracking_off": "Detailed memory tracking is off",
+    "perf_enable_tracking": "Enable",
+    "perf_expand": "Expand",
+    "perf_collapse": "Collapse",
+    "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {
     "grouped_changes": "已分组的更改",
@@ -2087,5 +2290,19 @@
     "recoverable_badge": "可恢复的更改",
     "crash_notice": "LichtFeld Studio 意外关闭。是否恢复上次会话？",
     "last_opened": "上次打开"
+  },
+  "messages": {
+    "no_data_loaded": "未加载数据",
+    "use_file_menu": "使用文件菜单导入",
+    "no_models_loaded": "未加载模型",
+    "right_click_to_add": "右键单击以添加...",
+    "training_complete": "训练完成",
+    "training_stopped": "训练已停止",
+    "training_error": "训练错误",
+    "param_manager_unavailable": "参数管理器不可用",
+    "failed_to_load_params": "加载参数失败：",
+    "err_distorted_images": "检测到畸变图像。请启用 --gut 或 --undistort 以使用有畸变的相机进行训练。",
+    "err_ortho_not_supported": "暂不支持使用正交相机模型进行训练。",
+    "err_non_pinhole": "请启用 --gut 或 --undistort 以使用非针孔相机进行训练。"
   }
 }

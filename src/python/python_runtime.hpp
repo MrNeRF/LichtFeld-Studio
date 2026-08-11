@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -95,9 +96,14 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API const PyContext& context();
 
     // UI redraw request mechanism
+    // request_redraw / request_redraw_after: "render a GUI frame no later than now + delay"
+    // (delay 0 = immediate). Multiple scheduled deadlines keep the earliest.
     LFS_PYTHON_RUNTIME_API void request_redraw();
+    LFS_PYTHON_RUNTIME_API void request_redraw_after(double delay_seconds);
     LFS_PYTHON_RUNTIME_API bool has_redraw_request();
     LFS_PYTHON_RUNTIME_API bool consume_redraw_request();
+    // Remaining seconds until a future scheduled redraw; nullopt if none or already due.
+    LFS_PYTHON_RUNTIME_API std::optional<double> seconds_until_scheduled_redraw();
     LFS_PYTHON_RUNTIME_API uint64_t redraw_request_generation();
     LFS_PYTHON_RUNTIME_API void request_pre_scene_panel_sync();
     LFS_PYTHON_RUNTIME_API uint64_t pre_scene_panel_sync_generation();
@@ -154,7 +160,7 @@ namespace lfs::python {
     // Safe Python error extraction - avoids nanobind::python_error::what() crash on Windows
     LFS_PYTHON_RUNTIME_API std::string extract_python_error();
 
-    // Typed Python-error extraction (Phase 9 Section 2.1). Precondition: GIL held
+    // Typed Python-error extraction requires the GIL and
     // AND PyErr_Occurred(). Consumes and clears the pending Python error. Never
     // throws; never leaves a Python error pending. The returned Error owns a
     // formatted traceback string only (in detail()); no PyObject is retained, so
@@ -176,10 +182,8 @@ namespace lfs::python {
 
     // Menu interface for C++ code
     LFS_PYTHON_RUNTIME_API void draw_python_menu_items(MenuLocation location);
-    LFS_PYTHON_RUNTIME_API bool has_python_menu_items(MenuLocation location);
 
     // Menu bar entry interface for C++ UI code (Python-driven menu bar)
-    LFS_PYTHON_RUNTIME_API bool has_menu_bar_entries();
     LFS_PYTHON_RUNTIME_API std::vector<MenuBarEntry> get_menu_bar_entries();
     LFS_PYTHON_RUNTIME_API void draw_menu_bar_entry(const std::string& idname);
 
@@ -228,8 +232,6 @@ namespace lfs::python {
                                               bool rad_streamable = true);
 
     using HasToolbarCallback = bool (*)();
-
-    LFS_PYTHON_RUNTIME_API bool has_python_toolbar();
 
     // Operator callbacks
     using CancelActiveOperatorCallback = void (*)();
@@ -293,7 +295,6 @@ namespace lfs::python {
     using MenuBarEntryVisitor = void (*)(const char* idname, const char* label, int order, void* user_data);
 
     // Menu bar entry callbacks
-    using HasMenuBarEntriesCallback = bool (*)();
     using GetMenuBarEntriesCallback = void (*)(MenuBarEntryVisitor, void* user_data);
     using DrawMenuBarEntryCallback = void (*)(const char* idname);
 
@@ -303,7 +304,6 @@ namespace lfs::python {
         bool (*has_menus)(MenuLocation) = nullptr;
 
         // Menu bar entries (Python-driven top-level menus)
-        bool (*has_menu_bar_entries)() = nullptr;
         void (*get_menu_bar_entries)(MenuBarEntryVisitor, void*) = nullptr;
         void (*draw_menu_bar_entry)(const char*) = nullptr;
         void (*collect_menu_content)(const char*, MenuItemVisitor, void*) = nullptr;
@@ -314,7 +314,6 @@ namespace lfs::python {
         bool (*has_modals)() = nullptr;
 
         // Toolbar
-        bool (*has_toolbar)() = nullptr;
 
         // Lifecycle
         void (*cleanup)() = nullptr;
@@ -710,6 +709,9 @@ namespace lfs::python {
         void (*set_input)(void* host, const void* input);
         void (*set_forced_height)(void* host, float h);
         bool (*needs_animation)(void* host);
+        // Returns true and writes delay when the host has a finite scheduled
+        // update delay > 0 seconds; false for continuous demand or idle.
+        bool (*next_scheduled_update_delay)(void* host, double* out_seconds);
     };
 
     LFS_PYTHON_RUNTIME_API void set_rml_panel_host_ops(const RmlPanelHostOps& ops);
@@ -745,7 +747,6 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void set_invalidate_poll_cache_callback(InvalidatePollCacheCallback cb);
     LFS_PYTHON_RUNTIME_API void invalidate_poll_caches(uint8_t dependency = 7);
 
-    // Signal bridge callbacks - registered by Python module, called by visualizer
     using SignalFlushCallback = void (*)();
     using TrainingProgressCallback = void (*)(int iteration, float loss, std::size_t num_gaussians);
     using TrainingStateCallback = void (*)(bool is_training, const char* state);
@@ -766,7 +767,6 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void set_signal_bridge_callbacks(const SignalBridgeCallbacks& callbacks);
 
-    // Signal update functions - called by visualizer, dispatch to Python via callbacks
     LFS_PYTHON_RUNTIME_API void update_training_progress(int iteration, float loss, std::size_t num_gaussians);
     LFS_PYTHON_RUNTIME_API void update_training_state(bool is_training, const char* state);
     LFS_PYTHON_RUNTIME_API void update_trainer_loaded(bool has_trainer, int max_iterations, int initial_iteration = 0);

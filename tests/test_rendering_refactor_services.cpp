@@ -124,7 +124,7 @@ namespace lfs::vis {
                 return;
             }
 
-            lfs::io::CacheLoader::getInstance(false, false);
+            lfs::io::CacheLoader::getInstance(false);
             lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
                 return lfs::io::CacheLoader::getInstance().load_cached_image(
                     p.path,

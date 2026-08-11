@@ -24,22 +24,18 @@
     border-color: @{alpha(border,0.55)};
 }
 
-.plugin-card:hover,
 .plugin-list-row:hover {
     background-color: @{alpha(primary,0.09)};
 }
 
-.plugin-card.card--in-progress,
 .plugin-list-row.card--in-progress {
     border-color: @{primary};
 }
 
-.plugin-card.card--success,
 .plugin-list-row.card--success {
     border-color: @{success};
 }
 
-.plugin-card.card--error,
 .plugin-list-row.card--error {
     border-color: @{error};
 }
@@ -48,23 +44,8 @@
     border-top-color: @{alpha(border,0.50)};
 }
 
-.plugin-list-disclosure,
-.plugin-list-link,
-.plugin-list-marker--local {
-    color: @{text_dim};
-}
-
-.plugin-list-name-btn,
-.plugin-list-marker--remote,
-.card-name,
-.plugin-list-name {
+.card-name {
     color: @{text};
-}
-
-.plugin-list-disclosure:hover,
-.plugin-list-name-btn:hover,
-.plugin-list-link:hover {
-    background-color: @{alpha(border,0.30)};
 }
 
 .confirm-overlay {

@@ -733,6 +733,8 @@ namespace lfs::vis {
                                              resolution);
             }
             out.vram_label = std::format("shadow:{}x{}@{}", resolution, resolution, static_cast<const void*>(&out));
+            vmaSetAllocationName(allocator, out.alloc,
+                                 is_dummy ? "Mesh shadow dummy depth" : "Mesh shadow depth");
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.mesh.shadow_image",
                 out.vram_label,
@@ -1107,6 +1109,7 @@ namespace lfs::vis {
                                          w,
                                          h);
             out.vram_label = std::format("{}:{}x{}@{}", label, w, h, static_cast<const void*>(&out));
+            vmaSetAllocationName(allocator, out.alloc, "Mesh texture image");
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.mesh.texture",
                 out.vram_label,

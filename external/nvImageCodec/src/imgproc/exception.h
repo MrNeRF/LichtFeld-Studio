@@ -34,7 +34,8 @@ namespace nvimgcodec {
         INTERNAL_ERROR = 6,
         INVALID_PARAMETER = 7,
         CUDA_CALL_ERROR = 8,
-        BAD_STATE = 9
+        BAD_STATE = 9,
+        ARCH_MISMATCH = 10
     };
 
     const char* getErrorString(Status);
@@ -49,8 +50,6 @@ namespace nvimgcodec {
         virtual const char* what() const throw();
 
         Status status() const;
-
-        const char* message() const;
 
         const char* where() const;
 
@@ -74,17 +73,25 @@ namespace nvimgcodec {
             FatalError(INVALID_PARAMETER, "null pointer"); \
     }
 
-#define CHECK_CUDA(call)                                                       \
-    {                                                                          \
-        cudaError_t _e = (call);                                               \
-        if (_e != cudaSuccess) {                                               \
-            cudaGetLastError(); /* clean that error for any further calls */   \
-            std::stringstream _error;                                          \
-            _error << "CUDA Runtime failure: '#" << std::to_string(_e) << "'"; \
-            FatalError(CUDA_CALL_ERROR, _error.str());                         \
-        }                                                                      \
+#ifndef CHECK_CUDA
+#define CHECK_CUDA(call)                                                     \
+    {                                                                        \
+        cudaError_t _e = (call);                                             \
+        if (_e != cudaSuccess) {                                             \
+            std::stringstream _error;                                        \
+            _error << "CUDA Runtime failure '#" << std::to_string(_e) << "'" \
+                   << " : " << cudaGetErrorString(_e);                       \
+            cudaGetLastError(); /* clean that error for any further calls */ \
+            if (_e == cudaErrorMemoryAllocation) {                           \
+                FatalError(ALLOCATION_ERROR, _error.str());                  \
+            } else {                                                         \
+                FatalError(CUDA_CALL_ERROR, _error.str());                   \
+            }                                                                \
+        }                                                                    \
     }
+#endif
 
+#ifndef CHECK_NVIMGCODEC
 #define CHECK_NVIMGCODEC(call)                                                 \
     {                                                                          \
         nvimgcodecStatus_t _e = (call);                                        \
@@ -94,6 +101,7 @@ namespace nvimgcodec {
             throw std::runtime_error(_error.str());                            \
         }                                                                      \
     }
+#endif
 
 #define LOG_CUDA_ERROR(call)                                                            \
     {                                                                                   \
@@ -105,6 +113,7 @@ namespace nvimgcodec {
         }                                                                               \
     }
 
+#ifndef CHECK_CU
 #define CHECK_CU(call)                                                            \
     {                                                                             \
         CUresult _e = (call);                                                     \
@@ -114,5 +123,6 @@ namespace nvimgcodec {
             FatalError(CUDA_CALL_ERROR, _error.str());                            \
         }                                                                         \
     }
+#endif
 
 } // namespace nvimgcodec

@@ -55,9 +55,6 @@ namespace lfs::training {
         void deserialize(std::istream& is);
         void adopt_checkpoint_state(ExponentialLR& loaded) noexcept;
 
-        // Accessors for state
-        double get_gamma() const { return gamma_; }
-
     private:
         AdamOptimizer& optimizer_;
         double gamma_;

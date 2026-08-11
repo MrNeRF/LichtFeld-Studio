@@ -9,6 +9,7 @@
 #endif
 
 #include "sogs.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/error_reporter.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -1751,17 +1752,46 @@ namespace lfs::io {
                 int palette_size = std::min(64, static_cast<int>(std::pow(2, std::floor(std::log2(num_rows / 1024.0))))) * 1024;
                 palette_size = std::clamp(palette_size, 1024, static_cast<int>(num_rows));
 
-                const auto& shN_swizzled = splat_data.shN_raw();
-                if (!shN_swizzled.is_valid() || shN_swizzled.ndim() != 1 || shN_swizzled.numel() == 0) {
+                // k-means expects 1D float32 swizzled layout. Resident shN may be:
+                //  - Float32 swizzled (training default / legacy)
+                // Float16 pad-dropped q16 — must dequant+reswizzle first
+                //  - any other dtype/layout is rejected
+                const auto& shN_raw = splat_data.shN_raw();
+                if (!shN_raw.is_valid() || shN_raw.numel() == 0) {
                     return make_error(ErrorCode::INVALID_DATASET,
-                                      "Invalid swizzled SH tensor for SOG export",
+                                      "Invalid SH tensor for SOG export",
                                       options.output_path);
                 }
 
-                // Run k-means directly on resident swizzled shN so SOG export does not allocate
-                // a full canonical [N, K, 3] CUDA tensor.
+                Tensor shN_float_swizzled;
+                if (shN_raw.ndim() == 1 && shN_raw.dtype() == lfs::core::DataType::Float32) {
+                    shN_float_swizzled = shN_raw;
+                } else {
+                    // Dequantize / reformat via canonical [N,K,3], then re-swizzle to float1D.
+                    // shN_canonical() handles q16 (Float16 + bounds) and float swizzled.
+                    Tensor shN_canon = splat_data.shN_canonical();
+                    if (!shN_canon.is_valid() || shN_canon.ndim() != 3 ||
+                        shN_canon.dtype() != lfs::core::DataType::Float32) {
+                        return make_error(ErrorCode::INVALID_DATASET,
+                                          "Failed to materialise float SH for SOG export",
+                                          options.output_path);
+                    }
+                    if (shN_canon.device() != Device::CUDA) {
+                        shN_canon = shN_canon.cuda();
+                    }
+                    const size_t n = static_cast<size_t>(num_rows);
+                    const uint32_t k = static_cast<uint32_t>(shN_canon.size(1));
+                    const size_t float_count = lfs::core::sh_swizzled_float_count(n, k);
+                    shN_float_swizzled = Tensor::zeros({float_count}, Device::CUDA, lfs::core::DataType::Float32);
+                    lfs::core::reorder_sh_to_swizzled(
+                        shN_canon.ptr<float>(),
+                        shN_float_swizzled.ptr<float>(),
+                        n, k, k);
+                }
+
+                // Run k-means on float swizzled shN (no full canonical residency for float path).
                 auto [sh_centroids, sh_labels] = lfs::io::kmeans_sh_swizzled(
-                    shN_swizzled, static_cast<int>(num_rows), sh_coeffs,
+                    shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
                     palette_size, options.kmeans_iterations);
                 if (!sh_centroids.is_valid() || !sh_labels.is_valid()) {
                     return make_error(ErrorCode::ENCODING_FAILED,

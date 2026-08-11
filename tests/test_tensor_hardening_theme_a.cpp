@@ -100,7 +100,7 @@ TEST_F(CudaTest, A1_NonContiguousClampFollowsViewStrides_CPUAndCUDA) {
     }
 }
 
-TEST(HardeningThemeA_Strided, A2_CPUCopyFromWritesLogicalDestinationCells) {
+TEST(StridedTensorHardening, A2_CPUCopyFromWritesLogicalDestinationCells) {
     auto base = Tensor::zeros({2, 2}, Device::CPU);
     auto destination = base.transpose(0, 1);
     auto source = lfs_float_tensor({1.0f, 2.0f, 3.0f, 4.0f}, {2, 2}, Device::CPU);
@@ -112,7 +112,7 @@ TEST(HardeningThemeA_Strided, A2_CPUCopyFromWritesLogicalDestinationCells) {
     expect_float_values_match(base, torch_base, "A2 CPU copy_from");
 }
 
-TEST(HardeningThemeA_Strided, A3_ViewCopyAssignmentUsesBothTensorStrides) {
+TEST(StridedTensorHardening, A3_ViewCopyAssignmentUsesBothTensorStrides) {
     auto base = Tensor::zeros({3, 3}, Device::CPU);
     auto destination = base.slice(1, 0, 1);
     const auto source = Tensor::full({3, 1}, 9.0f, Device::CPU);
@@ -123,7 +123,7 @@ TEST(HardeningThemeA_Strided, A3_ViewCopyAssignmentUsesBothTensorStrides) {
     expect_float_values_match(base, torch_base, "A3 copy assignment");
 }
 
-TEST(HardeningThemeA_Strided, A3_ViewMoveAssignmentUsesBothTensorStrides) {
+TEST(StridedTensorHardening, A3_ViewMoveAssignmentUsesBothTensorStrides) {
     auto base = Tensor::zeros({3, 3}, Device::CPU);
     auto destination = base.slice(1, 0, 1);
     destination = Tensor::full({3, 1}, 7.0f, Device::CPU);
@@ -133,7 +133,7 @@ TEST(HardeningThemeA_Strided, A3_ViewMoveAssignmentUsesBothTensorStrides) {
     expect_float_values_match(base, torch_base, "A3 move assignment");
 }
 
-TEST(HardeningThemeA_Strided, A4_RangeSlicePreservesExistingStorageOffset) {
+TEST(StridedTensorHardening, A4_RangeSlicePreservesExistingStorageOffset) {
     auto ours = Tensor::arange(10.0f).to(Device::CPU);
     auto ours_result = ours.slice(0, 2, 8).slice({{1, 3}});
 
@@ -142,7 +142,7 @@ TEST(HardeningThemeA_Strided, A4_RangeSlicePreservesExistingStorageOffset) {
     expect_float_values_match(ours_result, torch_result, "A4 chained range slice");
 }
 
-TEST(HardeningThemeA_Strided, A4_RangeSlicePreservesSourceStrides) {
+TEST(StridedTensorHardening, A4_RangeSlicePreservesSourceStrides) {
     const std::vector<float> values = {1, 2, 3, 4, 5, 6};
     auto ours = lfs_float_tensor(values, {2, 3}, Device::CPU).transpose(0, 1);
     auto ours_result = ours.slice({{1, 3}, {0, 2}});
@@ -152,13 +152,13 @@ TEST(HardeningThemeA_Strided, A4_RangeSlicePreservesSourceStrides) {
     expect_float_values_match(ours_result, torch_result, "A4 range slice of transpose");
 }
 
-TEST(HardeningThemeA_Strided, A5_Int32VectorExportUsesLogicalOrder) {
+TEST(StridedTensorHardening, A5_Int32VectorExportUsesLogicalOrder) {
     auto ours = lfs_int_tensor({1, 2, 3, 4}, {2, 2}, Device::CPU).transpose(0, 1);
     const std::vector<int> expected = {1, 3, 2, 4};
     EXPECT_EQ(ours.to_vector_int(), expected);
 }
 
-TEST(HardeningThemeA_Strided, A5_Int64VectorExportUsesLogicalOrder) {
+TEST(StridedTensorHardening, A5_Int64VectorExportUsesLogicalOrder) {
     auto ours = lfs_int_tensor({1, 2, 3, 4}, {2, 2}, Device::CPU)
                     .to(DataType::Int64)
                     .transpose(0, 1);
@@ -166,7 +166,7 @@ TEST(HardeningThemeA_Strided, A5_Int64VectorExportUsesLogicalOrder) {
     EXPECT_EQ(ours.to_vector_int64(), expected);
 }
 
-TEST(HardeningThemeA_Strided, A5_BoolAndUInt8VectorExportsUseLogicalOrder) {
+TEST(StridedTensorHardening, A5_BoolAndUInt8VectorExportsUseLogicalOrder) {
     auto bool_view = lfs_bool_tensor({true, false, true, true}, {2, 2}, Device::CPU)
                          .transpose(0, 1);
     const std::vector<bool> expected_bool = {true, true, false, true};
@@ -179,7 +179,7 @@ TEST(HardeningThemeA_Strided, A5_BoolAndUInt8VectorExportsUseLogicalOrder) {
     EXPECT_EQ(byte_view.to_vector_uint8(), expected_bytes);
 }
 
-TEST(HardeningThemeA_Strided, A6_CPUAllCloseComparesLogicalOrder) {
+TEST(StridedTensorHardening, A6_CPUAllCloseComparesLogicalOrder) {
     auto transposed = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::CPU).transpose(0, 1);
     auto dense_physical_order = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::CPU);
 
@@ -213,7 +213,7 @@ TEST_F(CudaTest, A7_CUDASpecialValueScansFollowViewStrides) {
     EXPECT_EQ(inf_view.has_inf(), torch_inf.isinf().any().item<bool>());
 }
 
-TEST(HardeningThemeA_Strided, A8_ReserveOnOffsetViewPreservesLogicalValues) {
+TEST(StridedTensorHardening, A8_ReserveOnOffsetViewPreservesLogicalValues) {
     auto base = lfs_float_tensor({1, 2, 3, 4, 5, 6}, {3, 2}, Device::CPU);
     auto view = base.slice(0, 1, 3);
     const auto torch_reference = torch::tensor({{3.0f, 4.0f}, {5.0f, 6.0f}});

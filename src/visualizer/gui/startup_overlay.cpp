@@ -85,7 +85,9 @@ namespace lfs::vis::gui {
         ShellExecuteA(nullptr, "open", url, nullptr, nullptr, SW_SHOWNORMAL);
 #else
         std::string cmd = "xdg-open \"" + std::string(url) + "\" &";
-        std::system(cmd.c_str());
+        if (const int status = std::system(cmd.c_str()); status != 0) {
+            LOG_WARN("StartupOverlay: xdg-open failed for '{}': status {}", url, status);
+        }
 #endif
     }
 

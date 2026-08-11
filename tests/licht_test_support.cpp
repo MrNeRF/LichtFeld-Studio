@@ -1147,7 +1147,6 @@ namespace lfs::test::licht {
         parameters.dataset.loading_params.use_cpu_memory = false;
         parameters.dataset.loading_params.min_cpu_free_memory_ratio = 0.25f;
         parameters.dataset.loading_params.min_cpu_free_GB = 3.5f;
-        parameters.dataset.loading_params.use_fs_cache = false;
         parameters.dataset.loading_params.print_cache_status = false;
         parameters.dataset.loading_params.print_status_freq_num = 123;
         parameters.dataset.loading_params.use_16bit_color = true;

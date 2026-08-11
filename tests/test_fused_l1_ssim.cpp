@@ -305,19 +305,25 @@ TEST_F(FusedL1SSIMTest, WorkspaceReuse) {
     auto img2a = Tensor::randn({N, C, H, W}, Device::CUDA);
     auto [loss1, ctx1] = fused_l1_ssim_forward(img1a, img2a, ssim_weight, workspace, true);
     auto grad1 = fused_l1_ssim_backward(ctx1, workspace);
+    // loss tensor aliases workspace.reduction_result — capture before reuse.
+    const float loss1_value = loss1.item<float>();
+    const float grad1_norm = grad1.abs().sum().item<float>();
 
     // Second call with same workspace
     auto img1b = Tensor::randn({N, C, H, W}, Device::CUDA);
     auto img2b = Tensor::randn({N, C, H, W}, Device::CUDA);
     auto [loss2, ctx2] = fused_l1_ssim_forward(img1b, img2b, ssim_weight, workspace, true);
     auto grad2 = fused_l1_ssim_backward(ctx2, workspace);
+    const float loss2_value = loss2.item<float>();
+    const float grad2_norm = grad2.abs().sum().item<float>();
 
     // Both should produce valid results
-    EXPECT_FALSE(std::isnan(loss1.item<float>()));
-    EXPECT_FALSE(std::isnan(loss2.item<float>()));
+    EXPECT_FALSE(std::isnan(loss1_value));
+    EXPECT_FALSE(std::isnan(loss2_value));
 
     // Results should be different since inputs differ
-    EXPECT_NE(loss1.item<float>(), loss2.item<float>());
+    EXPECT_NE(loss1_value, loss2_value);
+    EXPECT_NE(grad1_norm, grad2_norm);
 }
 
 // Test PhotometricLoss uses fused kernel

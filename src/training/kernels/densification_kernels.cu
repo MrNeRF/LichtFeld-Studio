@@ -64,211 +64,9 @@ namespace lfs::training::kernels {
     // Duplicate Gaussians Kernels (Split into two to avoid warp divergence)
     // ============================================================================
 
-    // Kernel 1: Copy all N Gaussians (fully coalesced, no divergence)
-    __global__ void duplicate_copy_kernel(
-        const float* __restrict__ positions_in,
-        const float* __restrict__ rotations_in,
-        const float* __restrict__ scales_in,
-        const float* __restrict__ sh0_in,
-        const float* __restrict__ shN_in,
-        const float* __restrict__ opacities_in,
-        float* __restrict__ positions_out,
-        float* __restrict__ rotations_out,
-        float* __restrict__ scales_out,
-        float* __restrict__ sh0_out,
-        float* __restrict__ shN_out,
-        float* __restrict__ opacities_out,
-        int N,
-        int shN_dim) {
-        int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= N)
-            return;
-
-        // Sequential copy (src_idx == dst_idx)
-        // Use vectorized loads for positions (float3)
-        const float3 pos = make_float3(
-            positions_in[idx * 3 + 0],
-            positions_in[idx * 3 + 1],
-            positions_in[idx * 3 + 2]);
-        positions_out[idx * 3 + 0] = pos.x;
-        positions_out[idx * 3 + 1] = pos.y;
-        positions_out[idx * 3 + 2] = pos.z;
-
-        // Use vectorized loads for rotations (float4)
-        const float4 rot = make_float4(
-            rotations_in[idx * 4 + 0],
-            rotations_in[idx * 4 + 1],
-            rotations_in[idx * 4 + 2],
-            rotations_in[idx * 4 + 3]);
-        rotations_out[idx * 4 + 0] = rot.x;
-        rotations_out[idx * 4 + 1] = rot.y;
-        rotations_out[idx * 4 + 2] = rot.z;
-        rotations_out[idx * 4 + 3] = rot.w;
-
-        // Use vectorized loads for scales (float3)
-        const float3 scale = make_float3(
-            scales_in[idx * 3 + 0],
-            scales_in[idx * 3 + 1],
-            scales_in[idx * 3 + 2]);
-        scales_out[idx * 3 + 0] = scale.x;
-        scales_out[idx * 3 + 1] = scale.y;
-        scales_out[idx * 3 + 2] = scale.z;
-
-        // Copy sh0 (3 elements) - use float3
-        const float3 sh0 = make_float3(
-            sh0_in[idx * 3 + 0],
-            sh0_in[idx * 3 + 1],
-            sh0_in[idx * 3 + 2]);
-        sh0_out[idx * 3 + 0] = sh0.x;
-        sh0_out[idx * 3 + 1] = sh0.y;
-        sh0_out[idx * 3 + 2] = sh0.z;
-
-        // Copy shN coefficients with vectorized loads (float4)
-        const float* shN_src = shN_in + idx * shN_dim;
-        float* shN_dst = shN_out + idx * shN_dim;
-
-        // Process in chunks of 4 (most efficient for SH degree 3: 45 elements)
-        int i = 0;
-        for (; i + 4 <= shN_dim; i += 4) {
-            float4 sh_val = *reinterpret_cast<const float4*>(shN_src + i);
-            *reinterpret_cast<float4*>(shN_dst + i) = sh_val;
-        }
-        // Handle remainder
-        for (; i < shN_dim; ++i) {
-            shN_dst[i] = shN_src[i];
-        }
-
-        // Copy opacity (1 element)
-        opacities_out[idx] = opacities_in[idx];
-    }
-
-    // Kernel 2: Gather from selected indices (scattered reads, but no divergence)
-    __global__ void duplicate_gather_kernel(
-        const float* __restrict__ positions_in,
-        const float* __restrict__ rotations_in,
-        const float* __restrict__ scales_in,
-        const float* __restrict__ sh0_in,
-        const float* __restrict__ shN_in,
-        const float* __restrict__ opacities_in,
-        float* __restrict__ positions_out,
-        float* __restrict__ rotations_out,
-        float* __restrict__ scales_out,
-        float* __restrict__ sh0_out,
-        float* __restrict__ shN_out,
-        float* __restrict__ opacities_out,
-        const int64_t* __restrict__ selected_indices,
-        int N,
-        int num_selected,
-        int shN_dim) {
-        int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= num_selected)
-            return;
-
-        // Gather from selected indices
-        int src_idx = selected_indices[idx];
-        int dst_idx = N + idx; // Append after first N elements
-
-        // Use vectorized loads for positions (float3)
-        const float3 pos = make_float3(
-            positions_in[src_idx * 3 + 0],
-            positions_in[src_idx * 3 + 1],
-            positions_in[src_idx * 3 + 2]);
-        positions_out[dst_idx * 3 + 0] = pos.x;
-        positions_out[dst_idx * 3 + 1] = pos.y;
-        positions_out[dst_idx * 3 + 2] = pos.z;
-
-        // Use vectorized loads for rotations (float4)
-        const float4 rot = make_float4(
-            rotations_in[src_idx * 4 + 0],
-            rotations_in[src_idx * 4 + 1],
-            rotations_in[src_idx * 4 + 2],
-            rotations_in[src_idx * 4 + 3]);
-        rotations_out[dst_idx * 4 + 0] = rot.x;
-        rotations_out[dst_idx * 4 + 1] = rot.y;
-        rotations_out[dst_idx * 4 + 2] = rot.z;
-        rotations_out[dst_idx * 4 + 3] = rot.w;
-
-        // Use vectorized loads for scales (float3)
-        const float3 scale = make_float3(
-            scales_in[src_idx * 3 + 0],
-            scales_in[src_idx * 3 + 1],
-            scales_in[src_idx * 3 + 2]);
-        scales_out[dst_idx * 3 + 0] = scale.x;
-        scales_out[dst_idx * 3 + 1] = scale.y;
-        scales_out[dst_idx * 3 + 2] = scale.z;
-
-        // Copy sh0 (3 elements) - use float3
-        const float3 sh0 = make_float3(
-            sh0_in[src_idx * 3 + 0],
-            sh0_in[src_idx * 3 + 1],
-            sh0_in[src_idx * 3 + 2]);
-        sh0_out[dst_idx * 3 + 0] = sh0.x;
-        sh0_out[dst_idx * 3 + 1] = sh0.y;
-        sh0_out[dst_idx * 3 + 2] = sh0.z;
-
-        // Copy shN coefficients with vectorized loads (float4)
-        const float* shN_src = shN_in + src_idx * shN_dim;
-        float* shN_dst = shN_out + dst_idx * shN_dim;
-
-        // Process in chunks of 4 (most efficient for SH degree 3: 45 elements)
-        int i = 0;
-        for (; i + 4 <= shN_dim; i += 4) {
-            float4 sh_val = *reinterpret_cast<const float4*>(shN_src + i);
-            *reinterpret_cast<float4*>(shN_dst + i) = sh_val;
-        }
-        // Handle remainder
-        for (; i < shN_dim; ++i) {
-            shN_dst[i] = shN_src[i];
-        }
-
-        // Copy opacity (1 element)
-        opacities_out[dst_idx] = opacities_in[src_idx];
-    }
-
     // ============================================================================
     // Launch functions
     // ============================================================================
-
-    void launch_duplicate_gaussians(
-        const float* positions_in,
-        const float* rotations_in,
-        const float* scales_in,
-        const float* sh0_in,
-        const float* shN_in,
-        const float* opacities_in,
-        float* positions_out,
-        float* rotations_out,
-        float* scales_out,
-        float* sh0_out,
-        float* shN_out,
-        float* opacities_out,
-        const int64_t* selected_indices,
-        int N,
-        int num_selected,
-        int shN_dim,
-        cudaStream_t stream) {
-        stream = resolve_stream(stream);
-        // Step 1: Copy all N Gaussians using cudaMemcpyAsync (DMA-accelerated, like LibTorch's cat)
-        if (N > 0) {
-            cudaMemcpyAsync(positions_out, positions_in, N * 3 * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-            cudaMemcpyAsync(rotations_out, rotations_in, N * 4 * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-            cudaMemcpyAsync(scales_out, scales_in, N * 3 * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-            cudaMemcpyAsync(sh0_out, sh0_in, N * 3 * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-            cudaMemcpyAsync(shN_out, shN_in, N * shN_dim * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-            cudaMemcpyAsync(opacities_out, opacities_in, N * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-        }
-
-        // Step 2: Gather from selected indices using kernel (scattered reads)
-        if (num_selected > 0) {
-            const int block_size = 256;
-            const int num_blocks_gather = (num_selected + block_size - 1) / block_size;
-            duplicate_gather_kernel<<<num_blocks_gather, block_size, 0, stream>>>(
-                positions_in, rotations_in, scales_in, sh0_in, shN_in, opacities_in,
-                positions_out, rotations_out, scales_out, sh0_out, shN_out, opacities_out,
-                selected_indices, N, num_selected, shN_dim);
-            LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.duplicate_gather");
-        }
-    }
 
     // ============================================================================
     // In-place Long-Axis-Split Kernel
@@ -422,6 +220,361 @@ namespace lfs::training::kernels {
             second_sh0, second_shN, second_opacities,
             split_indices, num_split, shN_dim);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.long_axis_split_inplace");
+    }
+
+    __global__ void fill_free_slots_fused_kernel(
+        const int64_t* __restrict__ target_indices,
+        size_t n_fill,
+        const float* __restrict__ src_means,
+        const float* __restrict__ src_rotations,
+        const float* __restrict__ src_scales,
+        const float* __restrict__ src_sh0,
+        const float* __restrict__ src_opacities,
+        float* __restrict__ dst_means,
+        float* __restrict__ dst_rotations,
+        float* __restrict__ dst_scales,
+        float* __restrict__ dst_sh0,
+        float* __restrict__ dst_opacities,
+        int opacity_dim,
+        float* const* __restrict__ adam_scale_ptrs,
+        int n_adam_scales,
+        bool* __restrict__ free_mask,
+        size_t N) {
+
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= n_fill)
+            return;
+
+        const int64_t t = target_indices[i];
+        if (t < 0 || static_cast<size_t>(t) >= N)
+            return;
+        const size_t dst = static_cast<size_t>(t);
+
+        dst_means[dst * 3 + 0] = src_means[i * 3 + 0];
+        dst_means[dst * 3 + 1] = src_means[i * 3 + 1];
+        dst_means[dst * 3 + 2] = src_means[i * 3 + 2];
+
+        dst_rotations[dst * 4 + 0] = src_rotations[i * 4 + 0];
+        dst_rotations[dst * 4 + 1] = src_rotations[i * 4 + 1];
+        dst_rotations[dst * 4 + 2] = src_rotations[i * 4 + 2];
+        dst_rotations[dst * 4 + 3] = src_rotations[i * 4 + 3];
+
+        dst_scales[dst * 3 + 0] = src_scales[i * 3 + 0];
+        dst_scales[dst * 3 + 1] = src_scales[i * 3 + 1];
+        dst_scales[dst * 3 + 2] = src_scales[i * 3 + 2];
+
+        // sh0 is 3 floats/row whether layout is [N,3] or [N,1,3]
+        dst_sh0[dst * 3 + 0] = src_sh0[i * 3 + 0];
+        dst_sh0[dst * 3 + 1] = src_sh0[i * 3 + 1];
+        dst_sh0[dst * 3 + 2] = src_sh0[i * 3 + 2];
+
+        if (opacity_dim == 1) {
+            dst_opacities[dst] = src_opacities[i]; // [N,1] still one float per row when col=1
+        } else {
+            dst_opacities[dst] = src_opacities[i];
+        }
+
+        for (int a = 0; a < n_adam_scales; ++a) {
+            float* scales = adam_scale_ptrs[a];
+            if (scales != nullptr) {
+                scales[dst] = 0.0f;
+            }
+        }
+
+        if (free_mask != nullptr) {
+            free_mask[dst] = false;
+        }
+    }
+
+    void launch_fill_free_slots_fused(
+        const int64_t* target_indices,
+        size_t n_fill,
+        const float* src_means,
+        const float* src_rotations,
+        const float* src_scales,
+        const float* src_sh0,
+        const float* src_opacities,
+        float* dst_means,
+        float* dst_rotations,
+        float* dst_scales,
+        float* dst_sh0,
+        float* dst_opacities,
+        int opacity_dim,
+        float* const* adam_scale_ptrs,
+        int n_adam_scales,
+        bool* free_mask,
+        size_t N,
+        cudaStream_t stream) {
+
+        stream = resolve_stream(stream);
+        if (n_fill == 0)
+            return;
+
+        // Copy pointer table to device (tiny; stack H2D once per launch).
+        float** d_adam = nullptr;
+        if (n_adam_scales > 0 && adam_scale_ptrs != nullptr) {
+            LFS_CUDA_CHECK_MSG(
+                cudaMallocAsync(reinterpret_cast<void**>(&d_adam),
+                                sizeof(float*) * static_cast<size_t>(n_adam_scales), stream),
+                "fill_free_slots adam ptr table");
+            LFS_CUDA_CHECK_MSG(
+                cudaMemcpyAsync(d_adam, adam_scale_ptrs,
+                                sizeof(float*) * static_cast<size_t>(n_adam_scales),
+                                cudaMemcpyHostToDevice, stream),
+                "fill_free_slots adam ptr H2D");
+        }
+
+        const int block = 256;
+        const int grid = static_cast<int>((n_fill + block - 1) / block);
+        fill_free_slots_fused_kernel<<<grid, block, 0, stream>>>(
+            target_indices, n_fill,
+            src_means, src_rotations, src_scales, src_sh0, src_opacities,
+            dst_means, dst_rotations, dst_scales, dst_sh0, dst_opacities,
+            opacity_dim, d_adam, n_adam_scales, free_mask, N);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.fill_free_slots_fused");
+
+        if (d_adam != nullptr) {
+            LFS_CUDA_CHECK_MSG(cudaFreeAsync(d_adam, stream), "fill_free_slots free adam ptrs");
+        }
+    }
+
+    __global__ void zero_adam_scales_kernel(
+        const int64_t* __restrict__ indices,
+        size_t n_indices,
+        float* const* __restrict__ adam_scale_ptrs,
+        int n_adam_scales,
+        size_t N) {
+
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= n_indices)
+            return;
+        const int64_t t = indices[i];
+        if (t < 0 || static_cast<size_t>(t) >= N)
+            return;
+        const size_t dst = static_cast<size_t>(t);
+        for (int a = 0; a < n_adam_scales; ++a) {
+            float* scales = adam_scale_ptrs[a];
+            if (scales != nullptr) {
+                scales[dst] = 0.0f;
+            }
+        }
+    }
+
+    void launch_zero_adam_scales_at_indices(
+        const int64_t* indices,
+        size_t n_indices,
+        float* const* adam_scale_ptrs,
+        int n_adam_scales,
+        size_t N,
+        cudaStream_t stream) {
+
+        stream = resolve_stream(stream);
+        if (n_indices == 0 || n_adam_scales <= 0)
+            return;
+
+        float** d_adam = nullptr;
+        LFS_CUDA_CHECK_MSG(
+            cudaMallocAsync(reinterpret_cast<void**>(&d_adam),
+                            sizeof(float*) * static_cast<size_t>(n_adam_scales), stream),
+            "zero_adam adam ptr table");
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(d_adam, adam_scale_ptrs,
+                            sizeof(float*) * static_cast<size_t>(n_adam_scales),
+                            cudaMemcpyHostToDevice, stream),
+            "zero_adam adam ptr H2D");
+
+        const int block = 256;
+        const int grid = static_cast<int>((n_indices + block - 1) / block);
+        zero_adam_scales_kernel<<<grid, block, 0, stream>>>(
+            indices, n_indices, d_adam, n_adam_scales, N);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.zero_adam_scales");
+        LFS_CUDA_CHECK_MSG(cudaFreeAsync(d_adam, stream), "zero_adam free ptrs");
+    }
+
+    __global__ void packed_refine_counts_kernel(
+        const bool* __restrict__ bool0,
+        size_t n_bool0,
+        const bool* __restrict__ bool1,
+        size_t n_bool1,
+        const float* __restrict__ float0,
+        size_t n_float0,
+        const float* __restrict__ float1,
+        size_t n_float1,
+        int64_t* __restrict__ out_counts4) {
+
+        // One block does all four reductions via shared atomics / CUB block reduce.
+        typedef cub::BlockReduce<int64_t, 256> BlockReduce;
+        __shared__ typename BlockReduce::TempStorage temp;
+
+        const int tid = threadIdx.x;
+        int64_t local0 = 0, local1 = 0, local2 = 0, local3 = 0;
+
+        if (bool0 != nullptr) {
+            for (size_t i = tid; i < n_bool0; i += blockDim.x)
+                local0 += bool0[i] ? 1 : 0;
+        }
+        if (bool1 != nullptr) {
+            for (size_t i = tid; i < n_bool1; i += blockDim.x)
+                local1 += bool1[i] ? 1 : 0;
+        }
+        if (float0 != nullptr) {
+            for (size_t i = tid; i < n_float0; i += blockDim.x)
+                local2 += (float0[i] > 0.0f) ? 1 : 0;
+        }
+        if (float1 != nullptr) {
+            for (size_t i = tid; i < n_float1; i += blockDim.x)
+                local3 += (float1[i] > 0.0f) ? 1 : 0;
+        }
+
+        const int64_t sum0 = BlockReduce(temp).Sum(local0);
+        __syncthreads();
+        const int64_t sum1 = BlockReduce(temp).Sum(local1);
+        __syncthreads();
+        const int64_t sum2 = BlockReduce(temp).Sum(local2);
+        __syncthreads();
+        const int64_t sum3 = BlockReduce(temp).Sum(local3);
+
+        if (tid == 0) {
+            out_counts4[0] = (bool0 != nullptr) ? sum0 : 0;
+            out_counts4[1] = (bool1 != nullptr) ? sum1 : 0;
+            out_counts4[2] = (float0 != nullptr) ? sum2 : 0;
+            out_counts4[3] = (float1 != nullptr) ? sum3 : 0;
+        }
+    }
+
+    void launch_packed_refine_counts(
+        const bool* bool0,
+        size_t n_bool0,
+        const bool* bool1,
+        size_t n_bool1,
+        const float* float0,
+        size_t n_float0,
+        const float* float1,
+        size_t n_float1,
+        int64_t* out_counts4,
+        cudaStream_t stream) {
+
+        stream = resolve_stream(stream);
+        packed_refine_counts_kernel<<<1, 256, 0, stream>>>(
+            bool0, n_bool0, bool1, n_bool1,
+            float0, n_float0, float1, n_float1,
+            out_counts4);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.packed_refine_counts");
+    }
+
+    __global__ void zero_nan_kernel(float* data, size_t n) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < n && isnan(data[i]))
+            data[i] = 0.0f;
+    }
+
+    struct PositivePred {
+        __host__ __device__ bool operator()(const float& x) const { return x > 0.0f; }
+    };
+
+    __global__ void div_by_device_scalar_kernel(
+        float* data, size_t n, const float* scalar, float skip_below) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= n)
+            return;
+        const float s = fmaxf(*scalar, 1e-9f);
+        if (s <= skip_below)
+            return;
+        data[i] /= s;
+    }
+
+    void launch_normalize_by_positive_median(
+        float* data,
+        size_t n,
+        cudaStream_t stream) {
+
+        stream = resolve_stream(stream);
+        if (n == 0 || data == nullptr)
+            return;
+
+        const int block = 256;
+        const int grid = static_cast<int>((n + block - 1) / block);
+        zero_nan_kernel<<<grid, block, 0, stream>>>(data, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.zero_nan");
+
+        // Compact positives into a scratch buffer, radix-sort that only, pick mid.
+        // Falls back to no-op (leave data) when zero positives.
+        float* d_selected = nullptr;
+        int* d_count = nullptr;
+        LFS_CUDA_CHECK_MSG(
+            cudaMallocAsync(reinterpret_cast<void**>(&d_selected), n * sizeof(float), stream),
+            "positive_median selected");
+        LFS_CUDA_CHECK_MSG(
+            cudaMallocAsync(reinterpret_cast<void**>(&d_count), sizeof(int), stream),
+            "positive_median count");
+        LFS_CUDA_CHECK_MSG(cudaMemsetAsync(d_count, 0, sizeof(int), stream), "positive_median count z");
+
+        // CUB DeviceSelect::If
+        size_t temp_bytes = 0;
+        LFS_CUDA_CHECK_MSG(
+            cub::DeviceSelect::If(nullptr, temp_bytes, data, d_selected, d_count,
+                                  static_cast<int>(n), PositivePred{}, stream),
+            "positive_median select size");
+        void* d_temp = nullptr;
+        if (temp_bytes > 0) {
+            LFS_CUDA_CHECK_MSG(
+                cudaMallocAsync(&d_temp, temp_bytes, stream), "positive_median select temp");
+        }
+        LFS_CUDA_CHECK_MSG(
+            cub::DeviceSelect::If(d_temp, temp_bytes, data, d_selected, d_count,
+                                  static_cast<int>(n), PositivePred{}, stream),
+            "positive_median select");
+
+        int h_count = 0;
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(&h_count, d_count, sizeof(int), cudaMemcpyDeviceToHost, stream),
+            "positive_median count D2H");
+        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "positive_median count sync");
+
+        if (h_count <= 0) {
+            // No positives → zero the tensor (match prior masked_select empty path).
+            LFS_CUDA_CHECK_MSG(cudaMemsetAsync(data, 0, n * sizeof(float), stream),
+                               "positive_median zero empty");
+            if (d_temp)
+                cudaFreeAsync(d_temp, stream);
+            cudaFreeAsync(d_selected, stream);
+            cudaFreeAsync(d_count, stream);
+            return;
+        }
+
+        // Radix sort the compacted positives only (O(P log P), P << n for sparse edges).
+        float* d_sorted = nullptr;
+        LFS_CUDA_CHECK_MSG(
+            cudaMallocAsync(reinterpret_cast<void**>(&d_sorted),
+                            static_cast<size_t>(h_count) * sizeof(float), stream),
+            "positive_median sorted");
+        size_t sort_bytes = 0;
+        LFS_CUDA_CHECK_MSG(
+            cub::DeviceRadixSort::SortKeys(nullptr, sort_bytes, d_selected, d_sorted,
+                                           h_count, 0, sizeof(float) * 8, stream),
+            "positive_median sort size");
+        void* d_sort_temp = nullptr;
+        if (sort_bytes > 0) {
+            LFS_CUDA_CHECK_MSG(
+                cudaMallocAsync(&d_sort_temp, sort_bytes, stream), "positive_median sort temp");
+        }
+        LFS_CUDA_CHECK_MSG(
+            cub::DeviceRadixSort::SortKeys(d_sort_temp, sort_bytes, d_selected, d_sorted,
+                                           h_count, 0, sizeof(float) * 8, stream),
+            "positive_median sort");
+
+        // Median at count/2 (same index as prior sorted[valid.numel()/2]).
+        const float* d_median = d_sorted + (h_count / 2);
+        div_by_device_scalar_kernel<<<grid, block, 0, stream>>>(data, n, d_median, 0.0f);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.div_by_median");
+
+        if (d_sort_temp)
+            cudaFreeAsync(d_sort_temp, stream);
+        if (d_temp)
+            cudaFreeAsync(d_temp, stream);
+        cudaFreeAsync(d_sorted, stream);
+        cudaFreeAsync(d_selected, stream);
+        cudaFreeAsync(d_count, stream);
     }
 
 } // namespace lfs::training::kernels

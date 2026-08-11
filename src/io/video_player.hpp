@@ -24,13 +24,10 @@ namespace lfs::io {
         void close();
         bool isOpen() const;
 
-        void play();
-        void pause();
         void togglePlayPause();
         bool isPlaying() const;
 
         void seek(double seconds);
-        void seekFrame(int64_t frame_number);
         bool rerenderCurrentFrame();
         void stepForward();
         void stepBackward();
@@ -49,12 +46,7 @@ namespace lfs::io {
 
         double currentTime() const;
         double duration() const;
-        int64_t currentFrameNumber() const;
-        int64_t totalFrames() const;
         double fps() const;
-
-        // Thumbnail generation (seeks and decodes single frame)
-        std::vector<uint8_t> getThumbnail(double time, int max_width);
 
         // Detected rotation from video metadata (0, 90, 180, 270)
         int rotation() const;

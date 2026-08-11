@@ -384,6 +384,21 @@ namespace lfs::core {
         return *this;
     }
 
+    void Tensor::materialize_zero_stride_for_raw_ptr_escape() {
+        if (numel() == 0 || is_contiguous_ || !has_zero_stride()) {
+            return;
+        }
+        throw std::runtime_error(
+            "the format test runtime does not create zero-stride tensors");
+    }
+
+    void Tensor::assert_device_storage_matches_tag() const {
+        if (data_ != nullptr && numel() != 0 && device_ != Device::CPU) {
+            throw std::runtime_error(
+                "the CPU-only format test runtime encountered non-CPU storage");
+        }
+    }
+
     Tensor Tensor::to(const Device device, const cudaStream_t) const {
         tensor_contract::require_valid(
             *this, "device transfer", "source", LFS_SOURCE_SITE_CURRENT());

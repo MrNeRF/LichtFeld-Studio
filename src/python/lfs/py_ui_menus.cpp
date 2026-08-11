@@ -348,17 +348,6 @@ namespace lfs::python {
         }
     }
 
-    bool PyMenuRegistry::has_menu_bar_entries() const {
-        ensure_synced();
-        std::lock_guard lock(mutex_);
-        for (const auto& mc : menu_classes_) {
-            if (mc.location == MenuLocation::MenuBar) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     std::vector<PyMenuClassInfo*> PyMenuRegistry::get_menu_bar_entries() {
         ensure_synced();
         std::lock_guard lock(mutex_);

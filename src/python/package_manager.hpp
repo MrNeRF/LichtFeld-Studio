@@ -39,8 +39,6 @@ namespace lfs::python {
         std::filesystem::path venv_python() const;
         std::filesystem::path site_packages_dir() const;
         bool ensure_venv();
-        bool is_venv_ready() const;
-
         // Synchronous operations (blocking)
         InstallResult install(const std::string& package);
         InstallResult uninstall(const std::string& package);
@@ -48,19 +46,6 @@ namespace lfs::python {
                                     const std::string& torch_version = "");
 
         // Async operations (non-blocking, call poll() in render loop)
-        bool install_async(const std::string& package,
-                           UvRunner::OutputCallback on_output = nullptr,
-                           UvRunner::CompletionCallback on_complete = nullptr);
-
-        bool uninstall_async(const std::string& package,
-                             UvRunner::OutputCallback on_output = nullptr,
-                             UvRunner::CompletionCallback on_complete = nullptr);
-
-        bool install_torch_async(const std::string& cuda_version = "auto",
-                                 const std::string& torch_version = "",
-                                 UvRunner::OutputCallback on_output = nullptr,
-                                 UvRunner::CompletionCallback on_complete = nullptr);
-
         bool install_async_raw(const std::string& package,
                                UvRunner::RawOutputCallback on_output = nullptr,
                                UvRunner::CompletionCallback on_complete = nullptr);

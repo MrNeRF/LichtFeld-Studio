@@ -58,6 +58,12 @@ body {
     overflow: hidden;
 }
 
+.toolbar-group {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 4dp;
+}
 button {
     height: 24dp;
     min-width: 0;
@@ -149,7 +155,6 @@ button {
 .btn-clear {
     width: 30dp;
 }
-
 button:hover {
     background-color: rgb(58, 58, 58);
 }
@@ -261,7 +266,6 @@ button.disabled {
 #syntax-status.status-error {
     color: rgb(221, 94, 94);
 }
-
 #font-status {
     display: none;
     width: 58dp;

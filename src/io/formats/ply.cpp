@@ -19,6 +19,8 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <fstream>
@@ -86,7 +88,11 @@ namespace lfs::io {
         constexpr size_t VALIDATION_CANCEL_INTERVAL = 65536;
         constexpr size_t MAX_HEADER_BYTES = 1024 * 1024;
         constexpr float MIN_ROTATION_NORM_SQUARED = 1.0e-12f;
-        constexpr int MAX_DECODE_THREADS = 6;
+        // Load decode + save pack: cap below full HW concurrency to leave headroom
+        // for GPU driver / other workers, but allow more than the old 6-thread limit.
+        constexpr int MAX_DECODE_THREADS = 16;
+        constexpr size_t PLY_WRITE_IO_BUFFER_BYTES = 8 * 1024 * 1024;
+        constexpr size_t PLY_WRITE_PACK_CHUNK_VERTICES = 65536;
 
         // SIMD constants
         constexpr int SIMD_WIDTH = 8;
@@ -2768,7 +2774,6 @@ namespace lfs::io {
                     tinyply::Type::INVALID, 0);
             }
 
-#ifndef NDEBUG
             const size_t expected_properties =
                 (colors_u8.is_valid() ? 3 : 0) +
                 std::accumulate(float_blocks.begin(), float_blocks.end(), size_t{0},
@@ -2778,12 +2783,223 @@ namespace lfs::io {
             const size_t expected_binary_stride =
                 (colors_u8.is_valid() ? 3 : 0) +
                 (expected_properties - (colors_u8.is_valid() ? 3 : 0)) * sizeof(float);
-#endif
 
             const auto temp_path = make_temp_output_path(output_path);
             ScopedTempOutputFile temp_file{temp_path};
 
+            // Fast binary path: parallel SoA→AoS pack + large buffered fwrite.
+            // tinyply is retained only for ASCII writes (!binary).
+            if (binary) {
+                struct FloatPackBlock {
+                    const float* data = nullptr;
+                    size_t cols = 0;
+                };
+
+                std::vector<FloatPackBlock> pack_blocks;
+                pack_blocks.reserve(float_blocks.size());
+                size_t floats_per_vertex = 0;
+                for (const auto& [t, attrs] : float_blocks) {
+                    (void)attrs;
+                    const size_t cols = static_cast<size_t>(t.size(1));
+                    pack_blocks.push_back(FloatPackBlock{t.ptr<float>(), cols});
+                    floats_per_vertex += cols;
+                }
+
+                const bool has_colors = colors_u8.is_valid();
+                const uint8_t* const colors_ptr =
+                    has_colors ? colors_u8.ptr<uint8_t>() : nullptr;
+                const size_t color_bytes = has_colors ? 3 : 0;
+                const size_t vertex_stride =
+                    color_bytes + floats_per_vertex * sizeof(float);
+                LFS_ASSERT_MSG(vertex_stride == expected_binary_stride,
+                               std::format("PLY pack stride mismatch: packed={} expected={}",
+                                           vertex_stride, expected_binary_stride));
+
+                // Header must match prior tinyply property order (format unchanged).
+                std::string header;
+                header.reserve(512 + expected_properties * 32);
+                header += "ply\nformat binary_little_endian 1.0\n";
+                header += std::format("element vertex {}\n", N);
+                if (has_colors) {
+                    header += "property uchar red\n"
+                              "property uchar green\n"
+                              "property uchar blue\n";
+                }
+                for (const auto& [t, attrs] : float_blocks) {
+                    (void)t;
+                    for (const auto& name : attrs) {
+                        header += "property float ";
+                        header += name;
+                        header += '\n';
+                    }
+                }
+                header += "end_header\n";
+
+                const size_t body_bytes = N * vertex_stride;
+                // Cap peak host RAM: full pack when body fits, else streaming chunks.
+                constexpr size_t kMaxFullBodyBytes = size_t{512} * 1024 * 1024;
+                const size_t pack_chunk_verts = std::max<size_t>(
+                    1, ply_constants::PLY_WRITE_PACK_CHUNK_VERTICES);
+
+#ifdef _WIN32
+                FILE* file = _wfopen(temp_path.wstring().c_str(), L"wb");
+#else
+                FILE* file = std::fopen(temp_path.c_str(), "wb");
+#endif
+                if (!file) {
+                    return make_error(ErrorCode::WRITE_FAILURE,
+                                      "Cannot open temporary file", temp_path);
+                }
+                // declare the stdio buffer BEFORE FileCloser so destruction order
+                // is fclose (via guard) first, then buffer free. Declaring the guard
+                // first made early cancel/error returns destroy the buffer while
+                // fclose still flushed through it (heap use-after-free).
+                std::vector<char> io_buffer(ply_constants::PLY_WRITE_IO_BUFFER_BYTES);
+                struct FileCloser {
+                    FILE* f = nullptr;
+                    ~FileCloser() {
+                        if (f)
+                            std::fclose(f);
+                    }
+                } file_guard{file};
+                std::setvbuf(file, io_buffer.data(), _IOFBF, io_buffer.size());
+
+                if (std::fwrite(header.data(), 1, header.size(), file) != header.size()) {
+                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                }
+
+                size_t bytes_written = header.size();
+                size_t next_report_bytes = 16 * 1024 * 1024;
+                const auto report_progress = [&](const bool force) -> Result<void> {
+                    if (!progress_callback)
+                        return {};
+                    if (!force && bytes_written < next_report_bytes)
+                        return {};
+                    next_report_bytes = bytes_written + 16 * 1024 * 1024;
+                    const float ratio = force
+                                            ? 1.0f
+                                            : static_cast<float>(std::min(
+                                                  1.0,
+                                                  static_cast<double>(bytes_written) /
+                                                      static_cast<double>(std::max<size_t>(estimated_write_bytes, 1))));
+                    if (!progress_callback(ratio, "Writing PLY")) {
+                        return make_error(ErrorCode::CANCELLED,
+                                          "Export cancelled by user", output_path);
+                    }
+                    return {};
+                };
+
+                if (body_bytes <= kMaxFullBodyBytes && N > 0) {
+                    std::vector<uint8_t> body(body_bytes);
+                    ply_decode_arena().execute([&] {
+                        tbb::parallel_for(
+                            tbb::blocked_range<size_t>(0, N, pack_chunk_verts),
+                            [&](const tbb::blocked_range<size_t>& range) {
+                                for (size_t i = range.begin(); i < range.end(); ++i) {
+                                    uint8_t* dst = body.data() + i * vertex_stride;
+                                    size_t off = 0;
+                                    if (has_colors) {
+                                        std::memcpy(dst + off, colors_ptr + i * 3, 3);
+                                        off += 3;
+                                    }
+                                    for (const auto& blk : pack_blocks) {
+                                        const size_t nbytes = blk.cols * sizeof(float);
+                                        std::memcpy(dst + off, blk.data + i * blk.cols, nbytes);
+                                        off += nbytes;
+                                    }
+                                }
+                            });
+                    });
+
+                    constexpr size_t kWriteSlice = size_t{16} * 1024 * 1024;
+                    size_t offset = 0;
+                    while (offset < body_bytes) {
+                        const size_t chunk = std::min(kWriteSlice, body_bytes - offset);
+                        if (std::fwrite(body.data() + offset, 1, chunk, file) != chunk) {
+                            return make_error(ErrorCode::WRITE_FAILURE, "Write failed",
+                                              output_path);
+                        }
+                        offset += chunk;
+                        bytes_written += chunk;
+                        if (auto r = report_progress(false); !r)
+                            return r;
+                    }
+                } else if (N > 0) {
+                    // Streaming path for very large clouds: parallel pack per chunk.
+                    std::vector<uint8_t> chunk(pack_chunk_verts * vertex_stride);
+                    for (size_t begin = 0; begin < N; begin += pack_chunk_verts) {
+                        const size_t end = std::min(N, begin + pack_chunk_verts);
+                        const size_t count = end - begin;
+                        ply_decode_arena().execute([&] {
+                            tbb::parallel_for(
+                                tbb::blocked_range<size_t>(
+                                    begin, end, std::max<size_t>(1, pack_chunk_verts / 8)),
+                                [&](const tbb::blocked_range<size_t>& range) {
+                                    // Pack into chunk-local offsets.
+                                    for (size_t i = range.begin(); i < range.end(); ++i) {
+                                        uint8_t* dst =
+                                            chunk.data() + (i - begin) * vertex_stride;
+                                        size_t off = 0;
+                                        if (has_colors) {
+                                            std::memcpy(dst + off, colors_ptr + i * 3, 3);
+                                            off += 3;
+                                        }
+                                        for (const auto& blk : pack_blocks) {
+                                            const size_t nbytes = blk.cols * sizeof(float);
+                                            std::memcpy(dst + off, blk.data + i * blk.cols,
+                                                        nbytes);
+                                            off += nbytes;
+                                        }
+                                    }
+                                });
+                        });
+                        const size_t chunk_bytes = count * vertex_stride;
+                        if (std::fwrite(chunk.data(), 1, chunk_bytes, file) != chunk_bytes) {
+                            return make_error(ErrorCode::WRITE_FAILURE, "Write failed",
+                                              output_path);
+                        }
+                        bytes_written += chunk_bytes;
+                        if (auto r = report_progress(false); !r)
+                            return r;
+                    }
+                }
+
+                if (std::fflush(file) != 0) {
+                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                }
+                if (auto r = report_progress(true); !r)
+                    return r;
+
+                if (std::fclose(file) != 0) {
+                    file_guard.f = nullptr;
+                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                }
+                file_guard.f = nullptr;
+
+#ifndef NDEBUG
+                if (auto result = validate_written_ply_file(
+                        temp_path, binary, N, expected_properties, expected_binary_stride);
+                    !result) {
+                    return result;
+                }
+#endif
+
+                if (auto result = replace_output_file(temp_path, output_path); !result) {
+                    return std::unexpected(result.error());
+                }
+
+                temp_file.dismiss();
+                LOG_DEBUG("PLY fast write: {} verts, stride {} B, body {:.1f} MiB",
+                          N, vertex_stride, body_bytes / (1024.0 * 1024.0));
+                return {};
+            }
+
+            // ASCII path via tinyply (binary uses parallel-pack above).
             std::filebuf fb;
+            // pubsetbuf before open — required for a portable large buffer.
+            std::vector<char> legacy_io_buffer(ply_constants::PLY_WRITE_IO_BUFFER_BYTES);
+            fb.pubsetbuf(legacy_io_buffer.data(),
+                         static_cast<std::streamsize>(legacy_io_buffer.size()));
 #ifdef _WIN32
             fb.open(temp_path.wstring(), std::ios::out | std::ios::binary);
 #else
@@ -2971,11 +3187,6 @@ namespace lfs::io {
         }
 
     } // anonymous namespace
-
-    PointCloud to_point_cloud(const SplatData& splat_data) {
-        auto pc = to_point_cloud_with_progress(splat_data, nullptr, {});
-        return pc ? std::move(*pc) : PointCloud{};
-    }
 
     std::vector<std::string> get_ply_attribute_names(const SplatData& splat_data) {
         std::vector<std::string> attrs{"x", "y", "z", "nx", "ny", "nz"};

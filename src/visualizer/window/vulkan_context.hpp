@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <source_location>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -175,40 +176,35 @@ namespace lfs::vis {
             }
         };
 
+        // One image transition for transitionImageLayoutsImmediate (batched submit).
+        struct ImmediateLayoutTransition {
+            VkImage image = VK_NULL_HANDLE;
+            VkImageLayout old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VkImageLayout new_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            ImmediateTransitionOptions options{};
+        };
+
         [[nodiscard]] VkInstance instance() const { return instance_; }
         [[nodiscard]] VkPhysicalDevice physicalDevice() const { return physical_device_; }
         [[nodiscard]] VkDevice device() const { return device_; }
-        [[nodiscard]] VkSurfaceKHR surface() const { return surface_; }
         [[nodiscard]] VkQueue graphicsQueue() const { return graphics_queue_; }
-        [[nodiscard]] VkQueue presentQueue() const { return present_queue_; }
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
-        [[nodiscard]] uint32_t presentQueueFamily() const { return present_queue_family_; }
         [[nodiscard]] VmaAllocator allocator() const { return allocator_; }
-        [[nodiscard]] std::size_t queryVmaUsedBytes() const;
+        [[nodiscard]] std::size_t queryVmaUsedBytes(
+            std::size_t additional_block_bytes = 0,
+            std::size_t additional_allocation_bytes = 0) const;
         [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
-        [[nodiscard]] VkColorSpaceKHR swapchainColorSpace() const { return swapchain_color_space_; }
-        [[nodiscard]] bool hasHdr() const noexcept { return has_hdr_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }
         [[nodiscard]] VkImageAspectFlags depthStencilAspectMask() const;
-        [[nodiscard]] VkImageView depthStencilImageView() const {
-            return active_frame_index_ < depth_stencil_resources_.size()
-                       ? depth_stencil_resources_[active_frame_index_].view
-                       : VK_NULL_HANDLE;
-        }
-        [[nodiscard]] VkExtent2D swapchainExtent() const { return swapchain_extent_; }
         [[nodiscard]] VkExtent2D framebufferExtent() const;
-        [[nodiscard]] uint32_t minImageCount() const { return min_image_count_; }
-        [[nodiscard]] uint32_t imageCount() const { return static_cast<uint32_t>(swapchain_images_.size()); }
         [[nodiscard]] std::size_t framesInFlight() const { return kFramesInFlight; }
         [[nodiscard]] std::size_t currentFrameSlot() const { return frame_index_; }
         [[nodiscard]] bool externalMemoryInteropEnabled() const { return external_memory_interop_enabled_; }
         [[nodiscard]] bool externalSemaphoreInteropEnabled() const { return external_semaphore_interop_enabled_; }
         [[nodiscard]] VulkanImageBarrierTracker& imageBarriers() { return image_barriers_; }
-        [[nodiscard]] bool hasPushDescriptor() const { return has_push_descriptor_; }
         [[nodiscard]] PFN_vkCmdPushDescriptorSetKHR vkCmdPushDescriptorSet() const { return vk_cmd_push_descriptor_set_; }
         [[nodiscard]] bool hasHostImageCopy() const { return has_host_image_copy_; }
-        [[nodiscard]] bool hasFloat16Storage() const { return has_float16_storage_; }
         [[nodiscard]] bool hasConditionalRendering() const { return has_conditional_rendering_; }
         [[nodiscard]] PFN_vkCmdBeginConditionalRenderingEXT vkCmdBeginConditionalRendering() const {
             return vk_cmd_begin_conditional_rendering_;
@@ -226,12 +222,13 @@ namespace lfs::vis {
         [[nodiscard]] VkQueue computeQueue() const { return compute_queue_; }
         [[nodiscard]] uint32_t computeQueueFamily() const { return compute_queue_family_; }
         [[nodiscard]] bool hasDedicatedComputeQueue() const { return has_dedicated_compute_queue_; }
+        // Optional dedicated transfer/DMA queue for async image readbacks (#1574).
+        // Prefer pure TRANSFER, else TRANSFER|COMPUTE without GRAPHICS. When absent,
+        // transferQueue() is VK_NULL_HANDLE and readbacks fall back to graphics.
+        [[nodiscard]] VkQueue transferQueue() const { return transfer_queue_; }
+        [[nodiscard]] uint32_t transferQueueFamily() const { return transfer_queue_family_; }
+        [[nodiscard]] bool hasDedicatedTransferQueue() const { return has_dedicated_transfer_queue_; }
         [[nodiscard]] const std::array<std::uint8_t, VK_UUID_SIZE>& deviceUUID() const { return device_uuid_; }
-#ifdef _WIN32
-        [[nodiscard]] const std::array<std::uint8_t, VK_LUID_SIZE>& deviceLUID() const { return device_luid_; }
-        [[nodiscard]] bool deviceLUIDValid() const { return device_luid_valid_; }
-        [[nodiscard]] std::uint32_t deviceNodeMask() const { return device_node_mask_; }
-#endif
         [[nodiscard]] bool externalMemoryDedicatedAllocationEnabled() const {
             return external_memory_dedicated_allocation_enabled_;
         }
@@ -258,22 +255,51 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
+        // Dynamic rendering must be closed while external-image layout barriers
+        // are recorded. These helpers bracket that interop window.
+        [[nodiscard]] bool finishActiveRendering(VkCommandBuffer command_buffer);
+        [[nodiscard]] bool restartActiveRendering(VkCommandBuffer command_buffer,
+                                                  const Frame& frame);
         [[nodiscard]] bool endFrame();
         [[nodiscard]] bool hasActiveFrame() const noexcept { return frame_active_; }
         [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba();
         [[nodiscard]] bool waitForCurrentFrameSlot();
         [[nodiscard]] bool waitForSubmittedFrames();
-        // Serial of the most recent graphics frame submission.
+        // Serial of the most recent graphics frame submission attempt (pre-incremented
+        // before vkQueueSubmit; advances even if the submit fails).
         [[nodiscard]] std::uint64_t lastFrameSubmitSerial() const;
+        // Serial of the most recent *successful* graphics frame vkQueueSubmit.
+        // Used by interop layout-commit rollback when endFrame submit fails.
+        [[nodiscard]] std::uint64_t lastSuccessfulFrameSubmitSerial() const;
+        // Immediate vkQueueSubmit count for the current GUI frame (proof counter for #1575).
+        // Accounting starts at resetImmediateSubmitsThisFrame (prepareFrame) and is logged
+        // at endFrame; beginFrame must not clear it because prepare runs first.
+        void resetImmediateSubmitsThisFrame() noexcept { immediate_submits_this_frame_ = 0; }
         // Highest serial S such that every graphics submit with serial <= S has
         // retired. Non-blocking (vkGetFenceStatus); serial-0 slots ignored.
         // device_ null returns frame_submit_serial_ (everything retired).
         [[nodiscard]] std::uint64_t retiredFrameSubmitSerial() const;
+        // Non-blocking host read of a timeline semaphore counter (vkGetSemaphoreCounterValue).
+        // Returns false if device/semaphore invalid or the Vulkan call fails.
+        [[nodiscard]] bool getTimelineSemaphoreCounterValue(VkSemaphore semaphore,
+                                                            std::uint64_t& out_value) const;
+        // Host-wait until every graphics submit with serial <= |serial| has
+        // retired. Returns immediately if serial == 0, no device, or already
+        // retired. Waits only the in_flight_ fences whose frame_submit_serials_
+        // are non-zero and <= serial (2s timeout, waitAll). Swapchain image
+        // aliases are the same fence objects as in_flight_ (endFrame), so they
+        // are not listed separately. Same threading assumptions as
+        // waitForSubmittedFrames (no extra locking).
+        [[nodiscard]] bool waitForRetiredFrameSubmitSerial(std::uint64_t serial);
         [[nodiscard]] bool waitForImmediateSubmits();
         [[nodiscard]] bool deviceWaitIdle();
-        void addFrameTimelineWait(VkSemaphore semaphore,
-                                  std::uint64_t value,
-                                  VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+        // Returns false if the wait was rejected (frame inactive / mono violation);
+        // endFrame will refuse submit when any wait fails. Callers that commit
+        // layout optimistically must not do so on false.
+        [[nodiscard]] bool addFrameTimelineWait(
+            VkSemaphore semaphore,
+            std::uint64_t value,
+            VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
         [[nodiscard]] bool createExternalImage(VkExtent2D extent,
                                                VkFormat format,
@@ -315,6 +341,11 @@ namespace lfs::vis {
                                                           VkImageLayout old_layout,
                                                           VkImageLayout new_layout,
                                                           const ImmediateTransitionOptions& options);
+        // Coalesce N layout transitions into one command buffer and one vkQueueSubmit.
+        // Empty span is a no-op success. Reuses immediate machinery (frame_active_ refuse,
+        // timeline mono checks, drain/backlog, pending_immediate_submits_ bookkeeping).
+        [[nodiscard]] bool transitionImageLayoutsImmediate(
+            std::span<const ImmediateLayoutTransition> transitions);
 
     private:
         bool fail(std::string message,
@@ -338,6 +369,9 @@ namespace lfs::vis {
             std::optional<uint32_t> graphics;
             std::optional<uint32_t> present;
             std::optional<uint32_t> async_compute; // optional dedicated compute family
+            // Optional transfer family: pure TRANSFER preferred, else TRANSFER|COMPUTE
+            // without GRAPHICS (#1574).
+            std::optional<uint32_t> transfer;
             [[nodiscard]] bool complete() const { return graphics.has_value() && present.has_value(); }
         };
 
@@ -375,7 +409,6 @@ namespace lfs::vis {
         bool createDebugMessenger();
         bool createPipelineCache();
         bool recreateSwapchain();
-        bool finishActiveRendering(VkCommandBuffer command_buffer);
         void deferSwapchainResizeRecreate(bool requires_recreate = true,
                                           std::optional<bool> allow_headroom = std::nullopt);
         void requireSwapchainRecreateAfterOutOfDate();
@@ -418,11 +451,6 @@ namespace lfs::vis {
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
         VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
         std::array<std::uint8_t, VK_UUID_SIZE> device_uuid_{};
-#ifdef _WIN32
-        std::array<std::uint8_t, VK_LUID_SIZE> device_luid_{};
-        bool device_luid_valid_ = false;
-        std::uint32_t device_node_mask_ = 0;
-#endif
         VkDevice device_ = VK_NULL_HANDLE;
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
@@ -433,10 +461,12 @@ namespace lfs::vis {
         VkQueue compute_queue_ = VK_NULL_HANDLE;
         uint32_t compute_queue_family_ = 0;
         bool has_dedicated_compute_queue_ = false;
+        VkQueue transfer_queue_ = VK_NULL_HANDLE;
+        uint32_t transfer_queue_family_ = 0;
+        bool has_dedicated_transfer_queue_ = false;
 
         VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
         VkFormat swapchain_format_ = VK_FORMAT_UNDEFINED;
-        VkColorSpaceKHR swapchain_color_space_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
         bool has_hdr_ = false;
         VkExtent2D swapchain_extent_{};
         VkImageUsageFlags swapchain_image_usage_ = 0;
@@ -491,6 +521,10 @@ namespace lfs::vis {
         std::array<VkFence, kFramesInFlight> in_flight_{};
         std::array<std::uint64_t, kFramesInFlight> frame_submit_serials_{};
         std::uint64_t frame_submit_serial_ = 0;
+        // Advanced only after a successful endFrame vkQueueSubmit (#1575 layout rollback).
+        std::uint64_t last_successful_frame_submit_serial_ = 0;
+        // Reset at interop prepareFrame start; incremented on each successful immediate submit.
+        std::uint32_t immediate_submits_this_frame_ = 0;
         std::vector<VkFence> swapchain_images_in_flight_;
 
         bool framebuffer_resized_ = false;
@@ -523,7 +557,6 @@ namespace lfs::vis {
         bool swapchain_maintenance1_enabled_ = false;
         bool swapchain_present_scaling_enabled_ = false;
         bool has_push_descriptor_ = false;
-        bool has_float16_storage_ = false;
         bool has_conditional_rendering_ = false;
         bool has_host_image_copy_ = false;
         bool has_fill_mode_non_solid_ = false;

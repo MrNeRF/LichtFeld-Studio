@@ -47,6 +47,7 @@ set(TENSOR_SOURCES
 # Core module sources
 set(CORE_SOURCES
         abi.cpp
+        alloc_counter.cpp
         crash_handler.cpp
         cuda_error.cpp
         cuda_error_typed.cpp
@@ -57,6 +58,7 @@ set(CORE_SOURCES
         error_latch.cpp
         error_reporter.cpp
         guarded_task.cpp
+        host_metrics.cpp
         failure_report.cpp
         cuda/memory_arena_owner.cpp
         memory_pressure.cpp

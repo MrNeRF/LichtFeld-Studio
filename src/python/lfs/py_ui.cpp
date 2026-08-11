@@ -2704,7 +2704,15 @@ namespace lfs::python {
 
         // Hot-reload redraw request functions
         m.def(
-            "request_redraw", []() { lfs::python::request_redraw(); }, "Request a UI redraw on next frame");
+            "request_redraw",
+            [](double delay) {
+                if (delay <= 0.0)
+                    lfs::python::request_redraw();
+                else
+                    lfs::python::request_redraw_after(delay);
+            },
+            nb::arg("delay") = 0.0,
+            "Request a UI redraw; with delay > 0, schedule it no later than that many seconds from now.");
         m.def(
             "consume_redraw_request", []() {
                 return lfs::python::consume_redraw_request();
@@ -4578,6 +4586,15 @@ namespace lfs::python {
               "Toggle system console visibility");
 
         m.def(
+            "toggle_vram_hud", []() { lfs::core::events::ui::ToggleVramHud{}.emit(); },
+            "Toggle the VRAM diagnostics HUD overlay");
+
+        m.def(
+            "is_perf_hud_visible",
+            []() -> bool { return lfs::vis::app_store().perf_hud.get().visible; },
+            "True when the performance HUD is currently shown");
+
+        m.def(
             "is_windows_platform", []() -> bool {
 #ifdef WIN32
                 return true;
@@ -4843,7 +4860,7 @@ namespace lfs::python {
             nb::arg("key"), "Translate a string key");
 
         // Menu bar UI functions (for Python-driven menus)
-        m.def("show_input_settings", &show_input_settings, "Show input settings window");
+        m.def("show_input_settings", &show_input_settings, "No-op stub; open input settings via lfs.input_settings panel");
         m.def("show_python_console", &show_python_console, "Show Python console");
         m.def(
             "get_time",
@@ -4860,7 +4877,6 @@ namespace lfs::python {
         bridge.prepare_ui = []() {};
         bridge.draw_menus = [](MenuLocation loc) { PyMenuRegistry::instance().draw_menu_items(loc); };
         bridge.has_menus = [](MenuLocation loc) { return PyMenuRegistry::instance().has_items(loc); };
-        bridge.has_menu_bar_entries = []() { return PyMenuRegistry::instance().has_menu_bar_entries(); };
         bridge.get_menu_bar_entries = [](MenuBarEntryVisitor visitor, void* ctx) {
             auto entries = PyMenuRegistry::instance().get_menu_bar_entries();
             for (auto* entry : entries) {
@@ -4896,7 +4912,6 @@ namespace lfs::python {
 
         if (const auto& enqueue_cb = get_modal_enqueue_callback())
             PyModalRegistry::instance().set_enqueue_callback(enqueue_cb);
-        bridge.has_toolbar = []() { return true; }; // Always true - Python ToolRegistry has builtin tools
         bridge.shutdown_ui_resources = []() { shutdown_dynamic_textures(); };
         bridge.cleanup = []() {
             PyPanelRegistry::instance().unregister_all();

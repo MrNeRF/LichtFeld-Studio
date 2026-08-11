@@ -86,7 +86,8 @@ namespace lfs::core {
     void serialize_tensor_with_descriptor(
         std::ostream& os,
         const Tensor& tensor,
-        const TensorSerializationDescriptor& descriptor) {
+        const TensorSerializationDescriptor& descriptor,
+        const Tensor* auxiliary_source) {
         if (!tensor.is_valid()) {
             throw std::runtime_error("Cannot serialize invalid tensor");
         }
@@ -109,7 +110,7 @@ namespace lfs::core {
 
         if (auto* sink = current_tensor_serialization_sink()) {
             sink->write_tensor_payload(
-                os, tensor, descriptor);
+                os, tensor, auxiliary_source, descriptor);
             if (!os) {
                 throw std::runtime_error(
                     "Failed to write tensor through snapshot sink");
@@ -117,7 +118,8 @@ namespace lfs::core {
             return;
         }
         if (descriptor.encoding !=
-            TensorPayloadEncoding::NativeContiguous) {
+                TensorPayloadEncoding::NativeContiguous ||
+            auxiliary_source) {
             throw std::runtime_error(
                 "Alternate tensor encoding requires a serialization sink");
         }

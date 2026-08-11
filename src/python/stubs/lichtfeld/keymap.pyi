@@ -75,6 +75,8 @@ class Action(enum.Enum):
 
     CUT_SELECTION = 76
 
+    TOGGLE_PERFORMANCE_HUD = 77
+
     PASTE_SELECTION = 33
 
     DEPTH_ADJUST_FAR = 34

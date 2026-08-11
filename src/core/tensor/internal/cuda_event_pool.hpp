@@ -55,6 +55,10 @@ namespace lfs::core {
         Stats stats_;
     };
 
+    // Toggleable failure seam for exercising the host-sync fallback.
+    // Production never enables it.
+    LFS_CORE_API void set_cuda_event_acquire_failure_for_testing(bool enabled) noexcept;
+
     // Orders all work currently enqueued on `from` before future work on `to`
     // (pooled event edge, host-sync fallback). Unlike waitForCUDAStream, a
     // nullptr `from` (legacy default stream) is still bridged — allocator

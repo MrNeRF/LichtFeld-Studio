@@ -25,14 +25,26 @@ namespace fast_lfs::rasterization::config {
     DEF float max_blend_color = 4.0f; // SH output is typically < 2.0
     // block size constants
     DEF int block_size_preprocess = 128;
-    DEF int block_size_preprocess_backward = 128;
+    // 256 matches joint-Adam quant block size so blockIdx.x == splat_block for bounds.
+    DEF int block_size_preprocess_backward = 256;
     DEF int block_size_create_instances = 256;
     DEF int block_size_extract_instance_ranges = 256;
     DEF int block_size_adam_step_invisible = 256;
     DEF int tile_width = 16;
     DEF int tile_height = 16;
     DEF int block_size_blend = tile_width * tile_height;
+    // Four warps with two pixels per thread cover all 8×4 sub-tiles without a
+    // 256-thread block.
     DEF int block_size_blend_backward = 128;
+    // Forward blend fetch batch size (multiple of warp size 32, <= block_size_blend).
+    // RTX 4080: synthetic microbench argmin 128; late-window bonsai kern_sum argmin 192
+    // among {128,192,256}. Keep 192, matching the high-end paper result.
+    DEF int blend_batch_size = 192;
+    // Backward blend fetch batch (warp-cull reverse walk). Cap at block_size (128).
+    DEF int blend_backward_batch_size = 128;
+    // Warp sub-tile geometry for forward/backward blend culling (32 threads = 1 warp).
+    DEF int warp_subtile_width = 8;
+    DEF int warp_subtile_height = 4;
 
     // SH coefficient swizzle (vksplat float4 layout): 32 primitives per block, 12 float4 slots
     // per primitive packing 15 float3 SH-rest coefficients with 3 floats of tail padding.
