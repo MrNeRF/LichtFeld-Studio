@@ -63,6 +63,11 @@ namespace lfs::io {
         std::string images_folder = "images";
         int min_track_length = 0;
         bool validate_only = false;
+        // Sidecars are opt-in so dataset loading does not inspect or cache
+        // auxiliary folders that the active training configuration will not use.
+        bool load_masks = false;
+        bool load_depths = false;
+        bool load_normals = false;
         CentralizeDataset centralize = CentralizeDataset::Off;
         ProgressCallback progress = nullptr;
         CancelCallback cancel_requested = nullptr;

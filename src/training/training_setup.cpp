@@ -509,6 +509,11 @@ namespace lfs::training {
             .images_folder = params.dataset.images,
             .min_track_length = effectiveMinTrackLengthForLoad(params),
             .validate_only = false,
+            .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
+            .load_depths = params.optimization.use_depth_loss &&
+                           params.optimization.depth_loss_weight > 0.0f,
+            .load_normals = params.optimization.use_normal_loss &&
+                            params.optimization.normal_loss_weight > 0.0f,
             .centralize = parse_centralize(params.dataset.centralize_dataset),
             .progress = [&data_path](float percentage, const std::string& message) {
                 LOG_DEBUG("[{:5.1f}%] {}", percentage, message);
@@ -892,7 +897,12 @@ namespace lfs::training {
             .max_width = params.dataset.max_width,
             .images_folder = params.dataset.images,
             .min_track_length = params.dataset.min_track_length,
-            .validate_only = true};
+            .validate_only = true,
+            .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
+            .load_depths = params.optimization.use_depth_loss &&
+                           params.optimization.depth_loss_weight > 0.0f,
+            .load_normals = params.optimization.use_normal_loss &&
+                            params.optimization.normal_loss_weight > 0.0f};
 
         auto result = data_loader->load(params.dataset.data_path, load_options);
         if (!result) {

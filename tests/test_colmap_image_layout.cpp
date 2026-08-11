@@ -264,7 +264,7 @@ TEST_F(ColmapImageLayoutTest, ResolvesNestedImagesByBasename) {
     write_png(nested_mask);
 
     auto result =
-        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_masks = true});
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
     const auto& cameras = std::get<0>(result->value);
@@ -344,7 +344,7 @@ TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
     write_png(depth_path);
 
     auto result =
-        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_depths = true});
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
     const auto& cameras = std::get<0>(result->value);
@@ -352,6 +352,23 @@ TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
     ASSERT_EQ(cameras.size(), 1u);
     EXPECT_TRUE(cameras[0]->has_depth());
     EXPECT_TRUE(fs::equivalent(cameras[0]->depth_path(), depth_path));
+}
+
+TEST_F(ColmapImageLayoutTest, BrokenDepthIsIgnoredUnlessDepthLoadingIsEnabled) {
+    const fs::path dataset_dir = temp_dir_ / "broken_depth_dataset";
+    write_minimal_colmap_text_dataset(dataset_dir, "frame_0000.png");
+    write_png(dataset_dir / "images" / "frame_0000.png");
+    write_text_file(dataset_dir / "depth" / "frame_0000.png", "not an image");
+
+    const auto without_depth =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+    ASSERT_TRUE(without_depth.has_value()) << without_depth.error().format();
+    ASSERT_EQ(std::get<0>(without_depth->value).size(), 1u);
+    EXPECT_FALSE(std::get<0>(without_depth->value)[0]->has_depth());
+
+    const auto with_depth =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_depths = true});
+    ASSERT_FALSE(with_depth.has_value());
 }
 
 TEST_F(ColmapImageLayoutTest, AcceptsIntegerRatioDepthForScaledImages) {
@@ -374,7 +391,7 @@ TEST_F(ColmapImageLayoutTest, AcceptsIntegerRatioDepthForScaledImages) {
     write_derived_depth(depth_path, source, source.width - 1, source.height);
 
     const auto result =
-        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images_2");
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images_2", {.load_depths = true});
     ASSERT_TRUE(result.has_value()) << result.error().format();
     ASSERT_EQ(std::get<0>(result->value).size(), 1u);
     EXPECT_TRUE(std::get<0>(result->value)[0]->has_depth());
@@ -398,7 +415,7 @@ TEST_F(ColmapImageLayoutTest, RejectsNonIntegerRatioDepthForScaledImages) {
     write_derived_depth(depth_path, source, source.width, source.height - 1);
 
     const auto result =
-        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images_2");
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images_2", {.load_depths = true});
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::DEPTH_SIZE_MISMATCH);
 }
@@ -457,7 +474,7 @@ TEST_F(ColmapImageLayoutTest, ResolvesDuplicateNestedImagesAndMasksByRelativePat
     write_png(mask_b);
 
     auto result =
-        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_masks = true});
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
     auto& [cameras, scene_center] = result->value;
@@ -514,7 +531,7 @@ TEST_F(ColmapImageLayoutTest, ValidationFailsWhenMasksDoNotMirrorRelativeImageLa
     write_png(dataset_dir / "masks" / "cam_a" / "frame_0001.png");
     write_png(dataset_dir / "masks" / "cam_b" / "frame_0001.png");
 
-    auto result = lfs::io::validate_colmap_dataset_layout(dataset_dir, "images");
+    auto result = lfs::io::validate_colmap_dataset_layout(dataset_dir, "images", {.load_masks = true});
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
     EXPECT_NE(result.error().message.find("mask"), std::string::npos);

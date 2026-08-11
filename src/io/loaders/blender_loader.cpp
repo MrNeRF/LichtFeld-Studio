@@ -18,6 +18,8 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <ranges>
+#include <span>
 #include <tuple>
 
 namespace lfs::io {
@@ -137,11 +139,37 @@ namespace lfs::io {
             std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
             cameras.reserve(camera_infos.size());
 
-            // Get base path for mask lookup
+            // Get base path for optional sidecar lookup.  Do not scan unused
+            // sidecar folders: malformed auxiliary files must not block a load
+            // when their corresponding loss/feature is disabled.
             std::filesystem::path base_path = transforms_file.parent_path();
-            MaskDirCache mask_cache(base_path, options.cancel_requested);
-            DepthDirCache depth_cache(base_path, options.cancel_requested);
-            NormalDirCache normal_cache(base_path, options.cancel_requested);
+            const auto has_sidecar_directory = [&base_path](const std::span<const char* const> folders) {
+                return std::ranges::any_of(folders, [&base_path](const char* folder) {
+                    return safe_is_directory(base_path / folder);
+                });
+            };
+            if (!options.load_depths && has_sidecar_directory(DEPTH_SEARCH_FOLDERS)) {
+                LOG_INFO("depth maps present but unused (depth loss disabled)");
+            }
+            if (!options.load_normals && has_sidecar_directory(NORMAL_SEARCH_FOLDERS)) {
+                LOG_INFO("normal maps present but unused (normal loss disabled)");
+            }
+            if (!options.load_masks && has_sidecar_directory(MASK_SEARCH_FOLDERS)) {
+                LOG_INFO("mask maps present but unused (mask usage disabled)");
+            }
+
+            std::optional<MaskDirCache> mask_cache;
+            std::optional<DepthDirCache> depth_cache;
+            std::optional<NormalDirCache> normal_cache;
+            if (options.load_masks) {
+                mask_cache.emplace(base_path, options.cancel_requested);
+            }
+            if (options.load_depths) {
+                depth_cache.emplace(base_path, options.cancel_requested);
+            }
+            if (options.load_normals) {
+                normal_cache.emplace(base_path, options.cancel_requested);
+            }
 
             for (size_t i = 0; i < camera_infos.size(); ++i) {
                 if ((i % 64) == 0) {
@@ -151,39 +179,45 @@ namespace lfs::io {
 
                 try {
                     std::filesystem::path mask_path;
-                    if (auto mask_lookup = mask_cache.lookup(info._image_name); mask_lookup.found()) {
-                        mask_path = std::move(mask_lookup.path);
-                    } else if (mask_lookup.ambiguous()) {
-                        return make_error(
-                            ErrorCode::INVALID_DATASET,
-                            std::format("Mask for image '{}' is ambiguous across the dataset mask folders. "
-                                        "Keep masks in the same relative subdirectories as the images or rename them uniquely.",
-                                        info._image_name),
-                            base_path);
+                    if (options.load_masks && mask_cache) {
+                        if (auto mask_lookup = mask_cache->lookup(info._image_name); mask_lookup.found()) {
+                            mask_path = std::move(mask_lookup.path);
+                        } else if (mask_lookup.ambiguous()) {
+                            return make_error(
+                                ErrorCode::INVALID_DATASET,
+                                std::format("Mask for image '{}' is ambiguous across the dataset mask folders. "
+                                            "Keep masks in the same relative subdirectories as the images or rename them uniquely.",
+                                            info._image_name),
+                                base_path);
+                        }
                     }
 
                     std::filesystem::path depth_path;
-                    if (auto depth_lookup = depth_cache.lookup(info._image_name); depth_lookup.found()) {
-                        depth_path = std::move(depth_lookup.path);
-                    } else if (depth_lookup.ambiguous()) {
-                        return make_error(
-                            ErrorCode::INVALID_DATASET,
-                            std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
-                                        "Keep depth maps in the same relative subdirectories as the images or rename them uniquely.",
-                                        info._image_name),
-                            base_path);
+                    if (options.load_depths && depth_cache) {
+                        if (auto depth_lookup = depth_cache->lookup(info._image_name); depth_lookup.found()) {
+                            depth_path = std::move(depth_lookup.path);
+                        } else if (depth_lookup.ambiguous()) {
+                            return make_error(
+                                ErrorCode::INVALID_DATASET,
+                                std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
+                                            "Keep depth maps in the same relative subdirectories as the images or rename them uniquely.",
+                                            info._image_name),
+                                base_path);
+                        }
                     }
 
                     std::filesystem::path normal_path;
-                    if (auto normal_lookup = normal_cache.lookup(info._image_name); normal_lookup.found()) {
-                        normal_path = std::move(normal_lookup.path);
-                    } else if (normal_lookup.ambiguous()) {
-                        return make_error(
-                            ErrorCode::INVALID_DATASET,
-                            std::format("Normal map for image '{}' is ambiguous across the dataset normal folders. "
-                                        "Keep normal maps in the same relative subdirectories as the images or rename them uniquely.",
-                                        info._image_name),
-                            base_path);
+                    if (options.load_normals && normal_cache) {
+                        if (auto normal_lookup = normal_cache->lookup(info._image_name); normal_lookup.found()) {
+                            normal_path = std::move(normal_lookup.path);
+                        } else if (normal_lookup.ambiguous()) {
+                            return make_error(
+                                ErrorCode::INVALID_DATASET,
+                                std::format("Normal map for image '{}' is ambiguous across the dataset normal folders. "
+                                            "Keep normal maps in the same relative subdirectories as the images or rename them uniquely.",
+                                            info._image_name),
+                                base_path);
+                        }
                     }
 
                     // Validate mask/depth dimensions match image dimensions
