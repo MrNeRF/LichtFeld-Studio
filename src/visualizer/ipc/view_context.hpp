@@ -158,6 +158,7 @@ namespace lfs::vis {
     struct SceneUpscalerOptionProxy {
         std::string id;
         std::string label_key;
+        std::array<float, 3> recommended_input_scales{};
     };
 
     using GetRenderSettingsCallback = std::function<std::optional<RenderSettingsProxy>()>;

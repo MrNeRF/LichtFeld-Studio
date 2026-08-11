@@ -54,20 +54,22 @@
           <span class="text-accent">@tr:preferences.scene_rendering</span>
         </div>
         <div class="section-content" data-if="scene_rendering_expanded">
-          <span class="preferences-description">@tr:preferences.scene_render_scale_description</span>
-          <div class="preferences-row">
-            <span class="preferences-label">@tr:preferences.scene_render_scale</span>
-            <select class="preferences-select" data-value="scene_render_scale_idx">
-              <option data-for="scale : scene_render_scales" data-attr-value="scale.index">{{ scale.label }}</option>
-            </select>
-          </div>
           <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.scene_upscaler</span>
             <select class="preferences-select" data-value="scene_upscaler_idx">
               <option data-for="upscaler : scene_upscalers" data-attr-value="upscaler.index">{{ upscaler.label }}</option>
             </select>
           </div>
-          <div class="preferences-row" data-if="scene_upscaler_temporal">
+          <div data-if="scene_upscaler_has_scale">
+            <span class="preferences-description">@tr:preferences.scene_render_scale_description</span>
+            <div class="preferences-row">
+              <span class="preferences-label">@tr:preferences.scene_render_scale</span>
+              <select class="preferences-select" data-value="scene_render_scale_idx">
+                <option data-for="scale : scene_render_scales" data-attr-value="scale.index">{{ scale.label }}</option>
+              </select>
+            </div>
+          </div>
+          <div class="preferences-row" data-if="scene_upscaler_has_quality">
             <span class="preferences-label">@tr:preferences.temporal_quality</span>
             <select class="preferences-select" data-value="temporal_quality_idx">
               <option data-for="quality : temporal_qualities" data-attr-value="quality.index">{{ quality.label }}</option>

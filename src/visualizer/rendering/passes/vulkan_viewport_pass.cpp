@@ -353,8 +353,18 @@ namespace lfs::vis {
                               static_cast<double>(optional.failure));
             profiler.setGauge("viewer.upscaler.optional.generation",
                               static_cast<double>(optional.generation));
+            profiler.setGauge("viewer.upscaler.optional.evaluation_count",
+                              static_cast<double>(optional.evaluation_count));
             profiler.setGauge("viewer.upscaler.optional.fallback_count",
                               static_cast<double>(optional.fallback_count));
+            profiler.setGauge("viewer.upscaler.optional.input_width_px",
+                              optional_upscaler_input_extent.x);
+            profiler.setGauge("viewer.upscaler.optional.input_height_px",
+                              optional_upscaler_input_extent.y);
+            profiler.setGauge("viewer.upscaler.optional.output_width_px",
+                              optional_upscaler_output_extent.x);
+            profiler.setGauge("viewer.upscaler.optional.output_height_px",
+                              optional_upscaler_output_extent.y);
         }
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
@@ -378,6 +388,8 @@ namespace lfs::vis {
         bool scene_spatial_pipeline_attempted = false;
         SceneUpscalerSelection scene_upscaler_selection{};
         std::optional<SceneUpscalerSelection> logged_scene_upscaler_selection;
+        glm::ivec2 optional_upscaler_input_extent{0, 0};
+        glm::ivec2 optional_upscaler_output_extent{0, 0};
         VkPipelineLayout vignette_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline vignette_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout grid_pipeline_layout = VK_NULL_HANDLE;
@@ -2213,6 +2225,8 @@ namespace lfs::vis {
                                          *context);
             if (!optional_requested) {
                 optional_upscaler.deactivate();
+                optional_upscaler_input_extent = {0, 0};
+                optional_upscaler_output_extent = {0, 0};
             }
             if (optional_active) {
                 const auto requirements = optional_upscaler.requirements();
@@ -2452,19 +2466,27 @@ namespace lfs::vis {
                 params.scene_upscaler == SceneUpscalerBackend::Temporal
                     ? temporal_prerequisites
                     : scene_spatial_pipeline != VK_NULL_HANDLE || split_spatial_available);
+            constexpr double OPTIONAL_UPSCALER_DIAGNOSTIC_ID = 3.0;
+            const double requested_upscaler =
+                optional_requested
+                    ? OPTIONAL_UPSCALER_DIAGNOSTIC_ID
+                    : static_cast<double>(scene_upscaler_selection.requested);
+            const double effective_upscaler =
+                optional_active
+                    ? OPTIONAL_UPSCALER_DIAGNOSTIC_ID
+                    : static_cast<double>(scene_upscaler_selection.effective);
+            const bool upscaler_fallback =
+                optional_requested ? !optional_active : scene_upscaler_selection.fallback;
             profiler.setGauge("viewer.upscaler.requested",
-                              static_cast<double>(scene_upscaler_selection.requested));
-            profiler.setGauge("viewer.upscaler.effective",
-                              static_cast<double>(scene_upscaler_selection.effective));
-            profiler.setGauge("viewer.upscaler.fallback",
-                              scene_upscaler_selection.fallback ? 1.0 : 0.0);
-            profiler.setGauge("viewer.upscaler.adapter_ready",
-                              (params.scene_upscaler == SceneUpscalerBackend::Temporal
-                                   ? temporal_prerequisites
-                                   : scene_spatial_pipeline != VK_NULL_HANDLE ||
-                                         split_spatial_available)
-                                  ? 1.0
-                                  : 0.0);
+                              requested_upscaler);
+            profiler.setGauge("viewer.upscaler.effective", effective_upscaler);
+            profiler.setGauge("viewer.upscaler.fallback", upscaler_fallback ? 1.0 : 0.0);
+            const bool adapter_ready = optional_upscaler.status().active() ||
+                                       (params.scene_upscaler == SceneUpscalerBackend::Temporal
+                                            ? temporal_prerequisites
+                                            : scene_spatial_pipeline != VK_NULL_HANDLE ||
+                                                  split_spatial_available);
+            profiler.setGauge("viewer.upscaler.adapter_ready", adapter_ready ? 1.0 : 0.0);
             if (!logged_scene_upscaler_selection ||
                 *logged_scene_upscaler_selection != scene_upscaler_selection) {
                 const bool empty_temporal_view =
@@ -2514,6 +2536,7 @@ namespace lfs::vis {
                 }
                 const auto make_resource = [](const VkImage image,
                                               const VkImageView view,
+                                              const VkFormat format,
                                               const VkImageLayout layout,
                                               const glm::ivec2 valid_extent,
                                               const glm::ivec2 allocation_extent,
@@ -2521,6 +2544,7 @@ namespace lfs::vis {
                     return VulkanSceneUpscalerResource{
                         .image = image,
                         .view = view,
+                        .format = format,
                         .layout = layout,
                         .valid_extent = valid_extent,
                         .allocation_extent = allocation_extent,
@@ -2540,6 +2564,7 @@ namespace lfs::vis {
                         const auto contract = scene_motion_pass.contract(motion_slot);
                         motion_resource = make_resource(scene_motion_pass.motionImage(motion_slot),
                                                         scene_motion_pass.motionView(motion_slot),
+                                                        VK_FORMAT_R16G16_SFLOAT,
                                                         VK_IMAGE_LAYOUT_GENERAL,
                                                         {contract.width, contract.height},
                                                         {contract.width, contract.height},
@@ -2560,12 +2585,19 @@ namespace lfs::vis {
                         .depth = depth,
                         .motion = motion_resource,
                         .output_extent = output_extent,
+                        .jitter_pixels = params.scene_jitter_pixels,
+                        .motion_includes_jitter =
+                            requirements.motion_vectors
+                                ? scene_motion_pass.contract(motion_slot).includes_jitter
+                                : false,
                         .sequence = color.generation,
                         .reset_reasons = reset_reasons,
                         .quality = params.scene_temporal_quality,
                     };
                     if (!optional_upscaler.record(command_buffer, dispatch))
                         return false;
+                    optional_upscaler_input_extent = color.valid_extent;
+                    optional_upscaler_output_extent = output_extent;
                     state.previous_view_projection =
                         view == TemporalViewId::Main
                             ? params.mesh_view_projection
@@ -2601,6 +2633,7 @@ namespace lfs::vis {
                         const auto color = make_resource(
                             panel.external_image,
                             panel.external_image_view,
+                            VK_FORMAT_R8G8B8A8_UNORM,
                             panel.external_image_layout,
                             panel.image_size,
                             panel.allocation_size.x > 0 && panel.allocation_size.y > 0
@@ -2609,6 +2642,7 @@ namespace lfs::vis {
                             panel.external_image_generation);
                         const auto depth = make_resource(panel.depth_image,
                                                          panel.depth_image_view,
+                                                         VK_FORMAT_R32_SFLOAT,
                                                          panel.depth_image_layout,
                                                          panel.image_size,
                                                          panel.image_size,
@@ -2654,12 +2688,14 @@ namespace lfs::vis {
                         : params.scene_image_size;
                 const auto color = make_resource(params.external_scene_image,
                                                  params.external_scene_image_view,
+                                                 VK_FORMAT_R8G8B8A8_UNORM,
                                                  params.external_scene_image_layout,
                                                  params.scene_image_size,
                                                  allocation_extent,
                                                  params.external_scene_image_generation);
                 const auto depth = make_resource(depth_blit_pass.depthImage(params.frame_slot),
                                                  depth_blit_pass.depthView(params.frame_slot),
+                                                 VK_FORMAT_R32_SFLOAT,
                                                  depth_blit_pass.depthLayout(params.frame_slot),
                                                  params.scene_image_size,
                                                  params.scene_image_size,

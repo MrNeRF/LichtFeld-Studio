@@ -237,7 +237,7 @@ TEST(ThemePreferencesContract, SceneRenderScaleRoundTripsAndRejectsInvalidValues
     std::filesystem::remove_all(root, error);
 }
 
-TEST(ThemePreferencesContract, SceneUpscalerRoundTripsAndRejectsUnknownValues) {
+TEST(ThemePreferencesContract, SceneUpscalerRoundTripsAndRejectsMalformedValues) {
     const auto root = std::filesystem::temp_directory_path() / "lfs_scene_upscaler_preferences";
     std::error_code error;
     std::filesystem::remove_all(root, error);
@@ -250,11 +250,40 @@ TEST(ThemePreferencesContract, SceneUpscalerRoundTripsAndRejectsUnknownValues) {
     EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "spatial");
     lfs::vis::saveSceneUpscalerPreference("temporal");
     EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "temporal");
-    lfs::vis::saveSceneUpscalerPreference("unknown");
+    lfs::vis::saveSceneUpscalerPreference("nvidia-dlss");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "nvidia-dlss");
+    lfs::vis::saveSceneUpscalerPreference("invalid id!");
     EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
 
     std::ofstream(paths->preferencesFile()) << R"({"scene_upscaler":42})";
     EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, SceneUpscalerScalesAreIndependentAndNativeIsFixed) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_scene_upscaler_scales";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    lfs::vis::saveSceneUpscalerScalePreference("spatial", 0.5f);
+    lfs::vis::saveSceneUpscalerScalePreference("temporal", 0.67f);
+    lfs::vis::saveSceneUpscalerScalePreference("nvidia-dlss", 0.75f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneUpscalerScalePreference("spatial"), 0.5f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneUpscalerScalePreference("temporal"), 0.67f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneUpscalerScalePreference("nvidia-dlss"), 0.75f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneUpscalerScalePreference("native"), 1.0f);
+
+    lfs::vis::saveSceneUpscalerQualityPreference("temporal", "performance");
+    lfs::vis::saveSceneUpscalerQualityPreference("nvidia-dlss", "quality");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerQualityPreference("temporal"), "performance");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerQualityPreference("nvidia-dlss"), "quality");
+
+    lfs::vis::saveSceneUpscalerScalePreference("spatial", 0.1f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneUpscalerScalePreference("spatial"), 0.25f);
     std::filesystem::remove_all(root, error);
 }
 

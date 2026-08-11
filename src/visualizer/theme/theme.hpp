@@ -232,6 +232,13 @@ namespace lfs::vis {
     // LOD splat-budget multiplier.
     LFS_VIS_API void saveSceneRenderScalePreference(float scale);
     [[nodiscard]] LFS_VIS_API float loadSceneRenderScalePreference();
+    LFS_VIS_API void saveSceneUpscalerScalePreference(const std::string& backend_id, float scale);
+    [[nodiscard]] LFS_VIS_API float loadSceneUpscalerScalePreference(
+        const std::string& backend_id);
+    LFS_VIS_API void saveSceneUpscalerQualityPreference(const std::string& backend_id,
+                                                        const std::string& quality_id);
+    [[nodiscard]] LFS_VIS_API std::string loadSceneUpscalerQualityPreference(
+        const std::string& backend_id);
     LFS_VIS_API void saveSceneUpscalerPreference(const std::string& backend_id);
     [[nodiscard]] LFS_VIS_API std::string loadSceneUpscalerPreference();
     LFS_VIS_API void saveSceneTemporalQualityPreference(const std::string& quality_id);

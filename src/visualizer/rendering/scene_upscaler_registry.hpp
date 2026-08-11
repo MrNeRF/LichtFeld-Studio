@@ -151,6 +151,9 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API std::vector<SceneUpscalerCatalogEntry>
     availableSceneUpscalerCatalog(const OptionalSceneUpscalerRegistry& optional_registry,
                                   const SceneUpscalerProbeContext& context);
+    [[nodiscard]] LFS_VIS_API SceneUpscalerRequirements sceneUpscalerRequirementsForId(
+        std::string_view id,
+        const OptionalSceneUpscalerRegistry& optional_registry = optionalSceneUpscalerRegistry());
 
     [[nodiscard]] LFS_VIS_API std::span<const SceneUpscalerDescriptor> sceneUpscalerDescriptors();
     [[nodiscard]] LFS_VIS_API const SceneUpscalerDescriptor& nativeSceneUpscalerDescriptor();

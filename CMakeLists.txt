@@ -551,6 +551,7 @@ message(STATUS "CUDA Toolkit ${CUDAToolkit_VERSION} found at ${CUDAToolkit_TARGE
 find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Vulkan REQUIRED)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SetupNvidiaDlss.cmake")
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(volk CONFIG REQUIRED)
 find_package(SDL3 REQUIRED)
@@ -678,6 +679,10 @@ add_executable(${PROJECT_NAME}
     src/app/converter.cpp
     resources/lichtfeld-studio.rc
 )
+
+if(LFS_NVIDIA_DLSS_AVAILABLE)
+    lfs_stage_nvidia_dlss_runtime(${PROJECT_NAME})
+endif()
 
 # The binary only carries code for these architectures; the app refuses to start on anything
 # lower instead of dying inside the first kernel launch (#1540).
@@ -1400,6 +1405,9 @@ if(_lfs_ort_runtime_libs)
 endif()
 if(WIN32 AND BUILD_PORTABLE AND _lfs_cudnn_runtime_libs)
     install(FILES ${_lfs_cudnn_runtime_libs} DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+if(LFS_NVIDIA_DLSS_AVAILABLE)
+    install(FILES "${LFS_NVIDIA_DLSS_RUNTIME}" DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
 

@@ -40,6 +40,10 @@
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/vulkan_ui_texture.hpp"
+#ifdef LFS_HAS_NVIDIA_DLSS
+#include "rendering/nvidia_dlss_vulkan_adapter.hpp"
+#endif
+#include "theme/theme.hpp"
 #include <nlohmann/json.hpp>
 
 #include "gui/gpu_memory_query.hpp"
@@ -4025,7 +4029,22 @@ namespace lfs::vis::gui {
         };
 
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
-            const auto settings = rendering_manager->getSettings();
+            auto settings = rendering_manager->getSettings();
+#ifdef LFS_HAS_NVIDIA_DLSS
+            if (settings.scene_upscaler == "nvidia-dlss") {
+                const auto recommended_scales = nvidiaDlssRecommendedInputScales();
+                const auto quality_index = static_cast<std::size_t>(
+                    std::clamp(settings.scene_temporal_quality, 0, 2));
+                const float recommended_scale = recommended_scales[quality_index];
+                if (recommended_scale >= 0.25f && recommended_scale <= 1.0f &&
+                    std::abs(settings.render_scale - recommended_scale) > 0.001f) {
+                    settings.render_scale = recommended_scale;
+                    rendering_manager->updateSettings(settings);
+                    saveSceneUpscalerScalePreference(settings.scene_upscaler,
+                                                     recommended_scale);
+                }
+            }
+#endif
             scene_render_scale = std::clamp(settings.render_scale, 0.01f, 1.0f);
             params.scene_upscaler_id = settings.scene_upscaler;
             params.scene_upscaler =
@@ -4124,6 +4143,7 @@ namespace lfs::vis::gui {
             params.mesh_camera_position = mesh_frame.camera_position;
             params.scene_identity = mesh_frame.scene_identity;
             params.scene_temporal_reset_generation = mesh_frame.temporal_reset_generation;
+            params.scene_jitter_pixels = mesh_frame.scene_jitter_pixels;
             params.scene_temporal_stable = mesh_frame.temporal_scene_stable;
             params.mesh_items = std::move(mesh_frame.items);
             params.mesh_panels = std::move(mesh_frame.panels);

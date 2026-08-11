@@ -205,6 +205,18 @@ namespace lfs::vis {
         return registry;
     }
 
+    SceneUpscalerRequirements sceneUpscalerRequirementsForId(
+        const std::string_view id,
+        const OptionalSceneUpscalerRegistry& optional_registry) {
+        if (const auto backend = sceneUpscalerBackendFromId(id)) {
+            return sceneUpscalerDescriptor(*backend).requirements;
+        }
+        if (const auto descriptor = optional_registry.descriptor(id)) {
+            return descriptor->requirements;
+        }
+        return {};
+    }
+
     std::vector<SceneUpscalerCatalogEntry> buildSceneUpscalerCatalog(
         const OptionalSceneUpscalerRegistry& optional_registry,
         const SceneUpscalerProbeContext& context) {

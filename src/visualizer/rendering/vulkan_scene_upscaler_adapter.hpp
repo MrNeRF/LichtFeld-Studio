@@ -18,6 +18,7 @@ namespace lfs::vis {
     struct VulkanSceneUpscalerResource {
         VkImage image = VK_NULL_HANDLE;
         VkImageView view = VK_NULL_HANDLE;
+        VkFormat format = VK_FORMAT_UNDEFINED;
         VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
         glm::ivec2 valid_extent{0, 0};
         glm::ivec2 allocation_extent{0, 0};
@@ -39,6 +40,7 @@ namespace lfs::vis {
         glm::ivec2 output_extent{0, 0};
         glm::vec2 jitter_pixels{0.0f};
         glm::vec2 previous_jitter_pixels{0.0f};
+        bool motion_includes_jitter = false;
         float exposure = 1.0f;
         float frame_time_seconds = 0.0f;
         std::uint64_t sequence = 0;

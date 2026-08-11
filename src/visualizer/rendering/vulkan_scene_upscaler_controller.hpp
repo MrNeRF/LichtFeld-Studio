@@ -31,6 +31,7 @@ namespace lfs::vis {
             SceneUpscalerAvailabilityReason::NotCompiled;
         VulkanSceneUpscalerFailure failure = VulkanSceneUpscalerFailure::None;
         std::uint64_t generation = 0;
+        std::uint64_t evaluation_count = 0;
         std::uint64_t fallback_count = 0;
 
         [[nodiscard]] bool active() const {

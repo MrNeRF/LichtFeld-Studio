@@ -92,6 +92,7 @@ namespace lfs::python {
         [[nodiscard]] const std::string& property_group() const { return prop_.group_id(); }
         [[nodiscard]] nb::object get(const std::string& name) const { return prop_.getattr(name); }
         void set(const std::string& name, nb::object value);
+        void set_scene_upscaler(const std::string& backend_id, float input_scale, int quality);
         [[nodiscard]] nb::dict prop_info(const std::string& name) const {
             return prop_.prop_info(name);
         }

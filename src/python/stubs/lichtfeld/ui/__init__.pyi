@@ -2539,6 +2539,18 @@ def get_ui_scale() -> float:
 def get_ui_scale_preference() -> float:
     """Get saved UI scale preference (0.0 = auto)"""
 
+def set_scene_upscaler_scale(backend_id: str, scale: float) -> None:
+    """Persist the input scale associated with one scene upscaler"""
+
+def get_scene_upscaler_scale(backend_id: str) -> float:
+    """Get the persisted input scale associated with one scene upscaler"""
+
+def set_scene_upscaler_quality(backend_id: str, quality_id: str) -> None:
+    """Persist the quality preset associated with one scene upscaler"""
+
+def get_scene_upscaler_quality(backend_id: str) -> str:
+    """Get the persisted quality preset associated with one scene upscaler"""
+
 def get_mcp_preferences() -> dict:
     """Get persisted MCP HTTP server preferences"""
 

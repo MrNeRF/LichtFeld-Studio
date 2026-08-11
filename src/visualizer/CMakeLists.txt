@@ -277,6 +277,15 @@ target_sources(lfs_visualizer
         rendering/vulkan_external_tensor.cpp
         rendering/point_cloud_vulkan_renderer.cpp)
 
+if(LFS_NVIDIA_DLSS_AVAILABLE)
+    target_sources(lfs_visualizer PRIVATE
+        rendering/nvidia_dlss_vulkan_adapter.cpp)
+    target_link_libraries(lfs_visualizer PRIVATE NVIDIA::NGX)
+    target_compile_definitions(lfs_visualizer PRIVATE
+        LFS_HAS_NVIDIA_DLSS=1
+        LFS_NVIDIA_DLSS_PROJECT_ID="${LFS_NVIDIA_DLSS_PROJECT_ID}")
+endif()
+
 # The CPU chunk decoders round multiplies and adds separately; FMA contraction
 # in the dequant kernel would break CPU/GPU bit-parity (guarded by gtest).
 set_source_files_properties(rendering/lod_page_dequant_cuda.cu PROPERTIES

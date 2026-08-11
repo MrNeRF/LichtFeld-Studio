@@ -93,6 +93,7 @@ namespace lfs::vis {
                  SceneUpscalerAvailabilityReason::ProbeFailed);
             return false;
         }
+        ++status_.evaluation_count;
         return true;
     }
 

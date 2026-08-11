@@ -65,6 +65,7 @@ class PreferencesPanel(Panel):
     def __init__(self):
         self._handle = None
         self._scene_upscaler_catalog = list(self.DEFAULT_SCENE_UPSCALER_OPTIONS)
+        self._scene_upscaler_recommended_scales = {}
         self._theme_catalog = []
         self._language_catalog = []
         self._scene_render_scale_catalog = []
@@ -107,7 +108,14 @@ class PreferencesPanel(Panel):
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind("scene_render_scale_idx", self._scene_render_scale_index, self._set_scene_render_scale_index)
         model.bind("scene_upscaler_idx", self._scene_upscaler_index, self._set_scene_upscaler_index)
-        model.bind_func("scene_upscaler_temporal", lambda: self._scene_upscaler() == "temporal")
+        model.bind_func(
+            "scene_upscaler_has_scale",
+            lambda: self._scene_upscaler() in {"spatial", "temporal"},
+        )
+        model.bind_func(
+            "scene_upscaler_has_quality",
+            lambda: self._scene_upscaler() in {"temporal", "nvidia-dlss"},
+        )
         model.bind("temporal_quality_idx", self._temporal_quality_index, self._set_temporal_quality_index)
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
@@ -166,6 +174,7 @@ class PreferencesPanel(Panel):
     def on_update(self, doc):
         self._consume_section_request()
         self._sync_mcp_runtime()
+        self._sync_scene_upscaler_catalog()
         self._sync_scene_render_scale_records()
         state = self._state()
         if state == self._last_state:
@@ -275,10 +284,14 @@ class PreferencesPanel(Panel):
             self._refresh_selection()
 
     def _scene_render_scale(self):
-        settings = lf.get_render_settings()
-        if settings is None:
+        backend = self._scene_upscaler()
+        if backend == "native":
             return 1.0
-        return max(0.25, min(1.0, float(settings.render_scale)))
+        try:
+            return max(0.25, min(1.0, float(lf.ui.get_scene_upscaler_scale(backend))))
+        except AttributeError:
+            settings = lf.get_render_settings()
+            return 1.0 if settings is None else max(0.25, min(1.0, float(settings.render_scale)))
 
     def _scene_render_scale_options(self):
         current = self._scene_render_scale()
@@ -318,7 +331,15 @@ class PreferencesPanel(Panel):
         if 0 <= index < len(self._scene_render_scale_catalog):
             settings = lf.get_render_settings()
             if settings is not None:
-                settings.render_scale = self._scene_render_scale_catalog[index]
+                backend = self._scene_upscaler()
+                if backend == "native":
+                    return
+                scale = self._scene_render_scale_catalog[index]
+                settings.render_scale = scale
+                try:
+                    lf.ui.set_scene_upscaler_scale(backend, scale)
+                except AttributeError:
+                    pass
             self._refresh_selection()
 
     def _scene_upscaler(self):
@@ -336,11 +357,30 @@ class PreferencesPanel(Panel):
                 for record in records
                 if record.get("id") and record.get("label_key")
             ]
+            self._scene_upscaler_recommended_scales = {
+                str(record["id"]): tuple(float(scale) for scale in record.get("recommended_input_scales", ()))
+                for record in records
+                if record.get("id")
+            }
         except (AttributeError, KeyError, TypeError):
             catalog = list(self.DEFAULT_SCENE_UPSCALER_OPTIONS)
+            self._scene_upscaler_recommended_scales = {}
         if not catalog:
             catalog = [("native", "preferences.scene_upscaler_native")]
         self._scene_upscaler_catalog = catalog
+
+    def _recommended_upscaler_scale(self, backend=None):
+        backend = backend or self._scene_upscaler()
+        if backend != "nvidia-dlss":
+            return 0.0
+        scales = self._scene_upscaler_recommended_scales.get(backend, ())
+        quality_index = {"performance": 0, "balanced": 1, "quality": 2}.get(
+            self._temporal_quality(), 1
+        )
+        if len(scales) <= quality_index:
+            return 0.0
+        scale = float(scales[quality_index])
+        return scale if 0.25 <= scale <= 1.0 else 0.0
 
     def _sync_scene_upscaler_records(self):
         self._sync_scene_upscaler_catalog()
@@ -367,7 +407,25 @@ class PreferencesPanel(Panel):
         if 0 <= index < len(self._scene_upscaler_catalog):
             settings = lf.get_render_settings()
             if settings is not None:
-                settings.scene_upscaler = self._scene_upscaler_catalog[index][0]
+                backend = self._scene_upscaler_catalog[index][0]
+                try:
+                    scale = self._recommended_upscaler_scale(backend)
+                    if scale <= 0.0:
+                        scale = float(lf.ui.get_scene_upscaler_scale(backend))
+                except AttributeError:
+                    scale = 1.0 if backend == "native" else float(settings.render_scale)
+                try:
+                    quality_id = str(lf.ui.get_scene_upscaler_quality(backend))
+                except AttributeError:
+                    quality_id = "balanced"
+                quality = {"performance": 0, "balanced": 1, "quality": 2}.get(quality_id, 1)
+                try:
+                    settings.set_scene_upscaler(backend, scale, quality)
+                except AttributeError:
+                    settings.scene_upscaler = backend
+                    settings.render_scale = scale
+                    settings.scene_temporal_quality = quality_id
+                self._sync_scene_render_scale_records()
             self._refresh_selection()
 
     def _temporal_quality(self):
@@ -396,7 +454,9 @@ class PreferencesPanel(Panel):
             settings = lf.get_render_settings()
             if settings is not None:
                 try:
-                    settings.scene_temporal_quality = self.TEMPORAL_QUALITY_OPTIONS[index][0]
+                    quality_id = self.TEMPORAL_QUALITY_OPTIONS[index][0]
+                    settings.scene_temporal_quality = quality_id
+                    lf.ui.set_scene_upscaler_quality(self._scene_upscaler(), quality_id)
                 except AttributeError:
                     return
             self._refresh_selection()
@@ -701,6 +761,12 @@ class PreferencesPanel(Panel):
                 settings.render_scale = 1.0
                 settings.scene_upscaler = "native"
                 try:
+                    for backend, _label_key in self._scene_upscaler_catalog:
+                        lf.ui.set_scene_upscaler_scale(backend, 1.0)
+                        lf.ui.set_scene_upscaler_quality(backend, "balanced")
+                except AttributeError:
+                    pass
+                try:
                     settings.scene_temporal_quality = "balanced"
                 except AttributeError:
                     pass
@@ -727,7 +793,8 @@ class PreferencesPanel(Panel):
             self._handle.dirty("scale_idx")
             self._handle.dirty("scene_render_scale_idx")
             self._handle.dirty("scene_upscaler_idx")
-            self._handle.dirty("scene_upscaler_temporal")
+            self._handle.dirty("scene_upscaler_has_scale")
+            self._handle.dirty("scene_upscaler_has_quality")
             self._handle.dirty("temporal_quality_idx")
             self._handle.dirty("language_idx")
             self._handle.dirty("navigation_idx")

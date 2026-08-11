@@ -1181,11 +1181,103 @@ namespace lfs::vis {
         return 1.0f;
     }
 
+    void saveSceneUpscalerScalePreference(const std::string& backend_id, const float scale) {
+        try {
+            if (backend_id.empty())
+                return;
+            auto preferences = loadPreferences();
+            const float sanitized = backend_id == "native"
+                                        ? 1.0f
+                                        : std::clamp(std::isfinite(scale) ? scale : 1.0f,
+                                                     0.25f,
+                                                     1.0f);
+            preferences["scene_upscaler_scales"][backend_id] = sanitized;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save scene upscaler scale preference: {}", e.what());
+        }
+    }
+
+    float loadSceneUpscalerScalePreference(const std::string& backend_id) {
+        if (backend_id == "native")
+            return 1.0f;
+        try {
+            if (preferencesDisabled())
+                return 1.0f;
+            const auto preferences = loadPreferences();
+            const auto scales = preferences.find("scene_upscaler_scales");
+            if (scales != preferences.end() && scales->is_object()) {
+                const auto it = scales->find(backend_id);
+                if (it != scales->end() && it->is_number()) {
+                    const float scale = it->get<float>();
+                    if (std::isfinite(scale) && scale >= 0.25f && scale <= 1.0f)
+                        return scale;
+                }
+            }
+
+            // Migrate the former single scene scale lazily into the selected
+            // backend without changing the legacy key during this read.
+            const auto legacy = preferences.find("scene_render_scale");
+            if (legacy != preferences.end() && legacy->is_number()) {
+                const float scale = legacy->get<float>();
+                if (std::isfinite(scale) && scale >= 0.25f && scale <= 1.0f)
+                    return scale;
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load scene upscaler scale preference: {}", e.what());
+        }
+        return 1.0f;
+    }
+
+    void saveSceneUpscalerQualityPreference(const std::string& backend_id,
+                                            const std::string& quality_id) {
+        try {
+            if (backend_id.empty())
+                return;
+            auto preferences = loadPreferences();
+            const std::string sanitized =
+                quality_id == "performance" || quality_id == "quality" ? quality_id : "balanced";
+            preferences["scene_upscaler_qualities"][backend_id] = sanitized;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save scene upscaler quality preference: {}", e.what());
+        }
+    }
+
+    std::string loadSceneUpscalerQualityPreference(const std::string& backend_id) {
+        try {
+            if (preferencesDisabled())
+                return "balanced";
+            const auto preferences = loadPreferences();
+            const auto qualities = preferences.find("scene_upscaler_qualities");
+            if (qualities != preferences.end() && qualities->is_object()) {
+                const auto it = qualities->find(backend_id);
+                if (it != qualities->end() && it->is_string()) {
+                    const auto quality = it->get<std::string>();
+                    if (quality == "performance" || quality == "balanced" || quality == "quality")
+                        return quality;
+                }
+            }
+            const auto legacy = preferences.find("scene_temporal_quality");
+            if (legacy != preferences.end() && legacy->is_string()) {
+                const auto quality = legacy->get<std::string>();
+                if (quality == "performance" || quality == "balanced" || quality == "quality")
+                    return quality;
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load scene upscaler quality preference: {}", e.what());
+        }
+        return "balanced";
+    }
+
     void saveSceneUpscalerPreference(const std::string& backend_id) {
         try {
             auto preferences = loadPreferences();
-            preferences["scene_upscaler"] =
-                backend_id == "spatial" || backend_id == "temporal" ? backend_id : "native";
+            const bool valid_id = !backend_id.empty() &&
+                                  std::ranges::all_of(backend_id, [](const unsigned char c) {
+                                      return std::isalnum(c) || c == '-' || c == '_';
+                                  });
+            preferences["scene_upscaler"] = valid_id ? backend_id : "native";
             savePreferences(std::move(preferences));
         } catch (const std::exception& e) {
             LOG_WARN("Failed to save scene upscaler preference: {}", e.what());
@@ -1200,7 +1292,11 @@ namespace lfs::vis {
             const auto it = preferences.find("scene_upscaler");
             if (it != preferences.end() && it->is_string()) {
                 const auto value = it->get<std::string>();
-                if (value == "spatial" || value == "temporal")
+                const bool valid_id = !value.empty() &&
+                                      std::ranges::all_of(value, [](const unsigned char c) {
+                                          return std::isalnum(c) || c == '-' || c == '_';
+                                      });
+                if (valid_id)
                     return value;
             }
         } catch (const std::exception& e) {

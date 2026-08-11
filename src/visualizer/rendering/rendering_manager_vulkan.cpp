@@ -16,6 +16,7 @@
 #include "rendering/image_layout.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene_upscaler_registry.hpp"
 #include "temporal_frame_tracker.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
@@ -956,6 +957,7 @@ namespace lfs::vis {
             }
             frame.temporal_scene_stable = !frame_ctx.training_active;
             frame.temporal_reset_generation = temporal_reset_generation;
+            frame.scene_jitter_pixels = frame_ctx.scene_jitter_pixels;
             const auto vp_data = frame_ctx.makeViewportData();
             frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
             frame.camera_position = vp_data.translation;
@@ -1836,7 +1838,7 @@ namespace lfs::vis {
             DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::MESH |
             DirtyFlag::VIEWPORT | DirtyFlag::BACKGROUND | DirtyFlag::SPLIT_VIEW;
         const bool temporal_jitter_enabled =
-            frame_settings.scene_upscaler == "temporal" &&
+            sceneUpscalerRequirementsForId(frame_settings.scene_upscaler).jitter &&
             !frame_settings.orthographic && !frame_settings.equirectangular;
         temporal_convergence_.prepare(
             temporal_jitter_enabled,

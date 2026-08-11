@@ -502,6 +502,7 @@ namespace lfs::vis {
         struct VulkanMeshFrame {
             glm::mat4 view_projection{1.0f};
             glm::vec3 camera_position{0.0f};
+            glm::vec2 scene_jitter_pixels{0.0f};
             std::uint64_t scene_identity = 0;
             std::uint64_t temporal_reset_generation = 0;
             bool temporal_scene_stable = true;

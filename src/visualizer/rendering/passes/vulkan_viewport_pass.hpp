@@ -229,6 +229,7 @@ namespace lfs::vis {
         bool scene_temporal_stable = true;
         std::uint64_t scene_identity = 0;
         std::uint64_t scene_temporal_reset_generation = 0;
+        glm::vec2 scene_jitter_pixels{0.0f};
         // Dormant unless the effective backend explicitly requests motion vectors.
         // The depth view is filled from depth_blit after prepare when omitted here.
         VulkanSceneMotionParams scene_motion;

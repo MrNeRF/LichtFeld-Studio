@@ -940,6 +940,18 @@ namespace lfs::python {
         request_redraw();
     }
 
+    void PyRenderSettings::set_scene_upscaler(const std::string& backend_id,
+                                              const float input_scale,
+                                              const int quality) {
+        settings_.scene_upscaler = backend_id;
+        settings_.render_scale = backend_id == "native"
+                                     ? 1.0f
+                                     : std::clamp(input_scale, 0.25f, 1.0f);
+        settings_.scene_temporal_quality = std::clamp(quality, 0, 2);
+        vis::update_render_settings(settings_);
+        request_redraw();
+    }
+
     void PyRenderSettings::prop_setattr(const std::string& name, nb::object value) {
         set(name, value);
     }
@@ -1350,6 +1362,10 @@ namespace lfs::python {
             nb::dict record;
             record["id"] = option.id;
             record["label_key"] = option.label_key;
+            nb::list recommended_scales;
+            for (const float scale : option.recommended_input_scales)
+                recommended_scales.append(scale);
+            record["recommended_input_scales"] = std::move(recommended_scales);
             result.append(std::move(record));
         }
         return result;
@@ -1956,6 +1972,12 @@ Args:
             .def_prop_ro("__property_group__", &PyRenderSettings::property_group)
             .def("get", &PyRenderSettings::get, nb::arg("name"), "Get property value by name")
             .def("set", &PyRenderSettings::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
+            .def("set_scene_upscaler",
+                 &PyRenderSettings::set_scene_upscaler,
+                 nb::arg("backend_id"),
+                 nb::arg("input_scale"),
+                 nb::arg("quality"),
+                 "Atomically select a scene upscaler and its contextual settings")
             .def("prop_info", &PyRenderSettings::prop_info, nb::arg("name"))
             .def("get_all_properties", &PyRenderSettings::get_all_properties,
                  "Get all property descriptors as Python Property objects")

@@ -263,6 +263,23 @@ namespace lfs::vis {
         EXPECT_FALSE(registry.descriptor(source.id).has_value());
     }
 
+    TEST(SceneUpscalerAdapterRegistry, ResolvesRequirementsForInternalOptionalAndUnknownIds) {
+        OptionalSceneUpscalerRegistry registry;
+        EXPECT_TRUE(sceneUpscalerRequirementsForId("temporal", registry).jitter);
+        EXPECT_FALSE(sceneUpscalerRequirementsForId("native", registry).any());
+
+        ASSERT_TRUE(registry.registerAdapter(
+            {.id = "optional-temporal",
+             .label_key = "preferences.scene_upscaler_optional_temporal",
+             .requirements = {.depth = true, .motion_vectors = true, .jitter = true}},
+            &makeReadyAdapter));
+        const auto optional = sceneUpscalerRequirementsForId("optional-temporal", registry);
+        EXPECT_TRUE(optional.depth);
+        EXPECT_TRUE(optional.motion_vectors);
+        EXPECT_TRUE(optional.jitter);
+        EXPECT_FALSE(sceneUpscalerRequirementsForId("missing", registry).any());
+    }
+
     TEST(SceneUpscalerAdapterRegistry, SafeModeRejectsBeforeFactoryOrRuntimeProbe) {
         OptionalSceneUpscalerRegistry registry;
         ASSERT_TRUE(registry.registerAdapter(optionalDescriptor(), makeReadyAdapter));
@@ -459,6 +476,7 @@ namespace lfs::vis {
         VulkanSceneUpscalerController controller(registry);
         resetVulkanAdapterCounters();
         ASSERT_TRUE(controller.select("optional_test", {.vendor_id = 1}, context));
+        EXPECT_EQ(controller.status().evaluation_count, 0U);
 
         const glm::ivec2 input_extent{1280, 720};
         const glm::ivec2 output_extent{1920, 1080};
@@ -475,6 +493,7 @@ namespace lfs::vis {
             reinterpret_cast<VkCommandBuffer>(static_cast<std::uintptr_t>(0x5000)), dispatch));
         EXPECT_EQ(vulkan_record_calls, 1);
         EXPECT_EQ(vulkan_reset_calls, 1);
+        EXPECT_EQ(controller.status().evaluation_count, 1U);
         EXPECT_TRUE(controller.output(TemporalViewId::Main).valid(output_extent));
     }
 
@@ -498,6 +517,7 @@ namespace lfs::vis {
             reinterpret_cast<VkCommandBuffer>(static_cast<std::uintptr_t>(0x5000)), dispatch));
         EXPECT_FALSE(controller.status().active());
         EXPECT_EQ(controller.status().failure, VulkanSceneUpscalerFailure::Record);
+        EXPECT_EQ(controller.status().evaluation_count, 0U);
         EXPECT_EQ(controller.status().fallback_count, 1U);
         EXPECT_EQ(vulkan_shutdown_calls, 1);
     }

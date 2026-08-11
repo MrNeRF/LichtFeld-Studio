@@ -4732,6 +4732,38 @@ namespace lfs::python {
             "Get saved UI scale preference (0.0 = auto)");
 
         m.def(
+            "set_scene_upscaler_scale",
+            [](const std::string& backend_id, const float scale) {
+                vis::saveSceneUpscalerScalePreference(backend_id, scale);
+            },
+            nb::arg("backend_id"), nb::arg("scale"),
+            "Persist the input scale associated with one scene upscaler");
+
+        m.def(
+            "get_scene_upscaler_scale",
+            [](const std::string& backend_id) {
+                return vis::loadSceneUpscalerScalePreference(backend_id);
+            },
+            nb::arg("backend_id"),
+            "Get the persisted input scale associated with one scene upscaler");
+
+        m.def(
+            "set_scene_upscaler_quality",
+            [](const std::string& backend_id, const std::string& quality_id) {
+                vis::saveSceneUpscalerQualityPreference(backend_id, quality_id);
+            },
+            nb::arg("backend_id"), nb::arg("quality_id"),
+            "Persist the quality preset associated with one scene upscaler");
+
+        m.def(
+            "get_scene_upscaler_quality",
+            [](const std::string& backend_id) {
+                return vis::loadSceneUpscalerQualityPreference(backend_id);
+            },
+            nb::arg("backend_id"),
+            "Get the persisted quality preset associated with one scene upscaler");
+
+        m.def(
             "get_mcp_preferences",
             [] {
                 const auto state = vis::loadMcpPreferences();

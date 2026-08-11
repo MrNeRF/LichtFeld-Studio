@@ -12,6 +12,9 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "vulkan_result.hpp"
+#ifdef LFS_HAS_NVIDIA_DLSS
+#include "rendering/nvidia_dlss_vulkan_adapter.hpp"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -2136,6 +2139,24 @@ namespace lfs::vis {
                 available_extension_count);
             available_extensions.resize(available_extension_count);
         }
+#ifdef LFS_HAS_NVIDIA_DLSS
+        if (lfs::core::environment::flag("LFS_SAFE_MODE", false))
+            disableNvidiaDlssVulkanBootstrap();
+        const auto dlss_instance_extensions = nvidiaDlssVulkanBootstrapReady()
+                                                  ? nvidiaDlssRequiredInstanceExtensions()
+                                                  : std::vector<std::string>{};
+        const bool dlss_instance_extensions_available =
+            std::ranges::all_of(dlss_instance_extensions, [&](const std::string& extension) {
+                return extensionAvailable(available_extensions, extension.c_str());
+            });
+        if (dlss_instance_extensions_available) {
+            for (const auto& extension : dlss_instance_extensions)
+                appendUniqueExtension(extensions, extension.c_str());
+        } else {
+            disableNvidiaDlssVulkanBootstrap();
+            LOG_WARN("NVIDIA DLSS disabled: a required Vulkan instance extension is unavailable");
+        }
+#endif
         instance_external_memory_capabilities_enabled_ =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
         if (instance_external_memory_capabilities_enabled_) {
@@ -2569,6 +2590,21 @@ namespace lfs::vis {
         }
 
         std::vector<const char*> extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+#ifdef LFS_HAS_NVIDIA_DLSS
+        const auto dlss_device_extensions =
+            nvidiaDlssRequiredDeviceExtensions(instance_, physical_device_);
+        const bool dlss_device_extensions_available =
+            std::ranges::all_of(dlss_device_extensions, [&](const std::string& extension) {
+                return extensionAvailable(available_extensions, extension.c_str());
+            });
+        if (dlss_device_extensions_available) {
+            for (const auto& extension : dlss_device_extensions)
+                appendUniqueExtension(extensions, extension.c_str());
+        } else {
+            disableNvidiaDlssVulkanBootstrap();
+            LOG_WARN("NVIDIA DLSS disabled: a required Vulkan device extension is unavailable");
+        }
+#endif
         const bool has_external_memory =
             instance_external_memory_capabilities_enabled_ &&
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);

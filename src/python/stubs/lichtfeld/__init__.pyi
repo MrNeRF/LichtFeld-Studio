@@ -1418,6 +1418,9 @@ class RenderSettings:
     def set(self, name: str, value: object) -> None:
         """Set property value by name"""
 
+    def set_scene_upscaler(self, backend_id: str, input_scale: float, quality: int) -> None:
+        """Atomically select a scene upscaler and its contextual settings"""
+
     def prop_info(self, name: str) -> dict: ...
 
     def get_all_properties(self) -> dict:
