@@ -4,6 +4,7 @@
 
 #include "rendering/scene_upscaler_registry.hpp"
 
+#include <algorithm>
 #include <array>
 #include <mutex>
 #include <ranges>
@@ -40,6 +41,18 @@ namespace lfs::vis {
                 .available = true,
             },
         };
+
+        constexpr std::string_view internalLabelKey(const SceneUpscalerBackend backend) {
+            switch (backend) {
+            case SceneUpscalerBackend::Native:
+                return "preferences.scene_upscaler_native";
+            case SceneUpscalerBackend::Spatial:
+                return "preferences.scene_upscaler_spatial";
+            case SceneUpscalerBackend::Temporal:
+                return "preferences.scene_upscaler_temporal";
+            }
+            return "preferences.scene_upscaler_native";
+        }
     } // namespace
 
     std::span<const SceneUpscalerDescriptor> sceneUpscalerDescriptors() {
@@ -180,5 +193,48 @@ namespace lfs::vis {
     OptionalSceneUpscalerRegistry& optionalSceneUpscalerRegistry() {
         static OptionalSceneUpscalerRegistry registry;
         return registry;
+    }
+
+    std::vector<SceneUpscalerCatalogEntry> buildSceneUpscalerCatalog(
+        const OptionalSceneUpscalerRegistry& optional_registry,
+        const SceneUpscalerProbeContext& context) {
+        std::vector<SceneUpscalerCatalogEntry> result;
+        const auto internal_descriptors = sceneUpscalerDescriptors();
+        const auto optional_descriptors = optional_registry.descriptors();
+        result.reserve(internal_descriptors.size() + optional_descriptors.size());
+
+        for (const auto& descriptor : internal_descriptors) {
+            const auto availability = context.safe_mode &&
+                                              descriptor.backend != SceneUpscalerBackend::Native
+                                          ? SceneUpscalerAvailabilityReason::SafeMode
+                                          : SceneUpscalerAvailabilityReason::Ready;
+            result.push_back({
+                .id = std::string(descriptor.id),
+                .label_key = std::string(internalLabelKey(descriptor.backend)),
+                .requirements = descriptor.requirements,
+                .availability = {.reason = availability},
+                .internal = true,
+            });
+        }
+        for (const auto& descriptor : optional_descriptors) {
+            result.push_back({
+                .id = descriptor.id,
+                .label_key = descriptor.label_key,
+                .requirements = descriptor.requirements,
+                .availability = optional_registry.probe(descriptor.id, context),
+                .internal = false,
+            });
+        }
+        return result;
+    }
+
+    std::vector<SceneUpscalerCatalogEntry> availableSceneUpscalerCatalog(
+        const OptionalSceneUpscalerRegistry& optional_registry,
+        const SceneUpscalerProbeContext& context) {
+        auto catalog = buildSceneUpscalerCatalog(optional_registry, context);
+        std::erase_if(catalog, [](const SceneUpscalerCatalogEntry& entry) {
+            return !entry.selectable();
+        });
+        return catalog;
     }
 } // namespace lfs::vis

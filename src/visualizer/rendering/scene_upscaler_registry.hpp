@@ -97,6 +97,18 @@ namespace lfs::vis {
         SceneUpscalerRequirements requirements;
     };
 
+    struct SceneUpscalerCatalogEntry {
+        std::string id;
+        std::string label_key;
+        SceneUpscalerRequirements requirements;
+        SceneUpscalerAvailability availability;
+        bool internal = false;
+
+        [[nodiscard]] constexpr bool selectable() const {
+            return availability.available();
+        }
+    };
+
     class SceneUpscalerAdapter {
     public:
         virtual ~SceneUpscalerAdapter() = default;
@@ -131,6 +143,12 @@ namespace lfs::vis {
     };
 
     [[nodiscard]] LFS_VIS_API OptionalSceneUpscalerRegistry& optionalSceneUpscalerRegistry();
+    [[nodiscard]] LFS_VIS_API std::vector<SceneUpscalerCatalogEntry> buildSceneUpscalerCatalog(
+        const OptionalSceneUpscalerRegistry& optional_registry,
+        const SceneUpscalerProbeContext& context);
+    [[nodiscard]] LFS_VIS_API std::vector<SceneUpscalerCatalogEntry>
+    availableSceneUpscalerCatalog(const OptionalSceneUpscalerRegistry& optional_registry,
+                                  const SceneUpscalerProbeContext& context);
 
     [[nodiscard]] LFS_VIS_API std::span<const SceneUpscalerDescriptor> sceneUpscalerDescriptors();
     [[nodiscard]] LFS_VIS_API const SceneUpscalerDescriptor& nativeSceneUpscalerDescriptor();

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "visualizer/rendering/scene_upscaler_registry.hpp"
+#include "visualizer/rendering/vulkan_scene_upscaler_adapter.hpp"
 
 #include <gtest/gtest.h>
 
@@ -214,5 +215,116 @@ namespace lfs::vis {
         EXPECT_EQ(registry.createAvailable("optional_test", {}), nullptr);
         EXPECT_EQ(registry.createAvailable("missing_runtime", {.vendor_id = 1}), nullptr);
         EXPECT_EQ(registry.createAvailable("unknown", {.vendor_id = 1}), nullptr);
+    }
+
+    TEST(SceneUpscalerCatalog, CombinesInternalAndSelectableOptionalBackendsInStableOrder) {
+        OptionalSceneUpscalerRegistry registry;
+        ASSERT_TRUE(registry.registerAdapter(optionalDescriptor(), makeReadyAdapter));
+
+        const auto catalog = availableSceneUpscalerCatalog(registry, {.vendor_id = 1});
+        ASSERT_EQ(catalog.size(), 4U);
+        EXPECT_EQ(catalog[0].id, "native");
+        EXPECT_EQ(catalog[1].id, "spatial");
+        EXPECT_EQ(catalog[2].id, "temporal");
+        EXPECT_EQ(catalog[3].id, "optional_test");
+        EXPECT_TRUE(catalog[0].internal);
+        EXPECT_FALSE(catalog[3].internal);
+        EXPECT_TRUE(catalog[3].requirements.temporal());
+    }
+
+    TEST(SceneUpscalerCatalog, RetainsFailureReasonButFiltersUnavailableChoices) {
+        OptionalSceneUpscalerRegistry registry;
+        ASSERT_TRUE(registry.registerAdapter(optionalDescriptor("missing_runtime"),
+                                             makeMissingRuntimeAdapter));
+
+        const auto complete = buildSceneUpscalerCatalog(registry, {.vendor_id = 1});
+        ASSERT_EQ(complete.size(), 4U);
+        EXPECT_EQ(complete.back().availability.reason,
+                  SceneUpscalerAvailabilityReason::RuntimeMissing);
+        EXPECT_FALSE(complete.back().selectable());
+
+        const auto selectable = availableSceneUpscalerCatalog(registry, {.vendor_id = 1});
+        ASSERT_EQ(selectable.size(), 3U);
+        EXPECT_EQ(selectable.back().id, "temporal");
+    }
+
+    TEST(SceneUpscalerCatalog, SafeModeKeepsOnlyNativeWithoutConstructingOptionalAdapters) {
+        OptionalSceneUpscalerRegistry registry;
+        ASSERT_TRUE(registry.registerAdapter(optionalDescriptor(), makeReadyAdapter));
+        factory_calls = 0;
+
+        const auto complete = buildSceneUpscalerCatalog(
+            registry, {.vendor_id = 1, .safe_mode = true});
+        ASSERT_EQ(complete.size(), 4U);
+        EXPECT_TRUE(complete[0].selectable());
+        EXPECT_EQ(complete[1].availability.reason,
+                  SceneUpscalerAvailabilityReason::SafeMode);
+        EXPECT_EQ(complete[2].availability.reason,
+                  SceneUpscalerAvailabilityReason::SafeMode);
+        EXPECT_EQ(complete.back().availability.reason,
+                  SceneUpscalerAvailabilityReason::SafeMode);
+        EXPECT_EQ(factory_calls, 0);
+
+        const auto selectable = availableSceneUpscalerCatalog(
+            registry, {.vendor_id = 1, .safe_mode = true});
+        ASSERT_EQ(selectable.size(), 1U);
+        EXPECT_EQ(selectable.front().id, "native");
+        EXPECT_EQ(factory_calls, 0);
+    }
+
+    TEST(SceneUpscalerAdapterContract, ValidatesOnlyResourcesRequiredByTheBackend) {
+        const auto make_resource = [](const std::uintptr_t base) {
+            return VulkanSceneUpscalerResource{
+                .image = reinterpret_cast<VkImage>(base),
+                .view = reinterpret_cast<VkImageView>(base + 1),
+                .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .valid_extent = {1280, 720},
+                .allocation_extent = {1280, 720},
+                .generation = 1,
+            };
+        };
+        VulkanSceneUpscalerDispatch dispatch{
+            .color = make_resource(0x1000),
+            .output_extent = {1920, 1080},
+            .frame_time_seconds = 1.0f / 60.0f,
+        };
+
+        EXPECT_TRUE(dispatch.valid({}));
+        EXPECT_FALSE(dispatch.valid({.depth = true}));
+        dispatch.depth = make_resource(0x2000);
+        EXPECT_TRUE(dispatch.valid({.depth = true}));
+        EXPECT_FALSE(dispatch.valid({.depth = true, .motion_vectors = true}));
+        dispatch.motion = make_resource(0x3000);
+        EXPECT_TRUE(dispatch.valid({.depth = true, .motion_vectors = true}));
+    }
+
+    TEST(SceneUpscalerAdapterContract, RejectsMalformedExtentsAndPhysicalResources) {
+        VulkanSceneUpscalerResource resource{
+            .image = reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(0x1000)),
+            .view = reinterpret_cast<VkImageView>(static_cast<std::uintptr_t>(0x1001)),
+            .layout = VK_IMAGE_LAYOUT_GENERAL,
+            .valid_extent = {1280, 720},
+            .allocation_extent = {1280, 720},
+        };
+        EXPECT_TRUE(resource.valid());
+        resource.allocation_extent = {1279, 720};
+        EXPECT_FALSE(resource.valid());
+        resource.allocation_extent = {1280, 720};
+        resource.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        EXPECT_FALSE(resource.valid());
+    }
+
+    TEST(SceneUpscalerAdapterContract, OutputMustMatchTheRequestedPresentationExtent) {
+        VulkanSceneUpscalerOutput output{
+            .color = {
+                .image = reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(0x1000)),
+                .view = reinterpret_cast<VkImageView>(static_cast<std::uintptr_t>(0x1001)),
+                .layout = VK_IMAGE_LAYOUT_GENERAL,
+                .valid_extent = {1920, 1080},
+                .allocation_extent = {1920, 1080},
+            },
+        };
+        EXPECT_TRUE(output.valid({1920, 1080}));
+        EXPECT_FALSE(output.valid({1280, 720}));
     }
 } // namespace lfs::vis
