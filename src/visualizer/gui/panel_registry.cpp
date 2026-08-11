@@ -515,7 +515,8 @@ namespace lfs::vis::gui {
             bool has_user_height = false;
             {
                 std::lock_guard lock(mutex_);
-                if (snap.index < panels_.size() && panels_[snap.index].id == snap.id) {
+                if (snap.index < panels_.size() && panels_[snap.index].id == snap.id &&
+                    panels_[snap.index].space == PanelSpace::Floating) {
                     const auto interaction = floating_interactions_.find(snap.id);
                     if (interaction != floating_interactions_.end() &&
                         interaction->second.user_height > 0) {
@@ -545,9 +546,12 @@ namespace lfs::vis::gui {
             bool auto_center = true;
             {
                 std::lock_guard lock(mutex_);
-                if (const auto interaction = floating_interactions_.find(snap.id);
-                    interaction != floating_interactions_.end()) {
-                    auto_center = interaction->second.auto_center;
+                if (snap.index < panels_.size() && panels_[snap.index].id == snap.id &&
+                    panels_[snap.index].space == PanelSpace::Floating) {
+                    if (const auto interaction = floating_interactions_.find(snap.id);
+                        interaction != floating_interactions_.end()) {
+                        auto_center = interaction->second.auto_center;
+                    }
                 }
             }
             const auto placement =
