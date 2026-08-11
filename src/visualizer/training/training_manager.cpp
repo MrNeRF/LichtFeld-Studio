@@ -1323,7 +1323,8 @@ namespace lfs::vis {
             },
             [this](lfs::Result<void>&& result) {
                 if (result) {
-                    LOG_INFO("Training completed successfully");
+                    LOG_INFO("Training {}",
+                             trainer_->has_stopped() ? "stopped by user" : "completed successfully");
                     handleTrainingComplete(true);
                 } else {
                     const auto& error = result.error();

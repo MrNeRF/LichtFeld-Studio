@@ -1,5 +1,25 @@
 #!/bin/bash
 
+child_pid=
+abort_script() {
+    trap - INT TERM
+    if [[ -n "${child_pid}" ]]; then
+        kill -TERM "${child_pid}" 2>/dev/null || true
+        wait "${child_pid}" 2>/dev/null || true
+    fi
+    exit 130
+}
+trap abort_script INT TERM
+
+run_child() {
+    "$@" &
+    child_pid=$!
+    wait "${child_pid}"
+    local status=$?
+    child_pid=
+    return "${status}"
+}
+
 SCENE_DIR="data"
 RESULT_DIR="results/benchmark_mcmc"
 STRATEGY_NAME="MCMC"
@@ -35,14 +55,14 @@ do
     # Run training with evaluation, capturing wall-clock duration.
     mkdir -p "$RESULT_DIR/$SCENE"
     scene_start=$(date +%s.%N)
-    ./build/LichtFeld-Studio \
+    run_child ./build/LichtFeld-Studio \
         -d $SCENE_DIR/$SCENE/ \
         -o $RESULT_DIR/$SCENE/ \
         --images images_${DATA_FACTOR} \
         --test-every 8 \
         --eval \
         --headless \
-        --config eval/mcmc_optimization_params.json
+        --config eval/mcmc_optimization_params.json || exit $?
     scene_end=$(date +%s.%N)
     scene_elapsed=$(echo "$scene_end - $scene_start" | bc -l)
     printf "%.2f\n" "$scene_elapsed" > "$RESULT_DIR/$SCENE/training_time_seconds.txt"

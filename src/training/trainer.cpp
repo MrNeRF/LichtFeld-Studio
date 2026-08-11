@@ -6283,8 +6283,8 @@ namespace lfs::training {
                 if (!logged_epoch2_loader_cache && epoch2_loader_sample_count > 0 &&
                     static_cast<size_t>(iter) >= epoch2_loader_sample_count) {
                     const auto stats = train_dataloader->get_stats();
-                    LOG_INFO("[PipelinedImageLoader] after epoch 2: {} compressed entries, {:.1f} MiB RAM, "
-                             "{} hits, {} misses",
+                    LOG_DEBUG("[PipelinedImageLoader] after epoch 2: {} compressed entries, {:.1f} MiB RAM, "
+                              "{} hits, {} misses",
                              stats.jpeg_cache_entries,
                              stats.jpeg_cache_bytes / (1024.0 * 1024.0),
                              stats.hot_path_hits,
@@ -6492,7 +6492,7 @@ namespace lfs::training {
             return lfs::Status::failure(
                 attach_train_stamp(std::move(*terminal_error)));
         }
-        LOG_INFO("Training completed successfully");
+        LOG_INFO("Training {}", user_stopped ? "stopped by user" : "completed successfully");
         return {};
     }
 

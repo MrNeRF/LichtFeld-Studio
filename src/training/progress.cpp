@@ -156,7 +156,7 @@ namespace lfs::training {
 #ifdef _WIN32
                   << "* Final splats: " << final_splats
 #else
-                  << "✓ Final splats: " << final_splats
+                  << (user_stopped ? "* Final splats: " : "✓ Final splats: ") << final_splats
 #endif
                   << std::endl;
     }

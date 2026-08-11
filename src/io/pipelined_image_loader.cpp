@@ -878,7 +878,7 @@ namespace lfs::io {
             adaptive_target_ = next;
             if (decoded_frame_ring_)
                 decoded_frame_ring_->set_capacity(next + 2);
-            LOG_INFO("[PipelinedImageLoader] adaptive prefetch target={} occupancy={} decode_ema={:.3f}ms train_ema={:.3f}ms",
+            LOG_DEBUG("[PipelinedImageLoader] adaptive prefetch target={} occupancy={} decode_ema={:.3f}ms train_ema={:.3f}ms",
                      adaptive_target_,
                      adaptive_occupancy_,
                      decode_latency_ema_ms_,

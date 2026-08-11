@@ -368,7 +368,8 @@ namespace lfs::app {
                     static_cast<void>(trainer.release());
                 }
 
-                LOG_INFO("Headless training completed");
+                LOG_INFO("Headless training {}",
+                         coordinator.interrupted() ? "stopped by user" : "completed");
                 core::teardown_gpu_before_exit();
                 core::mark_clean_exit();
                 core::flush_and_exit(0);
