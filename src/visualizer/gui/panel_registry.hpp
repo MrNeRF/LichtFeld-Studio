@@ -67,6 +67,7 @@ namespace lfs::vis::gui {
     struct PanelRenderOptions {
         PanelRenderTarget target;
         PanelRenderMode mode = PanelRenderMode::Standard;
+        // Geometry and clip fields apply to Direct* modes; x/y are unused by DirectPreload.
         float x = 0.0f;
         float y = 0.0f;
         float width = 0.0f;

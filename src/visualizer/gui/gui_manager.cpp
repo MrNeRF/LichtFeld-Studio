@@ -4769,7 +4769,7 @@ namespace lfs::vis::gui {
             draw_ctx.is_training = cc->snapshot().is_running;
 
         if (has_side_panel_plugins) {
-            LOG_TIMER_THRESHOLD("gui_render.panel_setup.legacy_side_panel_preload", 0.25);
+            LOG_TIMER_THRESHOLD("gui_render.panel_setup.side_panel_preload", 0.25);
             reg.render_panels({
                                   .target = PanelRenderTarget::for_space(PanelSpace::SidePanel),
                                   .mode = PanelRenderMode::StandardPreload,
@@ -5440,7 +5440,7 @@ namespace lfs::vis::gui {
             }
 
             if (has_viewport_overlay_panels) {
-                LOG_TIMER_THRESHOLD("gui_render.draw_panels.ViewportOverlay", 0.25);
+                LOG_TIMER_THRESHOLD("gui_render.render_panels.ViewportOverlay", 0.25);
                 reg.render_panels({
                                       .target = PanelRenderTarget::for_space(PanelSpace::ViewportOverlay),
                                   },
@@ -5472,7 +5472,7 @@ namespace lfs::vis::gui {
         PanelInputState floating_input = panel_input;
         panel_setup_timer.reset();
         if (has_floating_panels) {
-            LOG_TIMER_THRESHOLD("gui_render.draw_panels.Floating", 0.25);
+            LOG_TIMER_THRESHOLD("gui_render.render_panels.Floating", 0.25);
             reg.render_panels({
                                   .target = PanelRenderTarget::for_space(PanelSpace::Floating),
                                   .input = &floating_input,
