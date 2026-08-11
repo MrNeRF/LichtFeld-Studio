@@ -787,8 +787,6 @@
     "temporal_quality_performance": "성능",
     "temporal_quality_balanced": "균형",
     "temporal_quality_quality": "품질",
-    "reset_temporal_history": "시간 기록",
-    "reset_temporal_history_action": "기록 초기화",
     "input": "입력",
     "camera_navigation": "카메라 탐색",
     "navigation_mode": "탐색 모드",

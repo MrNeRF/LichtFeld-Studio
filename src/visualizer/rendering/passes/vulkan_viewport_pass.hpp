@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "rendering/scene_temporal_resolve.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
+#include "rendering/temporal_frame_tracker.hpp"
 #include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
@@ -14,6 +15,7 @@
 #include "vulkan_scene_temporal_resolve_pass.hpp"
 #include "vulkan_split_view_pass.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -41,6 +43,37 @@ namespace lfs::vis {
                output_extent.y > 0;
     }
 
+    [[nodiscard]] constexpr std::size_t temporalMotionResourceSlot(
+        const std::size_t frame_slot, const TemporalViewId view) {
+        return frame_slot * static_cast<std::size_t>(TemporalViewId::Count) +
+               static_cast<std::size_t>(view);
+    }
+
+    [[nodiscard]] constexpr bool splitTemporalRuntimeEligible(
+        const VulkanSplitViewParams& split,
+        const std::size_t mesh_panel_count,
+        const bool projection_supported,
+        const bool scene_stable) {
+        const auto panel_valid = [](const VulkanSplitViewPanel& panel) {
+            return panel.external_image != VK_NULL_HANDLE &&
+                   panel.external_image_view != VK_NULL_HANDLE &&
+                   panel.depth_image_view != VK_NULL_HANDLE && panel.image_size.x > 0 &&
+                   panel.image_size.y > 0;
+        };
+        return split.enabled && mesh_panel_count == 2 && projection_supported && scene_stable &&
+               panel_valid(split.left) && panel_valid(split.right);
+    }
+
+    [[nodiscard]] constexpr glm::ivec2 splitTemporalOutputExtent(
+        const glm::ivec2 output_extent, const float start, const float end) {
+        return {
+            std::max(1, static_cast<int>(static_cast<float>(output_extent.x) *
+                                             std::max(0.0f, end - start) +
+                                         0.5f)),
+            std::max(1, output_extent.y),
+        };
+    }
+
     [[nodiscard]] constexpr bool temporalSourceUnchanged(
         const VkImage previous_image,
         const std::uint64_t previous_generation,
@@ -48,6 +81,31 @@ namespace lfs::vis {
         const std::uint64_t current_generation) {
         return previous_image != VK_NULL_HANDLE && previous_image == current_image &&
                previous_generation == current_generation;
+    }
+
+    [[nodiscard]] constexpr TemporalResetReason temporalHistoryResetReasons(
+        const bool history_valid,
+        const std::uint64_t previous_scene_identity,
+        const std::uint64_t current_scene_identity,
+        const std::uint64_t previous_reset_generation,
+        const std::uint64_t current_reset_generation,
+        const SceneTemporalQuality previous_quality = SceneTemporalQuality::Balanced,
+        const SceneTemporalQuality current_quality = SceneTemporalQuality::Balanced) {
+        if (!history_valid) {
+            return TemporalResetReason::FirstFrame;
+        }
+
+        auto reasons = TemporalResetReason::None;
+        if (previous_scene_identity != current_scene_identity) {
+            reasons |= TemporalResetReason::Scene;
+        }
+        if (previous_reset_generation != current_reset_generation) {
+            reasons |= TemporalResetReason::Requested;
+        }
+        if (previous_quality != current_quality) {
+            reasons |= TemporalResetReason::Quality;
+        }
+        return reasons;
     }
 
     [[nodiscard]] constexpr bool temporalHistoryRequiresReset(
@@ -59,9 +117,13 @@ namespace lfs::vis {
         const SceneTemporalQuality previous_quality = SceneTemporalQuality::Balanced,
         const SceneTemporalQuality current_quality = SceneTemporalQuality::Balanced) {
         return history_valid &&
-               (previous_scene_identity != current_scene_identity ||
-                previous_reset_generation != current_reset_generation ||
-                previous_quality != current_quality);
+               temporalHistoryResetReasons(history_valid,
+                                           previous_scene_identity,
+                                           current_scene_identity,
+                                           previous_reset_generation,
+                                           current_reset_generation,
+                                           previous_quality,
+                                           current_quality) != TemporalResetReason::None;
     }
 
     struct VulkanViewportOverlayVertex {

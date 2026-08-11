@@ -2143,7 +2143,11 @@ namespace lfs::vis {
             std::shared_ptr<lfs::core::Tensor> image;
             lfs::rendering::FrameMetadata metadata;
             VkImageView external_image_view = VK_NULL_HANDLE;
+            VkImage external_image = VK_NULL_HANDLE;
+            VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             std::uint64_t external_image_generation = 0;
+            VkImageView depth_image_view = VK_NULL_HANDLE;
+            std::uint64_t depth_image_generation = 0;
             bool flip_y = false;
             glm::ivec2 size{0, 0};
             glm::ivec2 alloc_size{0, 0};
@@ -2407,7 +2411,11 @@ namespace lfs::vis {
                     return RenderedPanel{.image = nullptr,
                                          .metadata = std::move(metadata),
                                          .external_image_view = result->image_view,
+                                         .external_image = result->image,
+                                         .external_image_layout = result->image_layout,
                                          .external_image_generation = result->generation,
+                                         .depth_image_view = result->depth_image_view,
+                                         .depth_image_generation = result->depth_generation,
                                          .flip_y = result->flip_y,
                                          .size = result->size,
                                          .alloc_size = result->alloc_size};
@@ -2436,7 +2444,13 @@ namespace lfs::vis {
                     .normalize_x_to_panel = normalize_x_to_panel,
                     .flip_y = panel.flip_y,
                     .external_image_view = panel.external_image_view,
+                    .external_image = panel.external_image,
+                    .external_image_layout = panel.external_image_layout,
                     .external_image_generation = panel.external_image_generation,
+                    .depth_image_view = panel.depth_image_view,
+                    .depth_image_generation = panel.depth_image_generation,
+                    .image_size = valid,
+                    .allocation_size = alloc,
                     .uv_scale = outputUvScale(valid, alloc),
                     .uv_clamp_max = outputUvClampMax(valid, alloc),
                 };

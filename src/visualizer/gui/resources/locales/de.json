@@ -787,8 +787,6 @@
     "temporal_quality_performance": "Leistung",
     "temporal_quality_balanced": "Ausgewogen",
     "temporal_quality_quality": "Qualität",
-    "reset_temporal_history": "Temporaler Verlauf",
-    "reset_temporal_history_action": "Verlauf zurücksetzen",
     "input": "Eingabe",
     "camera_navigation": "Kameranavigation",
     "navigation_mode": "Navigationsmodus",

@@ -30,6 +30,10 @@ namespace lfs::vis {
         Backend = 1u << 6u,
         HistoryDisabled = 1u << 7u,
         InvalidInput = 1u << 8u,
+        Quality = 1u << 9u,
+        Requested = 1u << 10u,
+        RuntimeUnavailable = 1u << 11u,
+        ResolveFailure = 1u << 12u,
     };
 
     [[nodiscard]] constexpr TemporalResetReason operator|(const TemporalResetReason lhs,
@@ -47,6 +51,11 @@ namespace lfs::vis {
     [[nodiscard]] constexpr bool hasTemporalResetReason(const TemporalResetReason value,
                                                         const TemporalResetReason reason) {
         return (static_cast<std::uint32_t>(value) & static_cast<std::uint32_t>(reason)) != 0;
+    }
+
+    [[nodiscard]] constexpr std::uint32_t temporalResetReasonMask(
+        const TemporalResetReason value) {
+        return static_cast<std::uint32_t>(value);
     }
 
     struct TemporalFrameInput {

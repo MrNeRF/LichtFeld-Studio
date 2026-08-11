@@ -255,4 +255,64 @@ namespace lfs::vis {
                                                  SceneTemporalQuality::Quality));
     }
 
+    TEST(SceneTemporalCoordinator, ViewportResetDiagnosticsPreserveEveryApplicableCause) {
+        EXPECT_EQ(temporalHistoryResetReasons(false, 10, 10, 3, 3),
+                  TemporalResetReason::FirstFrame);
+
+        const auto unchanged = temporalHistoryResetReasons(true, 10, 10, 3, 3);
+        EXPECT_EQ(unchanged, TemporalResetReason::None);
+
+        const auto combined = temporalHistoryResetReasons(true,
+                                                          10,
+                                                          11,
+                                                          3,
+                                                          4,
+                                                          SceneTemporalQuality::Balanced,
+                                                          SceneTemporalQuality::Quality);
+        EXPECT_TRUE(hasTemporalResetReason(combined, TemporalResetReason::Scene));
+        EXPECT_TRUE(hasTemporalResetReason(combined, TemporalResetReason::Requested));
+        EXPECT_TRUE(hasTemporalResetReason(combined, TemporalResetReason::Quality));
+        EXPECT_EQ(temporalResetReasonMask(combined),
+                  temporalResetReasonMask(TemporalResetReason::Scene) |
+                      temporalResetReasonMask(TemporalResetReason::Requested) |
+                      temporalResetReasonMask(TemporalResetReason::Quality));
+    }
+
+    TEST(SceneTemporalCoordinator, IndependentSplitRequiresTwoCompleteGpuPanels) {
+        VulkanSplitViewParams split;
+        split.enabled = true;
+        const auto complete = [](VulkanSplitViewPanel& panel, const std::uintptr_t base) {
+            panel.external_image = reinterpret_cast<VkImage>(base);
+            panel.external_image_view = reinterpret_cast<VkImageView>(base + 1);
+            panel.depth_image_view = reinterpret_cast<VkImageView>(base + 2);
+            panel.image_size = {1100, 738};
+        };
+        complete(split.left, 0x1000);
+        complete(split.right, 0x2000);
+
+        EXPECT_TRUE(splitTemporalRuntimeEligible(split, 2, true, true));
+        EXPECT_FALSE(splitTemporalRuntimeEligible(split, 1, true, true));
+        EXPECT_FALSE(splitTemporalRuntimeEligible(split, 2, false, true));
+        EXPECT_FALSE(splitTemporalRuntimeEligible(split, 2, true, false));
+
+        split.right.depth_image_view = VK_NULL_HANDLE;
+        EXPECT_FALSE(splitTemporalRuntimeEligible(split, 2, true, true));
+    }
+
+    TEST(SceneTemporalCoordinator, SplitOutputExtentsFollowPanelFractions) {
+        constexpr glm::ivec2 output{2200, 1476};
+        EXPECT_EQ(splitTemporalOutputExtent(output, 0.0f, 0.25f), glm::ivec2(550, 1476));
+        EXPECT_EQ(splitTemporalOutputExtent(output, 0.25f, 1.0f), glm::ivec2(1650, 1476));
+        EXPECT_EQ(splitTemporalOutputExtent(output, 0.5f, 0.5f), glm::ivec2(1, 1476));
+    }
+
+    TEST(SceneTemporalCoordinator, MotionResourcesAreUniquePerFrameAndView) {
+        EXPECT_EQ(temporalMotionResourceSlot(0, TemporalViewId::Main), 0U);
+        EXPECT_EQ(temporalMotionResourceSlot(0, TemporalViewId::SplitLeft), 1U);
+        EXPECT_EQ(temporalMotionResourceSlot(0, TemporalViewId::SplitRight), 2U);
+        EXPECT_EQ(temporalMotionResourceSlot(1, TemporalViewId::Main), 3U);
+        EXPECT_EQ(temporalMotionResourceSlot(1, TemporalViewId::SplitLeft), 4U);
+        EXPECT_EQ(temporalMotionResourceSlot(1, TemporalViewId::SplitRight), 5U);
+    }
+
 } // namespace lfs::vis
