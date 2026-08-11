@@ -481,6 +481,12 @@ namespace lfs::core {
                         break;
                     }
                 }
+                size_t lifetime_peak = it->second->lifetime_peak_usage.load(std::memory_order_relaxed);
+                while (frame_usage > lifetime_peak) {
+                    if (it->second->lifetime_peak_usage.compare_exchange_weak(lifetime_peak, frame_usage)) {
+                        break;
+                    }
+                }
 
                 // Update period peak (for logging)
                 size_t period_peak = it->second->peak_usage_period.load(std::memory_order_relaxed);
@@ -731,6 +737,7 @@ namespace lfs::core {
         arena.capacity = 0;
         arena.offset.store(0, std::memory_order_release);
         arena.peak_usage.store(0, std::memory_order_release);
+        arena.lifetime_peak_usage.store(0, std::memory_order_release);
         arena.peak_usage_period.store(0, std::memory_order_release);
     }
 
@@ -1289,6 +1296,12 @@ namespace lfs::core {
         // synchronized the device. cuMemUnmap/cudaFree are not stream ordered.
         const size_t current_offset = arena.offset.load(std::memory_order_acquire);
         const auto reset_logical_peak = [&arena, current_offset]() {
+            size_t lifetime_peak = arena.lifetime_peak_usage.load(std::memory_order_relaxed);
+            while (current_offset > lifetime_peak) {
+                if (arena.lifetime_peak_usage.compare_exchange_weak(lifetime_peak, current_offset)) {
+                    break;
+                }
+            }
             arena.peak_usage.store(current_offset, std::memory_order_release);
             arena.peak_usage_period.store(0, std::memory_order_release);
         };
@@ -1628,6 +1641,13 @@ namespace lfs::core {
                     }
                 }
 
+                size_t lifetime_peak = arena.lifetime_peak_usage.load(std::memory_order_relaxed);
+                while (current_usage > lifetime_peak) {
+                    if (arena.lifetime_peak_usage.compare_exchange_weak(lifetime_peak, current_usage)) {
+                        break;
+                    }
+                }
+
                 size_t period_peak = arena.peak_usage_period.load(std::memory_order_relaxed);
                 while (current_usage > period_peak) {
                     if (arena.peak_usage_period.compare_exchange_weak(period_peak, current_usage)) {
@@ -1949,12 +1969,23 @@ namespace lfs::core {
 
     void RasterizerMemoryArena::dump_statistics() const {
         const auto stats = get_statistics();
+        size_t lifetime_peak = stats.peak_usage;
+        {
+            std::lock_guard<std::mutex> lock(arena_mutex_);
+            for (const auto& entry : device_arenas_) {
+                if (entry.second) {
+                    lifetime_peak = std::max(
+                        lifetime_peak,
+                        entry.second->lifetime_peak_usage.load(std::memory_order_relaxed));
+                }
+            }
+        }
         const auto runtime = std::chrono::steady_clock::now() - creation_time_;
         const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(runtime).count();
         const float utilization = stats.capacity > 0 ? (100.0f * stats.peak_usage / stats.capacity) : 0.0f;
 
         LOG_INFO("Arena stats: committed=%zu MB, peak=%zu MB (%.1f%%), frames=%zu, reallocs=%zu, runtime=%lds",
-                 stats.capacity >> 20, stats.peak_usage >> 20, utilization,
+                 stats.capacity >> 20, lifetime_peak >> 20, utilization,
                  stats.frame_count, stats.reallocation_count, seconds);
         dump_growth_timing();
     }

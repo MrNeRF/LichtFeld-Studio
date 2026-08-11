@@ -123,6 +123,9 @@ namespace lfs::core {
             // Statistics
             // Logical high-water since the last explicit shrink/reset boundary.
             std::atomic<size_t> peak_usage{0};
+            // Lifetime high-water retained across boundary decommits so teardown
+            // diagnostics still report the work done before backing was released.
+            std::atomic<size_t> lifetime_peak_usage{0};
             std::atomic<size_t> peak_usage_period{0};
             std::atomic<size_t> total_allocated{0};
             std::atomic<size_t> realloc_count{0};
