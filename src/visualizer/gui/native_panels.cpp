@@ -44,10 +44,10 @@ namespace lfs::vis::gui::native_panels {
         const PanelDrawContext& ctx) {
         if (!widget_)
             return {};
+        setPanelSpace(request.space);
         if (request.mode == PanelDirectRenderMode::Measure)
             return {.handled = true, .height = getDirectDrawHeight()};
 
-        setPanelSpace(request.space);
         setInputClipY(request.clip_y_min, request.clip_y_max);
         setInput(request.input);
         setForcedHeight(request.forced_height);
@@ -183,10 +183,10 @@ namespace lfs::vis::gui::native_panels {
     PanelDirectRenderResult SequencerPanel::renderDirect(
         const PanelDirectRenderRequest& request,
         const PanelDrawContext& ctx) {
+        is_floating_ = request.space == PanelSpace::Floating;
         if (request.mode == PanelDirectRenderMode::Measure)
             return {.handled = true, .height = direct_draw_height_};
 
-        is_floating_ = request.space == PanelSpace::Floating;
         input_ = request.input;
         forced_height_ = request.forced_height;
 

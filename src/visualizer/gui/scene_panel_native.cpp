@@ -456,10 +456,10 @@ namespace lfs::vis::gui {
     PanelDirectRenderResult NativeScenePanel::renderDirect(
         const PanelDirectRenderRequest& request,
         const PanelDrawContext& ctx) {
+        host_.setFloating(request.space == PanelSpace::Floating);
         if (request.mode == PanelDirectRenderMode::Measure)
             return {.handled = true, .height = host_.getContentHeight()};
 
-        host_.setFloating(request.space == PanelSpace::Floating);
         host_.setInputClipY(request.clip_y_min, request.clip_y_max);
         host_.setInput(request.input);
         host_.setForcedHeight(request.forced_height);

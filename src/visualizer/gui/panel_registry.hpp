@@ -56,11 +56,17 @@ namespace lfs::vis::gui {
         }
     };
 
+    enum class PanelRenderMode : uint8_t {
+        Standard,
+        StandardPreload,
+        Direct,
+        DirectCached,
+        DirectPreload,
+    };
+
     struct PanelRenderOptions {
         PanelRenderTarget target;
-        bool direct = false;
-        bool cached = false;
-        bool preload_only = false;
+        PanelRenderMode mode = PanelRenderMode::Standard;
         float x = 0.0f;
         float y = 0.0f;
         float width = 0.0f;
@@ -296,6 +302,7 @@ namespace lfs::vis::gui {
         std::string label;
         std::string id;
         std::string parent_id;
+        PanelSpace space;
         uint32_t options;
         bool is_native;
         PollDependency poll_dependencies;

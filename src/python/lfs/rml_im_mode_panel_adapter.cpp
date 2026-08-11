@@ -139,10 +139,10 @@ namespace lfs::vis::gui {
     PanelDirectRenderResult RmlImModePanelAdapter::renderDirect(
         const PanelDirectRenderRequest& request,
         const PanelDrawContext& ctx) {
+        setPanelSpace(request.space);
         if (request.mode == PanelDirectRenderMode::Measure)
             return {.handled = true, .height = getDirectDrawHeight()};
 
-        setPanelSpace(request.space);
         setInputClipY(request.clip_y_min, request.clip_y_max);
         setInput(request.input);
         setForcedHeight(request.forced_height);
