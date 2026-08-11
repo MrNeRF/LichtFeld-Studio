@@ -9,10 +9,11 @@
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
+#include "io/loader.hpp"
+#include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_quant_kernels.hpp"
 #include "lfs/training/sh_value_storage.hpp"
-#include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
@@ -26,6 +27,7 @@
 #include <gtest/gtest.h>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace lfs::core;
@@ -84,6 +86,50 @@ namespace {
         return 10.0 * std::log10(1.0 / mse);
     }
 
+    Tensor retag_external(Tensor tensor, std::string kind) {
+        const TensorShape shape = tensor.shape();
+        const auto device = tensor.device();
+        const auto dtype = tensor.dtype();
+        const size_t capacity = tensor.capacity();
+        const cudaStream_t stream = tensor.stream();
+        auto owner = std::make_shared<Tensor>(std::move(tensor));
+        return Tensor::from_external_owner(owner->data_ptr(),
+                                           shape,
+                                           device,
+                                           dtype,
+                                           owner,
+                                           capacity,
+                                           stream,
+                                           std::move(kind));
+    }
+
+    void retag_viewer_external(SplatData& splat,
+                               const std::string& shN_kind = "vulkan_external_buffer",
+                               const std::string& bounds_kind = "vulkan_external_buffer") {
+        splat.means_raw() = retag_external(std::move(splat.means_raw()), "vulkan_external_buffer");
+        splat.sh0_raw() = retag_external(std::move(splat.sh0_raw()), "vulkan_external_buffer");
+        splat.shN_raw() = retag_external(std::move(splat.shN_raw()), shN_kind);
+        splat.shN_value_bounds() =
+            retag_external(std::move(splat.shN_value_bounds()), bounds_kind);
+        splat.scaling_raw() =
+            retag_external(std::move(splat.scaling_raw()), "vulkan_external_buffer");
+        splat.rotation_raw() =
+            retag_external(std::move(splat.rotation_raw()), "vulkan_external_buffer");
+        splat.opacity_raw() =
+            retag_external(std::move(splat.opacity_raw()), "vulkan_external_buffer");
+    }
+
+    SplatTensorAllocator counting_viewer_allocator(int& allocation_calls) {
+        return [&allocation_calls](TensorShape shape,
+                                   const size_t capacity,
+                                   const DataType dtype,
+                                   std::string_view) {
+            ++allocation_calls;
+            Tensor backing = Tensor::zeros_direct(shape, capacity, Device::CUDA, dtype);
+            return retag_external(std::move(backing), "vulkan_external_buffer");
+        };
+    }
+
 } // namespace
 
 TEST(ShValueStorageTest, GpuEncodeDecodeRoundtripLowMse) {
@@ -128,6 +174,64 @@ TEST(ShValueStorageTest, CanonicalExportIsFp32BitCompat) {
     EXPECT_LT(mse, 1e-6);
     EXPECT_GT(psnr_from_mse(mse), 55.0);
 
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, ViewerExternalBindAcceptsCompleteQ16PairWithoutRehome) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto splat = make_random_sh3(64);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    retag_viewer_external(splat);
+
+    int allocation_calls = 0;
+    const auto result = lfs::io::migrateSplatTensorsToAllocator(
+        splat, counting_viewer_allocator(allocation_calls));
+
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    EXPECT_EQ(allocation_calls, 0);
+    EXPECT_TRUE(splat.shN_value_quantized());
+    EXPECT_EQ(splat.shN_raw().external_storage_kind(), "vulkan_external_buffer");
+    EXPECT_EQ(splat.shN_value_bounds().external_storage_kind(), "vulkan_external_buffer");
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, ViewerExternalBindRehomesDegradedQ16BoundsAsPair) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto splat = make_random_sh3(64);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    const Tensor reference = splat.shN_canonical().cpu().contiguous();
+    retag_viewer_external(splat, "vulkan_external_buffer", "degraded_external_buffer");
+
+    int allocation_calls = 0;
+    const auto result = lfs::io::migrateSplatTensorsToAllocator(
+        splat, counting_viewer_allocator(allocation_calls));
+
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    EXPECT_EQ(allocation_calls, 7);
+    ASSERT_TRUE(splat.shN_value_quantized());
+    EXPECT_EQ(splat.shN_raw().external_storage_kind(), "vulkan_external_buffer");
+    EXPECT_EQ(splat.shN_value_bounds().external_storage_kind(), "vulkan_external_buffer");
+    EXPECT_LT(mse_tensors(reference, splat.shN_canonical().cpu()), 1e-12);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, ViewerExternalBindRehomesDegradedQ16CodesAsPair) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto splat = make_random_sh3(64);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    const Tensor reference = splat.shN_canonical().cpu().contiguous();
+    retag_viewer_external(splat, "degraded_external_buffer", "vulkan_external_buffer");
+
+    int allocation_calls = 0;
+    const auto result = lfs::io::migrateSplatTensorsToAllocator(
+        splat, counting_viewer_allocator(allocation_calls));
+
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    EXPECT_EQ(allocation_calls, 7);
+    ASSERT_TRUE(splat.shN_value_quantized());
+    EXPECT_EQ(splat.shN_raw().external_storage_kind(), "vulkan_external_buffer");
+    EXPECT_EQ(splat.shN_value_bounds().external_storage_kind(), "vulkan_external_buffer");
+    EXPECT_LT(mse_tensors(reference, splat.shN_canonical().cpu()), 1e-12);
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
