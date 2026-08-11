@@ -596,6 +596,10 @@ namespace lfs::io {
         int model_id = 0;
         int width = 0;
         int height = 0;
+        // Keep the dimensions recorded by COLMAP so sidecars can be validated
+        // before the requested image-folder scale is applied.
+        int original_width = 0;
+        int original_height = 0;
         std::vector<float> params;
     };
 
@@ -1310,6 +1314,8 @@ namespace lfs::io {
             if (valid) {
                 cam.width = static_cast<int>(width);
                 cam.height = static_cast<int>(height);
+                cam.original_width = cam.width;
+                cam.original_height = cam.height;
                 if (scale_factor != 1.0f) {
                     cam.width = static_cast<int>(cam.width / scale_factor);
                     cam.height = static_cast<int>(cam.height / scale_factor);
@@ -1913,6 +1919,8 @@ namespace lfs::io {
             cam.model_id = static_cast<int>(camera_model_names.at(model_name));
             cam.width = static_cast<int>(width);
             cam.height = static_cast<int>(height);
+            cam.original_width = cam.width;
+            cam.original_height = cam.height;
 
             bool valid = true;
             double parameter = 0.0;
@@ -2204,6 +2212,24 @@ namespace lfs::io {
     // -----------------------------------------------------------------------------
     //  Assemble cameras with dimension verification
     // -----------------------------------------------------------------------------
+    static bool sidecar_dimensions_match_contract(const int sidecar_width,
+                                                  const int sidecar_height,
+                                                  const int requested_width,
+                                                  const int requested_height,
+                                                  const int original_width,
+                                                  const int original_height) noexcept {
+        if (sidecar_width == original_width && sidecar_height == original_height) {
+            return true;
+        }
+        if (requested_width <= 0 || requested_height <= 0 || sidecar_width <= 0 || sidecar_height <= 0) {
+            return false;
+        }
+        if (sidecar_width % requested_width != 0 || sidecar_height % requested_height != 0) {
+            return false;
+        }
+        return sidecar_width / requested_width == sidecar_height / requested_height;
+    }
+
     Result<LoadOutcome<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>>
     assemble_colmap_cameras(const std::filesystem::path& base_path,
                             const std::unordered_map<uint32_t, CameraDataIntermediate>& cam_map,
@@ -2488,7 +2514,12 @@ namespace lfs::io {
             if (!depth_path.empty()) {
                 auto [img_w, img_h, img_c] = get_image_info_cached();
                 auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
-                if (img_w != depth_w || img_h != depth_h) {
+                if (!sidecar_dimensions_match_contract(depth_w,
+                                                       depth_h,
+                                                       img_w,
+                                                       img_h,
+                                                       cam_data.original_width,
+                                                       cam_data.original_height)) {
                     return make_error(ErrorCode::DEPTH_SIZE_MISMATCH,
                                       std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}",
                                                   lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
@@ -2499,7 +2530,12 @@ namespace lfs::io {
             if (!normal_path.empty()) {
                 auto [img_w, img_h, img_c] = get_image_info_cached();
                 auto [normal_w, normal_h, normal_c] = lfs::core::get_image_info(normal_path);
-                if (img_w != normal_w || img_h != normal_h) {
+                if (!sidecar_dimensions_match_contract(normal_w,
+                                                       normal_h,
+                                                       img_w,
+                                                       img_h,
+                                                       cam_data.original_width,
+                                                       cam_data.original_height)) {
                     return make_error(ErrorCode::NORMAL_SIZE_MISMATCH,
                                       std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
                                                   lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
