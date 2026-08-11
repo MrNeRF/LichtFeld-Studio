@@ -26,7 +26,7 @@ target_include_directories(lfs_onnx_vulkan
 )
 
 target_compile_features(lfs_onnx_vulkan PUBLIC cxx_std_23)
-target_link_libraries(lfs_onnx_vulkan PRIVATE Vulkan::Vulkan)
+target_link_libraries(lfs_onnx_vulkan PRIVATE Vulkan::Vulkan lfs_logger)
 set_target_properties(lfs_onnx_vulkan PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
@@ -38,9 +38,14 @@ set(LFS_ONNX_SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/elementwise.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/elementwise.comp.spv.h" kElementwiseSpv lfs::onnx_vulkan::shaders)
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/transform.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/transform.comp.spv.h" kTransformSpv lfs::onnx_vulkan::shaders)
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/matmul.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/matmul.comp.spv.h" kMatMulSpv lfs::onnx_vulkan::shaders)
+compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/matmul_tiled.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/matmul_tiled.comp.spv.h" kMatMulTiledSpv lfs::onnx_vulkan::shaders)
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/conv.comp.spv.h" kConvSpv lfs::onnx_vulkan::shaders)
+compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv_1x1.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/conv_1x1.comp.spv.h" kConv1x1Spv lfs::onnx_vulkan::shaders)
+compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv_tiled.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/conv_tiled.comp.spv.h" kConvTiledSpv lfs::onnx_vulkan::shaders)
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv_transpose.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/conv_transpose.comp.spv.h" kConvTransposeSpv lfs::onnx_vulkan::shaders)
+compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv_transpose_tiled.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/conv_transpose_tiled.comp.spv.h" kConvTransposeTiledSpv lfs::onnx_vulkan::shaders)
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/reduce.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/reduce.comp.spv.h" kReduceSpv lfs::onnx_vulkan::shaders)
+compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/reduce_serial.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/reduce_serial.comp.spv.h" kReduceSerialSpv lfs::onnx_vulkan::shaders)
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/softmax.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/softmax.comp.spv.h" kSoftmaxSpv lfs::onnx_vulkan::shaders)
 
 add_executable(lfs_onnx_inspect EXCLUDE_FROM_ALL tools/onnx_inspect.cpp)

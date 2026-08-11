@@ -714,6 +714,8 @@ namespace {
                      device ? std::to_string(*device) : std::string("automatic"));
             lfs::onnx_vulkan::SessionOptions options;
             options.vulkan_device = device;
+            options.enable_profiling =
+                lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Performance);
             auto session = lfs::onnx_vulkan::VulkanSession::create(model_path, std::move(options));
             if (!session)
                 throw std::runtime_error(session.error().message);
@@ -1166,8 +1168,23 @@ namespace lfs::preprocessing {
 
     int run_preprocess(const lfs::core::param::PreprocessParameters& params) {
         auto& logger = lfs::core::Logger::get();
-        if (!logger.is_ready())
-            logger.init();
+        if (!logger.is_ready()) {
+            auto level = lfs::core::LogLevel::Info;
+            if (const char* requested = std::getenv("LFS_LOG_LEVEL"); requested && requested[0]) {
+                std::string name(requested);
+                std::ranges::transform(name, name.begin(), [](const unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+                if (name == "trace") level = lfs::core::LogLevel::Trace;
+                else if (name == "debug") level = lfs::core::LogLevel::Debug;
+                else if (name == "perf" || name == "performance") level = lfs::core::LogLevel::Performance;
+                else if (name == "warn" || name == "warning") level = lfs::core::LogLevel::Warn;
+                else if (name == "error") level = lfs::core::LogLevel::Error;
+                else if (name == "critical") level = lfs::core::LogLevel::Critical;
+                else if (name == "off") level = lfs::core::LogLevel::Off;
+            }
+            logger.init(level);
+        }
         try {
             if (params.download_only) {
                 fs::path model_path = params.model_path;

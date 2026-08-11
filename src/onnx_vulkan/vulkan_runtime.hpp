@@ -24,9 +24,14 @@ namespace lfs::onnx_vulkan::detail {
         Elementwise,
         Transform,
         MatMul,
+        MatMulTiled,
         Conv,
+        Conv1x1,
+        ConvTiled,
         ConvTranspose,
+        ConvTransposeTiled,
         Reduce,
+        ReduceSerial,
         Softmax,
         Count,
     };
@@ -85,7 +90,8 @@ namespace lfs::onnx_vulkan::detail {
         void bind_and_dispatch(VkCommandBuffer command,
                                Kernel kernel,
                                VkDescriptorSet descriptor_set,
-                               std::uint64_t invocation_count) const;
+                               std::uint64_t invocation_count,
+                               std::array<std::uint32_t, 3> workgroups = {}) const;
 
         [[nodiscard]] VkDevice device() const noexcept { return device_; }
         [[nodiscard]] VkQueue queue() const noexcept { return queue_; }
@@ -94,6 +100,12 @@ namespace lfs::onnx_vulkan::detail {
         [[nodiscard]] VkPipelineLayout pipeline_layout() const noexcept { return pipeline_layout_; }
         [[nodiscard]] VkDeviceSize storage_alignment() const noexcept { return storage_alignment_; }
         [[nodiscard]] VkDeviceSize maximum_storage_range() const noexcept { return maximum_storage_range_; }
+        [[nodiscard]] std::uint32_t maximum_group_count_x() const noexcept { return maximum_group_count_x_; }
+        [[nodiscard]] std::uint32_t maximum_group_count_y() const noexcept { return maximum_group_count_y_; }
+        [[nodiscard]] std::uint32_t maximum_group_count_z() const noexcept { return maximum_group_count_z_; }
+        [[nodiscard]] bool profiling_enabled() const noexcept { return profiling_enabled_; }
+        [[nodiscard]] float timestamp_period() const noexcept { return timestamp_period_; }
+        [[nodiscard]] std::uint32_t timestamp_valid_bits() const noexcept { return timestamp_valid_bits_; }
         [[nodiscard]] std::string_view device_name() const noexcept { return device_name_; }
 
     private:
@@ -121,6 +133,10 @@ namespace lfs::onnx_vulkan::detail {
         VkDeviceSize maximum_storage_range_ = 0;
         std::uint32_t maximum_group_count_x_ = 1;
         std::uint32_t maximum_group_count_y_ = 1;
+        std::uint32_t maximum_group_count_z_ = 1;
+        bool profiling_enabled_ = false;
+        float timestamp_period_ = 0.0f;
+        std::uint32_t timestamp_valid_bits_ = 0;
         std::string device_name_;
         std::filesystem::path pipeline_cache_path_;
     };

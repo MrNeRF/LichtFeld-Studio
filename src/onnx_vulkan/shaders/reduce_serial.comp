@@ -1,19 +1,17 @@
 #version 450
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+// Low-reduction-count fallback: avoids launching a full 256-lane workgroup for
+// every output when each result only combines a handful of values.
+layout(local_size_x = 64) in;
 layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
 layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint b[]; };
 layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint c[]; };
 layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
 layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
 
-shared float partial[256];
-
 void main() {
-    const uint id = gl_WorkGroupID.x + gl_WorkGroupID.y * gl_NumWorkGroups.x;
-    const uint lane = gl_LocalInvocationID.x;
+    const uint id = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
     if (id >= p[1]) return;
-
     const uint output_rank = p[2];
     const uint input_rank = p[83];
     uint output_coord[8];
@@ -30,9 +28,8 @@ void main() {
         input_coord[input_axis] = reduced_axis ? 0u : output_coord[output_axis];
         if (!reduced_axis || p[84] != 0u) ++output_axis;
     }
-
     float sum = 0.0;
-    for (uint reduced = lane; reduced < p[81]; reduced += 256u) {
+    for (uint reduced = 0u; reduced < p[81]; ++reduced) {
         uint r = reduced;
         uint input_index = p[82];
         for (int axis = int(input_rank) - 1; axis >= 0; --axis) {
@@ -46,16 +43,7 @@ void main() {
         const float value = uintBitsToFloat(a[input_index]);
         sum += p[0] == 2u ? value * value : value;
     }
-    partial[lane] = sum;
-    barrier();
-    for (uint stride = 128u; stride != 0u; stride >>= 1u) {
-        if (lane < stride) partial[lane] += partial[lane + stride];
-        barrier();
-    }
-    if (lane == 0u) {
-        sum = partial[0];
-        if (p[0] == 1u) sum /= float(p[81]);
-        if (p[0] == 2u) sum = sqrt(sum);
-        o[id] = floatBitsToUint(sum);
-    }
+    if (p[0] == 1u) sum /= float(p[81]);
+    if (p[0] == 2u) sum = sqrt(sum);
+    o[id] = floatBitsToUint(sum);
 }

@@ -5,10 +5,15 @@
 #include "vulkan_runtime.hpp"
 
 #include "conv.comp.spv.h"
+#include "conv_tiled.comp.spv.h"
 #include "conv_transpose.comp.spv.h"
+#include "conv_transpose_tiled.comp.spv.h"
 #include "elementwise.comp.spv.h"
 #include "matmul.comp.spv.h"
+#include "matmul_tiled.comp.spv.h"
+#include "conv_1x1.comp.spv.h"
 #include "reduce.comp.spv.h"
+#include "reduce_serial.comp.spv.h"
 #include "softmax.comp.spv.h"
 #include "transform.comp.spv.h"
 
@@ -190,6 +195,15 @@ namespace lfs::onnx_vulkan::detail {
         maximum_storage_range_ = candidate.properties.limits.maxStorageBufferRange;
         maximum_group_count_x_ = candidate.properties.limits.maxComputeWorkGroupCount[0];
         maximum_group_count_y_ = candidate.properties.limits.maxComputeWorkGroupCount[1];
+        maximum_group_count_z_ = candidate.properties.limits.maxComputeWorkGroupCount[2];
+        timestamp_period_ = candidate.properties.limits.timestampPeriod;
+        profiling_enabled_ = options.enable_profiling;
+        std::uint32_t selected_family_count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &selected_family_count, nullptr);
+        std::vector<VkQueueFamilyProperties> selected_families(selected_family_count);
+        vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &selected_family_count, selected_families.data());
+        timestamp_valid_bits_ = selected_families[queue_family_].timestampValidBits;
+        profiling_enabled_ = profiling_enabled_ && timestamp_valid_bits_ != 0 && timestamp_period_ > 0.0f;
         vkGetPhysicalDeviceMemoryProperties(physical_device_, &memory_properties_);
 
         constexpr float priority = 1.0f;
@@ -274,8 +288,10 @@ namespace lfs::onnx_vulkan::detail {
     std::expected<void, Error> VulkanRuntime::create_pipelines() {
         const std::array<std::span<const std::uint32_t>, static_cast<std::size_t>(Kernel::Count)> code{
             words(shaders::kElementwiseSpv), words(shaders::kTransformSpv), words(shaders::kMatMulSpv),
-            words(shaders::kConvSpv), words(shaders::kConvTransposeSpv), words(shaders::kReduceSpv),
-            words(shaders::kSoftmaxSpv),
+            words(shaders::kMatMulTiledSpv), words(shaders::kConvSpv), words(shaders::kConv1x1Spv),
+            words(shaders::kConvTiledSpv), words(shaders::kConvTransposeSpv),
+            words(shaders::kConvTransposeTiledSpv), words(shaders::kReduceSpv),
+            words(shaders::kReduceSerialSpv), words(shaders::kSoftmaxSpv),
         };
         for (std::size_t index = 0; index < code.size(); ++index) {
             const VkShaderModuleCreateInfo module_info{
@@ -485,17 +501,22 @@ namespace lfs::onnx_vulkan::detail {
     void VulkanRuntime::bind_and_dispatch(const VkCommandBuffer command,
                                           const Kernel kernel,
                                           const VkDescriptorSet descriptor_set,
-                                          const std::uint64_t invocation_count) const {
+                                          const std::uint64_t invocation_count,
+                                          const std::array<std::uint32_t, 3> workgroups) const {
         if (invocation_count == 0)
             return;
+        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[static_cast<std::size_t>(kernel)]);
+        vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_, 0, 1,
+                                &descriptor_set, 0, nullptr);
+        if (workgroups[0] != 0) {
+            vkCmdDispatch(command, workgroups[0], workgroups[1], workgroups[2]);
+            return;
+        }
         const std::uint32_t local_size = kernel == Kernel::Elementwise || kernel == Kernel::Transform ? 256 : 64;
         const auto group_count = (invocation_count + local_size - 1) / local_size;
         const auto groups_x = static_cast<std::uint32_t>(std::min<std::uint64_t>(group_count, maximum_group_count_x_));
         const auto groups_y64 = (group_count + groups_x - 1) / groups_x;
         const auto groups_y = static_cast<std::uint32_t>(std::min<std::uint64_t>(groups_y64, maximum_group_count_y_));
-        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[static_cast<std::size_t>(kernel)]);
-        vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_, 0, 1,
-                                &descriptor_set, 0, nullptr);
         vkCmdDispatch(command, groups_x, groups_y, 1);
     }
 

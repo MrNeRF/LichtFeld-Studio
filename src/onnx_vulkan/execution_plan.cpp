@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "execution_plan.hpp"
+#include "core/logger.hpp"
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <deque>
@@ -13,6 +15,7 @@
 #include <numeric>
 #include <optional>
 #include <set>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace lfs::onnx_vulkan::detail {
@@ -239,6 +242,7 @@ namespace lfs::onnx_vulkan::detail {
             std::int64_t element_offset = 0;
             std::optional<HostTensor> host;
             DeviceRef device;
+            std::optional<std::size_t> producer_dispatch;
         };
 
         [[nodiscard]] std::expected<HostTensor, Error> constant_value(const Node& node) {
@@ -621,6 +625,8 @@ namespace lfs::onnx_vulkan::detail {
         struct Dispatch {
             Kernel kernel = Kernel::Elementwise;
             std::uint64_t count = 0;
+            std::array<std::uint32_t, 3> workgroups{};
+            std::string label;
             std::array<DeviceRef, 4> values;
             std::array<std::uint32_t, kParameterWords> parameters{};
         };
@@ -634,6 +640,7 @@ namespace lfs::onnx_vulkan::detail {
         const Model* model = nullptr;
         const WeightStore* weights = nullptr;
         VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+        VkQueryPool query_pool = VK_NULL_HANDLE;
         VkCommandBuffer command = VK_NULL_HANDLE;
         Buffer arena;
         Buffer literals;
@@ -654,6 +661,7 @@ namespace lfs::onnx_vulkan::detail {
         std::size_t step = 0;
         std::size_t nested_depth = 0;
         VkDeviceSize alignment = 1;
+        bool profile_details_logged = false;
 
         [[nodiscard]] DeviceRef allocate_arena(const ValueSpec& spec, const std::size_t release_at, const bool pinned) {
             auto count = element_count(spec.shape).value_or(0); VkDeviceSize bytes = std::max<VkDeviceSize>(4, count * 4); bytes = align_up(bytes, alignment);
@@ -714,28 +722,115 @@ namespace lfs::onnx_vulkan::detail {
                     material.device=allocate_arena(material_spec,last_use[node.outputs[0]],requested.contains(node.outputs[0]));
                     Dispatch copy;copy.kernel=Kernel::Transform;copy.count=element_count(base.shape).value_or(0);copy.parameters[0]=0;copy.parameters[1]=u32(copy.count);copy.parameters[2]=u32(base.shape.size());put_shape(copy.parameters,16,base.shape);put_shape(copy.parameters,24,base.strides);copy.parameters[80]=u32(base.element_offset);copy.values[0]=base.device;copy.values[3]=material.device;dispatches.push_back(std::move(copy));base=std::move(material);
                 }
-                base.shape=(*specs)[0].shape;base.strides=contiguous_strides(base.shape);base.element_offset=0;values[node.outputs[0]]=base;extend_lifetime(values[node.outputs[0]].device,last_use[node.outputs[0]]);return {};
+                base.shape=(*specs)[0].shape;base.strides=contiguous_strides(base.shape);base.element_offset=0;base.producer_dispatch.reset();values[node.outputs[0]]=base;extend_lifetime(values[node.outputs[0]].device,last_use[node.outputs[0]]);return {};
             }
-            if(node.op_type=="Transpose"){auto perm=ints_attribute(node,"perm");if(perm.empty()){perm.resize(base.shape.size());std::iota(perm.rbegin(),perm.rend(),0);}Value out=base;out.shape=(*specs)[0].shape;for(size_t i=0;i<perm.size();++i)out.strides[i]=base.strides[perm[i]];values[node.outputs[0]]=out;extend_lifetime(values[node.outputs[0]].device,last_use[node.outputs[0]]);return {};}
-            if(node.op_type=="Expand"){Value out=base;const auto target=(*specs)[0].shape;std::vector<int64_t> strides(target.size(),0);for(size_t t=0;t<base.shape.size();++t){auto dst=target.size()-base.shape.size()+t;if(base.shape[t]!=1)strides[dst]=base.strides[t];}out.shape=target;out.strides=std::move(strides);values[node.outputs[0]]=out;extend_lifetime(values[node.outputs[0]].device,last_use[node.outputs[0]]);return {};}
-            if(node.op_type=="Slice"){auto starts=integer_values(*input_values[1]->host,&node);auto axes=input_values.size()>3&&input_values[3]&&input_values[3]->host?integer_values(*input_values[3]->host,&node):std::expected<std::vector<int64_t>,Error>(std::vector<int64_t>(starts->size()));if(!(input_values.size()>3&&input_values[3]&&input_values[3]->host))std::iota(axes->begin(),axes->end(),0);std::vector<int64_t> steps(starts->size(),1);if(input_values.size()>4&&input_values[4]&&input_values[4]->host)steps=*integer_values(*input_values[4]->host,&node);Value out=base;out.shape=(*specs)[0].shape;for(size_t i=0;i<starts->size();++i){auto axis=normalize_axis((*axes)[i],base.shape.size());auto start=(*starts)[i];if(start<0)start+=base.shape[axis];start=std::clamp(start,int64_t{0},base.shape[axis]-1);out.element_offset+=start*base.strides[axis];out.strides[axis]*=steps[i];}values[node.outputs[0]]=out;extend_lifetime(values[node.outputs[0]].device,last_use[node.outputs[0]]);return {};}
-            if(node.op_type=="Split"){auto axis=normalize_axis(int_attribute(node,"axis").value_or(0),base.shape.size());int64_t offset=0;for(size_t i=0;i<node.outputs.size();++i){Value out=base;out.shape=(*specs)[i].shape;out.element_offset+=offset*base.strides[axis];offset+=out.shape[axis];values[node.outputs[i]]=out;extend_lifetime(values[node.outputs[i]].device,last_use[node.outputs[i]]);}return {};}
+            if(node.op_type=="Transpose"){auto perm=ints_attribute(node,"perm");if(perm.empty()){perm.resize(base.shape.size());std::iota(perm.rbegin(),perm.rend(),0);}Value out=base;out.producer_dispatch.reset();out.shape=(*specs)[0].shape;for(size_t i=0;i<perm.size();++i)out.strides[i]=base.strides[perm[i]];values[node.outputs[0]]=out;extend_lifetime(values[node.outputs[0]].device,last_use[node.outputs[0]]);return {};}
+            if(node.op_type=="Expand"){Value out=base;out.producer_dispatch.reset();const auto target=(*specs)[0].shape;std::vector<int64_t> strides(target.size(),0);for(size_t t=0;t<base.shape.size();++t){auto dst=target.size()-base.shape.size()+t;if(base.shape[t]!=1)strides[dst]=base.strides[t];}out.shape=target;out.strides=std::move(strides);values[node.outputs[0]]=out;extend_lifetime(values[node.outputs[0]].device,last_use[node.outputs[0]]);return {};}
+            if(node.op_type=="Slice"){auto starts=integer_values(*input_values[1]->host,&node);auto axes=input_values.size()>3&&input_values[3]&&input_values[3]->host?integer_values(*input_values[3]->host,&node):std::expected<std::vector<int64_t>,Error>(std::vector<int64_t>(starts->size()));if(!(input_values.size()>3&&input_values[3]&&input_values[3]->host))std::iota(axes->begin(),axes->end(),0);std::vector<int64_t> steps(starts->size(),1);if(input_values.size()>4&&input_values[4]&&input_values[4]->host)steps=*integer_values(*input_values[4]->host,&node);Value out=base;out.producer_dispatch.reset();out.shape=(*specs)[0].shape;for(size_t i=0;i<starts->size();++i){auto axis=normalize_axis((*axes)[i],base.shape.size());auto start=(*starts)[i];if(start<0)start+=base.shape[axis];start=std::clamp(start,int64_t{0},base.shape[axis]-1);out.element_offset+=start*base.strides[axis];out.strides[axis]*=steps[i];}values[node.outputs[0]]=out;extend_lifetime(values[node.outputs[0]].device,last_use[node.outputs[0]]);return {};}
+            if(node.op_type=="Split"){auto axis=normalize_axis(int_attribute(node,"axis").value_or(0),base.shape.size());int64_t offset=0;for(size_t i=0;i<node.outputs.size();++i){Value out=base;out.producer_dispatch.reset();out.shape=(*specs)[i].shape;out.element_offset+=offset*base.strides[axis];offset+=out.shape[axis];values[node.outputs[i]]=out;extend_lifetime(values[node.outputs[i]].device,last_use[node.outputs[i]]);}return {};}
         }
 
         std::vector<Value> outputs;for(size_t i=0;i<specs->size();++i)outputs.push_back(make_output(i));
-        Dispatch dispatch;dispatch.count=element_count(outputs[0].shape).value_or(0);base_params(dispatch.parameters,outputs[0]);dispatch.parameters[9]=u32(static_cast<int>(outputs[0].type));
+        Dispatch dispatch;dispatch.label=node.op_type;dispatch.count=element_count(outputs[0].shape).value_or(0);base_params(dispatch.parameters,outputs[0]);dispatch.parameters[9]=u32(static_cast<int>(outputs[0].type));
         const auto ref=[&](size_t i)->DeviceRef{if(i>=input_values.size()||!input_values[i])return {};return ensure_device(*input_values[i]);};
-        const auto finish=[&](Dispatch d){d.values[3]=outputs[0].device;dispatches.push_back(std::move(d));for(size_t i=0;i<outputs.size();++i)values[node.outputs[i]]=std::move(outputs[i]);};
+        const auto finish=[&](Dispatch d){const auto producer=dispatches.size();d.values[3]=outputs[0].device;dispatches.push_back(std::move(d));outputs[0].producer_dispatch=producer;for(size_t i=0;i<outputs.size();++i)values[node.outputs[i]]=std::move(outputs[i]);};
         static const std::unordered_map<std::string,uint32_t> element_ops{{"Add",1},{"Sub",2},{"Mul",3},{"Div",4},{"Pow",5},{"Mod",6},{"Equal",7},{"Where",8},{"Neg",9},{"Exp",10},{"Erf",11},{"Reciprocal",12},{"Relu",13},{"Sqrt",14},{"Sigmoid",15},{"Round",16},{"Clip",17},{"Cast",18}};
+        if(node.op_type=="Add"&&input_values.size()==2){
+            for(size_t dynamic_slot=0;dynamic_slot<2;++dynamic_slot){
+                auto* dynamic=input_values[dynamic_slot];auto* bias=input_values[1-dynamic_slot];
+                if(!dynamic||!bias||!dynamic->producer_dispatch||dynamic->element_offset!=0||
+                   dynamic->strides!=contiguous_strides(dynamic->shape)||dynamic->shape!=outputs[0].shape||
+                   dynamic->shape.empty()||bias->shape.empty()||bias->type!=ElementType::Float32||
+                   element_count(bias->shape).value_or(0)!=static_cast<size_t>(dynamic->shape.back())||
+                   last_use[node.inputs[dynamic_slot]]!=step)continue;
+                auto& producer=dispatches[*dynamic->producer_dispatch];
+                if((producer.kernel!=Kernel::MatMul&&producer.kernel!=Kernel::MatMulTiled)||producer.parameters[89]!=0)continue;
+                producer.values[2]=ensure_device(*bias);producer.parameters[88]=f32(1.0f);producer.parameters[89]=1;
+                producer.parameters[90]=u32(bias->element_offset);producer.parameters[91]=1;
+                producer.parameters[92]=u32(bias->strides.back());producer.label+="+Bias";
+                Value fused=*dynamic;fused.shape=outputs[0].shape;fused.strides=outputs[0].strides;
+                extend_lifetime(fused.device,last_use[node.outputs[0]]);values[node.outputs[0]]=std::move(fused);return {};
+            }
+        }
         if(auto it=element_ops.find(node.op_type);it!=element_ops.end()){dispatch.kernel=Kernel::Elementwise;dispatch.parameters[0]=it->second;if(node.op_type=="Where"){input_params(dispatch.parameters,*input_values[1],0);input_params(dispatch.parameters,*input_values[2],1);input_params(dispatch.parameters,*input_values[0],2);}else for(size_t i=0;i<3;++i)if(i<input_values.size()&&input_values[i])input_params(dispatch.parameters,*input_values[i],i);dispatch.values={ref(node.op_type=="Where"?1:0),ref(node.op_type=="Where"?2:1),ref(node.op_type=="Where"?0:2),{}};if(node.op_type=="Mod")dispatch.parameters[83]=u32(int_attribute(node,"fmod").value_or(0));if(node.op_type=="Clip"){dispatch.parameters[83]=input_values.size()>1&&input_values[1];dispatch.parameters[84]=input_values.size()>2&&input_values[2];}finish(std::move(dispatch));return {};}
         if(node.op_type=="ConstantOfShape"){dispatch.kernel=Kernel::Transform;dispatch.parameters[0]=1;float scalar=0;if(const auto* a=find_attribute(node,"value"))scalar=static_cast<float>(read_number(host_tensor(std::get<TensorData>(a->value)),0));dispatch.parameters[80]=f32(scalar);finish(std::move(dispatch));return {};}
         if(node.op_type=="Concat"){dispatch.kernel=Kernel::Transform;dispatch.parameters[0]=2;auto axis=normalize_axis(*int_attribute(node,"axis"),outputs[0].shape.size());auto out_strides=outputs[0].strides;int64_t axis_offset=0;for(auto* input:input_values){Dispatch part=dispatch;part.count=element_count(input->shape).value_or(0);part.parameters[1]=u32(part.count);part.parameters[2]=u32(input->shape.size());put_shape(part.parameters,16,input->shape);put_shape(part.parameters,24,input->strides);put_shape(part.parameters,32,out_strides);part.parameters[80]=u32(input->element_offset);part.parameters[81]=u32(axis);part.parameters[82]=u32(axis_offset);part.values[0]=ensure_device(*input);part.values[3]=outputs[0].device;dispatches.push_back(std::move(part));axis_offset+=input->shape[axis];}values[node.outputs[0]]=std::move(outputs[0]);return {};}
         if(node.op_type=="Pad"){dispatch.kernel=Kernel::Transform;dispatch.parameters[0]=3;auto pads=*integer_values(*input_values[1]->host,&node);put_shape(dispatch.parameters,24,input_values[0]->strides);for(size_t i=0;i<input_values[0]->shape.size();++i){dispatch.parameters[40+i]=u32(pads[i]);dispatch.parameters[48+i]=u32(input_values[0]->shape[i]);}float pad=0;if(input_values.size()>2&&input_values[2]&&input_values[2]->host)pad=static_cast<float>(read_number(*input_values[2]->host,0));dispatch.parameters[80]=f32(pad);auto mode=string_attribute(node,"mode","constant");dispatch.parameters[81]=mode=="reflect"?1:mode=="edge"?2:0;dispatch.parameters[82]=u32(input_values[0]->element_offset);dispatch.values[0]=ref(0);finish(std::move(dispatch));return {};}
         if(node.op_type=="Gather"){dispatch.kernel=Kernel::Transform;dispatch.parameters[0]=4;auto axis=normalize_axis(int_attribute(node,"axis").value_or(0),input_values[0]->shape.size());dispatch.parameters[3]=u32(input_values[0]->shape.size());dispatch.parameters[4]=u32(input_values[1]->shape.size());put_shape(dispatch.parameters,24,input_values[0]->strides);put_shape(dispatch.parameters,40,input_values[1]->strides);put_shape(dispatch.parameters,56,input_values[0]->shape);dispatch.parameters[80]=u32(axis);dispatch.parameters[81]=u32(input_values[0]->element_offset);dispatch.parameters[82]=u32(input_values[1]->element_offset);dispatch.values[0]=ref(0);dispatch.values[1]=ref(1);finish(std::move(dispatch));return {};}
         if(node.op_type=="Resize"){dispatch.kernel=Kernel::Transform;dispatch.parameters[0]=5;put_shape(dispatch.parameters,24,input_values[0]->strides);put_shape(dispatch.parameters,48,input_values[0]->shape);for(size_t i=0;i<outputs[0].shape.size();++i)dispatch.parameters[40+i]=f32(static_cast<float>(outputs[0].shape[i])/input_values[0]->shape[i]);auto mode=string_attribute(node,"mode","nearest");dispatch.parameters[80]=mode=="linear"?1:mode=="cubic"?2:0;auto transform=string_attribute(node,"coordinate_transformation_mode","half_pixel");dispatch.parameters[81]=transform=="half_pixel"?1:transform=="align_corners"?2:transform=="pytorch_half_pixel"?3:0;auto nearest=string_attribute(node,"nearest_mode","round_prefer_floor");dispatch.parameters[82]=nearest=="floor"?0:nearest=="ceil"?1:nearest=="round_prefer_floor"?2:3;dispatch.parameters[83]=u32(input_values[0]->element_offset);dispatch.parameters[84]=f32(float_attribute(node,"cubic_coeff_a",-0.75f));dispatch.parameters[85]=u32(int_attribute(node,"exclude_outside").value_or(0));dispatch.values[0]=ref(0);finish(std::move(dispatch));return {};}
-        if(node.op_type=="MatMul"||node.op_type=="Gemm"){dispatch.kernel=Kernel::MatMul;auto a=input_values[0],b=input_values[1];dispatch.parameters[3]=u32(a->shape.size());dispatch.parameters[4]=u32(b->shape.size());put_shape(dispatch.parameters,24,a->shape);put_shape(dispatch.parameters,32,a->strides);put_shape(dispatch.parameters,40,b->shape);put_shape(dispatch.parameters,48,b->strides);bool ta=node.op_type=="Gemm"&&int_attribute(node,"transA").value_or(0);bool tb=node.op_type=="Gemm"&&int_attribute(node,"transB").value_or(0);auto ashape=a->shape,bshape=b->shape;if(ashape.size()==1){ashape.insert(ashape.begin(),1);}if(bshape.size()==1){bshape.push_back(1);}dispatch.parameters[80]=u32(bshape.back());dispatch.parameters[81]=u32(ashape[ashape.size()-2]);dispatch.parameters[82]=u32(ta?ashape[ashape.size()-2]:ashape.back());dispatch.parameters[83]=u32(a->element_offset);dispatch.parameters[84]=u32(b->element_offset);dispatch.parameters[85]=ta;dispatch.parameters[86]=tb;dispatch.parameters[87]=f32(node.op_type=="Gemm"?float_attribute(node,"alpha",1):1);dispatch.parameters[88]=f32(node.op_type=="Gemm"?float_attribute(node,"beta",1):0);if(node.op_type=="Gemm"&&input_values.size()>2&&input_values[2]){dispatch.parameters[89]=1;dispatch.parameters[90]=u32(input_values[2]->element_offset);dispatch.parameters[91]=input_values[2]->shape.size()==1;dispatch.parameters[92]=u32(input_values[2]->strides[0]);dispatch.parameters[93]=u32(input_values[2]->shape.size()>1?input_values[2]->strides[1]:0);}dispatch.values={ref(0),ref(1),ref(2),{}};finish(std::move(dispatch));return {};}
-        if(node.op_type=="Conv"||node.op_type=="ConvTranspose"){dispatch.kernel=node.op_type=="Conv"?Kernel::Conv:Kernel::ConvTranspose;auto strides=ints_attribute(node,"strides");if(strides.empty())strides={1,1};auto dil=ints_attribute(node,"dilations");if(dil.empty())dil={1,1};auto pads=ints_attribute(node,"pads");if(pads.empty())pads={0,0,0,0};dispatch.parameters[80]=u32(outputs[0].shape[3]);dispatch.parameters[81]=u32(outputs[0].shape[2]);dispatch.parameters[82]=u32(outputs[0].shape[1]);dispatch.parameters[83]=u32(int_attribute(node,"group").value_or(1));dispatch.parameters[84]=u32(input_values[0]->shape[1]);dispatch.parameters[85]=u32(input_values[1]->shape[2]);dispatch.parameters[86]=u32(input_values[1]->shape[3]);dispatch.parameters[87]=u32(strides[0]);dispatch.parameters[88]=u32(strides[1]);dispatch.parameters[89]=u32(dil[0]);dispatch.parameters[90]=u32(dil[1]);dispatch.parameters[91]=u32(pads[0]);dispatch.parameters[92]=u32(pads[1]);dispatch.parameters[93]=u32(input_values[0]->shape[2]);dispatch.parameters[94]=u32(input_values[0]->shape[3]);dispatch.parameters[95]=input_values.size()>2&&input_values[2];dispatch.parameters[96]=input_values.size()>2&&input_values[2]?u32(input_values[2]->element_offset):0;dispatch.parameters[97]=input_values.size()>2&&input_values[2]?u32(input_values[2]->strides[0]):0;dispatch.parameters[98]=u32(input_values[0]->element_offset);dispatch.parameters[99]=u32(input_values[1]->element_offset);put_shape(dispatch.parameters,32,input_values[0]->strides);put_shape(dispatch.parameters,48,input_values[1]->strides);dispatch.values={ref(0),ref(1),ref(2),{}};finish(std::move(dispatch));return {};}
-        if(node.op_type.starts_with("Reduce")){dispatch.kernel=Kernel::Reduce;dispatch.parameters[0]=node.op_type=="ReduceMean"?1:node.op_type=="ReduceL2"?2:0;auto axes=*axes_from(node,input_const,1,input_values[0]->shape.size(),true);uint32_t mask=0;uint64_t reduced=1;for(auto axis:axes){mask|=1u<<axis;reduced*=input_values[0]->shape[axis];}dispatch.parameters[80]=mask;dispatch.parameters[81]=u32(reduced);dispatch.parameters[82]=u32(input_values[0]->element_offset);dispatch.parameters[83]=u32(input_values[0]->shape.size());dispatch.parameters[84]=u32(int_attribute(node,"keepdims").value_or(1));put_shape(dispatch.parameters,24,input_values[0]->shape);put_shape(dispatch.parameters,32,input_values[0]->strides);dispatch.values[0]=ref(0);finish(std::move(dispatch));return {};}
+        if(node.op_type=="MatMul"||node.op_type=="Gemm"){
+            auto a=input_values[0],b=input_values[1];
+            dispatch.parameters[3]=u32(a->shape.size());dispatch.parameters[4]=u32(b->shape.size());
+            put_shape(dispatch.parameters,24,a->shape);put_shape(dispatch.parameters,32,a->strides);
+            put_shape(dispatch.parameters,40,b->shape);put_shape(dispatch.parameters,48,b->strides);
+            bool ta=node.op_type=="Gemm"&&int_attribute(node,"transA").value_or(0);
+            bool tb=node.op_type=="Gemm"&&int_attribute(node,"transB").value_or(0);
+            auto ashape=a->shape,bshape=b->shape;
+            if(ashape.size()==1)ashape.insert(ashape.begin(),1);
+            if(bshape.size()==1)bshape.push_back(1);
+            const auto n_size=u32(bshape.back());
+            const auto m_size=u32(ashape[ashape.size()-2]);
+            dispatch.parameters[80]=n_size;dispatch.parameters[81]=m_size;
+            dispatch.parameters[82]=u32(ta?ashape[ashape.size()-2]:ashape.back());
+            dispatch.parameters[83]=u32(a->element_offset);dispatch.parameters[84]=u32(b->element_offset);
+            dispatch.parameters[85]=ta;dispatch.parameters[86]=tb;
+            dispatch.parameters[87]=f32(node.op_type=="Gemm"?float_attribute(node,"alpha",1):1);
+            dispatch.parameters[88]=f32(node.op_type=="Gemm"?float_attribute(node,"beta",1):0);
+            if(node.op_type=="Gemm"&&input_values.size()>2&&input_values[2]){
+                dispatch.parameters[89]=1;dispatch.parameters[90]=u32(input_values[2]->element_offset);
+                dispatch.parameters[91]=input_values[2]->shape.size()==1;
+                dispatch.parameters[92]=u32(input_values[2]->strides[0]);
+                dispatch.parameters[93]=u32(input_values[2]->shape.size()>1?input_values[2]->strides[1]:0);
+            }
+            const bool tiled=a->shape.size()>=2&&b->shape.size()>=2&&outputs[0].shape.size()>=2;
+            dispatch.kernel=tiled?Kernel::MatMulTiled:Kernel::MatMul;
+            if(tiled){
+                const auto batches=dispatch.count/(static_cast<uint64_t>(m_size)*n_size);
+                dispatch.workgroups={(n_size+63u)/64u,(m_size+63u)/64u,u32(batches)};
+                dispatch.label="MatMulTiled";
+            }
+            dispatch.values={ref(0),ref(1),ref(2),{}};finish(std::move(dispatch));return {};
+        }
+        if(node.op_type=="Conv"||node.op_type=="ConvTranspose"){
+            auto strides=ints_attribute(node,"strides");if(strides.empty())strides={1,1};
+            auto dil=ints_attribute(node,"dilations");if(dil.empty())dil={1,1};
+            auto pads=ints_attribute(node,"pads");if(pads.empty())pads={0,0,0,0};
+            const auto groups=u32(int_attribute(node,"group").value_or(1));
+            const auto ow=u32(outputs[0].shape[3]),oh=u32(outputs[0].shape[2]),oc=u32(outputs[0].shape[1]);
+            dispatch.parameters[80]=ow;dispatch.parameters[81]=oh;dispatch.parameters[82]=oc;
+            dispatch.parameters[83]=groups;dispatch.parameters[84]=u32(input_values[0]->shape[1]);
+            dispatch.parameters[85]=u32(input_values[1]->shape[2]);dispatch.parameters[86]=u32(input_values[1]->shape[3]);
+            dispatch.parameters[87]=u32(strides[0]);dispatch.parameters[88]=u32(strides[1]);
+            dispatch.parameters[89]=u32(dil[0]);dispatch.parameters[90]=u32(dil[1]);
+            dispatch.parameters[91]=u32(pads[0]);dispatch.parameters[92]=u32(pads[1]);
+            dispatch.parameters[93]=u32(input_values[0]->shape[2]);dispatch.parameters[94]=u32(input_values[0]->shape[3]);
+            dispatch.parameters[95]=input_values.size()>2&&input_values[2];
+            dispatch.parameters[96]=input_values.size()>2&&input_values[2]?u32(input_values[2]->element_offset):0;
+            dispatch.parameters[97]=input_values.size()>2&&input_values[2]?u32(input_values[2]->strides[0]):0;
+            dispatch.parameters[98]=u32(input_values[0]->element_offset);dispatch.parameters[99]=u32(input_values[1]->element_offset);
+            put_shape(dispatch.parameters,32,input_values[0]->strides);put_shape(dispatch.parameters,48,input_values[1]->strides);
+            const bool conv1x1=node.op_type=="Conv"&&groups==1&&dispatch.parameters[85]==1&&dispatch.parameters[86]==1&&
+                strides[0]==1&&strides[1]==1&&dil[0]==1&&dil[1]==1&&
+                std::ranges::all_of(pads,[](auto value){return value==0;})&&
+                input_values[0]->shape[2]==outputs[0].shape[2]&&input_values[0]->shape[3]==outputs[0].shape[3];
+            const bool tiled=groups==1;
+            if(node.op_type=="ConvTranspose"){
+                dispatch.kernel=tiled?Kernel::ConvTransposeTiled:Kernel::ConvTranspose;
+                if(tiled)dispatch.label="ConvTransposeTiled";
+            }else if(conv1x1){
+                dispatch.kernel=Kernel::Conv1x1;dispatch.label="Conv1x1";
+            }else if(tiled){
+                dispatch.kernel=Kernel::ConvTiled;dispatch.label="ConvTiled";
+            }else{
+                dispatch.kernel=Kernel::Conv;
+            }
+            if(tiled){
+                const auto spatial=ow*oh;
+                dispatch.workgroups={(spatial+63u)/64u,(oc+63u)/64u,u32(outputs[0].shape[0])};
+            }
+            dispatch.values={ref(0),ref(1),ref(2),{}};finish(std::move(dispatch));return {};
+        }
+        if(node.op_type.starts_with("Reduce")){dispatch.parameters[0]=node.op_type=="ReduceMean"?1:node.op_type=="ReduceL2"?2:0;auto axes=*axes_from(node,input_const,1,input_values[0]->shape.size(),true);uint32_t mask=0;uint64_t reduced=1;for(auto axis:axes){mask|=1u<<axis;reduced*=input_values[0]->shape[axis];}dispatch.kernel=reduced>=64?Kernel::Reduce:Kernel::ReduceSerial;dispatch.label+=reduced>=64?"WG":"Serial";dispatch.parameters[80]=mask;dispatch.parameters[81]=u32(reduced);dispatch.parameters[82]=u32(input_values[0]->element_offset);dispatch.parameters[83]=u32(input_values[0]->shape.size());dispatch.parameters[84]=u32(int_attribute(node,"keepdims").value_or(1));put_shape(dispatch.parameters,24,input_values[0]->shape);put_shape(dispatch.parameters,32,input_values[0]->strides);dispatch.values[0]=ref(0);finish(std::move(dispatch));return {};}
         if(node.op_type=="Softmax"){dispatch.kernel=Kernel::Softmax;auto axis=normalize_axis(int_attribute(node,"axis").value_or(-1),input_values[0]->shape.size());dispatch.count=element_count(input_values[0]->shape).value_or(0)/input_values[0]->shape[axis];dispatch.parameters[1]=u32(dispatch.count);dispatch.parameters[80]=u32(axis);dispatch.parameters[81]=u32(input_values[0]->shape[axis]);dispatch.parameters[82]=u32(input_values[0]->element_offset);put_shape(dispatch.parameters,24,input_values[0]->strides);put_shape(dispatch.parameters,32,outputs[0].strides);dispatch.values[0]=ref(0);finish(std::move(dispatch));return {};}
         return std::unexpected(execution_error("GPU lowering is not implemented",&node));
     }
@@ -752,14 +847,35 @@ namespace lfs::onnx_vulkan::detail {
         auto pool=runtime.create_descriptor_pool(static_cast<uint32_t>(dispatches.size()));if(!pool)return std::unexpected(pool.error());descriptor_pool=*pool;
         std::vector<VkDescriptorSet> sets;sets.reserve(dispatches.size());const auto resolve=[&](const DeviceRef& ref)->BufferBinding{if(ref.kind==RefKind::Weight)return ref.direct;if(ref.kind==RefKind::Arena)return {arena.buffer,ref.offset,ref.range};if(ref.kind==RefKind::Literal)return {literals.buffer,ref.offset,ref.range};return {dummy.buffer,0,4};};
         for(size_t i=0;i<dispatches.size();++i){auto set=runtime.allocate_descriptor_set(descriptor_pool);if(!set)return std::unexpected(set.error());sets.push_back(*set);std::array<BufferBinding,5> bindings;for(size_t b=0;b<4;++b)bindings[b]=resolve(dispatches[i].values[b]);bindings[4]={metadata.buffer,i*meta_stride,kParameterWords*4};runtime.update_descriptor_set(*set,bindings);}
+        if(runtime.profiling_enabled()&&!dispatches.empty()){
+            const VkQueryPoolCreateInfo query_info{.sType=VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,.queryType=VK_QUERY_TYPE_TIMESTAMP,.queryCount=u32(dispatches.size()*2)};
+            if(vkCreateQueryPool(runtime.device(),&query_info,nullptr,&query_pool)!=VK_SUCCESS)
+                return std::unexpected(execution_error("vkCreateQueryPool failed"));
+        }
         const VkCommandBufferAllocateInfo alloc{.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,.commandPool=runtime.command_pool(),.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY,.commandBufferCount=1};if(auto result=vkAllocateCommandBuffers(runtime.device(),&alloc,&command);result!=VK_SUCCESS)return std::unexpected(execution_error("vkAllocateCommandBuffers failed"));const VkCommandBufferBeginInfo begin{.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};if(vkBeginCommandBuffer(command,&begin)!=VK_SUCCESS)return std::unexpected(execution_error("vkBeginCommandBuffer failed"));
+        if(query_pool)vkCmdResetQueryPool(command,query_pool,0,u32(dispatches.size()*2));
         for(const auto& slot:input_slots){VkBufferCopy copy{slot.staging_offset,slot.device.offset,element_count(slot.shape).value_or(0)*4};vkCmdCopyBuffer(command,staging.buffer,arena.buffer,1,&copy);}VkMemoryBarrier barrier{.sType=VK_STRUCTURE_TYPE_MEMORY_BARRIER,.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,.dstAccessMask=VK_ACCESS_SHADER_READ_BIT};vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&barrier,0,nullptr,0,nullptr);
-        for(size_t i=0;i<dispatches.size();++i){runtime.bind_and_dispatch(command,dispatches[i].kernel,sets[i],dispatches[i].count);VkMemoryBarrier compute{.sType=VK_STRUCTURE_TYPE_MEMORY_BARRIER,.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT,.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT};vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&compute,0,nullptr,0,nullptr);}
+        for(size_t i=0;i<dispatches.size();++i){
+            auto& dispatch=dispatches[i];
+            if(dispatch.workgroups[0]==0&&(dispatch.kernel==Kernel::Reduce||dispatch.kernel==Kernel::Softmax)){
+                const auto groups_x=u32(std::min<uint64_t>(dispatch.count,runtime.maximum_group_count_x()));
+                const auto groups_y=u32((dispatch.count+groups_x-1)/groups_x);
+                if(groups_y>runtime.maximum_group_count_y())return std::unexpected(execution_error("workgroup grid exceeds Vulkan device limits"));
+                dispatch.workgroups={groups_x,groups_y,1};
+            }
+            if(dispatch.workgroups[0]!=0&&(dispatch.workgroups[0]>runtime.maximum_group_count_x()||
+                dispatch.workgroups[1]>runtime.maximum_group_count_y()||dispatch.workgroups[2]>runtime.maximum_group_count_z()))
+                return std::unexpected(execution_error("specialized workgroup grid exceeds Vulkan device limits"));
+            if(query_pool)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,query_pool,u32(i*2));
+            runtime.bind_and_dispatch(command,dispatch.kernel,sets[i],dispatch.count,dispatch.workgroups);
+            if(query_pool)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,query_pool,u32(i*2+1));
+            VkMemoryBarrier compute{.sType=VK_STRUCTURE_TYPE_MEMORY_BARRIER,.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT,.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT};vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&compute,0,nullptr,0,nullptr);
+        }
         barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;barrier.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,1,&barrier,0,nullptr,0,nullptr);for(const auto& slot:output_slots){auto& value=values.at(slot.name);if(value.strides!=contiguous_strides(value.shape)||value.element_offset!=0)return std::unexpected(execution_error("requested strided output requires materialization"));auto source=resolve(value.device);VkBufferCopy copy{source.offset,slot.readback_offset,slot.bytes};vkCmdCopyBuffer(command,source.buffer,readback.buffer,1,&copy);}if(vkEndCommandBuffer(command)!=VK_SUCCESS)return std::unexpected(execution_error("vkEndCommandBuffer failed"));return {};
     }
 
     ExecutionPlan::ExecutionPlan(VulkanRuntime& runtime) : runtime_(runtime) {}
-    ExecutionPlan::~ExecutionPlan(){if(!impl_)return;if(impl_->command)vkFreeCommandBuffers(runtime_.device(),runtime_.command_pool(),1,&impl_->command);if(impl_->descriptor_pool)vkDestroyDescriptorPool(runtime_.device(),impl_->descriptor_pool,nullptr);}
+    ExecutionPlan::~ExecutionPlan(){if(!impl_)return;if(impl_->command)vkFreeCommandBuffers(runtime_.device(),runtime_.command_pool(),1,&impl_->command);if(impl_->query_pool)vkDestroyQueryPool(runtime_.device(),impl_->query_pool,nullptr);if(impl_->descriptor_pool)vkDestroyDescriptorPool(runtime_.device(),impl_->descriptor_pool,nullptr);}
 
     std::expected<std::unique_ptr<ExecutionPlan>,Error> ExecutionPlan::create(const Model& model,const WeightStore& weights,VulkanRuntime& runtime,std::span<const NamedTensorView> inputs,std::span<const std::string_view> requested_outputs){auto plan=std::unique_ptr<ExecutionPlan>(new ExecutionPlan(runtime));plan->impl_=std::make_unique<Impl>();auto& p=*plan->impl_;p.model=&model;p.weights=&weights;p.alignment=runtime.storage_alignment();for(auto output:requested_outputs)p.requested.emplace(output);if(p.requested.empty())for(const auto& output:model.graph.outputs)p.requested.emplace(output.name);
         std::unordered_set<std::string> needed=p.requested;for(size_t i=model.graph.nodes.size();i-->0;){const auto& node=model.graph.nodes[i];bool live=false;for(const auto& output:node.outputs)live|=needed.contains(output);if(live){p.live_nodes.emplace(i);for(const auto& input:node.inputs)if(!input.empty())needed.emplace(input);for(const auto& attribute:node.attributes)if(const auto* branch=std::get_if<std::shared_ptr<Graph>>(&attribute.value);branch&&*branch){std::unordered_set<std::string> captures;collect_captures(**branch,captures);needed.insert(captures.begin(),captures.end());}}}
@@ -774,7 +890,65 @@ namespace lfs::onnx_vulkan::detail {
         }
         auto finalized=p.finalize(runtime);if(!finalized)return std::unexpected(finalized.error());return plan;}
 
-    std::expected<std::vector<NamedTensor>,Error> ExecutionPlan::run(std::span<const NamedTensorView> inputs){for(const auto& slot:impl_->input_slots){auto it=std::ranges::find(inputs,slot.name,&NamedTensorView::name);if(it==inputs.end()||!std::ranges::equal(it->tensor.shape,slot.shape)||it->tensor.type!=slot.type)return std::unexpected(Error{ErrorCode::InvalidInput,"input does not match cached execution plan: "+slot.name});std::memcpy(static_cast<std::byte*>(impl_->staging.mapped)+slot.staging_offset,it->tensor.bytes.data(),it->tensor.bytes.size());}const VkSubmitInfo submit{.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&impl_->command};auto status=vkQueueSubmit(runtime_.queue(),1,&submit,VK_NULL_HANDLE);if(status==VK_SUCCESS)status=vkQueueWaitIdle(runtime_.queue());if(status!=VK_SUCCESS)return std::unexpected(Error{ErrorCode::VulkanFailure,"Vulkan inference submission failed with VkResult "+std::to_string(status)});std::vector<NamedTensor> result;for(const auto& slot:impl_->output_slots){std::vector<std::byte> bytes(slot.bytes);std::memcpy(bytes.data(),static_cast<const std::byte*>(impl_->readback.mapped)+slot.readback_offset,slot.bytes);result.push_back({slot.name,Tensor(slot.type,slot.shape,std::move(bytes))});}return result;}
+    std::expected<std::vector<NamedTensor>,Error> ExecutionPlan::run(std::span<const NamedTensorView> inputs){
+        for(const auto& slot:impl_->input_slots){
+            auto it=std::ranges::find(inputs,slot.name,&NamedTensorView::name);
+            if(it==inputs.end()||!std::ranges::equal(it->tensor.shape,slot.shape)||it->tensor.type!=slot.type)
+                return std::unexpected(Error{ErrorCode::InvalidInput,"input does not match cached execution plan: "+slot.name});
+            std::memcpy(static_cast<std::byte*>(impl_->staging.mapped)+slot.staging_offset,it->tensor.bytes.data(),it->tensor.bytes.size());
+        }
+        const auto wall_start=std::chrono::steady_clock::now();
+        const VkSubmitInfo submit{.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&impl_->command};
+        auto status=vkQueueSubmit(runtime_.queue(),1,&submit,VK_NULL_HANDLE);
+        if(status==VK_SUCCESS)status=vkQueueWaitIdle(runtime_.queue());
+        const auto wall_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-wall_start).count();
+        if(status!=VK_SUCCESS)return std::unexpected(Error{ErrorCode::VulkanFailure,"Vulkan inference submission failed with VkResult "+std::to_string(status)});
+
+        if(impl_->query_pool){
+            std::vector<std::uint64_t> timestamps(impl_->dispatches.size()*2);
+            const auto query_status=vkGetQueryPoolResults(runtime_.device(),impl_->query_pool,0,
+                static_cast<std::uint32_t>(timestamps.size()),timestamps.size()*sizeof(std::uint64_t),timestamps.data(),
+                sizeof(std::uint64_t),VK_QUERY_RESULT_64_BIT|VK_QUERY_RESULT_WAIT_BIT);
+            if(query_status==VK_SUCCESS){
+                struct ProfileRow{std::string label;double milliseconds=0;std::size_t dispatches=0;};
+                std::unordered_map<std::string,ProfileRow> grouped;
+                std::vector<ProfileRow> individual;
+                individual.reserve(impl_->dispatches.size());
+                double gpu_ms=0.0;
+                const auto valid_bits=runtime_.timestamp_valid_bits();
+                const auto mask=valid_bits>=64?std::numeric_limits<std::uint64_t>::max():((std::uint64_t{1}<<valid_bits)-1);
+                for(std::size_t i=0;i<impl_->dispatches.size();++i){
+                    const auto ticks=(timestamps[i*2+1]-timestamps[i*2])&mask;
+                    const auto milliseconds=static_cast<double>(ticks)*runtime_.timestamp_period()/1.0e6;
+                    gpu_ms+=milliseconds;
+                    const auto& label=impl_->dispatches[i].label.empty()?std::string("internal"):impl_->dispatches[i].label;
+                    auto& row=grouped[label];row.label=label;row.milliseconds+=milliseconds;++row.dispatches;
+                    individual.push_back({label,milliseconds,1});
+                }
+                LOG_PERF("ONNX Vulkan inference: gpu_dispatch_ms={:.3f} submit_wait_ms={:.3f} dispatches={}",
+                         gpu_ms,wall_ms,impl_->dispatches.size());
+                if(!impl_->profile_details_logged){
+                    std::vector<ProfileRow> rows;rows.reserve(grouped.size());
+                    for(auto& [label,row]:grouped)rows.push_back(std::move(row));
+                    std::ranges::sort(rows,std::greater<>{},&ProfileRow::milliseconds);
+                    for(std::size_t i=0;i<std::min<std::size_t>(rows.size(),12);++i)
+                        LOG_PERF("ONNX Vulkan op rank {}: {} {:.3f}ms across {} dispatch(es)",
+                                 i+1,rows[i].label,rows[i].milliseconds,rows[i].dispatches);
+                    std::ranges::sort(individual,std::greater<>{},&ProfileRow::milliseconds);
+                    for(std::size_t i=0;i<std::min<std::size_t>(individual.size(),12);++i)
+                        LOG_PERF("ONNX Vulkan dispatch rank {}: {} {:.3f}ms",i+1,individual[i].label,individual[i].milliseconds);
+                    impl_->profile_details_logged=true;
+                }
+            }
+        }
+        std::vector<NamedTensor> result;
+        for(const auto& slot:impl_->output_slots){
+            std::vector<std::byte> bytes(slot.bytes);
+            std::memcpy(bytes.data(),static_cast<const std::byte*>(impl_->readback.mapped)+slot.readback_offset,slot.bytes);
+            result.push_back({slot.name,Tensor(slot.type,slot.shape,std::move(bytes))});
+        }
+        return result;
+    }
 
     std::string plan_signature(std::span<const NamedTensorView> inputs,std::span<const std::string_view> requested_outputs){std::string result;for(const auto& input:inputs){result.append(input.name).push_back(':');result.append(std::to_string(static_cast<int>(input.tensor.type))).push_back('[');for(auto dim:input.tensor.shape)result.append(std::to_string(dim)).push_back(',');result.push_back(']');if(input.tensor.type!=ElementType::Float32)result.append(reinterpret_cast<const char*>(input.tensor.bytes.data()),input.tensor.bytes.size());result.push_back(';');}result.push_back('|');for(auto output:requested_outputs)result.append(output).push_back(',');return result;}
 
