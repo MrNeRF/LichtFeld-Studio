@@ -114,7 +114,7 @@ class PreferencesPanel(Panel):
         )
         model.bind_func(
             "scene_upscaler_has_quality",
-            lambda: self._scene_upscaler() in {"temporal", "nvidia-dlss"},
+            lambda: self._scene_upscaler() in {"temporal", "nvidia-dlss", "amd-fsr3"},
         )
         model.bind("temporal_quality_idx", self._temporal_quality_index, self._set_temporal_quality_index)
         model.bind("language_idx", self._language_index, self._set_language_index)
@@ -371,6 +371,12 @@ class PreferencesPanel(Panel):
 
     def _recommended_upscaler_scale(self, backend=None):
         backend = backend or self._scene_upscaler()
+        if backend == "amd-fsr3":
+            return {
+                "performance": 0.5,
+                "balanced": 1.0 / 1.7,
+                "quality": 1.0 / 1.5,
+            }.get(self._temporal_quality(), 1.0 / 1.7)
         if backend != "nvidia-dlss":
             return 0.0
         scales = self._scene_upscaler_recommended_scales.get(backend, ())

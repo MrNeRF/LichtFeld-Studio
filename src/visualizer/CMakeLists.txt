@@ -286,6 +286,18 @@ if(LFS_NVIDIA_DLSS_AVAILABLE)
         LFS_NVIDIA_DLSS_PROJECT_ID="${LFS_NVIDIA_DLSS_PROJECT_ID}")
 endif()
 
+if(LFS_AMD_FSR3_AVAILABLE)
+    target_sources(lfs_visualizer PRIVATE
+        rendering/amd_fsr3_vulkan_adapter.cpp)
+    target_link_libraries(lfs_visualizer PRIVATE
+        AMD::FidelityFXFsr3Upscaler
+        AMD::FidelityFXVkBackend)
+    target_compile_definitions(lfs_visualizer PRIVATE LFS_HAS_AMD_FSR3=1)
+    if(LFS_AMD_FSR3_BUILD_TARGET)
+        add_dependencies(lfs_visualizer "${LFS_AMD_FSR3_BUILD_TARGET}")
+    endif()
+endif()
+
 # The CPU chunk decoders round multiplies and adds separately; FMA contraction
 # in the dequant kernel would break CPU/GPU bit-parity (guarded by gtest).
 set_source_files_properties(rendering/lod_page_dequant_cuda.cu PROPERTIES

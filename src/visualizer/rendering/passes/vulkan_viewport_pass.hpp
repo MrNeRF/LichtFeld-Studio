@@ -245,6 +245,10 @@ namespace lfs::vis {
         std::uint64_t scene_identity = 0;
         std::uint64_t scene_temporal_reset_generation = 0;
         glm::vec2 scene_jitter_pixels{0.0f};
+        float scene_camera_near = 0.1f;
+        float scene_camera_far = 1000.0f;
+        float scene_camera_vertical_fov_radians = 1.0f;
+        bool scene_camera_orthographic = false;
         // Dormant unless the effective backend explicitly requests motion vectors.
         // The depth view is filled from depth_blit after prepare when omitted here.
         VulkanSceneMotionParams scene_motion;

@@ -8,6 +8,7 @@
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/temporal_frame_tracker.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
@@ -43,6 +44,10 @@ namespace lfs::vis {
         bool motion_includes_jitter = false;
         float exposure = 1.0f;
         float frame_time_seconds = 0.0f;
+        float camera_near = 0.0f;
+        float camera_far = 0.0f;
+        float camera_vertical_fov_radians = 0.0f;
+        float view_space_to_meters = 1.0f;
         std::uint64_t sequence = 0;
         TemporalResetReason reset_reasons = TemporalResetReason::None;
         SceneTemporalQuality quality = SceneTemporalQuality::Balanced;
@@ -50,13 +55,23 @@ namespace lfs::vis {
         [[nodiscard]] constexpr bool valid(
             const SceneUpscalerRequirements requirements) const {
             if (!color.valid() || output_extent.x <= 0 || output_extent.y <= 0 ||
-                frame_time_seconds < 0.0f || exposure < 0.0f)
+                !std::isfinite(frame_time_seconds) || frame_time_seconds < 0.0f ||
+                !std::isfinite(exposure) || exposure <= 0.0f)
                 return false;
             if (requirements.depth && !depth.valid())
                 return false;
             if (requirements.motion_vectors && !motion.valid())
                 return false;
             return true;
+        }
+
+        [[nodiscard]] bool validCamera() const {
+            return std::isfinite(camera_near) && std::isfinite(camera_far) &&
+                   std::isfinite(camera_vertical_fov_radians) &&
+                   std::isfinite(view_space_to_meters) && camera_near > 0.0f &&
+                   camera_far > camera_near && camera_vertical_fov_radians > 0.0f &&
+                   camera_vertical_fov_radians < 3.14159265358979323846f &&
+                   view_space_to_meters > 0.0f;
         }
     };
 

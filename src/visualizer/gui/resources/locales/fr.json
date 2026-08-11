@@ -784,6 +784,7 @@
     "scene_upscaler_spatial": "Spatial",
     "scene_upscaler_temporal": "Temporel (expérimental)",
     "scene_upscaler_nvidia_dlss": "NVIDIA DLSS",
+    "scene_upscaler_amd_fsr3": "AMD FidelityFX FSR 3.1",
     "temporal_quality": "Qualité temporelle",
     "temporal_quality_performance": "Performances",
     "temporal_quality_balanced": "Équilibrée",

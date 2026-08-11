@@ -36,6 +36,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -233,6 +234,9 @@ namespace lfs::vis {
         VkFormat color_format = VK_FORMAT_UNDEFINED;
         VkFormat depth_stencil_format = VK_FORMAT_UNDEFINED;
         std::size_t frames_in_flight = 1;
+        std::array<std::chrono::steady_clock::time_point,
+                   static_cast<std::size_t>(TemporalViewId::Count)>
+            optional_last_dispatch{};
 
         VkBuffer quad_buffer = VK_NULL_HANDLE;
         VmaAllocation quad_allocation = VK_NULL_HANDLE;
@@ -2647,6 +2651,16 @@ namespace lfs::vis {
                                                  const VulkanSceneMotionParams& motion_params,
                                                  const std::size_t motion_slot,
                                                  const glm::ivec2 output_extent) {
+                    const auto now = std::chrono::steady_clock::now();
+                    auto& previous_dispatch = optional_last_dispatch[static_cast<std::size_t>(view)];
+                    const float frame_time_seconds =
+                        previous_dispatch.time_since_epoch().count() == 0
+                            ? 1.0f / 60.0f
+                            : std::clamp(
+                                  std::chrono::duration<float>(now - previous_dispatch).count(),
+                                  1.0f / 240.0f,
+                                  0.1f);
+                    previous_dispatch = now;
                     VulkanSceneUpscalerResource motion_resource{};
                     if (requirements.motion_vectors) {
                         if (!scene_motion_pass.record(command_buffer, motion_params, motion_slot))
@@ -2680,6 +2694,24 @@ namespace lfs::vis {
                             requirements.motion_vectors
                                 ? scene_motion_pass.contract(motion_slot).includes_jitter
                                 : false,
+                        .frame_time_seconds = frame_time_seconds,
+                        .camera_near = view == TemporalViewId::Main
+                                           ? params.scene_camera_near
+                                           : params.mesh_panels[view == TemporalViewId::SplitLeft
+                                                                    ? 0
+                                                                    : 1]
+                                                 .camera_near,
+                        .camera_far = view == TemporalViewId::Main
+                                          ? params.scene_camera_far
+                                          : params.mesh_panels[view == TemporalViewId::SplitLeft
+                                                                   ? 0
+                                                                   : 1]
+                                                .camera_far,
+                        .camera_vertical_fov_radians =
+                            view == TemporalViewId::Main
+                                ? params.scene_camera_vertical_fov_radians
+                                : params.mesh_panels[view == TemporalViewId::SplitLeft ? 0 : 1]
+                                      .camera_vertical_fov_radians,
                         .sequence = color.generation,
                         .reset_reasons = reset_reasons,
                         .quality = params.scene_temporal_quality,

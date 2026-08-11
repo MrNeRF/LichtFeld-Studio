@@ -1001,6 +1001,11 @@ namespace lfs::vis {
             }
 
             const auto frame_view = frame_ctx.makeFrameView();
+            frame.camera_near = frame_view.near_plane;
+            frame.camera_far = frame_view.far_plane;
+            frame.camera_vertical_fov_radians =
+                lfs::rendering::focalLengthToVFovRad(frame_view.focal_length_mm);
+            frame.camera_orthographic = frame_view.orthographic;
             frame.environment.enabled = environmentBackgroundEnabled(settings);
             frame.environment.map_path = settings.environment_map_path;
             frame.environment.camera_to_world = vp_data.rotation;
@@ -2146,11 +2151,18 @@ namespace lfs::vis {
                         const auto& layout = (*layouts)[index];
                         const glm::ivec2 panel_size{std::max(layout.width, 1), render_size.y};
                         const auto panel_view = frame_ctx.makeViewportData(viewport, panel_size);
+                        const auto panel_frame_view = frame_ctx.makeFrameView(viewport, panel_size);
                         frame.panels.push_back(lfs::vis::VulkanMeshViewportPanel{
                             .start_position = layout.start_position,
                             .end_position = layout.end_position,
                             .view_projection = panel_view.getProjectionMatrix() * panel_view.getViewMatrix(),
-                            .camera_position = panel_view.translation});
+                            .camera_position = panel_view.translation,
+                            .camera_near = panel_frame_view.near_plane,
+                            .camera_far = panel_frame_view.far_plane,
+                            .camera_vertical_fov_radians =
+                                lfs::rendering::focalLengthToVFovRad(
+                                    panel_frame_view.focal_length_mm),
+                            .orthographic = panel_frame_view.orthographic});
                     };
                 append_panel(context.viewport, 0);
                 append_panel(split_view_service_.secondaryViewport(), 1);

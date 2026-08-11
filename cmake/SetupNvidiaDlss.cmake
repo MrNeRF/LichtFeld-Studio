@@ -14,6 +14,7 @@ set(LFS_NVIDIA_DLSS_ROOT "" CACHE PATH
 set(LFS_NVIDIA_DLSS_PROJECT_ID
     "7fc73d74-f126-4146-b028-4bc1026e5c3b"
     CACHE STRING "Stable NGX project ID used by LichtFeld Studio")
+set(_lfs_dlss_download_url "https://developer.nvidia.com/rtx/dlss/get-started")
 
 if(NOT LFS_ENABLE_NVIDIA_DLSS)
     set(LFS_NVIDIA_DLSS_AVAILABLE OFF CACHE INTERNAL
@@ -25,7 +26,8 @@ if(NOT LFS_NVIDIA_DLSS_ROOT)
     message(FATAL_ERROR
         "LFS_ENABLE_NVIDIA_DLSS=ON requires LFS_NVIDIA_DLSS_ROOT to point to an "
         "SDK obtained and accepted by the person compiling LichtFeld. The SDK is "
-        "not downloaded or distributed by this project.")
+        "not downloaded or distributed by this project. Official download: "
+        "${_lfs_dlss_download_url}")
 endif()
 if(NOT LFS_NVIDIA_DLSS_PROJECT_ID MATCHES
         "^[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]$")
@@ -43,7 +45,8 @@ set(_lfs_dlss_include "${_lfs_dlss_root}/include")
 foreach(_header IN ITEMS nvsdk_ngx.h nvsdk_ngx_vk.h nvsdk_ngx_helpers_vk.h)
     if(NOT EXISTS "${_lfs_dlss_include}/${_header}")
         message(FATAL_ERROR
-            "NVIDIA DLSS SDK at '${_lfs_dlss_root}' is missing include/${_header}")
+            "NVIDIA DLSS SDK at '${_lfs_dlss_root}' is missing include/${_header}. "
+            "Official download: ${_lfs_dlss_download_url}")
     endif()
 endforeach()
 
@@ -73,11 +76,12 @@ endif()
 if(NOT EXISTS "${_lfs_dlss_link_library}")
     message(FATAL_ERROR
         "NVIDIA DLSS SDK at '${_lfs_dlss_root}' is missing its platform link library: "
-        "${_lfs_dlss_link_library}")
+        "${_lfs_dlss_link_library}. Official download: ${_lfs_dlss_download_url}")
 endif()
 if(NOT _lfs_dlss_runtime OR NOT EXISTS "${_lfs_dlss_runtime}")
     message(FATAL_ERROR
-        "NVIDIA DLSS SDK at '${_lfs_dlss_root}' is missing its release runtime library")
+        "NVIDIA DLSS SDK at '${_lfs_dlss_root}' is missing its release runtime library. "
+        "Official download: ${_lfs_dlss_download_url}")
 endif()
 
 add_library(NVIDIA::NGX STATIC IMPORTED GLOBAL)

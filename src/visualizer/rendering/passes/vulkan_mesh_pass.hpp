@@ -59,6 +59,10 @@ namespace lfs::vis {
         float end_position = 1.0f;
         glm::mat4 view_projection{1.0f};
         glm::vec3 camera_position{0.0f};
+        float camera_near = 0.1f;
+        float camera_far = 1000.0f;
+        float camera_vertical_fov_radians = 1.0f;
+        bool orthographic = false;
     };
 
     class LFS_VIS_API VulkanMeshPass {

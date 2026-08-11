@@ -36,6 +36,9 @@
 #ifdef LFS_HAS_NVIDIA_DLSS
 #include "rendering/nvidia_dlss_vulkan_adapter.hpp"
 #endif
+#ifdef LFS_HAS_AMD_FSR3
+#include "rendering/amd_fsr3_vulkan_adapter.hpp"
+#endif
 #include "rendering/scene_upscaler_registry.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
@@ -1403,6 +1406,9 @@ namespace lfs::vis {
 #ifdef LFS_HAS_NVIDIA_DLSS
             if (nvidiaDlssVulkanBootstrapReady())
                 registerNvidiaDlssVulkanAdapter();
+#endif
+#ifdef LFS_HAS_AMD_FSR3
+            registerAmdFsr3VulkanAdapter();
 #endif
 
             window_manager_->pollEvents();

@@ -437,6 +437,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SCENE_UPSCALER_NATIVE = "preferences.scene_upscaler_native";
         inline constexpr const char* SCENE_UPSCALER_SPATIAL = "preferences.scene_upscaler_spatial";
         inline constexpr const char* SCENE_UPSCALER_TEMPORAL = "preferences.scene_upscaler_temporal";
+        inline constexpr const char* SCENE_UPSCALER_AMD_FSR3 =
+            "preferences.scene_upscaler_amd_fsr3";
         inline constexpr const char* TEMPORAL_QUALITY = "preferences.temporal_quality";
         inline constexpr const char* TEMPORAL_QUALITY_PERFORMANCE =
             "preferences.temporal_quality_performance";

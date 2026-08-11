@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "visualizer/rendering/amd_fsr3_contract.hpp"
 #include "visualizer/rendering/scene_upscaler_registry.hpp"
 #include "visualizer/rendering/vulkan_scene_upscaler_adapter.hpp"
 #include "visualizer/rendering/vulkan_scene_upscaler_controller.hpp"
@@ -128,10 +129,12 @@ namespace lfs::vis {
         }
 
         VulkanSceneUpscalerResource testResource(const std::uintptr_t base,
-                                                 const glm::ivec2 extent) {
+                                                 const glm::ivec2 extent,
+                                                 const VkFormat format = VK_FORMAT_UNDEFINED) {
             return {
                 .image = reinterpret_cast<VkImage>(base),
                 .view = reinterpret_cast<VkImageView>(base + 1),
+                .format = format,
                 .layout = VK_IMAGE_LAYOUT_GENERAL,
                 .valid_extent = extent,
                 .allocation_extent = extent,
@@ -444,6 +447,42 @@ namespace lfs::vis {
         };
         EXPECT_TRUE(output.valid({1920, 1080}));
         EXPECT_FALSE(output.valid({1280, 720}));
+    }
+
+    TEST(AmdFsr3Contract, QualityModesUseTheOfficialPerDimensionRatios) {
+        EXPECT_FLOAT_EQ(
+            amdFsr3RecommendedInputScale(SceneTemporalQuality::Performance), 0.5f);
+        EXPECT_FLOAT_EQ(
+            amdFsr3RecommendedInputScale(SceneTemporalQuality::Balanced), 1.0f / 1.7f);
+        EXPECT_FLOAT_EQ(
+            amdFsr3RecommendedInputScale(SceneTemporalQuality::Quality), 1.0f / 1.5f);
+    }
+
+    TEST(AmdFsr3Contract, RequiresTemporalResourcesCameraAndPositiveFrameTime) {
+        const glm::ivec2 input_extent{1280, 720};
+        VulkanSceneUpscalerDispatch dispatch{
+            .color = testResource(0x1000, input_extent, VK_FORMAT_R8G8B8A8_UNORM),
+            .depth = testResource(0x2000, input_extent, VK_FORMAT_R32_SFLOAT),
+            .motion = testResource(0x3000, input_extent, VK_FORMAT_R16G16_SFLOAT),
+            .output_extent = {1920, 1080},
+            .frame_time_seconds = 1.0f / 60.0f,
+            .camera_near = 0.1f,
+            .camera_far = 1000.0f,
+            .camera_vertical_fov_radians = 1.0f,
+        };
+        EXPECT_TRUE(validAmdFsr3Dispatch(dispatch));
+
+        dispatch.frame_time_seconds = 0.0f;
+        EXPECT_FALSE(validAmdFsr3Dispatch(dispatch));
+        dispatch.frame_time_seconds = 1.0f / 60.0f;
+        dispatch.camera_vertical_fov_radians = 0.0f;
+        EXPECT_FALSE(validAmdFsr3Dispatch(dispatch));
+        dispatch.camera_vertical_fov_radians = 1.0f;
+        dispatch.motion.valid_extent.x -= 1;
+        EXPECT_FALSE(validAmdFsr3Dispatch(dispatch));
+        dispatch.motion.valid_extent.x += 1;
+        dispatch.depth.format = VK_FORMAT_D32_SFLOAT;
+        EXPECT_FALSE(validAmdFsr3Dispatch(dispatch));
     }
 
     TEST(VulkanSceneUpscalerController, LazilyOwnsAndReusesTheSelectedAdapter) {
