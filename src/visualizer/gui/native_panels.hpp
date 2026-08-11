@@ -84,7 +84,7 @@ namespace lfs::vis::gui::native_panels {
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override {
-            return {.direct = true, .external_floating_shadow = false};
+            return {.direct = true};
         }
         PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
                                              const PanelDrawContext& ctx) override;

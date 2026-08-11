@@ -4772,7 +4772,7 @@ namespace lfs::vis::gui {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.legacy_side_panel_preload", 0.25);
             reg.render_panels({
                                   .target = PanelRenderTarget::for_space(PanelSpace::SidePanel),
-                                  .preload_only = true,
+                                  .mode = PanelRenderMode::StandardPreload,
                               },
                               draw_ctx);
         }
@@ -6698,8 +6698,7 @@ namespace lfs::vis::gui {
 
         reg.render_panels({
                               .target = PanelRenderTarget::for_panel(active_tab),
-                              .direct = true,
-                              .preload_only = true,
+                              .mode = PanelRenderMode::DirectPreload,
                               .width = content_w,
                               .height = kPreloadMaxHeight,
                               .clip_y_min = clip_y_min,
@@ -6709,8 +6708,7 @@ namespace lfs::vis::gui {
                           draw_ctx);
         reg.render_panels({
                               .target = PanelRenderTarget::for_children(active_tab),
-                              .direct = true,
-                              .preload_only = true,
+                              .mode = PanelRenderMode::DirectPreload,
                               .width = content_w,
                               .height = kPreloadMaxHeight,
                               .clip_y_min = clip_y_min,
