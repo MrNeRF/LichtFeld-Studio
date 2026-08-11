@@ -419,6 +419,7 @@ TEST_F(TensorStressTest, ConcurrentOperations) {
 
     for (int t = 0; t < num_threads; ++t) {
         threads.emplace_back([&custom_results, &torch_results, t, ops_per_thread]() {
+            ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
             auto custom_tensor = Tensor::full({50, 50}, static_cast<float>(t), Device::CUDA);
             auto torch_tensor = torch::full({50, 50}, static_cast<float>(t),
                                             torch::TensorOptions().device(torch::kCUDA));
