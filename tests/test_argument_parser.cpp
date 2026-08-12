@@ -41,7 +41,7 @@ TEST(ArgumentParserTest,
 
     const char* project_argv[] = {
         "LichtFeld-Studio",
-        "--project",
+        "-v",
         project_text.c_str(),
     };
     auto project_parsed =
@@ -76,8 +76,7 @@ TEST(ArgumentParserTest,
         (*resume_parsed)->resume_checkpoint);
 }
 
-TEST(ArgumentParserTest,
-     HeadlessProjectSelectsEmbeddedCheckpointResumeFlow) {
+TEST(ArgumentParserTest, HeadlessResumeSelectsEmbeddedCheckpointFlow) {
     const auto directory =
         make_test_path(
             "lfs_arg_parser_headless_project");
@@ -89,7 +88,7 @@ TEST(ArgumentParserTest,
     const char* argv[] = {
         "LichtFeld-Studio",
         "--headless",
-        "--project",
+        "--resume",
         project_text.c_str(),
     };
 
@@ -103,8 +102,7 @@ TEST(ArgumentParserTest,
     EXPECT_FALSE((*parsed)->project_path);
 }
 
-TEST(ArgumentParserTest,
-     RecoverRequiresHeadlessLichtProjectAndSetsOptIn) {
+TEST(ArgumentParserTest, RemovedProjectAndRecoverFlagsAreUnknown) {
     const auto directory =
         make_test_path(
             "lfs_arg_parser_recover_project");
@@ -113,40 +111,41 @@ TEST(ArgumentParserTest,
         "session.licht";
     std::ofstream(project).put('\n');
     const auto project_text = project.string();
-    const char* accepted[] = {
+    const char* project_flag[] = {
         "LichtFeld-Studio",
-        "--headless",
         "--project",
         project_text.c_str(),
-        "--recover",
     };
-    auto parsed =
+    auto project_parsed =
         lfs::core::args::parse_args_and_params(
             static_cast<int>(
-                std::size(accepted)),
-            accepted);
-    ASSERT_TRUE(parsed)
-        << parsed.error();
-    EXPECT_TRUE((*parsed)->recover_project);
-    EXPECT_EQ(
-        (*parsed)->resume_project, project);
+                std::size(project_flag)),
+            project_flag);
+    EXPECT_FALSE(project_parsed);
 
-    const char* rejected[] = {
+    const char* recover_flag[] = {
         "LichtFeld-Studio",
-        "--project",
-        project_text.c_str(),
         "--recover",
     };
-    auto invalid =
+    auto recover_parsed =
         lfs::core::args::parse_args_and_params(
             static_cast<int>(
-                std::size(rejected)),
-            rejected);
-    ASSERT_FALSE(invalid);
-    EXPECT_NE(
-        invalid.error().find(
-            "--recover requires --headless"),
-        std::string::npos);
+                std::size(recover_flag)),
+            recover_flag);
+    EXPECT_FALSE(recover_parsed);
+}
+
+TEST(ArgumentParserTest, GuiViewProjectExtensionIsCaseInsensitive) {
+    const auto directory = make_test_path("lfs_arg_parser_view_project");
+    const auto project = std::filesystem::path(directory) / "session.LICHT";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    const char* argv[] = {"LichtFeld-Studio", "-v", project_text.c_str()};
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ((*parsed)->project_path, project);
+    EXPECT_TRUE((*parsed)->view_paths.empty());
 }
 
 TEST(ArgumentParserMetadataTest, OptimizationFlagBindingsResolveWithCompatibleTypes) {

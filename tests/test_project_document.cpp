@@ -2826,7 +2826,7 @@ namespace {
         EXPECT_EQ(offered->disposition,
                   RecoveryDisposition::Offer);
 
-        // This is the headless-without---recover policy: open the durable
+        // This low-level document test opens the durable
         // master and leave the valid offer untouched.
         auto opened_master = require_result_ptr(ProjectDocument::open(master));
         EXPECT_TRUE(fs::is_regular_file(sidecar));

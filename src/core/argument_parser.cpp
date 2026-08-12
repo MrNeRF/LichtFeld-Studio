@@ -303,8 +303,8 @@ namespace {
                 "\n"
                 "EXAMPLES:\n"
                 "lichtfeld-studio -d ./data -o ./output\n"
-                "lichtfeld-studio --project session.licht\n"
-                "lichtfeld-studio --headless --project session.licht --recover\n"
+                "lichtfeld-studio -v session.licht\n"
+                "lichtfeld-studio --headless --resume session.licht\n"
                 "lichtfeld-studio -d ./data -o ./output --save-project-at-iter 7000\n"
                 "lichtfeld-studio --resume checkpoint.resume\n"
                 "lichtfeld-studio --render-camera-path path.json --render-load model.ply --render-output out.mp4\n"
@@ -325,9 +325,7 @@ namespace {
             ::args::HelpFlag help(mode_group, "help", "Display help menu", {'h', "help"});
             ::args::Flag version(mode_group, "version", "Display version information", {'V', "version"});
             ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
-            ::args::ValueFlag<std::string> project_file(mode_group, "path", "Open a .licht project", {"project"});
             ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from a .resume checkpoint or .licht project", {"resume"});
-            ::args::Flag recover_project(mode_group, "recover", "Headless: restore the fresh autosave sidecar bound to the .licht master", {"recover"});
             ::args::ValueFlag<std::string> render_camera_path(mode_group, "path", "Render a JSON camera-keyframe path to video, headless (no GUI/window). Requires --render-load and --render-output; see RENDER PATH options.", {"render-camera-path"});
             ::args::CompletionFlag completion(parser, {"complete"});
 
@@ -653,6 +651,19 @@ namespace {
                         }
                         LOG_DEBUG("Found {} view files in directory", params.view_paths.size());
                     } else {
+                        auto extension = view_path.extension().string();
+                        std::ranges::transform(
+                            extension, extension.begin(),
+                            [](const unsigned char character) {
+                                return static_cast<char>(
+                                    std::tolower(character));
+                            });
+                        if (extension == ".licht") {
+                            params.project_path = view_path;
+                            return std::make_tuple(
+                                ParseResult::Success,
+                                std::function<void()>{});
+                        }
                         if (!is_supported(view_path)) {
                             return std::unexpected(std::format(
                                 "Unsupported file format: {}", lfs::core::path_to_utf8(view_path)));
@@ -724,60 +735,28 @@ namespace {
                 return std::make_tuple(ParseResult::Success, std::function<void()>{});
             }
 
-            if (project_file) {
-                const auto project_path = lfs::core::utf8_to_path(
-                    ::args::get(project_file));
-                if (!std::filesystem::exists(project_path)) {
-                    return std::unexpected(std::format(
-                        "Project file does not exist: {}",
-                        lfs::core::path_to_utf8(project_path)));
-                }
-                auto extension = project_path.extension().string();
-                std::ranges::transform(
-                    extension, extension.begin(),
-                    [](const unsigned char character) {
-                        return static_cast<char>(
-                            std::tolower(character));
-                    });
-                if (extension != ".licht") {
-                    return std::unexpected(
-                        "--project requires a .licht file");
-                }
-                if (headless) {
-                    params.resume_project = project_path;
-                } else {
-                    params.project_path = project_path;
-                }
-            }
-
             // Check for resume mode
             if (resume_checkpoint) {
-                if (project_file) {
-                    return std::unexpected(
-                        "--project and --resume are mutually exclusive");
-                }
                 const auto ckpt_path_str = ::args::get(resume_checkpoint);
                 if (!ckpt_path_str.empty()) {
                     const auto ckpt_path = lfs::core::utf8_to_path(ckpt_path_str);
                     if (!std::filesystem::exists(ckpt_path)) {
                         return std::unexpected(std::format("Checkpoint file does not exist: {}", ckpt_path_str));
                     }
-                    if (ckpt_path.extension() == ".licht") {
+                    auto extension = ckpt_path.extension().string();
+                    std::ranges::transform(
+                        extension, extension.begin(),
+                        [](const unsigned char character) {
+                            return static_cast<char>(
+                                std::tolower(character));
+                        });
+                    if (extension == ".licht") {
                         params.resume_project = ckpt_path;
                     } else {
                         params.resume_checkpoint = ckpt_path;
                     }
                 }
             }
-            params.recover_project =
-                static_cast<bool>(recover_project);
-            if (params.recover_project &&
-                (!headless ||
-                 !params.resume_project)) {
-                return std::unexpected(
-                    "--recover requires --headless and a .licht --project/--resume source");
-            }
-
             if (init_path) {
                 const auto path_str = ::args::get(init_path);
                 params.init_path = path_str;
@@ -814,11 +793,11 @@ namespace {
                 params.resume_checkpoint.has_value() ||
                 params.resume_project.has_value();
 
-            // If headless mode, require data path, project, or resume
+            // If headless mode, require data path or resume
             // (--resume accepts both .resume checkpoints and .licht projects).
             if (headless && !has_data_path && !has_resume) {
                 return std::unexpected(std::format(
-                    "ERROR: Headless mode requires --data-path, --project, or --resume "
+                    "ERROR: Headless mode requires --data-path or --resume "
                     "(--resume file.licht counts as a project source)\n\n{}",
                     parser.Help()));
             }

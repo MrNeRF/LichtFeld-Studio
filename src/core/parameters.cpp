@@ -8,6 +8,7 @@
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include <any>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -388,7 +389,7 @@ namespace lfs::core {
                 if (resume_checkpoint.has_value() ||
                     resume_project.has_value() ||
                     project_path.has_value()) {
-                    return "--add-splat cannot be used together with --resume or --project";
+                    return "--add-splat cannot be used together with --resume";
                 }
                 if (!add_splat_freeze.empty() && add_splat_freeze.size() != add_splat_paths.size()) {
                     return "--add-splat freeze metadata is inconsistent";
@@ -408,16 +409,19 @@ namespace lfs::core {
             }
             if (project_path &&
                 (resume_checkpoint || resume_project)) {
-                return "--project and --resume are mutually exclusive";
+                return "A project path and --resume are mutually exclusive";
             }
-            if (project_path &&
-                project_path->extension() != ".licht") {
-                return "--project must reference a .licht file";
-            }
-            if (recover_project &&
-                (!optimization.headless ||
-                 !resume_project)) {
-                return "--recover requires --headless and a .licht --project/--resume source";
+            if (project_path) {
+                auto extension = project_path->extension().string();
+                std::ranges::transform(
+                    extension, extension.begin(),
+                    [](const unsigned char character) {
+                        return static_cast<char>(
+                            std::tolower(character));
+                    });
+                if (extension != ".licht") {
+                    return "The project path must reference a .licht file";
+                }
             }
             if (save_project_at_iteration && *save_project_at_iteration == 0) {
                 return "--save-project-at-iter must be positive";

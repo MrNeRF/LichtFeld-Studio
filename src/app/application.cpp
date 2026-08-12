@@ -182,18 +182,9 @@ namespace lfs::app {
                     "Multiple valid autosave candidates have the same highest sequence",
                     LFS_SOURCE_SITE_CURRENT());
             }
-            if (cli_params.recover_project) {
-                if (recovery->disposition !=
-                        io::project::
-                            RecoveryDisposition::
-                                Offer ||
-                    !recovery->selected_path) {
-                    return training_project_error(
-                        lfs::ErrorCode::
-                            FailedPrecondition,
-                        "No complete autosave is bound to the current master head",
-                        LFS_SOURCE_SITE_CURRENT());
-                }
+            if (recovery->disposition ==
+                    io::project::RecoveryDisposition::Offer &&
+                recovery->selected_path) {
                 auto session =
                     io::project::
                         begin_recovery_session(
@@ -228,15 +219,9 @@ namespace lfs::app {
                 recovery_session.emplace(
                     std::move(*session));
                 LOG_INFO(
-                    "Recovering autosave sequence {} for headless project open",
+                    "Automatically recovering autosave sequence {} for headless project open",
                     recovery
                         ->autosave_sequence);
-            } else if (
-                recovery->disposition ==
-                io::project::RecoveryDisposition::
-                    Offer) {
-                LOG_WARN(
-                    "A fresh autosave is available but headless recovery was not requested; opening the durable master (pass --recover to restore it)");
             }
 
             auto document =
