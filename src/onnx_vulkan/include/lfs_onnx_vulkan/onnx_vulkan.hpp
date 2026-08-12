@@ -118,7 +118,6 @@ namespace lfs::onnx_vulkan {
         std::filesystem::path pipeline_cache_path;
         std::uint64_t max_model_bytes = 2ull * 1024ull * 1024ull * 1024ull;
         std::uint64_t max_external_data_bytes = 2ull * 1024ull * 1024ull * 1024ull;
-        bool enable_profiling = false;
         bool enable_cooperative_matrix = true;
     };
 

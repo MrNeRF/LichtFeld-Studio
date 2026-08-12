@@ -26,7 +26,7 @@ target_include_directories(lfs_onnx_vulkan
 )
 
 target_compile_features(lfs_onnx_vulkan PUBLIC cxx_std_23)
-target_link_libraries(lfs_onnx_vulkan PRIVATE Vulkan::Vulkan lfs_logger)
+target_link_libraries(lfs_onnx_vulkan PRIVATE Vulkan::Vulkan)
 set_target_properties(lfs_onnx_vulkan PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
@@ -47,7 +47,7 @@ compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv.comp" "${LFS_ONNX_SH
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv_1x1.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/conv_1x1.comp.spv.h" kConv1x1Spv lfs::onnx_vulkan::shaders)
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv_tiled.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/conv_tiled.comp.spv.h" kConvTiledSpv lfs::onnx_vulkan::shaders)
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv_cooperative.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/conv_cooperative.comp.spv.h" kConvCooperativeSpv lfs::onnx_vulkan::shaders vulkan1.2)
-compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv_cooperative_3x3.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/conv_cooperative_3x3.comp.spv.h" kConvCooperative3x3Spv lfs::onnx_vulkan::shaders vulkan1.2)
+compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv_cooperative_direct.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/conv_cooperative_direct.comp.spv.h" kConvCooperativeDirectSpv lfs::onnx_vulkan::shaders vulkan1.2)
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv_transpose_cooperative_2x2.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/conv_transpose_cooperative_2x2.comp.spv.h" kConvTransposeCooperative2x2Spv lfs::onnx_vulkan::shaders vulkan1.2)
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/im2col_fp16.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/im2col_fp16.comp.spv.h" kIm2ColFp16Spv lfs::onnx_vulkan::shaders)
 compile_shader(lfs_onnx_vulkan "${LFS_ONNX_SHADER_DIR}/conv_transpose.comp" "${LFS_ONNX_SHADER_OUTPUT_DIR}/conv_transpose.comp.spv.h" kConvTransposeSpv lfs::onnx_vulkan::shaders)

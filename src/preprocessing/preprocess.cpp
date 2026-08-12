@@ -714,8 +714,6 @@ namespace {
                      device ? std::to_string(*device) : std::string("automatic"));
             lfs::onnx_vulkan::SessionOptions options;
             options.vulkan_device = device;
-            options.enable_profiling =
-                lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Performance);
             auto session = lfs::onnx_vulkan::VulkanSession::create(model_path, std::move(options));
             if (!session)
                 throw std::runtime_error(session.error().message);
@@ -753,16 +751,11 @@ namespace {
             }
             constexpr std::array<std::string_view, 4> requested{
                 "points", "normal", "mask", "metric_scale"};
-            const auto inference_start = std::chrono::steady_clock::now();
             auto result = session_->run(inputs, requested);
             if (!result)
                 throw std::runtime_error(result.error().message);
             auto outputs = std::move(*result);
-            const auto inference_ms = std::chrono::duration<double, std::milli>(
-                                          std::chrono::steady_clock::now() - inference_start)
-                                          .count();
-            LOG_DEBUG("MoGe Vulkan: inference complete in {:.2f} ms (outputs={})",
-                      inference_ms, outputs.size());
+            LOG_DEBUG("MoGe Vulkan: inference produced {} outputs", outputs.size());
 
             std::unordered_map<std::string, std::size_t> output_index;
             for (std::size_t i = 0; i < outputs.size(); ++i)

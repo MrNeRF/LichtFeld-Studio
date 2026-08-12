@@ -3,9 +3,9 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_KHR_memory_scope_semantics : require
 
-// Group-one NCHW 3x3 Conv over an explicitly padded, contiguous input. This
-// keeps the same FP16-input/FP32-accumulation contract as the generic kernel,
-// but makes the common spatial and weight addressing compile-time constants.
+// Group-one NCHW 1x1 Conv, or 3x3 Conv over an explicitly padded contiguous
+// input. This keeps FP16 inputs and FP32 accumulation while specializing the
+// two direct-convolution layouts used by the decoder.
 layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
 layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint w[]; };
@@ -29,8 +29,8 @@ void main() {
     const uint ow_size = p[80];
     const uint spatial_size = ow_size * p[81];
     const uint oc_size = p[82];
-    const bool pointwise = p[110] != 0u;
-    const uint k_size = p[84] * (pointwise ? 1u : 9u);
+    const bool direct_1x1 = p[110] != 0u;
+    const uint k_size = p[84] * (direct_1x1 ? 1u : 9u);
     const uint spatial_tile = narrow ? 128u : 64u;
     const uint oc_tile = narrow ? 32u : 64u;
     const uint spatial_origin = gl_WorkGroupID.x * spatial_tile;
@@ -72,10 +72,10 @@ void main() {
                 const vec2 unpacked = unpackHalf2x16(a[n * p[104] + element / 2u]);
                 value = (element & 1u) == 0u ? unpacked.x : unpacked.y;
             } else if (k < k_size && spatial < spatial_size) {
-                const uint ic = pointwise ? k : k / 9u;
-                const uint kernel_index = pointwise ? 0u : k - ic * 9u;
-                const uint kh = pointwise ? 0u : kernel_index / 3u;
-                const uint kw = pointwise ? 0u : kernel_index - kh * 3u;
+                const uint ic = direct_1x1 ? k : k / 9u;
+                const uint kernel_index = direct_1x1 ? 0u : k - ic * 9u;
+                const uint kh = direct_1x1 ? 0u : kernel_index / 3u;
+                const uint kw = direct_1x1 ? 0u : kernel_index - kh * 3u;
                 const uint oh = spatial / ow_size;
                 const uint ow = spatial - oh * ow_size;
                 const uint input_index = p[98] + n * p[32] + ic * p[33] +

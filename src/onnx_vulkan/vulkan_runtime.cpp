@@ -6,7 +6,7 @@
 
 #include "conv.comp.spv.h"
 #include "conv_cooperative.comp.spv.h"
-#include "conv_cooperative_3x3.comp.spv.h"
+#include "conv_cooperative_direct.comp.spv.h"
 #include "conv_transpose_cooperative_2x2.comp.spv.h"
 #include "conv_tiled.comp.spv.h"
 #include "conv_transpose.comp.spv.h"
@@ -220,14 +220,6 @@ namespace lfs::onnx_vulkan::detail {
         maximum_group_count_x_ = candidate.properties.limits.maxComputeWorkGroupCount[0];
         maximum_group_count_y_ = candidate.properties.limits.maxComputeWorkGroupCount[1];
         maximum_group_count_z_ = candidate.properties.limits.maxComputeWorkGroupCount[2];
-        timestamp_period_ = candidate.properties.limits.timestampPeriod;
-        profiling_enabled_ = options.enable_profiling;
-        std::uint32_t selected_family_count = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &selected_family_count, nullptr);
-        std::vector<VkQueueFamilyProperties> selected_families(selected_family_count);
-        vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &selected_family_count, selected_families.data());
-        timestamp_valid_bits_ = selected_families[queue_family_].timestampValidBits;
-        profiling_enabled_ = profiling_enabled_ && timestamp_valid_bits_ != 0 && timestamp_period_ > 0.0f;
         vkGetPhysicalDeviceMemoryProperties(physical_device_, &memory_properties_);
 
         std::uint32_t extension_count = 0;
@@ -401,7 +393,7 @@ namespace lfs::onnx_vulkan::detail {
             words(shaders::kMatMulCooperativeFp16WeightsSpv),
             words(shaders::kConvSpv), words(shaders::kConv1x1Spv),
             words(shaders::kConvTiledSpv), words(shaders::kConvCooperativeSpv),
-            words(shaders::kConvCooperative3x3Spv),
+            words(shaders::kConvCooperativeDirectSpv),
             words(shaders::kConvTransposeCooperative2x2Spv),
             words(shaders::kIm2ColFp16Spv),
             words(shaders::kConvTransposeSpv),
@@ -416,7 +408,7 @@ namespace lfs::onnx_vulkan::detail {
                 continue;
             if ((index == static_cast<std::size_t>(Kernel::MatMulCooperative) ||
                  index == static_cast<std::size_t>(Kernel::ConvCooperative) ||
-                 index == static_cast<std::size_t>(Kernel::ConvCooperative3x3) ||
+                 index == static_cast<std::size_t>(Kernel::ConvCooperativeDirect) ||
                  index == static_cast<std::size_t>(Kernel::ConvTransposeCooperative2x2) ||
                  index == static_cast<std::size_t>(Kernel::Im2ColFp16)) &&
                 !cooperative_matrix_enabled_)

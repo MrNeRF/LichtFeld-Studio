@@ -3,11 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "execution_plan.hpp"
-#include "core/logger.hpp"
 
 #include <algorithm>
 #include <bit>
-#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <deque>
@@ -626,7 +624,6 @@ namespace lfs::onnx_vulkan::detail {
             Kernel kernel = Kernel::Elementwise;
             std::uint64_t count = 0;
             std::array<std::uint32_t, 3> workgroups{};
-            std::string label;
             std::array<DeviceRef, 4> values;
             std::array<std::uint32_t, kParameterWords> parameters{};
         };
@@ -640,7 +637,6 @@ namespace lfs::onnx_vulkan::detail {
         const Model* model = nullptr;
         const WeightStore* weights = nullptr;
         VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
-        VkQueryPool query_pool = VK_NULL_HANDLE;
         VkCommandBuffer command = VK_NULL_HANDLE;
         Buffer arena;
         Buffer literals;
@@ -661,7 +657,6 @@ namespace lfs::onnx_vulkan::detail {
         std::size_t step = 0;
         std::size_t nested_depth = 0;
         VkDeviceSize alignment = 1;
-        bool profile_details_logged = false;
         bool cooperative_matrix = false;
 
         [[nodiscard]] DeviceRef allocate_bytes(VkDeviceSize bytes,const std::size_t release_at,const bool pinned){bytes=align_up(std::max<VkDeviceSize>(4,bytes),alignment);const bool keep_pinned=pinned||nested_depth!=0;if(!keep_pinned)for(std::size_t i=0;i<slices.size();++i)if(!slices[i].pinned&&slices[i].release_at<step&&slices[i].size>=bytes){slices[i].release_at=release_at;slices[i].pinned=false;return {RefKind::Arena,{},slices[i].offset,bytes,i};}const auto offset=align_up(arena_size,alignment);slices.push_back({offset,bytes,keep_pinned?std::numeric_limits<std::size_t>::max():release_at,keep_pinned});arena_size=offset+bytes;return {RefKind::Arena,{},offset,bytes,slices.size()-1};}
@@ -731,7 +726,7 @@ namespace lfs::onnx_vulkan::detail {
         }
 
         std::vector<Value> outputs;for(size_t i=0;i<specs->size();++i)outputs.push_back(make_output(i));
-        Dispatch dispatch;dispatch.label=node.op_type;dispatch.count=element_count(outputs[0].shape).value_or(0);base_params(dispatch.parameters,outputs[0]);dispatch.parameters[9]=u32(static_cast<int>(outputs[0].type));
+        Dispatch dispatch;dispatch.count=element_count(outputs[0].shape).value_or(0);base_params(dispatch.parameters,outputs[0]);dispatch.parameters[9]=u32(static_cast<int>(outputs[0].type));
         const auto ref=[&](size_t i)->DeviceRef{if(i>=input_values.size()||!input_values[i])return {};return ensure_device(*input_values[i]);};
         const auto finish=[&](Dispatch d){const auto producer=dispatches.size();d.values[3]=outputs[0].device;dispatches.push_back(std::move(d));outputs[0].producer_dispatch=producer;for(size_t i=0;i<outputs.size();++i)values[node.outputs[i]]=std::move(outputs[i]);};
         static const std::unordered_map<std::string,uint32_t> element_ops{{"Add",1},{"Sub",2},{"Mul",3},{"Div",4},{"Pow",5},{"Mod",6},{"Equal",7},{"Where",8},{"Neg",9},{"Exp",10},{"Erf",11},{"Reciprocal",12},{"Relu",13},{"Sqrt",14},{"Sigmoid",15},{"Round",16},{"Clip",17},{"Cast",18}};
@@ -794,7 +789,7 @@ namespace lfs::onnx_vulkan::detail {
                     }
                     if(!consecutive)continue;
                     dispatches.resize(dispatches.size()-chain.size());
-                    Dispatch fused;fused.kernel=Kernel::LayerNorm;fused.label="LayerNorm";
+                    Dispatch fused;fused.kernel=Kernel::LayerNorm;
                     const auto width=u32(source.shape.back());
                     fused.count=element_count(source.shape).value_or(0)/width;
                     fused.parameters[1]=u32(fused.count);fused.parameters[80]=width;
@@ -821,7 +816,7 @@ namespace lfs::onnx_vulkan::detail {
                     producer.kernel!=Kernel::MatMulCooperativeFp16Weights)||producer.parameters[89]!=0)continue;
                 producer.values[2]=ensure_device(*bias);producer.parameters[88]=f32(1.0f);producer.parameters[89]=1;
                 producer.parameters[90]=u32(bias->element_offset);producer.parameters[91]=1;
-                producer.parameters[92]=u32(bias->strides.back());producer.label+="+Bias";
+                producer.parameters[92]=u32(bias->strides.back());
                 Value fused=*dynamic;fused.shape=outputs[0].shape;fused.strides=outputs[0].strides;
                 extend_lifetime(fused.device,last_use[node.outputs[0]]);values[node.outputs[0]]=std::move(fused);return {};
             }
@@ -873,7 +868,7 @@ namespace lfs::onnx_vulkan::detail {
                     if(!consecutive)continue;
                     dispatches.resize(producer_index+1);
                     auto& producer=dispatches.back();producer.parameters[94]=1;producer.values[3]=outputs[0].device;
-                    producer.label+="+Gelu";outputs[0].producer_dispatch=producer_index;
+                    outputs[0].producer_dispatch=producer_index;
                     values[node.outputs[0]]=std::move(outputs[0]);return {};
                 }
             }
@@ -925,7 +920,7 @@ namespace lfs::onnx_vulkan::detail {
             if(fp16_weight.kind!=RefKind::None&&n_size>=128u){
                 const auto elements=element_count(a->shape).value_or(0);
                 fp16_activation=allocate_bytes((elements*sizeof(uint16_t)+3u)&~VkDeviceSize{3},step,false);
-                Dispatch pack;pack.kernel=Kernel::PackFp16;pack.label="PackFp16";
+                Dispatch pack;pack.kernel=Kernel::PackFp16;
                 pack.count=elements;pack.parameters[1]=u32(elements);pack.parameters[2]=u32(a->shape.size());
                 put_shape(pack.parameters,16,a->shape);put_shape(pack.parameters,24,a->strides);
                 pack.parameters[80]=u32(a->element_offset);
@@ -940,10 +935,6 @@ namespace lfs::onnx_vulkan::detail {
                 const auto tile_x=use_cooperative&&n_size>=m_size?128u:64u;
                 const auto tile_y=small_k||use_cooperative&&n_size<m_size?128u:64u;
                 dispatch.workgroups={(n_size+tile_x-1u)/tile_x,(m_size+tile_y-1u)/tile_y,u32(batches)};
-                dispatch.label=(small_k?"MatMulSmallK[":fp16_activation.kind!=RefKind::None?"MatMulCooperativeFp16[":
-                                use_cooperative?"MatMulCooperative[":"MatMulTiled[")+
-                               std::to_string(m_size)+"x"+std::to_string(n_size)+"x"+
-                               std::to_string(dispatch.parameters[82])+"]";
             }
             dispatch.values={fp16_activation.kind==RefKind::None?ref(0):fp16_activation,
                              fp16_activation.kind==RefKind::None?ref(1):fp16_weight,ref(2),{}};
@@ -976,66 +967,60 @@ namespace lfs::onnx_vulkan::detail {
             const bool use_cooperative=tiled&&cooperative_matrix&&(conv_k>=256u||conv1x1&&conv_k>=16u);
             dispatch.parameters[100]=node.op_type=="ConvTranspose";
             dispatch.parameters[101]=use_cooperative&&oc<=32u;
-            dispatch.parameters[105]=node.op_type=="Conv"&&input_values[1]->element_offset==0&&
-                                     input_values[1]->strides==contiguous_strides(input_values[1]->shape);
-            const bool specialized_3x3=use_cooperative&&node.op_type=="Conv"&&dispatch.parameters[105]&&
+            const bool contiguous_weights=node.op_type=="Conv"&&input_values[1]->element_offset==0&&
+                input_values[1]->strides==contiguous_strides(input_values[1]->shape);
+            dispatch.parameters[105]=contiguous_weights;
+            const bool direct_3x3=use_cooperative&&node.op_type=="Conv"&&contiguous_weights&&
                 dispatch.parameters[85]==3&&dispatch.parameters[86]==3&&strides[0]==1&&strides[1]==1&&
                 dil[0]==1&&dil[1]==1&&std::ranges::all_of(pads,[](auto value){return value==0;})&&
                 input_values[0]->strides==contiguous_strides(input_values[0]->shape)&&
                 input_values[0]->shape[2]==outputs[0].shape[2]+2&&
                 input_values[0]->shape[3]==outputs[0].shape[3]+2;
-            dispatch.parameters[107]=specialized_3x3;
-            const bool specialized_1x1=use_cooperative&&conv1x1&&dispatch.parameters[105];
-            dispatch.parameters[110]=specialized_1x1;
-            const bool specialized_transpose_2x2=use_cooperative&&node.op_type=="ConvTranspose"&&
+            dispatch.parameters[107]=direct_3x3;
+            const bool direct_1x1=use_cooperative&&conv1x1&&contiguous_weights;
+            dispatch.parameters[110]=direct_1x1;
+            const bool direct_transpose_2x2=use_cooperative&&node.op_type=="ConvTranspose"&&
                 dispatch.parameters[85]==2&&dispatch.parameters[86]==2&&strides[0]==2&&strides[1]==2&&
                 dil[0]==1&&dil[1]==1&&std::ranges::all_of(pads,[](auto value){return value==0;})&&
                 outputs[0].shape[2]==input_values[0]->shape[2]*2&&
                 outputs[0].shape[3]==input_values[0]->shape[3]*2;
             DeviceRef packed_input;
-            if(use_cooperative&&oc>=128u&&!specialized_transpose_2x2&&!specialized_1x1){
+            if(use_cooperative&&oc>=128u&&!direct_transpose_2x2&&!direct_1x1){
                 const auto spatial=static_cast<uint64_t>(ow)*oh;
                 const auto elements=static_cast<uint64_t>(conv_k)*spatial;
                 const auto words_per_batch=(elements+1u)/2u;
                 const auto batches=u32(outputs[0].shape[0]);
                 packed_input=allocate_bytes(words_per_batch*sizeof(uint32_t)*batches,step,false);
                 Dispatch gather=dispatch;gather.kernel=Kernel::Im2ColFp16;
-                gather.label="Im2ColFp16["+std::to_string(oc)+"x"+std::to_string(ow*oh)+"x"+
-                             std::to_string(conv_k)+"]";
                 gather.count=words_per_batch*batches;gather.parameters[1]=u32(words_per_batch);
                 gather.workgroups={u32((words_per_batch+255u)/256u),batches,1};
                 gather.values={ref(0),{},{},packed_input};dispatches.push_back(std::move(gather));
                 dispatch.parameters[103]=1;dispatch.parameters[104]=u32(words_per_batch);
             }
             if(use_cooperative){
-                dispatch.kernel=specialized_transpose_2x2?Kernel::ConvTransposeCooperative2x2:
-                                specialized_3x3||specialized_1x1?Kernel::ConvCooperative3x3:Kernel::ConvCooperative;
-                dispatch.label=node.op_type+(specialized_transpose_2x2?"Cooperative2x2[":
-                                             specialized_3x3?"Cooperative3x3[":
-                                             specialized_1x1?"Cooperative1x1[":"Cooperative[")+std::to_string(oc)+"x"+
-                               std::to_string(ow*oh)+"x"+std::to_string(conv_k)+"]";
+                dispatch.kernel=direct_transpose_2x2?Kernel::ConvTransposeCooperative2x2:
+                                direct_3x3||direct_1x1?Kernel::ConvCooperativeDirect:Kernel::ConvCooperative;
             }else if(node.op_type=="ConvTranspose"){
                 dispatch.kernel=tiled?Kernel::ConvTransposeTiled:Kernel::ConvTranspose;
-                if(tiled)dispatch.label="ConvTransposeTiled";
             }else if(conv1x1){
-                dispatch.kernel=Kernel::Conv1x1;dispatch.label="Conv1x1";
+                dispatch.kernel=Kernel::Conv1x1;
             }else if(tiled){
-                dispatch.kernel=Kernel::ConvTiled;dispatch.label="ConvTiled";
+                dispatch.kernel=Kernel::ConvTiled;
             }else{
                 dispatch.kernel=Kernel::Conv;
             }
             if(tiled){
-                const auto spatial=specialized_transpose_2x2?
+                const auto spatial=direct_transpose_2x2?
                     u32(input_values[0]->shape[2]*input_values[0]->shape[3]):ow*oh;
                 const auto tile_x=dispatch.parameters[101]?128u:64u;
                 const auto tile_y=dispatch.parameters[101]?32u:64u;
                 dispatch.workgroups={(spatial+tile_x-1u)/tile_x,(oc+tile_y-1u)/tile_y,
-                                     u32(outputs[0].shape[0])*(specialized_transpose_2x2?4u:1u)};
+                                     u32(outputs[0].shape[0])*(direct_transpose_2x2?4u:1u)};
             }
             dispatch.values={packed_input.kind==RefKind::None?ref(0):packed_input,ref(1),ref(2),{}};
             finish(std::move(dispatch));return {};
         }
-        if(node.op_type.starts_with("Reduce")){dispatch.parameters[0]=node.op_type=="ReduceMean"?1:node.op_type=="ReduceL2"?2:0;auto axes=*axes_from(node,input_const,1,input_values[0]->shape.size(),true);uint32_t mask=0;uint64_t reduced=1;for(auto axis:axes){mask|=1u<<axis;reduced*=input_values[0]->shape[axis];}dispatch.kernel=reduced>=64?Kernel::Reduce:Kernel::ReduceSerial;dispatch.label+=reduced>=64?"WG":"Serial";dispatch.parameters[80]=mask;dispatch.parameters[81]=u32(reduced);dispatch.parameters[82]=u32(input_values[0]->element_offset);dispatch.parameters[83]=u32(input_values[0]->shape.size());dispatch.parameters[84]=u32(int_attribute(node,"keepdims").value_or(1));put_shape(dispatch.parameters,24,input_values[0]->shape);put_shape(dispatch.parameters,32,input_values[0]->strides);dispatch.values[0]=ref(0);finish(std::move(dispatch));return {};}
+        if(node.op_type.starts_with("Reduce")){dispatch.parameters[0]=node.op_type=="ReduceMean"?1:node.op_type=="ReduceL2"?2:0;auto axes=*axes_from(node,input_const,1,input_values[0]->shape.size(),true);uint32_t mask=0;uint64_t reduced=1;for(auto axis:axes){mask|=1u<<axis;reduced*=input_values[0]->shape[axis];}dispatch.kernel=reduced>=64?Kernel::Reduce:Kernel::ReduceSerial;dispatch.parameters[80]=mask;dispatch.parameters[81]=u32(reduced);dispatch.parameters[82]=u32(input_values[0]->element_offset);dispatch.parameters[83]=u32(input_values[0]->shape.size());dispatch.parameters[84]=u32(int_attribute(node,"keepdims").value_or(1));put_shape(dispatch.parameters,24,input_values[0]->shape);put_shape(dispatch.parameters,32,input_values[0]->strides);dispatch.values[0]=ref(0);finish(std::move(dispatch));return {};}
         if(node.op_type=="Softmax"){dispatch.kernel=Kernel::Softmax;auto axis=normalize_axis(int_attribute(node,"axis").value_or(-1),input_values[0]->shape.size());dispatch.count=element_count(input_values[0]->shape).value_or(0)/input_values[0]->shape[axis];dispatch.parameters[1]=u32(dispatch.count);dispatch.parameters[80]=u32(axis);dispatch.parameters[81]=u32(input_values[0]->shape[axis]);dispatch.parameters[82]=u32(input_values[0]->element_offset);put_shape(dispatch.parameters,24,input_values[0]->strides);put_shape(dispatch.parameters,32,outputs[0].strides);dispatch.values[0]=ref(0);finish(std::move(dispatch));return {};}
         return std::unexpected(execution_error("GPU lowering is not implemented",&node));
     }
@@ -1052,13 +1037,7 @@ namespace lfs::onnx_vulkan::detail {
         auto pool=runtime.create_descriptor_pool(static_cast<uint32_t>(dispatches.size()));if(!pool)return std::unexpected(pool.error());descriptor_pool=*pool;
         std::vector<VkDescriptorSet> sets;sets.reserve(dispatches.size());const auto resolve=[&](const DeviceRef& ref)->BufferBinding{if(ref.kind==RefKind::Weight)return ref.direct;if(ref.kind==RefKind::Arena)return {arena.buffer,ref.offset,ref.range};if(ref.kind==RefKind::Literal)return {literals.buffer,ref.offset,ref.range};return {dummy.buffer,0,4};};
         for(size_t i=0;i<dispatches.size();++i){auto set=runtime.allocate_descriptor_set(descriptor_pool);if(!set)return std::unexpected(set.error());sets.push_back(*set);std::array<BufferBinding,5> bindings;for(size_t b=0;b<4;++b)bindings[b]=resolve(dispatches[i].values[b]);bindings[4]={metadata.buffer,i*meta_stride,kParameterWords*4};runtime.update_descriptor_set(*set,bindings);}
-        if(runtime.profiling_enabled()&&!dispatches.empty()){
-            const VkQueryPoolCreateInfo query_info{.sType=VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,.queryType=VK_QUERY_TYPE_TIMESTAMP,.queryCount=u32(dispatches.size()*2)};
-            if(vkCreateQueryPool(runtime.device(),&query_info,nullptr,&query_pool)!=VK_SUCCESS)
-                return std::unexpected(execution_error("vkCreateQueryPool failed"));
-        }
         const VkCommandBufferAllocateInfo alloc{.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,.commandPool=runtime.command_pool(),.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY,.commandBufferCount=1};if(auto result=vkAllocateCommandBuffers(runtime.device(),&alloc,&command);result!=VK_SUCCESS)return std::unexpected(execution_error("vkAllocateCommandBuffers failed"));const VkCommandBufferBeginInfo begin{.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};if(vkBeginCommandBuffer(command,&begin)!=VK_SUCCESS)return std::unexpected(execution_error("vkBeginCommandBuffer failed"));
-        if(query_pool)vkCmdResetQueryPool(command,query_pool,0,u32(dispatches.size()*2));
         for(const auto& slot:input_slots){VkBufferCopy copy{slot.staging_offset,slot.device.offset,element_count(slot.shape).value_or(0)*4};vkCmdCopyBuffer(command,staging.buffer,arena.buffer,1,&copy);}VkMemoryBarrier barrier{.sType=VK_STRUCTURE_TYPE_MEMORY_BARRIER,.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,.dstAccessMask=VK_ACCESS_SHADER_READ_BIT};vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&barrier,0,nullptr,0,nullptr);
         for(size_t i=0;i<dispatches.size();++i){
             auto& dispatch=dispatches[i];
@@ -1078,16 +1057,14 @@ namespace lfs::onnx_vulkan::detail {
             if(dispatch.workgroups[0]!=0&&(dispatch.workgroups[0]>runtime.maximum_group_count_x()||
                 dispatch.workgroups[1]>runtime.maximum_group_count_y()||dispatch.workgroups[2]>runtime.maximum_group_count_z()))
                 return std::unexpected(execution_error("specialized workgroup grid exceeds Vulkan device limits"));
-            if(query_pool)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,query_pool,u32(i*2));
             runtime.bind_and_dispatch(command,dispatch.kernel,sets[i],dispatch.count,dispatch.workgroups);
-            if(query_pool)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,query_pool,u32(i*2+1));
             VkMemoryBarrier compute{.sType=VK_STRUCTURE_TYPE_MEMORY_BARRIER,.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT,.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT};vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&compute,0,nullptr,0,nullptr);
         }
         barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;barrier.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,1,&barrier,0,nullptr,0,nullptr);for(const auto& slot:output_slots){auto& value=values.at(slot.name);if(value.strides!=contiguous_strides(value.shape)||value.element_offset!=0)return std::unexpected(execution_error("requested strided output requires materialization"));auto source=resolve(value.device);VkBufferCopy copy{source.offset,slot.readback_offset,slot.bytes};vkCmdCopyBuffer(command,source.buffer,readback.buffer,1,&copy);}if(vkEndCommandBuffer(command)!=VK_SUCCESS)return std::unexpected(execution_error("vkEndCommandBuffer failed"));return {};
     }
 
     ExecutionPlan::ExecutionPlan(VulkanRuntime& runtime) : runtime_(runtime) {}
-    ExecutionPlan::~ExecutionPlan(){if(!impl_)return;if(impl_->command)vkFreeCommandBuffers(runtime_.device(),runtime_.command_pool(),1,&impl_->command);if(impl_->query_pool)vkDestroyQueryPool(runtime_.device(),impl_->query_pool,nullptr);if(impl_->descriptor_pool)vkDestroyDescriptorPool(runtime_.device(),impl_->descriptor_pool,nullptr);}
+    ExecutionPlan::~ExecutionPlan(){if(!impl_)return;if(impl_->command)vkFreeCommandBuffers(runtime_.device(),runtime_.command_pool(),1,&impl_->command);if(impl_->descriptor_pool)vkDestroyDescriptorPool(runtime_.device(),impl_->descriptor_pool,nullptr);}
 
     std::expected<std::unique_ptr<ExecutionPlan>,Error> ExecutionPlan::create(const Model& model,const WeightStore& weights,VulkanRuntime& runtime,std::span<const NamedTensorView> inputs,std::span<const std::string_view> requested_outputs){auto plan=std::unique_ptr<ExecutionPlan>(new ExecutionPlan(runtime));plan->impl_=std::make_unique<Impl>();auto& p=*plan->impl_;p.model=&model;p.weights=&weights;p.alignment=runtime.storage_alignment();p.cooperative_matrix=runtime.cooperative_matrix_enabled();for(auto output:requested_outputs)p.requested.emplace(output);if(p.requested.empty())for(const auto& output:model.graph.outputs)p.requested.emplace(output.name);
         std::unordered_set<std::string> needed=p.requested;for(size_t i=model.graph.nodes.size();i-->0;){const auto& node=model.graph.nodes[i];bool live=false;for(const auto& output:node.outputs)live|=needed.contains(output);if(live){p.live_nodes.emplace(i);for(const auto& input:node.inputs)if(!input.empty())needed.emplace(input);for(const auto& attribute:node.attributes)if(const auto* branch=std::get_if<std::shared_ptr<Graph>>(&attribute.value);branch&&*branch){std::unordered_set<std::string> captures;collect_captures(**branch,captures);needed.insert(captures.begin(),captures.end());}}}
@@ -1109,50 +1086,10 @@ namespace lfs::onnx_vulkan::detail {
                 return std::unexpected(Error{ErrorCode::InvalidInput,"input does not match cached execution plan: "+slot.name});
             std::memcpy(static_cast<std::byte*>(impl_->staging.mapped)+slot.staging_offset,it->tensor.bytes.data(),it->tensor.bytes.size());
         }
-        const auto wall_start=std::chrono::steady_clock::now();
         const VkSubmitInfo submit{.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&impl_->command};
         auto status=vkQueueSubmit(runtime_.queue(),1,&submit,VK_NULL_HANDLE);
         if(status==VK_SUCCESS)status=vkQueueWaitIdle(runtime_.queue());
-        const auto wall_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-wall_start).count();
         if(status!=VK_SUCCESS)return std::unexpected(Error{ErrorCode::VulkanFailure,"Vulkan inference submission failed with VkResult "+std::to_string(status)});
-
-        if(impl_->query_pool){
-            std::vector<std::uint64_t> timestamps(impl_->dispatches.size()*2);
-            const auto query_status=vkGetQueryPoolResults(runtime_.device(),impl_->query_pool,0,
-                static_cast<std::uint32_t>(timestamps.size()),timestamps.size()*sizeof(std::uint64_t),timestamps.data(),
-                sizeof(std::uint64_t),VK_QUERY_RESULT_64_BIT|VK_QUERY_RESULT_WAIT_BIT);
-            if(query_status==VK_SUCCESS){
-                struct ProfileRow{std::string label;double milliseconds=0;std::size_t dispatches=0;};
-                std::unordered_map<std::string,ProfileRow> grouped;
-                std::vector<ProfileRow> individual;
-                individual.reserve(impl_->dispatches.size());
-                double gpu_ms=0.0;
-                const auto valid_bits=runtime_.timestamp_valid_bits();
-                const auto mask=valid_bits>=64?std::numeric_limits<std::uint64_t>::max():((std::uint64_t{1}<<valid_bits)-1);
-                for(std::size_t i=0;i<impl_->dispatches.size();++i){
-                    const auto ticks=(timestamps[i*2+1]-timestamps[i*2])&mask;
-                    const auto milliseconds=static_cast<double>(ticks)*runtime_.timestamp_period()/1.0e6;
-                    gpu_ms+=milliseconds;
-                    const auto& label=impl_->dispatches[i].label.empty()?std::string("internal"):impl_->dispatches[i].label;
-                    auto& row=grouped[label];row.label=label;row.milliseconds+=milliseconds;++row.dispatches;
-                    individual.push_back({label,milliseconds,1});
-                }
-                LOG_PERF("ONNX Vulkan inference: gpu_dispatch_ms={:.3f} submit_wait_ms={:.3f} dispatches={}",
-                         gpu_ms,wall_ms,impl_->dispatches.size());
-                if(!impl_->profile_details_logged){
-                    std::vector<ProfileRow> rows;rows.reserve(grouped.size());
-                    for(auto& [label,row]:grouped)rows.push_back(std::move(row));
-                    std::ranges::sort(rows,std::greater<>{},&ProfileRow::milliseconds);
-                    for(std::size_t i=0;i<std::min<std::size_t>(rows.size(),24);++i)
-                        LOG_PERF("ONNX Vulkan op rank {}: {} {:.3f}ms across {} dispatch(es)",
-                                 i+1,rows[i].label,rows[i].milliseconds,rows[i].dispatches);
-                    std::ranges::sort(individual,std::greater<>{},&ProfileRow::milliseconds);
-                    for(std::size_t i=0;i<std::min<std::size_t>(individual.size(),12);++i)
-                        LOG_PERF("ONNX Vulkan dispatch rank {}: {} {:.3f}ms",i+1,individual[i].label,individual[i].milliseconds);
-                    impl_->profile_details_logged=true;
-                }
-            }
-        }
         std::vector<NamedTensor> result;
         for(const auto& slot:impl_->output_slots){
             std::vector<std::byte> bytes(slot.bytes);

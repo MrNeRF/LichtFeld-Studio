@@ -52,7 +52,3 @@ if(BUILD_TESTS)
     add_test(NAME preprocess_cli_arguments COMMAND lfs_preprocess_cli_tests)
     set_tests_properties(preprocess_cli_arguments PROPERTIES LABELS "fast;cli" TIMEOUT 30)
 endif()
-
-add_executable(lfs_preprocess_compare EXCLUDE_FROM_ALL tools/preprocess_compare.cpp)
-target_compile_features(lfs_preprocess_compare PRIVATE cxx_std_23)
-target_link_libraries(lfs_preprocess_compare PRIVATE lfs_oiio)

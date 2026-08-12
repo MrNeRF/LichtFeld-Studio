@@ -33,7 +33,7 @@ namespace lfs::onnx_vulkan::detail {
         Conv1x1,
         ConvTiled,
         ConvCooperative,
-        ConvCooperative3x3,
+        ConvCooperativeDirect,
         ConvTransposeCooperative2x2,
         Im2ColFp16,
         ConvTranspose,
@@ -112,11 +112,8 @@ namespace lfs::onnx_vulkan::detail {
         [[nodiscard]] std::uint32_t maximum_group_count_x() const noexcept { return maximum_group_count_x_; }
         [[nodiscard]] std::uint32_t maximum_group_count_y() const noexcept { return maximum_group_count_y_; }
         [[nodiscard]] std::uint32_t maximum_group_count_z() const noexcept { return maximum_group_count_z_; }
-        [[nodiscard]] bool profiling_enabled() const noexcept { return profiling_enabled_; }
         [[nodiscard]] bool cooperative_matrix_enabled() const noexcept { return cooperative_matrix_enabled_; }
         [[nodiscard]] bool native_fp16_storage_enabled() const noexcept { return native_fp16_storage_enabled_; }
-        [[nodiscard]] float timestamp_period() const noexcept { return timestamp_period_; }
-        [[nodiscard]] std::uint32_t timestamp_valid_bits() const noexcept { return timestamp_valid_bits_; }
         [[nodiscard]] std::string_view device_name() const noexcept { return device_name_; }
 
     private:
@@ -145,11 +142,8 @@ namespace lfs::onnx_vulkan::detail {
         std::uint32_t maximum_group_count_x_ = 1;
         std::uint32_t maximum_group_count_y_ = 1;
         std::uint32_t maximum_group_count_z_ = 1;
-        bool profiling_enabled_ = false;
         bool cooperative_matrix_enabled_ = false;
         bool native_fp16_storage_enabled_ = false;
-        float timestamp_period_ = 0.0f;
-        std::uint32_t timestamp_valid_bits_ = 0;
         std::string device_name_;
         std::filesystem::path pipeline_cache_path_;
     };
