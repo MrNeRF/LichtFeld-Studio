@@ -1066,8 +1066,9 @@ namespace lfs::vis {
             el_panel_->SetClass("is-floating", floating_);
             el_panel_->SetClass("film-strip-attached", film_strip_attached_);
         }
-        if (el_floating_header_)
-            el_floating_header_->SetClass("hidden", !floating_);
+        if (el_floating_header_) {
+            el_floating_header_->SetClass("hidden", false);
+        }
         if (el_film_strip_panel_)
             el_film_strip_panel_->SetProperty("display", film_strip_attached_ ? "block" : "none");
         if (el_transport_dock_sep_)

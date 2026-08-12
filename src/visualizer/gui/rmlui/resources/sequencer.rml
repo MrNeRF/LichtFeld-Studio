@@ -4,8 +4,22 @@
 </head>
 <body id="body" class="docked-panel">
     <div id="panel">
-        <div id="floating-header" class="hidden">
+        <div id="floating-header">
             <span id="floating-title">@tr:toolbar.sequencer</span>
+            <div id="header-primary-actions">
+                <div id="btn-equirect" class="transport-btn toggle text wide header-action" data-tooltip="tooltip.equirectangular">
+                    <span class="transport-label">@tr:ui.pano</span>
+                </div>
+                <div id="btn-save-path" class="transport-btn text header-action" data-tooltip="tooltip.seq_save_path">
+                    <span class="transport-label">@tr:ui.save_path</span>
+                </div>
+                <div id="btn-load-path" class="transport-btn text header-action" data-tooltip="tooltip.seq_load_path">
+                    <span class="transport-label">@tr:ui.load_path</span>
+                </div>
+                <div id="btn-load-sequence" class="transport-btn text header-action" data-tooltip="tooltip.seq_load_sequence">
+                    <span class="transport-label">@tr:ui.load_sequence</span>
+                </div>
+            </div>
             <div id="floating-actions">
                 <div id="btn-close-panel" class="transport-btn text wide floating-header-action" data-tooltip="common.close">
                     <span id="close-panel-label" class="transport-label">@tr:common.close</span>
@@ -78,21 +92,8 @@
                     <img class="transport-icon" src="../icon/sequencer/preview.png" />
                     <span class="ctx-indicator">&#x25E2;</span>
                 </div>
-                <div id="btn-equirect" class="transport-btn toggle text wide" data-tooltip="tooltip.equirectangular">
-                    <span class="transport-label">@tr:ui.pano</span>
-                </div>
             </div>
             <div id="right-controls">
-                <div id="btn-save-path" class="transport-btn text" data-tooltip="tooltip.seq_save_path">
-                    <span class="transport-label">@tr:ui.save_path</span>
-                </div>
-                <div id="btn-load-path" class="transport-btn text" data-tooltip="tooltip.seq_load_path">
-                    <span class="transport-label">@tr:ui.load_path</span>
-                </div>
-                <div id="btn-load-sequence" class="transport-btn text" data-tooltip="tooltip.seq_load_sequence">
-                    <span class="transport-label">@tr:ui.load_sequence</span>
-                </div>
-                <div class="transport-sep"></div>
                 <div id="btn-format" class="transport-btn text wide format-badge" data-tooltip="tooltip.seq_format">
                     <span id="format-label" class="transport-label">@tr:ui.youtube_1080p</span>
                     <span class="dropdown-arrow">&#x25be;</span>
