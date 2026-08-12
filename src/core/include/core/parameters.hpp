@@ -380,6 +380,7 @@ namespace lfs::core {
             OutputFormat format = OutputFormat::PLY;
             int sh_degree = 3; // 0-3, -1 = keep original
             int sog_iterations = 10;
+            int spz_version = 4; // SPZ container version: 4 (zstd) or 3 (legacy gzip)
             // PLY -> RAD only: replicate the source across an AxB ground-plane
             // grid instead of pre-tiling the input file.
             std::uint32_t tiles_x = 1;
@@ -397,6 +398,7 @@ namespace lfs::core {
             std::vector<OutputFormat> formats{OutputFormat::PLY};
             Mesh2SplatOptions options;
             int sog_iterations = 10;
+            int spz_version = 4; // SPZ container version: 4 (zstd) or 3 (legacy gzip)
             bool overwrite = false;
         };
 

@@ -97,6 +97,7 @@ namespace lfs::io {
 
     struct SpzSaveOptions {
         std::filesystem::path output_path;
+        int version = 4; // SPZ container version: 4 (zstd, current) or 3 (legacy gzip)
         ExportProgressCallback progress_callback = nullptr;
     };
 

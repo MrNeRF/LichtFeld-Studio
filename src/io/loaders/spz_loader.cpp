@@ -39,20 +39,26 @@ namespace lfs::io {
         if (options.validate_only) {
             LOG_DEBUG("Validation only mode for SPZ: {}", lfs::core::path_to_utf8(path));
 
-            // Check for gzip magic bytes
+            // Accept legacy gzip (v1-v3) or NGSP (v4) containers.
             std::ifstream file;
             if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                 return make_error(ErrorCode::READ_FAILURE,
                                   "Cannot open SPZ file", path);
             }
 
-            uint8_t header[2];
-            file.read(reinterpret_cast<char*>(header), 2);
+            uint8_t header[4] = {};
+            file.read(reinterpret_cast<char*>(header), 4);
+            const auto bytes_read = file.gcount();
 
-            // Gzip magic: 0x1f 0x8b
-            if (header[0] != 0x1f || header[1] != 0x8b) {
-                return make_error(ErrorCode::INVALID_HEADER,
-                                  "Invalid SPZ format (expected gzip compressed data)", path);
+            const bool is_gzip = bytes_read >= 2 && header[0] == 0x1f && header[1] == 0x8b;
+            const bool is_ngsp = bytes_read >= 4 &&
+                                 header[0] == 'N' && header[1] == 'G' &&
+                                 header[2] == 'S' && header[3] == 'P';
+            if (!is_gzip && !is_ngsp) {
+                return make_error(
+                    ErrorCode::INVALID_HEADER,
+                    "Invalid SPZ format (expected gzip (v1-v3) or NGSP (v4) container)",
+                    path);
             }
 
             if (options.progress) {

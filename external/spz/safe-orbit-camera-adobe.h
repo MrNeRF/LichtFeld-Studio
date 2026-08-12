@@ -1,7 +1,6 @@
 /*
 MIT License
 
-Copyright (c) 2025 Niantic Labs
 Copyright (c) 2025 Adobe Inc.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -23,39 +22,32 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#ifndef SPZ_SPLAT_C_TYPES_H_
-#define SPZ_SPLAT_C_TYPES_H_
+#ifndef SPZ_SAFE_ORBIT_CAMERA_ADOBE_H_
+#define SPZ_SAFE_ORBIT_CAMERA_ADOBE_H_
 
-#define _USE_MATH_DEFINES
-#include <math.h>
-#include <stddef.h>
-#include <stdint.h>
-
-// These types are used to bridge between the C++ API and C (to interop with Swift and C#).
-
-typedef struct {
-  size_t count;
-  float *data;
-} SpzFloatBuffer;
-
-// Forward declaration - full definition is in splat-extensions.h
-#ifdef SPZ_BUILD_EXTENSIONS
 #include "splat-extensions.h"
-#else
-typedef struct SpzExtensionNode SpzExtensionNode;
-#endif
 
-typedef struct {
-  int32_t numPoints;
-  int32_t shDegree;
-  bool antialiased;
-  SpzFloatBuffer positions;
-  SpzFloatBuffer scales;
-  SpzFloatBuffer rotations;
-  SpzFloatBuffer alphas;
-  SpzFloatBuffer colors;
-  SpzFloatBuffer sh;
-  SpzExtensionNode* extensions;
-} GaussianCloudData;
+namespace spz {
 
-#endif  // SPZ_SPLAT_C_TYPES_H_
+struct SpzExtensionSafeOrbitCameraAdobe : public SpzExtensionBase {
+  float safeOrbitElevationMin = 0.0f;  // Minimum elevation for safe orbit (radians)
+  float safeOrbitElevationMax = 0.0f;  // Maximum elevation for safe orbit (radians)
+  float safeOrbitRadiusMin = 0.0f;     // Minimum radius for safe orbit
+
+  static const std::unordered_set<std::string> kRequiredPlyElementNames;
+
+  SpzExtensionSafeOrbitCameraAdobe();
+  uint32_t payloadBytes() const override;
+  void write(std::ostream& os) const override;
+  SpzExtensionBase* copyAsRawData() const override;
+  std::optional<std::shared_ptr<SpzExtensionBase>> tryReadFromPly(
+      std::istream& in, const std::unordered_set<std::string>& elementNames) const override;
+  void writePlyHeader(std::ostream& out) const override;
+  void writePlyData(std::ostream& out) const override;
+  static std::optional<SpzExtensionBasePtr> read(std::istream& is);
+  static SpzExtensionType type();
+};
+
+}  // namespace spz
+
+#endif  // SPZ_SAFE_ORBIT_CAMERA_ADOBE_H_

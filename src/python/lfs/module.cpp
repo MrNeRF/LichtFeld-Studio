@@ -878,13 +878,16 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
-           bool rad_flip_y, bool rad_streamable) {
-            lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable);
+           bool rad_flip_y, bool rad_streamable, int spz_version) {
+            lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
+                                       spz_version);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
         nb::arg("rad_flip_y") = false,
         nb::arg("rad_streamable") = true,
-        "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP.");
+        nb::arg("spz_version") = 4,
+        "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. "
+        "spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ.");
 
     m.def(
         "save_config_file",

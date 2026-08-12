@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tests for lichtfeld.io saving functionality."""
 
+from pathlib import Path
+
 import pytest
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SPZ_FIXTURE_DIR = PROJECT_ROOT / "tests" / "data" / "spz"
 
 
 def _read_ply_header(path):
@@ -231,6 +236,49 @@ class TestSaveSPZ:
 
         # SPZ should be smaller than binary PLY
         assert spz_path.stat().st_size < ply_path.stat().st_size
+
+    def test_save_spz_default_writes_v4(self, lf, tmp_output):
+        """Default save_spz writes SPZ v4 (NGSP/zstd container)."""
+        fixture = SPZ_FIXTURE_DIR / "upstream_v4_sh0.spz"
+        assert fixture.is_file(), f"missing fixture {fixture}"
+        result = lf.io.load(str(fixture))
+        output_path = tmp_output / "default_v4.spz"
+
+        lf.io.save_spz(result.splat_data, str(output_path))
+
+        with open(output_path, "rb") as f:
+            assert f.read(4) == b"NGSP"
+
+    def test_save_spz_version3_writes_gzip(self, lf, tmp_output):
+        """save_spz(version=3) writes legacy gzip container."""
+        fixture = SPZ_FIXTURE_DIR / "upstream_v4_sh0.spz"
+        assert fixture.is_file(), f"missing fixture {fixture}"
+        result = lf.io.load(str(fixture))
+        output_path = tmp_output / "escape_v3.spz"
+
+        lf.io.save_spz(result.splat_data, str(output_path), version=3)
+
+        with open(output_path, "rb") as f:
+            assert f.read(2) == b"\x1f\x8b"
+
+
+class TestAssetScannerSpzHeader:
+    """asset_scanner._parse_spz_header coverage for v3/v4 fixtures."""
+
+    def test_parse_spz_header_v3_and_v4(self):
+        from lfs_plugins.asset_scanner import AssetScanner
+
+        scanner = AssetScanner()
+        v3 = scanner._parse_spz_header(str(SPZ_FIXTURE_DIR / "upstream_v3_sh3.spz"))
+        v4 = scanner._parse_spz_header(str(SPZ_FIXTURE_DIR / "upstream_v4_sh3.spz"))
+
+        assert v3 is not None
+        assert v3["version"] == 3
+        assert v3["vertex_count"] == 100
+
+        assert v4 is not None
+        assert v4["version"] == 4
+        assert v4["vertex_count"] == 100
 
 
 class TestSaveSOG:

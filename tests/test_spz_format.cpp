@@ -5,9 +5,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <string>
+#include <vector>
 
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
@@ -111,7 +115,8 @@ protected:
     static std::vector<uint8_t> make_spz_header(
         const uint32_t point_count,
         const uint8_t sh_degree,
-        const uint8_t fractional_bits) {
+        const uint8_t fractional_bits,
+        const uint32_t version = 3) {
         std::vector<uint8_t> bytes;
         const auto append_u32 = [&](const uint32_t value) {
             bytes.push_back(static_cast<uint8_t>(value));
@@ -120,7 +125,7 @@ protected:
             bytes.push_back(static_cast<uint8_t>(value >> 24));
         };
         append_u32(0x5053474e);
-        append_u32(3);
+        append_u32(version);
         append_u32(point_count);
         bytes.push_back(sh_degree);
         bytes.push_back(fractional_bits);
@@ -141,6 +146,80 @@ protected:
         stream.write(reinterpret_cast<const char*>(compressed.data()),
                      static_cast<std::streamsize>(compressed.size()));
         return stream.good();
+    }
+
+    static fs::path fixture_path(const char* filename) {
+        return fs::path(PROJECT_ROOT_PATH) / "tests" / "data" / "spz" / filename;
+    }
+
+    static std::vector<uint8_t> read_file_prefix(const fs::path& path, size_t n) {
+        std::ifstream stream(path, std::ios::binary);
+        std::vector<uint8_t> bytes(n, 0);
+        stream.read(reinterpret_cast<char*>(bytes.data()),
+                    static_cast<std::streamsize>(n));
+        bytes.resize(static_cast<size_t>(stream.gcount()));
+        return bytes;
+    }
+
+    static void expect_near_tensors(
+        const Tensor& actual,
+        const Tensor& expected,
+        float tol,
+        const char* label) {
+        const auto a = actual.contiguous().to(Device::CPU);
+        const auto e = expected.contiguous().to(Device::CPU);
+        ASSERT_EQ(a.numel(), e.numel()) << label << " numel mismatch";
+        const auto* a_ptr = static_cast<const float*>(a.data_ptr());
+        const auto* e_ptr = static_cast<const float*>(e.data_ptr());
+        for (size_t i = 0; i < a.numel(); ++i) {
+            EXPECT_NEAR(a_ptr[i], e_ptr[i], tol) << label << " at " << i;
+        }
+    }
+
+    static void expect_near_rotations(
+        const Tensor& actual,
+        const Tensor& expected,
+        float tol,
+        const char* label) {
+        const auto a = actual.contiguous().to(Device::CPU);
+        const auto e = expected.contiguous().to(Device::CPU);
+        ASSERT_EQ(a.numel(), e.numel()) << label << " numel mismatch";
+        ASSERT_EQ(a.numel() % 4, 0u) << label << " not quaternion-sized";
+        const auto* a_ptr = static_cast<const float*>(a.data_ptr());
+        const auto* e_ptr = static_cast<const float*>(e.data_ptr());
+        const size_t n = a.numel() / 4;
+        for (size_t i = 0; i < n; ++i) {
+            const float dot = a_ptr[i * 4 + 0] * e_ptr[i * 4 + 0] +
+                              a_ptr[i * 4 + 1] * e_ptr[i * 4 + 1] +
+                              a_ptr[i * 4 + 2] * e_ptr[i * 4 + 2] +
+                              a_ptr[i * 4 + 3] * e_ptr[i * 4 + 3];
+            EXPECT_NEAR(std::abs(dot), 1.0f, tol) << label << " at point " << i;
+        }
+    }
+
+    static void expect_all_finite(const Tensor& tensor, const char* label) {
+        const auto cpu = tensor.contiguous().to(Device::CPU);
+        const auto* ptr = static_cast<const float*>(cpu.data_ptr());
+        for (size_t i = 0; i < cpu.numel(); ++i) {
+            EXPECT_TRUE(std::isfinite(ptr[i])) << label << " non-finite at " << i;
+        }
+    }
+
+    static void expect_splat_near(
+        const SplatData& actual,
+        const SplatData& expected,
+        float tol) {
+        EXPECT_EQ(actual.size(), expected.size());
+        EXPECT_EQ(actual.get_max_sh_degree(), expected.get_max_sh_degree());
+        expect_near_tensors(actual.means(), expected.means(), tol, "means");
+        expect_near_tensors(actual.sh0(), expected.sh0(), tol, "sh0");
+        expect_near_tensors(actual.scaling_raw(), expected.scaling_raw(), tol, "scale");
+        expect_near_tensors(actual.opacity_raw(), expected.opacity_raw(), tol, "opacity");
+        expect_near_rotations(actual.rotation_raw(), expected.rotation_raw(), tol, "rotation");
+        if (expected.shN().is_valid() && expected.shN().numel() > 0) {
+            ASSERT_TRUE(actual.shN().is_valid());
+            expect_near_tensors(actual.shN_raw(), expected.shN_raw(), tol, "shN");
+        }
     }
 };
 
@@ -391,4 +470,186 @@ TEST_F(SpzFormatTest, RealPlyRoundtrip) {
     // CRITICAL: sh0 shape must match PLY loader
     EXPECT_EQ(spz_splat.sh0().ndim(), ply_splat.sh0().ndim());
     EXPECT_EQ(spz_splat.sh0().size(1), ply_splat.sh0().size(1)); // Must be 1
+}
+
+// Default export writes SPZ v4 (NGSP/zstd container)
+TEST_F(SpzFormatTest, DefaultExportWritesV4) {
+    auto original = create_test_splat(10, 0);
+    const fs::path path = temp_dir / "default_v4.spz";
+    ASSERT_TRUE(save_spz(original, {.output_path = path}).has_value());
+
+    const auto prefix = read_file_prefix(path, 8);
+    ASSERT_GE(prefix.size(), 8u);
+    EXPECT_EQ(prefix[0], static_cast<uint8_t>('N'));
+    EXPECT_EQ(prefix[1], static_cast<uint8_t>('G'));
+    EXPECT_EQ(prefix[2], static_cast<uint8_t>('S'));
+    EXPECT_EQ(prefix[3], static_cast<uint8_t>('P'));
+
+    uint32_t version = 0;
+    std::memcpy(&version, prefix.data() + 4, sizeof(version));
+    EXPECT_EQ(version, 4u);
+}
+
+// v3 escape hatch: explicit version=3 writes legacy gzip
+TEST_F(SpzFormatTest, V3EscapeHatchRoundtrip) {
+    auto original = create_test_splat(50, 1);
+    const fs::path path = temp_dir / "escape_v3.spz";
+    ASSERT_TRUE(save_spz(original, {.output_path = path, .version = 3}).has_value());
+
+    const auto prefix = read_file_prefix(path, 2);
+    ASSERT_GE(prefix.size(), 2u);
+    EXPECT_EQ(prefix[0], 0x1f);
+    EXPECT_EQ(prefix[1], 0x8b);
+
+    const auto loaded = load_spz(path);
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    expect_splat_near(*loaded, original, SPZ_TOLERANCE);
+}
+
+// v3 fixture in -> default (v4) out round trip
+TEST_F(SpzFormatTest, V3InV4OutRoundtrip) {
+    const auto path_in = fixture_path("upstream_v3_sh3.spz");
+    ASSERT_TRUE(fs::exists(path_in)) << path_in;
+
+    const auto original = load_spz(path_in);
+    ASSERT_TRUE(original.has_value()) << original.error();
+
+    const fs::path path_out = temp_dir / "v3_to_v4.spz";
+    ASSERT_TRUE(save_spz(*original, {.output_path = path_out}).has_value());
+
+    const auto prefix = read_file_prefix(path_out, 4);
+    ASSERT_GE(prefix.size(), 4u);
+    EXPECT_EQ(std::string(prefix.begin(), prefix.begin() + 4), "NGSP");
+
+    const auto reloaded = load_spz(path_out);
+    ASSERT_TRUE(reloaded.has_value()) << reloaded.error();
+    expect_splat_near(*reloaded, *original, SPZ_TOLERANCE);
+}
+
+// v4 fixture in -> default (v4) out round trip
+TEST_F(SpzFormatTest, V4InV4OutRoundtrip) {
+    const auto path_in = fixture_path("upstream_v4_sh3.spz");
+    ASSERT_TRUE(fs::exists(path_in)) << path_in;
+
+    const auto original = load_spz(path_in);
+    ASSERT_TRUE(original.has_value()) << original.error();
+
+    const fs::path path_out = temp_dir / "v4_to_v4.spz";
+    ASSERT_TRUE(save_spz(*original, {.output_path = path_out}).has_value());
+
+    const auto reloaded = load_spz(path_out);
+    ASSERT_TRUE(reloaded.has_value()) << reloaded.error();
+    expect_splat_near(*reloaded, *original, SPZ_TOLERANCE);
+}
+
+// Upstream v4 fixtures import cleanly
+TEST_F(SpzFormatTest, UpstreamV4FixturesImport) {
+    struct Case {
+        const char* name;
+        int sh_degree;
+    };
+    const Case cases[] = {
+        {"upstream_v4_sh0.spz", 0},
+        {"upstream_v4_sh1.spz", 1},
+        {"upstream_v4_sh2.spz", 2},
+        {"upstream_v4_sh3.spz", 3},
+        {"upstream_v4_noext.spz", 3},
+    };
+
+    for (const auto& c : cases) {
+        const auto path = fixture_path(c.name);
+        ASSERT_TRUE(fs::exists(path)) << path;
+
+        const auto loaded = load_spz(path);
+        ASSERT_TRUE(loaded.has_value()) << c.name << ": " << loaded.error();
+        EXPECT_EQ(loaded->size(), 100u) << c.name;
+        EXPECT_EQ(loaded->get_max_sh_degree(), c.sh_degree) << c.name;
+
+        expect_all_finite(loaded->means(), "means");
+        expect_all_finite(loaded->sh0(), "sh0");
+        expect_all_finite(loaded->scaling_raw(), "scale");
+        expect_all_finite(loaded->rotation_raw(), "rotation");
+        expect_all_finite(loaded->opacity_raw(), "opacity");
+        if (loaded->shN().is_valid() && loaded->shN().numel() > 0) {
+            expect_all_finite(loaded->shN_raw(), "shN");
+        }
+    }
+}
+
+// Same source clouds written as v3 and v4 must decode to matching attributes
+TEST_F(SpzFormatTest, V3V4Parity) {
+    for (int degree = 0; degree <= 3; ++degree) {
+        const auto v3_name = std::string("upstream_v3_sh") + std::to_string(degree) + ".spz";
+        const auto v4_name = std::string("upstream_v4_sh") + std::to_string(degree) + ".spz";
+        const auto path_v3 = fixture_path(v3_name.c_str());
+        const auto path_v4 = fixture_path(v4_name.c_str());
+        ASSERT_TRUE(fs::exists(path_v3)) << path_v3;
+        ASSERT_TRUE(fs::exists(path_v4)) << path_v4;
+
+        const auto a = load_spz(path_v3);
+        const auto b = load_spz(path_v4);
+        ASSERT_TRUE(a.has_value()) << v3_name << ": " << a.error();
+        ASSERT_TRUE(b.has_value()) << v4_name << ": " << b.error();
+        expect_splat_near(*a, *b, SPZ_TOLERANCE);
+    }
+}
+
+// Coordinate-system extension declaration is honoured on load
+TEST_F(SpzFormatTest, CoordinateSystemExtensionHonoured) {
+    const auto path_rdf = fixture_path("upstream_v4_declRDF.spz");
+    const auto path_rub = fixture_path("upstream_v4_declRUB.spz");
+    ASSERT_TRUE(fs::exists(path_rdf)) << path_rdf;
+    ASSERT_TRUE(fs::exists(path_rub)) << path_rub;
+
+    const auto rdf = load_spz(path_rdf);
+    const auto rub = load_spz(path_rub);
+    ASSERT_TRUE(rdf.has_value()) << rdf.error();
+    ASSERT_TRUE(rub.has_value()) << rub.error();
+
+    constexpr float kCoordTol = 1e-4f;
+    EXPECT_EQ(rdf->size(), rub->size());
+    expect_near_tensors(rdf->means(), rub->means(), kCoordTol, "means");
+    expect_near_tensors(rdf->scaling_raw(), rub->scaling_raw(), kCoordTol, "scale");
+    expect_near_rotations(rdf->rotation_raw(), rub->rotation_raw(), kCoordTol, "rotation");
+}
+
+// Unknown SPZ versions must be rejected without crashing
+TEST_F(SpzFormatTest, UnknownVersionRejected) {
+    const auto path_v99 = fixture_path("upstream_v99_bad.spz");
+    ASSERT_TRUE(fs::exists(path_v99)) << path_v99;
+
+    const auto result_v99 = load_spz(path_v99);
+    EXPECT_FALSE(result_v99.has_value());
+    if (!result_v99.has_value()) {
+        const auto& err = result_v99.error();
+        EXPECT_NE(err.find("version"), std::string::npos) << err;
+        EXPECT_NE(err.find("99"), std::string::npos) << err;
+    }
+
+    const fs::path path_gzip_v9 = temp_dir / "forged_gzip_v9.spz";
+    ASSERT_TRUE(write_gzipped_spz(
+        path_gzip_v9,
+        make_spz_header(1, 0, 12, /*version=*/9)));
+
+    const auto result_v9 = load_spz(path_gzip_v9);
+    EXPECT_FALSE(result_v9.has_value());
+}
+
+// v3 export must not write an NGSP container
+TEST_F(SpzFormatTest, V3ExportCarriesNoExtensions) {
+    auto original = create_test_splat(20, 1);
+    const fs::path path = temp_dir / "v3_no_ngsp.spz";
+    ASSERT_TRUE(save_spz(original, {.output_path = path, .version = 3}).has_value());
+
+    const auto prefix = read_file_prefix(path, 4);
+    ASSERT_GE(prefix.size(), 2u);
+    EXPECT_EQ(prefix[0], 0x1f);
+    EXPECT_EQ(prefix[1], 0x8b);
+    if (prefix.size() >= 4u) {
+        EXPECT_NE(std::string(prefix.begin(), prefix.begin() + 4), "NGSP");
+    }
+
+    const auto loaded = load_spz(path);
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    EXPECT_EQ(loaded->size(), original.size());
 }

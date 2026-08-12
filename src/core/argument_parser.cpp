@@ -1223,12 +1223,14 @@ namespace {
         "\n"
         "EXAMPLES:\n"
         "  LichtFeld-Studio convert input.ply output.spz --sh-degree 0\n"
+        "  LichtFeld-Studio convert input.ply output.spz --spz-version 3\n"
         "  LichtFeld-Studio convert input.ply -f html\n"
         "  LichtFeld-Studio convert ./splats/ -f sog --sh-degree 2\n"
         "\n"
         "SUPPORTED FORMATS:\n"
         "  Input:  .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint)\n"
         "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
+        "  SPZ:    --spz-version 4 (default, zstd) or 3 (legacy gzip)\n"
         "\n";
 
     constexpr const char* MESH2SPLAT_HELP_HEADER = "LichtFeld Studio - Convert mesh files to Gaussian splats\n";
@@ -1325,6 +1327,7 @@ namespace {
         ::args::Positional<std::string> output(parser, "output", "Output file (optional)");
         ::args::ValueFlag<int> sh_degree(parser, "degree", "SH degree [0-3], -1 to keep original (default: -1)", {"sh-degree"});
         ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, spz, html, usd, usda, usdc, rad", {'f', "format"});
+        ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG (default: 10)", {"sog-iterations"});
         ::args::ValueFlag<std::string> tiles(parser, "AxB", "Replicate a PLY source across an AxB ground-plane grid (RAD output only)", {"tiles"});
         ::args::ValueFlag<std::string> lod_builder(parser, "builder", "PLY->RAD LOD tree builder: bhatt (default) or octree (hybrid: octree fine levels + similarity-ordered bhatt top, much faster)", {"lod-builder"});
@@ -1352,6 +1355,7 @@ namespace {
         param::ConvertParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
         params.sh_degree = sh_degree ? ::args::get(sh_degree) : -1;
+        params.spz_version = spz_version ? ::args::get(spz_version) : 4;
 
         if (!std::filesystem::exists(params.input_path)) {
             return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
@@ -1359,6 +1363,9 @@ namespace {
 
         if (params.sh_degree < -1 || params.sh_degree > 3) {
             return std::unexpected("SH degree must be -1 (keep) or 0-3");
+        }
+        if (params.spz_version != 3 && params.spz_version != 4) {
+            return std::unexpected("--spz-version must be 3 or 4");
         }
 
         if (output)
@@ -1440,6 +1447,7 @@ namespace {
         ::args::Positional<std::string> output(parser, "output", "Output file or directory (optional)");
         ::args::ValueFlag<std::string> output_flag(parser, "path", "Output file or directory", {'o', "output"});
         ::args::ValueFlag<std::string> format(parser, "formats", "Output format(s): ply, sog, spz, html, usd, usda, usdc, rad. Use commas for multiple outputs", {'f', "format"});
+        ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
         ::args::ValueFlag<int> resolution(parser, "pixels", "Mesh2Splat raster resolution target (default: 1024)", {"resolution"});
         ::args::ValueFlag<float> sigma(parser, "scale", "Gaussian scale sigma (default: 0.65)", {"sigma"});
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG/HTML output (default: 10)", {"sog-iterations"});
@@ -1467,9 +1475,13 @@ namespace {
 
         param::Mesh2SplatParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
+        params.spz_version = spz_version ? ::args::get(spz_version) : 4;
 
         if (!std::filesystem::exists(params.input_path)) {
             return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
+        }
+        if (params.spz_version != 3 && params.spz_version != 4) {
+            return std::unexpected("--spz-version must be 3 or 4");
         }
 
         if (output_flag) {

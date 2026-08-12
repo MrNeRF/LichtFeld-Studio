@@ -21,6 +21,9 @@ tests/data/*
 !tests/data/param_json_golden/
 tests/data/param_json_golden/*
 !tests/data/param_json_golden/*.json
+!tests/data/spz/
+tests/data/spz/*
+!tests/data/spz/*.spz
 *.pt
 *.py
 !scripts/lichtfeld_mcp_bridge.py

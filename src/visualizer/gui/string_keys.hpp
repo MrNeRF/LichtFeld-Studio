@@ -652,6 +652,9 @@ namespace lichtfeld::Strings {
         inline constexpr const char* MODELS = "export_dialog.models";
         inline constexpr const char* NO_MODELS = "export_dialog.no_models";
         inline constexpr const char* SH_DEGREE = "export_dialog.sh_degree";
+        inline constexpr const char* SPZ_VERSION = "export_dialog.spz_version";
+        inline constexpr const char* SPZ_VERSION_V4 = "export_dialog.spz_version_v4";
+        inline constexpr const char* SPZ_VERSION_V3 = "export_dialog.spz_version_v3";
         inline constexpr const char* EXPORT_MERGED = "export_dialog.export_merged";
     } // namespace ExportDialog
 

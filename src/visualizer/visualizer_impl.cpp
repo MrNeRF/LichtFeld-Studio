@@ -695,7 +695,7 @@ namespace lfs::vis {
 
         python::set_export_callback([](int format, const char* path, const char** node_names,
                                        int node_count, int sh_degree, bool rad_flip_y,
-                                       bool rad_streamable) {
+                                       bool rad_streamable, int spz_version) {
             if (auto* gm = python::get_gui_manager()) {
                 std::vector<std::string> names;
                 names.reserve(node_count);
@@ -705,7 +705,8 @@ namespace lfs::vis {
                 gm->asyncTasks().performExport(static_cast<lfs::core::ExportFormat>(format),
                                                lfs::core::utf8_to_path(path), names, sh_degree,
                                                rad_flip_y,
-                                               rad_streamable);
+                                               rad_streamable,
+                                               spz_version);
             }
         });
         callback_cleanup_.add([] { python::set_export_callback(nullptr); });

@@ -52,7 +52,8 @@ namespace lfs::vis {
             void performExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
                                const std::vector<std::string>& node_names, int sh_degree,
                                bool rad_flip_y = false,
-                               bool rad_streamable = true);
+                               bool rad_streamable = true,
+                               int spz_version = 4);
             [[nodiscard]] bool isExporting() const { return export_state_.active.load(); }
             [[nodiscard]] float getExportProgress() const { return export_state_.progress.load(); }
             [[nodiscard]] std::string getExportStage() const {
@@ -199,7 +200,8 @@ namespace lfs::vis {
                                   bool borrow_single_identity,
                                   std::shared_mutex* model_mutex,
                                   bool rad_flip_y,
-                                  bool rad_streamable);
+                                  bool rad_streamable,
+                                  int spz_version);
             void startColmapExport(const std::filesystem::path& path);
             void startAsyncImport(const std::filesystem::path& path,
                                   const lfs::core::param::TrainingParameters& params);

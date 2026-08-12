@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "spz.hpp"
+#include "coordinate-system-adobe.h"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
@@ -11,8 +12,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <format>
 #include <fstream>
+#include <memory>
 
 namespace lfs::io {
 
@@ -26,12 +30,60 @@ namespace lfs::io {
         constexpr int SH_COEFFS_FOR_DEGREE[] = {0, 3, 8, 15};
         constexpr float SCENE_SCALE = 0.5f; // Match PLY loader
 
+        const char* coordinate_system_name(spz::CoordinateSystem system) {
+            switch (system) {
+            case spz::CoordinateSystem::UNSPECIFIED: return "UNSPECIFIED";
+            case spz::CoordinateSystem::LDB: return "LDB";
+            case spz::CoordinateSystem::RDB: return "RDB";
+            case spz::CoordinateSystem::LUB: return "LUB";
+            case spz::CoordinateSystem::RUB: return "RUB";
+            case spz::CoordinateSystem::LDF: return "LDF";
+            case spz::CoordinateSystem::RDF: return "RDF";
+            case spz::CoordinateSystem::LUF: return "LUF";
+            case spz::CoordinateSystem::RUF: return "RUF";
+            case spz::CoordinateSystem::LFD: return "LFD";
+            case spz::CoordinateSystem::RFD: return "RFD";
+            case spz::CoordinateSystem::LFU: return "LFU";
+            case spz::CoordinateSystem::RFU: return "RFU";
+            case spz::CoordinateSystem::LBD: return "LBD";
+            case spz::CoordinateSystem::RBD: return "RBD";
+            case spz::CoordinateSystem::LBU: return "LBU";
+            case spz::CoordinateSystem::RBU: return "RBU";
+            }
+            return "UNKNOWN";
+        }
+
+        void log_coordinate_system_extension(const spz::GaussianCloud& cloud) {
+#ifdef SPZ_BUILD_EXTENSIONS
+            const auto coord_ext =
+                spz::findExtensionByType<spz::SpzExtensionCoordinateSystemAdobe>(cloud.extensions);
+            if (!coord_ext) {
+                return;
+            }
+            const spz::CoordinateSystem system = coord_ext->resolve();
+            if (system == spz::CoordinateSystem::RUB) {
+                LOG_INFO("SPZ: file declares coordinate system RUB (matches default assumption)");
+            } else {
+                LOG_WARN(
+                    "SPZ: file declares coordinate system {} (differs from historical RUB "
+                    "assumption); declared system was honoured",
+                    coordinate_system_name(system));
+            }
+#else
+            (void)cloud;
+#endif
+        }
+
         std::expected<void, std::string> validate_spz_cloud(
             const spz::GaussianCloud& cloud) {
             if (cloud.numPoints <= 0 ||
-                static_cast<uint32_t>(cloud.numPoints) > spz::kMaxSpzPoints ||
-                cloud.shDegree < 0 || cloud.shDegree > 3) {
+                static_cast<uint32_t>(cloud.numPoints) > spz::kMaxSpzPoints) {
                 return std::unexpected("SPZ header contains invalid point or SH metadata");
+            }
+            if (cloud.shDegree < 0 || cloud.shDegree > 3) {
+                return std::unexpected(
+                    "SPZ SH degree-4 files are not supported by LichtFeld yet "
+                    "(supported degrees: 0-3)");
             }
 
             const size_t count = static_cast<size_t>(cloud.numPoints);
@@ -199,6 +251,29 @@ namespace lfs::io {
                 return std::unexpected(std::format("Failed to read SPZ file: {}", lfs::core::path_to_utf8(filepath)));
             }
 
+            // Sniff the container so unsupported versions fail with a clear message.
+            if (data.size() >= 2 && data[0] == 0x1f && data[1] == 0x8b) {
+                // Legacy gzip container (v1–v3).
+            } else if (data.size() >= 8) {
+                uint32_t magic = 0;
+                std::memcpy(&magic, data.data(), sizeof(magic));
+                if (magic == spz::NGSP_MAGIC) {
+                    uint32_t version = 0;
+                    std::memcpy(&version, data.data() + 4, sizeof(version));
+                    if (version > static_cast<uint32_t>(spz::LATEST_SPZ_HEADER_VERSION)) {
+                        return std::unexpected(std::format(
+                            "unsupported SPZ version {} (this build supports 1-{})",
+                            version, spz::LATEST_SPZ_HEADER_VERSION));
+                    }
+                } else {
+                    return std::unexpected(std::format(
+                        "not an SPZ file: {}", lfs::core::path_to_utf8(filepath)));
+                }
+            } else {
+                return std::unexpected(std::format(
+                    "not an SPZ file: {}", lfs::core::path_to_utf8(filepath)));
+            }
+
             // Load through the in-memory API to avoid narrow-path handling in the bundled SPZ library.
             spz::UnpackOptions options;
             options.to = spz::CoordinateSystem::RDF;
@@ -209,6 +284,8 @@ namespace lfs::io {
                     lfs::core::path_to_utf8(filepath),
                     validation.error()));
             }
+
+            log_coordinate_system_extension(cloud);
 
             LOG_DEBUG("SPZ loaded: {} points, SH degree {}", cloud.numPoints, cloud.shDegree);
 
@@ -235,6 +312,12 @@ namespace lfs::io {
         if (!report_export_progress(options.progress_callback, 0.0f, "Preparing SPZ")) {
             return make_error(ErrorCode::CANCELLED, "SPZ export cancelled", options.output_path);
         }
+        if (options.version != 3 && options.version != 4) {
+            return make_error(
+                ErrorCode::UNSUPPORTED_FORMAT,
+                std::format("SPZ export version must be 3 or 4 (got {})", options.version),
+                options.output_path);
+        }
         if (splat_data.size() == 0 || splat_data.size() > spz::kMaxSpzPoints) {
             return make_error(
                 ErrorCode::INVALID_DATASET,
@@ -248,9 +331,20 @@ namespace lfs::io {
             return make_error(ErrorCode::CANCELLED, "SPZ export cancelled", options.output_path);
         }
 
-        // Save using Niantic's library (input is RDF coordinate system like PLY)
+        // Save using Niantic's library (input is RDF coordinate system like PLY).
+        // Version 4 attaches the coordinate-system extension declaring RUB on disk.
+        // Version 3 must attach no extensions: legacy readers hard-reject trailing bytes.
         spz::PackOptions pack_options;
         pack_options.from = spz::CoordinateSystem::RDF;
+        pack_options.version = static_cast<uint32_t>(options.version);
+
+#ifdef SPZ_BUILD_EXTENSIONS
+        if (options.version == 4) {
+            auto coord_ext = std::make_shared<spz::SpzExtensionCoordinateSystemAdobe>();
+            coord_ext->coordinateSystem = spz::CoordinateSystem::RUB;
+            cloud.extensions.push_back(coord_ext);
+        }
+#endif
 
         // Pack to memory first, then write to file ourselves to handle Unicode paths correctly
         std::vector<uint8_t> data;
