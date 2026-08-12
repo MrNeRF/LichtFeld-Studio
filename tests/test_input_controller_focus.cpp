@@ -1232,19 +1232,52 @@ namespace lfs::vis {
                         .has_value());
     }
 
-    TEST_F(InputControllerFocusTest, McpBindingShortcutInvokesRuntimeControl) {
+    TEST_F(InputControllerFocusTest, McpServerShortcutInvokesOnlyEnabledRuntimeControl) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
         input::InputRouter router;
         router.setInputController(&controller);
         controller.setInputRouter(&router);
 
-        int calls = 0;
+        int enabled_calls = 0;
+        int binding_calls = 0;
         setRuntimeServiceControls({
+            .toggle_mcp_enabled = [&] {
+                ++enabled_calls;
+                return true; },
             .toggle_mcp_binding = [&] {
-                ++calls;
-                return true;
-            },
+                ++binding_calls;
+                return true; },
+        });
+
+        EXPECT_EQ(controller.getBindings().getActionForKey(
+                      input::ToolMode::GLOBAL, input::KEY_M,
+                      input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_SERVER);
+
+        controller.handleKey(input::KEY_M, input::ACTION_PRESS,
+                             input::MODIFIER_CTRL | input::MODIFIER_SHIFT);
+
+        EXPECT_EQ(enabled_calls, 1);
+        EXPECT_EQ(binding_calls, 0);
+    }
+
+    TEST_F(InputControllerFocusTest, McpBindingShortcutInvokesOnlyBindingRuntimeControl) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        int enabled_calls = 0;
+        int binding_calls = 0;
+        setRuntimeServiceControls({
+            .toggle_mcp_enabled = [&] {
+                ++enabled_calls;
+                return true; },
+            .toggle_mcp_binding = [&] {
+                ++binding_calls;
+                return true; },
         });
 
         EXPECT_EQ(controller.getBindings().getActionForKey(
@@ -1255,7 +1288,8 @@ namespace lfs::vis {
         controller.handleKey(input::KEY_N, input::ACTION_PRESS,
                              input::MODIFIER_CTRL | input::MODIFIER_SHIFT);
 
-        EXPECT_EQ(calls, 1);
+        EXPECT_EQ(enabled_calls, 0);
+        EXPECT_EQ(binding_calls, 1);
     }
 
     TEST_F(InputControllerFocusTest, McpBindingShortcutBypassesPythonKeyboardCapture) {
@@ -1336,6 +1370,47 @@ namespace lfs::vis {
                                          input::KEY_M,
                                          input::MODIFIER_CTRL | input::MODIFIER_ALT),
                   input::Action::NONE);
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyFourProfileReconcilesPreferencesMcpAndHudActions) {
+        const auto profile_path = std::filesystem::temp_directory_path() /
+                                  "lfs_input_bindings_legacy_v24.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV24",
+  "version": 24,
+  "bindings": [
+    {"mode": 0, "action": 77, "description": "Preferences", "trigger_type": "key", "key": 44, "modifiers": 2, "on_repeat": false},
+    {"mode": 0, "action": 78, "description": "Toggle MCP server", "trigger_type": "key", "key": 77, "modifiers": 3, "on_repeat": false},
+    {"mode": 0, "action": 79, "description": "Toggle MCP binding", "trigger_type": "key", "key": 78, "modifiers": 3, "on_repeat": false},
+    {"mode": 0, "action": 80, "description": "Performance HUD", "trigger_type": "key", "key": 299, "modifiers": 0, "on_repeat": false}
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_COMMA,
+                                         input::MODIFIER_CTRL),
+                  input::Action::OPEN_PREFERENCES);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_M,
+                                         input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_SERVER);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_N,
+                                         input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_BINDING);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_F10,
+                                         input::MODIFIER_NONE),
+                  input::Action::TOGGLE_PERFORMANCE_HUD);
 
         std::filesystem::remove(profile_path);
     }

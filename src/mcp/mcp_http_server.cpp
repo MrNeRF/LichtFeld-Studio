@@ -323,8 +323,10 @@ namespace lfs::mcp {
 
     void McpHttpServer::stop() {
         std::lock_guard lock(lifecycle_mutex_);
-        if (running_.load(std::memory_order_acquire))
+        if (running_.load(std::memory_order_acquire)) {
             appendSessionLog({{"event", "state"}, {"state", "stopped"}});
+            LOG_INFO("MCP HTTP server stopped");
+        }
         if (http_server_)
             http_server_->stop();
         if (listener_thread_.joinable())

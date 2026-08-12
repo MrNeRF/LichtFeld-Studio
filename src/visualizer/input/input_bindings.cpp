@@ -23,7 +23,7 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 24; // Version 24 replaces the Windows-unreliable Ctrl+Alt+M shortcut.
+        constexpr int PROFILE_VERSION = 25; // Version 25 reconciles Preferences/MCP/HUD action ids with upstream.
         constexpr Action LAST_ACTION = Action::TOGGLE_MCP_BINDING;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
@@ -350,6 +350,7 @@ namespace lfs::vis::input {
 
             current_profile_name_ = profile_name;
             bindings_.clear();
+            size_t action_id_remaps = 0;
 
             for (const auto& b : j["bindings"]) {
                 const int mode_value = b.value("mode", 0);
@@ -364,7 +365,29 @@ namespace lfs::vis::input {
                 Binding binding;
                 // Version 1 had no mode field, default to GLOBAL
                 binding.mode = static_cast<ToolMode>(mode_value);
-                binding.action = static_cast<Action>(action_value);
+                int canonical_action_value = action_value;
+                if (version >= 21 && version < 25) {
+                    // These profile versions were emitted before the upstream
+                    // HUD action was placed ahead of Preferences and MCP.
+                    switch (action_value) {
+                    case 77:
+                        canonical_action_value = static_cast<int>(Action::OPEN_PREFERENCES);
+                        break;
+                    case 78:
+                        canonical_action_value = static_cast<int>(Action::TOGGLE_MCP_SERVER);
+                        break;
+                    case 79:
+                        canonical_action_value = static_cast<int>(Action::TOGGLE_MCP_BINDING);
+                        break;
+                    case 80:
+                        canonical_action_value = static_cast<int>(Action::TOGGLE_PERFORMANCE_HUD);
+                        break;
+                    default:
+                        break;
+                    }
+                    action_id_remaps += canonical_action_value != action_value ? 1 : 0;
+                }
+                binding.action = static_cast<Action>(canonical_action_value);
                 binding.description = b.value("description", getActionName(binding.action));
 
                 // Cross-version safeguard: if the stored description doesn't
@@ -439,7 +462,7 @@ namespace lfs::vis::input {
             }
 
             const size_t collapsed = collapseRedundantModeBindings(version);
-            const size_t migrated = collapsed + migrateLoadedProfile(version);
+            const size_t migrated = action_id_remaps + collapsed + migrateLoadedProfile(version);
 
             rebuildLookupMaps();
             LOG_INFO("Loaded profile '{}' ({} bindings) from {}", current_profile_name_, bindings_.size(), lfs::core::path_to_utf8(path));
@@ -527,7 +550,8 @@ namespace lfs::vis::input {
                 (version < 17 && def.action == Action::SELECTION_INTERSECT) ||
                 (version < 18 && selection_volume_shortcut) ||
                 (version < 19 && def.action == Action::CUT_SELECTION) ||
-                (version < 20 && def.action == Action::TOGGLE_PERFORMANCE_HUD) ||
+                ((version < 20 || (version >= 21 && version < 25)) &&
+                 def.action == Action::TOGGLE_PERFORMANCE_HUD) ||
                 (version < 21 && def.action == Action::OPEN_PREFERENCES) ||
                 (version < 22 && def.action == Action::TOGGLE_MCP_SERVER) ||
                 (version < 23 && def.action == Action::TOGGLE_MCP_BINDING);
