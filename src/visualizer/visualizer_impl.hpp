@@ -207,6 +207,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_FileExitRoutesThroughCloseSaveWhenAutoSaveOnCloseEnabled_Test;
         friend class VisualizerImplResetTest_CloseSavePendingActionSkipsPreviewRegen_Test;
         friend class VisualizerImplResetTest_SaveAsAndExitContinuesAfterProjectWriteCompletes_Test;
+        friend class VisualizerImplResetTest_SaveAsAndExitClearsSelectionDirtyBaseline_Test;
+        friend class VisualizerImplResetTest_SaveAsAndExitClearsParameterDirtyBaseline_Test;
         friend class VisualizerImplResetTest_CancelExitAndNextWindowAttemptRecoverFromFailedCloseSave_Test;
         friend class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
         friend class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;

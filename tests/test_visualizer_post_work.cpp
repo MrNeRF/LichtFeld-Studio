@@ -2125,6 +2125,95 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           SaveAsAndExitClearsSelectionDirtyBaseline) {
+        const auto source_path = temporary_.path / "selection-source.licht";
+        const auto destination = temporary_.path / "selection-save-as.licht";
+        write_empty_project(source_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(nullptr, viewer.getViewport());
+            ASSERT_TRUE(viewer.projectOpen(source_path));
+            ASSERT_NE(viewer.getScene().addGroup("Selectable"),
+                      lfs::core::NULL_NODE);
+            ASSERT_TRUE(viewer.projectSave(false));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                    return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+                }));
+            ASSERT_FALSE(viewer.project_lifecycle_->hasDirtyProject());
+
+            viewer.getSceneManager()->selectNode("Selectable");
+            viewer.project_lifecycle_->markSceneMutation(
+                static_cast<std::uint32_t>(
+                    lfs::core::Scene::MutationType::SELECTION_CHANGED));
+            ASSERT_TRUE(viewer.project_lifecycle_->hasDirtyProject());
+
+            ASSERT_TRUE(viewer.projectSaveAs(destination, false));
+            viewer.requestApplicationClose();
+            ASSERT_TRUE(viewer.getWindowManager()->shouldClose());
+            EXPECT_FALSE(viewer.allowclose());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                    return viewer.getWindowManager()->shouldClose();
+                }));
+
+            const auto after = viewer.projectGetInfo();
+            ASSERT_TRUE(after);
+            EXPECT_FALSE(after->dirty);
+            EXPECT_EQ(after->path->lexically_normal(),
+                      destination.lexically_normal());
+            EXPECT_TRUE(viewer.allowclose());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           SaveAsAndExitClearsParameterDirtyBaseline) {
+        const auto source_path = temporary_.path / "parameter-source.licht";
+        const auto destination = temporary_.path / "parameter-save-as.licht";
+        write_empty_project(source_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(nullptr, viewer.getViewport());
+            ASSERT_TRUE(viewer.projectOpen(source_path));
+            ASSERT_TRUE(viewer.projectSave(false));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                    return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+                }));
+            ASSERT_FALSE(viewer.project_lifecycle_->hasDirtyProject());
+
+            viewer.getParameterManager()->modifyActiveParams(
+                [](auto& params) { params.iterations += 1; });
+            ASSERT_TRUE(viewer.project_lifecycle_->hasDirtyProject());
+
+            ASSERT_TRUE(viewer.projectSaveAs(destination, false));
+            viewer.requestApplicationClose();
+            ASSERT_TRUE(viewer.getWindowManager()->shouldClose());
+            EXPECT_FALSE(viewer.allowclose());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                    return viewer.getWindowManager()->shouldClose();
+                }));
+
+            const auto after = viewer.projectGetInfo();
+            ASSERT_TRUE(after);
+            EXPECT_FALSE(after->dirty);
+            EXPECT_FALSE(viewer.getParameterManager()->isDirty());
+            EXPECT_EQ(after->path->lexically_normal(),
+                      destination.lexically_normal());
+            EXPECT_TRUE(viewer.allowclose());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
            FileExitRoutesThroughCloseSaveWhenAutoSaveOnCloseEnabled) {
         const auto& temporary = temporary_.path;
         const auto project_path =

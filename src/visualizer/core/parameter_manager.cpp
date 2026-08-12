@@ -399,7 +399,7 @@ namespace lfs::vis {
         apply_scaler_to_params(mcmc_current_, new_scaler);
         apply_scaler_to_params(mrnf_current_, new_scaler);
         apply_scaler_to_params(igs_current_, new_scaler);
-        dirty_.store(true, std::memory_order_release);
+        markDirty();
         LOG_INFO("Auto-scaled steps for {} images: scaler={:.2f}", image_count, new_scaler);
     }
 

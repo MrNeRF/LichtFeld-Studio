@@ -323,6 +323,8 @@ namespace lfs::vis::project {
             project_write_dirty_epoch_ = 0;
         std::uint64_t
             project_write_scene_serial_ = 0;
+        std::uint64_t
+            project_write_parameter_serial_ = 0;
         std::filesystem::path
             project_write_destination_;
         bool project_write_automatic_ = false;

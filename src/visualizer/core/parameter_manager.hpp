@@ -74,9 +74,19 @@ namespace lfs::vis {
         void installValidatedPendingProjectState(
             const lfs::io::project::ParameterManagerSnapshot& snapshot);
 
-        void markDirty() { dirty_.store(true, std::memory_order_release); }
+        void markDirty() {
+            dirty_serial_.fetch_add(1, std::memory_order_acq_rel);
+            dirty_.store(true, std::memory_order_release);
+        }
         [[nodiscard]] bool isDirty() const { return dirty_.load(std::memory_order_acquire); }
         bool consumeDirty() { return dirty_.exchange(false, std::memory_order_acq_rel); }
+        [[nodiscard]] std::uint64_t dirtySerial() const {
+            return dirty_serial_.load(std::memory_order_acquire);
+        }
+        void clearDirtyIfUnchanged(const std::uint64_t serial) {
+            if (dirty_serial_.load(std::memory_order_acquire) == serial)
+                dirty_.store(false, std::memory_order_release);
+        }
 
         [[nodiscard]] lfs::core::param::OptimizationParameters copyActiveParams() const {
             std::lock_guard lock(params_mutex_);
@@ -87,7 +97,7 @@ namespace lfs::vis {
         void modifyActiveParams(F&& fn) {
             std::lock_guard lock(params_mutex_);
             fn(getActiveParams());
-            dirty_.store(true, std::memory_order_release);
+            markDirty();
         }
 
     private:
@@ -126,6 +136,7 @@ namespace lfs::vis {
 
         mutable std::mutex params_mutex_;
         std::atomic<bool> dirty_{false};
+        std::atomic<std::uint64_t> dirty_serial_{0};
     };
 
 } // namespace lfs::vis

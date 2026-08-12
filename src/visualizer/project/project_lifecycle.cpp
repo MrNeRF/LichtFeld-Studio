@@ -1511,6 +1511,14 @@ namespace lfs::vis::project {
         project_write_purpose_ = purpose;
         project_write_destination_ =
             destination;
+        project_write_scene_serial_ =
+            scene_mutation_serial_.load(
+                std::memory_order_acquire);
+        project_write_parameter_serial_ =
+            viewer_.getParameterManager()
+                ? viewer_.getParameterManager()
+                      ->dirtySerial()
+                : 0;
         last_project_write_error_.clear();
         std::vector<std::byte> owned_preview(
             options.preview_png.begin(),
@@ -1642,6 +1650,11 @@ namespace lfs::vis::project {
             dirty_epoch;
         project_write_scene_serial_ =
             scene_serial;
+        project_write_parameter_serial_ =
+            viewer_.getParameterManager()
+                ? viewer_.getParameterManager()
+                      ->dirtySerial()
+                : 0;
         last_project_write_error_.clear();
         try {
             project_write_thread_ =
@@ -2238,7 +2251,33 @@ namespace lfs::vis::project {
             project_write_purpose_ ==
                 ProjectWritePurpose::
                     TrainingAutosave;
+        const bool rebases_project_dirty_state =
+            project_write_purpose_ ==
+                ProjectWritePurpose::ExplicitSave ||
+            project_write_purpose_ ==
+                ProjectWritePurpose::SaveAs ||
+            project_write_purpose_ ==
+                ProjectWritePurpose::CloseSave ||
+            project_write_purpose_ ==
+                ProjectWritePurpose::TrainingExplicitSave;
         if (error.empty()) {
+            if (rebases_project_dirty_state) {
+                const bool write_inputs_unchanged =
+                    scene_mutation_serial_.load(
+                        std::memory_order_acquire) ==
+                    project_write_scene_serial_;
+                if (write_inputs_unchanged) {
+                    scene_dirty_.store(
+                        false, std::memory_order_release);
+                    payload_dirty_.store(
+                        false, std::memory_order_release);
+                }
+                if (auto* parameter_manager =
+                        viewer_.getParameterManager()) {
+                    parameter_manager->clearDirtyIfUnchanged(
+                        project_write_parameter_serial_);
+                }
+            }
             jobs.completed(*project_write_job_);
             clearAutosaveFailureBackoff();
             if (was_autosave) {
