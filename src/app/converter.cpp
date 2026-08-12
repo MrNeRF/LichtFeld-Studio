@@ -224,6 +224,7 @@ namespace lfs::app {
             const param::OutputFormat format,
             const int sog_iterations,
             const param::RadExportMode rad_export_mode,
+            const int spz_version = 4,
             const lfs::io::ExportProgressCallback& progress = nullptr) {
             switch (format) {
             case param::OutputFormat::PLY:
@@ -231,7 +232,7 @@ namespace lfs::app {
             case param::OutputFormat::SOG:
                 return lfs::io::save_sog(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress});
             case param::OutputFormat::SPZ:
-                return lfs::io::save_spz(splat, {.output_path = output, .progress_callback = progress});
+                return lfs::io::save_spz(splat, {.output_path = output, .version = spz_version, .progress_callback = progress});
             case param::OutputFormat::HTML:
                 return lfs::io::export_html(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress});
             case param::OutputFormat::USD:
@@ -419,7 +420,7 @@ namespace lfs::app {
             ConvertProgressBar bar;
             const auto result = saveSplat(
                 *splat, output, params.format, params.sog_iterations,
-                params.rad_export_mode,
+                params.rad_export_mode, params.spz_version,
                 [&bar](const float progress, const std::string& stage) {
                     return bar.report(progress, stage);
                 });
@@ -480,7 +481,7 @@ namespace lfs::app {
             for (const auto& output : outputs) {
                 std::println("  Saving: {}", path_to_utf8(output.path));
                 const auto result = saveSplat(**splat, output.path, output.format, params.sog_iterations,
-                                              param::RadExportMode::Stream);
+                                              param::RadExportMode::Stream, params.spz_version);
                 if (!result) {
                     LOG_ERROR("Save failed: {}", result.error().format());
                     std::println(stderr, "  Error: {}", result.error().message);

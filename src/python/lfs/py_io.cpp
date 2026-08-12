@@ -395,16 +395,18 @@ namespace lfs::python {
 
         m.def(
             "save_spz",
-            [](const PySplatData& data, const std::filesystem::path& path) {
+            [](const PySplatData& data, const std::filesystem::path& path, int version) {
                 io::SpzSaveOptions options;
                 options.output_path = path;
+                options.version = version;
 
                 auto result = io::save_spz(*data.data(), options);
                 if (!result)
                     throw_io_error(result.error(), "Failed to save SPZ");
             },
-            nb::arg("data"), nb::arg("path"),
-            "Save splat data as SPZ compressed file");
+            nb::arg("data"), nb::arg("path"), nb::arg("version") = 4,
+            "Save splat data as SPZ compressed file.\n\n"
+            "version: SPZ container version, 4 (zstd, default) or 3 (legacy gzip).");
 
         m.def(
             "save_usd",

@@ -92,9 +92,18 @@ add_library(spz_lib STATIC
         ${CMAKE_SOURCE_DIR}/external/spz/load-spz.cc
         ${CMAKE_SOURCE_DIR}/external/spz/splat-types.cc
         ${CMAKE_SOURCE_DIR}/external/spz/splat-c-types.cc
+        ${CMAKE_SOURCE_DIR}/external/spz/splat-extensions.cc
+        ${CMAKE_SOURCE_DIR}/external/spz/coordinate-system-adobe.cc
+        ${CMAKE_SOURCE_DIR}/external/spz/safe-orbit-camera-adobe.cc
 )
 target_include_directories(spz_lib PUBLIC ${CMAKE_SOURCE_DIR}/external/spz)
-target_link_libraries(spz_lib PRIVATE ZLIB::ZLIB)
+if(TARGET zstd::libzstd)
+    set(_spz_zstd_target zstd::libzstd)
+else()
+    set(_spz_zstd_target zstd::libzstd_static)
+endif()
+target_link_libraries(spz_lib PRIVATE ZLIB::ZLIB ${_spz_zstd_target})
+target_compile_definitions(spz_lib PUBLIC SPZ_BUILD_EXTENSIONS)
 target_compile_features(spz_lib PUBLIC cxx_std_17)
 set_target_properties(spz_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 

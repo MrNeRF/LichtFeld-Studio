@@ -13,7 +13,9 @@
 // have, and alpha = opacity * exp2(-q).
 //
 // LFS_HIGS_FP32=1: float staging with the exact legacy evaluate_splat math;
-// used for validation and as the overlay/editor variant.
+// used for validation and for the spark-rad opacity path (host-routed).
+// Overlay data stages in separate uint arrays, so LFS_RASTER_OVERLAYS works
+// with either staging format; the fp16 overlay variant keeps the drain queue.
 
 #include "config.slang"
 
@@ -25,10 +27,6 @@ import utils;
 
 #ifndef LFS_RASTER_OVERLAYS
 #define LFS_RASTER_OVERLAYS 0
-#endif
-
-#if LFS_RASTER_OVERLAYS && !LFS_HIGS_FP32
-#error "overlay variant requires fp32 staging"
 #endif
 
 #define RASTER_THREAD_COUNT 320u
@@ -48,7 +46,13 @@ groupshared half4 shared_chol_thr[RASTER_BATCH_SIZE];    // {l00', l01', l11', t
 #endif
 groupshared half4 shared_rgb_opac[RASTER_BATCH_SIZE];    // {r, g, b, opacity}
 #if LFS_RASTER_OVERLAYS
+// Packed flags | selection_byte | preview_byte (selection id uses orig_ids).
+groupshared uint32_t shared_overlay_pack[RASTER_BATCH_SIZE];
+groupshared uint32_t shared_sel_id[RASTER_BATCH_SIZE];
+// Compact projection slot for rare ring inv_cov reloads (fp16 path only).
+#if !LFS_HIGS_FP32
 groupshared uint32_t shared_slot[RASTER_BATCH_SIZE];
+#endif
 #endif
 groupshared uint32_t shared_tile_masks[MINI_BATCHES * HIGS_MACRO_TILE_SIZE_TILES];
 #if !LFS_HIGS_FP32
@@ -161,6 +165,11 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
     const uint num_mini_batches = (splats_to_process + SUBGROUP_SIZE - 1u) / SUBGROUP_SIZE;
     const bool spark_rad_opacity_path = (uniforms.lod_enabled & 4u) != 0u;
 
+  #if LFS_RASTER_OVERLAYS
+    // Hoist uniform overlay scalars once per thread before the batch blend.
+    const OverlayUniformState overlay_state = load_overlay_uniform_state(overlay_params);
+  #endif
+
     // Phase 1: cooperative load + per-splat tile mask + ballot transpose. The
     // whole batch (positions, conics, colors) is staged once; render tiles
     // never re-read splat data from global memory.
@@ -194,7 +203,19 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
           #endif
             shared_rgb_opac[i] = half4(float4(g_rgb, g_ico.w));
           #if LFS_RASTER_OVERLAYS
+            // Selection masks are indexed by original gaussian id, not the
+            // macro-sorted slot (LOD may rematerialize).
+            const uint sel_splat_id = uint(orig_ids[slot]);
+            const uint flags = gaussian_overlay_flags[slot];
+            const uint selection_byte = overlay_state.selection_mask_enabled
+                ? read_byte(selection_mask, sel_splat_id) : 0u;
+            const uint preview_byte = overlay_state.preview_mask_enabled
+                ? read_byte(preview_mask, sel_splat_id) : 0u;
+            shared_overlay_pack[i] = pack_overlay_per_splat(flags, selection_byte, preview_byte);
+            shared_sel_id[i] = sel_splat_id;
+            #if !LFS_HIGS_FP32
             shared_slot[i] = slot;
+            #endif
           #endif
         }
         // One ballot per render tile transposes the per-splat tile masks into
@@ -277,15 +298,15 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                 const float4 g_ico = shared_inv_cov_opac[i];
 
               #if LFS_RASTER_OVERLAYS
-                const uint32_t splat_slot = shared_slot[i];
-                const uint flags = gaussian_overlay_flags[splat_slot];
-                const uint sel_splat_id = uint(orig_ids[splat_slot]);
+                const uint overlay_pack = shared_overlay_pack[i];
+                const uint flags = unpack_overlay_flags(overlay_pack);
+                const uint sel_splat_id = shared_sel_id[i];
                 const uint sel_status = selection_status(g_xy,
                                                          sel_splat_id,
                                                          flags,
-                                                         selection_mask,
-                                                         preview_mask,
-                                                         overlay_params);
+                                                         unpack_overlay_selection_byte(overlay_pack),
+                                                         unpack_overlay_preview_byte(overlay_pack),
+                                                         overlay_state);
                 const bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
                 const Splat_2D_AlphaBlend overlay_splat = { g_ico, g_xy, g_rgbo.rgb };
               #endif
@@ -316,16 +337,17 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                     gauss_rgba = apply_projection_overlay_color(gauss_rgba,
                                                                 overlay_splat.xy_vs,
                                                                 flags,
-                                                                overlay_params);
+                                                                overlay_state);
                     gauss_rgba = apply_ring_overlay(gauss_rgba,
                                                     overlay_splat,
                                                     pixel_coord[p],
                                                     sel_status,
                                                     flags,
-                                                    overlay_params,
+                                                    overlay_state.show_rings,
+                                                    overlay_state.ring_width,
                                                     selection_colors);
 
-                    if (overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].y) && selectable) {
+                    if (overlay_state.show_center_markers && selectable) {
                         const float INNER_RADIUS_SQ = 2.25f;
                         const float OUTER_RADIUS_SQ = 6.25f;
                         const float OUTLINE_DARKEN = 0.4f;
@@ -346,7 +368,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                     }
 
                     gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-                    gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_params);
+                    gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
                   #endif
 
                     const float3 color = pixel_state[p].rgb + gauss_rgba.rgb * pixel_state[p].a;
@@ -446,6 +468,32 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                     const half2 thr2 = half2(g_chol.w, g_chol.w);
                     const half2 gy2 = half2(g_xy.y, g_xy.y);
 
+                  #if LFS_RASTER_OVERLAYS
+                    // Macro-relative half positions are the same representation
+                    // as the plain fp16 blend; reconstruct absolute pixel xy
+                    // for cursor/ring/marker tests (macro extent is tiny so
+                    // half tile-units stay exact).
+                    const float2 g_xy_abs =
+                        float2(g_xy) * float2(float(HIGS_TILE_WIDTH), float(HIGS_TILE_HEIGHT)) +
+                        macro_origin;
+                    const uint overlay_pack = shared_overlay_pack[i];
+                    const uint flags = unpack_overlay_flags(overlay_pack);
+                    const uint sel_splat_id = shared_sel_id[i];
+                    const uint sel_status = selection_status(g_xy_abs,
+                                                             sel_splat_id,
+                                                             flags,
+                                                             unpack_overlay_selection_byte(overlay_pack),
+                                                             unpack_overlay_preview_byte(overlay_pack),
+                                                             overlay_state);
+                    const bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
+                    // Ring math needs full inv_cov; reload only when rings are on.
+                    const float4 g_ico_overlay = overlay_state.show_rings
+                        ? inv_cov_vs_opacity[shared_slot[i]]
+                        : float4(0.0f, 0.0f, 0.0f, 0.0f);
+                    const Splat_2D_AlphaBlend overlay_splat =
+                        { g_ico_overlay, g_xy_abs, float3(g_rgbo.xyz) };
+                  #endif
+
                     [unroll]
                     for (uint k = 0u; k < PIXEL_PAIRS; ++k) {
                         const half2 dy2 = pix_y2[k] - gy2;
@@ -455,11 +503,76 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                         half2 alpha2 = min(g_rgbo.w * exp2(-q2), alpha_cap2);
                         alpha2 = select(q2 <= thr2, alpha2, zero2);
                         alpha2 = select(alpha2 >= alpha_min2, alpha2, zero2);
+
+                      #if LFS_RASTER_OVERLAYS
+                        // Keep the half2 quadratic/exp2; apply overlays and blend
+                        // per pixel so ring/marker absorb-all can kill one of the
+                        // pair without falling back to full fp32 staging.
+                        [unroll]
+                        for (uint pj = 0u; pj < 2u; ++pj) {
+                            const float a = float(alpha2[pj]);
+                            const float t = float(acc_t[k][pj]);
+                            if (a < ALPHA_THRESHOLD || t < 0.0001f)
+                                continue;
+
+                            const uint p = 2u * k + pj;
+                            const uint pixel_linear = lane_id + p * SUBGROUP_SIZE;
+                            const float2 pix_coord = float2(
+                                float(tile_origin.x + (pixel_linear % HIGS_TILE_WIDTH)),
+                                float(tile_origin.y + (pixel_linear / HIGS_TILE_WIDTH)));
+
+                            float4 gauss_rgba = float4(float3(g_rgbo.xyz) * a, a);
+                            gauss_rgba = apply_projection_overlay_color(gauss_rgba,
+                                                                        g_xy_abs,
+                                                                        flags,
+                                                                        overlay_state);
+                            gauss_rgba = apply_ring_overlay(gauss_rgba,
+                                                            overlay_splat,
+                                                            pix_coord,
+                                                            sel_status,
+                                                            flags,
+                                                            overlay_state.show_rings,
+                                                            overlay_state.ring_width,
+                                                            selection_colors);
+
+                            if (overlay_state.show_center_markers && selectable) {
+                                const float INNER_RADIUS_SQ = 2.25f;
+                                const float OUTER_RADIUS_SQ = 6.25f;
+                                const float OUTLINE_DARKEN = 0.4f;
+                                const float2 marker_delta = g_xy_abs - pix_coord;
+                                const float dist_sq = dot(marker_delta, marker_delta);
+                                // Marker mode renders dots only (matches the
+                                // legacy and fp32 paths): outside the dot the
+                                // splat contributes nothing.
+                                if (dist_sq > OUTER_RADIUS_SQ)
+                                    continue;
+
+                                float3 marker_color =
+                                    selection_overlay_target_color(sel_status, selection_colors);
+                                if (dist_sq > INNER_RADIUS_SQ)
+                                    marker_color *= OUTLINE_DARKEN;
+                                acc_r[k][pj] = half(marker_color.x);
+                                acc_g[k][pj] = half(marker_color.y);
+                                acc_b[k][pj] = half(marker_color.z);
+                                acc_t[k][pj] = half(0.0f);
+                                continue;
+                            }
+
+                            gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
+                            gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
+
+                            acc_r[k][pj] = half(float(acc_r[k][pj]) + gauss_rgba.x * t);
+                            acc_g[k][pj] = half(float(acc_g[k][pj]) + gauss_rgba.y * t);
+                            acc_b[k][pj] = half(float(acc_b[k][pj]) + gauss_rgba.z * t);
+                            acc_t[k][pj] = half(t * (1.0f - gauss_rgba.w));
+                        }
+                      #else
                         const half2 w2 = alpha2 * acc_t[k];
                         acc_r[k] += g_rgbo.x * w2;
                         acc_g[k] += g_rgbo.y * w2;
                         acc_b[k] += g_rgbo.z * w2;
                         acc_t[k] *= one2 - alpha2;
+                      #endif
                     }
                 }
                 qcount = 0u;

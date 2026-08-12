@@ -87,6 +87,7 @@ class ExportPanel(Panel):
         self._max_export_sh_degree = 3
         self._export_sh_degree = 3
         self._pinned_sh_degree = True
+        self._spz_version = 4  # SPZ container: 4 (zstd) or 3 (legacy gzip)
         self._selection_seeded = False
         self._handle = None
         self._last_node_key = None
@@ -123,6 +124,7 @@ class ExportPanel(Panel):
         model.bind_func("show_no_models", lambda: not self._has_models)
         model.bind_func("show_model_selection", lambda: self._format != ExportFormat.COLMAP)
         model.bind_func("show_sh_degree", lambda: self._format != ExportFormat.COLMAP)
+        model.bind_func("show_spz_version", lambda: self._format == ExportFormat.SPZ)
         model.bind_func("export_error_text", self._get_export_error_text)
         model.bind_func("can_export", self._can_export)
         model.bind_func("progress_value", lambda: self._progress_value)
@@ -131,6 +133,11 @@ class ExportPanel(Panel):
             "sh_degree",
             lambda: str(self._export_sh_degree),
             self._set_sh_degree,
+        )
+        model.bind(
+            "spz_version",
+            lambda: str(self._spz_version),
+            self._set_spz_version,
         )
 
         model.bind_func("show_form", lambda: not self._exporting)
@@ -222,6 +229,16 @@ class ExportPanel(Panel):
             return
         self._rad_streamable = streamable
         self._dirty_model("rad_export_mode")
+
+    def _set_spz_version(self, value):
+        try:
+            version = int(float(value))
+        except (ValueError, TypeError):
+            return
+        if version not in (3, 4) or version == self._spz_version:
+            return
+        self._spz_version = version
+        self._dirty_model("spz_version")
 
     def _get_scrub_value(self, prop):
         del prop
@@ -541,14 +558,16 @@ class ExportPanel(Panel):
 
         self._format = new_format
         self._rebuild_format_records()
-        # Dirty RAD settings visibility when format changes
+        # Dirty format-dependent settings visibility when format changes
         self._dirty_model(
             "show_rad_settings",
             "show_model_selection",
             "show_sh_degree",
+            "show_spz_version",
             "export_error_text",
             "rad_flip_y",
             "rad_export_mode",
+            "spz_version",
             "can_export",
             "export_label",
         )
@@ -736,6 +755,7 @@ class ExportPanel(Panel):
                     self._export_sh_degree,
                     rad_flip_y=self._rad_flip_y,
                     rad_streamable=self._rad_streamable,
+                    spz_version=self._spz_version,
                 )
             finally:
                 self._request_reactive_update()

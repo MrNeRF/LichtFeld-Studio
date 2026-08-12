@@ -82,7 +82,8 @@
     },
     "shader-slang",
     "usd",
-    "xxhash"
+    "xxhash",
+    "zstd"
   ],
   "features": {
     "tests": {

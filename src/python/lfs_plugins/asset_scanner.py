@@ -46,8 +46,7 @@ _EXTENSION_TYPE_MAP = {
 _HEADER_SIGNATURES = {
     b"ply\n": "ply",
     b"ply\r": "ply",
-    b"SPZ\x00": "spz",  # SPZ magic number
-    b"SPZ\x01": "spz",
+    b"NGSP": "spz",  # SPZ v4 (zstd) magic; gzip (v1-v3) is handled in _parse_spz_header
 }
 
 # Role detection patterns
@@ -593,10 +592,10 @@ class AssetScanner:
     def _parse_spz_header(self, path: str) -> Optional[dict]:
         """Parse SPZ file header to extract metadata.
 
-        SPZ format:
-        - Magic: "SPZ" + version byte
-        - 4 bytes: vertex count (uint32)
-        - 1 byte: SH degree
+        Supports both containers:
+        - Legacy gzip (v1-v3): file starts with 1f 8b; the decompressed stream
+          begins with a 16-byte header (magic/version/numPoints/...).
+        - NGSP / v4: file starts with "NGSP" and a 32-byte header.
 
         Args:
             path: Path to the SPZ file.
@@ -606,27 +605,50 @@ class AssetScanner:
         """
         try:
             with open(path, "rb") as f:
-                header = f.read(8)
-                if len(header) < 8:
+                prefix = f.read(32)
+                if len(prefix) < 4:
                     return None
 
-                magic = header[:3]
-                if magic != b"SPZ":
-                    return None
+                # Legacy gzip container (v1-v3): stream-decompress only the first
+                # 16 header bytes — do not inflate the whole file.
+                if len(prefix) >= 2 and prefix[0] == 0x1F and prefix[1] == 0x8B:
+                    import zlib
 
-                version = header[3]
-                vertex_count = struct.unpack("<I", header[4:8])[0]
+                    f.seek(0)
+                    decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                    raw = b""
+                    while len(raw) < 16:
+                        chunk = f.read(4096)
+                        if not chunk:
+                            break
+                        raw += decompressor.decompress(chunk, 16 - len(raw))
+                        if decompressor.eof:
+                            break
+                    if len(raw) < 16:
+                        return None
+                    magic, version, num_points = struct.unpack_from("<III", raw, 0)
+                    if magic != 0x5053474E:  # "NGSP" little-endian
+                        return None
+                    sh_degree = raw[12]
+                    return {
+                        "vertex_count": num_points,
+                        "sh_degree": sh_degree,
+                        "version": version,
+                    }
 
-                # Read SH degree if available
-                sh_degree = None
-                if len(header) > 8:
-                    sh_degree = header[8]
+                # v4 NGSP container (plaintext 32-byte header)
+                if prefix[:4] == b"NGSP":
+                    if len(prefix) < 16:
+                        return None
+                    magic, version, num_points = struct.unpack_from("<III", prefix, 0)
+                    sh_degree = prefix[12]
+                    return {
+                        "vertex_count": num_points,
+                        "sh_degree": sh_degree,
+                        "version": version,
+                    }
 
-                return {
-                    "vertex_count": vertex_count,
-                    "sh_degree": sh_degree,
-                    "version": version,
-                }
+                return None
 
         except Exception as e:
             _logger.debug(f"Error parsing SPZ header: {e}")

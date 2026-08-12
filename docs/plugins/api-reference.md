@@ -1570,6 +1570,7 @@ lf.export_scene(
     sh_degree: int,
     rad_flip_y: bool = False,
     rad_streamable: bool = True,
+    spz_version: int = 4,    # SPZ only: 4 (zstd) or 3 (legacy gzip)
 )
 lf.save_config_file(path: str)
 ```
@@ -1586,7 +1587,7 @@ live application scene.
 | `lf.io.save_ply(data, path, binary=True, progress=None, extra_attributes=None)` | `None` | Save `SplatData` as PLY |
 | `lf.io.save_point_cloud_ply(point_cloud, path, extra_attributes=None)` | `None` | Save `PointCloud` as PLY |
 | `lf.io.save_sog(data, path, kmeans_iterations=10, use_gpu=True, progress=None)` | `None` | Save SOG-compressed splats |
-| `lf.io.save_spz(data, path)` | `None` | Save SPZ splats |
+| `lf.io.save_spz(data, path, version=4)` | `None` | Save SPZ splats (`version` 4=zstd, 3=legacy gzip) |
 | `lf.io.save_usd(data, path)` | `None` | Save OpenUSD gaussian file |
 | `lf.io.save_nurec_usdz(data, path)` | `None` | Save NuRec-compatible USDZ |
 | `lf.io.export_html(data, path, kmeans_iterations=10, progress=None)` | `None` | Self-contained HTML viewer |

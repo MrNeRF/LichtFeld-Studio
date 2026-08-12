@@ -1024,7 +1024,8 @@ namespace lfs::vis::gui {
     void AsyncTaskManager::performExport(ExportFormat format, const std::filesystem::path& path,
                                          const std::vector<std::string>& node_names, int sh_degree,
                                          bool rad_flip_y,
-                                         bool rad_streamable) {
+                                         bool rad_streamable,
+                                         int spz_version) {
         if (isExporting())
             return;
 
@@ -1106,7 +1107,8 @@ namespace lfs::vis::gui {
                          borrow_plan.storage_mode == core::Scene::MergeStorageMode::BorrowSingleIdentity,
                          borrow_plan.model_mutex,
                          rad_flip_y,
-                         rad_streamable);
+                         rad_streamable,
+                         spz_version);
     }
 
     void AsyncTaskManager::startColmapExport(const std::filesystem::path& path) {
@@ -1230,7 +1232,8 @@ namespace lfs::vis::gui {
                                             bool borrow_single_identity,
                                             std::shared_mutex* model_mutex,
                                             bool rad_flip_y,
-                                            bool rad_streamable) {
+                                            bool rad_streamable,
+                                            int spz_version) {
         if (splats.empty()) {
             LOG_ERROR("No splat data to export");
             publishExportFailureState(format, path, LOC(lichtfeld::Strings::Runtime::NO_SPLAT_DATA));
@@ -1262,7 +1265,8 @@ namespace lfs::vis::gui {
              borrow_single_identity,
              model_mutex,
              rad_flip_y,
-             rad_streamable](
+             rad_streamable,
+             spz_version](
                 std::stop_token stop_token) mutable {
                 bool cancellation_logged = false;
                 jobs_.work(job);
@@ -1375,6 +1379,7 @@ namespace lfs::vis::gui {
                         case ExportFormat::SPZ: {
                             const lfs::io::SpzSaveOptions options{
                                 .output_path = path,
+                                .version = spz_version,
                                 .progress_callback = update_progress};
                             if (auto result = lfs::io::save_spz(*splat_data, options); result) {
                                 success = true;
