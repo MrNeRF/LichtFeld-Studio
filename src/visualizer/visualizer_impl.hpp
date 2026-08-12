@@ -209,6 +209,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_SaveAsAndExitContinuesAfterProjectWriteCompletes_Test;
         friend class VisualizerImplResetTest_SaveAsAndExitClearsSelectionDirtyBaseline_Test;
         friend class VisualizerImplResetTest_SaveAsAndExitClearsParameterDirtyBaseline_Test;
+        friend class VisualizerImplResetTest_DialogSaveAsReplacesExistingFirstSave_Test;
         friend class VisualizerImplResetTest_CancelExitAndNextWindowAttemptRecoverFromFailedCloseSave_Test;
         friend class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
         friend class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -236,6 +237,10 @@ namespace lfs::vis {
         friend class ToolContext;
 
     private:
+        lfs::Result<void> projectSaveAsFromDialog(
+            const std::filesystem::path& path,
+            bool regenerate_preview);
+
         // Main loop callbacks
         bool initialize();
         void update();

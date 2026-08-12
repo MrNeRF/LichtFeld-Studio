@@ -3489,7 +3489,8 @@ namespace lfs::vis::project {
     lfs::Result<void>
     ProjectLifecycle::saveAs(
         const std::filesystem::path& path,
-        const bool regenerate_preview) {
+        const bool regenerate_preview,
+        const bool allow_existing_destination_replacement) {
         if (close_save_state_.load(
                 std::memory_order_acquire) ==
             CloseSaveState::Saving) {
@@ -3621,6 +3622,8 @@ namespace lfs::vis::project {
                         IndexCompression::Zstd,
                 .disk_reserve_bytes =
                     64ull * 1024 * 1024,
+                .allow_existing_destination_replacement =
+                    allow_existing_destination_replacement,
                 .preview_png = preview,
                 .writer_lock_lease =
                     recovery_session_ &&

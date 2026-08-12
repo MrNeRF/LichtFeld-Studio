@@ -85,6 +85,8 @@ namespace lfs::io::project {
         lfs::core::Uuid file_uuid;
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
+        // Only a file-dialog-confirmed Save As may replace a first-save destination.
+        bool allow_existing_destination_replacement = false;
         // Explicit GUI saves may replace THMB. An empty span means carry the
         // current preview forward without regenerating it.
         std::span<const std::byte> preview_png;

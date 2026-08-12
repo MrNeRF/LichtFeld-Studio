@@ -1308,7 +1308,7 @@ namespace lfs::vis {
                         return;
                     }
                     if (auto saved =
-                            projectSaveAs(path, true);
+                            projectSaveAsFromDialog(path, true);
                         !saved) {
                         publish_project_error(
                             "Save Project",
@@ -1349,7 +1349,9 @@ namespace lfs::vis {
                     return;
                 }
                 if (auto saved =
-                        projectSaveAs(path, true);
+                        command.path.empty()
+                            ? projectSaveAsFromDialog(path, true)
+                            : projectSaveAs(path, true);
                     !saved) {
                     publish_project_error(
                         "Save Project As",
@@ -1457,7 +1459,7 @@ namespace lfs::vis {
                     return;
                 }
                 if (auto saved =
-                        projectSaveAs(path, false);
+                        projectSaveAsFromDialog(path, false);
                     !saved) {
                     publish_project_error(
                         "Save Project As",
@@ -2931,6 +2933,21 @@ namespace lfs::vis {
         }
         return project_lifecycle_->saveAs(
             path, regenerate_preview);
+    }
+
+    lfs::Result<void>
+    VisualizerImpl::projectSaveAsFromDialog(
+        const std::filesystem::path& path,
+        const bool regenerate_preview) {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->saveAs(
+            path, regenerate_preview, true);
     }
 
     lfs::Result<ProjectOpenOutcome>

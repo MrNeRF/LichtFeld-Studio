@@ -2214,6 +2214,37 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           DialogSaveAsReplacesExistingFirstSave) {
+        const auto destination = temporary_.path / "dialog-existing.licht";
+        write_empty_project(destination);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(nullptr, viewer.getViewport());
+            ASSERT_NE(viewer.getScene().addGroup("Dialog save"),
+                      lfs::core::NULL_NODE);
+
+            ASSERT_TRUE(viewer.projectSaveAsFromDialog(destination, false));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                    return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+                }));
+            const auto info = viewer.projectGetInfo();
+            ASSERT_TRUE(info);
+            ASSERT_TRUE(info->path);
+            EXPECT_EQ(info->path->lexically_normal(),
+                      destination.lexically_normal());
+            EXPECT_FALSE(info->dirty);
+            viewer.requestApplicationClose();
+            EXPECT_TRUE(viewer.getWindowManager()->shouldClose());
+            EXPECT_TRUE(viewer.allowclose());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
            FileExitRoutesThroughCloseSaveWhenAutoSaveOnCloseEnabled) {
         const auto& temporary = temporary_.path;
         const auto project_path =

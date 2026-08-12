@@ -2636,7 +2636,8 @@ namespace lfs::io::project {
                     "base explicit commit UUID",
                     "autosave.base_commit_uuid");
             }
-        } else if (!impl_->source_path) {
+        } else if (!impl_->source_path &&
+                   !options.allow_existing_destination_replacement) {
             std::error_code error;
             if (std::filesystem::exists(*normalized, error)) {
                 return fail<ProjectDocumentSaveReport>(

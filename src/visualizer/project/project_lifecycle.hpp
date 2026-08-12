@@ -111,7 +111,8 @@ namespace lfs::vis::project {
         save(bool regenerate_preview);
         [[nodiscard]] lfs::Result<void>
         saveAs(const std::filesystem::path& path,
-               bool regenerate_preview);
+               bool regenerate_preview,
+               bool allow_existing_destination_replacement = false);
         [[nodiscard]] lfs::Result<void>
         compact();
         [[nodiscard]] lfs::Result<void>

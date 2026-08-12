@@ -1220,6 +1220,55 @@ namespace {
                 source));
     }
 
+    TEST(ProjectDocumentTest,
+         FirstSaveExplicitlyReplacesForeignDestinationAtomically) {
+        TemporaryDirectory temporary;
+        const auto destination = temporary.path / "destination.licht";
+        auto existing = make_empty_document(fixed_uuid(970), 100);
+        auto existing_options = save_options(1970, 1000);
+        ASSERT_TRUE(existing->save(destination, existing_options));
+
+        auto document = make_empty_document(fixed_uuid(971), 100);
+        auto options = save_options(1971, 1100);
+        options.allow_existing_destination_replacement = true;
+        ASSERT_TRUE(document->save(destination, options));
+
+        auto reader = ProjectReader::open(destination);
+        ASSERT_TRUE(reader);
+        EXPECT_EQ(reader->superblock().project_uuid, fixed_uuid(971));
+    }
+
+    TEST(ProjectDocumentTest,
+         FirstSaveImplicitReplacementRemainsRefused) {
+        TemporaryDirectory temporary;
+        const auto destination = temporary.path / "destination.licht";
+        auto existing = make_empty_document(fixed_uuid(972), 100);
+        ASSERT_TRUE(existing->save(destination, save_options(1972, 1200)));
+
+        auto document = make_empty_document(fixed_uuid(973), 100);
+        auto refused = document->save(destination, save_options(1973, 1300));
+        ASSERT_FALSE(refused);
+        EXPECT_EQ(refused.error().code(), lfs::ErrorCode::AlreadyExists);
+
+        auto reader = ProjectReader::open(destination);
+        ASSERT_TRUE(reader);
+        EXPECT_EQ(reader->superblock().project_uuid, fixed_uuid(972));
+    }
+
+    TEST(ProjectDocumentTest,
+         SaveAsToCurrentMasterPathRemainsSupported) {
+        TemporaryDirectory temporary;
+        const auto destination = temporary.path / "master.licht";
+        auto document = make_empty_document(fixed_uuid(974), 100);
+        ASSERT_TRUE(document->save(destination, save_options(1974, 1400)));
+        auto opened = require_result_ptr(ProjectDocument::open(destination));
+
+        ASSERT_TRUE(opened->save_as(destination, save_options(1975, 1500)));
+        auto reader = ProjectReader::open(destination);
+        ASSERT_TRUE(reader);
+        EXPECT_EQ(reader->superblock().project_uuid, fixed_uuid(974));
+    }
+
     TEST(ProjectDocumentPerformanceGate,
          MultiGigabyteCkptColdShellRestoreAndPartialSave) {
         const char* source_text = std::getenv("LFS_P6_P4_PROJECT_FIXTURE");
