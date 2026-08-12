@@ -135,7 +135,7 @@ namespace lfs::core {
             EVENT(SequencerPlayPause, );
             // Empty path opens the save dialog; a path set by a script exports straight
             // to it, since a modal dialog cannot be answered from an automation client.
-            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf; std::string path = {};);
+            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf; std::string upscaler_backend = "native"; float upscaler_input_scale = 1.0f; int upscaler_quality = 1; int upscaler_fallback = 0; int splat_precision = 32; std::string path = {};);
             EVENT(SequencerGoToKeyframe, size_t keyframe_index;);
             EVENT(SequencerSelectKeyframe, size_t keyframe_index;);
             EVENT(SequencerDeleteKeyframe, size_t keyframe_index;);

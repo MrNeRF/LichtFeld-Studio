@@ -81,7 +81,9 @@ namespace lfs::vis::gui {
     };
 
     LFS_VIS_API std::expected<VideoExportSceneSnapshot, std::string> captureVideoExportSceneSnapshot(
-        const lfs::vis::SceneManager& scene_manager);
+        const lfs::vis::SceneManager& scene_manager,
+        lfs::io::video::VideoSplatPrecision precision =
+            lfs::io::video::VideoSplatPrecision::Float32);
 
     LFS_VIS_API void refreshVideoExportMeshTransforms(
         VideoExportSceneSnapshot& snapshot,
@@ -92,5 +94,9 @@ namespace lfs::vis::gui {
 
     [[nodiscard]] LFS_VIS_API std::expected<VideoExportRenderPlan, std::string>
     makeVideoExportRenderPlan(const lfs::io::video::VideoExportOptions& options);
+
+    [[nodiscard]] LFS_VIS_API std::expected<VideoExportRenderPlan, std::string>
+    resolveVideoExportRenderPlan(const lfs::io::video::VideoExportOptions& options,
+                                 bool supports_reconstruction);
 
 } // namespace lfs::vis::gui

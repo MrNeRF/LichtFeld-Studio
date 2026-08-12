@@ -1181,6 +1181,31 @@ namespace lfs::vis {
         return 1.0f;
     }
 
+    void saveViewerSplatPrecisionPreference(const ViewerSplatPrecision precision) {
+        try {
+            auto preferences = loadPreferences();
+            preferences["viewer_splat_precision"] =
+                precision == ViewerSplatPrecision::Float32 ? 32 : 16;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save viewer splat precision preference: {}", e.what());
+        }
+    }
+
+    ViewerSplatPrecision loadViewerSplatPrecisionPreference() {
+        try {
+            if (preferencesDisabled())
+                return ViewerSplatPrecision::Float16;
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("viewer_splat_precision");
+            if (it != preferences.end() && it->is_number_integer() && it->get<int>() == 32)
+                return ViewerSplatPrecision::Float32;
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load viewer splat precision preference: {}", e.what());
+        }
+        return ViewerSplatPrecision::Float16;
+    }
+
     void saveSceneUpscalerScalePreference(const std::string& backend_id, const float scale) {
         try {
             if (backend_id.empty())

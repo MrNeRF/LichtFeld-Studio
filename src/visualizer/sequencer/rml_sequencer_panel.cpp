@@ -213,6 +213,21 @@ namespace lfs::vis {
             ui.custom_width = info.width;
             ui.custom_height = info.height;
             ui.framerate = info.framerate;
+        } else if (id == "btn-export-upscaler") {
+            if (ui.export_upscaler == "native") {
+                ui.export_upscaler = "spatial";
+                ui.export_input_scale = 0.75f;
+            } else if (ui.export_input_scale > 0.5f) {
+                ui.export_input_scale = 0.5f;
+            } else {
+                ui.export_upscaler = "native";
+                ui.export_input_scale = 1.0f;
+            }
+        } else if (id == "btn-export-precision") {
+            ui.export_splat_precision =
+                ui.export_splat_precision == lfs::io::video::VideoSplatPrecision::Float32
+                    ? lfs::io::video::VideoSplatPrecision::Float16
+                    : lfs::io::video::VideoSplatPrecision::Float32;
         } else if (id == "btn-save-path")
             panel->save_path_requested_ = true;
         else if (id == "btn-load-path")
@@ -460,6 +475,12 @@ namespace lfs::vis {
             .custom_height = ui_state_.custom_height,
             .framerate = ui_state_.framerate,
             .quality = ui_state_.quality,
+            .export_upscaler = ui_state_.export_upscaler,
+            .export_input_scale_milli = milli(ui_state_.export_input_scale),
+            .export_splat_precision =
+                ui_state_.export_splat_precision == lfs::io::video::VideoSplatPrecision::Float16
+                    ? 16
+                    : 32,
             .follow_playback = ui_state_.follow_playback,
             .show_camera_path = ui_state_.show_camera_path,
             .snap_to_grid = ui_state_.snap_to_grid,
@@ -588,6 +609,8 @@ namespace lfs::vis {
         el_sequence_fps_input_ = document_->GetElementById("sequence-fps-input");
         el_format_label_ = document_->GetElementById("format-label");
         el_resolution_info_ = document_->GetElementById("resolution-info");
+        el_export_upscaler_label_ = document_->GetElementById("export-upscaler-label");
+        el_export_precision_label_ = document_->GetElementById("export-precision-label");
         el_quality_scrub_ = document_->GetElementById("quality-scrub");
         el_quality_fill_ = document_->GetElementById("quality-fill");
         el_quality_display_ = document_->GetElementById("quality-display");
@@ -628,7 +651,7 @@ namespace lfs::vis {
                                    "btn-loop", "btn-add",
                                    "btn-camera-path", "btn-snap", "btn-follow",
                                    "btn-film-strip", "btn-preview", "btn-equirect", "btn-speed",
-                                   "btn-format", "btn-save-path", "btn-load-path", "btn-load-sequence",
+                                   "btn-format", "btn-export-upscaler", "btn-export-precision", "btn-save-path", "btn-load-path", "btn-load-sequence",
                                    "btn-export", "btn-clear", "btn-dock-toggle",
                                    "btn-close-panel"}) {
             auto* el = document_->GetElementById(btn_id);
@@ -1011,6 +1034,22 @@ namespace lfs::vis {
             const int h = custom ? ui_state_.custom_height : info.height;
             const int fps = custom ? ui_state_.framerate : info.framerate;
             el_resolution_info_->SetInnerRML(fmt::format("{}x{} @ {}fps", w, h, fps));
+        }
+        if (el_export_upscaler_label_) {
+            const auto label = ui_state_.export_upscaler == "native"
+                                   ? LOC(lichtfeld::Strings::Preferences::SCENE_UPSCALER_NATIVE)
+                                   : LOC(lichtfeld::Strings::Preferences::SCENE_UPSCALER_SPATIAL);
+            el_export_upscaler_label_->SetInnerRML(
+                ui_state_.export_upscaler == "native"
+                    ? std::string(label)
+                    : fmt::format("{} {}%", label,
+                                  static_cast<int>(std::lround(ui_state_.export_input_scale * 100.0f))));
+        }
+        if (el_export_precision_label_) {
+            el_export_precision_label_->SetInnerRML(
+                ui_state_.export_splat_precision == lfs::io::video::VideoSplatPrecision::Float16
+                    ? "16-bit"
+                    : "32-bit");
         }
         if (!quality_scrub_editing_)
             syncQualityScrub();

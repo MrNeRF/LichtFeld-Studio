@@ -17,6 +17,11 @@ namespace lfs::io::video {
         Native,
     };
 
+    enum class VideoSplatPrecision : uint8_t {
+        Float16, // Build a dedicated q16 SH representation for offline rendering.
+        Float32, // Preserve or recover source FP32 SH values for offline rendering.
+    };
+
     struct VideoUpscalerOptions {
         std::string backend = "native";
         float input_scale = 1.0f;
@@ -77,6 +82,7 @@ namespace lfs::io::video {
         int framerate = 30;
         int crf = 18;
         VideoUpscalerOptions upscaler{};
+        VideoSplatPrecision splat_precision = VideoSplatPrecision::Float32;
     };
 
     [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(
@@ -91,6 +97,8 @@ namespace lfs::io::video {
             return std::unexpected("Video CRF must be between 0 and 51");
         if (options.upscaler.backend.empty())
             return std::unexpected("Video upscaler backend must not be empty");
+        if (options.upscaler.backend != "native" && options.upscaler.backend != "spatial")
+            return std::unexpected("Video upscaler backend must be 'native' or 'spatial'");
         if (!(options.upscaler.input_scale >= 0.25f && options.upscaler.input_scale <= 1.0f))
             return std::unexpected("Video upscaler input scale must be between 0.25 and 1.0");
         if (options.upscaler.quality < 0 || options.upscaler.quality > 3)

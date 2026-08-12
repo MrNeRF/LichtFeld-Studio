@@ -2539,6 +2539,12 @@ def get_ui_scale() -> float:
 def get_ui_scale_preference() -> float:
     """Get saved UI scale preference (0.0 = auto)"""
 
+def set_viewer_splat_precision(bits: int) -> None:
+    """Apply and persist viewer splat SH precision (16 or 32 bits)"""
+
+def get_viewer_splat_precision() -> int:
+    """Get the persisted viewer splat SH precision in bits"""
+
 def set_scene_upscaler_scale(backend_id: str, scale: float) -> None:
     """Persist the input scale associated with one scene upscaler"""
 

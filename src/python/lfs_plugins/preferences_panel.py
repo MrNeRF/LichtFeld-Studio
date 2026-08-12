@@ -107,6 +107,7 @@ class PreferencesPanel(Panel):
         model.bind("theme_idx", self._theme_index, self._set_theme_index)
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind("scene_render_scale_idx", self._scene_render_scale_index, self._set_scene_render_scale_index)
+        model.bind("viewer_splat_precision_idx", self._viewer_splat_precision_index, self._set_viewer_splat_precision_index)
         model.bind("scene_upscaler_idx", self._scene_upscaler_index, self._set_scene_upscaler_index)
         model.bind_func(
             "scene_upscaler_has_scale",
@@ -187,6 +188,7 @@ class PreferencesPanel(Panel):
         return (
             lf.ui.get_theme(),
             float(lf.ui.get_ui_scale_preference()),
+            self._viewer_splat_precision_index(),
             self._scene_render_scale(),
             self._scene_upscaler(),
             tuple(value for value, _label_key in self._scene_upscaler_catalog),
@@ -292,6 +294,20 @@ class PreferencesPanel(Panel):
         except AttributeError:
             settings = lf.get_render_settings()
             return 1.0 if settings is None else max(0.25, min(1.0, float(settings.scene_upscaler_scale)))
+
+    def _viewer_splat_precision_index(self):
+        try:
+            return 1 if int(lf.ui.get_viewer_splat_precision()) == 32 else 0
+        except (AttributeError, TypeError, ValueError):
+            return 0
+
+    def _set_viewer_splat_precision_index(self, value):
+        try:
+            lf.ui.set_viewer_splat_precision(32 if int(value) == 1 else 16)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            self._refresh_selection()
+            return
+        self._refresh_selection()
 
     def _scene_render_scale_options(self):
         current = self._scene_render_scale()
@@ -762,6 +778,10 @@ class PreferencesPanel(Panel):
         elif section == "appearance":
             lf.ui.set_theme("dark")
             lf.ui.set_ui_scale(0.0)
+            try:
+                lf.ui.set_viewer_splat_precision(16)
+            except (AttributeError, RuntimeError):
+                pass
             settings = lf.get_render_settings()
             if settings is not None:
                 settings.render_scale = 1.0
@@ -799,6 +819,7 @@ class PreferencesPanel(Panel):
             self._handle.dirty("theme_idx")
             self._handle.dirty("scale_idx")
             self._handle.dirty("scene_render_scale_idx")
+            self._handle.dirty("viewer_splat_precision_idx")
             self._handle.dirty("scene_upscaler_idx")
             self._handle.dirty("scene_upscaler_has_scale")
             self._handle.dirty("scene_upscaler_has_quality")

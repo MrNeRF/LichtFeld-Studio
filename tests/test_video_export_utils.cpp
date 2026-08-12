@@ -6,16 +6,20 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "gui/video_export_utils.hpp"
+#include "io/exporter.hpp"
 #include "io/video/video_encoder.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -47,6 +51,31 @@ namespace {
             std::move(rotation),
             std::move(opacity),
             1.0f);
+    }
+
+    std::unique_ptr<lfs::core::SplatData> make_test_fp32_splat_256() {
+        constexpr size_t count = 256;
+        std::vector<float> rotations(count * 4, 0.0f);
+        for (size_t i = 0; i < count; ++i)
+            rotations[i * 4] = 1.0f;
+        return std::make_unique<lfs::core::SplatData>(
+            3,
+            Tensor::zeros({count, size_t{3}}, Device::CUDA, lfs::core::DataType::Float32),
+            Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CUDA, lfs::core::DataType::Float32),
+            Tensor::zeros({count, size_t{15}, size_t{3}}, Device::CUDA, lfs::core::DataType::Float32),
+            Tensor::zeros({count, size_t{3}}, Device::CUDA, lfs::core::DataType::Float32),
+            Tensor::from_vector(
+                rotations, lfs::core::TensorShape({count, size_t{4}}), Device::CUDA),
+            Tensor::zeros({count, size_t{1}}, Device::CUDA, lfs::core::DataType::Float32),
+            1.0f,
+            lfs::core::SplatData::ShNLayout::Canonical);
+    }
+
+    std::unique_ptr<lfs::core::SplatData> make_test_q16_splat() {
+        auto model = make_test_fp32_splat_256();
+        if (!lfs::training::sh_value::apply_shN_value_quant(*model))
+            throw std::runtime_error("Failed to create q16 test fixture");
+        return model;
     }
 
     std::shared_ptr<lfs::core::PointCloud> make_test_point_cloud() {
@@ -122,6 +151,91 @@ TEST(VideoExportUtilsTest, CaptureSnapshotUsesRenderableModelAndTransforms) {
 
     ASSERT_TRUE(snapshot.transform_indices);
     EXPECT_EQ(snapshot.transform_indices->cpu().to_vector_int(), (std::vector<int>{0, 1}));
+}
+
+TEST(VideoExportUtilsTest, Float16SnapshotBuildsAValidDedicatedQuantizedRepresentation) {
+    lfs::vis::SceneManager scene_manager;
+    auto resident = make_test_q16_splat();
+    const int expected_active_sh_degree = resident->get_active_sh_degree();
+    scene_manager.getScene().addSplat("q16", std::move(resident));
+
+    const auto snapshot_result =
+        lfs::vis::gui::captureVideoExportSceneSnapshot(
+            scene_manager, lfs::io::video::VideoSplatPrecision::Float16);
+    ASSERT_TRUE(snapshot_result.has_value()) << snapshot_result.error();
+    ASSERT_TRUE(snapshot_result->combined_model);
+    EXPECT_TRUE(snapshot_result->combined_model->shN_value_quantized());
+    EXPECT_TRUE(snapshot_result->combined_model->shN_value_bounds().is_valid());
+    EXPECT_EQ(snapshot_result->combined_model->get_active_sh_degree(),
+              expected_active_sh_degree);
+}
+
+TEST(VideoExportUtilsTest, Float16SnapshotQuantizesAFloat32ResidentModel) {
+    lfs::vis::SceneManager scene_manager;
+    scene_manager.getScene().addSplat("fp32", make_test_fp32_splat_256());
+
+    const auto snapshot_result = lfs::vis::gui::captureVideoExportSceneSnapshot(
+        scene_manager, lfs::io::video::VideoSplatPrecision::Float16);
+    ASSERT_TRUE(snapshot_result.has_value()) << snapshot_result.error();
+    ASSERT_TRUE(snapshot_result->combined_model);
+    EXPECT_TRUE(snapshot_result->combined_model->shN_value_quantized());
+    EXPECT_EQ(snapshot_result->combined_model->shN_raw().dtype(),
+              lfs::core::DataType::Float16);
+}
+
+TEST(VideoExportUtilsTest, Float32SnapshotClonesAFloat32ResidentModelWithoutSourceReload) {
+    lfs::vis::SceneManager scene_manager;
+    scene_manager.getScene().addSplat("fp32", make_test_fp32_splat_256());
+
+    const auto snapshot_result = lfs::vis::gui::captureVideoExportSceneSnapshot(
+        scene_manager, lfs::io::video::VideoSplatPrecision::Float32);
+    ASSERT_TRUE(snapshot_result.has_value()) << snapshot_result.error();
+    ASSERT_TRUE(snapshot_result->combined_model);
+    EXPECT_EQ(snapshot_result->combined_model->shN_raw().dtype(),
+              lfs::core::DataType::Float32);
+    EXPECT_FALSE(snapshot_result->combined_model->shN_value_quantized());
+}
+
+TEST(VideoExportUtilsTest, Float32SnapshotRejectsGeneratedReducedResidentData) {
+    lfs::vis::SceneManager scene_manager;
+    scene_manager.getScene().addSplat("q16", make_test_q16_splat());
+
+    const auto snapshot_result = lfs::vis::gui::captureVideoExportSceneSnapshot(
+        scene_manager, lfs::io::video::VideoSplatPrecision::Float32);
+    ASSERT_FALSE(snapshot_result.has_value());
+    EXPECT_NE(snapshot_result.error().find("generated node"), std::string::npos);
+}
+
+TEST(VideoExportUtilsTest, Float32SnapshotReloadsFileInsteadOfResidentQuantizedStorage) {
+    const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto source_path = std::filesystem::temp_directory_path() /
+                             ("lfs_video_source_fp32_" + std::to_string(unique) + ".ply");
+    struct RemoveSourceFile {
+        std::filesystem::path path;
+        ~RemoveSourceFile() {
+            std::error_code ec;
+            std::filesystem::remove(path, ec);
+        }
+    } cleanup{source_path};
+
+    auto resident = make_test_fp32_splat_256();
+    const auto save_result = lfs::io::save_ply(
+        *resident, {.output_path = source_path, .binary = true});
+    ASSERT_TRUE(save_result.has_value()) << save_result.error().format();
+    ASSERT_TRUE(lfs::training::sh_value::apply_shN_value_quant(*resident));
+
+    lfs::vis::SceneManager scene_manager;
+    const auto node_id = scene_manager.getScene().addSplat("q16", std::move(resident));
+    ASSERT_NE(node_id, lfs::core::NULL_NODE);
+    scene_manager.setPlyPath(node_id, source_path);
+
+    const auto snapshot_result = lfs::vis::gui::captureVideoExportSceneSnapshot(
+        scene_manager, lfs::io::video::VideoSplatPrecision::Float32);
+    ASSERT_TRUE(snapshot_result.has_value()) << snapshot_result.error();
+    ASSERT_TRUE(snapshot_result->combined_model);
+    EXPECT_EQ(snapshot_result->combined_model->shN_raw().dtype(), lfs::core::DataType::Float32);
+    EXPECT_FALSE(snapshot_result->combined_model->shN_value_quantized());
+    EXPECT_FALSE(snapshot_result->combined_model->shN_ieee_f16());
 }
 
 TEST(VideoExportUtilsTest, CaptureSnapshotPrefersSplatsOverPointCloudAndKeepsMeshes) {
@@ -327,6 +441,45 @@ TEST(VideoExportUtilsTest, RejectsInvalidOfflineUpscalerContract) {
     options.upscaler.input_scale = 0.5f;
     options.upscaler.quality = 4;
     EXPECT_FALSE(lfs::vis::gui::makeVideoExportRenderPlan(options));
+
+    options.upscaler.quality = 1;
+    options.upscaler.backend = "temporal";
+    EXPECT_FALSE(lfs::vis::gui::makeVideoExportRenderPlan(options));
+}
+
+TEST(VideoExportUtilsTest, KeepsReconstructionWhenTheSceneSupportsIt) {
+    lfs::io::video::VideoExportOptions options{};
+    options.upscaler.backend = "spatial";
+    options.upscaler.input_scale = 0.5f;
+
+    const auto plan = lfs::vis::gui::resolveVideoExportRenderPlan(options, true);
+    ASSERT_TRUE(plan) << plan.error();
+    EXPECT_EQ(plan->backend, "spatial");
+    EXPECT_TRUE(plan->requires_upscale);
+}
+
+TEST(VideoExportUtilsTest, AbortsUnsupportedCompositeReconstructionByDefault) {
+    lfs::io::video::VideoExportOptions options{};
+    options.upscaler.backend = "spatial";
+    options.upscaler.input_scale = 0.5f;
+
+    const auto plan = lfs::vis::gui::resolveVideoExportRenderPlan(options, false);
+    ASSERT_FALSE(plan);
+    EXPECT_NE(plan.error().find("mesh or environment"), std::string::npos);
+}
+
+TEST(VideoExportUtilsTest, ExplicitFallbackResolvesUnsupportedCompositeToNative) {
+    lfs::io::video::VideoExportOptions options{};
+    options.upscaler.backend = "spatial";
+    options.upscaler.input_scale = 0.5f;
+    options.upscaler.fallback = lfs::io::video::VideoUpscalerFallback::Native;
+
+    const auto plan = lfs::vis::gui::resolveVideoExportRenderPlan(options, false);
+    ASSERT_TRUE(plan) << plan.error();
+    EXPECT_EQ(plan->backend, "native");
+    EXPECT_FALSE(plan->requires_upscale);
+    EXPECT_EQ(plan->input_width, options.width);
+    EXPECT_EQ(plan->input_height, options.height);
 }
 
 TEST(VideoEncoderValidationTest, RejectsUnsafeOptionsBeforeCodecInitialization) {

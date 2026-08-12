@@ -4732,6 +4732,32 @@ namespace lfs::python {
             "Get saved UI scale preference (0.0 = auto)");
 
         m.def(
+            "set_viewer_splat_precision",
+            [](const int bits) {
+                if (bits != 16 && bits != 32)
+                    throw std::invalid_argument("Viewer splat precision must be 16 or 32 bits");
+                if (auto* const scene_manager = get_scene_manager()) {
+                    if (auto result = scene_manager->applyViewerSplatPrecision(bits); !result)
+                        throw std::runtime_error(result.error());
+                }
+                vis::saveViewerSplatPrecisionPreference(
+                    bits == 32 ? vis::ViewerSplatPrecision::Float32
+                               : vis::ViewerSplatPrecision::Float16);
+            },
+            nb::arg("bits"),
+            "Apply and persist viewer splat SH precision (16 or 32 bits)");
+
+        m.def(
+            "get_viewer_splat_precision",
+            []() {
+                return vis::loadViewerSplatPrecisionPreference() ==
+                               vis::ViewerSplatPrecision::Float32
+                           ? 32
+                           : 16;
+            },
+            "Get the persisted viewer splat SH precision in bits");
+
+        m.def(
             "set_scene_upscaler_scale",
             [](const std::string& backend_id, const float scale) {
                 vis::saveSceneUpscalerScalePreference(backend_id, scale);

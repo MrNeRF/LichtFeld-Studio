@@ -99,6 +99,12 @@
                     <span class="ctx-indicator">&#x25E2;</span>
                 </div>
                 <span id="resolution-info" class="transport-info">1920x1080</span>
+                <div id="btn-export-upscaler" class="transport-btn text wide">
+                    <span id="export-upscaler-label" class="transport-label">@tr:preferences.scene_upscaler_native</span>
+                </div>
+                <div id="btn-export-precision" class="transport-btn text">
+                    <span id="export-precision-label" class="transport-label">32-bit</span>
+                </div>
                 <span class="transport-info quality-group">Q</span>
                 <div id="quality-scrub" class="scrub-field" data-tooltip="tooltip.seq_quality">
                     <div id="quality-fill" class="scrub-field-fill"></div>

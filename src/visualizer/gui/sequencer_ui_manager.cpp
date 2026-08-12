@@ -1285,7 +1285,15 @@ namespace lfs::vis::gui {
                 .width = w,
                 .height = h,
                 .framerate = ui_state_.framerate,
-                .crf = ui_state_.quality}
+                .crf = ui_state_.quality,
+                .upscaler_backend = ui_state_.export_upscaler,
+                .upscaler_input_scale = ui_state_.export_input_scale,
+                .upscaler_quality = 1,
+                .upscaler_fallback = static_cast<int>(lfs::io::video::VideoUpscalerFallback::Native),
+                .splat_precision = ui_state_.export_splat_precision ==
+                                           lfs::io::video::VideoSplatPrecision::Float16
+                                       ? 16
+                                       : 32}
                 .emit();
         }
 

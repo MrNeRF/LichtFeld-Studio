@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/async_task_manager.hpp"
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
@@ -519,6 +520,24 @@ namespace lfs::vis::gui {
             .orthographic = frame_view.orthographic};
     }
 
+    std::expected<lfs::core::Tensor, std::string> reconstructVideoExportFrame(
+        lfs::core::Tensor frame,
+        const VideoExportRenderPlan& plan) {
+        if (!plan.requires_upscale)
+            return frame;
+
+        try {
+            return lfs::core::lanczos_resize_float_chw(
+                frame.contiguous(), plan.output_height, plan.output_width, 2);
+        } catch (const std::exception& error) {
+            return std::unexpected(std::format(
+                "Failed to reconstruct video frame with '{}': {}", plan.backend, error.what()));
+        } catch (...) {
+            return std::unexpected(std::format(
+                "Failed to reconstruct video frame with '{}': unknown error", plan.backend));
+        }
+    }
+
     std::expected<lfs::core::Tensor, std::string> renderVideoExportFrame(
         RenderingManager& rendering_manager,
         rendering::RenderingEngine& engine,
@@ -528,8 +547,9 @@ namespace lfs::vis::gui {
         const VideoExportSceneSnapshot& snapshot,
         const RenderSettings& render_settings,
         const lfs::sequencer::CameraState& cam_state,
-        const int width,
-        const int height) {
+        const VideoExportRenderPlan& render_plan) {
+        const int width = render_plan.input_width;
+        const int height = render_plan.input_height;
         const auto viewport = makeVideoExportViewport(cam_state, render_settings, width, height);
         const auto frame_view = makeVideoExportFrameView(cam_state, render_settings, width, height);
         const bool render_environment = environmentBackgroundEnabled(render_settings);
@@ -560,7 +580,7 @@ namespace lfs::vis::gui {
                         return std::unexpected(render_result ? LOC(lichtfeld::Strings::Runtime::RENDERED_POINT_CLOUD_INVALID)
                                                              : render_result.error());
                     }
-                    return *render_result->image;
+                    return reconstructVideoExportFrame(*render_result->image, render_plan);
                 }
 
                 auto render_result = engine.renderPointCloudGpuFrame(*snapshot.combined_model, request);
@@ -595,7 +615,7 @@ namespace lfs::vis::gui {
                 }
 
                 if (!requires_composite_pass) {
-                    return std::move(*video_frame);
+                    return reconstructVideoExportFrame(std::move(*video_frame), render_plan);
                 }
 
                 auto frame_image = std::make_shared<lfs::core::Tensor>(std::move(*video_frame));
@@ -638,7 +658,7 @@ namespace lfs::vis::gui {
                     return std::unexpected(readback_result ? LOC(lichtfeld::Strings::Runtime::RENDERED_POINT_CLOUD_INVALID)
                                                            : readback_result.error());
                 }
-                return *(*readback_result);
+                return reconstructVideoExportFrame(*(*readback_result), render_plan);
             }
 
             primary_frame = std::move(*render_result);
@@ -895,6 +915,16 @@ namespace lfs::vis::gui {
             options.height = evt.height;
             options.framerate = evt.framerate;
             options.crf = evt.crf;
+            options.upscaler.backend = evt.upscaler_backend;
+            options.upscaler.input_scale = evt.upscaler_input_scale;
+            options.upscaler.quality = evt.upscaler_quality;
+            options.upscaler.fallback = evt.upscaler_fallback ==
+                                                static_cast<int>(io::video::VideoUpscalerFallback::Native)
+                                            ? io::video::VideoUpscalerFallback::Native
+                                            : io::video::VideoUpscalerFallback::Abort;
+            options.splat_precision = evt.splat_precision == 16
+                                          ? io::video::VideoSplatPrecision::Float16
+                                          : io::video::VideoSplatPrecision::Float32;
             startVideoExport(path, options);
         });
     }
@@ -1945,7 +1975,8 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const auto snapshot_result = captureVideoExportSceneSnapshot(*scene_manager);
+        const auto snapshot_result = captureVideoExportSceneSnapshot(
+            *scene_manager, validated_options->splat_precision);
         if (!snapshot_result) {
             fail_start(snapshot_result.error());
             return;
@@ -1959,6 +1990,19 @@ namespace lfs::vis::gui {
 
         const auto export_options = *validated_options;
         const auto render_settings = rendering_manager->getSettings();
+        const bool supports_reconstruction =
+            !environmentBackgroundEnabled(render_settings) && snapshot_result->meshes.empty();
+        const auto render_plan = resolveVideoExportRenderPlan(
+            export_options, supports_reconstruction);
+        if (!render_plan) {
+            fail_start(render_plan.error());
+            return;
+        }
+        if (render_plan->backend != export_options.upscaler.backend) {
+            LOG_WARN("Video upscaler '{}' is unavailable for this scene composition; using '{}'",
+                     export_options.upscaler.backend,
+                     render_plan->backend);
+        }
         const float duration = timeline.duration();
         const int total_frames = static_cast<int>(std::ceil(duration * export_options.framerate)) + 1;
         const int width = export_options.width;
@@ -1992,10 +2036,19 @@ namespace lfs::vis::gui {
             video_export_mesh_renderer_state_ = std::make_unique<VideoExportMeshRendererState>();
         }
 
-        LOG_INFO("Starting video export: {} frames at {}x{}", total_frames, width, height);
+        LOG_INFO("Starting video export: {} frames at {}x{} ({}: {}x{} -> {}x{})",
+                 total_frames,
+                 width,
+                 height,
+                 render_plan->backend,
+                 render_plan->input_width,
+                 render_plan->input_height,
+                 render_plan->output_width,
+                 render_plan->output_height);
 
         video_export_state_.thread.emplace(
-            [this, viewer = viewer_, path, export_options, total_frames, width, height,
+            [this, viewer = viewer_, path, export_options, render_plan = *render_plan,
+             total_frames, width, height,
              engine, scene_manager, rendering_manager, render_settings, start_time, time_step,
              environment_state = video_export_environment_state_.get(),
              mesh_renderer_state = video_export_mesh_renderer_state_.get(),
@@ -2069,7 +2122,7 @@ namespace lfs::vis::gui {
                     auto frame_tensor = postToViewerAndWait(
                         viewer,
                         [viewer, engine, scene_manager, rendering_manager, environment_state,
-                         mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height,
+                         mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, render_plan,
                          cam_state = frame_states[frame],
                          clip_time = start_time + static_cast<float>(frame) * time_step]()
                             -> std::expected<lfs::core::Tensor, std::string> {
@@ -2090,8 +2143,7 @@ namespace lfs::vis::gui {
                                 *snapshot_ptr,
                                 render_settings,
                                 cam_state,
-                                width,
-                                height);
+                                render_plan);
                         });
 
                     if (!frame_tensor) {

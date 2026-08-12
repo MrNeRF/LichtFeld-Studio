@@ -262,6 +262,9 @@ namespace lfs::vis {
             int custom_height = 0;
             int framerate = 0;
             int quality = 0;
+            std::string export_upscaler;
+            int export_input_scale_milli = 1000;
+            int export_splat_precision = 32;
             bool follow_playback = false;
             bool show_camera_path = false;
             bool snap_to_grid = false;
@@ -359,6 +362,8 @@ namespace lfs::vis {
         Rml::Element* el_sequence_fps_input_ = nullptr;
         Rml::Element* el_format_label_ = nullptr;
         Rml::Element* el_resolution_info_ = nullptr;
+        Rml::Element* el_export_upscaler_label_ = nullptr;
+        Rml::Element* el_export_precision_label_ = nullptr;
         Rml::Element* el_quality_scrub_ = nullptr;
         Rml::Element* el_quality_fill_ = nullptr;
         Rml::Element* el_quality_display_ = nullptr;
