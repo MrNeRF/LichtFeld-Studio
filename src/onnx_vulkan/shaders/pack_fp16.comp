@@ -1,0 +1,26 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+// Materialize an arbitrary FP32 view as contiguous native FP16 storage.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint b[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint c[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { float16_t o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+void main() {
+    const uint index = gl_GlobalInvocationID.x +
+                       gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    if (index >= p[1]) return;
+    uint remaining = index;
+    uint source = p[80];
+    for (int axis = int(p[2]) - 1; axis >= 0; --axis) {
+        const uint extent = p[16u + uint(axis)];
+        const uint coordinate = remaining % extent;
+        remaining /= extent;
+        source += coordinate * p[24u + uint(axis)];
+    }
+    o[index] = float16_t(uintBitsToFloat(a[source]));
+}

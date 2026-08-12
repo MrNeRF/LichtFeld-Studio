@@ -18,15 +18,18 @@ float sample_input(uint element) {
     const uint kernel_area = kh_size * kw_size;
     const uint k = element / spatial_size;
     const uint spatial = element % spatial_size;
-    const uint ic = k / kernel_area;
-    const uint kernel_index = k % kernel_area;
-    const uint kh = kernel_index / kw_size;
-    const uint kw = kernel_index % kw_size;
+    const uint ic = p[107] != 0u ? k / 9u : k / kernel_area;
+    const uint kernel_index = p[107] != 0u ? k - ic * 9u : k % kernel_area;
+    const uint kh = p[107] != 0u ? kernel_index / 3u : kernel_index / kw_size;
+    const uint kw = p[107] != 0u ? kernel_index - kh * 3u : kernel_index % kw_size;
     const uint oh = spatial / ow_size;
     const uint ow = spatial % ow_size;
     int ih = -1;
     int iw = -1;
-    if (p[100] == 0u) {
+    if (p[107] != 0u) {
+        ih = int(oh + kh);
+        iw = int(ow + kw);
+    } else if (p[100] == 0u) {
         ih = int(oh * p[87] + kh * p[89]) - int(p[91]);
         iw = int(ow * p[88] + kw * p[90]) - int(p[92]);
     } else {

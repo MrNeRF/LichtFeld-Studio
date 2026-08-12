@@ -547,7 +547,7 @@ namespace {
     [[nodiscard]] Bytes cooperative_matmul_model() {
         constexpr std::int64_t rows = 16;
         constexpr std::int64_t inner = 256;
-        constexpr std::int64_t columns = 16;
+        constexpr std::int64_t columns = 128;
         const std::array<std::int64_t, 2> x_shape{rows, inner};
         const std::array<std::int64_t, 2> weight_shape{inner, columns};
         const std::array<std::int64_t, 2> y_shape{rows, columns};
@@ -785,7 +785,7 @@ namespace {
         write_file(cooperative_path, cooperative_matmul_model());
         const std::array<std::int64_t, 2> cooperative_shape{16, 256};
         const std::vector<float> cooperative_input(16 * 256, 1.0f);
-        const std::vector<float> cooperative_expected(16 * 16, 256.0f);
+        const std::vector<float> cooperative_expected(16 * 128, 256.0f);
         run_model(cooperative_path, cooperative_shape, cooperative_input, cooperative_expected);
         lfs::onnx_vulkan::SessionOptions fallback_options;
         fallback_options.enable_cooperative_matrix = false;

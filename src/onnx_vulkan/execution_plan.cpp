@@ -817,12 +817,65 @@ namespace lfs::onnx_vulkan::detail {
                    last_use[node.inputs[dynamic_slot]]!=step)continue;
                 auto& producer=dispatches[*dynamic->producer_dispatch];
                 if((producer.kernel!=Kernel::MatMul&&producer.kernel!=Kernel::MatMulTiled&&
-                    producer.kernel!=Kernel::MatMulSmallK&&producer.kernel!=Kernel::MatMulCooperative)||producer.parameters[89]!=0)continue;
+                    producer.kernel!=Kernel::MatMulSmallK&&producer.kernel!=Kernel::MatMulCooperative&&
+                    producer.kernel!=Kernel::MatMulCooperativeFp16Weights)||producer.parameters[89]!=0)continue;
                 producer.values[2]=ensure_device(*bias);producer.parameters[88]=f32(1.0f);producer.parameters[89]=1;
                 producer.parameters[90]=u32(bias->element_offset);producer.parameters[91]=1;
                 producer.parameters[92]=u32(bias->strides.back());producer.label+="+Bias";
                 Value fused=*dynamic;fused.shape=outputs[0].shape;fused.strides=outputs[0].strides;
                 extend_lifetime(fused.device,last_use[node.outputs[0]]);values[node.outputs[0]]=std::move(fused);return {};
+            }
+        }
+        if(node.op_type=="Mul"&&node.inputs.size()==2){
+            const auto producer_of=[&](const std::string& value)->const Node*{
+                const auto it=std::ranges::find_if(model->graph.nodes,[&](const Node& candidate){return std::ranges::find(candidate.outputs,value)!=candidate.outputs.end();});
+                return it==model->graph.nodes.end()?nullptr:&*it;
+            };
+            const auto scalar=[&](const std::string& name)->std::optional<double>{
+                const auto it=values.find(name);
+                if(it==values.end()||!it->second.host||element_count(it->second.shape).value_or(0)!=1)return std::nullopt;
+                return static_cast<double>(read_number(*it->second.host,0));
+            };
+            for(size_t half_slot=0;half_slot<2;++half_slot){
+                const auto half=scalar(node.inputs[half_slot]);
+                const auto* product=producer_of(node.inputs[1-half_slot]);
+                if(!half||std::abs(*half-0.5)>1e-7||!product||product->op_type!="Mul"||product->inputs.size()!=2)continue;
+                for(size_t add_slot=0;add_slot<2;++add_slot){
+                    const auto* add=producer_of(product->inputs[add_slot]);
+                    const auto& source_name=product->inputs[1-add_slot];
+                    if(!add||add->op_type!="Add"||add->inputs.size()!=2)continue;
+                    const Node* erf=nullptr;
+                    for(size_t erf_slot=0;erf_slot<2;++erf_slot){
+                        const auto one=scalar(add->inputs[1-erf_slot]);
+                        const auto* candidate=producer_of(add->inputs[erf_slot]);
+                        if(one&&std::abs(*one-1.0)<=1e-7&&candidate&&candidate->op_type=="Erf")erf=candidate;
+                    }
+                    if(!erf||erf->inputs.size()!=1)continue;
+                    const auto* div=producer_of(erf->inputs[0]);
+                    if(!div||div->op_type!="Div"||div->inputs.size()!=2||div->inputs[0]!=source_name)continue;
+                    const auto root_two=scalar(div->inputs[1]);
+                    if(!root_two||std::abs(*root_two-std::sqrt(2.0))>1e-5)continue;
+                    const auto source_it=values.find(source_name);
+                    if(source_it==values.end()||!source_it->second.producer_dispatch)continue;
+                    const auto producer_index=*source_it->second.producer_dispatch;
+                    if(producer_index>=dispatches.size()||
+                       dispatches[producer_index].kernel!=Kernel::MatMulCooperativeFp16Weights||
+                       dispatches[producer_index].parameters[94]!=0)continue;
+                    const std::array<const Node*,4> chain{div,erf,add,product};
+                    if(dispatches.size()!=producer_index+1+chain.size())continue;
+                    bool consecutive=true;
+                    for(size_t i=0;i<chain.size();++i){
+                        const auto it=values.find(chain[i]->outputs[0]);
+                        consecutive=consecutive&&it!=values.end()&&it->second.producer_dispatch&&
+                                    *it->second.producer_dispatch==producer_index+1+i&&
+                                    last_use[chain[i]->outputs[0]]<=step;
+                    }
+                    if(!consecutive)continue;
+                    dispatches.resize(producer_index+1);
+                    auto& producer=dispatches.back();producer.parameters[94]=1;producer.values[3]=outputs[0].device;
+                    producer.label+="+Gelu";outputs[0].producer_dispatch=producer_index;
+                    values[node.outputs[0]]=std::move(outputs[0]);return {};
+                }
             }
         }
         if(auto it=element_ops.find(node.op_type);it!=element_ops.end()){dispatch.kernel=Kernel::Elementwise;dispatch.parameters[0]=it->second;const auto set_index_mode=[&](const Value& value,const size_t slot){uint32_t mode=0;if(element_count(value.shape).value_or(0)==1)mode=2;else if(value.shape==outputs[0].shape&&value.strides==contiguous_strides(value.shape))mode=1;dispatch.parameters[10]|=mode<<u32(slot*2);};if(node.op_type=="Where"){input_params(dispatch.parameters,*input_values[1],0);input_params(dispatch.parameters,*input_values[2],1);input_params(dispatch.parameters,*input_values[0],2);set_index_mode(*input_values[1],0);set_index_mode(*input_values[2],1);set_index_mode(*input_values[0],2);}else for(size_t i=0;i<3;++i)if(i<input_values.size()&&input_values[i]){input_params(dispatch.parameters,*input_values[i],i);set_index_mode(*input_values[i],i);}dispatch.values={ref(node.op_type=="Where"?1:0),ref(node.op_type=="Where"?2:1),ref(node.op_type=="Where"?0:2),{}};if(node.op_type=="Mod")dispatch.parameters[83]=u32(int_attribute(node,"fmod").value_or(0));if(node.op_type=="Clip"){dispatch.parameters[83]=input_values.size()>1&&input_values[1];dispatch.parameters[84]=input_values.size()>2&&input_values[2];}finish(std::move(dispatch));return {};}
@@ -861,18 +914,40 @@ namespace lfs::onnx_vulkan::detail {
             // them on the exact FP32 path.
             const bool small_k=tiled&&k_size<=64u;
             const bool use_cooperative=cooperative_matrix&&k_size>=256u;
+            DeviceRef fp16_weight;
+            if(use_cooperative){
+                if(const auto packed=weights->fp16_tensors.find(node.inputs[1]);packed!=weights->fp16_tensors.end()){
+                    fp16_weight.kind=RefKind::Weight;fp16_weight.direct=packed->second.binding;
+                    fp16_weight.range=packed->second.binding.range;
+                }
+            }
+            DeviceRef fp16_activation;
+            if(fp16_weight.kind!=RefKind::None&&n_size>=128u){
+                const auto elements=element_count(a->shape).value_or(0);
+                fp16_activation=allocate_bytes((elements*sizeof(uint16_t)+3u)&~VkDeviceSize{3},step,false);
+                Dispatch pack;pack.kernel=Kernel::PackFp16;pack.label="PackFp16";
+                pack.count=elements;pack.parameters[1]=u32(elements);pack.parameters[2]=u32(a->shape.size());
+                put_shape(pack.parameters,16,a->shape);put_shape(pack.parameters,24,a->strides);
+                pack.parameters[80]=u32(a->element_offset);
+                pack.values={ensure_device(*a),{},{},fp16_activation};dispatches.push_back(std::move(pack));
+                dispatch.parameters[83]=0;put_shape(dispatch.parameters,32,contiguous_strides(a->shape));
+            }
             dispatch.kernel=tiled?(small_k?Kernel::MatMulSmallK:
+                                   fp16_activation.kind!=RefKind::None?Kernel::MatMulCooperativeFp16Weights:
                                    use_cooperative?Kernel::MatMulCooperative:Kernel::MatMulTiled):Kernel::MatMul;
             if(tiled){
                 const auto batches=dispatch.count/(static_cast<uint64_t>(m_size)*n_size);
                 const auto tile_x=use_cooperative&&n_size>=m_size?128u:64u;
                 const auto tile_y=small_k||use_cooperative&&n_size<m_size?128u:64u;
                 dispatch.workgroups={(n_size+tile_x-1u)/tile_x,(m_size+tile_y-1u)/tile_y,u32(batches)};
-                dispatch.label=(small_k?"MatMulSmallK[":use_cooperative?"MatMulCooperative[":"MatMulTiled[")+
+                dispatch.label=(small_k?"MatMulSmallK[":fp16_activation.kind!=RefKind::None?"MatMulCooperativeFp16[":
+                                use_cooperative?"MatMulCooperative[":"MatMulTiled[")+
                                std::to_string(m_size)+"x"+std::to_string(n_size)+"x"+
                                std::to_string(dispatch.parameters[82])+"]";
             }
-            dispatch.values={ref(0),ref(1),ref(2),{}};finish(std::move(dispatch));return {};
+            dispatch.values={fp16_activation.kind==RefKind::None?ref(0):fp16_activation,
+                             fp16_activation.kind==RefKind::None?ref(1):fp16_weight,ref(2),{}};
+            finish(std::move(dispatch));return {};
         }
         if(node.op_type=="Conv"||node.op_type=="ConvTranspose"){
             auto strides=ints_attribute(node,"strides");if(strides.empty())strides={1,1};
@@ -898,13 +973,27 @@ namespace lfs::onnx_vulkan::detail {
                 input_values[0]->shape[2]==outputs[0].shape[2]&&input_values[0]->shape[3]==outputs[0].shape[3];
             const bool tiled=groups==1;
             const auto conv_k=dispatch.parameters[84]*dispatch.parameters[85]*dispatch.parameters[86];
-            const bool use_cooperative=tiled&&cooperative_matrix&&conv_k>=256u;
+            const bool use_cooperative=tiled&&cooperative_matrix&&(conv_k>=256u||conv1x1&&conv_k>=16u);
             dispatch.parameters[100]=node.op_type=="ConvTranspose";
             dispatch.parameters[101]=use_cooperative&&oc<=32u;
             dispatch.parameters[105]=node.op_type=="Conv"&&input_values[1]->element_offset==0&&
                                      input_values[1]->strides==contiguous_strides(input_values[1]->shape);
+            const bool specialized_3x3=use_cooperative&&node.op_type=="Conv"&&dispatch.parameters[105]&&
+                dispatch.parameters[85]==3&&dispatch.parameters[86]==3&&strides[0]==1&&strides[1]==1&&
+                dil[0]==1&&dil[1]==1&&std::ranges::all_of(pads,[](auto value){return value==0;})&&
+                input_values[0]->strides==contiguous_strides(input_values[0]->shape)&&
+                input_values[0]->shape[2]==outputs[0].shape[2]+2&&
+                input_values[0]->shape[3]==outputs[0].shape[3]+2;
+            dispatch.parameters[107]=specialized_3x3;
+            const bool specialized_1x1=use_cooperative&&conv1x1&&dispatch.parameters[105];
+            dispatch.parameters[110]=specialized_1x1;
+            const bool specialized_transpose_2x2=use_cooperative&&node.op_type=="ConvTranspose"&&
+                dispatch.parameters[85]==2&&dispatch.parameters[86]==2&&strides[0]==2&&strides[1]==2&&
+                dil[0]==1&&dil[1]==1&&std::ranges::all_of(pads,[](auto value){return value==0;})&&
+                outputs[0].shape[2]==input_values[0]->shape[2]*2&&
+                outputs[0].shape[3]==input_values[0]->shape[3]*2;
             DeviceRef packed_input;
-            if(use_cooperative&&oc>=128u){
+            if(use_cooperative&&oc>=128u&&!specialized_transpose_2x2&&!specialized_1x1){
                 const auto spatial=static_cast<uint64_t>(ow)*oh;
                 const auto elements=static_cast<uint64_t>(conv_k)*spatial;
                 const auto words_per_batch=(elements+1u)/2u;
@@ -919,8 +1008,11 @@ namespace lfs::onnx_vulkan::detail {
                 dispatch.parameters[103]=1;dispatch.parameters[104]=u32(words_per_batch);
             }
             if(use_cooperative){
-                dispatch.kernel=Kernel::ConvCooperative;
-                dispatch.label=node.op_type+"Cooperative["+std::to_string(oc)+"x"+
+                dispatch.kernel=specialized_transpose_2x2?Kernel::ConvTransposeCooperative2x2:
+                                specialized_3x3||specialized_1x1?Kernel::ConvCooperative3x3:Kernel::ConvCooperative;
+                dispatch.label=node.op_type+(specialized_transpose_2x2?"Cooperative2x2[":
+                                             specialized_3x3?"Cooperative3x3[":
+                                             specialized_1x1?"Cooperative1x1[":"Cooperative[")+std::to_string(oc)+"x"+
                                std::to_string(ow*oh)+"x"+std::to_string(conv_k)+"]";
             }else if(node.op_type=="ConvTranspose"){
                 dispatch.kernel=tiled?Kernel::ConvTransposeTiled:Kernel::ConvTranspose;
@@ -933,12 +1025,15 @@ namespace lfs::onnx_vulkan::detail {
                 dispatch.kernel=Kernel::Conv;
             }
             if(tiled){
-                const auto spatial=ow*oh;
+                const auto spatial=specialized_transpose_2x2?
+                    u32(input_values[0]->shape[2]*input_values[0]->shape[3]):ow*oh;
                 const auto tile_x=dispatch.parameters[101]?128u:64u;
                 const auto tile_y=dispatch.parameters[101]?32u:64u;
-                dispatch.workgroups={(spatial+tile_x-1u)/tile_x,(oc+tile_y-1u)/tile_y,u32(outputs[0].shape[0])};
+                dispatch.workgroups={(spatial+tile_x-1u)/tile_x,(oc+tile_y-1u)/tile_y,
+                                     u32(outputs[0].shape[0])*(specialized_transpose_2x2?4u:1u)};
             }
-            dispatch.values={packed_input.kind==RefKind::None?ref(0):packed_input,ref(1),ref(2),{}};finish(std::move(dispatch));return {};
+            dispatch.values={packed_input.kind==RefKind::None?ref(0):packed_input,ref(1),ref(2),{}};
+            finish(std::move(dispatch));return {};
         }
         if(node.op_type.starts_with("Reduce")){dispatch.parameters[0]=node.op_type=="ReduceMean"?1:node.op_type=="ReduceL2"?2:0;auto axes=*axes_from(node,input_const,1,input_values[0]->shape.size(),true);uint32_t mask=0;uint64_t reduced=1;for(auto axis:axes){mask|=1u<<axis;reduced*=input_values[0]->shape[axis];}dispatch.kernel=reduced>=64?Kernel::Reduce:Kernel::ReduceSerial;dispatch.label+=reduced>=64?"WG":"Serial";dispatch.parameters[80]=mask;dispatch.parameters[81]=u32(reduced);dispatch.parameters[82]=u32(input_values[0]->element_offset);dispatch.parameters[83]=u32(input_values[0]->shape.size());dispatch.parameters[84]=u32(int_attribute(node,"keepdims").value_or(1));put_shape(dispatch.parameters,24,input_values[0]->shape);put_shape(dispatch.parameters,32,input_values[0]->strides);dispatch.values[0]=ref(0);finish(std::move(dispatch));return {};}
         if(node.op_type=="Softmax"){dispatch.kernel=Kernel::Softmax;auto axis=normalize_axis(int_attribute(node,"axis").value_or(-1),input_values[0]->shape.size());dispatch.count=element_count(input_values[0]->shape).value_or(0)/input_values[0]->shape[axis];dispatch.parameters[1]=u32(dispatch.count);dispatch.parameters[80]=u32(axis);dispatch.parameters[81]=u32(input_values[0]->shape[axis]);dispatch.parameters[82]=u32(input_values[0]->element_offset);put_shape(dispatch.parameters,24,input_values[0]->strides);put_shape(dispatch.parameters,32,outputs[0].strides);dispatch.values[0]=ref(0);finish(std::move(dispatch));return {};}
@@ -967,6 +1062,13 @@ namespace lfs::onnx_vulkan::detail {
         for(const auto& slot:input_slots){VkBufferCopy copy{slot.staging_offset,slot.device.offset,element_count(slot.shape).value_or(0)*4};vkCmdCopyBuffer(command,staging.buffer,arena.buffer,1,&copy);}VkMemoryBarrier barrier{.sType=VK_STRUCTURE_TYPE_MEMORY_BARRIER,.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,.dstAccessMask=VK_ACCESS_SHADER_READ_BIT};vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&barrier,0,nullptr,0,nullptr);
         for(size_t i=0;i<dispatches.size();++i){
             auto& dispatch=dispatches[i];
+            if(dispatch.workgroups[0]==0&&dispatch.kernel==Kernel::PackFp16){
+                const auto group_count=(dispatch.count+255u)/256u;
+                const auto groups_x=u32(std::min<uint64_t>(group_count,runtime.maximum_group_count_x()));
+                const auto groups_y=u32((group_count+groups_x-1)/groups_x);
+                if(groups_y>runtime.maximum_group_count_y())return std::unexpected(execution_error("FP16 packing workgroup grid exceeds Vulkan device limits"));
+                dispatch.workgroups={groups_x,groups_y,1};
+            }
             if(dispatch.workgroups[0]==0&&(dispatch.kernel==Kernel::Reduce||dispatch.kernel==Kernel::Softmax||dispatch.kernel==Kernel::LayerNorm)){
                 const auto groups_x=u32(std::min<uint64_t>(dispatch.count,runtime.maximum_group_count_x()));
                 const auto groups_y=u32((dispatch.count+groups_x-1)/groups_x);

@@ -6,14 +6,18 @@
 
 #include "conv.comp.spv.h"
 #include "conv_cooperative.comp.spv.h"
+#include "conv_cooperative_3x3.comp.spv.h"
+#include "conv_transpose_cooperative_2x2.comp.spv.h"
 #include "conv_tiled.comp.spv.h"
 #include "conv_transpose.comp.spv.h"
 #include "conv_transpose_tiled.comp.spv.h"
 #include "elementwise.comp.spv.h"
 #include "matmul.comp.spv.h"
 #include "matmul_cooperative.comp.spv.h"
+#include "matmul_cooperative_fp16_weights.comp.spv.h"
 #include "matmul_tiled.comp.spv.h"
 #include "matmul_small_k.comp.spv.h"
+#include "pack_fp16.comp.spv.h"
 #include "conv_1x1.comp.spv.h"
 #include "layer_norm.comp.spv.h"
 #include "im2col_fp16.comp.spv.h"
@@ -237,8 +241,11 @@ namespace lfs::onnx_vulkan::detail {
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
         VkPhysicalDeviceShaderFloat16Int8Features float16_support{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES};
+        VkPhysicalDevice16BitStorageFeatures storage16_support{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES};
         VkPhysicalDeviceFeatures2 feature_support{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-        feature_support.pNext = &float16_support;
+        feature_support.pNext = &storage16_support;
+        storage16_support.pNext = &float16_support;
         if (has_cooperative_extension)
             float16_support.pNext = &cooperative_support;
         vkGetPhysicalDeviceFeatures2(physical_device_, &feature_support);
@@ -280,6 +287,7 @@ namespace lfs::onnx_vulkan::detail {
                                       candidate.properties.limits.maxComputeWorkGroupSize[0] >= 512 &&
                                       candidate.properties.limits.maxComputeSharedMemorySize >= 40960 &&
                                       has_fp16_fp32_shape;
+        native_fp16_storage_enabled_ = cooperative_matrix_enabled_ && storage16_support.storageBuffer16BitAccess;
 
         constexpr float priority = 1.0f;
         const VkDeviceQueueCreateInfo queue_info{
@@ -297,12 +305,21 @@ namespace lfs::onnx_vulkan::detail {
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES,
             .pNext = cooperative_matrix_enabled_ ? &cooperative_features : nullptr,
             .shaderFloat16 = cooperative_matrix_enabled_};
+        VkPhysicalDevice16BitStorageFeatures storage16_features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+            .pNext = &float16_features,
+            .storageBuffer16BitAccess = native_fp16_storage_enabled_};
         if (cooperative_matrix_enabled_) {
             enabled_extensions[enabled_extension_count++] = VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME;
         }
+        const void* device_features = native_fp16_storage_enabled_
+                                          ? static_cast<const void*>(&storage16_features)
+                                          : cooperative_matrix_enabled_
+                                                ? static_cast<const void*>(&float16_features)
+                                                : nullptr;
         const VkDeviceCreateInfo device_info{
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-            .pNext = cooperative_matrix_enabled_ ? &float16_features : nullptr,
+            .pNext = device_features,
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &queue_info,
             .enabledExtensionCount = enabled_extension_count,
@@ -377,11 +394,15 @@ namespace lfs::onnx_vulkan::detail {
 
     std::expected<void, Error> VulkanRuntime::create_pipelines() {
         const std::array<std::span<const std::uint32_t>, static_cast<std::size_t>(Kernel::Count)> code{
-            words(shaders::kElementwiseSpv), words(shaders::kTransformSpv), words(shaders::kMatMulSpv),
+            words(shaders::kElementwiseSpv), words(shaders::kTransformSpv), words(shaders::kPackFp16Spv),
+            words(shaders::kMatMulSpv),
             words(shaders::kMatMulTiledSpv), words(shaders::kMatMulSmallKSpv),
             words(shaders::kMatMulCooperativeSpv),
+            words(shaders::kMatMulCooperativeFp16WeightsSpv),
             words(shaders::kConvSpv), words(shaders::kConv1x1Spv),
             words(shaders::kConvTiledSpv), words(shaders::kConvCooperativeSpv),
+            words(shaders::kConvCooperative3x3Spv),
+            words(shaders::kConvTransposeCooperative2x2Spv),
             words(shaders::kIm2ColFp16Spv),
             words(shaders::kConvTransposeSpv),
             words(shaders::kConvTransposeTiledSpv), words(shaders::kReduceSpv),
@@ -389,8 +410,14 @@ namespace lfs::onnx_vulkan::detail {
             words(shaders::kLayerNormSpv),
         };
         for (std::size_t index = 0; index < code.size(); ++index) {
+            if ((index == static_cast<std::size_t>(Kernel::PackFp16) ||
+                 index == static_cast<std::size_t>(Kernel::MatMulCooperativeFp16Weights)) &&
+                !native_fp16_storage_enabled_)
+                continue;
             if ((index == static_cast<std::size_t>(Kernel::MatMulCooperative) ||
                  index == static_cast<std::size_t>(Kernel::ConvCooperative) ||
+                 index == static_cast<std::size_t>(Kernel::ConvCooperative3x3) ||
+                 index == static_cast<std::size_t>(Kernel::ConvTransposeCooperative2x2) ||
                  index == static_cast<std::size_t>(Kernel::Im2ColFp16)) &&
                 !cooperative_matrix_enabled_)
                 continue;
@@ -612,7 +639,10 @@ namespace lfs::onnx_vulkan::detail {
             vkCmdDispatch(command, workgroups[0], workgroups[1], workgroups[2]);
             return;
         }
-        const std::uint32_t local_size = kernel == Kernel::Elementwise || kernel == Kernel::Transform ? 256 : 64;
+        const std::uint32_t local_size = kernel == Kernel::Elementwise || kernel == Kernel::Transform ||
+                                                 kernel == Kernel::PackFp16
+                                             ? 256
+                                             : 64;
         const auto group_count = (invocation_count + local_size - 1) / local_size;
         const auto groups_x = static_cast<std::uint32_t>(std::min<std::uint64_t>(group_count, maximum_group_count_x_));
         const auto groups_y64 = (group_count + groups_x - 1) / groups_x;
