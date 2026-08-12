@@ -1,0 +1,139 @@
+#version 450
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_memory_scope_semantics : require
+
+// Sixteen subgroups cooperatively compute a 64x128 or 128x64 FP32 output tile
+// using FP16-input, FP32-accumulating 16x16 matrix operations. The larger workgroup
+// amortizes FP32-to-FP16 conversion and barriers: every operand tile is reused
+// four times. Each subgroup holds two adjacent accumulators along the wider tile
+// dimension, sharing converted operands and synchronization. Tensor storage
+// remains FP32.
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint b[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint c[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+shared float16_t tile_a[2048];
+shared float16_t tile_b[2048];
+shared float tile_c[8192];
+
+void main() {
+    const uint local_index = gl_LocalInvocationID.x;
+    const uint subgroup = local_index / 32u;
+    const uint lane = local_index % 32u;
+    const uint tile_row = subgroup / 4u;
+    const uint tile_col = subgroup % 4u;
+    const uint n_size = p[80];
+    const uint m_size = p[81];
+    const uint k_size = p[82];
+    const uint batch_index = gl_WorkGroupID.z;
+    const bool wide_columns = n_size >= m_size;
+    const uint n_tile = wide_columns ? 128u : 64u;
+    const uint m_tile = wide_columns ? 64u : 128u;
+    const uint n_origin = gl_WorkGroupID.x * n_tile;
+    const uint m_origin = gl_WorkGroupID.y * m_tile;
+    const uint matrix_n_origin = n_origin + tile_col * 16u;
+    const uint matrix_m_origin = m_origin + tile_row * 16u;
+    const bool second_panel = wide_columns ? n_origin + 64u < n_size : m_origin + 64u < m_size;
+
+    uint batch = batch_index;
+    uint batch_coord[8];
+    const uint batch_rank = p[2] - 2u;
+    for (int axis = int(batch_rank) - 1; axis >= 0; --axis) {
+        const uint extent = p[16u + uint(axis)];
+        batch_coord[axis] = batch % extent;
+        batch /= extent;
+    }
+    uint a_base = p[83];
+    uint b_base = p[84];
+    const uint a_rank = p[3];
+    const uint b_rank = p[4];
+    for (uint axis = 0u; axis + 2u < a_rank; ++axis) {
+        const uint out_axis = batch_rank - (a_rank - 2u) + axis;
+        const uint coord = p[24u + axis] == 1u ? 0u : batch_coord[out_axis];
+        a_base += coord * p[32u + axis];
+    }
+    for (uint axis = 0u; axis + 2u < b_rank; ++axis) {
+        const uint out_axis = batch_rank - (b_rank - 2u) + axis;
+        const uint coord = p[40u + axis] == 1u ? 0u : batch_coord[out_axis];
+        b_base += coord * p[48u + axis];
+    }
+    const bool trans_a = p[85] != 0u;
+    const bool trans_b = p[86] != 0u;
+    const uint a_m_stride = p[32u + a_rank - (trans_a ? 1u : 2u)];
+    const uint a_k_stride = p[32u + a_rank - (trans_a ? 2u : 1u)];
+    const uint b_k_stride = p[48u + b_rank - (trans_b ? 1u : 2u)];
+    const uint b_n_stride = p[48u + b_rank - (trans_b ? 2u : 1u)];
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> accumulator0 =
+        coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> accumulator1 =
+        coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    for (uint k_origin = 0u; k_origin < k_size; k_origin += 16u) {
+        const uint a_elements = m_tile * 16u;
+        for (uint index = local_index; index < a_elements; index += 512u) {
+            const uint row = index / 16u;
+            const uint inner = index % 16u;
+            const uint m = m_origin + row;
+            const uint k = k_origin + inner;
+            tile_a[index] = m < m_size && k < k_size
+                ? float16_t(uintBitsToFloat(a[a_base + m * a_m_stride + k * a_k_stride]))
+                : float16_t(0.0);
+        }
+        const uint b_elements = 16u * n_tile;
+        for (uint index = local_index; index < b_elements; index += 512u) {
+            const uint inner = index / n_tile;
+            const uint col = index % n_tile;
+            const uint k = k_origin + inner;
+            const uint n = n_origin + col;
+            tile_b[index] = k < k_size && n < n_size
+                ? float16_t(uintBitsToFloat(b[b_base + k * b_k_stride + n * b_n_stride]))
+                : float16_t(0.0);
+        }
+        barrier();
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matrix_a0;
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matrix_a1;
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matrix_b0;
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matrix_b1;
+        coopMatLoad(matrix_a0, tile_a, tile_row * 256u, 16, gl_CooperativeMatrixLayoutRowMajor);
+        coopMatLoad(matrix_b0, tile_b, tile_col * 16u, n_tile, gl_CooperativeMatrixLayoutRowMajor);
+        accumulator0 = coopMatMulAdd(matrix_a0, matrix_b0, accumulator0);
+        if (second_panel) {
+            if (wide_columns) {
+                coopMatLoad(matrix_b1, tile_b, 64u + tile_col * 16u, n_tile, gl_CooperativeMatrixLayoutRowMajor);
+                accumulator1 = coopMatMulAdd(matrix_a0, matrix_b1, accumulator1);
+            } else {
+                coopMatLoad(matrix_a1, tile_a, 1024u + tile_row * 256u, 16,
+                            gl_CooperativeMatrixLayoutRowMajor);
+                accumulator1 = coopMatMulAdd(matrix_a1, matrix_b0, accumulator1);
+            }
+        }
+        barrier();
+    }
+
+    coopMatStore(accumulator0, tile_c, subgroup * 512u, 16, gl_CooperativeMatrixLayoutRowMajor);
+    if (second_panel)
+        coopMatStore(accumulator1, tile_c, subgroup * 512u + 256u, 16, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    const float alpha = uintBitsToFloat(p[87]);
+    const float beta = uintBitsToFloat(p[88]);
+    const uint panel_count = second_panel ? 2u : 1u;
+    for (uint panel = 0u; panel < panel_count; ++panel) {
+        for (uint index = lane; index < 256u; index += 32u) {
+            const uint row = index / 16u;
+            const uint col = index % 16u;
+            const uint m = matrix_m_origin + (wide_columns ? 0u : panel * 64u) + row;
+            const uint n = matrix_n_origin + (wide_columns ? panel * 64u : 0u) + col;
+            if (m >= m_size || n >= n_size) continue;
+            float value = alpha * tile_c[subgroup * 512u + panel * 256u + index];
+            if (p[89] != 0u) {
+                const uint c_index = p[90] + (p[91] == 1u ? n * p[92] : m * p[92] + n * p[93]);
+                value += beta * uintBitsToFloat(c[c_index]);
+            }
+            o[batch_index * m_size * n_size + m * n_size + n] = floatBitsToUint(value);
+        }
+    }
+}

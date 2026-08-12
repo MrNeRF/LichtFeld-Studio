@@ -1,0 +1,56 @@
+#version 450
+
+// Fused last-axis LayerNorm. The two reductions deliberately use the same
+// 256-lane tree as reduce.comp and compute variance from centered values,
+// preserving the unfused FP32 operation order as closely as possible.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint scale[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint bias[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+shared float partial[256];
+shared float mean_value;
+
+void reduce_sum(uint lane) {
+    barrier();
+    for (uint stride = 128u; stride != 0u; stride >>= 1u) {
+        if (lane < stride) partial[lane] += partial[lane + stride];
+        barrier();
+    }
+}
+
+void main() {
+    const uint row = gl_WorkGroupID.x + gl_WorkGroupID.y * gl_NumWorkGroups.x;
+    const uint lane = gl_LocalInvocationID.x;
+    if (row >= p[1]) return;
+    const uint width = p[80];
+    const uint input_base = p[81] + row * width;
+    const uint output_base = row * width;
+
+    float sum = 0.0;
+    for (uint index = lane; index < width; index += 256u)
+        sum += uintBitsToFloat(a[input_base + index]);
+    partial[lane] = sum;
+    reduce_sum(lane);
+    if (lane == 0u) mean_value = partial[0] / float(width);
+    barrier();
+    const float mean = mean_value;
+
+    float square_sum = 0.0;
+    for (uint index = lane; index < width; index += 256u) {
+        const float centered = uintBitsToFloat(a[input_base + index]) - mean;
+        square_sum += centered * centered;
+    }
+    partial[lane] = square_sum;
+    reduce_sum(lane);
+    const float denominator = sqrt(partial[0] / float(width) + uintBitsToFloat(p[84]));
+
+    for (uint index = lane; index < width; index += 256u) {
+        const float normalized = (uintBitsToFloat(a[input_base + index]) - mean) / denominator;
+        const float value = normalized * uintBitsToFloat(scale[p[82] + index]) +
+                            uintBitsToFloat(bias[p[83] + index]);
+        o[output_base + index] = floatBitsToUint(value);
+    }
+}

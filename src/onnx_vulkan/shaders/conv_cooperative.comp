@@ -1,0 +1,148 @@
+#version 450
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_memory_scope_semantics : require
+
+// Group-one NCHW Conv and ConvTranspose as implicit GEMM. Eight subgroups
+// compute either a 64-channel by 64-pixel tile or, for narrow outputs, a
+// 32-channel by 128-pixel tile. Both layouts keep all 16 subgroups occupied
+// while sharing converted FP16 operands and accumulating FP32 results.
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint w[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint bias[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+shared float16_t tile_w[1024];
+shared float16_t tile_x[2048];
+shared float tile_o[4096];
+shared float tile_bias[64];
+
+void main() {
+    const uint local_index = gl_LocalInvocationID.x;
+    const uint subgroup = local_index / 32u;
+    const uint lane = local_index % 32u;
+    const bool narrow = p[101] != 0u;
+    const uint tile_columns = narrow ? 8u : 4u;
+    const uint tile_row = subgroup / tile_columns;
+    const uint tile_col = subgroup % tile_columns;
+    const uint ow_size = p[80];
+    const uint oh_size = p[81];
+    const uint spatial_size = ow_size * oh_size;
+    const uint oc_size = p[82];
+    const uint ic_size = p[84];
+    const uint kh_size = p[85];
+    const uint kw_size = p[86];
+    const uint kernel_area = kh_size * kw_size;
+    const uint k_size = ic_size * kernel_area;
+    const uint spatial_tile = narrow ? 128u : 64u;
+    const uint oc_tile = narrow ? 32u : 64u;
+    const uint spatial_origin = gl_WorkGroupID.x * spatial_tile;
+    const uint oc_origin = gl_WorkGroupID.y * oc_tile;
+    const uint matrix_spatial_origin = spatial_origin + tile_col * 16u;
+    const uint matrix_oc_origin = oc_origin + tile_row * 16u;
+    const uint n = gl_WorkGroupID.z;
+    const bool transposed = p[100] != 0u;
+
+    if (local_index < oc_tile) {
+        const uint oc = oc_origin + local_index;
+        tile_bias[local_index] = p[95] != 0u && oc < oc_size
+            ? uintBitsToFloat(bias[p[96] + oc * p[97]]) : 0.0;
+    }
+    barrier();
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> accumulator =
+        coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+
+    for (uint k_origin = 0u; k_origin < k_size; k_origin += 16u) {
+        const uint weight_elements = oc_tile * 16u;
+        for (uint index = local_index; index < weight_elements; index += 512u) {
+            const uint row = index / 16u;
+            const uint inner = index % 16u;
+            const uint oc = oc_origin + row;
+            const uint k = k_origin + inner;
+            float value = 0.0;
+            if (oc < oc_size && k < k_size) {
+                uint weight_index;
+                if (p[105] != 0u) {
+                    weight_index = p[99] + oc * k_size + k;
+                } else {
+                    const uint ic = k / kernel_area;
+                    const uint kernel_index = k % kernel_area;
+                    const uint kh = kernel_index / kw_size;
+                    const uint kw = kernel_index % kw_size;
+                    weight_index = transposed
+                        ? p[99] + ic * p[48] + oc * p[49] + kh * p[50] + kw * p[51]
+                        : p[99] + oc * p[48] + ic * p[49] + kh * p[50] + kw * p[51];
+                }
+                value = uintBitsToFloat(w[weight_index]);
+            }
+            tile_w[index] = float16_t(value);
+        }
+
+        const uint input_elements = 16u * spatial_tile;
+        for (uint index = local_index; index < input_elements; index += 512u) {
+            const uint inner = index / spatial_tile;
+            const uint col = index % spatial_tile;
+            const uint k = k_origin + inner;
+            const uint spatial = spatial_origin + col;
+            float value = 0.0;
+            if (p[103] != 0u && k < k_size && spatial < spatial_size) {
+                const uint element = k * spatial_size + spatial;
+                const uint packed = a[n * p[104] + element / 2u];
+                const vec2 unpacked = unpackHalf2x16(packed);
+                value = (element & 1u) == 0u ? unpacked.x : unpacked.y;
+            } else if (k < k_size && spatial < spatial_size) {
+                const uint ic = k / kernel_area;
+                const uint kernel_index = k % kernel_area;
+                const uint kh = kernel_index / kw_size;
+                const uint kw = kernel_index % kw_size;
+                const uint oh = spatial / ow_size;
+                const uint ow = spatial % ow_size;
+                int ih = -1;
+                int iw = -1;
+                if (!transposed) {
+                    ih = int(oh * p[87] + kh * p[89]) - int(p[91]);
+                    iw = int(ow * p[88] + kw * p[90]) - int(p[92]);
+                } else {
+                    const int ih_numerator = int(oh) + int(p[91]) - int(kh * p[89]);
+                    const int iw_numerator = int(ow) + int(p[92]) - int(kw * p[90]);
+                    if (ih_numerator >= 0 && iw_numerator >= 0 &&
+                        ih_numerator % int(p[87]) == 0 && iw_numerator % int(p[88]) == 0) {
+                        ih = ih_numerator / int(p[87]);
+                        iw = iw_numerator / int(p[88]);
+                    }
+                }
+                if (ih >= 0 && ih < int(p[93]) && iw >= 0 && iw < int(p[94])) {
+                    const uint input_index = p[98] + n * p[32] + ic * p[33] +
+                                             uint(ih) * p[34] + uint(iw) * p[35];
+                    value = uintBitsToFloat(a[input_index]);
+                }
+            }
+            tile_x[index] = float16_t(value);
+        }
+        barrier();
+
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matrix_w;
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matrix_x;
+        coopMatLoad(matrix_w, tile_w, tile_row * 256u, 16, gl_CooperativeMatrixLayoutRowMajor);
+        coopMatLoad(matrix_x, tile_x, tile_col * 16u, spatial_tile, gl_CooperativeMatrixLayoutRowMajor);
+        accumulator = coopMatMulAdd(matrix_w, matrix_x, accumulator);
+        barrier();
+    }
+
+    coopMatStore(accumulator, tile_o, subgroup * 256u, 16, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    for (uint index = lane; index < 256u; index += 32u) {
+        const uint row = index / 16u;
+        const uint col = index % 16u;
+        const uint oc = matrix_oc_origin + row;
+        const uint spatial = matrix_spatial_origin + col;
+        if (oc >= oc_size || spatial >= spatial_size)
+            continue;
+        const float channel_bias = tile_bias[tile_row * 16u + row];
+        o[(n * oc_size + oc) * spatial_size + spatial] =
+            floatBitsToUint(tile_o[subgroup * 256u + index] + channel_bias);
+    }
+}

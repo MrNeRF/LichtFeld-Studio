@@ -1,0 +1,103 @@
+#version 450
+
+// Exact-FP32 MatMul specialized for small K. A 16x16 workgroup computes a
+// 128x64 output tile; the wider M tile doubles reuse of B for attention-score
+// products without changing the per-output accumulation order.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint b[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint c[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+shared float tile_a[128][16];
+shared float tile_b[16][64];
+
+void main() {
+    const uint lx = gl_LocalInvocationID.x;
+    const uint ly = gl_LocalInvocationID.y;
+    const uint local_linear = ly * 16u + lx;
+    const uint n_size = p[80];
+    const uint m_size = p[81];
+    const uint k_size = p[82];
+    const uint batch_index = gl_WorkGroupID.z;
+    const uint n_origin = gl_WorkGroupID.x * 64u;
+    const uint m_origin = gl_WorkGroupID.y * 128u;
+
+    uint batch = batch_index;
+    uint batch_coord[8];
+    const uint batch_rank = p[2] - 2u;
+    for (int axis = int(batch_rank) - 1; axis >= 0; --axis) {
+        const uint extent = p[16u + uint(axis)];
+        batch_coord[axis] = batch % extent;
+        batch /= extent;
+    }
+    uint a_base = p[83];
+    uint b_base = p[84];
+    const uint a_rank = p[3];
+    const uint b_rank = p[4];
+    for (uint axis = 0u; axis + 2u < a_rank; ++axis) {
+        const uint out_axis = batch_rank - (a_rank - 2u) + axis;
+        const uint coord = p[24u + axis] == 1u ? 0u : batch_coord[out_axis];
+        a_base += coord * p[32u + axis];
+    }
+    for (uint axis = 0u; axis + 2u < b_rank; ++axis) {
+        const uint out_axis = batch_rank - (b_rank - 2u) + axis;
+        const uint coord = p[40u + axis] == 1u ? 0u : batch_coord[out_axis];
+        b_base += coord * p[48u + axis];
+    }
+    const bool trans_a = p[85] != 0u;
+    const bool trans_b = p[86] != 0u;
+    const uint a_m_stride = p[32u + a_rank - (trans_a ? 1u : 2u)];
+    const uint a_k_stride = p[32u + a_rank - (trans_a ? 2u : 1u)];
+    const uint b_k_stride = p[48u + b_rank - (trans_b ? 1u : 2u)];
+    const uint b_n_stride = p[48u + b_rank - (trans_b ? 2u : 1u)];
+
+    float accum[8][4];
+    for (uint row = 0u; row < 8u; ++row)
+        for (uint col = 0u; col < 4u; ++col) accum[row][col] = 0.0;
+
+    for (uint k_origin = 0u; k_origin < k_size; k_origin += 16u) {
+        for (uint index = local_linear; index < 2048u; index += 256u) {
+            const uint row = index / 16u;
+            const uint inner = index % 16u;
+            const uint m = m_origin + row;
+            const uint k = k_origin + inner;
+            tile_a[row][inner] = m < m_size && k < k_size
+                ? uintBitsToFloat(a[a_base + m * a_m_stride + k * a_k_stride]) : 0.0;
+        }
+        for (uint index = local_linear; index < 1024u; index += 256u) {
+            const uint inner = index / 64u;
+            const uint col = index % 64u;
+            const uint k = k_origin + inner;
+            const uint n = n_origin + col;
+            tile_b[inner][col] = k < k_size && n < n_size
+                ? uintBitsToFloat(b[b_base + k * b_k_stride + n * b_n_stride]) : 0.0;
+        }
+        barrier();
+        for (uint inner = 0u; inner < 16u; ++inner)
+            for (uint row = 0u; row < 8u; ++row) {
+                const float av = tile_a[ly + row * 16u][inner];
+                for (uint col = 0u; col < 4u; ++col)
+                    accum[row][col] += av * tile_b[inner][lx + col * 16u];
+            }
+        barrier();
+    }
+
+    const float alpha = uintBitsToFloat(p[87]);
+    const float beta = uintBitsToFloat(p[88]);
+    for (uint row = 0u; row < 8u; ++row) {
+        const uint m = m_origin + ly + row * 16u;
+        if (m >= m_size) continue;
+        for (uint col = 0u; col < 4u; ++col) {
+            const uint n = n_origin + lx + col * 16u;
+            if (n >= n_size) continue;
+            float value = alpha * accum[row][col];
+            if (p[89] != 0u) {
+                const uint c_index = p[90] + (p[91] == 1u ? n * p[92] : m * p[92] + n * p[93]);
+                value += beta * uintBitsToFloat(c[c_index]);
+            }
+            o[batch_index * m_size * n_size + m * n_size + n] = floatBitsToUint(value);
+        }
+    }
+}

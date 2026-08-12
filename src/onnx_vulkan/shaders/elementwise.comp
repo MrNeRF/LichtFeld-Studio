@@ -11,7 +11,10 @@ const uint FLOAT32 = 1u;
 const uint INT32 = 6u;
 const uint BOOL = 9u;
 
-uint source_index(uint linear, uint rank, uint dims_base, uint strides_base, uint offset_word) {
+uint source_index(uint linear, uint rank, uint dims_base, uint strides_base, uint offset_word, uint slot) {
+    const uint mode = (p[10] >> (slot * 2u)) & 3u;
+    if (mode == 1u) return p[offset_word] + linear;
+    if (mode == 2u) return p[offset_word];
     uint out_rank = p[2];
     uint result = p[offset_word];
     for (int axis = int(out_rank) - 1; axis >= 0; --axis) {
@@ -53,13 +56,22 @@ void main() {
     uint id = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
     if (id >= p[1])
         return;
-    uint ai = source_index(id, p[3], 24u, 32u, 80u);
-    uint bi = source_index(id, p[4], 40u, 48u, 81u);
-    uint ci = source_index(id, p[5], 56u, 64u, 82u);
+    uint ai = source_index(id, p[3], 24u, 32u, 80u, 0u);
     float x = load_float_a(ai);
-    float y = load_float_b(bi);
-    float z = load_float_c(ci);
     uint op = p[0];
+
+    uint bi = 0u;
+    float y = 0.0;
+    if ((op >= 1u && op <= 8u) || (op == 17u && p[83] != 0u)) {
+        bi = source_index(id, p[4], 40u, 48u, 81u, 1u);
+        y = load_float_b(bi);
+    }
+    uint ci = 0u;
+    float z = 0.0;
+    if (op == 8u || (op == 17u && p[84] != 0u)) {
+        ci = source_index(id, p[5], 56u, 64u, 82u, 2u);
+        z = load_float_c(ci);
+    }
 
     if (op == 7u) {
         o[id] = x == y ? 1u : 0u;

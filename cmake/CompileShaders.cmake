@@ -34,6 +34,12 @@ function(compile_shader target source output symbol)
         set(_namespace "lfs::vis::viewport_shaders")
     endif()
 
+    if(ARGC GREATER 5)
+        set(_target_env_args --target-env "${ARGV5}")
+    else()
+        set(_target_env_args)
+    endif()
+
     add_custom_command(
         OUTPUT "${_output}"
         COMMAND $<TARGET_FILE:lfs_shader_compiler>
@@ -41,6 +47,7 @@ function(compile_shader target source output symbol)
                 --output "${_output}"
                 --symbol "${symbol}"
                 --namespace "${_namespace}"
+                ${_target_env_args}
         DEPENDS "${_source}" lfs_shader_compiler
         COMMENT "Compiling shader ${source}"
         VERBATIM)

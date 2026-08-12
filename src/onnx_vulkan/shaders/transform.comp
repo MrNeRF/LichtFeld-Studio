@@ -45,6 +45,78 @@ void main() {
     if (id >= p[1]) return;
     uint op = p[0];
     uint rank = p[2];
+
+    if (op == 6u) { // contiguous NCHW bilinear Resize
+        const uint ow_size = p[19];
+        const uint oh_size = p[18];
+        const uint spatial = ow_size * oh_size;
+        const uint ow = id % ow_size;
+        const uint oh = (id / ow_size) % oh_size;
+        const uint channel = (id / spatial) % p[17];
+        const uint batch = id / (spatial * p[17]);
+        const uint transform = p[81];
+        const float scale_h = uintBitsToFloat(p[42]);
+        const float scale_w = uintBitsToFloat(p[43]);
+        float source_h;
+        float source_w;
+        if (transform == 1u) {
+            source_h = (float(oh) + 0.5) / scale_h - 0.5;
+            source_w = (float(ow) + 0.5) / scale_w - 0.5;
+        } else if (transform == 2u) {
+            source_h = oh_size > 1u ? float(oh) * float(p[50] - 1u) / float(oh_size - 1u) : 0.0;
+            source_w = ow_size > 1u ? float(ow) * float(p[51] - 1u) / float(ow_size - 1u) : 0.0;
+        } else if (transform == 3u) {
+            source_h = (float(oh) + 0.5) / scale_h;
+            source_w = (float(ow) + 0.5) / scale_w;
+        } else {
+            source_h = float(oh) / scale_h;
+            source_w = float(ow) / scale_w;
+        }
+        const float clamped_h = clamp(source_h, 0.0, float(p[50] - 1u));
+        const float clamped_w = clamp(source_w, 0.0, float(p[51] - 1u));
+        const uint h0 = uint(floor(clamped_h));
+        const uint w0 = uint(floor(clamped_w));
+        const uint h1 = min(h0 + 1u, p[50] - 1u);
+        const uint w1 = min(w0 + 1u, p[51] - 1u);
+        const float fh = clamped_h - floor(clamped_h);
+        const float fw = clamped_w - floor(clamped_w);
+        const uint base = p[83] + batch * p[24] + channel * p[25];
+        const float v00 = uintBitsToFloat(a[base + h0 * p[26] + w0 * p[27]]);
+        const float v01 = uintBitsToFloat(a[base + h0 * p[26] + w1 * p[27]]);
+        const float v10 = uintBitsToFloat(a[base + h1 * p[26] + w0 * p[27]]);
+        const float v11 = uintBitsToFloat(a[base + h1 * p[26] + w1 * p[27]]);
+        o[id] = floatBitsToUint(mix(mix(v00, v01, fw), mix(v10, v11, fw), fh));
+        return;
+    }
+
+    if (op == 7u) { // rank-four Pad
+        const uint ow_size = p[19];
+        const uint oh_size = p[18];
+        const uint spatial = ow_size * oh_size;
+        int source[4];
+        source[3] = int(id % ow_size) - int(p[43]);
+        source[2] = int((id / ow_size) % oh_size) - int(p[42]);
+        source[1] = int((id / spatial) % p[17]) - int(p[41]);
+        source[0] = int(id / (spatial * p[17])) - int(p[40]);
+        bool inside = true;
+        for (uint axis = 0u; axis < 4u; ++axis) {
+            const int extent = int(p[48u + axis]);
+            inside = inside && source[axis] >= 0 && source[axis] < extent;
+            if (p[81] == 1u) source[axis] = reflect_coord(source[axis], extent);
+            if (p[81] == 2u) source[axis] = clamp(source[axis], 0, extent - 1);
+        }
+        if (!inside && p[81] == 0u) {
+            o[id] = p[80];
+        } else {
+            const uint input_index = p[82] + uint(max(source[0], 0)) * p[24] +
+                                     uint(max(source[1], 0)) * p[25] +
+                                     uint(max(source[2], 0)) * p[26] +
+                                     uint(max(source[3], 0)) * p[27];
+            o[id] = a[input_index];
+        }
+        return;
+    }
+
     uint coord[8];
     decode(id, rank, 16u, coord);
 

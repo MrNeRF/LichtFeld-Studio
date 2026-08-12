@@ -25,6 +25,7 @@ namespace {
         std::filesystem::path output;
         std::string symbol;
         std::string name_space = "lfs::vis::viewport_shaders";
+        std::string target_env = "vulkan1.0";
     };
 
     [[nodiscard]] bool endsWith(const std::string_view value, const std::string_view suffix) {
@@ -48,6 +49,8 @@ namespace {
                 args.symbol = value;
             } else if (key == "--namespace") {
                 args.name_space = value;
+            } else if (key == "--target-env") {
+                args.target_env = value;
             } else {
                 std::cerr << "Unknown argument " << key << '\n';
                 return std::nullopt;
@@ -55,7 +58,12 @@ namespace {
         }
 
         if (args.input.empty() || args.output.empty() || args.symbol.empty()) {
-            std::cerr << "Usage: lfs_shader_compiler --input <shader> --output <header> --symbol <name>\n";
+            std::cerr << "Usage: lfs_shader_compiler --input <shader> --output <header> --symbol <name> "
+                         "[--target-env vulkan1.0|vulkan1.2]\n";
+            return std::nullopt;
+        }
+        if (args.target_env != "vulkan1.0" && args.target_env != "vulkan1.2") {
+            std::cerr << "Unsupported target environment: " << args.target_env << '\n';
             return std::nullopt;
         }
         return args;
@@ -99,7 +107,8 @@ namespace {
     [[nodiscard]] std::optional<std::vector<std::uint32_t>> compileGlsl(
         const std::filesystem::path& input,
         const std::string& source,
-        const EShLanguage stage) {
+        const EShLanguage stage,
+        const std::string_view target_env) {
         const char* source_ptr = source.c_str();
         const std::string input_name = input.string();
         const char* source_name = input_name.c_str();
@@ -107,8 +116,13 @@ namespace {
         glslang::TShader shader(stage);
         shader.setStringsWithLengthsAndNames(&source_ptr, nullptr, &source_name, 1);
         shader.setEnvInput(glslang::EShSourceGlsl, stage, glslang::EShClientVulkan, 100);
-        shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_0);
-        shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
+        if (target_env == "vulkan1.2") {
+            shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_2);
+            shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_5);
+        } else {
+            shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_0);
+            shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
+        }
 
         constexpr auto messages = static_cast<EShMessages>(EShMsgSpvRules | EShMsgVulkanRules);
         if (!shader.parse(GetDefaultResources(), 450, false, messages)) {
@@ -199,7 +213,7 @@ int main(const int argc, char** argv) {
         return 1;
     }
 
-    const auto spirv = compileGlsl(args->input, *source, *stage);
+    const auto spirv = compileGlsl(args->input, *source, *stage, args->target_env);
     glslang::FinalizeProcess();
 
     if (!spirv) {

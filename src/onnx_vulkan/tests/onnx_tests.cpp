@@ -544,6 +544,28 @@ namespace {
         return proto::model(proto::graph(nodes, initializers, inputs, outputs));
     }
 
+    [[nodiscard]] Bytes cooperative_matmul_model() {
+        constexpr std::int64_t rows = 16;
+        constexpr std::int64_t inner = 256;
+        constexpr std::int64_t columns = 16;
+        const std::array<std::int64_t, 2> x_shape{rows, inner};
+        const std::array<std::int64_t, 2> weight_shape{inner, columns};
+        const std::array<std::int64_t, 2> y_shape{rows, columns};
+        const std::vector<float> weights(static_cast<std::size_t>(inner * columns), 1.0f);
+        const auto input = proto::value_info("x", 1, x_shape);
+        const auto output = proto::value_info("y", 1, y_shape);
+        const auto initializer = proto::raw_tensor("weights", 1, weight_shape,
+                                                   std::span<const float>(weights));
+        const std::array<std::string_view, 2> node_inputs{"x", "weights"};
+        const std::array<std::string_view, 1> node_outputs{"y"};
+        const auto matmul = proto::node("cooperative_matrix_product", "MatMul", node_inputs, node_outputs);
+        const std::array nodes{matmul};
+        const std::array initializers{initializer};
+        const std::array inputs{input};
+        const std::array outputs{output};
+        return proto::model(proto::graph(nodes, initializers, inputs, outputs));
+    }
+
     [[nodiscard]] Bytes grouped_conv_model() {
         const std::array<std::int64_t, 4> x_shape{1, 2, 3, 3};
         const std::array<std::int64_t, 4> weight_shape{2, 1, 2, 2};
@@ -671,8 +693,9 @@ namespace {
     void run_model(const fs::path& path,
                    const std::span<const std::int64_t> shape,
                    const std::span<const float> input_values,
-                   const std::span<const float> expected) {
-        auto session = lfs::onnx_vulkan::VulkanSession::create(path);
+                   const std::span<const float> expected,
+                   lfs::onnx_vulkan::SessionOptions options = {}) {
+        auto session = lfs::onnx_vulkan::VulkanSession::create(path, std::move(options));
         if (!session) {
             if (session.error().code == lfs::onnx_vulkan::ErrorCode::VulkanUnavailable ||
                 session.error().message.starts_with("vkCreateInstance") ||
@@ -757,6 +780,17 @@ namespace {
         const std::array<float, 6> input{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
         const std::array<float, 4> expected{22.0f, 28.0f, 49.0f, 64.0f};
         run_model(path, shape, input, expected);
+
+        const auto cooperative_path = temporary.path() / "cooperative_matmul.onnx";
+        write_file(cooperative_path, cooperative_matmul_model());
+        const std::array<std::int64_t, 2> cooperative_shape{16, 256};
+        const std::vector<float> cooperative_input(16 * 256, 1.0f);
+        const std::vector<float> cooperative_expected(16 * 16, 256.0f);
+        run_model(cooperative_path, cooperative_shape, cooperative_input, cooperative_expected);
+        lfs::onnx_vulkan::SessionOptions fallback_options;
+        fallback_options.enable_cooperative_matrix = false;
+        run_model(cooperative_path, cooperative_shape, cooperative_input, cooperative_expected,
+                  std::move(fallback_options));
     }
 
     void test_vulkan_grouped_conv(const TemporaryDirectory& temporary) {
