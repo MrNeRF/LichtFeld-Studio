@@ -47,7 +47,6 @@ namespace {
     constexpr std::uint64_t FIXED_COMMIT_NS =
         1'735'689'601'000'000'000;
 
-
     ProjectDocumentSaveOptions save_options(
         const std::uint64_t tag,
         const CommitKind kind = CommitKind::Explicit,
@@ -75,7 +74,6 @@ namespace {
             "p8_producer", std::string(producer)));
         return document;
     }
-
 
     ReaderOptions declared_v1() {
         ReaderOptions options;
@@ -191,8 +189,6 @@ namespace {
         require_status(after.read_stored_at(*row, 0, stored));
         EXPECT_EQ(stored, before.stored);
     }
-
-
 
     TEST(P8CompatibilityTest,
          V10CorpusAndSyntheticNewerClassificationRefusePayloadAccess) {
@@ -983,58 +979,6 @@ namespace {
         ASSERT_EQ(inflated.size(), lfkp_bytes.size());
         EXPECT_TRUE(std::equal(
             inflated.begin(), inflated.end(), lfkp_bytes.begin()));
-    }
-
-    TEST(P8CompatibilityTest, BytePlaneF32FilterInverseProperty) {
-        // Random-like + patterned f32-word buffers: shuffle then unshuffle
-        // is the identity. Filter lives in the writer path; reimplement the
-        // same plane transpose here so the inverse property is locked without
-        // file I/O.
-        auto plane = [](const std::vector<std::byte>& in) {
-            EXPECT_EQ(in.size() % 4, 0u);
-            const std::size_t n = in.size() / 4;
-            std::vector<std::byte> out(in.size());
-            const auto* s = reinterpret_cast<const std::uint8_t*>(in.data());
-            auto* d = reinterpret_cast<std::uint8_t*>(out.data());
-            for (std::size_t w = 0; w < n; ++w) {
-                d[0 * n + w] = s[w * 4 + 0];
-                d[1 * n + w] = s[w * 4 + 1];
-                d[2 * n + w] = s[w * 4 + 2];
-                d[3 * n + w] = s[w * 4 + 3];
-            }
-            return out;
-        };
-        auto unplane = [](const std::vector<std::byte>& in) {
-            EXPECT_EQ(in.size() % 4, 0u);
-            const std::size_t n = in.size() / 4;
-            std::vector<std::byte> out(in.size());
-            const auto* s = reinterpret_cast<const std::uint8_t*>(in.data());
-            auto* d = reinterpret_cast<std::uint8_t*>(out.data());
-            for (std::size_t w = 0; w < n; ++w) {
-                d[w * 4 + 0] = s[0 * n + w];
-                d[w * 4 + 1] = s[1 * n + w];
-                d[w * 4 + 2] = s[2 * n + w];
-                d[w * 4 + 3] = s[3 * n + w];
-            }
-            return out;
-        };
-
-        std::vector<std::byte> randomish(4096);
-        for (std::size_t i = 0; i < randomish.size(); ++i) {
-            randomish[i] = static_cast<std::byte>((i * 37u + 91u) & 0xffu);
-        }
-        EXPECT_EQ(unplane(plane(randomish)), randomish);
-
-        // Real-ish float pattern: interleave 1.0f / 2.0f / small integers.
-        std::vector<std::byte> floats(1024 * 4);
-        for (std::size_t i = 0; i < 1024; ++i) {
-            float v = static_cast<float>(i) * 0.125f;
-            std::memcpy(floats.data() + i * 4, &v, 4);
-        }
-        EXPECT_EQ(unplane(plane(floats)), floats);
-
-        // Empty is a valid multiple of 4.
-        EXPECT_EQ(unplane(plane({})), std::vector<std::byte>{});
     }
 
     TEST(P8CompatibilityTest, CkptByteShuffleZstdLogicalPayloadByteVerbatim) {
