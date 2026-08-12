@@ -1179,17 +1179,14 @@ namespace lfs::vis::gui {
     void PanelRegistry::reset_floating_panel_layouts() {
         {
             std::lock_guard lock(mutex_);
+            const float scale = floatingUiScale();
             for (auto& panel : panels_) {
                 if (panel.space != PanelSpace::Floating)
                     continue;
-                panel.float_x = NAN;
-                panel.float_y = NAN;
-                panel.float_auto_center = true;
-                panel.float_dragging = false;
-                panel.float_resizing = false;
-                panel.float_last_bounds_valid = false;
-                panel.float_stack_order = 0;
-                resetFloatingPanelSize(panel, floatingUiScale());
+
+                auto& interaction = floating_interactions_[panel.id];
+                interaction = FloatingPanelInteraction{};
+                resetFloatingPanelSize(panel, interaction, scale);
             }
         }
         lfs::vis::publish_viewport_toolbar_generation();

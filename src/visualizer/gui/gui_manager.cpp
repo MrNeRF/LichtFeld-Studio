@@ -5866,8 +5866,11 @@ namespace lfs::vis::gui {
                                     ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
                                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
                                     : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-                            vulkan_context->addFrameTimelineWait(
-                                completion.semaphore, completion.value, wait_stage);
+                            if (!vulkan_context->addFrameTimelineWait(
+                                    completion.semaphore, completion.value, wait_stage)) {
+                                LOG_ERROR("Unable to wait on VkSplat frame completion timeline: {}",
+                                          vulkan_context->lastError());
+                            }
                         }
                     }
                     if (temporal_pre_render) {
