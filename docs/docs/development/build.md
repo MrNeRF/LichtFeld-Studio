@@ -141,8 +141,10 @@ documents the test build targets, CTest tiers, and required real-data layout.
 
 ## Optional scene-upscaling SDKs
 
-Optional vendor upscalers are disabled by default. LichtFeld Studio neither
-downloads nor redistributes their SDKs: the person compiling the application
-must obtain the SDK, accept its terms, and provide its path at configure time.
+Optional vendor upscalers are disabled by default: both
+`LFS_ENABLE_NVIDIA_DLSS` and `LFS_ENABLE_AMD_FSR3` are `OFF` in a fresh cache.
+LichtFeld Studio neither downloads nor redistributes their SDKs: the person
+compiling the application must obtain the SDK, accept its terms, and provide
+its path at configure time.
 The complete platform, runtime-staging, fallback, and rendering contracts are
 documented in [Scene upscaling and temporal rendering](scene-upscaling).

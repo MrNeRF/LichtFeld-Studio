@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 include_guard(GLOBAL)
+include(CMakeDependentOption)
 
 option(LFS_ENABLE_AMD_FSR3
     "Compile the optional AMD FidelityFX FSR 3.1 Vulkan adapter (requires a user-provided SDK build)"
@@ -11,9 +12,11 @@ set(LFS_AMD_FSR3_ROOT "" CACHE PATH
     "Path to an AMD FidelityFX SDK 1.1.x checkout; never downloaded automatically")
 set(LFS_AMD_FSR3_LIBRARY_DIR "" CACHE PATH
     "Optional directory containing prebuilt FidelityFX FSR 3.1 Vulkan libraries")
-option(LFS_AMD_FSR3_BUILD_SDK
-    "Build the user-provided FidelityFX FSR 3.1 Vulkan SDK automatically when needed"
-    ON)
+cmake_dependent_option(LFS_AMD_FSR3_BUILD_SDK
+    "Build the user-provided FidelityFX FSR 3.1 Vulkan SDK automatically when FSR is enabled"
+    ON
+    "LFS_ENABLE_AMD_FSR3"
+    OFF)
 
 set(_lfs_fsr3_download_url "https://gpuopen.com/amd-fidelityfx-sdk-1/")
 

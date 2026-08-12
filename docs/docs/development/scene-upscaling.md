@@ -7,16 +7,17 @@ sidebar_position: 7
 LichtFeld Studio separates scene rendering from interface scaling. The scene is
 rendered at a backend-owned input extent and reconstructed into the full
 viewport extent; RmlUI and the rest of the interface remain at normal
-resolution. Native rendering is the baseline and must retain its existing
-behavior with zero optional-upscaler cost.
+resolution. **Native is the normal LichtFeld Studio renderer**, not an
+upscaling implementation. It is the behavioral and performance baseline and
+must retain its existing behavior with zero optional-upscaler cost.
 
 ## Available backends
 
 | Backend | Availability | Inputs and behavior |
 | --- | --- | --- |
-| Native | Always | Full-resolution scene rendering without adapter, history, motion, or optional SDK cost. |
-| Spatial | Always | Internal spatial reconstruction; it needs no temporal inputs. |
-| Temporal | Always | Internal reconstruction using per-view history, depth, motion, and jitter. |
+| Native | Always | The normal LichtFeld Studio renderer at full resolution, without an upscaling adapter, history, motion, or optional SDK cost. |
+| Spatial | Always | Limited internal spatial prototype used to validate resolution scaling, adapter lifetime, split view, and fallback contracts before external SDK integration. It is not intended as a quality-oriented production upscaler. |
+| Temporal | Always | Limited experimental temporal prototype used to validate per-view history, depth, motion, jitter, and reset contracts before external SDK integration. It is not intended to match production temporal upscalers. |
 | NVIDIA DLSS | Optional build | DLSS Super Resolution through a user-provided NGX SDK. Frame Generation is not enabled. |
 | AMD FSR 3.1 | Optional build | FidelityFX FSR 3.1 upscaling through a user-provided SDK. Frame Interpolation is not enabled. |
 
@@ -32,8 +33,12 @@ features must not allocate adapters or input resources.
 
 ## Build configuration
 
-Both integrations support 64-bit Windows and Linux Vulkan builds. They are
-opt-in and never change a default build.
+Both external integrations support 64-bit Windows and Linux Vulkan builds.
+`LFS_ENABLE_NVIDIA_DLSS` and `LFS_ENABLE_AMD_FSR3` both default to `OFF`; a
+fresh build therefore contains neither vendor SDK. CMake cache values survive
+later configure runs, so a build directory previously configured with either
+option enabled remains enabled until that option is explicitly set back to
+`OFF` or the cache is recreated.
 
 ### NVIDIA DLSS
 
@@ -70,10 +75,11 @@ cmake -S . -B build \
   -DLFS_AMD_FSR3_ROOT=/path/to/FidelityFX-SDK-1.1.4
 ```
 
-On Windows, `LFS_AMD_FSR3_BUILD_SDK=ON` is the default. CMake copies the
-user-provided SDK into the build tree and builds only the Vulkan FSR 3.1
-upscaler and backend libraries; it never modifies the source SDK. Set
-`LFS_AMD_FSR3_LIBRARY_DIR` to use existing libraries instead.
+`LFS_AMD_FSR3_BUILD_SDK=ON` is a subordinate Windows convenience option: it is
+consulted only after `LFS_ENABLE_AMD_FSR3=ON` and cannot enable FSR by itself.
+When active, CMake copies the user-provided SDK into the build tree and builds
+only the Vulkan FSR 3.1 upscaler and backend libraries; it never modifies the
+source SDK. Set `LFS_AMD_FSR3_LIBRARY_DIR` to use existing libraries instead.
 
 The upstream 1.1.4 standalone generator is Visual Studio-oriented. Linux
 builders provide Linux-built `ffx_fsr3upscaler` and `ffx_backend_vk` libraries
