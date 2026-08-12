@@ -5,6 +5,8 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -13,10 +15,12 @@
 #include <iterator>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "core/camera_types.h"
 #include "core/image_io.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
@@ -86,23 +90,95 @@ protected:
         }
     }
 
-    void write_png(const fs::path& path) const {
-        static const std::vector<unsigned char> png_1x1 = {
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
-            0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0,
-            0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99,
-            0x3D, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
-            0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
+    void write_png(const fs::path& path, int width = 1, int height = 1) const {
+        ASSERT_GT(width, 0);
+        ASSERT_GT(height, 0);
+
+        // Minimal solid-color RGBA PNG for the given dimensions (no external deps).
+        auto crc32 = [](const unsigned char* data, size_t len) -> uint32_t {
+            uint32_t crc = 0xFFFFFFFFu;
+            for (size_t i = 0; i < len; ++i) {
+                crc ^= data[i];
+                for (int b = 0; b < 8; ++b) {
+                    const uint32_t mask = -(crc & 1u);
+                    crc = (crc >> 1) ^ (0xEDB88320u & mask);
+                }
+            }
+            return ~crc;
+        };
+        auto append_be32 = [](std::vector<unsigned char>& out, uint32_t value) {
+            out.push_back(static_cast<unsigned char>((value >> 24) & 0xFF));
+            out.push_back(static_cast<unsigned char>((value >> 16) & 0xFF));
+            out.push_back(static_cast<unsigned char>((value >> 8) & 0xFF));
+            out.push_back(static_cast<unsigned char>(value & 0xFF));
+        };
+        auto append_chunk = [&](std::vector<unsigned char>& out, const char type[4],
+                                const std::vector<unsigned char>& data) {
+            append_be32(out, static_cast<uint32_t>(data.size()));
+            const size_t type_offset = out.size();
+            out.insert(out.end(), type, type + 4);
+            out.insert(out.end(), data.begin(), data.end());
+            append_be32(out, crc32(out.data() + type_offset, 4 + data.size()));
+        };
+
+        std::vector<unsigned char> raw;
+        raw.reserve(static_cast<size_t>(height) * (1u + static_cast<size_t>(width) * 4u));
+        for (int y = 0; y < height; ++y) {
+            raw.push_back(0); // filter: None
+            for (int x = 0; x < width; ++x) {
+                raw.push_back(0);
+                raw.push_back(0);
+                raw.push_back(0);
+                raw.push_back(255);
+            }
+        }
+
+        // Stored (uncompressed) deflate blocks — valid zlib stream for any size.
+        std::vector<unsigned char> zlib_data;
+        zlib_data.push_back(0x78);
+        zlib_data.push_back(0x01);
+        size_t offset = 0;
+        const size_t raw_size = raw.size();
+        while (offset < raw_size) {
+            const size_t chunk = std::min<size_t>(65535, raw_size - offset);
+            const bool final_block = (offset + chunk) >= raw_size;
+            zlib_data.push_back(final_block ? 0x01 : 0x00);
+            zlib_data.push_back(static_cast<unsigned char>(chunk & 0xFF));
+            zlib_data.push_back(static_cast<unsigned char>((chunk >> 8) & 0xFF));
+            const uint16_t nlen = static_cast<uint16_t>(~chunk);
+            zlib_data.push_back(static_cast<unsigned char>(nlen & 0xFF));
+            zlib_data.push_back(static_cast<unsigned char>((nlen >> 8) & 0xFF));
+            zlib_data.insert(zlib_data.end(), raw.begin() + static_cast<std::ptrdiff_t>(offset),
+                             raw.begin() + static_cast<std::ptrdiff_t>(offset + chunk));
+            offset += chunk;
+        }
+        // Adler-32 of the raw scanline data
+        uint32_t s1 = 1, s2 = 0;
+        for (unsigned char byte : raw) {
+            s1 = (s1 + byte) % 65521;
+            s2 = (s2 + s1) % 65521;
+        }
+        append_be32(zlib_data, (s2 << 16) | s1);
+
+        std::vector<unsigned char> png = {
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+        std::vector<unsigned char> ihdr;
+        append_be32(ihdr, static_cast<uint32_t>(width));
+        append_be32(ihdr, static_cast<uint32_t>(height));
+        ihdr.push_back(8); // bit depth
+        ihdr.push_back(6); // RGBA
+        ihdr.push_back(0);
+        ihdr.push_back(0);
+        ihdr.push_back(0);
+        append_chunk(png, "IHDR", ihdr);
+        append_chunk(png, "IDAT", zlib_data);
+        append_chunk(png, "IEND", {});
 
         fs::create_directories(path.parent_path());
         std::ofstream out(path, std::ios::binary);
         ASSERT_TRUE(out.is_open()) << "Failed to open " << path;
-        out.write(reinterpret_cast<const char*>(png_1x1.data()),
-                  static_cast<std::streamsize>(png_1x1.size()));
+        out.write(reinterpret_cast<const char*>(png.data()),
+                  static_cast<std::streamsize>(png.size()));
         out.close();
         ASSERT_TRUE(out.good()) << "Failed to write " << path;
     }
@@ -570,6 +646,323 @@ TEST_F(PythonIOTest, RejectsMalformedTransformsCameraContractsBeforeCameraConstr
     invalid = valid;
     invalid["frames"][0]["transform_matrix"][3] = nlohmann::json::array({0.0, 0.0, 1.0, 1.0});
     expect_rejected(std::move(invalid));
+}
+
+TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
+    const fs::path dataset_dir = temp_dir / "per_frame_intrinsics";
+    write_png(dataset_dir / "frame_a.png", 64, 48);
+    write_png(dataset_dir / "frame_b.png", 128, 96);
+
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    nlohmann::json transforms = {
+        {"frames", nlohmann::json::array({
+                       {
+                           {"file_path", "frame_a.png"},
+                           {"w", 64},
+                           {"h", 48},
+                           {"fl_x", 50.0},
+                           {"fl_y", 45.0},
+                           {"cx", 32.0},
+                           {"cy", 24.0},
+                           {"camera_model", "OPENCV"},
+                           {"k1", 0.01},
+                           {"k2", -0.02},
+                           {"k3", 0.003},
+                           {"p1", 0.0001},
+                           {"p2", -0.0002},
+                           {"k4", 0.001},
+                           {"b1", 0.0003},
+                           {"b2", -0.0004},
+                           {"transform_matrix", identity_matrix},
+                       },
+                       {
+                           {"file_path", "frame_b.png"},
+                           {"w", 128},
+                           {"h", 96},
+                           {"fl_x", 90.0},
+                           {"fl_y", 88.0},
+                           {"cx", 64.0},
+                           {"cy", 48.0},
+                           {"camera_model", "OPENCV"},
+                           {"k1", 0.05},
+                           {"k2", -0.04},
+                           {"k3", 0.006},
+                           {"p1", 0.0005},
+                           {"p2", -0.0006},
+                           {"k4", 0.002},
+                           {"b1", 0.0007},
+                           {"b2", -0.0008},
+                           {"transform_matrix", identity_matrix},
+                       },
+                   })},
+    };
+    write_text_file(dataset_dir / "transforms.json", transforms.dump());
+
+    auto [cameras, center, splits] = read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    (void)center;
+    (void)splits;
+    ASSERT_EQ(cameras.size(), 2u);
+
+    EXPECT_EQ(cameras[0]._width, 64);
+    EXPECT_EQ(cameras[0]._height, 48);
+    EXPECT_FLOAT_EQ(cameras[0]._focal_x, 50.0f);
+    EXPECT_FLOAT_EQ(cameras[0]._focal_y, 45.0f);
+    EXPECT_FLOAT_EQ(cameras[0]._center_x, 32.0f);
+    EXPECT_FLOAT_EQ(cameras[0]._center_y, 24.0f);
+    EXPECT_EQ(cameras[0]._camera_model_type, CameraModelType::PINHOLE);
+    ASSERT_EQ(cameras[0]._radial_distortion.numel(), 3u);
+    ASSERT_EQ(cameras[0]._tangential_distortion.numel(), 2u);
+    {
+        const auto* radial = cameras[0]._radial_distortion.ptr<float>();
+        const auto* tangential = cameras[0]._tangential_distortion.ptr<float>();
+        EXPECT_FLOAT_EQ(radial[0], 0.01f);
+        EXPECT_FLOAT_EQ(radial[1], -0.02f);
+        EXPECT_FLOAT_EQ(radial[2], 0.003f);
+        EXPECT_FLOAT_EQ(tangential[0], 0.0001f);
+        EXPECT_FLOAT_EQ(tangential[1], -0.0002f);
+    }
+
+    EXPECT_EQ(cameras[1]._width, 128);
+    EXPECT_EQ(cameras[1]._height, 96);
+    EXPECT_FLOAT_EQ(cameras[1]._focal_x, 90.0f);
+    EXPECT_FLOAT_EQ(cameras[1]._focal_y, 88.0f);
+    EXPECT_FLOAT_EQ(cameras[1]._center_x, 64.0f);
+    EXPECT_FLOAT_EQ(cameras[1]._center_y, 48.0f);
+    EXPECT_EQ(cameras[1]._camera_model_type, CameraModelType::PINHOLE);
+    ASSERT_EQ(cameras[1]._radial_distortion.numel(), 3u);
+    ASSERT_EQ(cameras[1]._tangential_distortion.numel(), 2u);
+    {
+        const auto* radial = cameras[1]._radial_distortion.ptr<float>();
+        const auto* tangential = cameras[1]._tangential_distortion.ptr<float>();
+        EXPECT_FLOAT_EQ(radial[0], 0.05f);
+        EXPECT_FLOAT_EQ(radial[1], -0.04f);
+        EXPECT_FLOAT_EQ(radial[2], 0.006f);
+        EXPECT_FLOAT_EQ(tangential[0], 0.0005f);
+        EXPECT_FLOAT_EQ(tangential[1], -0.0006f);
+    }
+
+    // Distinct per-frame values prove resolution is not root-only.
+    EXPECT_NE(cameras[0]._focal_x, cameras[1]._focal_x);
+    EXPECT_NE(cameras[0]._width, cameras[1]._width);
+}
+
+TEST_F(PythonIOTest, LoadTransformsRootIntrinsicsFrameOverride) {
+    const fs::path dataset_dir = temp_dir / "root_override_intrinsics";
+    write_png(dataset_dir / "frame_0.png", 100, 80);
+    write_png(dataset_dir / "frame_1.png", 100, 80);
+
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    nlohmann::json transforms = {
+        {"w", 100},
+        {"h", 80},
+        {"fl_x", 70.0},
+        {"fl_y", 65.0},
+        {"cx", 50.0},
+        {"cy", 40.0},
+        {"camera_model", "PINHOLE"},
+        {"frames", nlohmann::json::array({
+                       {
+                           {"file_path", "frame_0.png"},
+                           {"transform_matrix", identity_matrix},
+                       },
+                       {
+                           {"file_path", "frame_1.png"},
+                           {"fl_x", 110.0},
+                           {"fl_y", 105.0},
+                           {"cx", 49.0},
+                           {"cy", 39.0},
+                           {"transform_matrix", identity_matrix},
+                       },
+                   })},
+    };
+    write_text_file(dataset_dir / "transforms.json", transforms.dump());
+
+    auto [cameras, center, splits] = read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    (void)center;
+    (void)splits;
+    ASSERT_EQ(cameras.size(), 2u);
+
+    EXPECT_FLOAT_EQ(cameras[0]._focal_x, 70.0f);
+    EXPECT_FLOAT_EQ(cameras[0]._focal_y, 65.0f);
+    EXPECT_FLOAT_EQ(cameras[0]._center_x, 50.0f);
+    EXPECT_FLOAT_EQ(cameras[0]._center_y, 40.0f);
+
+    EXPECT_FLOAT_EQ(cameras[1]._focal_x, 110.0f);
+    EXPECT_FLOAT_EQ(cameras[1]._focal_y, 105.0f);
+    EXPECT_FLOAT_EQ(cameras[1]._center_x, 49.0f);
+    EXPECT_FLOAT_EQ(cameras[1]._center_y, 39.0f);
+}
+
+TEST_F(PythonIOTest, TransformsIdentityFrameYieldsIdentityExtrinsics) {
+    const fs::path dataset_dir = temp_dir / "identity_extrinsics";
+    write_png(dataset_dir / "frame.png", 32, 32);
+
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    nlohmann::json transforms = {
+        {"w", 32},
+        {"h", 32},
+        {"fl_x", 20.0},
+        {"fl_y", 20.0},
+        {"frames", nlohmann::json::array({
+                       {
+                           {"file_path", "frame.png"},
+                           {"transform_matrix", identity_matrix},
+                       },
+                   })},
+    };
+    write_text_file(dataset_dir / "transforms.json", transforms.dump());
+
+    auto [cameras, center, splits] = read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    (void)center;
+    (void)splits;
+    ASSERT_EQ(cameras.size(), 1u);
+
+    ASSERT_EQ(cameras[0]._R.ndim(), 2u);
+    ASSERT_EQ(cameras[0]._R.size(0), 3u);
+    ASSERT_EQ(cameras[0]._R.size(1), 3u);
+    ASSERT_EQ(cameras[0]._T.numel(), 3u);
+
+    auto R = cameras[0]._R.cpu().contiguous();
+    auto T = cameras[0]._T.cpu().contiguous();
+    auto R_acc = R.accessor<float, 2>();
+    const auto* T_ptr = T.ptr<float>();
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            EXPECT_NEAR(R_acc(i, j), (i == j) ? 1.0f : 0.0f, 1e-5f)
+                << "R(" << i << "," << j << ")";
+        }
+        EXPECT_NEAR(T_ptr[i], 0.0f, 1e-5f) << "T[" << i << "]";
+    }
+}
+
+TEST_F(PythonIOTest, TransformsTranslationFrameMatchesFlippedWorld) {
+    const fs::path dataset_dir = temp_dir / "translation_extrinsics";
+    write_png(dataset_dir / "frame.png", 32, 32);
+
+    const nlohmann::json transform_matrix = {
+        {1.0, 0.0, 0.0, 1.0},
+        {0.0, 1.0, 0.0, 2.0},
+        {0.0, 0.0, 1.0, 3.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    nlohmann::json transforms = {
+        {"w", 32},
+        {"h", 32},
+        {"fl_x", 20.0},
+        {"fl_y", 20.0},
+        {"frames", nlohmann::json::array({
+                       {
+                           {"file_path", "frame.png"},
+                           {"transform_matrix", transform_matrix},
+                       },
+                   })},
+    };
+    write_text_file(dataset_dir / "transforms.json", transforms.dump());
+
+    auto [cameras, center, splits] = read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    (void)center;
+    (void)splits;
+    ASSERT_EQ(cameras.size(), 1u);
+
+    auto R = cameras[0]._R.cpu().contiguous();
+    auto T = cameras[0]._T.cpu().contiguous();
+    auto R_acc = R.accessor<float, 2>();
+    const auto* T_ptr = T.ptr<float>();
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            EXPECT_NEAR(R_acc(i, j), (i == j) ? 1.0f : 0.0f, 1e-5f)
+                << "R(" << i << "," << j << ")";
+        }
+    }
+    EXPECT_NEAR(T_ptr[0], -1.0f, 1e-5f);
+    EXPECT_NEAR(T_ptr[1], 2.0f, 1e-5f);
+    EXPECT_NEAR(T_ptr[2], 3.0f, 1e-5f);
+}
+
+TEST_F(PythonIOTest, LoadTransformsCrlfFile) {
+    const fs::path dataset_dir = temp_dir / "crlf_transforms";
+    write_png(dataset_dir / "frame.png", 16, 16);
+
+    std::string json = R"json({
+  "w": 16,
+  "h": 16,
+  "fl_x": 10.0,
+  "fl_y": 10.0,
+  "frames": [
+    {
+      "file_path": "frame.png",
+      "transform_matrix": [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0]
+      ]
+    }
+  ]
+})json";
+    for (size_t pos = 0; (pos = json.find('\n', pos)) != std::string::npos;) {
+        json.replace(pos, 1, "\r\n");
+        pos += 2;
+    }
+    write_text_file(dataset_dir / "transforms.json", json);
+
+    auto [cameras, center, splits] = read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    (void)center;
+    (void)splits;
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_EQ(cameras[0]._width, 16);
+    EXPECT_EQ(cameras[0]._height, 16);
+    EXPECT_FLOAT_EQ(cameras[0]._focal_x, 10.0f);
+}
+
+TEST_F(PythonIOTest, TransformsCameraAngleXPerFrame) {
+    const fs::path dataset_dir = temp_dir / "camera_angle_x_frame";
+    constexpr int resolution = 100;
+    write_png(dataset_dir / "frame.png", resolution, resolution);
+
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    nlohmann::json transforms = {
+        {"w", resolution},
+        {"h", resolution},
+        {"frames", nlohmann::json::array({
+                       {
+                           {"file_path", "frame.png"},
+                           {"camera_angle_x", std::numbers::pi_v<double> / 2.0},
+                           {"transform_matrix", identity_matrix},
+                       },
+                   })},
+    };
+    write_text_file(dataset_dir / "transforms.json", transforms.dump());
+
+    auto [cameras, center, splits] = read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    (void)center;
+    (void)splits;
+    ASSERT_EQ(cameras.size(), 1u);
+
+    const float expected = 0.5f * static_cast<float>(resolution) /
+                           std::tan(static_cast<float>(std::numbers::pi_v<float> / 4.0f));
+    EXPECT_NEAR(cameras[0]._focal_x, expected, 1e-4f);
+    EXPECT_NEAR(cameras[0]._focal_y, expected, 1e-4f);
 }
 
 // Test loading COLMAP dataset
