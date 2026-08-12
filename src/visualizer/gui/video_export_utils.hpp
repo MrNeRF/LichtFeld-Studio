@@ -11,6 +11,8 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "io/video/video_export_options.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
+#include "rendering/vulkan_scene_upscaler_adapter.hpp"
 #include <expected>
 #include <glm/glm.hpp>
 #include <memory>
@@ -23,6 +25,55 @@ namespace lfs::vis {
 }
 
 namespace lfs::vis::gui {
+
+    enum class VideoExportUpscalerExecution : uint8_t {
+        Native,
+        SpatialTensor,
+        TemporalAccumulation,
+        VulkanAdapter,
+    };
+
+    struct VideoExportUpscalerResources {
+        bool vulkan_color = false;
+        bool depth = false;
+        bool motion_vectors = false;
+        bool jitter = false;
+        bool history = false;
+        bool reactive_mask = false;
+        bool exposure = false;
+    };
+
+    struct VideoExportVulkanFrameInputs {
+        VulkanSceneUpscalerResource color;
+        VulkanSceneUpscalerResource depth;
+        VulkanSceneUpscalerResource motion;
+        glm::ivec2 output_extent{0, 0};
+        glm::vec2 jitter_pixels{0.0f};
+        glm::vec2 previous_jitter_pixels{0.0f};
+        bool history_valid = false;
+        float exposure = 1.0f;
+        VkSemaphore completion_semaphore = VK_NULL_HANDLE;
+        std::uint64_t completion_value = 0;
+    };
+
+    struct VideoExportUpscalerContract {
+        std::string id;
+        SceneUpscalerRequirements requirements;
+        VideoExportUpscalerExecution execution = VideoExportUpscalerExecution::Native;
+        bool optional = false;
+        bool lazy_adapter = false;
+    };
+
+    enum class VideoExportUpscalerResourceIssue : uint8_t {
+        None,
+        VulkanColor,
+        Depth,
+        MotionVectors,
+        Jitter,
+        History,
+        ReactiveMask,
+        Exposure,
+    };
 
     struct VideoExportRenderPlan {
         int output_width = 0;
@@ -98,5 +149,31 @@ namespace lfs::vis::gui {
     [[nodiscard]] LFS_VIS_API std::expected<VideoExportRenderPlan, std::string>
     resolveVideoExportRenderPlan(const lfs::io::video::VideoExportOptions& options,
                                  bool supports_reconstruction);
+
+    [[nodiscard]] LFS_VIS_API int videoExportTemporalSampleCount(
+        const lfs::io::video::VideoExportOptions& options);
+
+    [[nodiscard]] LFS_VIS_API std::vector<float> videoExportSampleTimes(
+        float frame_time,
+        float frame_duration,
+        float timeline_start,
+        float timeline_end,
+        const lfs::io::video::VideoExportOptions& options);
+
+    [[nodiscard]] LFS_VIS_API std::optional<VideoExportUpscalerContract>
+    videoExportUpscalerContract(
+        std::string_view backend,
+        const OptionalSceneUpscalerRegistry& optional_registry = optionalSceneUpscalerRegistry());
+
+    [[nodiscard]] LFS_VIS_API VideoExportUpscalerResourceIssue
+    validateVideoExportUpscalerResources(
+        const VideoExportUpscalerContract& contract,
+        const VideoExportUpscalerResources& resources);
+
+    [[nodiscard]] LFS_VIS_API std::string_view videoExportUpscalerResourceIssueMessage(
+        VideoExportUpscalerResourceIssue issue);
+
+    [[nodiscard]] LFS_VIS_API VideoExportUpscalerResources videoExportUpscalerResources(
+        const VideoExportVulkanFrameInputs& inputs);
 
 } // namespace lfs::vis::gui

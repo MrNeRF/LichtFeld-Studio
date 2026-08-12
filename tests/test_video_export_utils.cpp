@@ -28,6 +28,22 @@ using lfs::core::Tensor;
 
 namespace {
 
+    int optional_video_adapter_factory_calls = 0;
+
+    class ReadyVideoOptionalAdapter final : public lfs::vis::SceneUpscalerAdapter {
+    public:
+        lfs::vis::SceneUpscalerAvailability probe(
+            const lfs::vis::SceneUpscalerProbeContext&) const noexcept override {
+            return {.reason = lfs::vis::SceneUpscalerAvailabilityReason::Ready};
+        }
+    };
+
+    lfs::vis::SceneUpscalerAdapterFactoryResult makeReadyVideoOptionalAdapter() noexcept {
+        ++optional_video_adapter_factory_calls;
+        return std::unique_ptr<lfs::vis::SceneUpscalerAdapter>(
+            std::make_unique<ReadyVideoOptionalAdapter>());
+    }
+
     std::unique_ptr<lfs::core::SplatData> make_test_splat(const std::vector<float>& xyz) {
         const size_t count = xyz.size() / 3;
         auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::CUDA).to(lfs::core::DataType::Float32);
@@ -444,7 +460,130 @@ TEST(VideoExportUtilsTest, RejectsInvalidOfflineUpscalerContract) {
 
     options.upscaler.quality = 1;
     options.upscaler.backend = "temporal";
-    EXPECT_FALSE(lfs::vis::gui::makeVideoExportRenderPlan(options));
+    EXPECT_TRUE(lfs::vis::gui::makeVideoExportRenderPlan(options));
+}
+
+TEST(VideoExportUtilsTest, TemporalSampleTimesCoverOneCenteredFrameInterval) {
+    lfs::io::video::VideoExportOptions options{};
+    options.upscaler.backend = "temporal";
+    options.upscaler.input_scale = 0.5f;
+    options.upscaler.quality = 1;
+
+    const auto times = lfs::vis::gui::videoExportSampleTimes(1.0f, 0.1f, 0.0f, 2.0f, options);
+    ASSERT_EQ(times.size(), 4u);
+    EXPECT_FLOAT_EQ(times[0], 0.9625f);
+    EXPECT_FLOAT_EQ(times[1], 0.9875f);
+    EXPECT_FLOAT_EQ(times[2], 1.0125f);
+    EXPECT_FLOAT_EQ(times[3], 1.0375f);
+}
+
+TEST(VideoExportUtilsTest, NativeAndSpatialUseOneExactSample) {
+    lfs::io::video::VideoExportOptions options{};
+    for (const std::string backend : {"native", "spatial"}) {
+        options.upscaler.backend = backend;
+        const auto times = lfs::vis::gui::videoExportSampleTimes(1.0f, 0.1f, 0.0f, 2.0f, options);
+        ASSERT_EQ(times.size(), 1u);
+        EXPECT_FLOAT_EQ(times.front(), 1.0f);
+    }
+}
+
+TEST(VideoExportUtilsTest, OptionalVendorContractIsResolvedWithoutCreatingItsAdapter) {
+    lfs::vis::OptionalSceneUpscalerRegistry registry;
+    ASSERT_TRUE(registry.registerAdapter(
+        {.id = "nvidia-dlss",
+         .label_key = "preferences.scene_upscaler_nvidia_dlss",
+         .requirements = {
+             .depth = true,
+             .motion_vectors = true,
+             .jitter = true,
+             .history = true,
+             .exposure = true,
+         }},
+        &makeReadyVideoOptionalAdapter));
+    ASSERT_TRUE(registry.registerAdapter(
+        {.id = "amd-fsr3",
+         .label_key = "preferences.scene_upscaler_amd_fsr3",
+         .requirements = {
+             .depth = true,
+             .motion_vectors = true,
+             .jitter = true,
+             .history = true,
+         }},
+        &makeReadyVideoOptionalAdapter));
+    optional_video_adapter_factory_calls = 0;
+
+    const auto contract = lfs::vis::gui::videoExportUpscalerContract("nvidia-dlss", registry);
+    ASSERT_TRUE(contract);
+    EXPECT_EQ(contract->execution,
+              lfs::vis::gui::VideoExportUpscalerExecution::VulkanAdapter);
+    EXPECT_TRUE(contract->optional);
+    EXPECT_TRUE(contract->lazy_adapter);
+    EXPECT_TRUE(contract->requirements.depth);
+    EXPECT_TRUE(contract->requirements.motion_vectors);
+    EXPECT_TRUE(contract->requirements.jitter);
+    EXPECT_TRUE(contract->requirements.history);
+    EXPECT_EQ(optional_video_adapter_factory_calls, 0);
+
+    const auto fsr_contract = lfs::vis::gui::videoExportUpscalerContract("amd-fsr3", registry);
+    ASSERT_TRUE(fsr_contract);
+    EXPECT_EQ(fsr_contract->execution,
+              lfs::vis::gui::VideoExportUpscalerExecution::VulkanAdapter);
+    EXPECT_TRUE(fsr_contract->lazy_adapter);
+    EXPECT_TRUE(fsr_contract->requirements.temporal());
+    EXPECT_EQ(optional_video_adapter_factory_calls, 0);
+
+    EXPECT_EQ(lfs::vis::gui::validateVideoExportUpscalerResources(
+                  *contract, {.vulkan_color = true, .depth = true}),
+              lfs::vis::gui::VideoExportUpscalerResourceIssue::MotionVectors);
+    EXPECT_EQ(lfs::vis::gui::validateVideoExportUpscalerResources(
+                  *contract,
+                  {.vulkan_color = true,
+                   .depth = true,
+                   .motion_vectors = true,
+                   .jitter = true,
+                   .history = true,
+                   .exposure = true}),
+              lfs::vis::gui::VideoExportUpscalerResourceIssue::None);
+    EXPECT_EQ(optional_video_adapter_factory_calls, 0);
+}
+
+TEST(VideoExportUtilsTest, UnknownOptionalBackendIsRejectedBeforeExport) {
+    lfs::vis::OptionalSceneUpscalerRegistry registry;
+    const auto contract = lfs::vis::gui::videoExportUpscalerContract("unknown-vendor", registry);
+    EXPECT_FALSE(contract);
+}
+
+TEST(VideoExportUtilsTest, VulkanFrameResourcesRequireValidImagesAndHistory) {
+    const glm::ivec2 extent{960, 540};
+    const auto resource = [extent](const std::uintptr_t base, const VkFormat format) {
+        return lfs::vis::VulkanSceneUpscalerResource{
+            .image = reinterpret_cast<VkImage>(base),
+            .view = reinterpret_cast<VkImageView>(base + 1),
+            .format = format,
+            .layout = VK_IMAGE_LAYOUT_GENERAL,
+            .valid_extent = extent,
+            .allocation_extent = extent,
+        };
+    };
+    const lfs::vis::gui::VideoExportVulkanFrameInputs inputs{
+        .color = resource(0x1000, VK_FORMAT_R8G8B8A8_UNORM),
+        .depth = resource(0x2000, VK_FORMAT_R32_SFLOAT),
+        .motion = resource(0x3000, VK_FORMAT_R16G16_SFLOAT),
+        .output_extent = {1920, 1080},
+        .jitter_pixels = {0.25f, -0.25f},
+        .previous_jitter_pixels = {-0.25f, 0.25f},
+        .history_valid = true,
+        .exposure = 1.0f,
+    };
+
+    const auto resources = lfs::vis::gui::videoExportUpscalerResources(inputs);
+    EXPECT_TRUE(resources.vulkan_color);
+    EXPECT_TRUE(resources.depth);
+    EXPECT_TRUE(resources.motion_vectors);
+    EXPECT_TRUE(resources.jitter);
+    EXPECT_TRUE(resources.history);
+    EXPECT_TRUE(resources.exposure);
+    EXPECT_FALSE(resources.reactive_mask);
 }
 
 TEST(VideoExportUtilsTest, KeepsReconstructionWhenTheSceneSupportsIt) {

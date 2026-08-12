@@ -528,6 +528,10 @@ namespace lfs::vis {
         return result;
     }
 
+    std::optional<RenderingManager::PreviewVulkanFrame> RenderingManager::previewVulkanFrame() const {
+        return preview_vulkan_frame_;
+    }
+
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgb8(SceneManager* const scene_manager,
                                                                                 const glm::mat3& rotation,
                                                                                 const glm::vec3& position,
@@ -774,6 +778,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::releasePreviewImageResources() {
+        preview_vulkan_frame_.reset();
         if (vksplat_viewport_renderer_) {
             vksplat_viewport_renderer_->releasePreviewResources();
         }
@@ -1012,8 +1017,22 @@ namespace lfs::vis {
             VksplatViewportRenderer::OutputSlot::Preview,
             false);
         if (!render_result) {
+            preview_vulkan_frame_.reset();
             return std::unexpected(render_result.error());
         }
+        preview_vulkan_frame_ = PreviewVulkanFrame{
+            .color_image = render_result->image,
+            .color_view = render_result->image_view,
+            .color_layout = render_result->image_layout,
+            .depth_image = render_result->depth_image,
+            .depth_view = render_result->depth_image_view,
+            .depth_layout = render_result->depth_image_layout,
+            .extent = render_result->size,
+            .allocation_extent = render_result->alloc_size,
+            .generation = render_result->generation,
+            .completion_semaphore = render_result->completion_semaphore,
+            .completion_value = render_result->completion_value,
+        };
         return {};
     }
 

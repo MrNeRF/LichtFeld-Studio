@@ -12,6 +12,7 @@
 #include "scene/scene_manager.hpp"
 #include "training/training_manager.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <optional>
 #include <shared_mutex>
@@ -341,6 +342,8 @@ namespace lfs::vis::gui {
         lfs::io::video::VideoExportOptions options) {
         if (const auto validation = lfs::io::video::validateVideoEncodingOptions(options); !validation)
             return std::unexpected(validation.error());
+        if (const auto contract = videoExportUpscalerContract(options.upscaler.backend); !contract)
+            return std::unexpected("Video upscaler backend is not compiled or registered");
         return options;
     }
 
@@ -383,6 +386,128 @@ namespace lfs::vis::gui {
         native_options.upscaler.backend = "native";
         native_options.upscaler.input_scale = 1.0f;
         return makeVideoExportRenderPlan(native_options);
+    }
+
+    int videoExportTemporalSampleCount(const lfs::io::video::VideoExportOptions& options) {
+        if (options.upscaler.backend != "temporal")
+            return 1;
+        constexpr std::array SAMPLE_COUNTS{2, 4, 8, 16};
+        return SAMPLE_COUNTS[static_cast<size_t>(std::clamp(options.upscaler.quality, 0, 3))];
+    }
+
+    std::vector<float> videoExportSampleTimes(
+        const float frame_time,
+        const float frame_duration,
+        const float timeline_start,
+        const float timeline_end,
+        const lfs::io::video::VideoExportOptions& options) {
+        const int sample_count = videoExportTemporalSampleCount(options);
+        if (sample_count == 1)
+            return {std::clamp(frame_time, timeline_start, timeline_end)};
+
+        std::vector<float> result;
+        result.reserve(static_cast<size_t>(sample_count));
+        for (int sample = 0; sample < sample_count; ++sample) {
+            const float unit = (static_cast<float>(sample) + 0.5f) /
+                               static_cast<float>(sample_count);
+            const float offset = (unit - 0.5f) * frame_duration;
+            result.push_back(std::clamp(frame_time + offset, timeline_start, timeline_end));
+        }
+        return result;
+    }
+
+    std::optional<VideoExportUpscalerContract> videoExportUpscalerContract(
+        const std::string_view backend,
+        const OptionalSceneUpscalerRegistry& optional_registry) {
+        if (backend == "native") {
+            return VideoExportUpscalerContract{
+                .id = "native",
+                .execution = VideoExportUpscalerExecution::Native,
+            };
+        }
+        if (backend == "spatial") {
+            return VideoExportUpscalerContract{
+                .id = "spatial",
+                .execution = VideoExportUpscalerExecution::SpatialTensor,
+            };
+        }
+        if (backend == "temporal") {
+            return VideoExportUpscalerContract{
+                .id = "temporal",
+                .execution = VideoExportUpscalerExecution::TemporalAccumulation,
+            };
+        }
+        const auto descriptor = optional_registry.descriptor(backend);
+        if (!descriptor)
+            return std::nullopt;
+        return VideoExportUpscalerContract{
+            .id = descriptor->id,
+            .requirements = descriptor->requirements,
+            .execution = VideoExportUpscalerExecution::VulkanAdapter,
+            .optional = true,
+            .lazy_adapter = true,
+        };
+    }
+
+    VideoExportUpscalerResourceIssue validateVideoExportUpscalerResources(
+        const VideoExportUpscalerContract& contract,
+        const VideoExportUpscalerResources& resources) {
+        if (contract.execution != VideoExportUpscalerExecution::VulkanAdapter)
+            return VideoExportUpscalerResourceIssue::None;
+        if (!resources.vulkan_color)
+            return VideoExportUpscalerResourceIssue::VulkanColor;
+        if (contract.requirements.depth && !resources.depth)
+            return VideoExportUpscalerResourceIssue::Depth;
+        if (contract.requirements.motion_vectors && !resources.motion_vectors)
+            return VideoExportUpscalerResourceIssue::MotionVectors;
+        if (contract.requirements.jitter && !resources.jitter)
+            return VideoExportUpscalerResourceIssue::Jitter;
+        if (contract.requirements.history && !resources.history)
+            return VideoExportUpscalerResourceIssue::History;
+        if (contract.requirements.reactive_mask && !resources.reactive_mask)
+            return VideoExportUpscalerResourceIssue::ReactiveMask;
+        if (contract.requirements.exposure && !resources.exposure)
+            return VideoExportUpscalerResourceIssue::Exposure;
+        return VideoExportUpscalerResourceIssue::None;
+    }
+
+    std::string_view videoExportUpscalerResourceIssueMessage(
+        const VideoExportUpscalerResourceIssue issue) {
+        switch (issue) {
+        case VideoExportUpscalerResourceIssue::None:
+            return {};
+        case VideoExportUpscalerResourceIssue::VulkanColor:
+            return "Vulkan color input is unavailable for the selected video upscaler";
+        case VideoExportUpscalerResourceIssue::Depth:
+            return "Depth input is unavailable for the selected video upscaler";
+        case VideoExportUpscalerResourceIssue::MotionVectors:
+            return "Motion-vector input is unavailable for the selected video upscaler";
+        case VideoExportUpscalerResourceIssue::Jitter:
+            return "Jitter input is unavailable for the selected video upscaler";
+        case VideoExportUpscalerResourceIssue::History:
+            return "Temporal history is unavailable for the selected video upscaler";
+        case VideoExportUpscalerResourceIssue::ReactiveMask:
+            return "Reactive-mask input is unavailable for the selected video upscaler";
+        case VideoExportUpscalerResourceIssue::Exposure:
+            return "Exposure input is unavailable for the selected video upscaler";
+        }
+        return "Unknown video upscaler resource issue";
+    }
+
+    VideoExportUpscalerResources videoExportUpscalerResources(
+        const VideoExportVulkanFrameInputs& inputs) {
+        return {
+            .vulkan_color = inputs.color.valid(),
+            .depth = inputs.depth.valid(),
+            .motion_vectors = inputs.motion.valid(),
+            .jitter = std::isfinite(inputs.jitter_pixels.x) &&
+                      std::isfinite(inputs.jitter_pixels.y) &&
+                      std::isfinite(inputs.previous_jitter_pixels.x) &&
+                      std::isfinite(inputs.previous_jitter_pixels.y),
+            .history = inputs.history_valid,
+            .reactive_mask = false,
+            .exposure = std::isfinite(inputs.exposure) && inputs.exposure > 0.0f,
+        };
     }
 
 } // namespace lfs::vis::gui

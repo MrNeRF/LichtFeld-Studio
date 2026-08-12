@@ -16,6 +16,7 @@
 #include "gui/ui_widgets.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/video/video_export_options.hpp"
+#include "ipc/view_context.hpp"
 #include "rendering/render_constants.hpp"
 #include "sequencer/interpolation.hpp"
 #include "sequencer/timeline_view_math.hpp"
@@ -52,6 +53,24 @@ namespace lfs::vis {
                 }
             }
             return best;
+        }
+
+        [[nodiscard]] std::vector<SceneUpscalerOptionProxy> videoExportUpscalerOptions() {
+            auto options = get_scene_upscaler_options();
+            std::erase_if(options, [](const SceneUpscalerOptionProxy& option) {
+                return option.id != "native" && option.id != "spatial" &&
+                       option.id != "temporal" && option.id != "nvidia-dlss" &&
+                       option.id != "amd-fsr3";
+            });
+            return options;
+        }
+
+        [[nodiscard]] std::string videoExportUpscalerLabel(const std::string_view id) {
+            for (const auto& option : videoExportUpscalerOptions()) {
+                if (option.id == id)
+                    return LOC(option.label_key.c_str());
+            }
+            return std::string(id);
         }
 
         [[nodiscard]] std::string formatSpeed(const float speed) {
@@ -214,14 +233,18 @@ namespace lfs::vis {
             ui.custom_height = info.height;
             ui.framerate = info.framerate;
         } else if (id == "btn-export-upscaler") {
-            if (ui.export_upscaler == "native") {
-                ui.export_upscaler = "spatial";
-                ui.export_input_scale = 0.75f;
-            } else if (ui.export_input_scale > 0.5f) {
+            const auto options = videoExportUpscalerOptions();
+            const auto current = std::ranges::find(options, ui.export_upscaler,
+                                                   &SceneUpscalerOptionProxy::id);
+            if (ui.export_upscaler != "native" && ui.export_input_scale > 0.5f) {
                 ui.export_input_scale = 0.5f;
             } else {
-                ui.export_upscaler = "native";
-                ui.export_input_scale = 1.0f;
+                const size_t index = current == options.end()
+                                         ? 0
+                                         : (static_cast<size_t>(current - options.begin()) + 1) %
+                                               std::max<size_t>(options.size(), 1);
+                ui.export_upscaler = options.empty() ? "native" : options[index].id;
+                ui.export_input_scale = ui.export_upscaler == "native" ? 1.0f : 0.75f;
             }
         } else if (id == "btn-export-precision") {
             ui.export_splat_precision =
@@ -1036,9 +1059,7 @@ namespace lfs::vis {
             el_resolution_info_->SetInnerRML(fmt::format("{}x{} @ {}fps", w, h, fps));
         }
         if (el_export_upscaler_label_) {
-            const auto label = ui_state_.export_upscaler == "native"
-                                   ? LOC(lichtfeld::Strings::Preferences::SCENE_UPSCALER_NATIVE)
-                                   : LOC(lichtfeld::Strings::Preferences::SCENE_UPSCALER_SPATIAL);
+            const auto label = videoExportUpscalerLabel(ui_state_.export_upscaler);
             el_export_upscaler_label_->SetInnerRML(
                 ui_state_.export_upscaler == "native"
                     ? std::string(label)
