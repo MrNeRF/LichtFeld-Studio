@@ -5,7 +5,6 @@
 #include "lfs_onnx_vulkan/onnx_vulkan.hpp"
 #include "model.hpp"
 #include "operator_registry.hpp"
-#include "vulkan_runtime.hpp"
 
 #include <algorithm>
 #include <array>
@@ -482,40 +481,6 @@ namespace {
                 "unsupported control-flow operator was registered");
     }
 
-    void test_cooperative_matrix_compatibility() {
-        using lfs::onnx_vulkan::detail::cooperative_matrix_canary_is_valid;
-        using lfs::onnx_vulkan::detail::has_unreliable_nvidia_blackwell_cooperative_matrix;
-
-        constexpr std::uint32_t nvidia = 0x10de;
-        require(has_unreliable_nvidia_blackwell_cooperative_matrix(
-                    nvidia, "NVIDIA GeForce RTX 5080"),
-                "RTX 50-series compatibility fallback was not selected");
-        require(has_unreliable_nvidia_blackwell_cooperative_matrix(
-                    nvidia, "NVIDIA GeForce RTX 5090 Laptop GPU"),
-                "RTX 50-series laptop compatibility fallback was not selected");
-        require(has_unreliable_nvidia_blackwell_cooperative_matrix(
-                    nvidia, "NVIDIA RTX PRO 6000 Blackwell Generation"),
-                "RTX PRO Blackwell compatibility fallback was not selected");
-        require(has_unreliable_nvidia_blackwell_cooperative_matrix(nvidia, "NVIDIA B200"),
-                "B200 compatibility fallback was not selected");
-        require(!has_unreliable_nvidia_blackwell_cooperative_matrix(
-                    nvidia, "NVIDIA GeForce RTX 4090"),
-                "validated Ada device was incorrectly placed on the fallback path");
-        require(!has_unreliable_nvidia_blackwell_cooperative_matrix(
-                    0x1002, "NVIDIA GeForce RTX 5080"),
-                "device-name policy ignored the Vulkan vendor id");
-
-        std::vector<float> canary(16 * 128, 256.0f);
-        require(cooperative_matrix_canary_is_valid(canary),
-                "valid cooperative-matrix canary output was rejected");
-        canary[127] = 0.0f;
-        require(!cooperative_matrix_canary_is_valid(canary),
-                "corrupt cooperative-matrix canary output was accepted");
-        canary[127] = std::numeric_limits<float>::quiet_NaN();
-        require(!cooperative_matrix_canary_is_valid(canary),
-                "non-finite cooperative-matrix canary output was accepted");
-    }
-
     [[nodiscard]] Bytes arithmetic_model() {
         const std::array<std::int64_t, 2> x_shape{2, 1};
         const std::array<std::int64_t, 2> b_shape{1, 3};
@@ -579,7 +544,7 @@ namespace {
         return proto::model(proto::graph(nodes, initializers, inputs, outputs));
     }
 
-    [[nodiscard]] Bytes cooperative_matmul_model() {
+    [[nodiscard]] Bytes tiled_matmul_model() {
         constexpr std::int64_t rows = 16;
         constexpr std::int64_t inner = 256;
         constexpr std::int64_t columns = 128;
@@ -593,7 +558,7 @@ namespace {
                                                    std::span<const float>(weights));
         const std::array<std::string_view, 2> node_inputs{"x", "weights"};
         const std::array<std::string_view, 1> node_outputs{"y"};
-        const auto matmul = proto::node("cooperative_matrix_product", "MatMul", node_inputs, node_outputs);
+        const auto matmul = proto::node("tiled_matrix_product", "MatMul", node_inputs, node_outputs);
         const std::array nodes{matmul};
         const std::array initializers{initializer};
         const std::array inputs{input};
@@ -854,16 +819,12 @@ namespace {
         const std::array<float, 4> expected{22.0f, 28.0f, 49.0f, 64.0f};
         run_model(path, shape, input, expected);
 
-        const auto cooperative_path = temporary.path() / "cooperative_matmul.onnx";
-        write_file(cooperative_path, cooperative_matmul_model());
-        const std::array<std::int64_t, 2> cooperative_shape{16, 256};
-        const std::vector<float> cooperative_input(16 * 256, 1.0f);
-        const std::vector<float> cooperative_expected(16 * 128, 256.0f);
-        run_model(cooperative_path, cooperative_shape, cooperative_input, cooperative_expected);
-        lfs::onnx_vulkan::SessionOptions fallback_options;
-        fallback_options.enable_cooperative_matrix = false;
-        run_model(cooperative_path, cooperative_shape, cooperative_input, cooperative_expected,
-                  std::move(fallback_options));
+        const auto tiled_path = temporary.path() / "tiled_matmul.onnx";
+        write_file(tiled_path, tiled_matmul_model());
+        const std::array<std::int64_t, 2> tiled_shape{16, 256};
+        const std::vector<float> tiled_input(16 * 256, 1.0f);
+        const std::vector<float> tiled_expected(16 * 128, 256.0f);
+        run_model(tiled_path, tiled_shape, tiled_input, tiled_expected);
     }
 
     void test_vulkan_grouped_conv(const TemporaryDirectory& temporary) {
@@ -913,7 +874,6 @@ int main() {
     run("parser", [&] { test_parser(temporary); });
     run("graph_validation", [&] { test_graph_validation(temporary); });
     run("operator_registry", test_registry);
-    run("cooperative_matrix_compatibility", test_cooperative_matrix_compatibility);
     run("vulkan_basics", [&] { test_vulkan_basics(temporary); });
     run("vulkan_elementwise", [&] { test_vulkan_elementwise(temporary); });
     run("vulkan_matmul", [&] { test_vulkan_matmul(temporary); });

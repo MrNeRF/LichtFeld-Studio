@@ -26,9 +26,7 @@ namespace lfs::onnx_vulkan::detail {
 
     struct WeightStore {
         Buffer buffer;
-        Buffer fp16_buffer;
         std::unordered_map<std::string, DeviceTensor> tensors;
-        std::unordered_map<std::string, DeviceTensor> fp16_tensors;
     };
 
     [[nodiscard]] std::expected<WeightStore, Error>

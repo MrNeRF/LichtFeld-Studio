@@ -77,12 +77,6 @@ namespace lfs::onnx_vulkan {
     std::span<const ValueInfo> VulkanSession::inputs() const noexcept { return impl_->inputs; }
     std::span<const ValueInfo> VulkanSession::outputs() const noexcept { return impl_->outputs; }
     std::string_view VulkanSession::device_name() const noexcept { return impl_->runtime->device_name(); }
-    bool VulkanSession::cooperative_matrix_enabled() const noexcept {
-        return impl_->runtime->cooperative_matrix_enabled();
-    }
-    bool VulkanSession::cooperative_matrix_compatibility_fallback() const noexcept {
-        return impl_->runtime->cooperative_matrix_compatibility_fallback();
-    }
 
     std::expected<std::vector<NamedTensor>, Error>
     VulkanSession::run(const std::span<const NamedTensorView> named_inputs,

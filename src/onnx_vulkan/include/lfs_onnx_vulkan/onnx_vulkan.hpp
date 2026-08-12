@@ -118,7 +118,6 @@ namespace lfs::onnx_vulkan {
         std::filesystem::path pipeline_cache_path;
         std::uint64_t max_model_bytes = 2ull * 1024ull * 1024ull * 1024ull;
         std::uint64_t max_external_data_bytes = 2ull * 1024ull * 1024ull * 1024ull;
-        bool enable_cooperative_matrix = true;
     };
 
     class VulkanSession final {
@@ -136,8 +135,6 @@ namespace lfs::onnx_vulkan {
         [[nodiscard]] std::span<const ValueInfo> inputs() const noexcept;
         [[nodiscard]] std::span<const ValueInfo> outputs() const noexcept;
         [[nodiscard]] std::string_view device_name() const noexcept;
-        [[nodiscard]] bool cooperative_matrix_enabled() const noexcept;
-        [[nodiscard]] bool cooperative_matrix_compatibility_fallback() const noexcept;
 
         [[nodiscard]] std::expected<std::vector<NamedTensor>, Error>
         run(std::span<const NamedTensorView> named_inputs,
