@@ -621,7 +621,7 @@ class AssetScanner:
                         chunk = f.read(4096)
                         if not chunk:
                             break
-                        raw += decompressor.decompress(chunk)
+                        raw += decompressor.decompress(chunk, 16 - len(raw))
                         if decompressor.eof:
                             break
                     if len(raw) < 16:

@@ -17,6 +17,7 @@
 #include <format>
 #include <fstream>
 #include <memory>
+#include <zlib.h>
 
 namespace lfs::io {
 
@@ -72,6 +73,31 @@ namespace lfs::io {
 #else
             (void)cloud;
 #endif
+        }
+
+        std::string unsupported_spz_version_message(uint32_t version) {
+            return std::format(
+                "unsupported SPZ version {} (this build supports 1-{})",
+                version, spz::LATEST_SPZ_HEADER_VERSION);
+        }
+
+        // Partially inflate a gzip container to recover the 16-byte SPZ header.
+        // Returns true only when all 16 header bytes are produced.
+        bool try_inflate_gzip_spz_header(
+            const std::vector<uint8_t>& data, uint8_t out[16]) {
+            z_stream stream{};
+            if (inflateInit2(&stream, 16 + MAX_WBITS) != Z_OK) {
+                return false;
+            }
+            stream.next_in =
+                const_cast<Bytef*>(reinterpret_cast<const Bytef*>(data.data()));
+            stream.avail_in = static_cast<uInt>(data.size());
+            stream.next_out = out;
+            stream.avail_out = 16;
+            const int status = inflate(&stream, Z_NO_FLUSH);
+            const size_t produced = 16u - static_cast<size_t>(stream.avail_out);
+            inflateEnd(&stream);
+            return (status == Z_OK || status == Z_STREAM_END) && produced == 16u;
         }
 
         std::expected<void, std::string> validate_spz_cloud(
@@ -253,7 +279,23 @@ namespace lfs::io {
 
             // Sniff the container so unsupported versions fail with a clear message.
             if (data.size() >= 2 && data[0] == 0x1f && data[1] == 0x8b) {
-                // Legacy gzip container (v1–v3).
+                // Legacy gzip container (v1–v3): partially inflate only the first
+                // 16 header bytes so future versions get a clear error.
+                uint8_t header[16]{};
+                if (try_inflate_gzip_spz_header(data, header)) {
+                    uint32_t magic = 0;
+                    uint32_t version = 0;
+                    std::memcpy(&magic, header, sizeof(magic));
+                    std::memcpy(&version, header + 4, sizeof(version));
+                    if (magic != spz::NGSP_MAGIC) {
+                        return std::unexpected(std::format(
+                            "not an SPZ file: {}", lfs::core::path_to_utf8(filepath)));
+                    }
+                    if (version > static_cast<uint32_t>(spz::LATEST_SPZ_HEADER_VERSION)) {
+                        return std::unexpected(unsupported_spz_version_message(version));
+                    }
+                }
+                // Truncated/corrupt gzip: fall through to spz::loadSpz.
             } else if (data.size() >= 8) {
                 uint32_t magic = 0;
                 std::memcpy(&magic, data.data(), sizeof(magic));
@@ -261,9 +303,7 @@ namespace lfs::io {
                     uint32_t version = 0;
                     std::memcpy(&version, data.data() + 4, sizeof(version));
                     if (version > static_cast<uint32_t>(spz::LATEST_SPZ_HEADER_VERSION)) {
-                        return std::unexpected(std::format(
-                            "unsupported SPZ version {} (this build supports 1-{})",
-                            version, spz::LATEST_SPZ_HEADER_VERSION));
+                        return std::unexpected(unsupported_spz_version_message(version));
                     }
                 } else {
                     return std::unexpected(std::format(

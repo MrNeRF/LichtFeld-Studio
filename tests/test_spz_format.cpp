@@ -633,6 +633,11 @@ TEST_F(SpzFormatTest, UnknownVersionRejected) {
 
     const auto result_v9 = load_spz(path_gzip_v9);
     EXPECT_FALSE(result_v9.has_value());
+    if (!result_v9.has_value()) {
+        const auto& err = result_v9.error();
+        EXPECT_NE(err.find("version"), std::string::npos) << err;
+        EXPECT_NE(err.find("9"), std::string::npos) << err;
+    }
 }
 
 // v3 export must not write an NGSP container

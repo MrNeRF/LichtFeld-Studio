@@ -112,7 +112,7 @@ inline SpzExtensionNode* copyExtensions(const std::vector<SpzExtensionBasePtr> &
 template <typename T>
 std::shared_ptr<T> findExtensionByType(const std::vector<SpzExtensionBasePtr>& list) {
   for (const auto& rec : list) {
-    if (rec->extensionType == T::type())
+    if (rec && rec->extensionType == T::type())
       return std::dynamic_pointer_cast<T>(rec);
   }
   return nullptr;
