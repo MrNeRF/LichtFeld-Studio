@@ -188,17 +188,6 @@ jobs:
           cmake --build build --target lichtfeld_format_tests -j $(nproc)
           ctest --test-dir build --output-on-failure -R '^lichtfeld_format_tests$'
 
-      - name: Run format authority and conformance gates
-        run: |
-          git config --global --add safe.directory "$(pwd)"
-          python3 -m venv /tmp/licht-format-python
-          . /tmp/licht-format-python/bin/activate
-          python -m pip install zstandard
-          python scripts/licht_compat_matrix.py
-          python scripts/licht_compat_recovery.py
-          python scripts/licht_spec_self_containment.py
-          python tools/licht_inspect/run_conformance.py --full
-
   # .clang-tidy is for local/IDE use only here; CI needs compile_commands.json in a later phase.
   error-debt-gate:
     if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'

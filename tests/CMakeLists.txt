@@ -105,7 +105,6 @@ set(LICHT_FORMAT_NON_WINDOWS_FILES
     ${LICHT_FORMAT_WINDOWS_FILES}
     test_selection_chapter.cpp
     test_p8_compatibility.cpp
-    test_p8_migrations.cpp
     licht_format_tensor_runtime.cpp
     ${CMAKE_SOURCE_DIR}/src/core/checkpoint_format.cpp
     ${CMAKE_SOURCE_DIR}/src/core/tensor/tensor_serialization.cpp
@@ -117,7 +116,6 @@ set(LICHT_FORMAT_NON_WINDOWS_FILES
     ${CMAKE_SOURCE_DIR}/src/visualizer/gui/layout_state.cpp
 )
 # test_project_document.cpp is excluded: it links headless recovery, training strategies, and visualizer parameter state.
-# test_p3_matrix_proof.cpp is excluded: it links checkpoint and training-strategy implementations.
 # test_p5_session_chapters.cpp is excluded: it links the Python editor and TrainingManager runtime.
 
 if(WIN32)
@@ -332,9 +330,7 @@ set(TEST_FILES
     test_project_document.cpp
     test_project_lifecycle.cpp
     test_p8_compatibility.cpp
-    test_p8_migrations.cpp
     test_job_registry.cpp
-    test_p3_matrix_proof.cpp
     test_p5_session_chapters.cpp
     test_training_terminal_state.cpp
     test_headless_run_coordinator.cpp

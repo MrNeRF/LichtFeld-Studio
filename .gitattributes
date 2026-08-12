@@ -1,4 +1,1 @@
 src/python/stubs/**/*.pyi text eol=lf
-# These tagged parser files retain their byte-exact P8 whitespace.
-tools/licht_inspect/tagged/v1_0/conformance_geometry.py whitespace=-blank-at-eof
-tools/licht_inspect/tagged/v1_0/geometry_payloads.py whitespace=-blank-at-eof
