@@ -134,6 +134,7 @@ target_include_directories(lichtfeld_format_tests PRIVATE
 )
 if(NOT WIN32)
     target_include_directories(lichtfeld_format_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/diagnostics/include
         ${CMAKE_SOURCE_DIR}/src/training
         ${CMAKE_SOURCE_DIR}/src/training/include
         ${CMAKE_SOURCE_DIR}/src/visualizer
@@ -246,6 +247,7 @@ set(TEST_FILES
     test_steady_alloc_invariant.cpp
     test_allocator_hygiene.cpp
     test_pinned_stream_teardown.cpp
+    test_cuda_pool_stream_teardown.cpp
     test_fastgs_sort_buffers.cpp
     test_warp_cull_blend.cpp
     test_warp_cull_bwd.cpp
@@ -439,6 +441,7 @@ set(TEST_FILES
     test_rml_im_mode_layout.cpp
     test_status_bar_fit.cpp
     test_rotated_sh_correctness.cpp
+    test_splat_raw_payload.cpp
     test_tensor_stream.cpp
     test_tensor_d4_from_blob_stream.cpp
     tensor_hardening_cuda_utils.cu

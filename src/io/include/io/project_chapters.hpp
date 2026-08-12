@@ -29,7 +29,6 @@ namespace lfs::io::project {
     struct LFS_IO_API Hash128 {
         std::array<std::uint8_t, 16> bytes{};
 
-        [[nodiscard]] bool is_zero() const noexcept;
         [[nodiscard]] std::string to_hex() const;
         [[nodiscard]] static std::optional<Hash128> from_hex(std::string_view text);
 

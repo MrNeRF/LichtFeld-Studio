@@ -60,6 +60,7 @@ namespace lfs::io::project {
         mutable std::mutex mutex;
         std::optional<detail::WriterLock> lock;
         std::filesystem::path anchor;
+        bool release_requested = false;
     };
 
     WriterLockLease::WriterLockLease() noexcept = default;
@@ -71,7 +72,17 @@ namespace lfs::io::project {
         WriterLockLease&&) noexcept = default;
     WriterLockLease& WriterLockLease::operator=(
         WriterLockLease&&) noexcept = default;
-    WriterLockLease::~WriterLockLease() = default;
+    WriterLockLease::~WriterLockLease() {
+        if (!impl_) {
+            return;
+        }
+        const std::lock_guard lock(impl_->mutex);
+        if (impl_->release_requested &&
+            impl_->lock.has_value() &&
+            impl_.use_count() == 1) {
+            impl_->lock.reset();
+        }
+    }
 
     WriterLockLease::WriterLockLease(
         std::shared_ptr<Impl> impl) noexcept
@@ -114,7 +125,10 @@ namespace lfs::io::project {
             return;
         }
         const std::lock_guard lock(impl_->mutex);
-        impl_->lock.reset();
+        impl_->release_requested = true;
+        if (impl_.use_count() == 1) {
+            impl_->lock.reset();
+        }
     }
 
 } // namespace lfs::io::project

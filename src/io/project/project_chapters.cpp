@@ -742,12 +742,6 @@ namespace lfs::io::project {
 
     } // namespace
 
-    bool Hash128::is_zero() const noexcept {
-        return std::ranges::all_of(bytes, [](const std::uint8_t value) {
-            return value == 0;
-        });
-    }
-
     std::string Hash128::to_hex() const {
         std::string result;
         result.reserve(32);

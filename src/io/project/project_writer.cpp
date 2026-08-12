@@ -4,8 +4,10 @@
 
 #include "io/project_container.hpp"
 
+#include "core/logger.hpp"
 #include "crc32c.hpp"
 #include "project_container_internal.hpp"
+#include "project_framing.hpp"
 #include "project_recovery_internal.hpp"
 
 #include <zstd.h>
@@ -19,12 +21,14 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <ostream>
 #include <set>
 #include <span>
 #include <streambuf>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -222,13 +226,14 @@ namespace lfs::io::project {
             }
         }
 
-        // Fixed internal level 3 (no knobs). Below the stream threshold, one-shot
+        // Payload records use the fast level; index chunks retain level 3. Below
         // compress; above it, ZSTD_compressStream2 with a bounded output window
         // so peak transient RAM is ~input + final-compressed + window, not
         // input + ZSTD_compressBound(~input).
         constexpr std::size_t ZSTD_STREAM_THRESHOLD_BYTES = 8ull * 1024 * 1024;
         constexpr std::size_t ZSTD_STREAM_OUT_WINDOW_BYTES = 8ull * 1024 * 1024;
         constexpr int ZSTD_FIXED_LEVEL = 3;
+        constexpr int ZSTD_PAYLOAD_LEVEL = 1;
 
         // f32-word byte-plane transpose: [b0 b1 b2 b3 | b0 b1 b2 b3 | ...]
         // -> plane0 || plane1 || plane2 || plane3. Requires size % 4 == 0.
@@ -251,13 +256,14 @@ namespace lfs::io::project {
         lfs::Result<std::vector<std::byte>>
         compress_zstd(const std::span<const std::byte> input,
                       const std::filesystem::path& path,
-                      const std::string_view field) {
+                      const std::string_view field,
+                      const int compression_level = ZSTD_FIXED_LEVEL) {
             if (input.size() < ZSTD_STREAM_THRESHOLD_BYTES) {
                 const std::size_t bound = ZSTD_compressBound(input.size());
                 std::vector<std::byte> compressed(bound);
                 const std::size_t result = ZSTD_compress(
                     compressed.data(), compressed.size(), input.data(),
-                    input.size(), ZSTD_FIXED_LEVEL);
+                    input.size(), compression_level);
                 if (ZSTD_isError(result)) {
                     return writer_error(
                         lfs::ErrorCode::Internal, path,
@@ -280,7 +286,7 @@ namespace lfs::io::project {
             auto free_cctx = [&]() { ZSTD_freeCCtx(cctx); };
 
             if (const std::size_t rc = ZSTD_CCtx_setParameter(
-                    cctx, ZSTD_c_compressionLevel, ZSTD_FIXED_LEVEL);
+                    cctx, ZSTD_c_compressionLevel, compression_level);
                 ZSTD_isError(rc)) {
                 free_cctx();
                 return writer_error(
@@ -290,8 +296,7 @@ namespace lfs::io::project {
                                 ZSTD_getErrorName(rc)),
                     field);
             }
-            // Readers require a single frame with known content size
-            // (decompress_zstd_exact checks ZSTD_getFrameContentSize).
+            // Readers require a single index frame with known content size.
             if (const std::size_t rc = ZSTD_CCtx_setParameter(
                     cctx, ZSTD_c_contentSizeFlag, 1);
                 ZSTD_isError(rc)) {
@@ -354,6 +359,145 @@ namespace lfs::io::project {
             }
             free_cctx();
             return compressed;
+        }
+
+        lfs::Result<std::vector<std::byte>> frame_zstd(
+            const std::span<const std::byte> input,
+            const std::filesystem::path& path, const std::string_view field,
+            const int compression_level = ZSTD_FIXED_LEVEL) {
+            const auto started = std::chrono::steady_clock::now();
+            const std::size_t record_count = detail::framed_record_count(input.size());
+            if (record_count == 0) {
+                return writer_error(lfs::ErrorCode::InvalidArgument, path,
+                                    "The framed project payload is empty.",
+                                    "framed payloads require at least one record", field);
+            }
+            std::vector<std::vector<std::byte>> records(record_count);
+            std::atomic<std::size_t> next{0};
+            std::mutex error_mutex;
+            std::optional<lfs::Error> first_error;
+            const auto publish_worker_error = [&](const lfs::ErrorCode code,
+                                                  const std::string_view message,
+                                                  const std::string_view detail) noexcept {
+                try {
+                    std::scoped_lock lock(error_mutex);
+                    if (!first_error)
+                        first_error = writer_error(code, path, message,
+                                                   std::string(detail), field);
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): preserve the first worker error if formatting fails.
+                }
+            };
+            const std::size_t worker_count = std::min<std::size_t>(
+                record_count, std::max(1u, std::thread::hardware_concurrency()));
+            std::vector<std::jthread> workers;
+            try {
+                workers.reserve(worker_count);
+                for (std::size_t worker = 0; worker < worker_count; ++worker) {
+                    workers.emplace_back([&] {
+                        try {
+                            while (true) {
+                                const std::size_t index = next.fetch_add(1, std::memory_order_relaxed);
+                                if (index >= record_count)
+                                    return;
+                                {
+                                    std::scoped_lock lock(error_mutex);
+                                    if (first_error)
+                                        return;
+                                }
+                                const std::size_t offset = index * detail::FRAMED_RECORD_TARGET_BYTES;
+                                const std::size_t size = std::min(
+                                    detail::FRAMED_RECORD_TARGET_BYTES, input.size() - offset);
+                                auto compressed = compress_zstd(
+                                    input.subspan(offset, size), path, field,
+                                    compression_level);
+                                if (!compressed) {
+                                    std::scoped_lock lock(error_mutex);
+                                    if (!first_error)
+                                        first_error = std::move(compressed).error();
+                                    return;
+                                }
+                                records[index] = std::move(*compressed);
+                            }
+                        } catch (const std::bad_alloc&) {
+                            publish_worker_error(
+                                lfs::ErrorCode::ResourceExhausted,
+                                "There is not enough memory to compress this project payload.",
+                                "framed compression worker allocation failed");
+                        } catch (const std::exception& exception) {
+                            publish_worker_error(
+                                lfs::ErrorCode::Internal,
+                                "The project payload could not be compressed.",
+                                exception.what());
+                        } catch (...) {
+                            publish_worker_error(
+                                lfs::ErrorCode::Internal,
+                                "The project payload could not be compressed.",
+                                "unknown worker exception");
+                        }
+                    });
+                }
+            } catch (const std::bad_alloc&) {
+                publish_worker_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "There is not enough memory to start framed compression workers.",
+                    "worker allocation failed");
+            } catch (const std::exception& exception) {
+                publish_worker_error(
+                    lfs::ErrorCode::Internal,
+                    "The project payload could not be compressed.",
+                    exception.what());
+            } catch (...) {
+                publish_worker_error(
+                    lfs::ErrorCode::Internal,
+                    "The project payload could not be compressed.",
+                    "unknown worker construction exception");
+            }
+            workers.clear();
+            if (first_error)
+                return std::move(*first_error);
+            const auto compressed_at = std::chrono::steady_clock::now();
+
+            std::size_t total = detail::FRAMED_HEADER_BYTES +
+                                record_count * detail::FRAMED_RECORD_BYTES;
+            for (const auto& record : records) {
+                auto checked = detail::checked_add(total, record.size(), path,
+                                                   total, field);
+                if (!checked)
+                    return std::move(checked).error();
+                total = *checked;
+            }
+            std::vector<std::byte> framed(total);
+            const auto bytes = std::span<std::byte>(framed);
+            put_bytes(bytes, 0, detail::FRAMED_MAGIC);
+            put_u16(bytes, 8, detail::FRAMED_VERSION);
+            put_u16(bytes, 10, 0);
+            put_u32(bytes, 12, static_cast<std::uint32_t>(record_count));
+            std::size_t cursor = detail::FRAMED_HEADER_BYTES +
+                                 record_count * detail::FRAMED_RECORD_BYTES;
+            for (std::size_t index = 0; index < record_count; ++index) {
+                const std::size_t source_offset = index * detail::FRAMED_RECORD_TARGET_BYTES;
+                const std::size_t uncompressed = std::min(
+                    detail::FRAMED_RECORD_TARGET_BYTES, input.size() - source_offset);
+                const std::size_t table_offset = detail::FRAMED_HEADER_BYTES +
+                                                 index * detail::FRAMED_RECORD_BYTES;
+                put_u64(bytes, table_offset, records[index].size());
+                put_u64(bytes, table_offset + 8, uncompressed);
+                std::copy(records[index].begin(), records[index].end(),
+                          framed.begin() + static_cast<std::ptrdiff_t>(cursor));
+                cursor += records[index].size();
+            }
+            const auto assembled_at = std::chrono::steady_clock::now();
+            const auto milliseconds = [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(end - begin).count();
+            };
+            LOG_DEBUG(
+                "Project payload save stages: field={} input_bytes={} records={} level={} compress={:.3f} ms assemble={:.3f} ms total={:.3f} ms stored_bytes={}",
+                field, input.size(), record_count, compression_level,
+                milliseconds(started, compressed_at),
+                milliseconds(compressed_at, assembled_at),
+                milliseconds(started, assembled_at), framed.size());
+            return framed;
         }
 
         std::array<std::byte, SUPERBLOCK_BYTES>
@@ -523,10 +667,10 @@ namespace lfs::io::project {
             for (const auto& [key, row] : rows) {
                 (void)key;
                 if (row.row_kind == RowKind::Live) {
-                    if (row.compression == Compression::Zstd) {
+                    if (row.compression == Compression::ZstdFramed) {
                         capabilities.set(CHUNK_ZSTD_V1);
                     }
-                    if (row.compression == Compression::ByteShuffleZstd) {
+                    if (row.compression == Compression::ByteShuffleZstdFramed) {
                         capabilities.set(CHUNK_BYTESHUFFLE_ZSTD_V1);
                     }
                     if ((row.flags & HAS_BLOCK_CRCS) != 0) {
@@ -980,6 +1124,7 @@ namespace lfs::io::project {
                            const ChunkWriteOptions& options,
                            const bool preserve_stored_crc = false,
                            const std::uint32_t expected_stored_crc = 0) {
+            const auto started = std::chrono::steady_clock::now();
             auto header_offset =
                 align_up(cursor, CHUNK_ALIGNMENT, active_path,
                          "chunk.header_offset");
@@ -1021,6 +1166,7 @@ namespace lfs::io::project {
                 }
                 table_bytes = *total;
             }
+            const auto crc_at = std::chrono::steady_clock::now();
             auto after_metadata = detail::checked_add(
                 *table_offset, table_bytes, active_path, *table_offset,
                 "chunk.payload_pre_alignment");
@@ -1110,6 +1256,14 @@ namespace lfs::io::project {
                 !write) {
                 return std::move(write).error();
             }
+            const auto written_at = std::chrono::steady_clock::now();
+            const auto milliseconds = [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(end - begin).count();
+            };
+            LOG_DEBUG(
+                "Project chunk write stages: chunk={} stored_bytes={} block_crc={:.3f} ms disk_write={:.3f} ms total={:.3f} ms",
+                key.fourcc.to_string(), stored.size(), milliseconds(started, crc_at),
+                milliseconds(crc_at, written_at), milliseconds(started, written_at));
             cursor = *payload_end;
             mutation_started = true;
             return row;
@@ -1118,6 +1272,7 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<ChunkInfo>
         copy_stored_chunk(const ProjectReader& source,
                           const ChunkInfo& source_row) {
+            const auto started = std::chrono::steady_clock::now();
             assert(source_row.row_kind == RowKind::Live);
             auto header_offset =
                 align_up(cursor, CHUNK_ALIGNMENT, active_path,
@@ -1288,6 +1443,11 @@ namespace lfs::io::project {
                 !write) {
                 return std::move(write).error();
             }
+            const auto finished = std::chrono::steady_clock::now();
+            LOG_DEBUG(
+                "Project carried chunk stage: chunk={} stored_bytes={} total={:.3f} ms",
+                source_row.key_string(), source_row.stored_bytes,
+                std::chrono::duration<double, std::milli>(finished - started).count());
             cursor = *payload_end;
             mutation_started = true;
             return row;
@@ -1837,15 +1997,16 @@ namespace lfs::io::project {
         std::vector<std::byte> compressed;
         std::span<const std::byte> stored = payload;
         ChunkWriteOptions placed_options = options;
-        if (options.compression == Compression::ByteShuffleZstd) {
+        if (options.compression == Compression::ByteShuffleZstdFramed) {
             // Deterministic fallback: non-multiple-of-4 payloads cannot be
-            // f32-word plane-shuffled; emit plain Zstd instead (no knob).
+            // f32-word plane-shuffled; emit framed Zstd instead (no knob).
             if (payload.size() % 4 != 0) {
-                placed_options.compression = Compression::Zstd;
+                placed_options.compression = Compression::ZstdFramed;
             } else {
                 const std::vector<std::byte> planes = byte_plane_f32_words(payload);
-                auto result =
-                    compress_zstd(planes, impl_->active_path, "chunk.byteshuffle_zstd");
+                auto result = frame_zstd(planes, impl_->active_path,
+                                         "chunk.byteshuffle_zstd_framed",
+                                         ZSTD_PAYLOAD_LEVEL);
                 if (!result) {
                     return status_failure(std::move(result).error());
                 }
@@ -1853,20 +2014,21 @@ namespace lfs::io::project {
                 stored = compressed;
             }
         }
-        if (placed_options.compression == Compression::Zstd) {
-            auto result =
-                compress_zstd(payload, impl_->active_path, "chunk.zstd");
+        if (placed_options.compression == Compression::ZstdFramed) {
+            auto result = frame_zstd(payload, impl_->active_path, "chunk.zstd_framed",
+                                     ZSTD_PAYLOAD_LEVEL);
             if (!result) {
                 return status_failure(std::move(result).error());
             }
             compressed = std::move(*result);
             stored = compressed;
         } else if (placed_options.compression != Compression::Stored &&
-                   placed_options.compression != Compression::ByteShuffleZstd) {
+                   placed_options.compression != Compression::ZstdFramed &&
+                   placed_options.compression != Compression::ByteShuffleZstdFramed) {
             return status_failure(writer_error(
                 lfs::ErrorCode::InvalidArgument, impl_->destination_path,
                 "The project chunk compression is invalid.",
-                "compression must be STORED, ZSTD, or BYTESHUFFLE_ZSTD",
+                "compression must be STORED, ZSTD_FRAMED, or BYTESHUFFLE_ZSTD_FRAMED",
                 "chunk.compression"));
         }
 
@@ -2392,7 +2554,10 @@ namespace lfs::io::project {
         }
         impl_->rows[copied->key] =
             std::move(*copied);
-        impl_->touched.insert(chunk.key);
+        if (auto touched = impl_->touch_key(chunk.key);
+            !touched) {
+            return touched;
+        }
         return {};
     }
 
@@ -2446,6 +2611,7 @@ namespace lfs::io::project {
 
     lfs::Result<void>
     ProjectWriter::commit() {
+        const auto commit_started = std::chrono::steady_clock::now();
         if (auto ready = impl_->require_ready(); !ready) {
             return ready;
         }
@@ -2536,13 +2702,15 @@ namespace lfs::io::project {
         std::vector<std::byte> stored_index;
         Compression index_compression = Compression::Stored;
         if (impl_->index_compression == IndexCompression::Zstd) {
+            // The index is intentionally one legacy zstd frame; do not apply
+            // the payload framed-record layout to this metadata encoding.
             auto compressed = compress_zstd(
                 *decoded_index, impl_->active_path, "index.zstd");
             if (!compressed) {
                 return status_failure(std::move(compressed).error());
             }
             stored_index = std::move(*compressed);
-            index_compression = Compression::Zstd;
+            index_compression = Compression::ZstdFramed;
         } else {
             stored_index = *decoded_index;
         }
@@ -2647,10 +2815,12 @@ namespace lfs::io::project {
             !boundary) {
             return boundary;
         }
+        const auto commit_written = std::chrono::steady_clock::now();
         if (auto flush = impl_->file->sync_data(); !flush) {
             impl_->poisoned = true;
             return flush;
         }
+        const auto data_flushed = std::chrono::steady_clock::now();
         if (auto boundary =
                 impl_->notify(CommitBoundary::AppendFlushed);
             !boundary) {
@@ -2684,6 +2854,13 @@ namespace lfs::io::project {
             impl_->poisoned = true;
             return flush;
         }
+        const auto all_flushed = std::chrono::steady_clock::now();
+        LOG_DEBUG(
+            "Project commit stages: write_commit={:.3f} ms sync_data={:.3f} ms sync_all={:.3f} ms total={:.3f} ms",
+            std::chrono::duration<double, std::milli>(commit_written - commit_started).count(),
+            std::chrono::duration<double, std::milli>(data_flushed - commit_written).count(),
+            std::chrono::duration<double, std::milli>(all_flushed - data_flushed).count(),
+            std::chrono::duration<double, std::milli>(all_flushed - commit_started).count());
         if (auto boundary = impl_->notify(CommitBoundary::HeadFlushed);
             !boundary) {
             return boundary;
@@ -2701,7 +2878,7 @@ namespace lfs::io::project {
         validation_options.writer_capabilities =
             supported_writer_capabilities() | writer_capabilities;
 
-        auto validate_path = [&](const std::filesystem::path& candidate)
+        auto validate_authority = [&](const std::filesystem::path& candidate)
             -> lfs::Result<void> {
             auto reader =
                 ProjectReader::open(candidate, validation_options);
@@ -2718,21 +2895,82 @@ namespace lfs::io::project {
                     "authority tuple",
                     "commit.validation"));
             }
+            return {};
+        };
+
+        auto validate_path = [&](const std::filesystem::path& candidate)
+            -> lfs::Result<void> {
+            const auto validation_started = std::chrono::steady_clock::now();
+            if (auto authority = validate_authority(candidate); !authority) {
+                return authority;
+            }
+            auto reader =
+                ProjectReader::open(candidate, validation_options);
+            if (!reader) {
+                return status_failure(std::move(reader).error());
+            }
             for (const ChunkInfo& row : reader->chunks()) {
                 if (!row.is_live() ||
                     row.source_generation != impl_->generation) {
                     continue;
                 }
-                if (auto verified = reader->verify_chunk(row);
-                    !verified) {
-                    return verified;
+                const bool payload_class =
+                    (row.flags & TENSOR_PAYLOAD) != 0 ||
+                    row.key.fourcc == FOURCC_CKPT ||
+                    row.key.fourcc == FOURCC_PPIS;
+                if (!payload_class) {
+                    if (auto verified = reader->verify_chunk(row); !verified)
+                        return verified;
+                    continue;
+                }
+                std::vector<std::byte> buffer(BLOCK_CRC_BYTES);
+                std::uint32_t stored_crc = 0;
+                std::size_t block_index = 0;
+                for (std::uint64_t relative = 0; relative < row.stored_bytes;
+                     relative += std::min<std::uint64_t>(
+                         BLOCK_CRC_BYTES, row.stored_bytes - relative)) {
+                    const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(
+                        BLOCK_CRC_BYTES, row.stored_bytes - relative));
+                    auto block = std::span<std::byte>(buffer.data(), count);
+                    if (auto read = reader->read_stored_at(row, relative, block);
+                        !read) {
+                        return read;
+                    }
+                    const auto block_crc = crc32c(0, block.data(), block.size());
+                    if (row.block_crc_table.has_value() &&
+                        (block_index >= row.block_crc_table->entries.size() ||
+                         block_crc != row.block_crc_table->entries[block_index])) {
+                        return status_failure(writer_error(
+                            lfs::ErrorCode::DataLoss, candidate,
+                            "The published project failed block CRC validation.",
+                            std::format("chunk {} block {} does not match",
+                                        row.key_string(), block_index),
+                            "commit.validation"));
+                    }
+                    stored_crc = crc32c(stored_crc, block.data(), block.size());
+                    ++block_index;
+                }
+                if (stored_crc != row.payload_crc32c) {
+                    return status_failure(writer_error(
+                        lfs::ErrorCode::DataLoss, candidate,
+                        "The published project failed payload CRC validation.",
+                        std::format("chunk {} does not match", row.key_string()),
+                        "commit.validation"));
                 }
             }
+            LOG_DEBUG(
+                "Project commit validation stage: path={} crc_only={:.3f} ms",
+                candidate.string(),
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - validation_started)
+                    .count());
             return {};
         };
 
-        if (auto validation = validate_path(impl_->active_path);
-            !validation) {
+        auto validation = impl_->mode == Impl::Mode::Append
+                              ? validate_authority(impl_->active_path)
+                              : validate_path(impl_->active_path);
+        if (!validation) {
             impl_->poisoned = true;
             impl_->keep_temporary = impl_->mode == Impl::Mode::Create;
             if (impl_->mode == Impl::Mode::Append) {
@@ -2781,7 +3019,7 @@ namespace lfs::io::project {
                     "replacement-published observer");
             }
             if (auto validation =
-                    validate_path(impl_->destination_path);
+                    validate_authority(impl_->destination_path);
                 !validation) {
                 auto rollback = detail::rollback_atomic_replace(
                     *replacement, impl_->destination_path);

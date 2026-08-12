@@ -324,7 +324,7 @@ namespace {
             ::args::Group mode_group(parser, "MODE SELECTION:");
             ::args::HelpFlag help(mode_group, "help", "Display help menu", {'h', "help"});
             ::args::Flag version(mode_group, "version", "Display version information", {'V', "version"});
-            ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
+            ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports projects (.licht), splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
             ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from a .resume checkpoint or .licht project", {"resume"});
             ::args::ValueFlag<std::string> render_camera_path(mode_group, "path", "Render a JSON camera-keyframe path to video, headless (no GUI/window). Requires --render-load and --render-output; see RENDER PATH options.", {"render-camera-path"});
             ::args::CompletionFlag completion(parser, {"complete"});
@@ -660,15 +660,12 @@ namespace {
                             });
                         if (extension == ".licht") {
                             params.project_path = view_path;
-                            return std::make_tuple(
-                                ParseResult::Success,
-                                std::function<void()>{});
-                        }
-                        if (!is_supported(view_path)) {
+                        } else if (!is_supported(view_path)) {
                             return std::unexpected(std::format(
                                 "Unsupported file format: {}", lfs::core::path_to_utf8(view_path)));
+                        } else {
+                            params.view_paths.push_back(view_path);
                         }
-                        params.view_paths.push_back(view_path);
                     }
                 }
 

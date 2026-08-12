@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "io/loader.hpp"
 #include "project_container_internal.hpp"
+#include "project_framing.hpp"
 
 #include <zstd.h>
 
@@ -364,9 +365,15 @@ namespace lfs::io::project {
             for (const auto& [key, chunk] : chunks) {
                 (void)key;
                 std::uint64_t estimate = chunk.bytes.size();
-                if (chunk.options.compression == Compression::Zstd ||
-                    chunk.options.compression == Compression::ByteShuffleZstd) {
-                    estimate = ZSTD_compressBound(chunk.bytes.size());
+                if (chunk.options.compression == Compression::ZstdFramed ||
+                    chunk.options.compression == Compression::ByteShuffleZstdFramed) {
+                    const auto records = detail::framed_record_count(chunk.bytes.size());
+                    estimate = detail::FRAMED_HEADER_BYTES + records * detail::FRAMED_RECORD_BYTES;
+                    for (std::size_t index = 0; index < records; ++index) {
+                        const auto offset = index * detail::FRAMED_RECORD_TARGET_BYTES;
+                        estimate += ZSTD_compressBound(std::min(
+                            detail::FRAMED_RECORD_TARGET_BYTES, chunk.bytes.size() - offset));
+                    }
                 }
                 auto added = checked_add(total, estimate, "save.preflight_bytes");
                 if (!added) {
@@ -380,7 +387,7 @@ namespace lfs::io::project {
         ChunkWriteOptions json_options() {
             return ChunkWriteOptions{
                 .chunk_version = P3_CHUNK_VERSION,
-                .compression = Compression::Zstd,
+                .compression = Compression::ZstdFramed,
                 .tensor_payload = false,
                 .block_crcs = false,
                 .expected_stream_bytes = std::nullopt,
@@ -390,7 +397,7 @@ namespace lfs::io::project {
         ChunkWriteOptions selection_options() {
             return ChunkWriteOptions{
                 .chunk_version = SELM_CHAPTER_VERSION,
-                .compression = Compression::Zstd,
+                .compression = Compression::ZstdFramed,
                 .tensor_payload = false,
                 .block_crcs = false,
                 .expected_stream_bytes = std::nullopt,
@@ -400,11 +407,11 @@ namespace lfs::io::project {
         ChunkWriteOptions tensor_options(const std::size_t size) {
             return ChunkWriteOptions{
                 .chunk_version = P3_CHUNK_VERSION,
-                // Prefer ByteShuffleZstd (CHUNK_BYTESHUFFLE_ZSTD_V1) when the
-                // payload is a multiple of 4; write_chunk falls back to plain
-                // Zstd otherwise. Logical payload remains bit-exact after
+                // Prefer framed ByteShuffleZstd (CHUNK_BYTESHUFFLE_ZSTD_V1) when
+                // the payload is a multiple of 4; write_chunk falls back to
+                // framed Zstd otherwise. Logical payload remains bit-exact after
                 // unshuffle + inflate.
-                .compression = Compression::ByteShuffleZstd,
+                .compression = Compression::ByteShuffleZstdFramed,
                 .tensor_payload = true,
                 .block_crcs =
                     size >= static_cast<std::size_t>(BLOCK_CRC_REQUIRED_AT),
@@ -417,10 +424,10 @@ namespace lfs::io::project {
             const std::uint64_t size) {
             return ChunkWriteOptions{
                 .chunk_version = P3_CHUNK_VERSION,
-                // Byte-plane + zstd of the whole CKPT/PPIS stream when size % 4
-                // == 0; else plain zstd. Decompress (and unshuffle) before
+                // Byte-plane + framed zstd of the CKPT/PPIS stream when size % 4
+                // == 0; else framed zstd. Decompress (and unshuffle) before
                 // LFKP/PPISP parse — byte-verbatim logical payload.
-                .compression = Compression::ByteShuffleZstd,
+                .compression = Compression::ByteShuffleZstdFramed,
                 .tensor_payload = fourcc == FOURCC_CKPT,
                 .block_crcs = size >= BLOCK_CRC_REQUIRED_AT,
                 .expected_stream_bytes = size,
@@ -613,10 +620,6 @@ namespace lfs::io::project {
                !impl_->owned;
     }
 
-    bool LazyChunkValue::owns_staged_bytes() const noexcept {
-        return static_cast<bool>(impl_->owned);
-    }
-
     lfs::Result<void>
     LazyChunkValue::read_at(
         const std::uint64_t offset,
@@ -703,52 +706,6 @@ namespace lfs::io::project {
         ReadOnlyMemoryBuffer buffer(*logical);
         std::istream stream(&buffer);
         return visitor(stream, logical->size());
-    }
-
-    lfs::Result<void>
-    LazyChunkValue::copy_to(
-        std::ostream& destination,
-        const std::size_t window_bytes) const {
-        if (window_bytes == 0) {
-            return fail<void>(
-                lfs::ErrorCode::InvalidArgument,
-                "The lazy chapter copy window cannot be zero.",
-                "copy_to requires a bounded non-zero window",
-                "lazy_chunk.window_bytes");
-        }
-        const std::size_t bounded_window = std::min<std::size_t>(
-            window_bytes,
-            static_cast<std::size_t>(
-                std::numeric_limits<std::streamsize>::max()));
-        std::vector<std::byte> window(
-            static_cast<std::size_t>(
-                std::min<std::uint64_t>(size(), bounded_window)));
-        std::uint64_t offset = 0;
-        while (offset < size()) {
-            const auto count = static_cast<std::size_t>(
-                std::min<std::uint64_t>(
-                    window.size(), size() - offset));
-            auto destination_window =
-                std::span<std::byte>(window).first(count);
-            if (auto read = read_at(offset, destination_window);
-                !read) {
-                return read;
-            }
-            destination.write(
-                reinterpret_cast<const char*>(window.data()),
-                static_cast<std::streamsize>(count));
-            if (!destination) {
-                return fail<void>(
-                    lfs::ErrorCode::DataLoss,
-                    "The lazy chapter could not be streamed.",
-                    std::format(
-                        "destination failed after {} of {} bytes",
-                        offset, size()),
-                    "lazy_chunk.destination");
-            }
-            offset += count;
-        }
-        return {};
     }
 
     struct ProjectHydrationPlan::Impl {
@@ -1627,14 +1584,14 @@ namespace lfs::io::project {
                 is_project_managed_fourcc(row.key.fourcc);
             const bool thumbnail =
                 row.key.fourcc == FOURCC_THMB;
-            // Lazy binary (CKPT/PPIS): Stored (legacy), plain Zstd
-            // (CHUNK_ZSTD_V1), or ByteShuffleZstd (CHUNK_BYTESHUFFLE_ZSTD_V1).
+            // Lazy binary (CKPT/PPIS): Stored, framed Zstd (CHUNK_ZSTD_V1), or
+            // framed ByteShuffleZstd (CHUNK_BYTESHUFFLE_ZSTD_V1).
             // Any other encoding is opaque/unsupported.
             const bool lazy_binary_encoding_ok =
                 !lazy_binary ||
                 row.compression == Compression::Stored ||
-                row.compression == Compression::Zstd ||
-                row.compression == Compression::ByteShuffleZstd;
+                row.compression == Compression::ZstdFramed ||
+                row.compression == Compression::ByteShuffleZstdFramed;
             const bool unsupported_known_encoding =
                 (managed || lazy_binary || thumbnail) &&
                 (row.chunk_version != P3_CHUNK_VERSION ||
@@ -1905,13 +1862,14 @@ namespace lfs::io::project {
                 impl->metrics = std::move(*chapter);
                 have_metrics = true;
             } else if (row.key.fourcc == FOURCC_SPLT) {
+                const auto content_hash = xxh3_128(*bytes);
                 auto payload = SplatChapterPayload::from_lfsp(std::move(*bytes));
                 if (!payload) {
                     return std::move(payload).error();
                 }
                 impl->splats.emplace(row.key.instance_uuid,
                                      std::move(*payload));
-                impl->content_hashes.emplace(row.key, xxh3_128(*bytes));
+                impl->content_hashes.emplace(row.key, content_hash);
             } else if (row.key.fourcc == FOURCC_PCLD) {
                 auto payload =
                     decode_point_cloud_payload(*bytes, options.geometry);
@@ -2286,11 +2244,6 @@ namespace lfs::io::project {
             instance_uuid, std::move(payload));
         impl_->mark(FOURCC_PPIS, instance_uuid);
         return {};
-    }
-
-    std::vector<lfs::core::Uuid>
-    ProjectDocument::ppisp_uuids() const {
-        return sorted_uuids(impl_->ppisp_payloads);
     }
 
     lfs::Result<void> ProjectDocument::set_georeference(
@@ -2832,7 +2785,11 @@ namespace lfs::io::project {
                                          payload.bytes().end());
             hashes.insert_or_assign(key, xxh3_128(bytes));
             add_encoded(key, std::move(bytes),
-                        tensor_options(payload.bytes().size()));
+                        ChunkWriteOptions{.chunk_version = P3_CHUNK_VERSION,
+                                          .compression = Compression::ZstdFramed,
+                                          .tensor_payload = true,
+                                          .block_crcs = payload.bytes().size() >= BLOCK_CRC_REQUIRED_AT,
+                                          .expected_stream_bytes = std::nullopt});
         }
         for (const auto& [uuid, payload] : impl_->point_clouds) {
             const ChunkKey key{
@@ -3029,6 +2986,8 @@ namespace lfs::io::project {
                             ->reader_options(),
                     .writer_lock_anchor =
                         *impl_->source_path,
+                    .writer_lock_lease =
+                        autosave->writer_lock_lease,
                 });
             if (!result) {
                 return std::move(result).error();
@@ -3661,7 +3620,8 @@ namespace lfs::io::project {
     ProjectDocument::stage_hydration(
         lfs::core::Scene& destination,
         const ScenePayloadResolver& external_payloads,
-        lfs::core::SplatTensorAllocator splat_allocator) const {
+        lfs::core::SplatTensorAllocator splat_allocator,
+        std::function<void(std::size_t, std::size_t)> payload_progress) const {
         const auto hydration_started =
             std::chrono::steady_clock::now();
         double splat_read_ms = 0.0;
@@ -3704,7 +3664,7 @@ namespace lfs::io::project {
                             }));
                 };
             const auto read_deferred =
-                [this](const ChunkKey& key)
+                [this, &payload_progress](const ChunkKey& key)
                 -> lfs::Result<std::vector<std::byte>> {
                 if (!impl_->source_reader) {
                     return fail<std::vector<std::byte>>(
@@ -3725,7 +3685,8 @@ namespace lfs::io::project {
                                     key.instance_uuid.to_string()),
                         "hydrate.deferred_source");
                 }
-                return impl_->source_reader->read_chunk(found->second.info);
+                return impl_->source_reader->read_chunk(found->second.info,
+                                                        payload_progress);
             };
 
             staged_splats.reserve(

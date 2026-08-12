@@ -7,6 +7,10 @@
 #include <array>
 #include <cstring>
 
+#if defined(__x86_64__) || defined(_M_X64)
+#include <nmmintrin.h>
+#endif
+
 namespace lfs::io::project {
 
     namespace {
@@ -35,9 +39,49 @@ namespace lfs::io::project {
 
         constexpr Crc32cTables TABLES = make_tables();
 
+#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__GNUC__) || defined(__clang__)
+        __attribute__((target("sse4.2")))
+#endif
+        std::uint32_t
+        crc32c_sse42_impl(const std::uint32_t crc, const void* data,
+                          std::size_t size) {
+            const auto* bytes = static_cast<const std::uint8_t*>(data);
+            std::uint64_t state = ~static_cast<std::uint64_t>(crc);
+            while (size >= sizeof(std::uint64_t)) {
+                std::uint64_t value = 0;
+                std::memcpy(&value, bytes, sizeof(value));
+                state = _mm_crc32_u64(state, value);
+                bytes += sizeof(value);
+                size -= sizeof(value);
+            }
+            auto state32 = static_cast<std::uint32_t>(state);
+            while (size-- > 0)
+                state32 = _mm_crc32_u8(state32, *bytes++);
+            return ~state32;
+        }
+#endif
+
+        bool has_sse42() noexcept {
+#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__GNUC__) || defined(__clang__)
+            return __builtin_cpu_supports("sse4.2");
+#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+            int cpu_info[4]{};
+            __cpuid(cpu_info, 1);
+            return (cpu_info[2] & (1 << 20)) != 0;
+#else
+            return false;
+#endif
+#else
+            return false;
+#endif
+        }
+
     } // namespace
 
-    std::uint32_t crc32c(const std::uint32_t crc, const void* data, std::size_t size) {
+    std::uint32_t crc32c_software(const std::uint32_t crc, const void* data,
+                                  std::size_t size) {
         const auto* bytes = static_cast<const std::uint8_t*>(data);
         std::uint32_t state = ~crc;
 
@@ -54,10 +98,25 @@ namespace lfs::io::project {
             bytes += 8;
             size -= 8;
         }
-        while (size-- > 0) {
+        while (size-- > 0)
             state = (state >> 8) ^ TABLES[0][(state ^ *bytes++) & 0xFFu];
-        }
         return ~state;
     }
+
+    std::uint32_t crc32c(const std::uint32_t crc, const void* data, const std::size_t size) {
+#if defined(__x86_64__) || defined(_M_X64)
+        static const bool use_hardware = has_sse42();
+        if (use_hardware)
+            return crc32c_sse42(crc, data, size);
+#endif
+        return crc32c_software(crc, data, size);
+    }
+
+#if defined(__x86_64__) || defined(_M_X64)
+    std::uint32_t crc32c_sse42(const std::uint32_t crc, const void* data,
+                               const std::size_t size) {
+        return crc32c_sse42_impl(crc, data, size);
+    }
+#endif
 
 } // namespace lfs::io::project

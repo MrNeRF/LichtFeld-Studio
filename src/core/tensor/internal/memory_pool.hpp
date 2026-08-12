@@ -22,6 +22,7 @@
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::core {
@@ -288,6 +289,7 @@ namespace lfs::core {
             bool map_miss = false;
             {
                 std::lock_guard<std::mutex> lock(map_mutex_);
+                severed_streams_.erase(stream);
                 auto it = allocation_map_.find(ptr);
                 if (it == allocation_map_.end()) {
                     map_miss = true;
@@ -346,6 +348,17 @@ namespace lfs::core {
             GPUSlabAllocator::instance().merge_stream_into_virgin(stream);
             SizeBucketedPool::instance().retag_stream(stream, nullptr);
             PinnedMemoryAllocator::instance().release_stream(stream);
+            {
+                std::lock_guard<std::mutex> lock(map_mutex_);
+                severed_streams_.insert(stream);
+            }
+        }
+
+        [[nodiscard]] bool is_stream_severed(cudaStream_t stream) const {
+            if (!stream)
+                return false;
+            std::lock_guard<std::mutex> lock(map_mutex_);
+            return severed_streams_.contains(stream);
         }
 
         // Moves `ptr`'s home to `stream` (declarative re-homing for tensors whose
@@ -356,6 +369,7 @@ namespace lfs::core {
             bool map_miss = false;
             {
                 std::lock_guard<std::mutex> lock(map_mutex_);
+                severed_streams_.erase(stream);
                 auto it = allocation_map_.find(ptr);
                 if (it == allocation_map_.end()) {
                     map_miss = true;
@@ -636,6 +650,7 @@ namespace lfs::core {
 
         void track_allocation(void* ptr, size_t size, AllocMethod method, cudaStream_t stream = nullptr) {
             std::lock_guard<std::mutex> lock(map_mutex_);
+            severed_streams_.erase(stream);
             allocation_map_[ptr] = {size, method, stream, {}};
             try {
                 lfs::diagnostics::VramProfiler::instance().recordAllocation(
@@ -668,7 +683,7 @@ namespace lfs::core {
                 // Skip null / home-equal extras. Bridging a destroyed capture stream
                 // can SIGSEGV inside the driver — callers should rehome first,
                 // but free must stay best-effort.
-                if (extra == nullptr || extra == info.home_stream)
+                if (extra == nullptr || extra == info.home_stream || is_stream_severed(extra))
                     continue;
                 bridgeStreams(extra, info.home_stream);
             }
@@ -808,7 +823,8 @@ namespace lfs::core {
 #endif
 
         std::unordered_map<void*, AllocationInfo> allocation_map_;
-        std::mutex map_mutex_;
+        std::unordered_set<cudaStream_t> severed_streams_;
+        mutable std::mutex map_mutex_;
         std::shared_mutex stream_routing_mutex_;
         std::atomic<size_t> direct_alloc_count_{0};
         bool slab_enabled_{false};

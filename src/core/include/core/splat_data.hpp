@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/mapped_file.hpp"
 #include "core/point_cloud.hpp"
@@ -385,6 +386,14 @@ namespace lfs::core {
         // ========== Serialization ==========
         void serialize(std::ostream& os) const;
         void deserialize(std::istream& is, SplatTensorAllocator tensor_allocator = {});
+
+        [[nodiscard]] static lfs::Result<std::unique_ptr<SplatData>>
+        from_raw_tensors(int active_sh_degree, int max_sh_degree,
+                         float scene_scale, Tensor means, Tensor sh0,
+                         Tensor shN_canonical, Tensor scaling, Tensor rotation,
+                         Tensor opacity, Tensor deleted, Tensor densification,
+                         std::vector<FrozenRange> frozen_ranges,
+                         SplatTensorAllocator tensor_allocator = {});
 
         // Allocator used to back the parameter tensors (e.g. Vulkan-external interop
         // storage). Retained so edits that rebuild tensors (apply_deleted) can keep

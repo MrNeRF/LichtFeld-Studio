@@ -1766,6 +1766,132 @@ namespace lfs::core {
         LOG_DEBUG("Deserialized SplatData: {} Gaussians, SH {}/{}", size(), active_sh, max_sh);
     }
 
+    lfs::Result<std::unique_ptr<SplatData>> SplatData::from_raw_tensors(
+        const int active_sh_degree, const int max_sh_degree,
+        const float scene_scale, Tensor means, Tensor sh0, Tensor shN_canonical,
+        Tensor scaling, Tensor rotation, Tensor opacity, Tensor deleted,
+        Tensor densification, std::vector<FrozenRange> frozen_ranges,
+        SplatTensorAllocator tensor_allocator) {
+        try {
+            if (max_sh_degree < 0 || max_sh_degree > MAX_SUPPORTED_SH_DEGREE ||
+                active_sh_degree < 0 || active_sh_degree > max_sh_degree ||
+                !std::isfinite(scene_scale) || scene_scale <= 0.0f) {
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::DataLoss,
+                    .domain = lfs::ErrorDomain::IO,
+                    .detail = "invalid raw SPLT metadata",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+            if (!means.is_valid() || means.device() != Device::CPU ||
+                means.dtype() != DataType::Float32 || means.ndim() != 2 ||
+                means.size(1) != 3) {
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::DataLoss,
+                    .domain = lfs::ErrorDomain::IO,
+                    .detail = "raw SPLT means shape is invalid",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+            const auto n = static_cast<std::size_t>(means.size(0));
+            const auto require = [&](const Tensor& value, const DataType dtype,
+                                     const std::vector<std::size_t>& shape) {
+                return value.is_valid() && value.device() == Device::CPU &&
+                       value.dtype() == dtype && value.shape().dims() == shape;
+            };
+            if (!require(sh0, DataType::Float32, {n, 1, 3}) ||
+                !require(scaling, DataType::Float32, {n, 3}) ||
+                !require(rotation, DataType::Float32, {n, 4}) ||
+                !require(opacity, DataType::Float32, {n, 1}) ||
+                !require(shN_canonical, DataType::Float32,
+                         {n, static_cast<std::size_t>(sh_rest_coefficients_for_degree(max_sh_degree)),
+                          SH_CHANNELS})) {
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::DataLoss,
+                    .domain = lfs::ErrorDomain::IO,
+                    .detail = "raw SPLT tensor manifest does not match tensor shapes",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+            const auto is_bool_like = [](const DataType dtype) {
+                return dtype == DataType::Bool || dtype == DataType::UInt8;
+            };
+            if (deleted.is_valid() &&
+                (!is_bool_like(deleted.dtype()) || deleted.ndim() != 1 ||
+                 static_cast<std::size_t>(deleted.numel()) != n)) {
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::DataLoss,
+                    .domain = lfs::ErrorDomain::IO,
+                    .detail = "raw SPLT deleted mask must be bool/uint8 [N]",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+            if (densification.is_valid()) {
+                const bool valid_shape =
+                    densification.dtype() == DataType::Float32 &&
+                    ((densification.ndim() == 1 &&
+                      (densification.numel() == 0 ||
+                       static_cast<std::size_t>(densification.numel()) == n)) ||
+                     (densification.ndim() == 2 &&
+                      densification.size(0) >= 2 &&
+                      static_cast<std::size_t>(densification.size(1)) == n));
+                if (!valid_shape) {
+                    return lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::DataLoss,
+                        .domain = lfs::ErrorDomain::IO,
+                        .detail = "raw SPLT densification state has incompatible schema",
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    });
+                }
+            }
+            validate_frozen_ranges(frozen_ranges, n);
+            auto result = std::make_unique<SplatData>();
+            result->_tensor_allocator = std::move(tensor_allocator);
+            const auto copy_param = [&](Tensor source, const std::string_view name) {
+                Tensor source_cuda = std::move(source).cuda();
+                if (!result->_tensor_allocator) {
+                    source_cuda.set_name(std::string(name));
+                    return source_cuda;
+                }
+                Tensor destination = allocate_param_tensor(
+                    source_cuda.shape(), source_cuda.capacity(),
+                    result->_tensor_allocator, name);
+                destination.copy_from(source_cuda);
+                return destination;
+            };
+            result->_means = copy_param(std::move(means), "SplatData.means");
+            result->_sh0 = copy_param(std::move(sh0), "SplatData.sh0");
+            result->_scaling = copy_param(std::move(scaling), "SplatData.scaling");
+            result->_rotation = copy_param(std::move(rotation), "SplatData.rotation");
+            result->_opacity = copy_param(std::move(opacity), "SplatData.opacity");
+            result->_max_sh_degree = max_sh_degree;
+            result->_active_sh_degree = active_sh_degree;
+            result->_scene_scale = scene_scale;
+            result->_shN = allocate_swizzled_shN(
+                n, std::max<std::size_t>(result->_means.capacity(), n),
+                static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(max_sh_degree)),
+                result->_tensor_allocator, "SplatData.shN");
+            if (shN_canonical.numel() > 0)
+                reorder_canonical_into_swizzled(
+                    shN_canonical.cuda(), result->_shN, n,
+                    static_cast<std::size_t>(sh_rest_coefficients_for_degree(max_sh_degree)),
+                    static_cast<std::size_t>(sh_rest_coefficients_for_degree(max_sh_degree)));
+            if (deleted.is_valid())
+                result->_deleted = std::move(deleted).to(DataType::Bool).cuda();
+            if (densification.is_valid() && densification.numel() > 0)
+                result->_densification_info = std::move(densification).cuda();
+            result->_frozen_ranges = std::move(frozen_ranges);
+            return result;
+        } catch (const std::exception& error) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::IO,
+                .detail = std::format("raw SPLT hydration failed: {}", error.what()),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+    }
+
     // ========== FREE FUNCTION: FACTORY ==========
 
     std::expected<SplatData, std::string> init_model_from_pointcloud(

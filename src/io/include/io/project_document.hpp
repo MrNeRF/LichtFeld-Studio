@@ -20,7 +20,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <iosfwd>
 #include <memory>
 #include <optional>
 #include <set>
@@ -60,15 +59,11 @@ namespace lfs::io::project {
         [[nodiscard]] std::uint64_t size() const noexcept;
         [[nodiscard]] const lfs::core::Uuid& snapshot_uuid() const noexcept;
         [[nodiscard]] bool is_clean_reference() const noexcept;
-        [[nodiscard]] bool owns_staged_bytes() const noexcept;
 
         [[nodiscard]] lfs::Result<void>
         read_at(std::uint64_t offset, std::span<std::byte> destination) const;
         [[nodiscard]] lfs::Result<void>
         visit_stream(const StreamVisitor& visitor) const;
-        [[nodiscard]] lfs::Result<void>
-        copy_to(std::ostream& destination,
-                std::size_t window_bytes = 8ull * 1024 * 1024) const;
 
     private:
         friend class ProjectDocument;
@@ -116,6 +111,8 @@ namespace lfs::io::project {
         std::uint64_t wallclock_unix_ns = 0;
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
+        std::optional<WriterLockLease> writer_lock_lease =
+            std::nullopt;
         CommitBoundaryObserver boundary_observer;
     };
 
@@ -240,9 +237,6 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         set_ppisp(const lfs::core::Uuid& instance_uuid,
                   LazyChunkValue payload);
-        [[nodiscard]] std::vector<lfs::core::Uuid>
-        ppisp_uuids() const;
-
         [[nodiscard]] lfs::Result<void>
         set_georeference(const ProjectGeoreference& value);
         [[nodiscard]] lfs::Result<void>
@@ -307,7 +301,8 @@ namespace lfs::io::project {
         stage_hydration(
             lfs::core::Scene& destination,
             const ScenePayloadResolver& external_payloads = {},
-            lfs::core::SplatTensorAllocator splat_allocator = {}) const;
+            lfs::core::SplatTensorAllocator splat_allocator = {},
+            std::function<void(std::size_t, std::size_t)> payload_progress = {}) const;
 
         // Strict Phase B. This performs only assert-guarded moves/swaps and
         // cannot parse, perform IO, or allocate.

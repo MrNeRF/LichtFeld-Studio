@@ -448,7 +448,7 @@ namespace {
                 view_key,
                 ChunkWriteOptions{
                     .chunk_version = 99,
-                    .compression = Compression::Zstd,
+                    .compression = Compression::ZstdFramed,
                 }},
             newer_view_payload);
 
@@ -492,7 +492,7 @@ namespace {
                 unknown_key, unknown_payload,
                 ChunkWriteOptions{
                     .chunk_version = 77,
-                    .compression = Compression::Zstd,
+                    .compression = Compression::ZstdFramed,
                 }));
             require_status(writer.commit());
         }
@@ -630,7 +630,7 @@ namespace {
                 proj_key,
                 ChunkWriteOptions{
                     .chunk_version = 1,
-                    .compression = Compression::Zstd,
+                    .compression = Compression::ZstdFramed,
                 }},
             future_payload);
         auto json_open = require_result(
@@ -958,7 +958,7 @@ namespace {
                 key, lfkp_bytes,
                 ChunkWriteOptions{
                     .chunk_version = 1,
-                    .compression = Compression::Zstd,
+                    .compression = Compression::ZstdFramed,
                     .tensor_payload = true,
                     .block_crcs = false,
                     .expected_stream_bytes = lfkp_bytes.size(),
@@ -969,7 +969,7 @@ namespace {
         ProjectReader reader = require_result(ProjectReader::open(path));
         const ChunkInfo* row = reader.find(key.fourcc, key.instance_uuid);
         ASSERT_NE(row, nullptr);
-        EXPECT_EQ(row->compression, Compression::Zstd);
+        EXPECT_EQ(row->compression, Compression::ZstdFramed);
         EXPECT_EQ(row->uncompressed_bytes, lfkp_bytes.size());
         EXPECT_LT(row->stored_bytes, row->uncompressed_bytes);
         EXPECT_TRUE(reader.commit()
@@ -1022,7 +1022,7 @@ namespace {
                 key, lfkp_bytes,
                 ChunkWriteOptions{
                     .chunk_version = 1,
-                    .compression = Compression::ByteShuffleZstd,
+                    .compression = Compression::ByteShuffleZstdFramed,
                     .tensor_payload = true,
                     .block_crcs = false,
                     .expected_stream_bytes = lfkp_bytes.size(),
@@ -1033,7 +1033,7 @@ namespace {
         ProjectReader reader = require_result(ProjectReader::open(path));
         const ChunkInfo* row = reader.find(key.fourcc, key.instance_uuid);
         ASSERT_NE(row, nullptr);
-        EXPECT_EQ(row->compression, Compression::ByteShuffleZstd);
+        EXPECT_EQ(row->compression, Compression::ByteShuffleZstdFramed);
         EXPECT_EQ(row->uncompressed_bytes, lfkp_bytes.size());
         EXPECT_LT(row->stored_bytes, row->uncompressed_bytes);
         EXPECT_TRUE(reader.commit()
@@ -1085,7 +1085,7 @@ namespace {
                 key, lfkp_bytes,
                 ChunkWriteOptions{
                     .chunk_version = 1,
-                    .compression = Compression::ByteShuffleZstd,
+                    .compression = Compression::ByteShuffleZstdFramed,
                     .tensor_payload = true,
                     .block_crcs = false,
                     .expected_stream_bytes = lfkp_bytes.size(),
@@ -1096,7 +1096,7 @@ namespace {
         ProjectReader reader = require_result(ProjectReader::open(path));
         const ChunkInfo* row = reader.find(key.fourcc, key.instance_uuid);
         ASSERT_NE(row, nullptr);
-        EXPECT_EQ(row->compression, Compression::Zstd);
+        EXPECT_EQ(row->compression, Compression::ZstdFramed);
         EXPECT_TRUE(reader.commit()
                         .required_reader_capabilities
                         .contains(CHUNK_ZSTD_V1));
@@ -1164,7 +1164,7 @@ namespace {
                 json_key, jsonish,
                 ChunkWriteOptions{
                     .chunk_version = 1,
-                    .compression = Compression::Zstd,
+                    .compression = Compression::ZstdFramed,
                     .tensor_payload = false,
                     .block_crcs = false,
                     .expected_stream_bytes = std::nullopt,
@@ -1173,7 +1173,7 @@ namespace {
                 shuffle_key, shuffle_payload,
                 ChunkWriteOptions{
                     .chunk_version = 1,
-                    .compression = Compression::ByteShuffleZstd,
+                    .compression = Compression::ByteShuffleZstdFramed,
                     .tensor_payload = true,
                     .block_crcs = false,
                     .expected_stream_bytes = shuffle_payload.size(),
@@ -1182,7 +1182,7 @@ namespace {
                 plain_key, plain_payload,
                 ChunkWriteOptions{
                     .chunk_version = 1,
-                    .compression = Compression::Zstd,
+                    .compression = Compression::ZstdFramed,
                     .tensor_payload = true,
                     .block_crcs = false,
                     .expected_stream_bytes = plain_payload.size(),
@@ -1206,9 +1206,9 @@ namespace {
         ASSERT_NE(j, nullptr);
         ASSERT_NE(s, nullptr);
         ASSERT_NE(p, nullptr);
-        EXPECT_EQ(j->compression, Compression::Zstd);
-        EXPECT_EQ(s->compression, Compression::ByteShuffleZstd);
-        EXPECT_EQ(p->compression, Compression::Zstd);
+        EXPECT_EQ(j->compression, Compression::ZstdFramed);
+        EXPECT_EQ(s->compression, Compression::ByteShuffleZstdFramed);
+        EXPECT_EQ(p->compression, Compression::ZstdFramed);
 
         auto j_bytes = require_result(reader.read_chunk(*j));
         auto s_bytes = require_result(reader.read_chunk(*s));
@@ -1258,7 +1258,7 @@ namespace {
                 key, payload,
                 ChunkWriteOptions{
                     .chunk_version = 1,
-                    .compression = Compression::ByteShuffleZstd,
+                    .compression = Compression::ByteShuffleZstdFramed,
                     .tensor_payload = true,
                     .block_crcs = false,
                     .expected_stream_bytes = payload.size(),
@@ -1269,7 +1269,7 @@ namespace {
         ProjectReader reader = require_result(ProjectReader::open(path));
         const ChunkInfo* row = reader.find(key.fourcc, key.instance_uuid);
         ASSERT_NE(row, nullptr);
-        EXPECT_EQ(row->compression, Compression::ByteShuffleZstd);
+        EXPECT_EQ(row->compression, Compression::ByteShuffleZstdFramed);
         auto inflated = require_result(reader.read_chunk(*row));
         ASSERT_EQ(inflated.size(), payload.size());
         EXPECT_TRUE(std::equal(

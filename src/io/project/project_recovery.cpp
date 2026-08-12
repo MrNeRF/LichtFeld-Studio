@@ -904,13 +904,18 @@ namespace lfs::io::project {
                 RowKind::SidecarBaseReference) {
                 source = master->find(row.key);
             }
-            if (source &&
-                source->stored_bytes <=
-                    std::numeric_limits<
-                        std::uint64_t>::max() -
+            if (source) {
+                if (source->stored_bytes >
+                    std::numeric_limits<std::uint64_t>::max() -
                         planned_bytes) {
-                planned_bytes +=
-                    source->stored_bytes;
+                    return fail<void>(
+                        lfs::ErrorCode::ResourceExhausted,
+                        master_path,
+                        "The recovery overlay is too large to materialize.",
+                        "stored chunk sizes overflow the recovery preflight total",
+                        "recovery.preflight");
+                }
+                planned_bytes += source->stored_bytes;
             }
         }
         if (auto preflight =

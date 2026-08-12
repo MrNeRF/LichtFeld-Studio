@@ -7,6 +7,8 @@
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
 
+#include <zstd.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -19,6 +21,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <gtest/gtest.h>
 #include <iterator>
 #include <limits>
@@ -108,6 +111,38 @@ namespace {
                             const std::size_t offset,
                             const std::size_t count) {
         return crc32c(0, bytes.data() + offset, count);
+    }
+
+    std::vector<std::byte> raw_framed(
+        const std::uint32_t count,
+        const std::vector<std::pair<std::uint64_t, std::uint64_t>>& records,
+        const std::size_t tail_bytes = 0) {
+        const std::size_t table = 16 + static_cast<std::size_t>(count) * 16;
+        std::vector<std::byte> bytes(table + tail_bytes);
+        const std::array magic = {std::byte{'L'}, std::byte{'F'}, std::byte{'S'},
+                                  std::byte{'Z'}, std::byte{'F'}, std::byte{'R'},
+                                  std::byte{'M'}, std::byte{0}};
+        std::copy(magic.begin(), magic.end(), bytes.begin());
+        auto put16 = [&](const std::size_t at, const std::uint16_t value) {
+            bytes[at] = static_cast<std::byte>(value & 0xffu);
+            bytes[at + 1] = static_cast<std::byte>(value >> 8);
+        };
+        auto put32 = [&](const std::size_t at, const std::uint32_t value) {
+            for (std::size_t i = 0; i < 4; ++i)
+                bytes[at + i] = static_cast<std::byte>(value >> (8 * i));
+        };
+        auto put64 = [&](const std::size_t at, const std::uint64_t value) {
+            for (std::size_t i = 0; i < 8; ++i)
+                bytes[at + i] = static_cast<std::byte>(value >> (8 * i));
+        };
+        put16(8, 1);
+        put16(10, 0);
+        put32(12, count);
+        for (std::size_t i = 0; i < records.size(); ++i) {
+            put64(16 + i * 16, records[i].first);
+            put64(24 + i * 16, records[i].second);
+        }
+        return bytes;
     }
 
     std::vector<std::byte>
@@ -310,6 +345,120 @@ namespace {
         ASSERT_GT(chunk.stored_bytes, 1u);
         fs::resize_file(path, chunk.payload_offset + chunk.stored_bytes - 1);
         EXPECT_FALSE(reader.read_chunk(chunk));
+    }
+
+    TEST(ProjectContainerReader, FramedPayloadCorruptionIsRejected) {
+        const auto check = [](const std::string_view name,
+                              const std::function<void(const ChunkInfo&, const fs::path&)>& corrupt) {
+            TemporaryDirectory temporary;
+            const fs::path path = temporary.path / (std::string(name) + ".licht");
+            const std::size_t payload_size = 64ull * 1024 * 1024 + 4096;
+            std::vector<std::byte> payload(payload_size);
+            for (std::size_t index = 0; index < payload.size(); ++index)
+                payload[index] = static_cast<std::byte>((index * 31u) ^ (index >> 7));
+            ProjectWriter writer = require_result(ProjectWriter::create(
+                path, fixture_create_options(830)));
+            require_status(writer.plan_commit(fixture_commit_options(831, 832, 1)));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.write_chunk(
+                fixed_key("SPLT", 833), payload,
+                ChunkWriteOptions{.chunk_version = 1,
+                                  .compression = Compression::ZstdFramed,
+                                  .tensor_payload = true,
+                                  .block_crcs = true}));
+            require_status(writer.commit());
+            ProjectReader reader = require_result(ProjectReader::open(path));
+            const ChunkInfo& chunk = reader.chunks().front();
+            corrupt(chunk, path);
+            EXPECT_FALSE(reader.read_chunk(chunk)) << name;
+        };
+        check("framed-count", [](const ChunkInfo& chunk, const fs::path& path) {
+            write_file_range(path, chunk.payload_offset + 12,
+                             std::array{std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}});
+        });
+        check("framed-size", [](const ChunkInfo& chunk, const fs::path& path) {
+            write_file_range(path, chunk.payload_offset + 24,
+                             std::array{std::byte{0xff}, std::byte{0xff}, std::byte{0xff}, std::byte{0xff}});
+        });
+        check("framed-truncated", [](const ChunkInfo& chunk, const fs::path& path) {
+            fs::resize_file(path, chunk.payload_offset + chunk.stored_bytes - 1);
+        });
+        check("framed-crc", [](const ChunkInfo& chunk, const fs::path& path) {
+            write_file_range(path, chunk.payload_offset + 4096,
+                             std::array{std::byte{0x7f}});
+        });
+    }
+
+    TEST(ProjectContainerReader, FramedParserRejectsMalformedHeadersAndTables) {
+        const auto reject = [](std::vector<std::byte> bytes,
+                               const std::uint64_t expected) {
+            auto result = detail::decompress_framed_zstd_for_testing(
+                "framed-corruption.licht", 0, bytes, expected, 64ull * 1024 * 1024);
+            EXPECT_FALSE(result);
+        };
+
+        auto bad_magic = raw_framed(1, {{1, 1}}, 1);
+        bad_magic[0] = std::byte{'X'};
+        reject(std::move(bad_magic), 1);
+
+        auto bad_version = raw_framed(1, {{1, 1}}, 1);
+        bad_version[8] = std::byte{2};
+        reject(std::move(bad_version), 1);
+
+        auto bad_reserved = raw_framed(1, {{1, 1}}, 1);
+        bad_reserved[10] = std::byte{1};
+        reject(std::move(bad_reserved), 1);
+
+        auto bad_count = raw_framed(0, {}, 1);
+        reject(std::move(bad_count), 1);
+
+        auto count_bomb = raw_framed(2, {{1, 1}, {1, 1}}, 2);
+        auto count_result = detail::decompress_framed_zstd_for_testing(
+            "framed-corruption.licht", 0, count_bomb, 1, 64ull * 1024 * 1024);
+        ASSERT_FALSE(count_result);
+        EXPECT_NE(lfs::format_for_developer(count_result.error()).find("invalid record count"),
+                  std::string::npos);
+
+        auto table_too_large = raw_framed(2, {}, 0);
+        table_too_large.resize(16);
+        reject(std::move(table_too_large), 0);
+
+        auto zero_stored = raw_framed(1, {{0, 1}}, 1);
+        reject(std::move(zero_stored), 1);
+
+        auto zero_uncompressed = raw_framed(1, {{1, 0}}, 1);
+        reject(std::move(zero_uncompressed), 1);
+
+        auto stored_short = raw_framed(1, {{1, 1}}, 2);
+        reject(std::move(stored_short), 1);
+
+        auto stored_long = raw_framed(1, {{3, 1}}, 2);
+        reject(std::move(stored_long), 1);
+
+        auto decoded_short = raw_framed(1, {{1, 1}}, 1);
+        reject(std::move(decoded_short), 2);
+
+        const std::array source = {std::byte{0x42}};
+        std::vector<std::byte> compressed(ZSTD_compressBound(source.size()));
+        const auto compressed_size = ZSTD_compress(
+            compressed.data(), compressed.size(), source.data(), source.size(), 1);
+        ASSERT_FALSE(ZSTD_isError(compressed_size));
+        ASSERT_GT(compressed_size, 1u);
+        auto truncated = raw_framed(1, {{compressed_size - 1, 1}}, compressed_size - 1);
+        std::copy_n(compressed.begin(), compressed_size - 1,
+                    truncated.begin() + 32);
+        reject(std::move(truncated), 1);
+    }
+
+    TEST(ProjectContainerReader, HardwareAndSoftwareCrc32cAgree) {
+        std::vector<std::byte> bytes(1 << 20);
+        for (std::size_t i = 0; i < bytes.size(); ++i)
+            bytes[i] = static_cast<std::byte>((i * 37u) ^ (i >> 9));
+        const auto software = crc32c_software(0, bytes.data(), bytes.size());
+        EXPECT_EQ(crc32c(0, bytes.data(), bytes.size()), software);
+#if defined(__x86_64__) || defined(_M_X64)
+        EXPECT_EQ(crc32c_sse42(0, bytes.data(), bytes.size()), software);
+#endif
     }
 
     TEST(ProjectContainerReader,
@@ -1250,7 +1399,7 @@ namespace {
                                             streamed_payload.size()));
             ChunkWriteOptions compressed{
                 .chunk_version = 1,
-                .compression = Compression::Zstd,
+                .compression = Compression::ZstdFramed,
             };
             require_status(writer.write_chunk(fixed_key("PROJ", 705),
                                               compressed_payload,
@@ -1275,7 +1424,7 @@ namespace {
 
         ProjectReader held =
             require_result(ProjectReader::open(path));
-        EXPECT_EQ(held.commit().index_compression, Compression::Zstd);
+        EXPECT_EQ(held.commit().index_compression, Compression::ZstdFramed);
         const ChunkInfo* compressed_row =
             held.find(fixed_key("PROJ", 705));
         const ChunkInfo* streamed_row =
@@ -1355,7 +1504,7 @@ namespace {
             },
             ChunkWriteOptions{
                 .chunk_version = 78,
-                .compression = Compression::Zstd,
+                .compression = Compression::ZstdFramed,
                 .tensor_payload = false,
                 .block_crcs = false,
             },
@@ -1367,7 +1516,7 @@ namespace {
             },
             ChunkWriteOptions{
                 .chunk_version = 100,
-                .compression = Compression::Zstd,
+                .compression = Compression::ZstdFramed,
                 .tensor_payload = false,
                 .block_crcs = false,
             }};
@@ -1775,7 +1924,7 @@ namespace {
                 fixed_key("CKPT", 9303), payload,
                 ChunkWriteOptions{
                     .chunk_version = 1,
-                    .compression = Compression::Zstd,
+                    .compression = Compression::ZstdFramed,
                     .tensor_payload = true,
                 }));
             // verify-before-publish must accept payload-class >512 MiB.
@@ -1805,7 +1954,7 @@ namespace {
             fixed_key("PROJ", 9313), payload,
             ChunkWriteOptions{
                 .chunk_version = 1,
-                .compression = Compression::Zstd,
+                .compression = Compression::ZstdFramed,
                 .tensor_payload = false,
             }));
         // Create-mode post-publish verify applies the 512 MiB small-class cap.

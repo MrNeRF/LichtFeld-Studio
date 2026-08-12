@@ -3,6 +3,7 @@
 
 #include "internal/cuda_event_pool.hpp"
 #include "core/cuda_error.hpp"
+#include "internal/memory_pool.hpp"
 
 #include <format>
 #include <string_view>
@@ -105,17 +106,21 @@ namespace lfs::core {
         if (from == to) {
             return;
         }
-        // Null stream is the default stream — wait/record still valid, but a
-        // destroyed user stream handle can crash in the driver. Detect
-        // capture status first; any query failure means the stream is unusable.
         if (from != nullptr) {
-            cudaStreamCaptureStatus capture = cudaStreamCaptureStatusNone;
-            if (cudaStreamIsCapturing(from, &capture) != cudaSuccess) {
-                (void)cudaGetLastError();
-                synchronize_stream_bridge_source(from, to, "capture status query failed");
+            if (CudaMemoryPool* pool = try_live_cuda_memory_pool();
+                pool && pool->is_stream_severed(from)) {
                 return;
             }
-            if (capture != cudaStreamCaptureStatusNone) {
+            cudaStreamCaptureStatus capture = cudaStreamCaptureStatusNone;
+            const cudaError_t capture_status = cudaStreamIsCapturing(from, &capture);
+            if (capture_status != cudaSuccess) {
+                ensure_cuda_success(
+                    capture_status, "cudaStreamIsCapturing(tensor stream bridge)",
+                    std::format("from_stream={}, to_stream={}",
+                                static_cast<void*>(from), static_cast<void*>(to)),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                (void)cudaGetLastError();
+            } else if (capture != cudaStreamCaptureStatusNone) {
                 // Cannot record events into an active capture without joining it.
                 synchronize_stream_bridge_source(from, to, "source stream is capturing");
                 return;

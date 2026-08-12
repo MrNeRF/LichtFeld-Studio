@@ -163,14 +163,11 @@ namespace lfs::io::project {
     };
 
     // Chunk payload entropy encodings (wire u16 / index-row u8).
-    // Zstd: whole-chunk zstd (CHUNK_ZSTD_V1).
-    // ByteShuffleZstd: lossless f32-word byte-plane transpose then zstd
-    // (CHUNK_BYTESHUFFLE_ZSTD_V1). Writers require payload size % 4 == 0;
-    // otherwise they fall back to plain Zstd for that chunk (deterministic).
+    // Framed payloads contain independently compressed zstd records.
     enum class Compression : std::uint16_t {
         Stored = 0,
-        Zstd = 1,
-        ByteShuffleZstd = 2,
+        ZstdFramed = 1,
+        ByteShuffleZstdFramed = 2,
     };
 
     enum class RowKind : std::uint8_t {
@@ -208,8 +205,6 @@ namespace lfs::io::project {
         OpenState state = OpenState::HardFail;
         std::uint64_t generation = 0;
         std::string diagnostic;
-
-        [[nodiscard]] std::string outcome_name() const;
     };
 
     struct ReaderOptions {
@@ -400,7 +395,10 @@ namespace lfs::io::project {
                                             const lfs::core::Uuid& instance_uuid) const noexcept;
 
         [[nodiscard]] lfs::Result<std::vector<std::byte>>
-        read_chunk(const ChunkInfo& chunk) const;
+        read_chunk(const ChunkInfo& chunk,
+                   // For framed payloads, progress may be invoked concurrently
+                   // from decompression worker threads.
+                   std::function<void(std::size_t, std::size_t)> progress = {}) const;
         [[nodiscard]] lfs::Result<void>
         read_stored_at(const ChunkInfo& chunk, std::uint64_t relative_offset,
                        std::span<std::byte> destination) const;
@@ -463,7 +461,7 @@ namespace lfs::io::project {
         [[nodiscard]] bool valid() const noexcept;
         [[nodiscard]] bool owns(
             const std::filesystem::path& project_path) const noexcept;
-        // Invalidates every copy of this lease and releases the OS lock.
+        // Requests release after any in-flight writer copies are destroyed.
         void release() noexcept;
 
     private:

@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -24,6 +25,12 @@
 #endif
 
 namespace lfs::io::project::detail {
+
+    [[nodiscard]] lfs::Result<std::vector<std::byte>>
+    decompress_framed_zstd_for_testing(
+        const std::filesystem::path& path, std::uint64_t offset,
+        std::span<const std::byte> stored, std::uint64_t expected_size,
+        std::uint64_t maximum_decoded_size);
 
     [[nodiscard]] lfs::Error project_error(
         lfs::ErrorCode code, std::string user_message, std::string detail,

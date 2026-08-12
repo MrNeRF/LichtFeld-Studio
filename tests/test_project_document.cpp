@@ -353,14 +353,14 @@ namespace {
             *model, SplatSourceKind::ImportedPly, false);
         ASSERT_TRUE(imported)
             << lfs::format_for_developer(imported.error());
-        EXPECT_EQ(imported->lfsp_version(), 4u);
+        EXPECT_EQ(imported->lfsp_version(), 2u);
 
         // SPZ imports use ImportedSpz (not ImportedPly); embed is allowed.
         auto imported_spz = SplatChapterPayload::capture(
             *model, SplatSourceKind::ImportedSpz, false);
         ASSERT_TRUE(imported_spz)
             << lfs::format_for_developer(imported_spz.error());
-        EXPECT_EQ(imported_spz->lfsp_version(), 4u);
+        EXPECT_EQ(imported_spz->lfsp_version(), 2u);
         EXPECT_TRUE(std::ranges::equal(imported_spz->bytes(),
                                        imported->bytes()));
 
