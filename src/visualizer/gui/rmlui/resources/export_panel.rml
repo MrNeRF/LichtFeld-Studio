@@ -59,6 +59,19 @@
         </div>
       </div>
 
+      <!-- SPZ version - only shown for SPZ format -->
+      <div class="ep-section" data-if="show_spz_version">
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:export_dialog.spz_version</span>
+          <div class="setting-row__control-col setting-row__control-col--fill">
+            <select data-value="spz_version">
+              <option value="4">@tr:export_dialog.spz_version_v4</option>
+              <option value="3">@tr:export_dialog.spz_version_v3</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
       <!-- RAD Settings - only shown for RAD format -->
       <div data-if="show_rad_settings">
         <div class="separator"></div>
