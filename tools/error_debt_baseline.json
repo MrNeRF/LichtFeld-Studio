@@ -206,8 +206,7 @@
       "src/mcp/llm_client.cpp:173"
     ],
     "preprocessing": [
-      "src/preprocessing/preprocess.cpp:406",
-      "src/preprocessing/preprocess.cpp:1261"
+      "src/preprocessing/preprocess.cpp:405"
     ],
     "python": [
       "src/python/runner.cpp:1084"

@@ -46,7 +46,7 @@ namespace lfs::onnx_vulkan::detail {
         read_string(WireReader& reader, const std::string_view context) {
             auto bytes = reader.bytes();
             if (!bytes)
-                return std::unexpected(malformed(std::string(context) + ": " + bytes.error()));
+                return std::unexpected(malformed(std::string(context) + ": " + bytes.error().message));
             if (std::ranges::find(*bytes, std::byte{0}) != bytes->end())
                 return std::unexpected(malformed(std::string(context) + " contains an embedded NUL"));
             return as_string(*bytes);
@@ -56,7 +56,7 @@ namespace lfs::onnx_vulkan::detail {
         read_varint(WireReader& reader, const std::string_view context) {
             auto value = reader.varint();
             if (!value)
-                return std::unexpected(malformed(std::string(context) + ": " + value.error()));
+                return std::unexpected(malformed(std::string(context) + ": " + value.error().message));
             return *value;
         }
 
@@ -64,14 +64,14 @@ namespace lfs::onnx_vulkan::detail {
         read_message(WireReader& reader, const std::string_view context) {
             auto value = reader.bytes();
             if (!value)
-                return std::unexpected(malformed(std::string(context) + ": " + value.error()));
+                return std::unexpected(malformed(std::string(context) + ": " + value.error().message));
             return *value;
         }
 
         [[nodiscard]] std::expected<void, Error>
         skip(WireReader& reader, const FieldKey key, const std::string_view context) {
             if (auto result = reader.skip(key.type); !result)
-                return std::unexpected(malformed(std::string(context) + ": " + result.error()));
+                return std::unexpected(malformed(std::string(context) + ": " + result.error().message));
             return {};
         }
 
@@ -144,7 +144,7 @@ namespace lfs::onnx_vulkan::detail {
             while (!reader.empty()) {
                 auto key = reader.key();
                 if (!key)
-                    return std::unexpected(malformed("external_data entry: " + key.error()));
+                    return std::unexpected(malformed("external_data entry: " + key.error().message));
                 if (key->number == 1 || key->number == 2) {
                     if (auto valid = require_wire(*key, WireType::LengthDelimited, "external_data"); !valid)
                         return std::unexpected(valid.error());
@@ -259,7 +259,7 @@ namespace lfs::onnx_vulkan::detail {
             while (!packed.empty()) {
                 auto value = packed.varint();
                 if (!value)
-                    return std::unexpected(malformed(std::string(context) + ": " + value.error()));
+                    return std::unexpected(malformed(std::string(context) + ": " + value.error().message));
                 destination.push_back(*value);
             }
             return {};
@@ -275,7 +275,7 @@ namespace lfs::onnx_vulkan::detail {
             while (!packed.empty()) {
                 auto value = packed.fixed32();
                 if (!value)
-                    return std::unexpected(malformed(std::string(context) + ": " + value.error()));
+                    return std::unexpected(malformed(std::string(context) + ": " + value.error().message));
                 destination.push_back(*value);
             }
             return {};
@@ -297,7 +297,7 @@ namespace lfs::onnx_vulkan::detail {
             while (!reader.empty()) {
                 auto key = reader.key();
                 if (!key)
-                    return std::unexpected(malformed("TensorProto: " + key.error()));
+                    return std::unexpected(malformed("TensorProto: " + key.error().message));
                 switch (key->number) {
                 case 1: {
                     if (key->type == WireType::Varint) {
@@ -342,7 +342,7 @@ namespace lfs::onnx_vulkan::detail {
                     if (key->type == WireType::Fixed32) {
                         auto value = reader.fixed32();
                         if (!value)
-                            return std::unexpected(malformed("TensorProto.float_data: " + value.error()));
+                            return std::unexpected(malformed("TensorProto.float_data: " + value.error().message));
                         float_data.push_back(*value);
                     } else if (key->type == WireType::LengthDelimited) {
                         auto packed = read_message(reader, "TensorProto.float_data");
@@ -501,7 +501,7 @@ namespace lfs::onnx_vulkan::detail {
             while (!reader.empty()) {
                 auto key = reader.key();
                 if (!key)
-                    return std::unexpected(malformed("TensorShapeProto: " + key.error()));
+                    return std::unexpected(malformed("TensorShapeProto: " + key.error().message));
                 if (key->number != 1) {
                     if (auto ignored = skip(reader, *key, "TensorShapeProto"); !ignored)
                         return std::unexpected(ignored.error());
@@ -518,7 +518,7 @@ namespace lfs::onnx_vulkan::detail {
                 while (!dim_reader.empty()) {
                     auto dim_key = dim_reader.key();
                     if (!dim_key)
-                        return std::unexpected(malformed("TensorShapeProto.Dimension: " + dim_key.error()));
+                        return std::unexpected(malformed("TensorShapeProto.Dimension: " + dim_key.error().message));
                     if (dim_key->number == 1) {
                         if (auto valid = require_wire(*dim_key, WireType::Varint, "Dimension.dim_value"); !valid)
                             return std::unexpected(valid.error());
@@ -556,7 +556,7 @@ namespace lfs::onnx_vulkan::detail {
             while (!reader.empty()) {
                 auto key = reader.key();
                 if (!key)
-                    return std::unexpected(malformed("TypeProto.Tensor: " + key.error()));
+                    return std::unexpected(malformed("TypeProto.Tensor: " + key.error().message));
                 if (key->number == 1) {
                     if (auto valid = require_wire(*key, WireType::Varint, "TypeProto.Tensor.elem_type"); !valid)
                         return std::unexpected(valid.error());
@@ -594,7 +594,7 @@ namespace lfs::onnx_vulkan::detail {
             while (!reader.empty()) {
                 auto key = reader.key();
                 if (!key)
-                    return std::unexpected(malformed("ValueInfoProto: " + key.error()));
+                    return std::unexpected(malformed("ValueInfoProto: " + key.error().message));
                 if (key->number == 1) {
                     if (auto valid = require_wire(*key, WireType::LengthDelimited, "ValueInfoProto.name"); !valid)
                         return std::unexpected(valid.error());
@@ -613,7 +613,7 @@ namespace lfs::onnx_vulkan::detail {
                     while (!type_reader.empty()) {
                         auto type_key = type_reader.key();
                         if (!type_key)
-                            return std::unexpected(malformed("TypeProto: " + type_key.error()));
+                            return std::unexpected(malformed("TypeProto: " + type_key.error().message));
                         if (type_key->number == 1) {
                             if (tensor_seen)
                                 return std::unexpected(malformed("TypeProto has duplicate tensor_type"));
@@ -670,7 +670,7 @@ namespace lfs::onnx_vulkan::detail {
             while (!reader.empty()) {
                 auto key = reader.key();
                 if (!key)
-                    return std::unexpected(malformed("AttributeProto: " + key.error()));
+                    return std::unexpected(malformed("AttributeProto: " + key.error().message));
                 switch (key->number) {
                 case 1: {
                     if (auto valid = require_wire(*key, WireType::LengthDelimited, "AttributeProto.name"); !valid)
@@ -686,7 +686,7 @@ namespace lfs::onnx_vulkan::detail {
                         return std::unexpected(valid.error());
                     auto bits = reader.fixed32();
                     if (!bits)
-                        return std::unexpected(malformed("AttributeProto.f: " + bits.error()));
+                        return std::unexpected(malformed("AttributeProto.f: " + bits.error().message));
                     float_value = std::bit_cast<float>(*bits);
                     break;
                 }
@@ -745,7 +745,7 @@ namespace lfs::onnx_vulkan::detail {
                     if (key->type == WireType::Fixed32) {
                         auto bits = reader.fixed32();
                         if (!bits)
-                            return std::unexpected(malformed("AttributeProto.floats: " + bits.error()));
+                            return std::unexpected(malformed("AttributeProto.floats: " + bits.error().message));
                         floats.push_back(std::bit_cast<float>(*bits));
                     } else if (key->type == WireType::LengthDelimited) {
                         auto packed = read_message(reader, "AttributeProto.floats");
@@ -860,7 +860,7 @@ namespace lfs::onnx_vulkan::detail {
             while (!reader.empty()) {
                 auto key = reader.key();
                 if (!key)
-                    return std::unexpected(malformed("NodeProto: " + key.error()));
+                    return std::unexpected(malformed("NodeProto: " + key.error().message));
                 if (key->number == 1 || key->number == 2 || key->number == 3 ||
                     key->number == 4 || key->number == 7) {
                     if (auto valid = require_wire(*key, WireType::LengthDelimited, "NodeProto string"); !valid)
@@ -904,7 +904,7 @@ namespace lfs::onnx_vulkan::detail {
             while (!reader.empty()) {
                 auto key = reader.key();
                 if (!key)
-                    return std::unexpected(malformed("GraphProto: " + key.error()));
+                    return std::unexpected(malformed("GraphProto: " + key.error().message));
                 if (key->number == 1) {
                     if (auto valid = require_wire(*key, WireType::LengthDelimited, "GraphProto.node"); !valid)
                         return std::unexpected(valid.error());
@@ -963,7 +963,7 @@ namespace lfs::onnx_vulkan::detail {
             while (!reader.empty()) {
                 auto key = reader.key();
                 if (!key)
-                    return std::unexpected(malformed("OperatorSetIdProto: " + key.error()));
+                    return std::unexpected(malformed("OperatorSetIdProto: " + key.error().message));
                 if (key->number == 1) {
                     if (auto valid = require_wire(*key, WireType::LengthDelimited, "OperatorSetIdProto.domain"); !valid)
                         return std::unexpected(valid.error());
@@ -997,7 +997,7 @@ namespace lfs::onnx_vulkan::detail {
             while (!reader.empty()) {
                 auto key = reader.key();
                 if (!key)
-                    return std::unexpected(malformed("ModelProto: " + key.error()));
+                    return std::unexpected(malformed("ModelProto: " + key.error().message));
                 if (key->number == 1) {
                     if (auto valid = require_wire(*key, WireType::Varint, "ModelProto.ir_version"); !valid)
                         return std::unexpected(valid.error());
