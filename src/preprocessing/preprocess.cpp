@@ -723,6 +723,13 @@ namespace {
                 throw std::runtime_error("ONNX model has no 'image' input");
             LOG_INFO("MoGe Vulkan: session ready on {} (inputs={}, outputs={})",
                      session_->device_name(), session_->inputs().size(), session_->outputs().size());
+            if (session_->cooperative_matrix_compatibility_fallback()) {
+                LOG_WARN("MoGe Vulkan: cooperative-matrix compatibility fallback active; "
+                         "using portable tiled kernels");
+            } else {
+                LOG_INFO("MoGe Vulkan: cooperative-matrix kernels {}",
+                         session_->cooperative_matrix_enabled() ? "enabled" : "disabled");
+            }
             for (const auto& input : session_->inputs())
                 LOG_DEBUG("MoGe Vulkan: input '{}' type={} rank={}",
                           input.name, static_cast<int>(input.type), input.shape.size());

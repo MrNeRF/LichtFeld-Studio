@@ -5,6 +5,7 @@
 #include "lfs_onnx_vulkan/onnx_vulkan.hpp"
 #include "model.hpp"
 #include "operator_registry.hpp"
+#include "vulkan_runtime.hpp"
 
 #include <algorithm>
 #include <array>
@@ -481,6 +482,40 @@ namespace {
                 "unsupported control-flow operator was registered");
     }
 
+    void test_cooperative_matrix_compatibility() {
+        using lfs::onnx_vulkan::detail::cooperative_matrix_canary_is_valid;
+        using lfs::onnx_vulkan::detail::has_unreliable_nvidia_blackwell_cooperative_matrix;
+
+        constexpr std::uint32_t nvidia = 0x10de;
+        require(has_unreliable_nvidia_blackwell_cooperative_matrix(
+                    nvidia, "NVIDIA GeForce RTX 5080"),
+                "RTX 50-series compatibility fallback was not selected");
+        require(has_unreliable_nvidia_blackwell_cooperative_matrix(
+                    nvidia, "NVIDIA GeForce RTX 5090 Laptop GPU"),
+                "RTX 50-series laptop compatibility fallback was not selected");
+        require(has_unreliable_nvidia_blackwell_cooperative_matrix(
+                    nvidia, "NVIDIA RTX PRO 6000 Blackwell Generation"),
+                "RTX PRO Blackwell compatibility fallback was not selected");
+        require(has_unreliable_nvidia_blackwell_cooperative_matrix(nvidia, "NVIDIA B200"),
+                "B200 compatibility fallback was not selected");
+        require(!has_unreliable_nvidia_blackwell_cooperative_matrix(
+                    nvidia, "NVIDIA GeForce RTX 4090"),
+                "validated Ada device was incorrectly placed on the fallback path");
+        require(!has_unreliable_nvidia_blackwell_cooperative_matrix(
+                    0x1002, "NVIDIA GeForce RTX 5080"),
+                "device-name policy ignored the Vulkan vendor id");
+
+        std::vector<float> canary(16 * 128, 256.0f);
+        require(cooperative_matrix_canary_is_valid(canary),
+                "valid cooperative-matrix canary output was rejected");
+        canary[127] = 0.0f;
+        require(!cooperative_matrix_canary_is_valid(canary),
+                "corrupt cooperative-matrix canary output was accepted");
+        canary[127] = std::numeric_limits<float>::quiet_NaN();
+        require(!cooperative_matrix_canary_is_valid(canary),
+                "non-finite cooperative-matrix canary output was accepted");
+    }
+
     [[nodiscard]] Bytes arithmetic_model() {
         const std::array<std::int64_t, 2> x_shape{2, 1};
         const std::array<std::int64_t, 2> b_shape{1, 3};
@@ -878,6 +913,7 @@ int main() {
     run("parser", [&] { test_parser(temporary); });
     run("graph_validation", [&] { test_graph_validation(temporary); });
     run("operator_registry", test_registry);
+    run("cooperative_matrix_compatibility", test_cooperative_matrix_compatibility);
     run("vulkan_basics", [&] { test_vulkan_basics(temporary); });
     run("vulkan_elementwise", [&] { test_vulkan_elementwise(temporary); });
     run("vulkan_matmul", [&] { test_vulkan_matmul(temporary); });

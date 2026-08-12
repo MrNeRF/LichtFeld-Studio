@@ -17,8 +17,19 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace lfs::onnx_vulkan::detail {
+
+    // NVIDIA's current Blackwell drivers can advertise KHR cooperative-matrix
+    // support while failing its property query or producing invalid results.
+    // Keep this policy pure so it can be regression-tested without a GPU.
+    [[nodiscard]] bool has_unreliable_nvidia_blackwell_cooperative_matrix(
+        std::uint32_t vendor_id,
+        std::string_view device_name) noexcept;
+
+    [[nodiscard]] bool cooperative_matrix_canary_is_valid(
+        std::span<const float> output) noexcept;
 
     enum class Kernel : std::uint8_t {
         Elementwise,
@@ -113,6 +124,9 @@ namespace lfs::onnx_vulkan::detail {
         [[nodiscard]] std::uint32_t maximum_group_count_y() const noexcept { return maximum_group_count_y_; }
         [[nodiscard]] std::uint32_t maximum_group_count_z() const noexcept { return maximum_group_count_z_; }
         [[nodiscard]] bool cooperative_matrix_enabled() const noexcept { return cooperative_matrix_enabled_; }
+        [[nodiscard]] bool cooperative_matrix_compatibility_fallback() const noexcept {
+            return cooperative_matrix_compatibility_fallback_;
+        }
         [[nodiscard]] bool native_fp16_storage_enabled() const noexcept { return native_fp16_storage_enabled_; }
         [[nodiscard]] std::string_view device_name() const noexcept { return device_name_; }
 
@@ -120,6 +134,7 @@ namespace lfs::onnx_vulkan::detail {
         VulkanRuntime() = default;
         [[nodiscard]] std::expected<void, Error> initialize(const SessionOptions& options);
         [[nodiscard]] std::expected<void, Error> create_pipelines();
+        [[nodiscard]] bool validate_cooperative_matrix() const;
         [[nodiscard]] std::expected<std::uint32_t, Error>
         memory_type(std::uint32_t bits,
                     VkMemoryPropertyFlags required,
@@ -143,6 +158,7 @@ namespace lfs::onnx_vulkan::detail {
         std::uint32_t maximum_group_count_y_ = 1;
         std::uint32_t maximum_group_count_z_ = 1;
         bool cooperative_matrix_enabled_ = false;
+        bool cooperative_matrix_compatibility_fallback_ = false;
         bool native_fp16_storage_enabled_ = false;
         std::string device_name_;
         std::filesystem::path pipeline_cache_path_;

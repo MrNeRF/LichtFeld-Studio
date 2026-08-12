@@ -28,6 +28,8 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -90,6 +92,33 @@ namespace lfs::onnx_vulkan::detail {
             return value;
         }
     } // namespace
+
+    bool has_unreliable_nvidia_blackwell_cooperative_matrix(
+        const std::uint32_t vendor_id,
+        const std::string_view device_name) noexcept {
+        constexpr std::uint32_t kNvidiaVendorId = 0x10de;
+        if (vendor_id != kNvidiaVendorId)
+            return false;
+
+        const bool geforce_blackwell = device_name.find("GeForce RTX 50") != std::string_view::npos;
+        const bool professional_blackwell = device_name.find("RTX PRO") != std::string_view::npos &&
+                                            device_name.find("Blackwell") != std::string_view::npos;
+        const bool datacenter_blackwell = device_name.find("NVIDIA B200") != std::string_view::npos ||
+                                          device_name.find("NVIDIA B300") != std::string_view::npos ||
+                                          device_name.find("NVIDIA GB200") != std::string_view::npos ||
+                                          device_name.find("NVIDIA GB300") != std::string_view::npos;
+        return geforce_blackwell || professional_blackwell || datacenter_blackwell;
+    }
+
+    bool cooperative_matrix_canary_is_valid(const std::span<const float> output) noexcept {
+        constexpr std::size_t kExpectedElements = 16 * 128;
+        constexpr float kExpectedValue = 256.0f;
+        constexpr float kTolerance = 0.5f;
+        return output.size() == kExpectedElements &&
+               std::ranges::all_of(output, [](const float value) {
+                   return std::isfinite(value) && std::abs(value - kExpectedValue) <= kTolerance;
+               });
+    }
 
     Buffer::Buffer(Buffer&& other) noexcept
         : device(std::exchange(other.device, VK_NULL_HANDLE)),
@@ -228,6 +257,11 @@ namespace lfs::onnx_vulkan::detail {
         vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &extension_count, extensions.data());
         const bool has_cooperative_extension =
             has_extension(extensions, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        const bool unreliable_blackwell =
+            has_unreliable_nvidia_blackwell_cooperative_matrix(
+                candidate.properties.vendorID, candidate.properties.deviceName);
+        cooperative_matrix_compatibility_fallback_ =
+            options.enable_cooperative_matrix && has_cooperative_extension && unreliable_blackwell;
 
         VkPhysicalDeviceCooperativeMatrixFeaturesKHR cooperative_support{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
@@ -238,7 +272,7 @@ namespace lfs::onnx_vulkan::detail {
         VkPhysicalDeviceFeatures2 feature_support{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
         feature_support.pNext = &storage16_support;
         storage16_support.pNext = &float16_support;
-        if (has_cooperative_extension)
+        if (has_cooperative_extension && !unreliable_blackwell)
             float16_support.pNext = &cooperative_support;
         vkGetPhysicalDeviceFeatures2(physical_device_, &feature_support);
 
@@ -248,7 +282,7 @@ namespace lfs::onnx_vulkan::detail {
                                                  .pNext = &subgroup};
         vkGetPhysicalDeviceProperties2(physical_device_, &properties2);
         bool has_fp16_fp32_shape = false;
-        if (has_cooperative_extension) {
+        if (has_cooperative_extension && !unreliable_blackwell) {
             const auto query = reinterpret_cast<PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR>(
                 vkGetInstanceProcAddr(instance_, "vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR"));
             if (query) {
@@ -381,7 +415,14 @@ namespace lfs::onnx_vulkan::detail {
         }
         if (cache_result != VK_SUCCESS)
             return std::unexpected(vk_error("vkCreatePipelineCache", cache_result));
-        return create_pipelines();
+        if (auto pipelines = create_pipelines(); !pipelines)
+            return pipelines;
+        if (cooperative_matrix_enabled_ && !validate_cooperative_matrix()) {
+            cooperative_matrix_enabled_ = false;
+            native_fp16_storage_enabled_ = false;
+            cooperative_matrix_compatibility_fallback_ = true;
+        }
+        return {};
     }
 
     std::expected<void, Error> VulkanRuntime::create_pipelines() {
@@ -615,6 +656,82 @@ namespace lfs::onnx_vulkan::detail {
                              .pBufferInfo = &infos[index]};
         }
         vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
+
+    bool VulkanRuntime::validate_cooperative_matrix() const {
+        constexpr std::uint32_t kRows = 16;
+        constexpr std::uint32_t kInner = 256;
+        constexpr std::uint32_t kColumns = 128;
+        constexpr auto kHostMemory =
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+
+        auto a = create_buffer(kRows * kInner * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               kHostMemory, VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+        auto b = create_buffer(kInner * kColumns * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               kHostMemory, VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+        auto c = create_buffer(sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               kHostMemory, VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+        auto output = create_buffer(kRows * kColumns * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                    kHostMemory, VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+        auto parameters = create_buffer(128 * sizeof(std::uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                        kHostMemory, VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+        if (!a || !b || !c || !output || !parameters)
+            return false;
+
+        std::fill_n(static_cast<float*>(a->mapped), kRows * kInner, 1.0f);
+        std::fill_n(static_cast<float*>(b->mapped), kInner * kColumns, 1.0f);
+        *static_cast<float*>(c->mapped) = 0.0f;
+        std::fill_n(static_cast<float*>(output->mapped), kRows * kColumns,
+                    std::numeric_limits<float>::quiet_NaN());
+
+        std::array<std::uint32_t, 128> words{};
+        words[2] = 2;
+        words[3] = 2;
+        words[4] = 2;
+        words[16] = kRows;
+        words[17] = kInner;
+        words[24] = kRows;
+        words[25] = kInner;
+        words[32] = kInner;
+        words[33] = 1;
+        words[40] = kInner;
+        words[41] = kColumns;
+        words[48] = kColumns;
+        words[49] = 1;
+        words[80] = kColumns;
+        words[81] = kRows;
+        words[82] = kInner;
+        words[87] = std::bit_cast<std::uint32_t>(1.0f);
+        std::memcpy(parameters->mapped, words.data(), sizeof(words));
+
+        auto pool = create_descriptor_pool(1);
+        if (!pool)
+            return false;
+        struct PoolGuard {
+            VkDevice device;
+            VkDescriptorPool pool;
+            ~PoolGuard() { vkDestroyDescriptorPool(device, pool, nullptr); }
+        } pool_guard{device_, *pool};
+
+        auto set = allocate_descriptor_set(*pool);
+        if (!set)
+            return false;
+        update_descriptor_set(
+            *set,
+            {{{a->buffer, 0, a->size},
+              {b->buffer, 0, b->size},
+              {c->buffer, 0, c->size},
+              {output->buffer, 0, output->size},
+              {parameters->buffer, 0, parameters->size}}});
+
+        const auto submitted = immediate_submit([&](const VkCommandBuffer command) {
+            bind_and_dispatch(command, Kernel::MatMulCooperative, *set,
+                              kRows * kColumns, {1, 1, 1});
+        });
+        if (!submitted)
+            return false;
+        return cooperative_matrix_canary_is_valid(
+            {static_cast<const float*>(output->mapped), kRows * kColumns});
     }
 
     void VulkanRuntime::bind_and_dispatch(const VkCommandBuffer command,
