@@ -10,6 +10,8 @@
 #include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/training_manager.hpp"
+#include <algorithm>
+#include <cmath>
 #include <optional>
 #include <shared_mutex>
 
@@ -197,6 +199,29 @@ namespace lfs::vis::gui {
         if (const auto validation = lfs::io::video::validateVideoEncodingOptions(options); !validation)
             return std::unexpected(validation.error());
         return options;
+    }
+
+    std::expected<VideoExportRenderPlan, std::string> makeVideoExportRenderPlan(
+        const lfs::io::video::VideoExportOptions& options) {
+        const auto validated = validateVideoExportOptions(options);
+        if (!validated)
+            return std::unexpected(validated.error());
+
+        const bool native = options.upscaler.backend == "native";
+        const float scale = native ? 1.0f : options.upscaler.input_scale;
+        const auto scaled_dimension = [scale](const int value) {
+            const int scaled = std::max(1, static_cast<int>(std::lround(value * scale)));
+            return scaled + (scaled & 1);
+        };
+
+        return VideoExportRenderPlan{
+            .output_width = options.width,
+            .output_height = options.height,
+            .input_width = scaled_dimension(options.width),
+            .input_height = scaled_dimension(options.height),
+            .requires_upscale = !native && scale < 1.0f,
+            .backend = options.upscaler.backend,
+        };
     }
 
 } // namespace lfs::vis::gui

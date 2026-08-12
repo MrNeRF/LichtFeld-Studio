@@ -15,6 +15,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace lfs::vis {
@@ -22,6 +23,17 @@ namespace lfs::vis {
 }
 
 namespace lfs::vis::gui {
+
+    struct VideoExportRenderPlan {
+        int output_width = 0;
+        int output_height = 0;
+        int input_width = 0;
+        int input_height = 0;
+        bool requires_upscale = false;
+        std::string backend;
+
+        bool operator==(const VideoExportRenderPlan&) const = default;
+    };
 
     struct VideoExportMeshSnapshot {
         std::shared_ptr<lfs::core::MeshData> mesh;
@@ -77,5 +89,8 @@ namespace lfs::vis::gui {
 
     LFS_VIS_API std::expected<lfs::io::video::VideoExportOptions, std::string> validateVideoExportOptions(
         lfs::io::video::VideoExportOptions options);
+
+    [[nodiscard]] LFS_VIS_API std::expected<VideoExportRenderPlan, std::string>
+    makeVideoExportRenderPlan(const lfs::io::video::VideoExportOptions& options);
 
 } // namespace lfs::vis::gui

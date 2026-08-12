@@ -273,6 +273,62 @@ TEST(VideoExportUtilsTest, ValidateVideoExportOptionsAcceptsNativeResolution) {
     EXPECT_EQ(result->crf, 18);
 }
 
+TEST(VideoExportUtilsTest, NativeRenderPlanPreservesExactOutput) {
+    const lfs::io::video::VideoExportOptions options{
+        .width = 1920,
+        .height = 1080,
+        .framerate = 30,
+        .crf = 18,
+    };
+
+    const auto plan = lfs::vis::gui::makeVideoExportRenderPlan(options);
+    ASSERT_TRUE(plan) << plan.error();
+    EXPECT_EQ(plan->input_width, 1920);
+    EXPECT_EQ(plan->input_height, 1080);
+    EXPECT_EQ(plan->output_width, 1920);
+    EXPECT_EQ(plan->output_height, 1080);
+    EXPECT_FALSE(plan->requires_upscale);
+    EXPECT_EQ(plan->backend, "native");
+}
+
+TEST(VideoExportUtilsTest, UpscaledRenderPlanUsesEvenInternalExtent) {
+    lfs::io::video::VideoExportOptions options{
+        .preset = lfs::io::video::VideoPreset::CUSTOM,
+        .width = 1920,
+        .height = 1080,
+        .framerate = 30,
+        .crf = 18,
+    };
+    options.upscaler = {
+        .backend = "spatial",
+        .input_scale = 0.67f,
+        .quality = 1,
+        .fallback = lfs::io::video::VideoUpscalerFallback::Native,
+    };
+
+    const auto plan = lfs::vis::gui::makeVideoExportRenderPlan(options);
+    ASSERT_TRUE(plan) << plan.error();
+    EXPECT_EQ(plan->input_width % 2, 0);
+    EXPECT_EQ(plan->input_height % 2, 0);
+    EXPECT_LT(plan->input_width, plan->output_width);
+    EXPECT_LT(plan->input_height, plan->output_height);
+    EXPECT_TRUE(plan->requires_upscale);
+}
+
+TEST(VideoExportUtilsTest, RejectsInvalidOfflineUpscalerContract) {
+    lfs::io::video::VideoExportOptions options{};
+    options.upscaler.input_scale = 0.5f;
+    EXPECT_FALSE(lfs::vis::gui::makeVideoExportRenderPlan(options));
+
+    options.upscaler.backend = "temporal";
+    options.upscaler.input_scale = 0.1f;
+    EXPECT_FALSE(lfs::vis::gui::makeVideoExportRenderPlan(options));
+
+    options.upscaler.input_scale = 0.5f;
+    options.upscaler.quality = 4;
+    EXPECT_FALSE(lfs::vis::gui::makeVideoExportRenderPlan(options));
+}
+
 TEST(VideoEncoderValidationTest, RejectsUnsafeOptionsBeforeCodecInitialization) {
     lfs::io::video::VideoEncoder encoder;
     const std::filesystem::path unused_path = "/tmp/lfs-invalid-video-options.mp4";

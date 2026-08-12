@@ -12,6 +12,18 @@
 
 namespace lfs::io::video {
 
+    enum class VideoUpscalerFallback : uint8_t {
+        Abort,
+        Native,
+    };
+
+    struct VideoUpscalerOptions {
+        std::string backend = "native";
+        float input_scale = 1.0f;
+        int quality = 1;
+        VideoUpscalerFallback fallback = VideoUpscalerFallback::Abort;
+    };
+
     enum class VideoPreset : uint8_t {
         YOUTUBE_1080P,      // 1920x1080, 30fps
         YOUTUBE_4K,         // 3840x2160, 30fps
@@ -64,6 +76,7 @@ namespace lfs::io::video {
         int height = 1080;
         int framerate = 30;
         int crf = 18;
+        VideoUpscalerOptions upscaler{};
     };
 
     [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(
@@ -76,6 +89,14 @@ namespace lfs::io::video {
             return std::unexpected("Video framerate must be between 1 and 1000");
         if (options.crf < 0 || options.crf > 51)
             return std::unexpected("Video CRF must be between 0 and 51");
+        if (options.upscaler.backend.empty())
+            return std::unexpected("Video upscaler backend must not be empty");
+        if (!(options.upscaler.input_scale >= 0.25f && options.upscaler.input_scale <= 1.0f))
+            return std::unexpected("Video upscaler input scale must be between 0.25 and 1.0");
+        if (options.upscaler.quality < 0 || options.upscaler.quality > 3)
+            return std::unexpected("Video upscaler quality must be between 0 and 3");
+        if (options.upscaler.backend == "native" && options.upscaler.input_scale != 1.0f)
+            return std::unexpected("Native video export requires an input scale of 1.0");
 
         const size_t width = static_cast<size_t>(options.width);
         const size_t height = static_cast<size_t>(options.height);
