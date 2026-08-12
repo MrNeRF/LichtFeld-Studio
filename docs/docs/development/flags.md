@@ -38,6 +38,22 @@ environment variables:
 | `LFS_VCPKG_MAX_CONCURRENCY` | empty | Uses an explicit vcpkg environment setting or caps automatic package-build concurrency at six. |
 | `LFS_DOWNLOAD_CACHE_DIR` | platform cache directory | Stores checksum-verified ONNX Runtime and uv archives outside disposable build trees. |
 
+Optional scene-upscaling SDKs are also regular CMake cache options. They are
+not diagnostic flags and are disabled in a fresh cache:
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `LFS_ENABLE_NVIDIA_DLSS` | `OFF` | Compiles the Vulkan DLSS Super Resolution adapter after validating a user-provided SDK. |
+| `LFS_NVIDIA_DLSS_ROOT` | empty | Path to the unpacked NVIDIA DLSS SDK; LichtFeld does not download or redistribute it. |
+| `LFS_NVIDIA_DLSS_PROJECT_ID` | LichtFeld's public NGX GUID | Stable application identity used by NGX; not a credential or per-user value. |
+| `LFS_ENABLE_AMD_FSR3` | `OFF` | Compiles the Vulkan FidelityFX FSR 3.1 upscaler adapter after validating a user-provided SDK. |
+| `LFS_AMD_FSR3_ROOT` | empty | Path to an AMD FidelityFX SDK 1.1.x checkout; LichtFeld does not download or redistribute it. |
+| `LFS_AMD_FSR3_BUILD_SDK` | `ON` only when FSR is enabled | On Windows, builds the required Vulkan FSR 3.1 libraries from a copied SDK source tree when compatible prebuilt libraries are absent. It cannot enable FSR by itself. |
+| `LFS_AMD_FSR3_LIBRARY_DIR` | empty | Optional directory containing prebuilt `ffx_fsr3upscaler` and `ffx_backend_vk` libraries; required for the documented Linux integration. |
+
+See [Scene upscaling and temporal rendering](scene-upscaling) for supported
+platforms, runtime staging, fallback behavior, and adapter contracts.
+
 Multi-config generators default the configuration-dependent options to `OFF`;
 enable the required option explicitly when configuring them. Source-tree Python
 and RmlUI imports are controlled by `LFS_DEV_IMPORT_SOURCE_PYTHON` and

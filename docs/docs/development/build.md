@@ -148,3 +148,8 @@ compiling the application must obtain the SDK, accept its terms, and provide
 its path at configure time.
 The complete platform, runtime-staging, fallback, and rendering contracts are
 documented in [Scene upscaling and temporal rendering](scene-upscaling).
+
+The base scene render scale remains an independent renderer setting. Optional
+backend scales are input multipliers applied to that base scale; vendor quality
+presets may select the multiplier recommended by their SDK. Selecting or
+disabling an upscaler does not overwrite the base renderer setting.

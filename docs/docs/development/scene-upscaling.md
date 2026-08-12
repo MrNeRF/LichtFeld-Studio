@@ -4,27 +4,32 @@ sidebar_position: 7
 
 # Scene upscaling and temporal rendering
 
-LichtFeld Studio separates scene rendering from interface scaling. The scene is
-rendered at a backend-owned input extent and reconstructed into the full
-viewport extent; RmlUI and the rest of the interface remain at normal
-resolution. **Native is the normal LichtFeld Studio renderer**, not an
-upscaling implementation. It is the behavioral and performance baseline and
-must retain its existing behavior with zero optional-upscaler cost.
+LichtFeld Studio separates scene rendering from interface scaling. RmlUI and
+the rest of the interface remain at the normal output resolution. The scene
+render extent starts from the existing base renderer scale; when an upscaler is
+selected, its input multiplier is applied on top of that base scale and the
+result is reconstructed into the full viewport extent. **Native is the normal
+LichtFeld Studio renderer**, not an upscaling implementation. It preserves the
+existing base-scale behavior and is the zero-optional-upscaler-cost baseline.
 
 ## Available backends
 
 | Backend | Availability | Inputs and behavior |
 | --- | --- | --- |
-| Native | Always | The normal LichtFeld Studio renderer at full resolution, without an upscaling adapter, history, motion, or optional SDK cost. |
+| Native | Always | The normal LichtFeld Studio renderer using the existing base render scale, without an upscaling adapter, history, motion, or optional SDK cost. |
 | Spatial | Always | Limited internal spatial prototype used to validate resolution scaling, adapter lifetime, split view, and fallback contracts before external SDK integration. It is not intended as a quality-oriented production upscaler. |
 | Temporal | Always | Limited experimental temporal prototype used to validate per-view history, depth, motion, jitter, and reset contracts before external SDK integration. It is not intended to match production temporal upscalers. |
 | NVIDIA DLSS | Optional build | DLSS Super Resolution through a user-provided NGX SDK. Frame Generation is not enabled. |
 | AMD FSR 3.1 | Optional build | FidelityFX FSR 3.1 upscaling through a user-provided SDK. Frame Interpolation is not enabled. |
 
 Preferences lists only backends registered by the current build and available
-on the active Vulkan device. Scale and quality values are owned independently:
-switching backend does not overwrite the base renderer's scale or another
-backend's choices. Native is fixed at 100 percent.
+on the active Vulkan device. The base renderer scale and each backend's input
+multiplier are persisted independently, so switching backend does not overwrite
+either the base scale or another backend's choices. Native ignores backend
+multipliers and therefore uses the base renderer scale unchanged. The internal
+Spatial and Temporal prototypes expose their multiplier directly; optional
+vendor backends currently derive it from the selected quality preset and SDK
+recommendations.
 
 The selected backend is requested, probed, and resolved explicitly. Safe mode,
 a missing runtime, an unsupported device or graphics API, a failed probe, or a
@@ -57,7 +62,7 @@ project identifier. It is not a credential or a per-user setting. Override it
 only for a separately registered application identity.
 
 CMake validates the NGX and Vulkan headers and platform libraries. On Windows
-it links the compatible static import library and stages `nvngx_dlss.dll`
+it links the SDK's NGX import library and stages `nvngx_dlss.dll`
 beside opted-in targets. On Linux it links `libnvsdk_ngx.a` and stages the
 newest matching release `libnvidia-ngx-dlss.so.*`. Missing files stop
 configuration with the official download link instead of silently disabling a
@@ -195,10 +200,11 @@ extension is absent.
 Add the localized label key to every locale and let
 `availableSceneUpscalerCatalog()` drive the Preferences list. Do not add an
 unconditional Python list entry for an optional backend. The UI persists its
-stable ID, independent scale, and independent quality preset through the
-existing `scene_upscaler`, `scene_upscaler_scales`, and
-`scene_upscaler_qualities` owners. Invalid or unavailable saved IDs resolve to
-Native without rewriting unrelated backend settings.
+stable ID, per-backend input multiplier, and per-backend quality preset through
+the existing `scene_upscaler`, `scene_upscaler_scales`, and
+`scene_upscaler_qualities` owners. These values do not replace the separate
+base renderer scale. Invalid or unavailable saved IDs resolve to Native without
+rewriting unrelated backend settings.
 
 If the SDK publishes recommended scales or backend-specific quality modes,
 expose them as catalog metadata. Backend-specific controls must appear only
@@ -240,12 +246,15 @@ usable on CI runners without the optional runtime.
 ### Resolution
 
 - The output extent is the full viewport extent.
-- The render extent is derived from the selected backend's scale and rounded to
-  valid pixel dimensions.
-- Base render scale and backend scales are separate persisted values.
+- The Native render extent is derived from the base renderer scale.
+- With an upscaler selected, the effective input scale is the base renderer
+  scale multiplied by that backend's input multiplier, clamped to the supported
+  range and rounded to valid pixel dimensions.
+- Base render scale and per-backend multipliers are separate persisted values.
 - A resize, split-view change, backend change, or scale change updates extents
   without stretching an old rendered texture.
-- Native requires no reconstruction resources and remains fixed at full scale.
+- Native requires no reconstruction resources and ignores the backend
+  multiplier; it does not force the existing base renderer scale to 100 percent.
 
 ### Depth
 
@@ -276,7 +285,7 @@ The atomic `preferences.json` store owns:
 
 - `scene_render_scale` for the base renderer;
 - `scene_upscaler` for the selected backend;
-- `scene_upscaler_scales` for independent per-backend scales;
+- `scene_upscaler_scales` for independent per-backend input multipliers;
 - `scene_upscaler_qualities` for independent per-backend quality presets;
 - `scene_temporal_quality` as the compatibility value for older preferences.
 
