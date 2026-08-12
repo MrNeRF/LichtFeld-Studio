@@ -141,6 +141,10 @@ namespace lfs::vis {
                 ProjectSwitchDisposition::RequireClean) = 0;
         virtual lfs::Result<void>
         projectCompact() = 0;
+        virtual lfs::Result<bool>
+        projectIsDirty() = 0;
+        virtual lfs::Result<bool>
+        projectHasPath() = 0;
         virtual lfs::Result<ProjectInfo>
         projectGetInfo() = 0;
 

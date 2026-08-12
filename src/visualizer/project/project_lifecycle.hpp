@@ -114,6 +114,8 @@ namespace lfs::vis::project {
         newProject(
             ProjectSwitchDisposition disposition =
                 ProjectSwitchDisposition::RequireClean);
+        [[nodiscard]] bool isDirty();
+        [[nodiscard]] bool hasSourcePath() const;
         [[nodiscard]] lfs::Result<ProjectInfo> info();
         [[nodiscard]] lfs::Result<void>
         preflightSwitch(

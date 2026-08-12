@@ -93,6 +93,10 @@ namespace lfs::vis {
                 ProjectSwitchDisposition::RequireClean) override;
         lfs::Result<void>
         projectCompact() override;
+        lfs::Result<bool>
+        projectIsDirty() override;
+        lfs::Result<bool>
+        projectHasPath() override;
         lfs::Result<ProjectInfo>
         projectGetInfo() override;
 

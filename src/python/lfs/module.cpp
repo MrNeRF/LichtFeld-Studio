@@ -994,8 +994,8 @@ NB_MODULE(lichtfeld, m) {
             if (!viewer) {
                 return false;
             }
-            auto info = viewer->projectGetInfo();
-            return info && info->dirty;
+            auto dirty = viewer->projectIsDirty();
+            return dirty && *dirty;
         },
         "Return whether the active project has unsaved chapters");
     m.def(
@@ -1005,8 +1005,8 @@ NB_MODULE(lichtfeld, m) {
             if (!viewer) {
                 return false;
             }
-            auto info = viewer->projectGetInfo();
-            return info && info->path.has_value();
+            auto has_path = viewer->projectHasPath();
+            return has_path && *has_path;
         },
         "Return whether the active project has a bound .licht path");
     m.def(

@@ -2350,8 +2350,10 @@ namespace lfs::vis::project {
             selection_mutation_serial_.fetch_add(
                 1, std::memory_order_acq_rel);
         }
-        scene_dirty_.store(
-            true, std::memory_order_release);
+        if ((mutation_flags & ~selection_flag) != 0) {
+            scene_dirty_.store(
+                true, std::memory_order_release);
+        }
         const auto model_flag =
             static_cast<std::uint32_t>(
                 lfs::core::Scene::MutationType::
@@ -4148,6 +4150,16 @@ namespace lfs::vis::project {
         return {};
     }
 
+    bool ProjectLifecycle::isDirty() {
+        return hasDirtyProject();
+    }
+
+    bool ProjectLifecycle::hasSourcePath() const {
+        return recovered_master_path_.has_value() ||
+               (document_ &&
+                document_->source_path().has_value());
+    }
+
     bool ProjectLifecycle::hasDirtyProject() {
         if (close_save_state_.load(
                 std::memory_order_acquire) ==
@@ -4198,12 +4210,10 @@ namespace lfs::vis::project {
         if (blank_untitled) {
             return false;
         }
-        if (auto synchronized =
-                synchronizeDocumentFromViewer();
-            !synchronized) {
-            LOG_ERROR(
-                "Could not evaluate project dirty state: {}",
-                developerError(synchronized.error()));
+        if (scene_dirty_.load(
+                std::memory_order_acquire) ||
+            payload_dirty_.load(
+                std::memory_order_acquire)) {
             return true;
         }
         return hasHardDirtyChapters(*document_);

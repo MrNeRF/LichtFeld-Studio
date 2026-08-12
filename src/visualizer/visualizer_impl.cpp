@@ -1269,15 +1269,15 @@ namespace lfs::vis {
 
         cmd::ProjectSave::when(
             [this, publish_project_error](const auto&) {
-                auto info = projectGetInfo();
-                if (!info) {
+                auto has_path = projectHasPath();
+                if (!has_path) {
                     publish_project_error(
                         "Save Project",
                         lfs::format_for_developer(
-                            info.error()));
+                            has_path.error()));
                     return;
                 }
-                if (!info->path) {
+                if (!*has_path) {
                     const auto path =
                         gui::SaveProjectFileDialog();
                     if (path.empty()) {
@@ -1400,15 +1400,15 @@ namespace lfs::vis {
         cmd::SaveAndExit::when(
             [this, publish_project_error](
                 const auto&) {
-                auto info = projectGetInfo();
-                if (!info) {
+                auto has_path = projectHasPath();
+                if (!has_path) {
                     publish_project_error(
                         "Save Project",
                         lfs::format_for_developer(
-                            info.error()));
+                            has_path.error()));
                     return;
                 }
-                if (!info->path) {
+                if (!*has_path) {
                     publish_project_error(
                         "Save Project",
                         "The project has no path; use Save As.");
@@ -1521,8 +1521,8 @@ namespace lfs::vis {
                 }
                 return;
             }
-            auto info = projectGetInfo();
-            if (info && info->path) {
+            auto has_path = projectHasPath();
+            if (has_path && *has_path) {
                 lfs::core::events::cmd::SaveAndExit{}
                     .emit();
             } else {
@@ -2918,6 +2918,30 @@ namespace lfs::vis {
         return project_lifecycle_->info();
     }
 
+    lfs::Result<bool>
+    VisualizerImpl::projectIsDirty() {
+        if (!project_lifecycle_) {
+            return visualizerFailure<bool>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->isDirty();
+    }
+
+    lfs::Result<bool>
+    VisualizerImpl::projectHasPath() {
+        if (!project_lifecycle_) {
+            return visualizerFailure<bool>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->hasSourcePath();
+    }
+
     lfs::Result<void>
     VisualizerImpl::projectCompact() {
         if (!project_lifecycle_) {
@@ -3044,8 +3068,8 @@ namespace lfs::vis {
                     RequireClean;
             break;
         case PendingTrainingAction::CloseSave: {
-            auto info = projectGetInfo();
-            if (info && info->path) {
+            auto has_path = projectHasPath();
+            if (has_path && *has_path) {
                 lfs::core::events::cmd::SaveAndExit{}
                     .emit();
             } else {

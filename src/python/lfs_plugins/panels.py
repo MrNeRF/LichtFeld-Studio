@@ -106,20 +106,10 @@ def _build_builtin_panel_steps(lf):
         lf.ui.set_panel_enabled("lfs.getting_started", False)
 
     def startup_recent_panel():
-        from .startup_recent_panel import StartupRecentPanel, try_show_startup_recent
+        from .startup_recent_panel import StartupRecentPanel
 
         lf.register_class(StartupRecentPanel)
         lf.ui.set_panel_enabled("lfs.startup_recent", False)
-        # Defer show until after openStartupProject (CLI path) can run in the
-        # same init sequence. Prefer UI-thread schedule; fall back to immediate.
-        scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
-        if callable(scheduler):
-            try:
-                scheduler(try_show_startup_recent)
-            except Exception:
-                try_show_startup_recent()
-        else:
-            try_show_startup_recent()
 
     def image_preview_panel():
         from .image_preview_panel import ImagePreviewPanel, open_camera_preview_by_uid

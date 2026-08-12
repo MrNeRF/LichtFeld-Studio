@@ -99,6 +99,12 @@ namespace {
         lfs::Result<void> projectCompact() override {
             return {};
         }
+        lfs::Result<bool> projectIsDirty() override {
+            return false;
+        }
+        lfs::Result<bool> projectHasPath() override {
+            return false;
+        }
         lfs::Result<lfs::vis::ProjectInfo>
         projectGetInfo() override {
             return lfs::vis::ProjectInfo{};
