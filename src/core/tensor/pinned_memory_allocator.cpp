@@ -50,11 +50,11 @@ namespace lfs::core {
         // event-pool singleton may already be gone.
         for (const cudaEvent_t event : ready_events) {
             const cudaError_t status = cudaEventDestroy(event);
-            if (status != cudaSuccess) {
+            if (status != cudaSuccess && !is_cuda_shutdown(status)) {
                 ensure_cuda_success(
                     status, "cudaEventDestroy(pinned static teardown)", {},
                     LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
-                cudaGetLastError();
+                (void)cudaGetLastError();
             }
         }
     }

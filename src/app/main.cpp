@@ -273,6 +273,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    return lfs::core::run_with_exception_firewall(
+    const int exit_code = lfs::core::run_with_exception_firewall(
         [&result] { return run_mode(std::move(*result)); });
+
+    // CLI modes can populate CUDA-backed tensor and pinned-host caches even
+    // when their primary inference backend is Vulkan (for example, depth-anchor
+    // fitting after preprocessing). Drain those holders while CUDA is alive,
+    // then skip unsafe process-static GPU destructors just like the test runner.
+    lfs::core::teardown_gpu_before_exit();
+    lfs::core::flush_and_exit(exit_code);
 }

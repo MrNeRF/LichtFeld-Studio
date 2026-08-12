@@ -12,6 +12,10 @@ namespace lfs::core {
     namespace {
         std::atomic<bool> g_force_event_acquire_failure_for_testing{false};
 
+        [[nodiscard]] bool is_cuda_shutdown(const cudaError_t status) noexcept {
+            return status == cudaErrorCudartUnloading || is_cuda_unavailable_error(status);
+        }
+
         void synchronize_stream_bridge_source(cudaStream_t from,
                                               cudaStream_t to,
                                               const std::string_view reason) {
@@ -70,7 +74,7 @@ namespace lfs::core {
             }
         }
         const cudaError_t destroy_status = cudaEventDestroy(event);
-        if (destroy_status != cudaSuccess) {
+        if (destroy_status != cudaSuccess && !is_cuda_shutdown(destroy_status)) {
             ensure_cuda_success(
                 destroy_status, "cudaEventDestroy(tensor event pool release)", {},
                 LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
@@ -84,7 +88,7 @@ namespace lfs::core {
         std::lock_guard<std::mutex> lock(mutex_);
         for (cudaEvent_t event : pool_) {
             const cudaError_t destroy_status = cudaEventDestroy(event);
-            if (destroy_status != cudaSuccess) {
+            if (destroy_status != cudaSuccess && !is_cuda_shutdown(destroy_status)) {
                 ensure_cuda_success(
                     destroy_status, "cudaEventDestroy(tensor event pool shutdown)", {},
                     LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
