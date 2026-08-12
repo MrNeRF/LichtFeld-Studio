@@ -15,6 +15,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/session_breadcrumb.hpp"
 #include "core/tensor.hpp"
@@ -439,6 +440,8 @@ namespace lfs::app {
             options.height = cfg.height;
             options.framerate = cfg.fps;
             options.crf = cfg.crf;
+            if (cfg.include_provenance)
+                options.provenance = core::make_provenance_stamp();
             if (const auto open_result = encoder.open(cfg.output_path, options); !open_result) {
                 LOG_ERROR("Failed to open video encoder: {}", open_result.error());
                 return 1;

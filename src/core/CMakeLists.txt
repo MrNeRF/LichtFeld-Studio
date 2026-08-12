@@ -74,6 +74,7 @@ set(CORE_SOURCES
         optimization_properties.cpp
         parameters.cpp
         property_registry.cpp
+        provenance.cpp
         reactive_store.cpp
         scene.cpp
         session_breadcrumb.cpp

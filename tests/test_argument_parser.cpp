@@ -242,6 +242,49 @@ TEST(ArgumentParserTest, Mesh2SplatParsesMultipleOutputFormats) {
     EXPECT_EQ(mode->params.formats[2], lfs::core::param::OutputFormat::HTML);
 }
 
+TEST(ArgumentParserTest, ConvertDefaultsIncludeProvenance) {
+    const auto dir = make_test_path("lfs_convert_arg_parser_provenance_default");
+    const auto input = std::filesystem::path(dir) / "input.ply";
+    std::ofstream(input).put('\n');
+
+    const std::string input_str = input.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "convert",
+        input_str.c_str(),
+        "-f",
+        "ply"};
+
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_TRUE(mode->params.include_provenance);
+}
+
+TEST(ArgumentParserTest, ConvertNoProvenanceDisablesStamp) {
+    const auto dir = make_test_path("lfs_convert_arg_parser_no_provenance");
+    const auto input = std::filesystem::path(dir) / "input.ply";
+    std::ofstream(input).put('\n');
+
+    const std::string input_str = input.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "convert",
+        input_str.c_str(),
+        "-f",
+        "ply",
+        "--no-provenance"};
+
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_FALSE(mode->params.include_provenance);
+}
+
 TEST(ArgumentParserTest, TrainingParsesAddSplats) {
     const auto dir = make_test_path("lfs_arg_parser_add_splat");
     const auto data_path = std::filesystem::path(dir) / "data";

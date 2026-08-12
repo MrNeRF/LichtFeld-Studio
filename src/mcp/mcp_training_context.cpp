@@ -12,6 +12,8 @@
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
+#include "core/parameters.hpp"
+#include "core/provenance.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
 #include "io/exporter.hpp"
 #include "python/python_runtime.hpp"
@@ -27,6 +29,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <optional>
 #include <sstream>
 
 namespace lfs::mcp {
@@ -206,7 +209,8 @@ namespace lfs::mcp {
     }
 
     std::expected<void, std::string> TrainingContext::save_ply(
-        const std::filesystem::path& path) {
+        const std::filesystem::path& path,
+        const bool include_provenance) {
 
         std::lock_guard lock(mutex_);
 
@@ -219,7 +223,22 @@ namespace lfs::mcp {
             return std::unexpected("No model to save");
         }
 
-        io::PlySaveOptions options{.output_path = path, .binary = true};
+        std::optional<core::ProvenanceStamp> stamp;
+        if (include_provenance) {
+            auto built = core::make_provenance_stamp();
+            if (trainer_) {
+                const int iteration = trainer_->get_current_iteration();
+                if (iteration > 0)
+                    built.iteration = iteration;
+                const auto strategy = core::param::canonical_strategy_name(
+                    trainer_->getParams().optimization.strategy);
+                if (!strategy.empty())
+                    built.strategy = std::string(strategy);
+            }
+            stamp = std::move(built);
+        }
+
+        io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = std::move(stamp)};
         auto result = io::save_ply(*model, options);
         if (!result) {
             return std::unexpected(result.error().message);

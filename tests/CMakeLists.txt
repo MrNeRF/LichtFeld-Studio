@@ -188,6 +188,7 @@ set(TEST_FILES
     test_ply_io_throughput.cpp
     test_gsplat_rasterizer.cpp
     test_spz_format.cpp
+    test_provenance.cpp
     test_converter_usd.cpp
     test_usd_format.cpp
     test_nurec_usdz_format.cpp

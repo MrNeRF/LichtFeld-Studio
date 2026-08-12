@@ -339,6 +339,7 @@ namespace {
             ::args::CounterFlag freeze(paths_group, "freeze", "Freeze the immediately preceding --add-splat rows from optimizer gradients and densification", {"freeze"});
             ::args::ValueFlag<float> freeze_lr_scale(paths_group, "scale", "Learning-rate scale for frozen splats (0 = fully frozen, default; try 0.01-0.1 to let frozen splats absorb small appearance mismatch)", {"freeze-lr-scale"});
             ::args::Flag exclude_export(paths_group, "exclude_export", "Exclude frozen --add-splat rows from PLY exports", {"exclude-export"});
+            ::args::Flag no_provenance(paths_group, "no-provenance", "Omit provenance metadata from the output", {"no-provenance"});
 
             ::args::ValueFlag<std::string> import_cameras(paths_group, "path", "Import COLMAP cameras from sparse folder (no images required)", {"import-cameras"});
 
@@ -601,6 +602,8 @@ namespace {
                 }
             }
 
+            params.include_provenance = !no_provenance;
+
             // NO ARGUMENTS = VIEWER MODE (empty)
             if (args.size() == 1) {
                 return std::make_tuple(ParseResult::Success, std::function<void()>{});
@@ -689,6 +692,7 @@ namespace {
                 if (render_crf) {
                     cfg.crf = ::args::get(render_crf);
                 }
+                cfg.include_provenance = params.include_provenance;
                 params.render_path = cfg;
 
                 return std::make_tuple(ParseResult::Success, std::function<void()>{});
@@ -1231,6 +1235,7 @@ namespace {
         "  Input:  .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint)\n"
         "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  SPZ:    --spz-version 4 (default, zstd) or 3 (legacy gzip)\n"
+        "  Metadata: --no-provenance omits provenance stamps (included by default)\n"
         "\n";
 
     constexpr const char* MESH2SPLAT_HELP_HEADER = "LichtFeld Studio - Convert mesh files to Gaussian splats\n";
@@ -1246,6 +1251,7 @@ namespace {
         "  Input:  .obj, .fbx, .gltf, .glb, .stl, .dae, .3ds, .ply\n"
         "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  Multiple output formats: pass a comma-separated list to --format\n"
+        "  Metadata: --no-provenance omits provenance stamps (included by default)\n"
         "\n";
 
     constexpr const char* PREPROCESS_HELP_HEADER = "LichtFeld Studio - Generate dataset depth and normal maps with MoGe-2 ONNX\n";
@@ -1328,6 +1334,7 @@ namespace {
         ::args::ValueFlag<int> sh_degree(parser, "degree", "SH degree [0-3], -1 to keep original (default: -1)", {"sh-degree"});
         ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, spz, html, usd, usda, usdc, rad", {'f', "format"});
         ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
+        ::args::Flag no_provenance(parser, "no-provenance", "Omit provenance metadata from the output", {"no-provenance"});
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG (default: 10)", {"sog-iterations"});
         ::args::ValueFlag<std::string> tiles(parser, "AxB", "Replicate a PLY source across an AxB ground-plane grid (RAD output only)", {"tiles"});
         ::args::ValueFlag<std::string> lod_builder(parser, "builder", "PLY->RAD LOD tree builder: bhatt (default) or octree (hybrid: octree fine levels + similarity-ordered bhatt top, much faster)", {"lod-builder"});
@@ -1356,6 +1363,7 @@ namespace {
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
         params.sh_degree = sh_degree ? ::args::get(sh_degree) : -1;
         params.spz_version = spz_version ? ::args::get(spz_version) : 4;
+        params.include_provenance = !no_provenance;
 
         if (!std::filesystem::exists(params.input_path)) {
             return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
@@ -1448,6 +1456,7 @@ namespace {
         ::args::ValueFlag<std::string> output_flag(parser, "path", "Output file or directory", {'o', "output"});
         ::args::ValueFlag<std::string> format(parser, "formats", "Output format(s): ply, sog, spz, html, usd, usda, usdc, rad. Use commas for multiple outputs", {'f', "format"});
         ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
+        ::args::Flag no_provenance(parser, "no-provenance", "Omit provenance metadata from the output", {"no-provenance"});
         ::args::ValueFlag<int> resolution(parser, "pixels", "Mesh2Splat raster resolution target (default: 1024)", {"resolution"});
         ::args::ValueFlag<float> sigma(parser, "scale", "Gaussian scale sigma (default: 0.65)", {"sigma"});
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG/HTML output (default: 10)", {"sog-iterations"});
@@ -1476,6 +1485,7 @@ namespace {
         param::Mesh2SplatParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
         params.spz_version = spz_version ? ::args::get(spz_version) : 4;
+        params.include_provenance = !no_provenance;
 
         if (!std::filesystem::exists(params.input_path)) {
             return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));

@@ -1599,6 +1599,8 @@
     "models": "MODELOS",
     "no_models": "No hay modelos en la escena",
     "sh_degree": "SH DEGREE",
+    "include_provenance": "DATOS DE PROCEDENCIA",
+    "include_provenance_hint": "Incrusta id de exportación, iteración, estrategia, versión de la app y hora de exportación",
     "spz_version": "VERSIÓN SPZ",
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (legado)",

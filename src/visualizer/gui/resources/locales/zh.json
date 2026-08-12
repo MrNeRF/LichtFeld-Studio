@@ -1215,6 +1215,8 @@
     "models": "模型",
     "no_models": "场景中无模型",
     "sh_degree": "SH Degree",
+    "include_provenance": "来源元数据",
+    "include_provenance_hint": "嵌入导出 ID、迭代、策略、应用版本和导出时间",
     "spz_version": "SPZ 版本",
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (旧版)",

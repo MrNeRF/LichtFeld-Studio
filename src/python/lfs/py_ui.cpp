@@ -4474,19 +4474,23 @@ namespace lfs::python {
 
         m.def(
             "export_video",
-            [](int width, int height, int framerate, int crf, const std::string& path) {
+            [](int width, int height, int framerate, int crf, const std::string& path,
+               bool include_provenance) {
                 lfs::core::events::cmd::SequencerExportVideo{
                     .width = width,
                     .height = height,
                     .framerate = framerate,
                     .crf = crf,
-                    .path = path}
+                    .path = path,
+                    .include_provenance = include_provenance}
                     .emit();
             },
             nb::arg("width"), nb::arg("height"), nb::arg("framerate"), nb::arg("crf"),
             nb::arg("path") = std::string{},
+            nb::arg("include_provenance") = true,
             "Export video with specified settings. Without a path a save dialog opens, "
-            "which a script cannot answer; pass one to export directly.");
+            "which a script cannot answer; pass one to export directly. "
+            "include_provenance (default true) writes a provenance stamp into the video comment.");
 
         m.def(
             "add_keyframe",

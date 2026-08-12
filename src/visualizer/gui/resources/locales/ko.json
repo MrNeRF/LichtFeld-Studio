@@ -1196,6 +1196,8 @@
     "models": "모델",
     "no_models": "씬에 모델 없음",
     "sh_degree": "SH Degree",
+    "include_provenance": "출처 메타데이터",
+    "include_provenance_hint": "내보내기 ID, 반복, 전략, 앱 버전, 내보내기 시간을 포함합니다",
     "spz_version": "SPZ 버전",
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (레거시)",

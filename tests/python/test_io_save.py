@@ -169,6 +169,22 @@ class TestSavePLY:
                 },
             )
 
+    def test_save_ply_default_writes_provenance(self, lf, benchmark_ply, tmp_output):
+        result = lf.io.load(str(benchmark_ply))
+        output_path = tmp_output / "default_provenance.ply"
+
+        lf.io.save_ply(result.splat_data, str(output_path))
+
+        assert b"lichtfeld_provenance" in output_path.read_bytes()
+
+    def test_save_ply_without_provenance_omits_stamp(self, lf, benchmark_ply, tmp_output):
+        result = lf.io.load(str(benchmark_ply))
+        output_path = tmp_output / "no_provenance.ply"
+
+        lf.io.save_ply(result.splat_data, str(output_path), include_provenance=False)
+
+        assert b"lichtfeld_provenance" not in output_path.read_bytes()
+
     @pytest.mark.slow
     def test_save_point_cloud_ply_with_extra_attribute(self, lf, tmp_output, numpy):
         """Test save_point_cloud_ply forwards extra per-vertex properties."""
@@ -251,6 +267,22 @@ class TestSaveSPZ:
 
         with open(output_path, "rb") as f:
             assert f.read(2) == b"\x1f\x8b"
+
+    def test_save_spz_default_writes_provenance(self, lf, benchmark_ply, tmp_output):
+        result = lf.io.load(str(benchmark_ply))
+        output_path = tmp_output / "default_provenance.spz"
+
+        lf.io.save_spz(result.splat_data, str(output_path))
+
+        assert b"lichtfeld_provenance" in output_path.read_bytes()
+
+    def test_save_spz_without_provenance_omits_stamp(self, lf, benchmark_ply, tmp_output):
+        result = lf.io.load(str(benchmark_ply))
+        output_path = tmp_output / "no_provenance.spz"
+
+        lf.io.save_spz(result.splat_data, str(output_path), include_provenance=False)
+
+        assert b"lichtfeld_provenance" not in output_path.read_bytes()
 
 
 class TestAssetScannerSpzHeader:

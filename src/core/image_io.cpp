@@ -18,8 +18,10 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -174,7 +176,8 @@ namespace {
 
     void write_prepared_image(const std::filesystem::path& path,
                               const lfs::core::Tensor& image,
-                              const int jpeg_quality) {
+                              const int jpeg_quality,
+                              const std::optional<std::string>& metadata_comment = {}) {
         init_oiio();
         if (image.ndim() != 3)
             throw std::runtime_error("save_image: expected a 3D HxWxC tensor");
@@ -204,6 +207,8 @@ namespace {
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
         if (ext == ".jpg" || ext == ".jpeg")
             spec.attribute("CompressionQuality", std::clamp(jpeg_quality, 1, 100));
+        if ((ext == ".png" || ext == ".jpg" || ext == ".jpeg") && metadata_comment)
+            spec.attribute("Comment", *metadata_comment);
 
         if (!out->open(path_utf8, spec)) {
             auto e = out->geterror();
@@ -552,15 +557,18 @@ namespace lfs::core {
         return ::load_image_t<uint16_t>(p, res_div, max_width);
     }
 
-    void save_image(const std::filesystem::path& path, lfs::core::Tensor image) {
+    void save_image(const std::filesystem::path& path, lfs::core::Tensor image,
+                    const std::optional<std::string>& metadata_comment) {
         write_prepared_image(path,
                              prepare_image_for_write(std::move(image)),
-                             DEFAULT_JPEG_QUALITY);
+                             DEFAULT_JPEG_QUALITY,
+                             metadata_comment);
     }
 
     void save_image_u8(const std::filesystem::path& path,
                        lfs::core::Tensor image,
-                       const int jpeg_quality) {
+                       const int jpeg_quality,
+                       const std::optional<std::string>& metadata_comment) {
         if (image.ndim() == 4)
             image = image.squeeze(0);
         if (image.ndim() == 3 && image.shape()[0] <= 4 && image.shape()[2] > 4)
@@ -572,7 +580,7 @@ namespace lfs::core {
         if (image.dtype() != lfs::core::DataType::UInt8)
             image = image.to(lfs::core::DataType::UInt8);
         image = image.contiguous();
-        write_prepared_image(path, image, jpeg_quality);
+        write_prepared_image(path, image, jpeg_quality, metadata_comment);
     }
 
     void save_image(const std::filesystem::path& path,

@@ -38,6 +38,7 @@
 #include <pxr/base/tf/diagnosticMgr.h>
 #include <pxr/base/tf/errorMark.h>
 #include <pxr/base/vt/array.h>
+#include <pxr/base/vt/dictionary.h>
 #include <pxr/base/vt/value.h>
 #include <pxr/usd/sdf/layer.h>
 #include <pxr/usd/sdf/path.h>
@@ -881,7 +882,18 @@ namespace lfs::io {
         }
 
         try {
-            if (const auto root_layer = stage->GetRootLayer(); !root_layer || !root_layer->Save()) {
+            const auto root_layer = stage->GetRootLayer();
+            if (!root_layer) {
+                return make_error(ErrorCode::WRITE_FAILURE,
+                                  "Failed to save USD stage",
+                                  options.output_path);
+            }
+            if (options.provenance) {
+                const std::string json = core::provenance_to_json(*options.provenance);
+                root_layer->SetCustomLayerData(
+                    pxr::VtDictionary{{"lichtfeld_provenance", pxr::VtValue(json)}});
+            }
+            if (!root_layer->Save()) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   "Failed to save USD stage",
                                   options.output_path);

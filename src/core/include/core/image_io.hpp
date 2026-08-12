@@ -13,7 +13,9 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -32,8 +34,10 @@ namespace lfs::core {
     LFS_CORE_API std::tuple<uint16_t*, int, int, int>
     load_image_u16(std::filesystem::path p, int res_div = -1, int max_width = 0);
 
-    LFS_CORE_API void save_image(const std::filesystem::path& path, Tensor image);
-    LFS_CORE_API void save_image_u8(const std::filesystem::path& path, Tensor image, int jpeg_quality = 95);
+    LFS_CORE_API void save_image(const std::filesystem::path& path, Tensor image,
+                                 const std::optional<std::string>& metadata_comment = {});
+    LFS_CORE_API void save_image_u8(const std::filesystem::path& path, Tensor image, int jpeg_quality = 95,
+                                    const std::optional<std::string>& metadata_comment = {});
     LFS_CORE_API void save_image(const std::filesystem::path& path,
                                  const std::vector<Tensor>& images,
                                  bool horizontal = true,

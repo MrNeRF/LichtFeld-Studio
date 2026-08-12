@@ -451,7 +451,7 @@ namespace lfs::io {
                 return false;
             }
 
-            struct stat st {};
+            struct stat st{};
             if (fstat(fd, &st) < 0) {
                 return false;
             }
@@ -539,8 +539,10 @@ namespace lfs::io {
             size_t line_len = line_end - line_start;
             lines_parsed++;
 
-            // Skip empty lines and comments
-            if (line_len == 0 || (line_len > 0 && line_start[0] == '#'))
+            // Skip empty lines and comments (# and spec PLY "comment" lines)
+            if (line_len == 0 || line_start[0] == '#')
+                continue;
+            if (line_len >= 7 && std::strncmp(line_start, "comment", 7) == 0)
                 continue;
 
             if (lines_parsed % 1000 == 0) {
@@ -2659,7 +2661,8 @@ namespace lfs::io {
         Result<void> write_ply_binary(const PointCloud& pc, const std::filesystem::path& output_path,
                                       bool binary = true,
                                       std::span<const PlyAttributeBlock> extra_attributes = {},
-                                      ExportProgressCallback progress_callback = nullptr) {
+                                      ExportProgressCallback progress_callback = nullptr,
+                                      const std::optional<core::ProvenanceStamp>& provenance = {}) {
             // Write using tinyply
             tinyply::PlyFile ply;
             const size_t N = pc.means.size(0);
@@ -2819,6 +2822,11 @@ namespace lfs::io {
                 std::string header;
                 header.reserve(512 + expected_properties * 32);
                 header += "ply\nformat binary_little_endian 1.0\n";
+                if (provenance) {
+                    header += "comment lichtfeld_provenance ";
+                    header += core::provenance_to_json(*provenance);
+                    header += '\n';
+                }
                 header += std::format("element vertex {}\n", N);
                 if (has_colors) {
                     header += "property uchar red\n"
@@ -2995,6 +3003,11 @@ namespace lfs::io {
             }
 
             // ASCII path via tinyply (binary uses parallel-pack above).
+            if (provenance) {
+                ply.get_comments().push_back(
+                    "lichtfeld_provenance " + core::provenance_to_json(*provenance));
+            }
+
             std::filebuf fb;
             // pubsetbuf before open — required for a portable large buffer.
             std::vector<char> legacy_io_buffer(ply_constants::PLY_WRITE_IO_BUFFER_BYTES);
@@ -3317,7 +3330,8 @@ namespace lfs::io {
                 std::async(std::launch::async, [pc = point_cloud, opts = options]() {
                     auto write_progress_callback = scale_export_progress(opts.progress_callback, 0.5f, 1.0f);
                     if (const auto result = write_ply_binary(
-                            pc, opts.output_path, opts.binary, opts.extra_attributes, write_progress_callback);
+                            pc, opts.output_path, opts.binary, opts.extra_attributes,
+                            write_progress_callback, opts.provenance);
                         !result) {
                         LOG_ERROR("PLY save failed: {}", result.error().format());
                     }
@@ -3328,7 +3342,8 @@ namespace lfs::io {
 
             auto write_progress_callback = scale_export_progress(options.progress_callback, 0.5f, 1.0f);
             if (const auto result = write_ply_binary(
-                    point_cloud, options.output_path, options.binary, options.extra_attributes, write_progress_callback);
+                    point_cloud, options.output_path, options.binary, options.extra_attributes,
+                    write_progress_callback, options.provenance);
                 !result) {
                 return std::unexpected(result.error());
             }

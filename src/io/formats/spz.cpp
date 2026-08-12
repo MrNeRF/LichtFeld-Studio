@@ -6,9 +6,11 @@
 #include "coordinate-system-adobe.h"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
 #include "load-spz.h"
+#include "provenance-lichtfeld.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -383,6 +385,11 @@ namespace lfs::io {
             auto coord_ext = std::make_shared<spz::SpzExtensionCoordinateSystemAdobe>();
             coord_ext->coordinateSystem = spz::CoordinateSystem::RUB;
             cloud.extensions.push_back(coord_ext);
+            if (options.provenance) {
+                auto provenance_ext = std::make_shared<spz::SpzExtensionProvenanceLichtFeld>();
+                provenance_ext->json = core::provenance_to_json(*options.provenance);
+                cloud.extensions.push_back(std::move(provenance_ext));
+            }
         }
 #endif
 

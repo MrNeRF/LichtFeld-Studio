@@ -13,7 +13,8 @@
 
 #include <cmath>
 #include <fstream>
-#include <sstream>
+#include <optional>
+#include <string>
 
 namespace lfs::io {
 
@@ -68,7 +69,8 @@ namespace lfs::io {
             return result;
         }
 
-        std::string generate_html(const std::string& base64_sog) {
+        std::string generate_html(const std::string& base64_sog,
+                                  const std::optional<core::ProvenanceStamp>& provenance) {
             const auto tmpl = get_viewer_template();
             const auto css = get_viewer_css();
             const auto js = get_viewer_js();
@@ -91,6 +93,22 @@ namespace lfs::io {
             html = replace_placeholder(html, content_fetch, base64_fetch);
 
             html = replace_placeholder(html, ".compressed.ply", ".sog");
+
+            if (provenance) {
+                const std::string json = core::provenance_to_json(*provenance);
+                std::string escaped;
+                escaped.reserve(json.size());
+                for (const char c : json) {
+                    if (c == '<')
+                        escaped += "\\u003c";
+                    else
+                        escaped += c;
+                }
+                const std::string script =
+                    "<script type=\"application/json\" id=\"lichtfeld-provenance\">" + escaped +
+                    "</script>\n    </head>";
+                html = replace_placeholder(html, "</head>", script);
+            }
 
             return html;
         }
@@ -129,7 +147,8 @@ namespace lfs::io {
             .use_gpu = true,
             .progress_callback = [&](float p, const std::string& stage) {
                 return report_export_progress(options.progress_callback, p * 0.5f, stage);
-            }};
+            },
+            .provenance = options.provenance};
 
         if (auto result = save_sog(splat_data, sog_options); !result) {
             // Propagate the SOG error with context
@@ -155,7 +174,7 @@ namespace lfs::io {
             return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);
         }
 
-        const auto html = generate_html(base64_data);
+        const auto html = generate_html(base64_data, options.provenance);
 
         if (!report_export_progress(options.progress_callback, 0.9f, "Writing HTML...")) {
             return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);

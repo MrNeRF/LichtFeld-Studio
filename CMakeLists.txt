@@ -686,6 +686,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE LFS_MIN_SM=${LFS_RUNTIME_MIN_
 
 foreach(_lfs_git_version_consumer IN ITEMS
         ${PROJECT_NAME}
+        lfs_core
         lfs_visualizer
         lfs_py
         lfs_mcp)
