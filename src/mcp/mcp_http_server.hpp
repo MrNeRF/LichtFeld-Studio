@@ -58,7 +58,7 @@ namespace lfs::mcp {
         [[nodiscard]] McpHttpStatus status() const;
 
     private:
-        friend bool applyActiveMcpHttpConfig(const McpHttpConfig& config);
+        friend LFS_MCP_API bool applyActiveMcpHttpConfig(const McpHttpConfig& config);
 
         std::unique_ptr<McpServer> mcp_server_;
         std::unique_ptr<httplib::Server> http_server_;
