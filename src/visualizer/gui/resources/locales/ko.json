@@ -10,6 +10,7 @@
     "file.compact_project": "프로젝트 압축",
     "file.auto_save_on_close": "닫을 때 묻지 않고 저장",
     "file.no_recent_projects": "최근 프로젝트 없음",
+    "file.recent_entry": "{name} — {parent}",
     "file.import_dataset": "데이터셋 가져오기",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USD 가져오기",
     "file.import_mesh": "메시 가져오기",
@@ -1204,7 +1205,7 @@
     "cannot_open": "열 수 없음"
   },
   "file_drop": {
-    "blocked_during_training": "Stop training before loading a new scene."
+    "blocked_during_training": "새 장면을 불러오기 전에 학습을 중지하세요."
   },
   "export_dialog": {
     "format": "형식",
@@ -1230,7 +1231,7 @@
     "exporting": "%s 내보내는 중...",
     "exporting_video": "비디오 내보내기 중...",
     "importing": "%s 가져오는 중...",
-    "opening_project": "Opening project...",
+    "opening_project": "프로젝트 여는 중...",
     "import_complete": "가져오기 완료: %zu 이미지, %zu 포인트",
     "import_failed": "가져오기 실패: %s",
     "import_complete_title": "가져오기 완료",
@@ -2290,7 +2291,7 @@
     "recoverable_badge": "복구 가능한 변경 사항",
     "crash_notice": "LichtFeld Studio가 예기치 않게 종료되었습니다. 마지막 세션을 복구할까요?",
     "last_opened": "최근 열림",
-    "project_missing": "Project file not found: {name}"
+    "project_missing": "프로젝트 파일을 찾을 수 없습니다: {name}"
   },
   "messages": {
     "no_data_loaded": "데이터가 로드되지 않음",

@@ -192,6 +192,7 @@ namespace lfs::python {
         const char* label;
         const char* operator_id;
         const char* shortcut;
+        const char* tooltip = nullptr;
         bool enabled;
         bool selected;
         int callback_index;

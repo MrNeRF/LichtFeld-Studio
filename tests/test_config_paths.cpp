@@ -204,6 +204,29 @@ namespace {
         std::error_code ec;
         fs::remove_all(root, ec);
     }
+
+    TEST(LocalizationPersistence, LocaleProjectStringsAreTranslated) {
+        const fs::path locale_root =
+            fs::current_path() / "src/visualizer/gui/resources/locales";
+        ASSERT_TRUE(fs::exists(locale_root));
+        for (const std::string_view language :
+             {"de", "es", "fr", "it", "ja", "ko", "nl", "pl", "zh"}) {
+            std::ifstream input(locale_root / (std::string(language) + ".json"));
+            ASSERT_TRUE(input);
+            const std::string contents{
+                std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>()};
+            EXPECT_EQ(contents.find("\"opening_project\": \"Opening project...\""),
+                      std::string::npos)
+                << language;
+            EXPECT_EQ(contents.find("\"project_missing\": \"Project file not found: {name}\""),
+                      std::string::npos)
+                << language;
+            EXPECT_EQ(contents.find("\"blocked_during_training\": \"Stop training before loading a new scene.\""),
+                      std::string::npos)
+                << language;
+        }
+    }
 #endif
 
 } // namespace

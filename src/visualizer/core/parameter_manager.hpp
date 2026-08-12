@@ -75,6 +75,7 @@ namespace lfs::vis {
             const lfs::io::project::ParameterManagerSnapshot& snapshot);
 
         void markDirty() { dirty_.store(true, std::memory_order_release); }
+        [[nodiscard]] bool isDirty() const { return dirty_.load(std::memory_order_acquire); }
         bool consumeDirty() { return dirty_.exchange(false, std::memory_order_acq_rel); }
 
         [[nodiscard]] lfs::core::param::OptimizationParameters copyActiveParams() const {

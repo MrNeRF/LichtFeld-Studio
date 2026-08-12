@@ -4897,6 +4897,7 @@ namespace lfs::python {
                 info.label = item.label.c_str();
                 info.operator_id = item.operator_id.c_str();
                 info.shortcut = item.shortcut.c_str();
+                info.tooltip = item.tooltip.c_str();
                 info.enabled = item.enabled;
                 info.selected = item.selected;
                 info.callback_index = item.callback_index;

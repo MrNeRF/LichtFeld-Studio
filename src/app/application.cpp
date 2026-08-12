@@ -183,6 +183,15 @@ namespace lfs::app {
                     LFS_SOURCE_SITE_CURRENT());
             }
             if (recovery->disposition ==
+                io::project::RecoveryDisposition::Invalid) {
+                return training_project_error(
+                    lfs::ErrorCode::DataLoss,
+                    recovery->diagnostics.empty()
+                        ? "The autosave sidecar failed recovery validation"
+                        : recovery->diagnostics.front(),
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            if (recovery->disposition ==
                     io::project::RecoveryDisposition::Offer &&
                 recovery->selected_path) {
                 auto session =

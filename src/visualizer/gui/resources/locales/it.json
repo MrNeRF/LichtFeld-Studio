@@ -10,6 +10,7 @@
     "file.compact_project": "Compatta progetto",
     "file.auto_save_on_close": "Salva alla chiusura senza chiedere",
     "file.no_recent_projects": "Nessun progetto recente",
+    "file.recent_entry": "{name} — {parent}",
     "file.import_dataset": "Importa Dataset",
     "file.import_ply": "Importa PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Importa Mesh",
@@ -1204,7 +1205,7 @@
     "cannot_open": "Impossibile aprire"
   },
   "file_drop": {
-    "blocked_during_training": "Stop training before loading a new scene."
+    "blocked_during_training": "Arresta l'addestramento prima di caricare una nuova scena."
   },
   "export_dialog": {
     "format": "FORMATO",
@@ -1230,7 +1231,7 @@
     "exporting": "Esportazione %s...",
     "exporting_video": "Esportazione video...",
     "importing": "Importazione %s...",
-    "opening_project": "Opening project...",
+    "opening_project": "Apertura del progetto...",
     "import_complete": "Importazione completata: %zu immagini, %zu punti",
     "import_failed": "Importazione fallita: %s",
     "import_complete_title": "Importazione Completata",
@@ -2290,7 +2291,7 @@
     "recoverable_badge": "Modifiche recuperabili",
     "crash_notice": "LichtFeld Studio si è chiuso inaspettatamente. Recuperare l'ultima sessione?",
     "last_opened": "Ultima apertura",
-    "project_missing": "Project file not found: {name}"
+    "project_missing": "File di progetto non trovato: {name}"
   },
   "messages": {
     "no_data_loaded": "Nessun dato caricato",

@@ -262,7 +262,9 @@ class StartupRecentPanel(Panel):
             return
 
         try:
-            lf.project_open(path_text, True)
+            outcome = lf.project_open(path_text, True)
+            if outcome == lf.ProjectOpenOutcome.RECOVERY_PROMPT_PENDING:
+                return
         except Exception as exc:
             # NotFoundError subclasses FileNotFoundError; other open failures
             # surface their error text on the same user-visible path.

@@ -74,6 +74,10 @@ namespace lfs::vis::project {
     saveProjectLifecycleSettings(
         const std::filesystem::path& path,
         const ProjectLifecycleSettings& settings);
+    [[nodiscard]] LFS_VIS_API std::filesystem::path
+    resolveProjectMruPath(const std::filesystem::path& path);
+    LFS_VIS_API void pruneMissingMruEntries(
+        ProjectLifecycleSettings& settings);
     LFS_VIS_API void rememberProject(
         ProjectLifecycleSettings& settings,
         const lfs::core::Uuid& project_uuid,
@@ -145,8 +149,6 @@ namespace lfs::vis::project {
         [[nodiscard]] bool
         isApplicationClosePending() const;
         void setSuppressTrainingAdoption(bool suppress);
-        [[nodiscard]] bool
-        suppressTrainingAdoption() const;
 
     private:
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;

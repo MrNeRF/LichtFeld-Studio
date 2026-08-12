@@ -54,6 +54,7 @@ namespace lfs::vis {
     };
 
     struct LFS_VIS_API ProjectMenuInfo {
+        bool reopen_last_project = true;
         bool auto_save_on_close = false;
         std::vector<ProjectRecentInfo> recent_projects;
     };
@@ -159,6 +160,8 @@ namespace lfs::vis {
                 return std::move(info).error();
             }
             return ProjectMenuInfo{
+                .reopen_last_project =
+                    info->reopen_last_project,
                 .auto_save_on_close =
                     info->auto_save_on_close,
                 .recent_projects =

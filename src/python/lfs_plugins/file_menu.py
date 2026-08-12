@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """File menu implementation using Blender-style operators."""
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import lichtfeld as lf
 from .asset_manager_integration import register_catalog_asset_path
@@ -35,9 +35,26 @@ def _confirm_discard_then(title: str, callback) -> None:
     lf.ui.confirm_dialog(
         title,
         tr("exit_popup.unsaved_warning"),
-        [tr("common.cancel"), continue_label],
+        [continue_label, tr("common.cancel")],
         _on_result,
     )
+
+
+def format_recent_project_entry(path: str, tr) -> tuple[str, str]:
+    """Return the compact recent-project label and full-path tooltip."""
+    windows_path = PureWindowsPath(path)
+    display_path = windows_path if windows_path.drive or "\\" in path else Path(path)
+    name = display_path.name or path
+    anchor = display_path.anchor
+    parent_parts = [
+        part
+        for part in display_path.parent.parts
+        if part and part not in {anchor, "/", "\\"}
+    ]
+    parent = "/".join(parent_parts[-2:])
+    if not parent:
+        return name, path
+    return tr("menu.file.recent_entry").format(name=name, parent=parent), path
 
 
 class NewProjectOperator(Operator):
@@ -286,13 +303,15 @@ class FileMenu:
         recent_items = []
         for recent_path in lf.project_recent_files():
             path = str(recent_path)
+            label, tooltip = format_recent_project_entry(path, lf.ui.tr)
             recent_items.append(
                 menu_action(
-                    Path(path).name,
+                    label,
                     lambda selected=path: _confirm_discard_then(
                         lf.ui.tr("menu.file.open_project"),
                         lambda: lf.project_open(selected, True),
                     ),
+                    tooltip=tooltip,
                 )
             )
         if not recent_items:

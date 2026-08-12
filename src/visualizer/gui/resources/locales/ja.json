@@ -10,6 +10,7 @@
     "file.compact_project": "プロジェクトを圧縮",
     "file.auto_save_on_close": "確認なしで終了時に保存",
     "file.no_recent_projects": "最近使ったプロジェクトはありません",
+    "file.recent_entry": "{name} — {parent}",
     "file.import_dataset": "データセットをインポート",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USDをインポート",
     "file.import_mesh": "メッシュをインポート",
@@ -1204,7 +1205,7 @@
     "cannot_open": "開けません"
   },
   "file_drop": {
-    "blocked_during_training": "Stop training before loading a new scene."
+    "blocked_during_training": "新しいシーンを読み込む前にトレーニングを停止してください。"
   },
   "export_dialog": {
     "format": "フォーマット",
@@ -1230,7 +1231,7 @@
     "exporting": "%s をエクスポート中...",
     "exporting_video": "動画を書き出し中...",
     "importing": "%s をインポート中...",
-    "opening_project": "Opening project...",
+    "opening_project": "プロジェクトを開いています...",
     "import_complete": "インポート完了: %zu 画像, %zu ポイント",
     "import_failed": "インポート失敗: %s",
     "import_complete_title": "インポート完了",
@@ -2290,7 +2291,7 @@
     "recoverable_badge": "復旧可能な変更",
     "crash_notice": "LichtFeld Studio が予期せず終了しました。前回のセッションを復元しますか？",
     "last_opened": "最終オープン",
-    "project_missing": "Project file not found: {name}"
+    "project_missing": "プロジェクトファイルが見つかりません: {name}"
   },
   "messages": {
     "no_data_loaded": "データが読み込まれていません",

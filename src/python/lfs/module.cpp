@@ -256,14 +256,20 @@ namespace {
                 lfs::OperationId::generate(),
             .site = LFS_SOURCE_SITE_CURRENT(),
         };
-        (void)lfs::vis::post_guarded_and_wait<void>(
-            viewer, context,
-            [emit = std::forward<EmitFn>(emit_fn)]() mutable
-            -> lfs::Result<void> {
-                emit();
-                return {};
-            },
-            python_viewer_shutdown_error());
+        if (auto posted = lfs::vis::post_guarded_and_wait<void>(
+                viewer, context,
+                [emit = std::forward<EmitFn>(emit_fn)]() mutable
+                -> lfs::Result<void> {
+                    emit();
+                    return {};
+                },
+                python_viewer_shutdown_error());
+            !posted) {
+            throw std::runtime_error(
+                std::format("{} failed: {}", task_name,
+                            lfs::format_for_developer(
+                                posted.error())));
+        }
     }
 
     template <class EmitFn>
@@ -995,7 +1001,14 @@ NB_MODULE(lichtfeld, m) {
                 return false;
             }
             auto dirty = viewer->projectIsDirty();
-            return dirty && *dirty;
+            if (!dirty) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_is_dirty failed: {}",
+                        lfs::format_for_developer(
+                            dirty.error())));
+            }
+            return *dirty;
         },
         "Return whether the active project has unsaved chapters");
     m.def(
@@ -1006,7 +1019,14 @@ NB_MODULE(lichtfeld, m) {
                 return false;
             }
             auto has_path = viewer->projectHasPath();
-            return has_path && *has_path;
+            if (!has_path) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_has_path failed: {}",
+                        lfs::format_for_developer(
+                            has_path.error())));
+            }
+            return *has_path;
         },
         "Return whether the active project has a bound .licht path");
     m.def(
@@ -1019,7 +1039,11 @@ NB_MODULE(lichtfeld, m) {
             }
             auto info = viewer->projectGetMenuInfo();
             if (!info) {
-                return paths;
+                throw std::runtime_error(
+                    std::format(
+                        "project_recent_files failed: {}",
+                        lfs::format_for_developer(
+                            info.error())));
             }
             paths.reserve(
                 info->recent_projects.size());
@@ -1045,7 +1069,11 @@ NB_MODULE(lichtfeld, m) {
                     inspect_autosave_recovery(
                         master_path);
             if (!inspection) {
-                return "none";
+                throw std::runtime_error(
+                    std::format(
+                        "project_autosave_recovery_disposition failed: {}",
+                        lfs::format_for_developer(
+                            inspection.error())));
             }
             using lfs::io::project::
                 RecoveryDisposition;
@@ -1073,9 +1101,15 @@ NB_MODULE(lichtfeld, m) {
             if (!viewer) {
                 return true;
             }
-            auto info = viewer->projectGetInfo();
-            return !info ||
-                   info->reopen_last_project;
+            auto info = viewer->projectGetMenuInfo();
+            if (!info) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_reopen_last_enabled failed: {}",
+                        lfs::format_for_developer(
+                            info.error())));
+            }
+            return info->reopen_last_project;
         },
         "Return whether the last project is reopened at startup");
     m.def(
@@ -1097,8 +1131,14 @@ NB_MODULE(lichtfeld, m) {
                 return true;
             }
             auto info = viewer->projectGetMenuInfo();
-            return !info ||
-                   info->auto_save_on_close;
+            if (!info) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_auto_save_on_close_enabled failed: {}",
+                        lfs::format_for_developer(
+                            info.error())));
+            }
+            return info->auto_save_on_close;
         },
         "Return whether dirty projects are saved automatically on close");
     m.def(

@@ -1262,17 +1262,32 @@ namespace lfs::vis {
         });
 
         const auto publish_project_error =
-            [](std::string action, std::string detail) {
-                LOG_ERROR("{} failed: {}", action, detail);
+            [](std::string action, const auto& value) {
+                lfs::ErrorCode code = lfs::ErrorCode::Unavailable;
+                lfs::ErrorDomain domain = lfs::ErrorDomain::App;
+                lfs::Severity severity = lfs::Severity::Error;
+                std::string user_message =
+                    std::format("{} failed.", action);
+                std::string detail;
+                if constexpr (std::is_same_v<std::decay_t<decltype(value)>, lfs::Error>) {
+                    code = value.code();
+                    domain = value.domain();
+                    severity = value.severity();
+                    if (!value.user_message().empty())
+                        user_message = std::string(value.user_message());
+                    detail = std::string(value.detail());
+                    LOG_ERROR("{} failed: {}", action,
+                              lfs::format_for_developer(value));
+                } else {
+                    detail = std::string(value);
+                    LOG_ERROR("{} failed: {}", action, detail);
+                }
                 lfs::ErrorBus::instance().publish(
                     makeFrameNotification(
-                        lfs::ErrorCode::Unavailable,
-                        lfs::ErrorDomain::App,
-                        lfs::Severity::Error,
+                        code, domain, severity,
                         lfs::ErrorSurface::Toast,
-                        std::format("{} failed.", action),
-                        std::move(detail),
-                        {},
+                        std::move(user_message),
+                        std::move(detail), {},
                         LFS_SOURCE_SITE_CURRENT()));
             };
 
@@ -1282,8 +1297,7 @@ namespace lfs::vis {
                 if (!has_path) {
                     publish_project_error(
                         "Save Project",
-                        lfs::format_for_developer(
-                            has_path.error()));
+                        has_path.error());
                     return;
                 }
                 if (!*has_path) {
@@ -1297,8 +1311,7 @@ namespace lfs::vis {
                         !saved) {
                         publish_project_error(
                             "Save Project",
-                            lfs::format_for_developer(
-                                saved.error()));
+                            saved.error());
                     }
                     return;
                 }
@@ -1306,8 +1319,7 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Save Project",
-                        lfs::format_for_developer(
-                            saved.error()));
+                        saved.error());
                 }
             });
 
@@ -1340,8 +1352,7 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Save Project As",
-                        lfs::format_for_developer(
-                            saved.error()));
+                        saved.error());
                 }
             });
 
@@ -1376,8 +1387,7 @@ namespace lfs::vis {
                     }
                     publish_project_error(
                         "Open Project",
-                        lfs::format_for_developer(
-                            opened.error()));
+                        opened.error());
                 }
             });
 
@@ -1389,8 +1399,7 @@ namespace lfs::vis {
                     !compacted) {
                     publish_project_error(
                         "Compact Project",
-                        lfs::format_for_developer(
-                            compacted.error()));
+                        compacted.error());
                 }
             });
 
@@ -1413,8 +1422,7 @@ namespace lfs::vis {
                 if (!has_path) {
                     publish_project_error(
                         "Save Project",
-                        lfs::format_for_developer(
-                            has_path.error()));
+                        has_path.error());
                     return;
                 }
                 if (!*has_path) {
@@ -1427,8 +1435,7 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Save Project",
-                        lfs::format_for_developer(
-                            saved.error()));
+                        saved.error());
                     return;
                 }
                 requestApplicationClose();
@@ -1453,8 +1460,7 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Save Project As",
-                        lfs::format_for_developer(
-                            saved.error()));
+                        saved.error());
                     return;
                 }
                 requestApplicationClose();
@@ -1556,8 +1562,7 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Update Project Settings",
-                        lfs::format_for_developer(
-                            saved.error()));
+                        saved.error());
                 }
             });
 
@@ -1577,8 +1582,7 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Update Project Settings",
-                        lfs::format_for_developer(
-                            saved.error()));
+                        saved.error());
                 }
             });
 
@@ -1598,8 +1602,7 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Update Project Settings",
-                        lfs::format_for_developer(
-                            saved.error()));
+                        saved.error());
                 }
             });
 
@@ -2722,6 +2725,15 @@ namespace lfs::vis {
                 "New Project preflight failed: {}",
                 lfs::format_for_developer(
                     preflight.error()));
+            lfs::ErrorBus::instance().publish(
+                makeFrameNotification(
+                    preflight.error().code(),
+                    preflight.error().domain(),
+                    preflight.error().severity(),
+                    lfs::ErrorSurface::Toast,
+                    std::string(preflight.error().user_message()),
+                    std::string(preflight.error().detail()), {},
+                    LFS_SOURCE_SITE_CURRENT()));
             return;
         }
         if (gui_manager_) {
@@ -2765,6 +2777,15 @@ namespace lfs::vis {
                 "New Project failed: {}",
                 lfs::format_for_developer(
                     created.error()));
+            lfs::ErrorBus::instance().publish(
+                makeFrameNotification(
+                    created.error().code(),
+                    created.error().domain(),
+                    created.error().severity(),
+                    lfs::ErrorSurface::Toast,
+                    std::string(created.error().user_message()),
+                    std::string(created.error().detail()), {},
+                    LFS_SOURCE_SITE_CURRENT()));
         }
     }
 

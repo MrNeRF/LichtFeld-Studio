@@ -10,6 +10,7 @@
     "file.compact_project": "压缩项目",
     "file.auto_save_on_close": "关闭时直接保存（不询问）",
     "file.no_recent_projects": "没有最近项目",
+    "file.recent_entry": "{name} — {parent}",
     "file.import_dataset": "导入数据集",
     "file.import_ply": "导入PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "导入网格",
@@ -1204,7 +1205,7 @@
     "cannot_open": "无法打开"
   },
   "file_drop": {
-    "blocked_during_training": "Stop training before loading a new scene."
+    "blocked_during_training": "请先停止训练，再加载新场景。"
   },
   "export_dialog": {
     "format": "格式",
@@ -1230,7 +1231,7 @@
     "exporting": "导出%s...",
     "exporting_video": "导出视频...",
     "importing": "导入%s...",
-    "opening_project": "Opening project...",
+    "opening_project": "正在打开项目...",
     "import_complete": "导入完成：%zu 张图像，%zu 个点",
     "import_failed": "导入失败：%s",
     "import_complete_title": "导入完成",
@@ -2290,7 +2291,7 @@
     "recoverable_badge": "可恢复的更改",
     "crash_notice": "LichtFeld Studio 意外关闭。是否恢复上次会话？",
     "last_opened": "上次打开",
-    "project_missing": "Project file not found: {name}"
+    "project_missing": "找不到项目文件：{name}"
   },
   "messages": {
     "no_data_loaded": "未加载数据",

@@ -169,6 +169,7 @@ namespace lfs::python {
                     vis::gui::MenuItemDesc begin_desc;
                     begin_desc.type = vis::gui::MenuItemDesc::Type::SubMenuBegin;
                     begin_desc.label = object_to_string(dict_get(item, "label"));
+                    begin_desc.tooltip = object_to_string(dict_get(item, "tooltip"));
                     content.items.push_back(std::move(begin_desc));
 
                     collect_schema_items(dict_get(item, "items"), content, callback_index);
@@ -181,6 +182,7 @@ namespace lfs::python {
 
                 vis::gui::MenuItemDesc desc;
                 desc.label = object_to_string(dict_get(item, "label"));
+                desc.tooltip = object_to_string(dict_get(item, "tooltip"));
                 desc.enabled = object_to_bool(dict_get(item, "enabled"), true);
 
                 if (is_operator_item(item)) {

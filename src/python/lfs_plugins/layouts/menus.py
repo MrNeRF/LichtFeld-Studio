@@ -81,15 +81,24 @@ def menu_operator(
     return entry
 
 
-def menu_action(label: str, callback: Any, shortcut: str = "", enabled: bool = True) -> dict[str, Any]:
+def menu_action(
+    label: str,
+    callback: Any,
+    shortcut: str = "",
+    enabled: bool = True,
+    tooltip: str = "",
+) -> dict[str, Any]:
     """Create a plain callback-backed menu entry."""
-    return {
+    entry = {
         "type": "item",
         "label": label,
         "callback": callback,
         "shortcut": shortcut,
         "enabled": enabled,
     }
+    if tooltip:
+        entry["tooltip"] = tooltip
+    return entry
 
 
 def menu_toggle(label: str, callback: Any, selected: bool,

@@ -10,6 +10,7 @@
     "file.compact_project": "Project comprimeren",
     "file.auto_save_on_close": "Opslaan bij sluiten zonder te vragen",
     "file.no_recent_projects": "Geen recente projecten",
+    "file.recent_entry": "{name} — {parent}",
     "file.import_dataset": "Dataset Importeren",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USD Importeren",
     "file.import_mesh": "Mesh Importeren",
@@ -1204,7 +1205,7 @@
     "cannot_open": "Kan niet openen"
   },
   "file_drop": {
-    "blocked_during_training": "Stop training before loading a new scene."
+    "blocked_during_training": "Stop de training voordat je een nieuwe scène laadt."
   },
   "export_dialog": {
     "format": "FORMAAT",
@@ -1230,7 +1231,7 @@
     "exporting": "Exporteren %s...",
     "exporting_video": "Video exporteren...",
     "importing": "Importeren %s...",
-    "opening_project": "Opening project...",
+    "opening_project": "Project openen...",
     "import_complete": "Import voltooid: %zu afbeeldingen, %zu punten",
     "import_failed": "Import mislukt: %s",
     "import_complete_title": "Import Voltooid",
@@ -2290,7 +2291,7 @@
     "recoverable_badge": "Herstelbare wijzigingen",
     "crash_notice": "LichtFeld Studio is onverwacht afgesloten. Laatste sessie herstellen?",
     "last_opened": "Laatst geopend",
-    "project_missing": "Project file not found: {name}"
+    "project_missing": "Projectbestand niet gevonden: {name}"
   },
   "messages": {
     "no_data_loaded": "Geen data geladen",
