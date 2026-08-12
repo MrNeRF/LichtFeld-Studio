@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 #include "core/mapped_file.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
@@ -4466,7 +4467,12 @@ namespace lfs::io {
         return sliced;
     }
 
-    Result<void> save_rad(const SplatData& splat_data, const RadSaveOptions& options) {
+    Result<void> save_rad(const SplatData& splat_data, const RadSaveOptions& options_in) {
+        RadSaveOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         auto start = std::chrono::high_resolution_clock::now();
 
         LOG_INFO("Saving RAD file: {}", lfs::core::path_to_utf8(options.output_path));
@@ -4809,6 +4815,9 @@ namespace lfs::io {
         impl_->emit_meta_sidecar = emit_meta_sidecar && lod_tree;
         impl_->gpu_quantization = gpu_quantization;
         impl_->provenance = std::move(provenance);
+        if (!impl_->provenance) {
+            impl_->provenance = core::make_minimal_provenance_stamp();
+        }
     }
 
     RadStreamWriter::~RadStreamWriter() = default;
@@ -5074,9 +5083,10 @@ namespace lfs::io {
         if (s.lod_tree) {
             meta.splat_encoding = nlohmann::json{{"lodOpacity", true}};
         }
-        if (s.provenance) {
-            meta.comment = core::provenance_to_json(*s.provenance);
+        if (!s.provenance) {
+            s.provenance = core::make_minimal_provenance_stamp();
         }
+        meta.comment = core::provenance_to_json(*s.provenance);
 
         const std::string meta_json = meta.to_json().dump();
         if (meta_json.size() > s.meta_reserved) {

@@ -7,6 +7,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "io/error.hpp"
@@ -3235,7 +3236,12 @@ namespace lfs::io {
         return attrs;
     }
 
-    Result<void> save_ply(const SplatData& splat_data, const PlySaveOptions& options) {
+    Result<void> save_ply(const SplatData& splat_data, const PlySaveOptions& options_in) {
+        PlySaveOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         if (!report_export_progress(options.progress_callback, 0.0f, "Preparing PLY"))
             return make_error(ErrorCode::CANCELLED, "Export cancelled by user", options.output_path);
 
@@ -3258,7 +3264,12 @@ namespace lfs::io {
         return save_ply(*pc, filtered_options);
     }
 
-    Result<void> save_ply(const PointCloud& point_cloud, const PlySaveOptions& options) {
+    Result<void> save_ply(const PointCloud& point_cloud, const PlySaveOptions& options_in) {
+        PlySaveOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         if (auto result = validate_point_cloud_for_ply_write(point_cloud, options.output_path); !result) {
             return result;
         }

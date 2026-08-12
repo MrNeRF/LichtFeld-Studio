@@ -12,6 +12,7 @@
 #include "formats/nurec_usdz.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
@@ -811,7 +812,12 @@ namespace lfs::io {
         return build_splat_from_payload(*payload);
     }
 
-    Result<void> save_nurec_usdz(const SplatData& splat_data, const NurecUsdzSaveOptions& options) {
+    Result<void> save_nurec_usdz(const SplatData& splat_data, const NurecUsdzSaveOptions& options_in) {
+        NurecUsdzSaveOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         if (!report_export_progress(options.progress_callback, 0.0f, "Preparing USDZ")) {
             return make_error(ErrorCode::CANCELLED, "NuRec USDZ export cancelled", options.output_path);
         }

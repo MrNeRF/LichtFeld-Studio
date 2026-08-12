@@ -70,7 +70,7 @@ namespace lfs::io {
         std::uint32_t tiles_x = 1;
         std::uint32_t tiles_y = 1;
         ExportProgressCallback progress = nullptr;
-        std::optional<core::ProvenanceStamp> provenance{};
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     // Out-of-core conversion of a gaussian-splat PLY into a chunked LOD RAD

@@ -2355,7 +2355,7 @@ def set_playback_speed(speed: float) -> None:
 
 def export_video(width: int, height: int, framerate: int, crf: int, path: str = '', include_provenance: bool = True) -> None:
     """
-    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. include_provenance (default true) writes a provenance stamp into the video comment.
+    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.
     """
 
 def add_keyframe() -> None:

@@ -346,7 +346,13 @@ namespace lfs::io {
         }
     }
 
-    Result<void> save_spz(const SplatData& splat_data, const SpzSaveOptions& options) {
+    Result<void> save_spz(const SplatData& splat_data, const SpzSaveOptions& options_in) {
+        SpzSaveOptions options = options_in;
+        // v3 has no extension zone; leave the slot empty so legacy files stay clean.
+        if (options.version == 4 && !options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         auto start = std::chrono::high_resolution_clock::now();
 
         LOG_INFO("Saving SPZ file: {}", lfs::core::path_to_utf8(options.output_path));

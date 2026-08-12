@@ -1641,9 +1641,9 @@ namespace lfs::python {
             }
         }
 
-        std::optional<std::string> comment;
-        if (include_provenance)
-            comment = core::provenance_to_json(core::make_provenance_stamp());
+        const auto comment = core::provenance_to_json(
+            include_provenance ? core::make_provenance_stamp()
+                               : core::make_minimal_provenance_stamp());
         core::save_image_u8(output_path, image, jpeg_quality, comment);
 
         nb::dict result;
@@ -1760,7 +1760,7 @@ Args:
     height: Target height in pixels. If both dimensions are zero, captures the current viewport.
     transparent: For PNG only, export straight RGBA from the preview renderer.
     jpeg_quality: JPEG compression quality in [1, 100].
-    include_provenance: When true, writes a Comment attribute on PNG and JPEG.
+    include_provenance: When true, writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.
 
 Returns:
     Dict with path, width, height, channels, format, and transparent.

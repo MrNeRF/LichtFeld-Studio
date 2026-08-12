@@ -223,19 +223,16 @@ namespace lfs::mcp {
             return std::unexpected("No model to save");
         }
 
-        std::optional<core::ProvenanceStamp> stamp;
-        if (include_provenance) {
-            auto built = core::make_provenance_stamp();
-            if (trainer_) {
-                const int iteration = trainer_->get_current_iteration();
-                if (iteration > 0)
-                    built.iteration = iteration;
-                const auto strategy = core::param::canonical_strategy_name(
-                    trainer_->getParams().optimization.strategy);
-                if (!strategy.empty())
-                    built.strategy = std::string(strategy);
-            }
-            stamp = std::move(built);
+        auto stamp = include_provenance ? core::make_provenance_stamp()
+                                        : core::make_minimal_provenance_stamp();
+        if (include_provenance && trainer_) {
+            const int iteration = trainer_->get_current_iteration();
+            if (iteration > 0)
+                stamp.iteration = iteration;
+            const auto strategy = core::param::canonical_strategy_name(
+                trainer_->getParams().optimization.strategy);
+            if (!strategy.empty())
+                stamp.strategy = std::string(strategy);
         }
 
         io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = std::move(stamp)};

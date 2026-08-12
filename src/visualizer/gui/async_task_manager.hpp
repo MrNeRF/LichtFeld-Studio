@@ -203,7 +203,7 @@ namespace lfs::vis {
                                   bool rad_flip_y,
                                   bool rad_streamable,
                                   int spz_version,
-                                  std::optional<lfs::core::ProvenanceStamp> provenance);
+                                  lfs::core::ProvenanceStamp provenance);
             void startColmapExport(const std::filesystem::path& path);
             void startAsyncImport(const std::filesystem::path& path,
                                   const lfs::core::param::TrainingParameters& params);

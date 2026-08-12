@@ -182,7 +182,7 @@ namespace lfs::mcp {
                     .type = "object",
                     .properties = json{
                         {"path", json{{"type", "string"}, {"description", "Path to save PLY file"}}},
-                        {"include_provenance", json{{"type", "boolean"}, {"description", "Write a provenance stamp (default true)"}}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", false, true)},
             [backend](const json& args) -> json {

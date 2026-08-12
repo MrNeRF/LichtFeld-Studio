@@ -227,8 +227,8 @@ namespace lfs::app {
             const param::OutputFormat format,
             const int sog_iterations,
             const param::RadExportMode rad_export_mode,
-            const int spz_version = 4,
-            const std::optional<core::ProvenanceStamp>& provenance = {},
+            const int spz_version,
+            const core::ProvenanceStamp& provenance,
             const lfs::io::ExportProgressCallback& progress = nullptr) {
             switch (format) {
             case param::OutputFormat::PLY:
@@ -278,11 +278,11 @@ namespace lfs::app {
             return ext == ".resume";
         }
 
-        [[nodiscard]] std::optional<core::ProvenanceStamp> make_convert_provenance(
-            const bool enabled,
+        [[nodiscard]] core::ProvenanceStamp make_convert_provenance(
+            const bool include_identifying,
             const std::filesystem::path& input = {}) {
-            if (!enabled)
-                return std::nullopt;
+            if (!include_identifying)
+                return core::make_minimal_provenance_stamp();
 
             auto stamp = core::make_provenance_stamp();
             if (isResumeExtension(input)) {
@@ -308,7 +308,7 @@ namespace lfs::app {
             const std::filesystem::path& input,
             const std::filesystem::path& output,
             const std::uint32_t target_chunk_size,
-            const std::optional<core::ProvenanceStamp>& provenance = {}) {
+            const core::ProvenanceStamp& provenance) {
             std::println("Re-chunking RAD LOD: {} -> {} ({}-splat chunks)",
                          path_to_utf8(input), path_to_utf8(output), target_chunk_size);
 

@@ -440,8 +440,8 @@ namespace lfs::app {
             options.height = cfg.height;
             options.framerate = cfg.fps;
             options.crf = cfg.crf;
-            if (cfg.include_provenance)
-                options.provenance = core::make_provenance_stamp();
+            options.provenance = cfg.include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
             if (const auto open_result = encoder.open(cfg.output_path, options); !open_result) {
                 LOG_ERROR("Failed to open video encoder: {}", open_result.error());
                 return 1;

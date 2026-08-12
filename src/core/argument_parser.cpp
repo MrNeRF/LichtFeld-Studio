@@ -339,7 +339,7 @@ namespace {
             ::args::CounterFlag freeze(paths_group, "freeze", "Freeze the immediately preceding --add-splat rows from optimizer gradients and densification", {"freeze"});
             ::args::ValueFlag<float> freeze_lr_scale(paths_group, "scale", "Learning-rate scale for frozen splats (0 = fully frozen, default; try 0.01-0.1 to let frozen splats absorb small appearance mismatch)", {"freeze-lr-scale"});
             ::args::Flag exclude_export(paths_group, "exclude_export", "Exclude frozen --add-splat rows from PLY exports", {"exclude-export"});
-            ::args::Flag no_provenance(paths_group, "no-provenance", "Omit provenance metadata from the output", {"no-provenance"});
+            ::args::Flag no_provenance(paths_group, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
 
             ::args::ValueFlag<std::string> import_cameras(paths_group, "path", "Import COLMAP cameras from sparse folder (no images required)", {"import-cameras"});
 
@@ -354,6 +354,7 @@ namespace {
             ::args::ValueFlag<int> render_height(render_path_group, "height", "Output height (default 1080)", {"render-height"});
             ::args::ValueFlag<int> render_fps(render_path_group, "fps", "Output framerate (default 30)", {"render-fps"});
             ::args::ValueFlag<int> render_crf(render_path_group, "crf", "Video quality, lower=better (default 18)", {"render-crf"});
+            ::args::Group render_path_provenance_note(render_path_group, "  Metadata: videos always embed a minimal build stamp; --no-provenance strips identifying metadata");
 
             // =============================================================================
             // TRAINING PARAMETERS
@@ -1235,7 +1236,7 @@ namespace {
         "  Input:  .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint)\n"
         "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  SPZ:    --spz-version 4 (default, zstd) or 3 (legacy gzip)\n"
-        "  Metadata: --no-provenance omits provenance stamps (included by default)\n"
+        "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
 
     constexpr const char* MESH2SPLAT_HELP_HEADER = "LichtFeld Studio - Convert mesh files to Gaussian splats\n";
@@ -1251,7 +1252,7 @@ namespace {
         "  Input:  .obj, .fbx, .gltf, .glb, .stl, .dae, .3ds, .ply\n"
         "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  Multiple output formats: pass a comma-separated list to --format\n"
-        "  Metadata: --no-provenance omits provenance stamps (included by default)\n"
+        "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
 
     constexpr const char* PREPROCESS_HELP_HEADER = "LichtFeld Studio - Generate dataset depth and normal maps with MoGe-2 ONNX\n";
@@ -1334,7 +1335,7 @@ namespace {
         ::args::ValueFlag<int> sh_degree(parser, "degree", "SH degree [0-3], -1 to keep original (default: -1)", {"sh-degree"});
         ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, spz, html, usd, usda, usdc, rad", {'f', "format"});
         ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
-        ::args::Flag no_provenance(parser, "no-provenance", "Omit provenance metadata from the output", {"no-provenance"});
+        ::args::Flag no_provenance(parser, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG (default: 10)", {"sog-iterations"});
         ::args::ValueFlag<std::string> tiles(parser, "AxB", "Replicate a PLY source across an AxB ground-plane grid (RAD output only)", {"tiles"});
         ::args::ValueFlag<std::string> lod_builder(parser, "builder", "PLY->RAD LOD tree builder: bhatt (default) or octree (hybrid: octree fine levels + similarity-ordered bhatt top, much faster)", {"lod-builder"});
@@ -1456,7 +1457,7 @@ namespace {
         ::args::ValueFlag<std::string> output_flag(parser, "path", "Output file or directory", {'o', "output"});
         ::args::ValueFlag<std::string> format(parser, "formats", "Output format(s): ply, sog, spz, html, usd, usda, usdc, rad. Use commas for multiple outputs", {'f', "format"});
         ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
-        ::args::Flag no_provenance(parser, "no-provenance", "Omit provenance metadata from the output", {"no-provenance"});
+        ::args::Flag no_provenance(parser, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
         ::args::ValueFlag<int> resolution(parser, "pixels", "Mesh2Splat raster resolution target (default: 1024)", {"resolution"});
         ::args::ValueFlag<float> sigma(parser, "scale", "Gaussian scale sigma (default: 0.65)", {"sigma"});
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG/HTML output (default: 10)", {"sog-iterations"});

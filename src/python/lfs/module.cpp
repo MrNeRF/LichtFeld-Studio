@@ -889,7 +889,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("include_provenance") = true,
         "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. "
         "spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. "
-        "include_provenance (default true) writes a provenance stamp into the format metadata slot. "
+        "include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. "
         "Ignored for COLMAP and SPZ v3.");
 
     m.def(

@@ -6,6 +6,7 @@
 #include "core/base64.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "html_viewer_resources.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
@@ -115,7 +116,12 @@ namespace lfs::io {
 
     } // anonymous namespace
 
-    Result<void> export_html(const SplatData& splat_data, const HtmlExportOptions& options) {
+    Result<void> export_html(const SplatData& splat_data, const HtmlExportOptions& options_in) {
+        HtmlExportOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         if (!report_export_progress(options.progress_callback, 0.0f, "Exporting SOG...")) {
             return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);
         }

@@ -1209,7 +1209,7 @@
     "no_models": "No models in scene",
     "sh_degree": "SH DEGREE",
     "include_provenance": "PROVENANCE METADATA",
-    "include_provenance_hint": "Embeds export id, iteration, strategy, app version, export time",
+    "include_provenance_hint": "Opting out strips identifying fields, but a minimal build identification (app version + build commit) is always embedded",
     "spz_version": "SPZ VERSION",
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (legacy)",

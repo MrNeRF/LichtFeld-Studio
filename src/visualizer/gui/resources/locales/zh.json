@@ -1216,7 +1216,7 @@
     "no_models": "场景中无模型",
     "sh_degree": "SH Degree",
     "include_provenance": "来源元数据",
-    "include_provenance_hint": "嵌入导出 ID、迭代、策略、应用版本和导出时间",
+    "include_provenance_hint": "关闭后会去掉标识字段，但仍会始终嵌入最小构建标识（应用版本 + 构建提交）",
     "spz_version": "SPZ 版本",
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (旧版)",

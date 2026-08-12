@@ -315,7 +315,7 @@ namespace lfs::core {
             int height = 1080;
             int fps = 30;
             int crf = 18;
-            bool include_provenance = true; // default on; --no-provenance clears
+            bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         };
 
         struct LFS_CORE_API TrainingParameters {
@@ -337,7 +337,7 @@ namespace lfs::core {
             std::vector<bool> add_splat_freeze;
             float freeze_lr_scale = 0.0f;
             bool exclude_frozen_add_splats_from_export = false;
-            bool include_provenance = true; // default on; --no-provenance clears
+            bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
 
             // Checkpoint to resume training from
             std::optional<std::filesystem::path> resume_checkpoint = std::nullopt;
@@ -390,7 +390,7 @@ namespace lfs::core {
             LodBuilder lod_builder = LodBuilder::BHATT;
             RadExportMode rad_export_mode = RadExportMode::Stream;
             bool overwrite = false;         // Skip overwrite prompts
-            bool include_provenance = true; // default on; --no-provenance clears
+            bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         };
 
         // Parameters for the mesh2splat command
@@ -403,7 +403,7 @@ namespace lfs::core {
             int sog_iterations = 10;
             int spz_version = 4; // SPZ container version: 4 (zstd) or 3 (legacy gzip)
             bool overwrite = false;
-            bool include_provenance = true; // default on; --no-provenance clears
+            bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         };
 
         enum class PreprocessOutputMode { Depth,

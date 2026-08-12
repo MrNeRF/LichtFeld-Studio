@@ -1391,9 +1391,8 @@ namespace lfs::app {
             truncate_sh_degree(*merged, sh_degree);
             borrow_plan.model_lock.reset();
 
-            std::optional<core::ProvenanceStamp> stamp;
-            if (include_provenance)
-                stamp = make_gui_export_stamp(scene_manager);
+            const auto stamp = include_provenance ? make_gui_export_stamp(scene_manager)
+                                                  : core::make_minimal_provenance_stamp();
 
             switch (format) {
             case core::ExportFormat::PLY: {
@@ -1917,16 +1916,13 @@ namespace lfs::app {
                         if (!model)
                             return std::unexpected("No model to save");
 
-                        std::optional<core::ProvenanceStamp> stamp;
-                        if (include_provenance) {
-                            if (const auto* const scene_manager = viewer->getSceneManager()) {
-                                stamp = make_gui_export_stamp(*scene_manager);
-                            } else {
-                                stamp = core::make_provenance_stamp();
-                            }
-                        }
+                        const auto stamp = include_provenance
+                                               ? (viewer->getSceneManager()
+                                                      ? make_gui_export_stamp(*viewer->getSceneManager())
+                                                      : core::make_provenance_stamp())
+                                               : core::make_minimal_provenance_stamp();
 
-                        io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = std::move(stamp)};
+                        io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = stamp};
                         auto result = io::save_ply(*model, options);
                         if (!result)
                             return std::unexpected(result.error().message);
@@ -2686,7 +2682,7 @@ namespace lfs::app {
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
-                        {"include_provenance", json{{"type", "boolean"}, {"description", "Write a provenance stamp (default true)"}}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
@@ -2727,7 +2723,7 @@ namespace lfs::app {
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
-                        {"include_provenance", json{{"type", "boolean"}, {"description", "Write a provenance stamp (default true)"}}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
@@ -2768,7 +2764,7 @@ namespace lfs::app {
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
-                        {"include_provenance", json{{"type", "boolean"}, {"description", "Write a provenance stamp (default true)"}}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
@@ -2809,7 +2805,7 @@ namespace lfs::app {
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
-                        {"include_provenance", json{{"type", "boolean"}, {"description", "Write a provenance stamp (default true)"}}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
@@ -2850,7 +2846,7 @@ namespace lfs::app {
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
-                        {"include_provenance", json{{"type", "boolean"}, {"description", "Write a provenance stamp (default true)"}}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
@@ -2891,7 +2887,7 @@ namespace lfs::app {
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
-                        {"include_provenance", json{{"type", "boolean"}, {"description", "Write a provenance stamp (default true)"}}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
@@ -2932,7 +2928,7 @@ namespace lfs::app {
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
-                        {"include_provenance", json{{"type", "boolean"}, {"description", "Write a provenance stamp (default true)"}}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();

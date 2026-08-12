@@ -928,6 +928,8 @@ namespace lfs::vis::gui {
                     populate_project_identity(stamp);
                     options.provenance = std::move(stamp);
                 }
+            } else {
+                options.provenance = core::make_minimal_provenance_stamp();
             }
             startVideoExport(path, options);
         });
@@ -986,9 +988,8 @@ namespace lfs::vis::gui {
 
         auto borrow_plan = makeBorrowSingleIdentityExportPlan(*scene_manager, node_names);
 
-        std::optional<core::ProvenanceStamp> provenance;
-        if (include_provenance)
-            provenance = make_gui_export_stamp(*scene_manager);
+        auto provenance = include_provenance ? make_gui_export_stamp(*scene_manager)
+                                             : core::make_minimal_provenance_stamp();
 
         startAsyncExport(format,
                          path,
@@ -1138,7 +1139,7 @@ namespace lfs::vis::gui {
                                             bool rad_flip_y,
                                             bool rad_streamable,
                                             int spz_version,
-                                            std::optional<core::ProvenanceStamp> provenance) {
+                                            core::ProvenanceStamp provenance) {
         if (splats.empty()) {
             LOG_ERROR("No splat data to export");
             publishExportFailureState(format, path, LOC(lichtfeld::Strings::Runtime::NO_SPLAT_DATA));

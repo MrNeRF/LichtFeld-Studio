@@ -51,6 +51,8 @@ namespace lfs::core {
                 json["strategy"] = stamp.strategy;
             if (!stamp.app_version.empty())
                 json["app_version"] = stamp.app_version;
+            if (!stamp.build_commit.empty())
+                json["build_commit"] = stamp.build_commit;
             if (!stamp.exported_at.empty())
                 json["exported_at"] = stamp.exported_at;
             return json.dump();
@@ -101,7 +103,15 @@ namespace lfs::core {
         ProvenanceStamp stamp;
         stamp.export_id = uuid_v4();
         stamp.app_version = GIT_TAGGED_VERSION;
+        stamp.build_commit = GIT_COMMIT_HASH_SHORT;
         stamp.exported_at = utc_now();
+        return stamp;
+    }
+
+    ProvenanceStamp make_minimal_provenance_stamp() {
+        ProvenanceStamp stamp;
+        stamp.app_version = GIT_TAGGED_VERSION;
+        stamp.build_commit = GIT_COMMIT_HASH_SHORT;
         return stamp;
     }
 

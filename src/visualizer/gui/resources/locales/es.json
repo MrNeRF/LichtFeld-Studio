@@ -1600,7 +1600,7 @@
     "no_models": "No hay modelos en la escena",
     "sh_degree": "SH DEGREE",
     "include_provenance": "DATOS DE PROCEDENCIA",
-    "include_provenance_hint": "Incrusta id de exportación, iteración, estrategia, versión de la app y hora de exportación",
+    "include_provenance_hint": "Al desactivar se omiten los campos identificativos, pero siempre se incrusta una identificación mínima de la build (versión de la app + commit)",
     "spz_version": "VERSIÓN SPZ",
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (legado)",

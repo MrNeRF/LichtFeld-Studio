@@ -46,6 +46,7 @@ namespace {
     const std::regex kUuidRe{
         R"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"};
     const std::regex kExportedAtRe{R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)"};
+    const std::regex kHexIshRe{R"([0-9a-fA-F]+)"};
 
     std::string read_file_bytes(const fs::path& path) {
         std::ifstream in(path, std::ios::binary);
@@ -227,6 +228,11 @@ TEST_F(ProvenanceTest, JsonParsesAsSingleLineStamp) {
     ASSERT_TRUE(json.contains("app_version"));
     EXPECT_FALSE(json["app_version"].get<std::string>().empty());
 
+    ASSERT_TRUE(json.contains("build_commit"));
+    EXPECT_EQ(json["build_commit"].get<std::string>(), stamp.build_commit);
+    EXPECT_FALSE(json["build_commit"].get<std::string>().empty());
+    EXPECT_TRUE(std::regex_match(json["build_commit"].get<std::string>(), kHexIshRe));
+
     ASSERT_TRUE(json.contains("exported_at"));
     EXPECT_TRUE(std::regex_match(json["exported_at"].get<std::string>(), kExportedAtRe));
 }
@@ -239,6 +245,7 @@ TEST_F(ProvenanceTest, JsonOmitsDefaultConstructedFields) {
     EXPECT_FALSE(json.contains("iteration"));
     EXPECT_FALSE(json.contains("strategy"));
     EXPECT_FALSE(json.contains("app_version"));
+    EXPECT_FALSE(json.contains("build_commit"));
     EXPECT_FALSE(json.contains("exported_at"));
     EXPECT_FALSE(json.contains("project"));
     EXPECT_FALSE(json.contains("commit"));
@@ -252,6 +259,38 @@ TEST_F(ProvenanceTest, MakeStampYieldsUniqueExportIds) {
     EXPECT_FALSE(a.export_id.empty());
     EXPECT_FALSE(b.export_id.empty());
     EXPECT_NE(a.export_id, b.export_id);
+}
+
+TEST_F(ProvenanceTest, MinimalStampJsonContainsExactlyThreeKeys) {
+    const auto stamp = make_minimal_provenance_stamp();
+    EXPECT_TRUE(stamp.export_id.empty());
+    EXPECT_TRUE(stamp.exported_at.empty());
+    EXPECT_EQ(stamp.iteration, -1);
+    EXPECT_TRUE(stamp.strategy.empty());
+
+    const auto json = nlohmann::json::parse(provenance_to_json(stamp));
+    ASSERT_TRUE(json.is_object());
+    EXPECT_EQ(json.size(), 3u);
+    ASSERT_TRUE(json.contains("lichtfeld_provenance"));
+    EXPECT_EQ(json["lichtfeld_provenance"].get<int>(), 1);
+    ASSERT_TRUE(json.contains("app_version"));
+    EXPECT_FALSE(json["app_version"].get<std::string>().empty());
+    ASSERT_TRUE(json.contains("build_commit"));
+    const auto commit = json["build_commit"].get<std::string>();
+    EXPECT_FALSE(commit.empty());
+    EXPECT_TRUE(std::regex_match(commit, kHexIshRe));
+    EXPECT_FALSE(json.contains("export_id"));
+    EXPECT_FALSE(json.contains("exported_at"));
+}
+
+TEST_F(ProvenanceTest, FullStampContainsBuildCommit) {
+    const auto stamp = make_provenance_stamp();
+    EXPECT_FALSE(stamp.build_commit.empty());
+    EXPECT_TRUE(std::regex_match(stamp.build_commit, kHexIshRe));
+
+    const auto json = nlohmann::json::parse(provenance_to_json(stamp));
+    ASSERT_TRUE(json.contains("build_commit"));
+    EXPECT_EQ(json["build_commit"].get<std::string>(), stamp.build_commit);
 }
 
 TEST_F(ProvenanceTest, PlyBinaryEmbedsStampAndReloads) {
@@ -283,13 +322,32 @@ TEST_F(ProvenanceTest, PlyAsciiEmbedsStamp) {
     expect_stamp_in_text(bytes, stamp);
 }
 
-TEST_F(ProvenanceTest, PlyWithoutProvenanceOmitsStamp) {
+TEST_F(ProvenanceTest, PlyStripWritesMinimalStamp) {
     const auto splat = create_test_splat(8, 0);
-    const fs::path path = temp_dir / "no_stamp.ply";
+    const fs::path path = temp_dir / "minimal_stamp.ply";
+
+    const auto saved = save_ply(splat, {.output_path = path, .binary = true, .provenance = make_minimal_provenance_stamp()});
+    ASSERT_TRUE(saved.has_value()) << saved.error().format();
+
+    const auto bytes = read_file_bytes(path);
+    EXPECT_TRUE(contains_text(bytes, kProvenanceKey));
+    EXPECT_TRUE(contains_text(bytes, "build_commit"));
+    EXPECT_FALSE(contains_text(bytes, "export_id"));
+    EXPECT_FALSE(contains_text(bytes, "exported_at"));
+}
+
+TEST_F(ProvenanceTest, PlyDefaultOptionsWritesMinimalStamp) {
+    const auto splat = create_test_splat(8, 0);
+    const fs::path path = temp_dir / "default_options.ply";
 
     const auto saved = save_ply(splat, {.output_path = path, .binary = true});
     ASSERT_TRUE(saved.has_value()) << saved.error().format();
-    expect_stamp_absent(read_file_bytes(path));
+
+    const auto bytes = read_file_bytes(path);
+    EXPECT_TRUE(contains_text(bytes, kProvenanceKey));
+    EXPECT_TRUE(contains_text(bytes, "build_commit"));
+    EXPECT_FALSE(contains_text(bytes, "export_id"));
+    EXPECT_FALSE(contains_text(bytes, "exported_at"));
 }
 
 TEST_F(ProvenanceTest, SogEmbedsStampInDeflatedMetaJson) {

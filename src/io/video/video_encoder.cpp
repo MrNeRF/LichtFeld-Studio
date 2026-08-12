@@ -43,7 +43,12 @@ namespace lfs::io::video {
 
         std::expected<void, std::string> open(
             const std::filesystem::path& path,
-            const VideoExportOptions& opts) {
+            const VideoExportOptions& opts_in) {
+
+            VideoExportOptions opts = opts_in;
+            if (!opts.provenance) {
+                opts.provenance = core::make_minimal_provenance_stamp();
+            }
 
             if (is_open_)
                 return std::unexpected("Encoder is already open");

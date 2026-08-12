@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -4152,7 +4153,8 @@ namespace lfs::python {
                 const lfs::io::PlySaveOptions options{
                     .output_path = path,
                     .binary = true,
-                    .async = false};
+                    .async = false,
+                    .provenance = lfs::core::make_provenance_stamp()};
 
                 lfs::io::Result<void> result = std::unexpected(
                     lfs::io::Error{lfs::io::ErrorCode::INTERNAL_ERROR, "uninitialized"});
@@ -4490,7 +4492,7 @@ namespace lfs::python {
             nb::arg("include_provenance") = true,
             "Export video with specified settings. Without a path a save dialog opens, "
             "which a script cannot answer; pass one to export directly. "
-            "include_provenance (default true) writes a provenance stamp into the video comment.");
+            "include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "add_keyframe",

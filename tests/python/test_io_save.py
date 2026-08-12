@@ -177,13 +177,16 @@ class TestSavePLY:
 
         assert b"lichtfeld_provenance" in output_path.read_bytes()
 
-    def test_save_ply_without_provenance_omits_stamp(self, lf, benchmark_ply, tmp_output):
+    def test_save_ply_strip_writes_minimal_stamp(self, lf, benchmark_ply, tmp_output):
         result = lf.io.load(str(benchmark_ply))
         output_path = tmp_output / "no_provenance.ply"
 
         lf.io.save_ply(result.splat_data, str(output_path), include_provenance=False)
 
-        assert b"lichtfeld_provenance" not in output_path.read_bytes()
+        data = output_path.read_bytes()
+        assert b"lichtfeld_provenance" in data
+        assert b"build_commit" in data
+        assert b"export_id" not in data
 
     @pytest.mark.slow
     def test_save_point_cloud_ply_with_extra_attribute(self, lf, tmp_output, numpy):
@@ -276,13 +279,16 @@ class TestSaveSPZ:
 
         assert b"lichtfeld_provenance" in output_path.read_bytes()
 
-    def test_save_spz_without_provenance_omits_stamp(self, lf, benchmark_ply, tmp_output):
+    def test_save_spz_strip_writes_minimal_stamp(self, lf, benchmark_ply, tmp_output):
         result = lf.io.load(str(benchmark_ply))
         output_path = tmp_output / "no_provenance.spz"
 
         lf.io.save_spz(result.splat_data, str(output_path), include_provenance=False)
 
-        assert b"lichtfeld_provenance" not in output_path.read_bytes()
+        data = output_path.read_bytes()
+        assert b"lichtfeld_provenance" in data
+        assert b"build_commit" in data
+        assert b"export_id" not in data
 
 
 class TestAssetScannerSpzHeader:

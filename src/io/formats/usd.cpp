@@ -5,6 +5,7 @@
 #include "usd.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
@@ -739,7 +740,12 @@ namespace lfs::io {
         return validate_particlefield_prim(*particlefield_prim);
     }
 
-    Result<void> save_usd(const SplatData& splat_data, const UsdSaveOptions& options) {
+    Result<void> save_usd(const SplatData& splat_data, const UsdSaveOptions& options_in) {
+        UsdSaveOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         if (!report_export_progress(options.progress_callback, 0.0f, "Preparing USD")) {
             return make_error(ErrorCode::CANCELLED, "USD export cancelled", options.output_path);
         }
