@@ -472,7 +472,7 @@ namespace lfs::vis::input {
 
         const Profile defaults = createDefaultProfile();
         size_t added = 0;
-        if (version < 23) {
+        if (version < 24) {
             const KeyTrigger old_mcp_binding{KEY_M, MODIFIER_CTRL | MODIFIER_ALT};
             const KeyTrigger new_mcp_binding{KEY_N, MODIFIER_CTRL | MODIFIER_SHIFT};
             auto old_binding = std::ranges::find_if(bindings_, [&](const Binding& binding) {
