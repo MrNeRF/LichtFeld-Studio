@@ -69,7 +69,7 @@ becomes active, explicit fallback decisions, and actionable warnings or
 errors. Detailed rendering diagnostics are intentionally excluded from the
 normal console output. This includes SDK capability discovery, Vulkan
 extension requirements, recommended input scales, per-view context dimensions,
-adapter shutdown, and temporal-history reset reasons.
+adapter initialization and shutdown, and temporal-history reset reasons.
 
 Enable those diagnostics for one run with either equivalent command:
 

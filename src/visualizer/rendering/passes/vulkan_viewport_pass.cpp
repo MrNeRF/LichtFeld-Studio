@@ -391,7 +391,8 @@ namespace lfs::vis {
         VkPipeline scene_spatial_pipeline = VK_NULL_HANDLE;
         bool scene_spatial_pipeline_attempted = false;
         SceneUpscalerSelection scene_upscaler_selection{};
-        std::optional<SceneUpscalerSelection> logged_scene_upscaler_selection;
+        std::optional<std::string> logged_requested_upscaler_id;
+        std::optional<std::string> logged_effective_upscaler_id;
         glm::ivec2 optional_upscaler_input_extent{0, 0};
         glm::ivec2 optional_upscaler_output_extent{0, 0};
         VkPipelineLayout vignette_pipeline_layout = VK_NULL_HANDLE;
@@ -2581,21 +2582,39 @@ namespace lfs::vis {
                                             : scene_spatial_pipeline != VK_NULL_HANDLE ||
                                                   split_spatial_available);
             profiler.setGauge("viewer.upscaler.adapter_ready", adapter_ready ? 1.0 : 0.0);
-            if (!logged_scene_upscaler_selection ||
-                *logged_scene_upscaler_selection != scene_upscaler_selection) {
+            const std::string requested_upscaler_id =
+                optional_requested
+                    ? params.scene_upscaler_id
+                    : std::string(sceneUpscalerLabel(scene_upscaler_selection.requested));
+            const std::string effective_upscaler_id =
+                optional_active
+                    ? params.scene_upscaler_id
+                    : std::string(sceneUpscalerLabel(scene_upscaler_selection.effective));
+            const bool upscaler_selection_changed =
+                !logged_requested_upscaler_id ||
+                *logged_requested_upscaler_id != requested_upscaler_id ||
+                !logged_effective_upscaler_id ||
+                *logged_effective_upscaler_id != effective_upscaler_id;
+            if (upscaler_selection_changed) {
+                if (logged_effective_upscaler_id &&
+                    *logged_effective_upscaler_id != effective_upscaler_id) {
+                    LOG_INFO("Scene upscaler deactivated: {}", *logged_effective_upscaler_id);
+                }
                 const bool empty_temporal_view =
                     scene_upscaler_selection.requested == SceneUpscalerBackend::Temporal &&
                     params.external_scene_image_view == VK_NULL_HANDLE &&
                     !params.split_view.enabled;
-                if (scene_upscaler_selection.fallback && !empty_temporal_view) {
+                if (upscaler_fallback && !empty_temporal_view) {
                     LOG_WARN("Scene upscaler '{}' unavailable; using '{}'",
-                             sceneUpscalerLabel(scene_upscaler_selection.requested),
-                             sceneUpscalerLabel(scene_upscaler_selection.effective));
-                } else if (!empty_temporal_view) {
-                    LOG_INFO("Scene upscaler active: {}",
-                             sceneUpscalerLabel(scene_upscaler_selection.effective));
+                             requested_upscaler_id,
+                             effective_upscaler_id);
                 }
-                logged_scene_upscaler_selection = scene_upscaler_selection;
+                if (!logged_effective_upscaler_id ||
+                    *logged_effective_upscaler_id != effective_upscaler_id) {
+                    LOG_INFO("Scene upscaler active: {}", effective_upscaler_id);
+                }
+                logged_requested_upscaler_id = requested_upscaler_id;
+                logged_effective_upscaler_id = effective_upscaler_id;
             }
             publishUpscalerResourceDiagnostics(profiler);
         }

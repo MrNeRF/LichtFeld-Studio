@@ -127,7 +127,7 @@ namespace lfs::vis {
                     return {.reason = SceneUpscalerAvailabilityReason::ProbeFailed};
                 }
                 initialized_ = true;
-                LOG_INFO("AMD FidelityFX FSR 3.1 Vulkan adapter initialized");
+                LOG_DEBUG("AMD FidelityFX FSR 3.1 Vulkan adapter initialized");
                 return {.reason = SceneUpscalerAvailabilityReason::Ready};
             }
 

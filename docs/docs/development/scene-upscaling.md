@@ -96,6 +96,147 @@ Adapters are constructed lazily only after selection and a successful probe.
 Each viewport, including both sides of split view, owns independent adapter,
 temporal-frame, and history state.
 
+## Adding an optional backend
+
+New production backends should use the optional registry and the common Vulkan
+adapter contract rather than adding another value to the internal
+`SceneUpscalerBackend` enum. That enum is reserved for Native and the two
+in-tree validation prototypes. A registered backend is identified by a stable,
+lowercase string ID that is also used by preferences, diagnostics, fallback
+status, and the Python UI catalog.
+
+### 1. Declare requirements, do not create them manually
+
+Register an `OptionalSceneUpscalerDescriptor` with the smallest accurate
+`SceneUpscalerRequirements` set:
+
+```cpp
+optionalSceneUpscalerRegistry().registerAdapter(
+    {
+        .id = "vendor-backend",
+        .label_key = "preferences.scene_upscaler_vendor_backend",
+        .requirements = {
+            .depth = true,
+            .motion_vectors = true,
+            .jitter = true,
+            .history = true,
+            .reactive_mask = false,
+            .exposure = true,
+        },
+    },
+    &makeVendorBackendAdapter);
+```
+
+These flags are the resource contract, not descriptive metadata. The temporal
+planner, viewport pass, input validator, and controller use them to request and
+validate only the required work:
+
+| Requirement | Common contract |
+| --- | --- |
+| `depth` | Render-extent depth with declared storage, encoding, clipping planes, projection, and vertical origin. |
+| `motion_vectors` | Current-to-previous displacement with explicit units, jitter inclusion, and vertical origin. |
+| `jitter` | Resolution-aware current and previous jitter applied only to the scene projection. |
+| `history` | Per-view color history, plus depth history only when depth is also requested. |
+| `reactive_mask` | Availability validated by the common input contract; a backend must remain unavailable until the renderer supplies a real mask. |
+| `exposure` | Finite positive pre-exposure supplied through the dispatch contract. |
+
+Leaving a flag `false` is a zero-cost guarantee: the backend must not depend on
+that input, and LichtFeld must not allocate or generate it for that backend.
+Declaring an input that is not yet produced makes selection fail safely rather
+than allowing an implicit dummy resource.
+
+### 2. Implement the Vulkan adapter lifecycle
+
+Derive from `VulkanSceneUpscalerAdapter` and implement:
+
+- `probe()` for platform, safe-mode, runtime, device, and Vulkan capability
+  checks without allocating persistent rendering resources;
+- `initialize()` for device-level SDK state after a successful probe;
+- `record()` to validate `VulkanSceneUpscalerDispatch`, record commands into
+  the supplied command buffer, and preserve the declared layouts;
+- `output()` to return a full-output-extent image and monotonically meaningful
+  generation;
+- `reset()` to invalidate the specified view for every supplied temporal reset
+  reason;
+- `shutdown()` as idempotent cleanup for partial initialization, selection
+  changes, failures, and application shutdown.
+
+Do not cache one global frame history. `TemporalViewId::Main`, `SplitLeft`, and
+`SplitRight` are independent, and split views can have different extents.
+Creation should be lazy; unselected backends must have no runtime or VRAM cost.
+An adapter failure is reported to `VulkanSceneUpscalerController`, which owns
+cleanup, retry boundaries, status counters, and Native fallback.
+
+### 3. Add opt-in build discovery
+
+Create a guarded CMake setup module following `SetupNvidiaDlss.cmake` or
+`SetupAmdFsr3.cmake`:
+
+- use `LFS_ENABLE_<BACKEND>=OFF` by default;
+- require a user-provided SDK root and link/runtime files;
+- never download or redistribute a restricted SDK;
+- validate supported 64-bit Windows and Linux layouts explicitly;
+- expose an internal `<BACKEND>_AVAILABLE` result only after complete
+  validation;
+- add sources, libraries, and a private `LFS_HAS_<BACKEND>` definition only
+  when available;
+- stage user-provided runtime libraries beside every opted-in executable when
+  dynamic loading requires it;
+- include the official acquisition URL in actionable configuration failures.
+
+Register the adapter after Vulkan instance/device initialization, when the
+probe context has real API, vendor, and device IDs. If an SDK needs Vulkan
+instance or device extensions before device creation, expose a bootstrap query
+like the DLSS integration and disable the backend cleanly if any required
+extension is absent.
+
+### 4. Expose settings without hard-coded availability
+
+Add the localized label key to every locale and let
+`availableSceneUpscalerCatalog()` drive the Preferences list. Do not add an
+unconditional Python list entry for an optional backend. The UI persists its
+stable ID, independent scale, and independent quality preset through the
+existing `scene_upscaler`, `scene_upscaler_scales`, and
+`scene_upscaler_qualities` owners. Invalid or unavailable saved IDs resolve to
+Native without rewriting unrelated backend settings.
+
+If the SDK publishes recommended scales or backend-specific quality modes,
+expose them as catalog metadata. Backend-specific controls must appear only
+when that backend is selectable; they must not mutate the base render scale.
+All new visible labels, status text, and validation errors require locale keys.
+
+### 5. Preserve logging and diagnostics policy
+
+At `info`, report only effective-backend deactivation/activation, explicit
+fallbacks, and actionable failures. SDK discovery, extension lists, context
+dimensions, resource recreation, and teardown belong at `debug` and are
+enabled with `--verbose`. Add HUD gauges under `viewer.upscaler` only when they
+help verify ownership, fallback, or resource cost; counters must not force
+continuous rendering when the scene is idle.
+
+### 6. Required tests
+
+A backend integration is incomplete without tests for:
+
+- registration uniqueness, stable ID, label key, and exact requirements;
+- safe mode, not-compiled, missing-runtime, unsupported-device/API, and probe
+  failure reasons;
+- lazy construction, adapter reuse, per-view reset, idempotent shutdown, and
+  destruction after record/output failure;
+- invalid or incomplete dispatch rejection for every declared input;
+- valid output extent/layout/generation and split-view independence;
+- explicit Native fallback without repeated retry or allocation each frame;
+- independent scale/quality preference round trips and malformed-value
+  fallback;
+- CMake OFF-by-default behavior and missing-SDK diagnostics;
+- real Windows and Linux runtime smoke tests when the SDK license permits CI or
+  developer-machine execution.
+
+Start from the `SceneUpscalerRegistry`, `VulkanSceneUpscalerController`, input
+contract, temporal coordinator, split-view, and preference suites. SDK-specific
+GPU tests should be filtered separately so the CPU-only contract suite remains
+usable on CI runners without the optional runtime.
+
 ### Resolution
 
 - The output extent is the full viewport extent.
@@ -148,10 +289,10 @@ upscaler state belongs in `layout.json`.
 
 The performance HUD exposes grouped counters under `viewer.resolution`,
 `viewer.depth`, `viewer.motion`, `viewer.temporal`, and `viewer.upscaler`.
-Ordinary console output reports adapter activation, the effective backend,
+Ordinary console output reports effective-backend activation and deactivation,
 fallbacks, warnings, and errors. Run with `--verbose` or `--log-level debug` to
-also see SDK queries, recommended scales, context dimensions, adapter teardown,
-and temporal reset masks.
+also see SDK queries, recommended scales, adapter initialization and teardown,
+context dimensions, and temporal reset masks.
 
 ## Contract tests
 

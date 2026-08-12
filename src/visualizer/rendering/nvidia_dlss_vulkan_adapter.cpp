@@ -228,7 +228,7 @@ namespace lfs::vis {
                     return {.reason = SceneUpscalerAvailabilityReason::DeviceUnsupported};
                 }
                 initialized_ = true;
-                LOG_INFO("NVIDIA DLSS Vulkan adapter initialized");
+                LOG_DEBUG("NVIDIA DLSS Vulkan adapter initialized");
                 return {.reason = SceneUpscalerAvailabilityReason::Ready};
             }
 
