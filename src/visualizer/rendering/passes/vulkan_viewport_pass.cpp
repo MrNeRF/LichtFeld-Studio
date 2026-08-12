@@ -327,9 +327,9 @@ namespace lfs::vis {
                                    state.last_logged_quality == quality;
             if (duplicate)
                 return;
-            LOG_INFO("Temporal history reset [{}]: mask={}",
-                     label,
-                     temporalResetReasonMask(reasons));
+            LOG_DEBUG("Temporal history reset [{}]: mask={}",
+                      label,
+                      temporalResetReasonMask(reasons));
             state.last_logged_reset_reasons = reasons;
             state.last_logged_scene_identity = scene_identity;
             state.last_logged_reset_generation = reset_generation;

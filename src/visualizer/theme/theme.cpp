@@ -1478,6 +1478,44 @@ namespace lfs::vis {
         return result;
     }
 
+    void savePerfHudPreferences(const PerfHudPreferenceState& state) {
+        try {
+            if (preferencesDisabled())
+                return;
+            auto preferences = loadPreferences();
+            preferences["performance_hud"] = {
+                {"visible", state.visible},
+                {"expanded", state.expanded},
+            };
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& error) {
+            LOG_WARN("Failed to save performance HUD preferences: {}", error.what());
+        }
+    }
+
+    PerfHudPreferenceState loadPerfHudPreferences() {
+        PerfHudPreferenceState result;
+        if (preferencesDisabled())
+            return result;
+        try {
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("performance_hud");
+            if (it == preferences.end() || !it->is_object())
+                return result;
+            if (const auto visible = it->find("visible");
+                visible != it->end() && visible->is_boolean()) {
+                result.visible = visible->get<bool>();
+            }
+            if (const auto expanded = it->find("expanded");
+                expanded != it->end() && expanded->is_boolean()) {
+                result.expanded = expanded->get<bool>();
+            }
+        } catch (const std::exception& error) {
+            LOG_WARN("Failed to load performance HUD preferences: {}", error.what());
+        }
+        return result;
+    }
+
     void setRememberCameraViewSnapPreference(const bool enabled) {
         try {
             auto preferences = loadPreferences();

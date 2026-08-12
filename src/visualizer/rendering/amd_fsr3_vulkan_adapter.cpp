@@ -194,7 +194,7 @@ namespace lfs::vis {
                 for (auto& view : views_)
                     destroyView(view);
                 clearBackend();
-                LOG_INFO("AMD FidelityFX FSR 3.1 Vulkan adapter shut down");
+                LOG_DEBUG("AMD FidelityFX FSR 3.1 Vulkan adapter shut down");
             }
 
         private:
@@ -314,9 +314,9 @@ namespace lfs::vis {
                 state.output_extent = dispatch.output_extent;
                 state.reset_pending = true;
                 ++state.generation;
-                LOG_INFO("AMD FSR 3.1 context ready: view={} render={}x{} output={}x{}",
-                         viewIndex(dispatch.view), state.render_extent.x, state.render_extent.y,
-                         state.output_extent.x, state.output_extent.y);
+                LOG_DEBUG("AMD FSR 3.1 context ready: view={} render={}x{} output={}x{}",
+                          viewIndex(dispatch.view), state.render_extent.x, state.render_extent.y,
+                          state.output_extent.x, state.output_extent.y);
                 return true;
             }
 

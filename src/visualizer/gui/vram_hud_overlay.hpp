@@ -106,7 +106,6 @@ namespace lfs::vis::gui {
         void toggleNode(const std::string& path);
         void enableDetailedTracking();
         void pruneCollapsedSet();
-        void loadPersistedState();
         void schedulePersistSave();
         void persistNow();
         void applyPersistedGeometry();

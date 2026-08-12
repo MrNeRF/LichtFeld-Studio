@@ -18,6 +18,7 @@ The Preferences panel currently exposes:
 - camera navigation mode;
 - axis/view snap;
 - per-setting remember options;
+- performance HUD visibility and expanded state;
 - MCP server enablement, bind scope, port, and opt-in request logging;
 - interface and layout reset actions.
 

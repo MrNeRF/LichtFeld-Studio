@@ -7,7 +7,6 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
-#include "gui/layout_state.hpp"
 #include "gui/string_keys.hpp"
 #include "visualizer/app_store.hpp"
 
@@ -264,35 +263,9 @@ namespace lfs::vis::gui {
         tab_listener_.owner = this;
         anno_filter_listener_.owner = this;
         anno_filter_clear_listener_.owner = this;
-        loadPersistedState();
     }
 
     VramHudOverlay::~VramHudOverlay() = default;
-
-    void VramHudOverlay::loadPersistedState() {
-        LayoutState ls;
-        ls.load(false);
-        pos_x_ = ls.vram_hud_x;
-        pos_y_ = ls.vram_hud_y;
-        size_w_ = ls.vram_hud_width;
-        size_h_ = ls.vram_hud_height;
-        if (ls.vram_hud_active_tab == "overview" || ls.vram_hud_active_tab == "ledger" ||
-            ls.vram_hud_active_tab == "allocations" ||
-            ls.vram_hud_active_tab == "annotations" || ls.vram_hud_active_tab == "tree") {
-            active_tab_ = ls.vram_hud_active_tab;
-        }
-        collapsed_paths_.clear();
-        default_collapse_applied_ = false;
-        ledger_default_collapse_applied_ = false;
-        for (const auto& p : ls.vram_hud_collapsed_paths) {
-            collapsed_paths_.insert(p);
-            if (p.rfind("ledger/", 0) == 0) {
-                ledger_default_collapse_applied_ = true;
-            } else {
-                default_collapse_applied_ = true;
-            }
-        }
-    }
 
     void VramHudOverlay::schedulePersistSave() {
         persistence_dirty_ = true;

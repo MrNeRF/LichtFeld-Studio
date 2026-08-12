@@ -3085,13 +3085,14 @@ namespace lfs::vis::gui {
           async_tasks_(viewer) {
 
         const LayoutState saved_layout = panel_layout_.loadState();
-        show_vram_hud_ = saved_layout.perf_hud_visible;
-        perf_hud_expanded_ = saved_layout.perf_hud_expanded;
         if (const auto saved_window = loadWindowState()) {
             if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr) {
                 window_manager->setInitialWindowState(*saved_window);
             }
         }
+        const auto perf_hud_preferences = loadPerfHudPreferences();
+        show_vram_hud_ = perf_hud_preferences.visible;
+        perf_hud_expanded_ = perf_hud_preferences.expanded;
 
         // Create components
         menu_bar_ = std::make_unique<MenuBar>();
@@ -6500,30 +6501,26 @@ namespace lfs::vis::gui {
         ui::ToggleVramHud::when([this](const auto&) {
             show_vram_hud_ = !show_vram_hud_;
             next_vram_hud_publish_ = {};
-            LayoutState state;
-            state.load();
-            state.perf_hud_visible = show_vram_hud_;
-            state.perf_hud_expanded = perf_hud_expanded_;
-            state.save();
+            savePerfHudPreferences({
+                .visible = show_vram_hud_,
+                .expanded = perf_hud_expanded_,
+            });
         });
 
         ui::TogglePerfHudExpanded::when([this](const auto&) {
             perf_hud_expanded_ = !perf_hud_expanded_;
-            LayoutState state;
-            state.load();
-            state.perf_hud_visible = show_vram_hud_;
-            state.perf_hud_expanded = perf_hud_expanded_;
-            state.save();
+            savePerfHudPreferences({
+                .visible = show_vram_hud_,
+                .expanded = perf_hud_expanded_,
+            });
         });
 
         ui::OpenPerfHudLedger::when([this](const auto&) {
             perf_hud_expanded_ = true;
-            LayoutState state;
-            state.load();
-            state.perf_hud_visible = show_vram_hud_;
-            state.perf_hud_expanded = true;
-            state.vram_hud_active_tab = "ledger";
-            state.save();
+            savePerfHudPreferences({
+                .visible = show_vram_hud_,
+                .expanded = true,
+            });
         });
 
         ui::ToggleFullscreen::when([this](const auto&) {

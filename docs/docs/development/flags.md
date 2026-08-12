@@ -62,6 +62,27 @@ and RmlUI imports are controlled by `LFS_DEV_IMPORT_SOURCE_PYTHON` and
 | `LFS_PYTHON_LSP` | Auto-discovered | Overrides the Python language-server executable. |
 | `LFS_PYTHON_LSP_WORKSPACE` | `~/.lichtfeld` | Overrides the language-server workspace directory. |
 
+### Runtime log levels
+
+The default `info` level reports startup milestones, the scene upscaler that
+becomes active, explicit fallback decisions, and actionable warnings or
+errors. Detailed rendering diagnostics are intentionally excluded from the
+normal console output. This includes SDK capability discovery, Vulkan
+extension requirements, recommended input scales, per-view context dimensions,
+adapter shutdown, and temporal-history reset reasons.
+
+Enable those diagnostics for one run with either equivalent command:
+
+```sh
+./build/LichtFeld-Studio --verbose
+./build/LichtFeld-Studio --log-level debug
+```
+
+On Windows, use `build\LichtFeld-Studio.exe` in place of the Unix executable.
+`--quiet` selects the warning level. Command-line choices override
+`LFS_LOG_LEVEL`; errors and warnings are never demoted by the rendering
+diagnostic policy.
+
 The VRAM and pinned-cache values are startup-time hardware policy, so they must
 remain runtime-selectable across GPUs. Endpoint and path overrides support
 isolated development and automation. Render, training, overlay, LOD, and plugin

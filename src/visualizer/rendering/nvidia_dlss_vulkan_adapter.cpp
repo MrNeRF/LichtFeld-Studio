@@ -130,13 +130,13 @@ namespace lfs::vis {
             }
             recommended_scales = scales;
             recommended_scales_output_extent = output_extent;
-            LOG_INFO("NGX DLSS recommended input scales for {}x{}: performance={:.3f}, "
-                     "balanced={:.3f}, quality={:.3f}",
-                     output_extent.x,
-                     output_extent.y,
-                     scales[0],
-                     scales[1],
-                     scales[2]);
+            LOG_DEBUG("NGX DLSS recommended input scales for {}x{}: performance={:.3f}, "
+                      "balanced={:.3f}, quality={:.3f}",
+                      output_extent.x,
+                      output_extent.y,
+                      scales[0],
+                      scales[1],
+                      scales[2]);
         }
 
         [[nodiscard]] std::size_t viewIndex(const TemporalViewId view) {
@@ -350,7 +350,7 @@ namespace lfs::vis {
                 device_ = VK_NULL_HANDLE;
                 context_ = nullptr;
                 initialized_ = false;
-                LOG_INFO("NVIDIA DLSS Vulkan adapter shut down");
+                LOG_DEBUG("NVIDIA DLSS Vulkan adapter shut down");
             }
 
         private:
@@ -487,13 +487,13 @@ namespace lfs::vis {
                 state.motion_includes_jitter = dispatch.motion_includes_jitter;
                 state.reset_pending = true;
                 ++state.generation;
-                LOG_INFO("NGX DLSS feature ready: view={} render={}x{} output={}x{} quality={}",
-                         viewIndex(dispatch.view),
-                         state.render_extent.x,
-                         state.render_extent.y,
-                         state.output_extent.x,
-                         state.output_extent.y,
-                         static_cast<int>(state.quality));
+                LOG_DEBUG("NGX DLSS feature ready: view={} render={}x{} output={}x{} quality={}",
+                          viewIndex(dispatch.view),
+                          state.render_extent.x,
+                          state.render_extent.y,
+                          state.output_extent.x,
+                          state.output_extent.y,
+                          static_cast<int>(state.quality));
                 return true;
             }
 
@@ -524,7 +524,7 @@ namespace lfs::vis {
             auto info = discoveryInfo(data_path->c_str());
             uint32_t count = 0;
             VkExtensionProperties* properties = nullptr;
-            LOG_INFO("Querying NVIDIA DLSS Vulkan instance requirements");
+            LOG_DEBUG("Querying NVIDIA DLSS Vulkan instance requirements");
             const auto result = NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements(
                 &info, &count, &properties);
             if (NVSDK_NGX_FAILED(result) || (count > 0 && properties == nullptr)) {
@@ -533,7 +533,7 @@ namespace lfs::vis {
                          static_cast<unsigned int>(result));
                 return {};
             }
-            LOG_INFO("NVIDIA DLSS requires {} Vulkan instance extension(s)", count);
+            LOG_DEBUG("NVIDIA DLSS requires {} Vulkan instance extension(s)", count);
             return extensionNames(count, properties);
         } catch (const std::exception& exception) {
             bootstrap_ready.store(false, std::memory_order_relaxed);
@@ -556,7 +556,7 @@ namespace lfs::vis {
             auto info = discoveryInfo(data_path->c_str());
             uint32_t count = 0;
             VkExtensionProperties* properties = nullptr;
-            LOG_INFO("Querying NVIDIA DLSS Vulkan device requirements");
+            LOG_DEBUG("Querying NVIDIA DLSS Vulkan device requirements");
             const auto result = NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements(
                 instance, physical_device, &info, &count, &properties);
             if (NVSDK_NGX_FAILED(result) || (count > 0 && properties == nullptr)) {
@@ -565,7 +565,7 @@ namespace lfs::vis {
                          static_cast<unsigned int>(result));
                 return {};
             }
-            LOG_INFO("NVIDIA DLSS requires {} Vulkan device extension(s)", count);
+            LOG_DEBUG("NVIDIA DLSS requires {} Vulkan device extension(s)", count);
             return extensionNames(count, properties);
         } catch (const std::exception& exception) {
             bootstrap_ready.store(false, std::memory_order_relaxed);

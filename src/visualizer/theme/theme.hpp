@@ -268,6 +268,14 @@ namespace lfs::vis {
 
     LFS_VIS_API void saveMcpPreferences(const McpPreferenceState& state);
     [[nodiscard]] LFS_VIS_API McpPreferenceState loadMcpPreferences();
+
+    struct PerfHudPreferenceState {
+        bool visible = false;
+        bool expanded = true;
+    };
+
+    LFS_VIS_API void savePerfHudPreferences(const PerfHudPreferenceState& state);
+    [[nodiscard]] LFS_VIS_API PerfHudPreferenceState loadPerfHudPreferences();
     LFS_VIS_API void setRememberCameraViewSnapPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool rememberCameraViewSnapPreference();
 

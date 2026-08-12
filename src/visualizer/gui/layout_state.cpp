@@ -62,28 +62,6 @@ namespace lfs::vis::gui {
                 }
             }
 
-            if (j.contains("vram_hud") && j["vram_hud"].is_object()) {
-                const auto& vh = j["vram_hud"];
-                vram_hud_x = vh.value("x", vram_hud_x);
-                vram_hud_y = vh.value("y", vram_hud_y);
-                vram_hud_width = vh.value("width", vram_hud_width);
-                vram_hud_height = vh.value("height", vram_hud_height);
-                vram_hud_active_tab = vh.value("active_tab", vram_hud_active_tab);
-                if (vh.contains("collapsed") && vh["collapsed"].is_array()) {
-                    vram_hud_collapsed_paths.clear();
-                    for (const auto& entry : vh["collapsed"]) {
-                        if (entry.is_string())
-                            vram_hud_collapsed_paths.push_back(entry.get<std::string>());
-                    }
-                }
-            }
-
-            if (j.contains("perf_hud") && j["perf_hud"].is_object()) {
-                const auto& ph = j["perf_hud"];
-                perf_hud_visible = ph.value("visible", perf_hud_visible);
-                perf_hud_expanded = ph.value("expanded", perf_hud_expanded);
-            }
-
             if (log_success)
                 LOG_INFO("Layout state loaded from {}", path.string());
         } catch (const std::exception& e) {

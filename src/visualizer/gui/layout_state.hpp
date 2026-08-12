@@ -9,7 +9,6 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 namespace lfs::vis::gui {
 
@@ -23,15 +22,6 @@ namespace lfs::vis::gui {
         std::string active_main_tab;
         std::string file_association;
         std::unordered_map<std::string, bool> window_visibility;
-
-        float vram_hud_x = -1.0f;
-        float vram_hud_y = -1.0f;
-        float vram_hud_width = -1.0f;
-        float vram_hud_height = -1.0f;
-        std::string vram_hud_active_tab;
-        std::vector<std::string> vram_hud_collapsed_paths;
-        bool perf_hud_visible = false;
-        bool perf_hud_expanded = true;
 
         void load(bool log_success = true);
         static std::filesystem::path getConfigDir();

@@ -341,6 +341,32 @@ TEST(ThemePreferencesContract, McpPreferencesRoundTripAndValidateInput) {
     std::filesystem::remove_all(root, error);
 }
 
+TEST(ThemePreferencesContract, PerformanceHudPreferencesRoundTripAndValidateInput) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_performance_hud_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    const auto defaults = lfs::vis::loadPerfHudPreferences();
+    EXPECT_FALSE(defaults.visible);
+    EXPECT_TRUE(defaults.expanded);
+
+    lfs::vis::savePerfHudPreferences({.visible = true, .expanded = false});
+    const auto saved = lfs::vis::loadPerfHudPreferences();
+    EXPECT_TRUE(saved.visible);
+    EXPECT_FALSE(saved.expanded);
+
+    std::ofstream(paths->preferencesFile())
+        << R"({"performance_hud":{"visible":"yes","expanded":7}})";
+    const auto invalid = lfs::vis::loadPerfHudPreferences();
+    EXPECT_FALSE(invalid.visible);
+    EXPECT_TRUE(invalid.expanded);
+    std::filesystem::remove_all(root, error);
+}
+
 TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
     const auto root = std::filesystem::temp_directory_path() / "lfs_theme_preferences_safe_mode";
     std::error_code error;
@@ -364,12 +390,16 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         EXPECT_FALSE(mcp.expose_network);
         EXPECT_EQ(mcp.port, 45677);
         EXPECT_FALSE(mcp.request_logging);
+        const auto perf_hud = lfs::vis::loadPerfHudPreferences();
+        EXPECT_FALSE(perf_hud.visible);
+        EXPECT_TRUE(perf_hud.expanded);
         lfs::vis::saveThemePreferenceName("gruvbox");
         lfs::vis::saveUiScalePreference(2.0f);
         lfs::vis::saveSceneRenderScalePreference(0.5f);
         lfs::vis::saveSceneUpscalerPreference("spatial");
         lfs::vis::saveLanguagePreference("fr");
         lfs::vis::saveMcpPreferences({.enabled = true, .expose_network = false, .port = 45677, .request_logging = true});
+        lfs::vis::savePerfHudPreferences({.visible = true, .expanded = false});
     }
 
     std::ifstream file(paths->preferencesFile());
