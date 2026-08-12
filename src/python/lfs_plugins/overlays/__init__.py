@@ -199,7 +199,10 @@ class _OverlayDocumentController:
             return False
 
         model.bind_func("show_import_overlay", self._show_import_overlay)
-        model.bind_func("show_import_backdrop", lambda: self._import_state.get("active", False))
+        model.bind_func(
+            "show_import_backdrop",
+            lambda: (self._import_state.get("active", False)
+                     and self._import_state.get("dataset_type") != "project"))
         model.bind_func("import_title", self._import_title)
         model.bind_func("import_title_class", self._import_title_class)
         model.bind_func("show_import_path", lambda: bool(self._import_state.get("path", "")))
@@ -269,6 +272,8 @@ class _OverlayDocumentController:
 
     def _import_title(self):
         state = self._import_state
+        if state.get("dataset_type") == "project":
+            return lf.ui.tr("progress.opening_project")
         show_completion = state.get("show_completion", False)
         if show_completion and not state.get("active", False):
             if state.get("success", False):

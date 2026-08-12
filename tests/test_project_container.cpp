@@ -110,7 +110,6 @@ namespace {
         return crc32c(0, bytes.data() + offset, count);
     }
 
-
     std::vector<std::byte>
     create_single_chunk_fixture(const fs::path& path,
                                 const std::uint64_t file_tag,
@@ -176,7 +175,6 @@ namespace {
         require_status(writer.commit());
     }
 
-
     TEST(ProjectContainerFormat, Crc32cKnownVector) {
         constexpr std::string_view CHECK = "123456789";
         EXPECT_EQ(crc32c(0, CHECK.data(), CHECK.size()), 0xe3069283u);
@@ -208,11 +206,6 @@ namespace {
             EXPECT_EQ(crc32c(0, sequential.data(), n), kExpected[n]) << "n=" << n;
         }
     }
-
-
-
-
-
 
     TEST(ProjectContainerReader,
          PositionalReadValidatesOnlyTouchedBlockCrcRanges) {
@@ -264,6 +257,59 @@ namespace {
                     : lfs::format_for_developer(untouched_result.error()));
         EXPECT_TRUE(std::equal(untouched.begin(), untouched.end(),
                                payload.begin() + 128));
+    }
+
+    TEST(ProjectContainerReader, ReadChunkRejectsPayloadCrcCorruption) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "payload-crc.licht";
+        std::vector<std::byte> payload(4096);
+        for (std::size_t index = 0; index < payload.size(); ++index) {
+            payload[index] = static_cast<std::byte>((index * 17u) ^ (index >> 3));
+        }
+        {
+            ProjectWriter writer = require_result(ProjectWriter::create(
+                path, fixture_create_options(818)));
+            require_status(writer.plan_commit(fixture_commit_options(819, 820, 1)));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.write_chunk(
+                fixed_key("PROJ", 821), payload,
+                ChunkWriteOptions{
+                    .chunk_version = 1,
+                    .compression = Compression::Stored,
+                    .tensor_payload = false,
+                    .block_crcs = false,
+                }));
+            require_status(writer.commit());
+        }
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        const ChunkInfo& chunk = reader.chunks().front();
+        write_file_range(path, chunk.payload_offset + 137,
+                         std::array{std::byte{0x7f}});
+        auto result = reader.read_chunk(chunk);
+        EXPECT_FALSE(result);
+        if (!result) {
+            EXPECT_NE(lfs::format_for_developer(result.error()).find("crc32c"),
+                      std::string::npos);
+        }
+    }
+
+    TEST(ProjectContainerReader, ReadChunkRejectsTruncatedChunk) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "truncated-chunk.licht";
+        const auto payload = byte_vector("payload that is longer than one byte");
+        {
+            ProjectWriter writer = require_result(ProjectWriter::create(
+                path, fixture_create_options(822)));
+            require_status(writer.plan_commit(fixture_commit_options(823, 824, 1)));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.write_chunk(fixed_key("PROJ", 825), payload));
+            require_status(writer.commit());
+        }
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        const ChunkInfo& chunk = reader.chunks().front();
+        ASSERT_GT(chunk.stored_bytes, 1u);
+        fs::resize_file(path, chunk.payload_offset + chunk.stored_bytes - 1);
+        EXPECT_FALSE(reader.read_chunk(chunk));
     }
 
     TEST(ProjectContainerReader,
@@ -324,10 +370,6 @@ namespace {
         EXPECT_TRUE(bounded->stream().fail());
         EXPECT_EQ(bounded->stream().gcount(), 0);
     }
-
-
-
-
 
     TEST(ProjectContainerWriter, CleanProofRejectsForcedFalseCleanAndReaderStaysPinned) {
         TemporaryDirectory temporary;
@@ -507,8 +549,6 @@ namespace {
             CLEAN_PROOF_REUSE));
     }
 
-
-
     TEST(ProjectContainerWriter,
          AutosaveCreateReplacesTornAndWrongMagicStableSidecars) {
         TemporaryDirectory temporary;
@@ -569,7 +609,6 @@ namespace {
         EXPECT_EQ(replacement.superblock().autosave_sequence, 2u);
         require_status(replacement.verify_all());
     }
-
 
     TEST(ProjectContainerWriter,
          BackupCleanupFailureAfterValidatedReplaceReportsSuccessAndNote) {
@@ -1683,8 +1722,6 @@ namespace {
 
 #ifndef _WIN32
 
-
-
 #endif
 
     [[nodiscard]] std::optional<std::uint64_t>
@@ -1718,8 +1755,6 @@ namespace {
         }
         return std::nullopt;
     }
-
-
 
     // Highly compressible zeros just over the historical 512 MiB bomb guard.
     // Runtime stays sane because zstd collapses the stored frame; materialize

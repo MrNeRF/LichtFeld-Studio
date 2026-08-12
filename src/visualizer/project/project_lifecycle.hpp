@@ -117,6 +117,7 @@ namespace lfs::vis::project {
         [[nodiscard]] bool isDirty();
         [[nodiscard]] bool hasSourcePath() const;
         [[nodiscard]] lfs::Result<ProjectInfo> info();
+        [[nodiscard]] ProjectMenuInfo menuInfo() const;
         [[nodiscard]] lfs::Result<void>
         preflightSwitch(
             ProjectSwitchDisposition disposition);
@@ -125,6 +126,7 @@ namespace lfs::vis::project {
             const std::optional<std::filesystem::path>& explicit_path);
         void markSceneMutation(std::uint32_t mutation_flags);
         void updateMaintenance();
+        void noteProjectFrameRendered(double render_ms);
         [[nodiscard]] bool hasDirtyProject();
         [[nodiscard]] lfs::Result<void>
         setReopenLastProject(bool enabled);
@@ -274,6 +276,7 @@ namespace lfs::vis::project {
         VisualizerImpl& viewer_;
         std::shared_ptr<lfs::io::project::ProjectDocument> document_;
         ProjectLifecycleSettings settings_;
+        mutable std::mutex settings_mutex_;
         std::filesystem::path settings_path_;
         std::atomic<std::uint64_t> epoch_{0};
         std::atomic<std::uint64_t> scene_mutation_serial_{0};
@@ -290,6 +293,11 @@ namespace lfs::vis::project {
             next_storage_check_at_;
         std::chrono::steady_clock::time_point
             autosave_retry_not_before_{};
+        std::chrono::steady_clock::time_point
+            project_open_started_at_{};
+        std::chrono::steady_clock::time_point
+            hydration_committed_at_{};
+        bool project_first_render_pending_ = false;
         std::uint64_t
             autosave_failure_backoff_seconds_ = 0;
         std::uint64_t
@@ -303,6 +311,8 @@ namespace lfs::vis::project {
             project_write_autosave_sequence_ = 0;
         std::optional<JobHandle>
             project_write_job_;
+        std::optional<JobHandle>
+            project_open_job_;
         ProjectWritePurpose
             project_write_purpose_ =
                 ProjectWritePurpose::None;

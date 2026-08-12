@@ -1017,7 +1017,7 @@ NB_MODULE(lichtfeld, m) {
             if (!viewer) {
                 return paths;
             }
-            auto info = viewer->projectGetInfo();
+            auto info = viewer->projectGetMenuInfo();
             if (!info) {
                 return paths;
             }
@@ -1096,7 +1096,7 @@ NB_MODULE(lichtfeld, m) {
             if (!viewer) {
                 return true;
             }
-            auto info = viewer->projectGetInfo();
+            auto info = viewer->projectGetMenuInfo();
             return !info ||
                    info->auto_save_on_close;
         },

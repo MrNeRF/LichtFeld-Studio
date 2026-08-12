@@ -539,6 +539,7 @@ namespace lichtfeld::Strings {
     namespace Progress {
         inline constexpr const char* EXPORTING = "progress.exporting";
         inline constexpr const char* IMPORTING = "progress.importing";
+        inline constexpr const char* OPENING_PROJECT = "progress.opening_project";
         inline constexpr const char* IMPORT_COMPLETE = "progress.import_complete";
         inline constexpr const char* IMPORT_FAILED = "progress.import_failed";
         inline constexpr const char* IMPORT_COMPLETE_TITLE = "progress.import_complete_title";

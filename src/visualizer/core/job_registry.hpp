@@ -23,6 +23,7 @@ namespace lfs::vis {
         Mesh2Splat,
         SplatSimplify,
         ProjectWrite,
+        ProjectOpen,
     };
 
     enum class JobStatus : std::uint8_t {
@@ -103,6 +104,8 @@ namespace lfs::vis {
         [[nodiscard]] bool cancelRequested(
             JobHandle handle) const;
         [[nodiscard]] bool anyRunning(JobType type) const;
+        [[nodiscard]] std::optional<JobSnapshot>
+        active(JobType type) const;
 
     private:
         struct Entry {

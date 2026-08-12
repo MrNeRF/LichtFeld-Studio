@@ -527,6 +527,15 @@ namespace lfs::vis {
                 if (!gm)
                     return {};
                 python::OverlayImportState state;
+                if (const auto project_open =
+                        gm->getViewer()->jobs().active(JobType::ProjectOpen);
+                    project_open) {
+                    state.active = true;
+                    state.progress = project_open->progress;
+                    state.stage = project_open->stage;
+                    state.dataset_type = "project";
+                    return state;
+                }
                 const auto& tasks = gm->asyncTasks();
                 state.active = tasks.isImporting();
                 state.show_completion = tasks.isImportCompletionShowing();
@@ -2245,11 +2254,15 @@ namespace lfs::vis {
             return;
         }
 
+        std::optional<std::chrono::steady_clock::time_point>
+            project_frame_started;
         if (!viewport_export_locked && !interactive_transition_settling &&
             !frame_state_.scene_render_suspended()) {
             if (!python::is_plugin_preload_running() && frame_demand.python_redraw && gui_manager_)
                 gui_manager_->syncVisiblePanelsBeforeSceneRender();
 
+            project_frame_started =
+                std::chrono::steady_clock::now();
             const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
             {
                 auto& interop = rendering_manager_->viewportInterop();
@@ -2319,6 +2332,13 @@ namespace lfs::vis {
             }
         } else {
             processRenderWorkQueue();
+        }
+        if (project_frame_started && project_lifecycle_) {
+            project_lifecycle_->noteProjectFrameRendered(
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() -
+                    *project_frame_started)
+                    .count());
         }
 
         if (!python::is_plugin_preload_running()) {
@@ -2916,6 +2936,18 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->info();
+    }
+
+    lfs::Result<ProjectMenuInfo>
+    VisualizerImpl::projectGetMenuInfo() {
+        if (!project_lifecycle_) {
+            return visualizerFailure<ProjectMenuInfo>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->menuInfo();
     }
 
     lfs::Result<bool>

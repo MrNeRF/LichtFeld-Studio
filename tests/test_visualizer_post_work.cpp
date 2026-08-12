@@ -2035,6 +2035,14 @@ namespace lfs::vis {
                     CloseSave;
             viewer.performPendingTrainingAction();
 
+            ASSERT_TRUE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+            EXPECT_FALSE(viewer.allowclose());
+            EXPECT_FALSE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+
             ASSERT_TRUE(pumpUntil(
                 viewer.work_queue_mutex_,
                 viewer.work_queue_,
@@ -2053,6 +2061,66 @@ namespace lfs::vis {
             EXPECT_TRUE(
                 viewer.getWindowManager()
                     ->shouldClose());
+            EXPECT_TRUE(viewer.allowclose());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           SaveAsAndExitContinuesAfterProjectWriteCompletes) {
+        const auto project_path =
+            temporary_.path /
+            "save-as-exit.licht";
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Unsaved before Save As exit"),
+                lfs::core::NULL_NODE);
+
+            const auto saved =
+                viewer.projectSaveAs(
+                    project_path, false);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            viewer.requestApplicationClose();
+
+            ASSERT_TRUE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+            EXPECT_FALSE(viewer.allowclose());
+            EXPECT_FALSE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return viewer
+                        .getWindowManager()
+                        ->shouldClose();
+                }));
+            const auto after =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(after)
+                << lfs::format_for_developer(
+                       after.error());
+            EXPECT_FALSE(after->dirty);
+            ASSERT_TRUE(after->path);
+            EXPECT_EQ(
+                after->path->lexically_normal(),
+                project_path.lexically_normal());
+            EXPECT_TRUE(viewer.allowclose());
         }
     }
 

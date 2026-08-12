@@ -1230,6 +1230,7 @@
     "exporting": "Exportando %s...",
     "exporting_video": "Exportando Vídeo...",
     "importing": "Importando %s...",
+    "opening_project": "Opening project...",
     "import_complete": "Importación completada: %zu imágenes, %zu puntos",
     "import_failed": "Error de importación: %s",
     "import_complete_title": "Importación Completada",

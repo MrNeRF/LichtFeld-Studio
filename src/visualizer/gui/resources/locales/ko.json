@@ -1230,6 +1230,7 @@
     "exporting": "%s 내보내는 중...",
     "exporting_video": "비디오 내보내기 중...",
     "importing": "%s 가져오는 중...",
+    "opening_project": "Opening project...",
     "import_complete": "가져오기 완료: %zu 이미지, %zu 포인트",
     "import_failed": "가져오기 실패: %s",
     "import_complete_title": "가져오기 완료",

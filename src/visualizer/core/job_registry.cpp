@@ -248,4 +248,26 @@ namespace lfs::vis {
         return active_by_type_.contains(type);
     }
 
+    std::optional<JobSnapshot>
+    JobRegistry::active(const JobType type) const {
+        const std::lock_guard lock(mutex_);
+        const auto active = active_by_type_.find(type);
+        if (active == active_by_type_.end()) {
+            return std::nullopt;
+        }
+        const auto* entry = findLocked(JobHandle{active->second, type});
+        if (!entry) {
+            return std::nullopt;
+        }
+        return JobSnapshot{
+            .handle = entry->handle,
+            .status = entry->status,
+            .progress = entry->progress,
+            .stage = entry->stage,
+            .error = entry->error,
+            .cancel_requested = entry->cancel_requested,
+            .worker_canceled = entry->worker_canceled,
+        };
+    }
+
 } // namespace lfs::vis

@@ -5,6 +5,7 @@
 
 #include "io/project_document.hpp"
 
+#include "core/logger.hpp"
 #include "io/loader.hpp"
 #include "project_container_internal.hpp"
 
@@ -1575,14 +1576,20 @@ namespace lfs::io::project {
     lfs::Result<ProjectDocument>
     ProjectDocument::open(const std::filesystem::path& path,
                           const ProjectDocumentOpenOptions& options) {
+        const auto open_started =
+            std::chrono::steady_clock::now();
         auto normalized = normalized_absolute_path(path);
         if (!normalized) {
             return std::move(normalized).error();
         }
+        const auto normalized_at =
+            std::chrono::steady_clock::now();
         auto reader = ProjectReader::open(*normalized, options.reader);
         if (!reader) {
             return std::move(reader).error();
         }
+        const auto reader_opened_at =
+            std::chrono::steady_clock::now();
         auto shared_reader = std::make_shared<ProjectReader>(
             std::move(*reader));
         auto impl = std::make_unique<Impl>();
@@ -1601,6 +1608,9 @@ namespace lfs::io::project {
         bool have_editor = false;
         bool have_sequencer = false;
         bool have_metrics = false;
+        double chapter_read_ms = 0.0;
+        const auto chapter_scan_started =
+            std::chrono::steady_clock::now();
 
         for (const auto& row : shared_reader->chunks()) {
             if (!row.is_live()) {
@@ -1697,7 +1707,14 @@ namespace lfs::io::project {
                 impl->deferred_geometry_keys.insert(row.key);
                 continue;
             }
+            const auto chapter_read_started =
+                std::chrono::steady_clock::now();
             auto bytes = shared_reader->read_chunk(row);
+            chapter_read_ms +=
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() -
+                    chapter_read_started)
+                    .count();
             if (!bytes) {
                 return std::move(bytes).error();
             }
@@ -1888,7 +1905,7 @@ namespace lfs::io::project {
                 impl->metrics = std::move(*chapter);
                 have_metrics = true;
             } else if (row.key.fourcc == FOURCC_SPLT) {
-                auto payload = SplatChapterPayload::from_lfsp(*bytes);
+                auto payload = SplatChapterPayload::from_lfsp(std::move(*bytes));
                 if (!payload) {
                     return std::move(payload).error();
                 }
@@ -1914,6 +1931,8 @@ namespace lfs::io::project {
                 impl->content_hashes.emplace(row.key, xxh3_128(*bytes));
             }
         }
+        const auto chapter_scan_finished =
+            std::chrono::steady_clock::now();
 
         if (!have_project || !have_references || !have_scene ||
             !have_selection || !have_parameters) {
@@ -1957,6 +1976,32 @@ namespace lfs::io::project {
             !valid) {
             return std::move(valid).error();
         }
+        const auto open_finished =
+            std::chrono::steady_clock::now();
+        const auto milliseconds =
+            [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(
+                           end - begin)
+                    .count();
+            };
+        const double chapter_scan_ms =
+            milliseconds(
+                chapter_scan_started,
+                chapter_scan_finished);
+        LOG_DEBUG(
+            "Project document open stages: path={} deferred_geometry={} normalize={:.3f} ms reader_parse={:.3f} ms chapter_read={:.3f} ms chapter_decode_scan={:.3f} ms validate={:.3f} ms total={:.3f} ms",
+            normalized->string(),
+            options.defer_geometry_payloads,
+            milliseconds(open_started, normalized_at),
+            milliseconds(normalized_at, reader_opened_at),
+            chapter_read_ms,
+            std::max(
+                0.0,
+                chapter_scan_ms - chapter_read_ms),
+            milliseconds(
+                chapter_scan_finished,
+                open_finished),
+            milliseconds(open_started, open_finished));
         return ProjectDocument(std::move(impl));
     }
 
@@ -3617,6 +3662,18 @@ namespace lfs::io::project {
         lfs::core::Scene& destination,
         const ScenePayloadResolver& external_payloads,
         lfs::core::SplatTensorAllocator splat_allocator) const {
+        const auto hydration_started =
+            std::chrono::steady_clock::now();
+        double splat_read_ms = 0.0;
+        double splat_hash_ms = 0.0;
+        double splat_copy_ms = 0.0;
+        double splat_materialize_ms = 0.0;
+        const auto milliseconds =
+            [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(
+                           end - begin)
+                    .count();
+            };
         try {
             std::map<ChunkKey, Hash128, ChunkKeyLess>
                 hashes;
@@ -3673,16 +3730,26 @@ namespace lfs::io::project {
 
             staged_splats.reserve(
                 impl_->splats.size() + deferred_count(FOURCC_SPLT));
+            const std::size_t splat_count =
+                impl_->splats.size() + deferred_count(FOURCC_SPLT);
             for (const auto& [uuid, payload] :
                  impl_->splats) {
                 const ChunkKey key{
                     .fourcc = FOURCC_SPLT,
                     .instance_uuid = uuid,
                 };
-                hashes.emplace(
-                    key, xxh3_128(payload.bytes()));
+                const auto hash_started =
+                    std::chrono::steady_clock::now();
+                hashes.emplace(key, xxh3_128(payload.bytes()));
+                splat_hash_ms += milliseconds(
+                    hash_started, std::chrono::steady_clock::now());
+                const auto materialize_started =
+                    std::chrono::steady_clock::now();
                 auto materialized =
                     payload.hydrate(splat_allocator);
+                splat_materialize_ms += milliseconds(
+                    materialize_started,
+                    std::chrono::steady_clock::now());
                 if (!materialized) {
                     return std::move(materialized).error();
                 }
@@ -3693,17 +3760,34 @@ namespace lfs::io::project {
                 if (key.fourcc != FOURCC_SPLT) {
                     continue;
                 }
+                const auto read_started =
+                    std::chrono::steady_clock::now();
                 auto bytes = read_deferred(key);
+                splat_read_ms += milliseconds(
+                    read_started, std::chrono::steady_clock::now());
                 if (!bytes) {
                     return std::move(bytes).error();
                 }
+                const auto hash_started =
+                    std::chrono::steady_clock::now();
                 hashes.insert_or_assign(key, xxh3_128(*bytes));
-                auto payload = SplatChapterPayload::from_lfsp(*bytes);
+                splat_hash_ms += milliseconds(
+                    hash_started, std::chrono::steady_clock::now());
+                const auto copy_started =
+                    std::chrono::steady_clock::now();
+                auto payload = SplatChapterPayload::from_lfsp(std::move(*bytes));
+                splat_copy_ms += milliseconds(
+                    copy_started, std::chrono::steady_clock::now());
                 if (!payload) {
                     return std::move(payload).error();
                 }
+                const auto materialize_started =
+                    std::chrono::steady_clock::now();
                 auto materialized =
                     payload->hydrate(splat_allocator);
+                splat_materialize_ms += milliseconds(
+                    materialize_started,
+                    std::chrono::steady_clock::now());
                 if (!materialized) {
                     return std::move(materialized).error();
                 }
@@ -4042,6 +4126,17 @@ namespace lfs::io::project {
                     .pending_session =
                         std::move(pending_session),
                 };
+            const double total_ms = milliseconds(
+                hydration_started,
+                std::chrono::steady_clock::now());
+            LOG_DEBUG(
+                "Project SPLT hydration stages: splats={} chunk_read={:.3f} ms content_hash={:.3f} ms payload_copy={:.3f} ms materialize={:.3f} ms remaining={:.3f} ms total={:.3f} ms",
+                splat_count, splat_read_ms, splat_hash_ms,
+                splat_copy_ms, splat_materialize_ms,
+                std::max(0.0,
+                         total_ms - splat_read_ms - splat_hash_ms -
+                             splat_copy_ms - splat_materialize_ms),
+                total_ms);
             return ProjectHydrationPlan(std::move(plan));
         } catch (const std::bad_alloc& error) {
             // LFS-CENSUS-OK(empty-catch): Phase A converts allocation failure into the Result contract.

@@ -53,6 +53,11 @@ namespace lfs::vis {
         std::filesystem::path last_known_path;
     };
 
+    struct LFS_VIS_API ProjectMenuInfo {
+        bool auto_save_on_close = false;
+        std::vector<ProjectRecentInfo> recent_projects;
+    };
+
     struct LFS_VIS_API ProjectInfo {
         std::optional<std::filesystem::path> path;
         std::string project_uuid;
@@ -147,6 +152,20 @@ namespace lfs::vis {
         projectHasPath() = 0;
         virtual lfs::Result<ProjectInfo>
         projectGetInfo() = 0;
+        virtual lfs::Result<ProjectMenuInfo>
+        projectGetMenuInfo() {
+            auto info = projectGetInfo();
+            if (!info) {
+                return std::move(info).error();
+            }
+            return ProjectMenuInfo{
+                .auto_save_on_close =
+                    info->auto_save_on_close,
+                .recent_projects =
+                    std::move(
+                        info->recent_projects),
+            };
+        }
 
         virtual ~Visualizer() = default;
     };

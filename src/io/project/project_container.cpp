@@ -4,6 +4,7 @@
 
 #include "io/project_container.hpp"
 
+#include "core/logger.hpp"
 #include "crc32c.hpp"
 #include "project_container_internal.hpp"
 
@@ -13,6 +14,7 @@
 #include <array>
 #include <cassert>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <format>
 #include <istream>
@@ -3043,6 +3045,8 @@ namespace lfs::io::project {
 
     lfs::Result<std::vector<std::byte>>
     ProjectReader::read_chunk(const ChunkInfo& chunk) const {
+        const auto read_started =
+            std::chrono::steady_clock::now();
         if (auto allowed = require_supported_payload_access(*this); !allowed) {
             return std::move(allowed).error();
         }
@@ -3050,6 +3054,9 @@ namespace lfs::io::project {
         if (!resolved) {
             return std::move(resolved).error();
         }
+        const auto resolved_at =
+            std::chrono::steady_clock::now();
+        const ChunkInfo& row = **resolved;
         const std::uint64_t materialize_max =
             max_materialized_bytes_for(**resolved);
         if ((*resolved)->stored_bytes > materialize_max ||
@@ -3064,19 +3071,119 @@ namespace lfs::io::project {
                             materialize_max),
                 path(), (*resolved)->payload_offset, "payload.materialized_size");
         }
-        if (auto verified = verify_chunk(**resolved); !verified) {
-            return std::move(verified).error();
+        if (row.stored_bytes > std::numeric_limits<std::size_t>::max()) {
+            return detail::project_error(
+                lfs::ErrorCode::ResourceExhausted,
+                "This project chunk is too large to materialize in memory.",
+                std::format("stored bytes {} exceed this build's size_t range",
+                            row.stored_bytes),
+                path(), row.payload_offset, "payload.read");
         }
-        const ChunkInfo& row = **resolved;
-        auto stored = read_vector(*impl_->state->file, row.payload_offset,
-                                  row.stored_bytes, impl_->state->physical_size,
-                                  commit().committed_file_end, "payload.read",
-                                  materialize_max,
-                                  lfs::ErrorCode::ResourceExhausted);
-        if (!stored) {
-            return std::move(stored).error();
+        auto payload_end = detail::checked_add(
+            row.payload_offset, row.stored_bytes, path(),
+            row.payload_offset, "payload.read");
+        if (!payload_end) {
+            return std::move(payload_end).error();
         }
+        if (*payload_end > commit().committed_file_end) {
+            return format_error(
+                path(), row.payload_offset, "payload.read",
+                std::format("end <= committed file end {}",
+                            commit().committed_file_end),
+                std::to_string(*payload_end), lfs::ErrorCode::BoundsViolation);
+        }
+        std::vector<std::byte> stored;
+        try {
+            stored.resize(static_cast<std::size_t>(row.stored_bytes));
+        } catch (const std::bad_alloc&) {
+            return detail::project_error(
+                lfs::ErrorCode::ResourceExhausted,
+                "There is not enough memory to read this project chunk.",
+                std::format("allocation of {} stored bytes failed", row.stored_bytes),
+                path(), row.payload_offset, "payload.read");
+        } catch (const std::length_error& error) {
+            return detail::project_error(
+                lfs::ErrorCode::BoundsViolation,
+                "The project chunk cannot be represented by this build.",
+                std::format("allocation of {} stored bytes failed: {}",
+                            row.stored_bytes, error.what()),
+                path(), row.payload_offset, "payload.read");
+        }
+        std::uint32_t running_crc = 0;
+        std::size_t block_index = 0;
+        for (std::uint64_t relative = 0; relative < row.stored_bytes;) {
+            const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(
+                BLOCK_CRC_BYTES, row.stored_bytes - relative));
+            auto block = std::span<std::byte>(
+                stored.data() + static_cast<std::size_t>(relative), count);
+            if (auto read = impl_->state->file->read_exact(
+                    row.payload_offset + relative, block);
+                !read) {
+                return std::move(read).error();
+            }
+            if (impl_->state->options.payload_bytes_read) {
+                impl_->state->options.payload_bytes_read->fetch_add(
+                    count, std::memory_order_relaxed);
+            }
+            const auto block_crc = crc32c(0, block.data(), block.size());
+            if (row.block_crc_table.has_value()) {
+                const auto& entries = row.block_crc_table->entries;
+                if (block_index >= entries.size()) {
+                    return detail::project_error(
+                        lfs::ErrorCode::DataLoss,
+                        "The project payload block table is inconsistent.",
+                        std::format("payload {} has more blocks than its CRC table",
+                                    row.key_string()),
+                        path(), row.block_crc_table->offset + 40,
+                        "payload.block_count");
+                }
+                if (block_crc != entries[block_index]) {
+                    return format_error(
+                        path(), row.payload_offset + relative,
+                        std::format("payload[{}].block[{}].crc32c",
+                                    row.key_string(), block_index),
+                        std::format("0x{:08x}", entries[block_index]),
+                        std::format("0x{:08x}", block_crc));
+                }
+            }
+            running_crc = crc32c(running_crc, block.data(), block.size());
+            relative += count;
+            ++block_index;
+        }
+        if (running_crc != row.payload_crc32c) {
+            return format_error(
+                path(), row.payload_offset,
+                std::format("payload[{}].crc32c", row.key_string()),
+                std::format("0x{:08x}", row.payload_crc32c),
+                std::format("0x{:08x}", running_crc));
+        }
+        if (row.block_crc_table.has_value() &&
+            block_index != row.block_crc_table->entries.size()) {
+            return format_error(
+                path(), row.block_crc_table->offset + 40,
+                std::format("payload[{}].block_count", row.key_string()),
+                std::to_string(row.block_crc_table->entries.size()),
+                std::to_string(block_index));
+        }
+        const auto stored_read_at =
+            std::chrono::steady_clock::now();
+        const auto verified_at = stored_read_at;
+        const auto milliseconds =
+            [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(
+                           end - begin)
+                    .count();
+            };
         if (row.compression == Compression::Stored) {
+            LOG_DEBUG(
+                "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms verify={:.3f} ms stored_read={:.3f} ms decompress=0.000 ms unshuffle=0.000 ms total={:.3f} ms",
+                row.key_string(), row.stored_bytes,
+                row.uncompressed_bytes,
+                static_cast<std::uint16_t>(row.compression),
+                milliseconds(read_started, resolved_at),
+                milliseconds(stored_read_at, verified_at),
+                milliseconds(resolved_at, stored_read_at),
+                milliseconds(read_started, stored_read_at));
             return stored;
         }
         if (row.compression != Compression::Zstd &&
@@ -3089,13 +3196,25 @@ namespace lfs::io::project {
                 path(), row.payload_offset, "payload.compression");
         }
         auto decoded = decompress_zstd_exact(path(), row.payload_offset,
-                                             "payload.zstd", *stored,
+                                             "payload.zstd", stored,
                                              row.uncompressed_bytes,
                                              materialize_max);
         if (!decoded) {
             return std::move(decoded).error();
         }
+        const auto decompressed_at =
+            std::chrono::steady_clock::now();
         if (row.compression == Compression::Zstd) {
+            LOG_DEBUG(
+                "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms verify={:.3f} ms stored_read={:.3f} ms decompress={:.3f} ms unshuffle=0.000 ms total={:.3f} ms",
+                row.key_string(), row.stored_bytes,
+                row.uncompressed_bytes,
+                static_cast<std::uint16_t>(row.compression),
+                milliseconds(read_started, resolved_at),
+                milliseconds(stored_read_at, verified_at),
+                milliseconds(resolved_at, stored_read_at),
+                milliseconds(stored_read_at, decompressed_at),
+                milliseconds(read_started, decompressed_at));
             return decoded;
         }
         // ByteShuffleZstd: zstd frame content is the plane-shuffled buffer;
@@ -3106,7 +3225,21 @@ namespace lfs::io::project {
                                 "decoded size multiple of 4",
                                 std::to_string(decoded->size()));
         }
-        return unbyte_plane_f32_words(*decoded);
+        auto unshuffled = unbyte_plane_f32_words(*decoded);
+        const auto unshuffled_at =
+            std::chrono::steady_clock::now();
+        LOG_DEBUG(
+            "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms verify={:.3f} ms stored_read={:.3f} ms decompress={:.3f} ms unshuffle={:.3f} ms total={:.3f} ms",
+            row.key_string(), row.stored_bytes,
+            row.uncompressed_bytes,
+            static_cast<std::uint16_t>(row.compression),
+            milliseconds(read_started, resolved_at),
+            milliseconds(stored_read_at, verified_at),
+            milliseconds(resolved_at, stored_read_at),
+            milliseconds(stored_read_at, decompressed_at),
+            milliseconds(decompressed_at, unshuffled_at),
+            milliseconds(read_started, unshuffled_at));
+        return unshuffled;
     }
 
     lfs::Result<std::vector<std::byte>> ProjectReader::read_preview() const {

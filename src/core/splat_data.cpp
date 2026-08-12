@@ -13,6 +13,7 @@
 #include "nanoflann.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <expected>
@@ -1540,6 +1541,8 @@ namespace lfs::core {
     }
 
     void SplatData::deserialize(std::istream& is, SplatTensorAllocator tensor_allocator) {
+        const auto deserialize_started =
+            std::chrono::steady_clock::now();
         uint32_t magic = 0, version = 0;
         serialization_detail::read_exact(is, &magic, sizeof(magic), "SplatData magic");
         serialization_detail::read_exact(is, &version, sizeof(version), "SplatData version");
@@ -1661,6 +1664,8 @@ namespace lfs::core {
                 throw std::runtime_error("Invalid SplatData: densification state has incompatible schema");
         }
         validate_frozen_ranges(loaded_frozen_ranges, n);
+        const auto gpu_upload_started =
+            std::chrono::steady_clock::now();
 
         const auto copy_param = [&](Tensor source, std::string_view name) {
             Tensor source_cuda = std::move(source).cuda();
@@ -1720,6 +1725,8 @@ namespace lfs::core {
         Tensor loaded_densification = has_densification && densification.numel() > 0
                                           ? std::move(densification).cuda()
                                           : Tensor{};
+        const auto gpu_upload_finished =
+            std::chrono::steady_clock::now();
 
         // Commit only after the complete serialized model has been read,
         // schema-checked, allocated, and uploaded successfully.
@@ -1736,6 +1743,25 @@ namespace lfs::core {
         _max_sh_degree = max_sh;
         _active_sh_degree = active_sh;
         _scene_scale = scene_scale;
+
+        const auto milliseconds =
+            [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(
+                           end - begin)
+                    .count();
+            };
+        LOG_DEBUG(
+            "Splat deserialize stages: gaussians={} cpu_decode={:.3f} ms gpu_upload={:.3f} ms total={:.3f} ms",
+            n,
+            milliseconds(
+                deserialize_started,
+                gpu_upload_started),
+            milliseconds(
+                gpu_upload_started,
+                gpu_upload_finished),
+            milliseconds(
+                deserialize_started,
+                gpu_upload_finished));
 
         LOG_DEBUG("Deserialized SplatData: {} Gaussians, SH {}/{}", size(), active_sh, max_sh);
     }

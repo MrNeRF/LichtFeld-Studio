@@ -99,6 +99,8 @@ namespace lfs::vis {
         projectHasPath() override;
         lfs::Result<ProjectInfo>
         projectGetInfo() override;
+        lfs::Result<ProjectMenuInfo>
+        projectGetMenuInfo() override;
 
         // Getters for GUI (delegating to state manager)
         lfs::training::Trainer* getTrainer() const { return trainer_manager_->getTrainer(); }
@@ -204,6 +206,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_FileExitWithDefaultSettingsNeedsPrompt_Test;
         friend class VisualizerImplResetTest_FileExitRoutesThroughCloseSaveWhenAutoSaveOnCloseEnabled_Test;
         friend class VisualizerImplResetTest_CloseSavePendingActionSkipsPreviewRegen_Test;
+        friend class VisualizerImplResetTest_SaveAsAndExitContinuesAfterProjectWriteCompletes_Test;
         friend class VisualizerImplResetTest_CancelExitAndNextWindowAttemptRecoverFromFailedCloseSave_Test;
         friend class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
         friend class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;

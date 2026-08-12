@@ -30,6 +30,8 @@ namespace lfs::io::project {
         [[nodiscard]] static lfs::Result<SplatChapterPayload>
         from_lfsp(std::span<const std::byte> bytes);
         [[nodiscard]] static lfs::Result<SplatChapterPayload>
+        from_lfsp(std::vector<std::byte>&& bytes);
+        [[nodiscard]] static lfs::Result<SplatChapterPayload>
         capture(const lfs::core::SplatData& model, SplatSourceKind source_kind,
                 bool is_training_model);
 

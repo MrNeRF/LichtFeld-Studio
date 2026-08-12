@@ -1230,6 +1230,7 @@
     "exporting": "%s をエクスポート中...",
     "exporting_video": "動画を書き出し中...",
     "importing": "%s をインポート中...",
+    "opening_project": "Opening project...",
     "import_complete": "インポート完了: %zu 画像, %zu ポイント",
     "import_failed": "インポート失敗: %s",
     "import_complete_title": "インポート完了",

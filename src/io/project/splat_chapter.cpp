@@ -8,6 +8,7 @@
 #include <cstring>
 #include <exception>
 #include <format>
+#include <spanstream>
 #include <sstream>
 #include <utility>
 
@@ -35,7 +36,7 @@ namespace lfs::io::project {
 
     } // namespace
 
-    lfs::Result<SplatChapterPayload> SplatChapterPayload::from_lfsp(
+    lfs::Result<std::uint32_t> validate_lfsp(
         const std::span<const std::byte> bytes) {
         if (bytes.size() < 8) {
             return splat_error(
@@ -57,9 +58,30 @@ namespace lfs::io::project {
                 "This embedded splat payload version is not supported.",
                 std::format("LFSP version {} is unsupported", version));
         }
+        return version;
+    }
+
+    lfs::Result<SplatChapterPayload> SplatChapterPayload::from_lfsp(
+        const std::span<const std::byte> bytes) {
+        auto version = validate_lfsp(bytes);
+        if (!version) {
+            return std::move(version).error();
+        }
         SplatChapterPayload result;
         result.bytes_.assign(bytes.begin(), bytes.end());
-        result.lfsp_version_ = version;
+        result.lfsp_version_ = *version;
+        return result;
+    }
+
+    lfs::Result<SplatChapterPayload> SplatChapterPayload::from_lfsp(
+        std::vector<std::byte>&& bytes) {
+        auto version = validate_lfsp(bytes);
+        if (!version) {
+            return std::move(version).error();
+        }
+        SplatChapterPayload result;
+        result.bytes_ = std::move(bytes);
+        result.lfsp_version_ = *version;
         return result;
     }
 
@@ -105,9 +127,9 @@ namespace lfs::io::project {
         lfs::core::SplatTensorAllocator tensor_allocator) const {
         try {
             auto result = std::make_unique<lfs::core::SplatData>();
-            const std::string_view view(
+            const auto chars = std::span<const char>(
                 reinterpret_cast<const char*>(bytes_.data()), bytes_.size());
-            std::istringstream stream(std::string(view), std::ios::binary);
+            std::ispanstream stream(chars);
             result->deserialize(stream, std::move(tensor_allocator));
             if (!stream || stream.peek() != std::char_traits<char>::eof()) {
                 return splat_error(

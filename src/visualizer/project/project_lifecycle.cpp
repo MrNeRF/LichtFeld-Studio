@@ -1050,6 +1050,14 @@ namespace lfs::vis::project {
                 hydration_threads_);
         }
         hydration_threads.clear();
+        if (project_open_job_) {
+            if (auto job = viewer_.jobs().peek(*project_open_job_);
+                job && job->running()) {
+                viewer_.jobs().canceled(*project_open_job_);
+                viewer_.jobs().free(*project_open_job_);
+            }
+            project_open_job_.reset();
+        }
     }
 
     std::string ProjectLifecycle::hydrationName(
@@ -1071,8 +1079,14 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::persistSettings() {
+        ProjectLifecycleSettings settings;
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            settings = settings_;
+        }
         return saveProjectLifecycleSettings(
-            settings_path_, settings_);
+            settings_path_, settings);
     }
 
     lfs::Result<void>
@@ -1110,14 +1124,24 @@ namespace lfs::vis::project {
     lfs::Result<void>
     ProjectLifecycle::setReopenLastProject(
         const bool enabled) {
-        if (settings_.reopen_last_project == enabled) {
-            return {};
+        bool previous = false;
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            if (settings_.reopen_last_project ==
+                enabled) {
+                return {};
+            }
+            previous =
+                settings_.reopen_last_project;
+            settings_.reopen_last_project =
+                enabled;
         }
-        const auto previous =
-            settings_.reopen_last_project;
-        settings_.reopen_last_project = enabled;
         if (auto saved = persistSettings(); !saved) {
-            settings_.reopen_last_project = previous;
+            const std::lock_guard lock(
+                settings_mutex_);
+            settings_.reopen_last_project =
+                previous;
             return saved;
         }
         return {};
@@ -1126,14 +1150,24 @@ namespace lfs::vis::project {
     lfs::Result<void>
     ProjectLifecycle::setAutoSaveOnClose(
         const bool enabled) {
-        if (settings_.auto_save_on_close == enabled) {
-            return {};
+        bool previous = false;
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            if (settings_.auto_save_on_close ==
+                enabled) {
+                return {};
+            }
+            previous =
+                settings_.auto_save_on_close;
+            settings_.auto_save_on_close =
+                enabled;
         }
-        const auto previous =
-            settings_.auto_save_on_close;
-        settings_.auto_save_on_close = enabled;
         if (auto saved = persistSettings(); !saved) {
-            settings_.auto_save_on_close = previous;
+            const std::lock_guard lock(
+                settings_mutex_);
+            settings_.auto_save_on_close =
+                previous;
             return saved;
         }
         return {};
@@ -1142,12 +1176,20 @@ namespace lfs::vis::project {
     lfs::Result<void>
     ProjectLifecycle::setAutosaveIntervalSeconds(
         const std::uint64_t seconds) {
-        const auto previous =
-            settings_.autosave_interval_seconds;
-        settings_.autosave_interval_seconds =
-            seconds;
-        if (auto saved = persistSettings(); !saved) {
+        std::uint64_t previous = 0;
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            previous =
+                settings_.autosave_interval_seconds;
             settings_.autosave_interval_seconds =
+                seconds;
+        }
+        if (auto saved = persistSettings(); !saved) {
+            const std::lock_guard lock(
+                settings_mutex_);
+            settings_
+                .autosave_interval_seconds =
                 previous;
             return saved;
         }
@@ -2144,10 +2186,14 @@ namespace lfs::vis::project {
                 project_write_purpose_ ==
                     ProjectWritePurpose::
                         TrainingExplicitSave) {
-                rememberProject(
-                    settings_,
-                    document_->project_uuid(),
-                    project_write_destination_);
+                {
+                    const std::lock_guard lock(
+                        settings_mutex_);
+                    rememberProject(
+                        settings_,
+                        document_->project_uuid(),
+                        project_write_destination_);
+                }
                 if (auto persisted =
                         persistSettings();
                     !persisted) {
@@ -2220,7 +2266,7 @@ namespace lfs::vis::project {
         if (!(was_autosave && !error.empty())) {
             refreshStorageStats();
         }
-        if (close_save) {
+        if (application_close_pending_) {
             viewer_.requestApplicationClose();
         }
     }
@@ -2335,6 +2381,32 @@ namespace lfs::vis::project {
         }
     }
 
+    void ProjectLifecycle::noteProjectFrameRendered(
+        const double render_ms) {
+        if (!project_first_render_pending_) {
+            return;
+        }
+        project_first_render_pending_ = false;
+        const auto rendered_at =
+            std::chrono::steady_clock::now();
+        const double commit_to_present_ms =
+            std::chrono::duration<double, std::milli>(
+                rendered_at -
+                hydration_committed_at_)
+                .count();
+        const double open_to_present_ms =
+            std::chrono::duration<double, std::milli>(
+                rendered_at -
+                project_open_started_at_)
+                .count();
+        LOG_DEBUG(
+            "Project first render stages: wait_after_hydration={:.3f} ms render_present={:.3f} ms open_to_present={:.3f} ms",
+            std::max(
+                0.0,
+                commit_to_present_ms - render_ms),
+            render_ms, open_to_present_ms);
+    }
+
     void ProjectLifecycle::markSceneMutation(
         const std::uint32_t mutation_flags) {
         cached_project_info_.reset();
@@ -2434,9 +2506,14 @@ namespace lfs::vis::project {
             Hydration::Complete,
             std::memory_order_release);
         hydration_error_.clear();
-        rememberProject(
-            settings_, document_->project_uuid(),
-            metrics.last_path);
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            rememberProject(
+                settings_,
+                document_->project_uuid(),
+                metrics.last_path);
+        }
         if (auto persisted = persistSettings();
             !persisted) {
             LOG_WARN(
@@ -3421,6 +3498,10 @@ namespace lfs::vis::project {
     ProjectLifecycle::open(
         const std::filesystem::path& path,
         const ProjectSwitchDisposition disposition) {
+        const auto open_started =
+            std::chrono::steady_clock::now();
+        project_open_started_at_ = open_started;
+        project_first_render_pending_ = false;
         if (recovery_prompt_pending_) {
             return ProjectOpenOutcome::
                 RecoveryPromptPending;
@@ -3438,11 +3519,15 @@ namespace lfs::vis::project {
                 "Wait for save, autosave, or compaction before opening another project",
                 "project.job");
         }
+        const auto preflight_finished =
+            std::chrono::steady_clock::now();
         auto normalized =
             normalizedProjectPath(path);
         if (!normalized) {
             return std::move(normalized).error();
         }
+        const auto normalized_at =
+            std::chrono::steady_clock::now();
         auto inspection =
             lfs::io::project::
                 inspect_autosave_recovery(
@@ -3450,6 +3535,8 @@ namespace lfs::vis::project {
         if (!inspection) {
             return std::move(inspection).error();
         }
+        const auto recovery_inspected_at =
+            std::chrono::steady_clock::now();
         const auto previous_autosave_sequence =
             autosave_sequence_;
         autosave_sequence_ =
@@ -3500,7 +3587,7 @@ namespace lfs::vis::project {
                     lfs::ErrorCode::
                         FailedPrecondition,
                     "A recoverable autosave is available.",
-                    "Headless callers must explicitly pass --recover",
+                    "Headless project resume performs recovery automatically",
                     "project.recovery");
             }
             recovery_prompt_pending_ = true;
@@ -3566,6 +3653,30 @@ namespace lfs::vis::project {
         if (!opened) {
             return std::move(opened).error();
         }
+        const auto open_finished =
+            std::chrono::steady_clock::now();
+        const auto milliseconds =
+            [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(
+                           end - begin)
+                    .count();
+            };
+        LOG_DEBUG(
+            "Project open dispatch stages: path={} preflight={:.3f} ms normalize={:.3f} ms recovery_scan={:.3f} ms master_open={:.3f} ms total={:.3f} ms",
+            lfs::core::path_to_utf8(*normalized),
+            milliseconds(
+                open_started,
+                preflight_finished),
+            milliseconds(
+                preflight_finished,
+                normalized_at),
+            milliseconds(
+                normalized_at,
+                recovery_inspected_at),
+            milliseconds(
+                recovery_inspected_at,
+                open_finished),
+            milliseconds(open_started, open_finished));
         return ProjectOpenOutcome::Opened;
     }
 
@@ -3611,9 +3722,14 @@ namespace lfs::vis::project {
             temporary;
         recovery_session_ =
             std::move(*session);
-        rememberProject(
-            settings_, document_->project_uuid(),
-            master_path);
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            rememberProject(
+                settings_,
+                document_->project_uuid(),
+                master_path);
+        }
         if (auto persisted = persistSettings();
             !persisted) {
             LOG_WARN(
@@ -3648,6 +3764,8 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(normalized).error());
         }
+        const auto normalized_at =
+            std::chrono::steady_clock::now();
         auto opened = ProjectDocument::open(
             *normalized,
             {
@@ -3662,6 +3780,8 @@ namespace lfs::vis::project {
         auto candidate =
             std::make_shared<ProjectDocument>(
                 std::move(*opened));
+        const auto document_opened_at =
+            std::chrono::steady_clock::now();
         const auto project_root =
             projectRootFor(*candidate);
         auto session =
@@ -3681,6 +3801,8 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(session).error());
         }
+        const auto session_prepared_at =
+            std::chrono::steady_clock::now();
         auto parameters =
             candidate->parameters().snapshot();
         if (!parameters) {
@@ -3706,6 +3828,8 @@ namespace lfs::vis::project {
             !valid) {
             return valid;
         }
+        const auto parameters_ready_at =
+            std::chrono::steady_clock::now();
         auto* manager = viewer_.getSceneManager();
         if (!manager) {
             return fail<void>(
@@ -3721,6 +3845,8 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(shell).error());
         }
+        const auto shell_staged_at =
+            std::chrono::steady_clock::now();
 
         stopHydrationThreads();
         viewer_.resetProjectState();
@@ -3734,6 +3860,8 @@ namespace lfs::vis::project {
                 *parameters);
         viewer_.stagePreparedProjectSessionRestore(
             std::move(*session));
+        const auto shell_committed_at =
+            std::chrono::steady_clock::now();
 
         cached_project_info_.reset();
         document_ = candidate;
@@ -3769,15 +3897,24 @@ namespace lfs::vis::project {
                 std::memory_order_acquire);
         const auto shell_selected_nodes =
             selectedNodeUuids(viewer_);
-        rememberProject(
-            settings_, candidate->project_uuid(),
-            *normalized);
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            rememberProject(
+                settings_,
+                candidate->project_uuid(),
+                *normalized);
+        }
         if (auto persisted = persistSettings();
             !persisted) {
             LOG_WARN(
                 "Project opened, but MRU settings failed: {}",
                 developerError(persisted.error()));
         }
+        const auto lifecycle_installed_at =
+            std::chrono::steady_clock::now();
+        project_open_job_ = viewer_.jobs().init(
+            JobType::ProjectOpen, "Reading project");
         if (auto launched =
                 launchHydration(
                     candidate, epoch,
@@ -3788,11 +3925,45 @@ namespace lfs::vis::project {
                 epoch,
                 developerError(launched.error()));
         }
+        const auto hydration_launched_at =
+            std::chrono::steady_clock::now();
         const auto shell_ms =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() -
                 started)
                 .count();
+        const auto milliseconds =
+            [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(
+                           end - begin)
+                    .count();
+            };
+        LOG_DEBUG(
+            "Project shell stages: path={} normalize={:.3f} ms document_open={:.3f} ms session_restore={:.3f} ms parameters={:.3f} ms shell_stage={:.3f} ms shell_commit={:.3f} ms lifecycle_install={:.3f} ms hydration_launch={:.3f} ms total={:.3f} ms",
+            lfs::core::path_to_utf8(*normalized),
+            milliseconds(started, normalized_at),
+            milliseconds(
+                normalized_at,
+                document_opened_at),
+            milliseconds(
+                document_opened_at,
+                session_prepared_at),
+            milliseconds(
+                session_prepared_at,
+                parameters_ready_at),
+            milliseconds(
+                parameters_ready_at,
+                shell_staged_at),
+            milliseconds(
+                shell_staged_at,
+                shell_committed_at),
+            milliseconds(
+                shell_committed_at,
+                lifecycle_installed_at),
+            milliseconds(
+                lifecycle_installed_at,
+                hydration_launched_at),
+            milliseconds(started, hydration_launched_at));
         LOG_INFO(
             "Project shell ready in {:.3f} ms: {} (generation {}, {} payload units)",
             shell_ms,
@@ -3847,6 +4018,14 @@ namespace lfs::vis::project {
                  std::move(selected_node_uuids),
              allocator = std::move(allocator)](
                 const std::stop_token stop) mutable {
+                const auto project_open_job = project_open_job_;
+                if (project_open_job) {
+                    viewer_.jobs().work(*project_open_job);
+                    viewer_.jobs().report(
+                        *project_open_job, 0.05F, "Reading project");
+                }
+                const auto hydration_started =
+                    std::chrono::steady_clock::now();
                 if (stop.stop_requested()) {
                     return;
                 }
@@ -3888,6 +4067,12 @@ namespace lfs::vis::project {
                     }
                     return;
                 }
+                const auto source_opened_at =
+                    std::chrono::steady_clock::now();
+                if (project_open_job) {
+                    viewer_.jobs().report(
+                        *project_open_job, 0.20F, "Decompressing project data");
+                }
                 auto* scene_manager =
                     viewer_.getSceneManager();
                 if (!scene_manager) {
@@ -3906,19 +4091,33 @@ namespace lfs::vis::project {
                     }
                     return;
                 }
+                const auto payload_staged_at =
+                    std::chrono::steady_clock::now();
+                if (project_open_job) {
+                    viewer_.jobs().report(
+                        *project_open_job, 0.75F, "Uploading project data");
+                }
                 auto plan =
                     std::make_shared<
                         std::optional<
                             lfs::io::project::
                                 ProjectHydrationPlan>>(
                         std::move(*staged));
+                if (project_open_job) {
+                    viewer_.jobs().finishWork(*project_open_job, false);
+                }
+                const auto queued_at =
+                    std::chrono::steady_clock::now();
                 const bool posted =
                     viewer_.postWork({
                         .run =
                             [this, document, epoch,
                              selection_mutation_serial,
                              selected_node_uuids,
-                             plan] {
+                             plan, hydration_started,
+                             source_opened_at,
+                             payload_staged_at,
+                             queued_at, project_open_job] {
                                 if (epoch_.load(
                                         std::memory_order_acquire) !=
                                         epoch ||
@@ -3931,6 +4130,9 @@ namespace lfs::vis::project {
                                 if (!manager) {
                                     return;
                                 }
+                                const auto commit_started =
+                                    std::chrono::steady_clock::
+                                        now();
                                 const bool install_selection =
                                     selection_mutation_serial_.load(
                                         std::memory_order_acquire) ==
@@ -3954,6 +4156,9 @@ namespace lfs::vis::project {
                                 manager->changeContentType(
                                     inferContentType(
                                         manager->getScene()));
+                                const auto scene_committed_at =
+                                    std::chrono::steady_clock::
+                                        now();
                                 if (report.selection_installed) {
                                     std::vector<
                                         lfs::core::NodeId>
@@ -3982,6 +4187,9 @@ namespace lfs::vis::project {
                                             selected_ids);
                                     }
                                 }
+                                const auto selection_restored_at =
+                                    std::chrono::steady_clock::
+                                        now();
                                 // Trainer restore is soft: display
                                 // hydration already succeeded.
                                 if (report
@@ -3994,6 +4202,9 @@ namespace lfs::vis::project {
                                         viewer_, *manager,
                                         *document, report);
                                 }
+                                const auto trainer_restored_at =
+                                    std::chrono::steady_clock::
+                                        now();
                                 hydration_.store(
                                     Hydration::Complete,
                                     std::memory_order_release);
@@ -4018,6 +4229,37 @@ namespace lfs::vis::project {
                                 payload_dirty_.store(
                                     payload_was_dirty,
                                     std::memory_order_release);
+                                const auto hydration_finished =
+                                    std::chrono::steady_clock::
+                                        now();
+                                hydration_committed_at_ =
+                                    hydration_finished;
+                                project_first_render_pending_ =
+                                    true;
+                                if (project_open_job) {
+                                    viewer_.jobs().completed(*project_open_job);
+                                    viewer_.jobs().free(*project_open_job);
+                                    project_open_job_.reset();
+                                }
+                                const auto milliseconds =
+                                    [](const auto begin,
+                                       const auto end) {
+                                        return std::chrono::
+                                            duration<double,
+                                                     std::milli>(
+                                                   end - begin)
+                                                .count();
+                                    };
+                                LOG_DEBUG(
+                                    "Project hydration stages: path={} source_reopen={:.3f} ms payload_stage={:.3f} ms queue_wait={:.3f} ms scene_commit={:.3f} ms selection_restore={:.3f} ms trainer_restore={:.3f} ms finalize={:.3f} ms total={:.3f} ms",
+                                    document->source_path()
+                                        ? lfs::core::
+                                              path_to_utf8(
+                                                  *document
+                                                       ->source_path())
+                                        : std::string{
+                                              "<untitled>"},
+                                    milliseconds(hydration_started, source_opened_at), milliseconds(source_opened_at, payload_staged_at), milliseconds(queued_at, commit_started), milliseconds(commit_started, scene_committed_at), milliseconds(scene_committed_at, selection_restored_at), milliseconds(selection_restored_at, trainer_restored_at), milliseconds(trainer_restored_at, hydration_finished), milliseconds(hydration_started, hydration_finished));
                                 LOG_INFO(
                                     "Project background hydration complete: {} (hydrated={}, invalidated={}, selection={})",
                                     document->source_path()
@@ -4036,6 +4278,16 @@ namespace lfs::vis::project {
                     });
                 if (!posted) {
                     plan->reset();
+                    if (project_open_job) {
+                        viewer_.jobs().finishWork(
+                            *project_open_job, false,
+                            "The project hydration work was canceled.");
+                    }
+                    if (!stop.stop_requested()) {
+                        markHydrationFailed(
+                            epoch,
+                            "The project hydration work could not be queued.");
+                    }
                 }
             });
         return {};
@@ -4053,6 +4305,15 @@ namespace lfs::vis::project {
                         return;
                     }
                     hydration_error_ = detail;
+                    if (project_open_job_) {
+                        if (auto job = viewer_.jobs().peek(*project_open_job_);
+                            job && job->running()) {
+                            viewer_.jobs().failed(
+                                *project_open_job_, detail, "Project open failed");
+                            viewer_.jobs().free(*project_open_job_);
+                        }
+                        project_open_job_.reset();
+                    }
                     hydration_.store(
                         Hydration::Failed,
                         std::memory_order_release);
@@ -4386,6 +4647,28 @@ namespace lfs::vis::project {
     bool ProjectLifecycle::suppressTrainingAdoption()
         const {
         return suppress_training_adoption_;
+    }
+
+    ProjectMenuInfo ProjectLifecycle::menuInfo()
+        const {
+        const std::lock_guard lock(
+            settings_mutex_);
+        ProjectMenuInfo result{
+            .auto_save_on_close =
+                settings_.auto_save_on_close,
+            .recent_projects = {},
+        };
+        result.recent_projects.reserve(
+            settings_.mru.size());
+        for (const auto& entry : settings_.mru) {
+            result.recent_projects.push_back({
+                .project_uuid =
+                    entry.project_uuid.to_string(),
+                .last_known_path =
+                    entry.last_known_path,
+            });
+        }
+        return result;
     }
 
     lfs::Result<ProjectInfo>
