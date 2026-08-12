@@ -652,6 +652,37 @@ namespace {
         return proto::model(proto::graph(nodes, initializers, inputs, outputs));
     }
 
+    [[nodiscard]] Bytes slice_sentinel_model() {
+        const std::array<std::int64_t, 2> x_shape{1, 6};
+        const std::array<std::int64_t, 1> y_shape{5};
+        const std::array<std::int64_t, 1> control_shape{1};
+        const std::array<std::int64_t, 1> starts{1};
+        const std::array<std::int64_t, 1> ends{std::numeric_limits<std::int64_t>::max()};
+        const std::array<std::int64_t, 1> axes{1};
+        const std::array<std::int64_t, 1> steps{1};
+        const std::array<std::int64_t, 1> target{5};
+        const auto input = proto::value_info("x", 1, x_shape);
+        const auto output = proto::value_info("y", 1, y_shape);
+        const std::array initializers{
+            proto::raw_tensor("starts", 7, control_shape, std::span<const std::int64_t>(starts)),
+            proto::raw_tensor("ends", 7, control_shape, std::span<const std::int64_t>(ends)),
+            proto::raw_tensor("axes", 7, control_shape, std::span<const std::int64_t>(axes)),
+            proto::raw_tensor("steps", 7, control_shape, std::span<const std::int64_t>(steps)),
+            proto::raw_tensor("target", 7, control_shape, std::span<const std::int64_t>(target)),
+        };
+        const std::array<std::string_view, 5> slice_inputs{"x", "starts", "ends", "axes", "steps"};
+        const std::array<std::string_view, 1> slice_outputs{"sliced"};
+        const std::array<std::string_view, 2> reshape_inputs{"sliced", "target"};
+        const std::array<std::string_view, 1> reshape_outputs{"y"};
+        const std::array nodes{
+            proto::node("slice_to_end", "Slice", slice_inputs, slice_outputs),
+            proto::node("reshape_slice", "Reshape", reshape_inputs, reshape_outputs),
+        };
+        const std::array inputs{input};
+        const std::array outputs{output};
+        return proto::model(proto::graph(nodes, initializers, inputs, outputs));
+    }
+
     [[nodiscard]] Bytes if_model() {
         const std::array<std::int64_t, 1> value_shape{2};
         const std::array<std::int64_t, 0> scalar_shape{};
@@ -739,6 +770,13 @@ namespace {
         write_file(view_path, view_model());
         const std::array<float, 6> view_expected{1.0f, 4.0f, 2.0f, 5.0f, 3.0f, 6.0f};
         run_model(view_path, matrix_shape, matrix, view_expected);
+
+        const auto slice_sentinel_path = temporary.path() / "slice_sentinel.onnx";
+        write_file(slice_sentinel_path, slice_sentinel_model());
+        const std::array<std::int64_t, 2> slice_shape{1, 6};
+        const std::array<float, 6> slice_input{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
+        const std::array<float, 5> slice_expected{2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
+        run_model(slice_sentinel_path, slice_shape, slice_input, slice_expected);
 
         const auto if_path = temporary.path() / "if.onnx";
         write_file(if_path, if_model());

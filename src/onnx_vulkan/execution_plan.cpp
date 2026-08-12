@@ -129,8 +129,19 @@ namespace lfs::onnx_vulkan::detail {
             if (!count)
                 return std::unexpected(count.error());
             std::vector<std::int64_t> result(*count);
-            for (std::size_t index = 0; index < *count; ++index)
-                result[index] = static_cast<std::int64_t>(read_number(tensor, index));
+            // Keep shape controls in the integer domain. On MSVC, long double is
+            // only 64 bits, so routing INT64_MAX Slice sentinels through
+            // read_number() rounds them to the out-of-range value 2^63.
+            for (std::size_t index = 0; index < *count; ++index) {
+                if (tensor.type == ElementType::Int64) {
+                    std::memcpy(&result[index], tensor.bytes.data() + index * sizeof(std::int64_t),
+                                sizeof(std::int64_t));
+                } else {
+                    std::int32_t value = 0;
+                    std::memcpy(&value, tensor.bytes.data() + index * sizeof(value), sizeof(value));
+                    result[index] = value;
+                }
+            }
             return result;
         }
 
@@ -579,10 +590,15 @@ namespace lfs::onnx_vulkan::detail {
             static const std::unordered_set<std::string> elementwise{"Add","Sub","Mul","Div","Pow","Mod","Equal","Where","Neg","Round","Sqrt","Identity","Reshape","Squeeze","Unsqueeze","Expand"};
             if (elementwise.contains(node.op_type)) {
                 auto count = element_count(outputs[0].shape);
+                const bool linear_view = node.op_type == "Identity" || node.op_type == "Reshape" ||
+                                         node.op_type == "Squeeze" || node.op_type == "Unsqueeze";
+                if (linear_view) {
+                    std::memcpy(outputs[0].owner->data(), inputs[0]->host->bytes.data(),
+                                outputs[0].owner->size());
+                    return outputs;
+                }
                 for (std::size_t i = 0; i < *count; ++i) {
-                    const bool linear_view = node.op_type == "Identity" || node.op_type == "Reshape" ||
-                                             node.op_type == "Squeeze" || node.op_type == "Unsqueeze";
-                    const auto ai = linear_view ? i : broadcast_index(i, outputs[0].shape, inputs[0]->shape);
+                    const auto ai = broadcast_index(i, outputs[0].shape, inputs[0]->shape);
                     long double x = read_number(*inputs[0]->host, ai), value = x;
                     long double y = 0; if (inputs.size() > 1 && inputs[1] && inputs[1]->host) y = read_number(*inputs[1]->host, broadcast_index(i, outputs[0].shape, inputs[1]->shape));
                     if (node.op_type == "Add") value = x + y; else if (node.op_type == "Sub") value = x - y; else if (node.op_type == "Mul") value = x * y; else if (node.op_type == "Div") value = x / y; else if (node.op_type == "Pow") value = std::pow(x, y); else if (node.op_type == "Mod") value = std::fmod(x, y); else if (node.op_type == "Equal") value = x == y; else if (node.op_type == "Neg") value = -x; else if (node.op_type == "Round") value = std::nearbyint(x); else if (node.op_type == "Sqrt") value = std::sqrt(x); else if (node.op_type == "Where") { const bool condition = read_number(*inputs[0]->host, broadcast_index(i, outputs[0].shape, inputs[0]->shape)) != 0; value = read_number(*(condition ? inputs[1] : inputs[2])->host, broadcast_index(i, outputs[0].shape, (condition ? inputs[1] : inputs[2])->shape)); }
