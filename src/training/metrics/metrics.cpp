@@ -10,6 +10,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "lfs/kernels/ssim.cuh"
@@ -518,11 +519,20 @@ namespace lfs::training {
                     render_vis = r_output.image * mask_3d;
                 }
                 const std::vector<lfs::core::Tensor> rgb_images = {gt_vis, render_vis};
+                auto stamp = _params.include_provenance ? lfs::core::make_provenance_stamp()
+                                                        : lfs::core::make_minimal_provenance_stamp();
+                if (_params.include_provenance) {
+                    stamp.iteration = iteration;
+                    const auto strategy = lfs::core::param::canonical_strategy_name(_params.optimization.strategy);
+                    if (!strategy.empty())
+                        stamp.strategy = std::string(strategy);
+                }
                 lfs::core::image_io::save_images_async(
                     eval_dir / (std::to_string(image_idx) + ".png"),
                     rgb_images,
                     true, // horizontal
-                    4);   // separator width
+                    4,    // separator width
+                    lfs::core::provenance_to_json(stamp));
                 saved_images++;
             }
         }

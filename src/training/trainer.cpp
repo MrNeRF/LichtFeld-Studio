@@ -23,6 +23,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
@@ -86,6 +87,7 @@
 #include <numeric>
 #include <nvtx3/nvToolsExt.h>
 #include <nvtx3/nvToolsExtCudaRt.h>
+#include <optional>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -5802,8 +5804,17 @@ namespace lfs::training {
                                 auto output_path = params_.dataset.output_path / "timelapse" / folder_name;
                                 std::filesystem::create_directories(output_path);
 
+                                auto stamp = params_.include_provenance ? lfs::core::make_provenance_stamp()
+                                                                        : lfs::core::make_minimal_provenance_stamp();
+                                if (params_.include_provenance) {
+                                    stamp.iteration = iter;
+                                    const auto strategy = lfs::core::param::canonical_strategy_name(params_.optimization.strategy);
+                                    if (!strategy.empty())
+                                        stamp.strategy = std::string(strategy);
+                                }
                                 lfs::core::image_io::save_image_async(output_path / std::format("{:06d}.jpg", iter),
-                                                                      rendered_timelapse_output.image);
+                                                                      rendered_timelapse_output.image,
+                                                                      lfs::core::provenance_to_json(stamp));
                             } else {
                                 LOG_WARN("Timelapse image '{}' not found in dataset.", img_name);
                             }
@@ -6505,10 +6516,20 @@ namespace lfs::training {
 
         std::filesystem::path ply_output_path = filename.empty() ? save_path / ("splat_" + std::to_string(iter_num) + ".ply") : save_path / (filename + ".ply");
 
+        auto stamp = params_.include_provenance ? lfs::core::make_provenance_stamp()
+                                                : lfs::core::make_minimal_provenance_stamp();
+        if (params_.include_provenance) {
+            stamp.iteration = iter_num;
+            const auto strategy = lfs::core::param::canonical_strategy_name(params_.optimization.strategy);
+            if (!strategy.empty())
+                stamp.strategy = std::string(strategy);
+        }
+
         const lfs::io::PlySaveOptions ply_options{
             .output_path = ply_output_path,
             .binary = true,
-            .async = !join_threads};
+            .async = !join_threads,
+            .provenance = std::move(stamp)};
 
         const auto& model = strategy_->get_model();
         const auto export_model = make_ply_export_model(

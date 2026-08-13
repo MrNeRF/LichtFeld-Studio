@@ -9,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/property_registry.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
@@ -39,6 +40,7 @@
 #include <filesystem>
 #include <functional>
 #include <numbers>
+#include <optional>
 #include <variant>
 
 #include <glm/glm.hpp>
@@ -1610,7 +1612,8 @@ namespace lfs::python {
                                    int width,
                                    int height,
                                    const bool transparent,
-                                   const int jpeg_quality) {
+                                   const int jpeg_quality,
+                                   const bool include_provenance) {
         auto output_path = core::utf8_to_path(path);
         const auto normalized_format = normalizeExportImageFormat(format, output_path);
         if (transparent && normalized_format != "png") {
@@ -1691,7 +1694,10 @@ namespace lfs::python {
             }
         }
 
-        core::save_image_u8(output_path, image, jpeg_quality);
+        const auto comment = core::provenance_to_json(
+            include_provenance ? core::make_provenance_stamp()
+                               : core::make_minimal_provenance_stamp());
+        core::save_image_u8(output_path, image, jpeg_quality, comment);
 
         nb::dict result;
         result["path"] = core::path_to_utf8(output_path);
@@ -1796,6 +1802,7 @@ namespace lfs::python {
               nb::arg("height") = 0,
               nb::arg("transparent") = false,
               nb::arg("jpeg_quality") = 95,
+              nb::arg("include_provenance") = true,
               R"doc(
 Export the active viewport image to PNG or JPEG.
 
@@ -1806,6 +1813,7 @@ Args:
     height: Target height in pixels. If both dimensions are zero, captures the current viewport.
     transparent: For PNG only, export straight RGBA from the preview renderer.
     jpeg_quality: JPEG compression quality in [1, 100].
+    include_provenance: When true, writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.
 
 Returns:
     Dict with path, width, height, channels, format, and transparent.

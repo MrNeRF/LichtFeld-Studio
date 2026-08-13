@@ -18,6 +18,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -26,6 +27,7 @@
 
 #include <filesystem>
 #include <format>
+#include <optional>
 
 namespace lfs::python {
 
@@ -332,11 +334,13 @@ namespace lfs::python {
         m.def(
             "save_ply",
             [](const PySplatData& data, const std::filesystem::path& path, bool binary,
-               nb::object progress, nb::object extra_attributes) {
+               nb::object progress, nb::object extra_attributes, bool include_provenance) {
                 io::PlySaveOptions options;
                 options.output_path = path;
                 options.binary = binary;
                 options.extra_attributes = parse_extra_ply_attributes(extra_attributes, path);
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
 
                 if (progress && !progress.is_none()) {
                     PyExportProgressCallback py_progress{nb::cast<nb::object>(progress)};
@@ -351,32 +355,41 @@ namespace lfs::python {
             },
             nb::arg("data"), nb::arg("path"), nb::arg("binary") = true, nb::arg("progress") = nb::none(),
             nb::arg("extra_attributes") = nb::none(),
-            "Save splat data as PLY file with optional extra per-vertex float attributes");
+            nb::arg("include_provenance") = true,
+            "Save splat data as PLY file with optional extra per-vertex float attributes. "
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "save_point_cloud_ply",
-            [](const PyPointCloud& pc, const std::filesystem::path& path, nb::object extra_attributes) {
+            [](const PyPointCloud& pc, const std::filesystem::path& path, nb::object extra_attributes,
+               bool include_provenance) {
                 if (!pc.data())
                     throw_invalid_io_argument("Point cloud data must not be null");
                 io::PlySaveOptions options;
                 options.output_path = path;
                 options.binary = true;
                 options.extra_attributes = parse_extra_ply_attributes(extra_attributes, path);
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
                 auto result = io::save_ply(*pc.data(), options);
                 if (!result)
                     throw_io_error(result.error(), "Failed to save point cloud PLY");
             },
             nb::arg("point_cloud"), nb::arg("path"), nb::arg("extra_attributes") = nb::none(),
-            "Save a point cloud as PLY file (xyz + colors) with optional extra per-vertex float attributes");
+            nb::arg("include_provenance") = true,
+            "Save a point cloud as PLY file (xyz + colors) with optional extra per-vertex float attributes. "
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "save_sog",
             [](const PySplatData& data, const std::filesystem::path& path, int kmeans_iterations, bool use_gpu,
-               nb::object progress) {
+               nb::object progress, bool include_provenance) {
                 io::SogSaveOptions options;
                 options.output_path = path;
                 options.kmeans_iterations = kmeans_iterations;
                 options.use_gpu = use_gpu;
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
 
                 if (progress && !progress.is_none()) {
                     PyExportProgressCallback py_progress{nb::cast<nb::object>(progress)};
@@ -391,55 +404,72 @@ namespace lfs::python {
             },
             nb::arg("data"), nb::arg("path"), nb::arg("kmeans_iterations") = 10, nb::arg("use_gpu") = true,
             nb::arg("progress") = nb::none(),
-            "Save splat data as SOG compressed file");
+            nb::arg("include_provenance") = true,
+            "Save splat data as SOG compressed file. "
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "save_spz",
-            [](const PySplatData& data, const std::filesystem::path& path, int version) {
+            [](const PySplatData& data, const std::filesystem::path& path, int version, bool include_provenance) {
                 io::SpzSaveOptions options;
                 options.output_path = path;
                 options.version = version;
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
 
                 auto result = io::save_spz(*data.data(), options);
                 if (!result)
                     throw_io_error(result.error(), "Failed to save SPZ");
             },
             nb::arg("data"), nb::arg("path"), nb::arg("version") = 4,
+            nb::arg("include_provenance") = true,
             "Save splat data as SPZ compressed file.\n\n"
-            "version: SPZ container version, 4 (zstd, default) or 3 (legacy gzip).");
+            "version: SPZ container version, 4 (zstd, default) or 3 (legacy gzip).\n"
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded. Ignored for SPZ v3.");
 
         m.def(
             "save_usd",
-            [](const PySplatData& data, const std::filesystem::path& path) {
+            [](const PySplatData& data, const std::filesystem::path& path, bool include_provenance) {
                 io::UsdSaveOptions options;
                 options.output_path = path;
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
 
                 auto result = io::save_usd(*data.data(), options);
                 if (!result)
                     throw_io_error(result.error(), "Failed to save USD");
             },
             nb::arg("data"), nb::arg("path"),
-            "Save splat data as OpenUSD gaussian file");
+            nb::arg("include_provenance") = true,
+            "Save splat data as OpenUSD gaussian file. "
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "save_nurec_usdz",
-            [](const PySplatData& data, const std::filesystem::path& path) {
+            [](const PySplatData& data, const std::filesystem::path& path, bool include_provenance) {
                 io::NurecUsdzSaveOptions options;
                 options.output_path = path;
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
 
                 auto result = io::save_nurec_usdz(*data.data(), options);
                 if (!result)
                     throw_io_error(result.error(), "Failed to save NuRec USDZ");
             },
             nb::arg("data"), nb::arg("path"),
-            "Save splat data as NuRec USDZ compatible with PLY_to_USD / Omniverse");
+            nb::arg("include_provenance") = true,
+            "Save splat data as NuRec USDZ compatible with PLY_to_USD / Omniverse. "
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "export_html",
-            [](const PySplatData& data, const std::filesystem::path& path, int kmeans_iterations, nb::object progress) {
+            [](const PySplatData& data, const std::filesystem::path& path, int kmeans_iterations, nb::object progress,
+               bool include_provenance) {
                 io::HtmlExportOptions options;
                 options.output_path = path;
                 options.kmeans_iterations = kmeans_iterations;
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
 
                 if (progress && !progress.is_none()) {
                     PyExportProgressCallback py_progress{nb::cast<nb::object>(progress)};
@@ -453,7 +483,9 @@ namespace lfs::python {
                     throw_io_error(result.error(), "Failed to export HTML");
             },
             nb::arg("data"), nb::arg("path"), nb::arg("kmeans_iterations") = 10, nb::arg("progress") = nb::none(),
-            "Export splat data as self-contained HTML viewer");
+            nb::arg("include_provenance") = true,
+            "Export splat data as self-contained HTML viewer. "
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "is_dataset_path",
@@ -483,12 +515,17 @@ namespace lfs::python {
 
         m.def(
             "save_image",
-            [](const std::filesystem::path& path, const PyTensor& image) {
+            [](const std::filesystem::path& path, const PyTensor& image, bool include_provenance) {
                 auto t = image.tensor().contiguous().cpu();
-                core::save_image(path, std::move(t));
+                const auto comment = core::provenance_to_json(
+                    include_provenance ? core::make_provenance_stamp()
+                                       : core::make_minimal_provenance_stamp());
+                core::save_image(path, std::move(t), comment);
             },
             nb::arg("path"), nb::arg("image"),
-            "Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1].");
+            nb::arg("include_provenance") = true,
+            "Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1]. "
+            "include_provenance (default true) writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.");
     }
 
 } // namespace lfs::python

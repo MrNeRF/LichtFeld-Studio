@@ -5,6 +5,7 @@
 #include "usd.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
@@ -38,6 +39,7 @@
 #include <pxr/base/tf/diagnosticMgr.h>
 #include <pxr/base/tf/errorMark.h>
 #include <pxr/base/vt/array.h>
+#include <pxr/base/vt/dictionary.h>
 #include <pxr/base/vt/value.h>
 #include <pxr/usd/sdf/layer.h>
 #include <pxr/usd/sdf/path.h>
@@ -738,7 +740,12 @@ namespace lfs::io {
         return validate_particlefield_prim(*particlefield_prim);
     }
 
-    Result<void> save_usd(const SplatData& splat_data, const UsdSaveOptions& options) {
+    Result<void> save_usd(const SplatData& splat_data, const UsdSaveOptions& options_in) {
+        UsdSaveOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         if (!report_export_progress(options.progress_callback, 0.0f, "Preparing USD")) {
             return make_error(ErrorCode::CANCELLED, "USD export cancelled", options.output_path);
         }
@@ -881,7 +888,18 @@ namespace lfs::io {
         }
 
         try {
-            if (const auto root_layer = stage->GetRootLayer(); !root_layer || !root_layer->Save()) {
+            const auto root_layer = stage->GetRootLayer();
+            if (!root_layer) {
+                return make_error(ErrorCode::WRITE_FAILURE,
+                                  "Failed to save USD stage",
+                                  options.output_path);
+            }
+            if (options.provenance) {
+                const std::string json = core::provenance_to_json(*options.provenance);
+                root_layer->SetCustomLayerData(
+                    pxr::VtDictionary{{"lichtfeld_provenance", pxr::VtValue(json)}});
+            }
+            if (!root_layer->Save()) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   "Failed to save USD stage",
                                   options.output_path);

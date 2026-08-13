@@ -1725,7 +1725,9 @@ namespace lfs::io {
 
         RadStreamWriter writer(output_path, total_nodes, layout.sh_degree, true,
                                options.compression_level, /*emit_meta_sidecar=*/true,
-                               static_cast<std::uint32_t>(output_chunk_splats));
+                               static_cast<std::uint32_t>(output_chunk_splats),
+                               RadGpuQuantization::Auto,
+                               options.provenance);
         if (auto ok = writer.open(); !ok) {
             return make_error(ErrorCode::WRITE_FAILURE, ok.error(), output_path);
         }

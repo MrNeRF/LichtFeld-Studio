@@ -8,6 +8,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/tensor.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -433,6 +434,7 @@ namespace lfs::vis::gui {
                 .binary = true,
                 .async = false,
                 .extra_attributes = {},
+                .provenance = core::make_provenance_stamp(),
             };
 
             io::Result<void> result = std::unexpected(

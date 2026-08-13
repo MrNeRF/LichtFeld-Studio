@@ -1246,6 +1246,8 @@
     "models": "モデル",
     "no_models": "シーンにモデルがありません",
     "sh_degree": "SH Degree",
+    "include_provenance": "来歴メタデータ",
+    "include_provenance_hint": "オフにすると識別フィールドは省かれますが、最小限のビルド識別（アプリバージョン + ビルドコミット）は常に埋め込まれます",
     "spz_version": "SPZバージョン",
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (レガシー)",

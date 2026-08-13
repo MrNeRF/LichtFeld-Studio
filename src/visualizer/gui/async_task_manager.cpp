@@ -9,10 +9,10 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "gui/gui_manager.hpp"
-#include "gui/html_viewer_export.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/native_file_dialog.hpp"
@@ -66,6 +66,31 @@ namespace lfs::vis::gui {
         private:
             Fn fn_;
         };
+
+        // Fills project/commit/node/dataset once the .licht project session (#1525) is merged.
+        void populate_project_identity([[maybe_unused]] core::ProvenanceStamp& stamp) {}
+
+        [[nodiscard]] core::ProvenanceStamp make_gui_export_stamp(const lfs::vis::SceneManager& scene_manager) {
+            auto stamp = core::make_provenance_stamp();
+            populate_project_identity(stamp);
+
+            const auto* const trainer_manager = scene_manager.getTrainerManager();
+            if (trainer_manager) {
+                const int iteration = trainer_manager->getCurrentIteration();
+                // iteration 0 means an untrained scene, deliberately not stamped.
+                if (iteration > 0)
+                    stamp.iteration = iteration;
+            }
+
+            const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
+            if (trainer) {
+                const auto strategy = lfs::core::param::canonical_strategy_name(
+                    trainer->getParams().optimization.strategy);
+                if (!strategy.empty())
+                    stamp.strategy = std::string(strategy);
+            }
+            return stamp;
+        }
 
     } // namespace
 
@@ -895,6 +920,17 @@ namespace lfs::vis::gui {
             options.height = evt.height;
             options.framerate = evt.framerate;
             options.crf = evt.crf;
+            if (evt.include_provenance) {
+                if (const auto* const scene_manager = viewer_->getSceneManager()) {
+                    options.provenance = make_gui_export_stamp(*scene_manager);
+                } else {
+                    auto stamp = core::make_provenance_stamp();
+                    populate_project_identity(stamp);
+                    options.provenance = std::move(stamp);
+                }
+            } else {
+                options.provenance = core::make_minimal_provenance_stamp();
+            }
             startVideoExport(path, options);
         });
     }
@@ -914,7 +950,8 @@ namespace lfs::vis::gui {
                                          const std::vector<std::string>& node_names, int sh_degree,
                                          bool rad_flip_y,
                                          bool rad_streamable,
-                                         int spz_version) {
+                                         int spz_version,
+                                         bool include_provenance) {
         if (isExporting())
             return;
 
@@ -950,6 +987,10 @@ namespace lfs::vis::gui {
         }
 
         auto borrow_plan = makeBorrowSingleIdentityExportPlan(*scene_manager, node_names);
+
+        auto provenance = include_provenance ? make_gui_export_stamp(*scene_manager)
+                                             : core::make_minimal_provenance_stamp();
+
         startAsyncExport(format,
                          path,
                          std::move(splats),
@@ -958,7 +999,8 @@ namespace lfs::vis::gui {
                          borrow_plan.model_mutex,
                          rad_flip_y,
                          rad_streamable,
-                         spz_version);
+                         spz_version,
+                         std::move(provenance));
     }
 
     void AsyncTaskManager::startColmapExport(const std::filesystem::path& path) {
@@ -1096,7 +1138,8 @@ namespace lfs::vis::gui {
                                             std::shared_mutex* model_mutex,
                                             bool rad_flip_y,
                                             bool rad_streamable,
-                                            int spz_version) {
+                                            int spz_version,
+                                            core::ProvenanceStamp provenance) {
         if (splats.empty()) {
             LOG_ERROR("No splat data to export");
             publishExportFailureState(format, path, LOC(lichtfeld::Strings::Runtime::NO_SPLAT_DATA));
@@ -1128,7 +1171,8 @@ namespace lfs::vis::gui {
              model_mutex,
              rad_flip_y,
              rad_streamable,
-             spz_version](
+             spz_version,
+             provenance](
                 std::stop_token stop_token) mutable {
                 bool cancellation_logged = false;
                 auto update_progress = [this, &stop_token, &cancellation_logged](float progress, const std::string& stage) -> bool {
@@ -1211,7 +1255,8 @@ namespace lfs::vis::gui {
                                 .binary = true,
                                 .async = false,
                                 .progress_callback = update_progress,
-                                .extra_attributes = {}};
+                                .extra_attributes = {},
+                                .provenance = provenance};
                             if (auto result = lfs::io::save_ply(*splat_data, options); result) {
                                 success = true;
                             } else {
@@ -1235,7 +1280,8 @@ namespace lfs::vis::gui {
                             const lfs::io::SogSaveOptions options{
                                 .output_path = path,
                                 .kmeans_iterations = 10,
-                                .progress_callback = update_progress};
+                                .progress_callback = update_progress,
+                                .provenance = provenance};
                             if (auto result = lfs::io::save_sog(*splat_data, options); result) {
                                 success = true;
                             } else {
@@ -1248,7 +1294,8 @@ namespace lfs::vis::gui {
                             const lfs::io::SpzSaveOptions options{
                                 .output_path = path,
                                 .version = spz_version,
-                                .progress_callback = update_progress};
+                                .progress_callback = update_progress,
+                                .provenance = provenance};
                             if (auto result = lfs::io::save_spz(*splat_data, options); result) {
                                 success = true;
                             } else {
@@ -1261,7 +1308,8 @@ namespace lfs::vis::gui {
                             const lfs::io::HtmlExportOptions options{
                                 .output_path = path,
                                 .kmeans_iterations = 10,
-                                .progress_callback = update_progress};
+                                .progress_callback = update_progress,
+                                .provenance = provenance};
                             if (auto result = lfs::io::export_html(*splat_data, options); result) {
                                 success = true;
                             } else {
@@ -1273,7 +1321,8 @@ namespace lfs::vis::gui {
                         case ExportFormat::USD: {
                             const lfs::io::UsdSaveOptions options{
                                 .output_path = path,
-                                .progress_callback = update_progress};
+                                .progress_callback = update_progress,
+                                .provenance = provenance};
                             if (auto result = lfs::io::save_usd(*splat_data, options); result) {
                                 success = true;
                             } else {
@@ -1285,7 +1334,8 @@ namespace lfs::vis::gui {
                         case ExportFormat::NUREC_USDZ: {
                             const lfs::io::NurecUsdzSaveOptions options{
                                 .output_path = path,
-                                .progress_callback = update_progress};
+                                .progress_callback = update_progress,
+                                .provenance = provenance};
                             if (auto result = lfs::io::save_nurec_usdz(*splat_data, options); result) {
                                 success = true;
                             } else {
@@ -1302,7 +1352,8 @@ namespace lfs::vis::gui {
                                 .chunk_size = rad_streamable
                                                   ? lfs::io::kRadStreamableChunkSplats
                                                   : lfs::io::kRadNativeChunkSplats,
-                                .progress_callback = update_progress};
+                                .progress_callback = update_progress,
+                                .provenance = provenance};
                             if (auto result = lfs::io::save_rad(*splat_data, options); result) {
                                 success = true;
                             } else {

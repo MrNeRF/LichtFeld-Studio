@@ -181,12 +181,14 @@ namespace lfs::mcp {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Path to save PLY file"}}}},
+                        {"path", json{{"type", "string"}, {"description", "Path to save PLY file"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", false, true)},
             [backend](const json& args) -> json {
                 std::filesystem::path path = args["path"].get<std::string>();
-                auto result = backend.save_ply(path);
+                const bool include_provenance = args.value("include_provenance", true);
+                auto result = backend.save_ply(path, include_provenance);
                 if (!result)
                     return json{{"error", result.error()}};
                 return json{{"success", true}, {"path", core::path_to_utf8(path)}};

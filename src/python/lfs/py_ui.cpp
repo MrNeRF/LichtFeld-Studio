@@ -12,6 +12,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/user_paths.hpp"
 #include "gui/global_context_menu.hpp"
@@ -4156,7 +4157,8 @@ namespace lfs::python {
                 const lfs::io::PlySaveOptions options{
                     .output_path = path,
                     .binary = true,
-                    .async = false};
+                    .async = false,
+                    .provenance = lfs::core::make_provenance_stamp()};
 
                 lfs::io::Result<void> result = std::unexpected(
                     lfs::io::Error{lfs::io::ErrorCode::INTERNAL_ERROR, "uninitialized"});
@@ -4478,19 +4480,23 @@ namespace lfs::python {
 
         m.def(
             "export_video",
-            [](int width, int height, int framerate, int crf, const std::string& path) {
+            [](int width, int height, int framerate, int crf, const std::string& path,
+               bool include_provenance) {
                 lfs::core::events::cmd::SequencerExportVideo{
                     .width = width,
                     .height = height,
                     .framerate = framerate,
                     .crf = crf,
-                    .path = path}
+                    .path = path,
+                    .include_provenance = include_provenance}
                     .emit();
             },
             nb::arg("width"), nb::arg("height"), nb::arg("framerate"), nb::arg("crf"),
             nb::arg("path") = std::string{},
+            nb::arg("include_provenance") = true,
             "Export video with specified settings. Without a path a save dialog opens, "
-            "which a script cannot answer; pass one to export directly.");
+            "which a script cannot answer; pass one to export directly. "
+            "include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "add_keyframe",

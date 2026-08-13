@@ -508,7 +508,7 @@ def test_rendered_thumbnails_cover_geometry_and_checkpoints(
         calls.append((path, width, height))
         return object()
 
-    def save_image(path, image):
+    def save_image(path, image, include_provenance=True):
         Path(path).write_bytes(b"preview")
 
     asset_manager_panel_module.lf.render_asset_preview = render_asset_preview
@@ -582,7 +582,7 @@ def test_rendered_thumbnail_from_camera_passes_dimensions_by_keyword(
         calls.append((path, eye, target, width, height, focal_length_mm, up))
         return object()
 
-    def save_image(path, image):
+    def save_image(path, image, include_provenance=True):
         Path(path).write_bytes(b"preview")
 
     asset_manager_panel_module.lf.render_asset_preview_from_camera = (

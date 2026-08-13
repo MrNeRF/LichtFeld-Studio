@@ -51,6 +51,7 @@ namespace spz {
     enum class SpzExtensionType : uint32_t {
         SPZ_ADOBE_safe_orbit_camera = 0xADBE0002u,
         SPZ_ADOBE_coordinate_system = 0xADBE0003u,
+        SPZ_LICHTFELD_provenance = 0x4C465001u, // "LFS" 0x4C4653 + 01
     };
 
     struct SpzExtensionBase {

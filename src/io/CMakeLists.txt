@@ -95,6 +95,7 @@ add_library(spz_lib STATIC
         ${CMAKE_SOURCE_DIR}/external/spz/splat-extensions.cc
         ${CMAKE_SOURCE_DIR}/external/spz/coordinate-system-adobe.cc
         ${CMAKE_SOURCE_DIR}/external/spz/safe-orbit-camera-adobe.cc
+        ${CMAKE_SOURCE_DIR}/external/spz/provenance-lichtfeld.cc
 )
 target_include_directories(spz_lib PUBLIC ${CMAKE_SOURCE_DIR}/external/spz)
 if(TARGET zstd::libzstd)

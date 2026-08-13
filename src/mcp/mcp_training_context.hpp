@@ -45,7 +45,8 @@ namespace lfs::mcp {
             const std::filesystem::path& path);
 
         std::expected<void, std::string> save_ply(
-            const std::filesystem::path& path);
+            const std::filesystem::path& path,
+            bool include_provenance = true);
 
         std::expected<std::string, std::string> render_to_base64(
             int camera_index = 0,

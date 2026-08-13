@@ -53,7 +53,8 @@ namespace lfs::vis {
                                const std::vector<std::string>& node_names, int sh_degree,
                                bool rad_flip_y = false,
                                bool rad_streamable = true,
-                               int spz_version = 4);
+                               int spz_version = 4,
+                               bool include_provenance = true);
             [[nodiscard]] bool isExporting() const { return export_state_.active.load(); }
             [[nodiscard]] float getExportProgress() const { return export_state_.progress.load(); }
             [[nodiscard]] std::string getExportStage() const {
@@ -201,7 +202,8 @@ namespace lfs::vis {
                                   std::shared_mutex* model_mutex,
                                   bool rad_flip_y,
                                   bool rad_streamable,
-                                  int spz_version);
+                                  int spz_version,
+                                  lfs::core::ProvenanceStamp provenance);
             void startColmapExport(const std::filesystem::path& path);
             void startAsyncImport(const std::filesystem::path& path,
                                   const lfs::core::param::TrainingParameters& params);
@@ -234,7 +236,6 @@ namespace lfs::vis {
                 std::string outcome{"idle"};
                 std::string error;
                 std::filesystem::path path;
-                bool rad_flip_y = false; // Y-flip for RAD export (off by default)
                 mutable std::mutex mutex;
                 std::optional<std::jthread> thread;
             };

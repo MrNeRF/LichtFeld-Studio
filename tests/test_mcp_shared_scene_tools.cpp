@@ -68,7 +68,7 @@ namespace {
                     return path.value_or(std::filesystem::path{"/tmp/output"});
                 },
                 .save_ply =
-                    [](const std::filesystem::path&) -> std::expected<void, std::string> {
+                    [](const std::filesystem::path&, bool) -> std::expected<void, std::string> {
                     return {};
                 },
                 .start_training = []() -> std::expected<void, std::string> { return {}; },
