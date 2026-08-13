@@ -31,6 +31,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <sstream>
@@ -2834,6 +2835,120 @@ namespace {
             restored->igs_current_references
                 .ppisp_reference,
             ppisp_reference);
+    }
+
+    TEST(ProjectDocumentTest,
+         TrainingAutosaveCarryForwardCkptRecoversNewestLightAndSpecifiedCkpt) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "train-light-ckpt.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(master);
+        const fs::path recovered =
+            temporary.path / "train-light-ckpt-recovered.licht";
+        write_phase_a_fixture(master);
+        auto seeded =
+            require_result_ptr(ProjectDocument::open(master));
+        const Uuid checkpoint_uuid = fixed_uuid(9931);
+        install_bound_autosave_checkpoint(
+            *seeded, fixed_uuid(9930), checkpoint_uuid);
+        auto options = save_options(9932, 1400);
+        options.commit.snapshot_uuid = checkpoint_uuid;
+        auto published = seeded->save(master, options);
+        ASSERT_TRUE(published)
+            << lfs::format_for_developer(
+                   published.error());
+
+        auto document =
+            require_result_ptr(ProjectDocument::open(master));
+        const auto* clean =
+            document->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(clean, nullptr);
+        EXPECT_TRUE(clean->is_clean_reference());
+        require_status(
+            document->edit_view().dom().set(
+                "training_light_marker",
+                std::string{"newest"}));
+        auto base = require_result(ProjectReader::open(master));
+        auto autosaved = document->save_autosave(
+            sidecar,
+            ProjectDocumentAutosaveOptions{
+                .file_uuid = fixed_uuid(9933),
+                .base_explicit_commit_uuid =
+                    base.commit().commit_uuid,
+                .autosave_sequence = 1,
+                .snapshot_uuid = {},
+                .index_compression =
+                    IndexCompression::
+                        StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(autosaved)
+            << lfs::format_for_developer(
+                   autosaved.error());
+
+        ProjectReader overlay =
+            require_result(ProjectReader::open(sidecar));
+        const ChunkInfo* ckpt_row = overlay.find(
+            FOURCC_CKPT, checkpoint_uuid);
+        ASSERT_NE(ckpt_row, nullptr);
+        EXPECT_EQ(
+            ckpt_row->row_kind,
+            RowKind::SidecarBaseReference);
+        EXPECT_EQ(ckpt_row->payload_offset, 0u);
+        for (const auto& row : overlay.chunks()) {
+            if (row.key.fourcc == FOURCC_CKPT) {
+                EXPECT_NE(
+                    row.row_kind, RowKind::Live)
+                    << row.key_string();
+            }
+        }
+
+        auto offered = inspect_autosave_recovery(master);
+        ASSERT_TRUE(offered)
+            << lfs::format_for_developer(
+                   offered.error());
+        EXPECT_EQ(
+            offered->disposition,
+            RecoveryDisposition::Offer);
+
+        require_status(materialize_recovered_project(
+            master, sidecar, recovered));
+        auto restored =
+            require_result_ptr(ProjectDocument::open(recovered));
+        const auto marker =
+            restored->view().dom().get_json(
+                "training_light_marker");
+        ASSERT_TRUE(marker.has_value());
+        EXPECT_EQ(*marker, "newest");
+        const auto* recovered_ckpt =
+            restored->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(recovered_ckpt, nullptr);
+        std::optional<int> iteration;
+        auto visited = recovered_ckpt->visit_stream(
+            [&](std::istream& stream,
+                const std::uint64_t bytes)
+                -> lfs::Result<void> {
+                auto header =
+                    lfs::core::load_checkpoint_header(
+                        stream, bytes);
+                if (header) {
+                    iteration = header->iteration;
+                }
+                return {};
+            });
+        ASSERT_TRUE(visited)
+            << lfs::format_for_developer(
+                   visited.error());
+        ASSERT_TRUE(iteration.has_value());
+        EXPECT_EQ(*iteration, 11);
+        auto training =
+            restored->scene_graph().training_model_uuid();
+        ASSERT_TRUE(training)
+            << lfs::format_for_developer(
+                   training.error());
+        ASSERT_TRUE(training->has_value());
+        EXPECT_EQ(**training, fixed_uuid(9930));
     }
 
     TEST(ProjectDocumentTest,

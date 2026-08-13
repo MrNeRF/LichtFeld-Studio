@@ -95,10 +95,10 @@ namespace lfs::vis {
         static constexpr size_t STATE_COUNT = 6;
         static constexpr std::array<std::array<bool, STATE_COUNT>, STATE_COUNT> TRANSITIONS = {{
             // To:    Idle   Ready  Running Paused Stopping Finished
-            /* Idle */ {false, true, false, true, false, false}, // Paused: checkpoint load
+            /* Idle */ {false, true, false, true, false, true}, // Paused/Finished: project CKPT
             /* Ready */ {true, false, true, false, false, false},
             /* Running */ {false, false, false, true, true, false},
-            /* Paused */ {false, true, true, false, true, false},
+            /* Paused */ {false, true, true, false, true, true}, // Finished: completed restore
             /* Stopping */ {true, false, false, false, false, true},
             /* Finished */ {true, true, false, false, false, false},
         }};

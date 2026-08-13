@@ -517,8 +517,10 @@ namespace {
     }
 
     void new_script(lfs::vis::gui::panels::PythonConsoleState& state) {
-        if (auto* editor = state.getEditor())
+        if (auto* editor = state.getEditor()) {
             editor->clear();
+            editor->clearActiveSessionLocator();
+        }
         state.setScriptPath({});
         state.setModified(false);
     }
@@ -1385,6 +1387,8 @@ namespace {
 
         if (auto* editor = state.getEditor()) {
             editor->setText(content);
+            editor->setActiveSessionLocator(
+                lfs::core::path_to_utf8(path));
         }
 
         state.setScriptPath(path);
@@ -1409,6 +1413,8 @@ namespace {
         file.close();
 
         state.setScriptPath(path);
+        editor->setActiveSessionLocator(
+            lfs::core::path_to_utf8(path));
         state.setModified(false);
         state.addInfo("Saved: " + lfs::core::path_to_utf8(path.filename()));
         return true;
@@ -1597,6 +1603,14 @@ namespace lfs::vis::gui::panels {
             nearest == std::end(FONT_STEPS)
                 ? 1.0f
                 : *nearest;
+    }
+
+    float PythonConsoleState::splitterRatio() {
+        return g_splitter_ratio;
+    }
+
+    void PythonConsoleState::setSplitterRatio(const float ratio) {
+        g_splitter_ratio = std::clamp(ratio, 0.2f, 0.8f);
     }
 
     void PythonConsoleState::addToHistory(const std::string& cmd) {

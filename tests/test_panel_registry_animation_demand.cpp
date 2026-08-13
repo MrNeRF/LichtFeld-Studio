@@ -12,6 +12,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -37,6 +39,23 @@ namespace {
     private:
         bool animation_ = false;
         std::optional<double> scheduled_delay_;
+    };
+
+    class ChromePanel final : public lfs::vis::gui::IPanel {
+    public:
+        void draw(const lfs::vis::gui::PanelDrawContext&) override {}
+
+        std::string captureChromeJson() const override {
+            return chrome;
+        }
+
+        void applyChromeJson(const std::string_view json) override {
+            chrome = json.empty() ? std::string("{}") : std::string(json);
+            ++apply_count;
+        }
+
+        std::string chrome = R"({"metric_id":"opacity"})";
+        int apply_count = 0;
     };
 
     class RecordingPanel final : public lfs::vis::gui::IPanel {
@@ -372,6 +391,114 @@ TEST_F(PanelRegistryAnimationDemandTest,
         live_found->float_last_bounds_valid);
 }
 
+TEST_F(PanelRegistryAnimationDemandTest,
+       ApplyProjectStateResetsUnlistedPanelsToRegisterDefaults) {
+    using namespace lfs::vis::gui;
+
+    registerRecordingPanel("test.keep");
+    registerRecordingPanel("test.drop");
+    auto& registry = PanelRegistry::instance();
+    registry.set_panel_enabled("test.drop", false);
+
+    const PanelProjectState keep{
+        .id = "test.keep",
+        .space = PanelSpace::Floating,
+        .enabled = true,
+        .float_x = 12.0f,
+        .float_y = 24.0f,
+        .float_auto_center = false,
+    };
+    registry.apply_project_state({keep});
+
+    const auto kept = registry.get_panel("test.keep");
+    const auto dropped = registry.get_panel("test.drop");
+    ASSERT_TRUE(kept.has_value());
+    ASSERT_TRUE(dropped.has_value());
+    EXPECT_TRUE(kept->enabled);
+    EXPECT_TRUE(dropped->enabled);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest,
+       LateRegisterDropsInvalidSavedOverlayAndStillRegisters) {
+    using namespace lfs::vis::gui;
+
+    auto& registry = PanelRegistry::instance();
+    const PanelProjectState saved{
+        .id = "test.corrupt_float",
+        .space = PanelSpace::Floating,
+        .enabled = false,
+        .float_x = 10.0f,
+        .float_y = 20.0f,
+        .float_auto_center = false,
+    };
+    registry.apply_project_state({saved});
+
+    PanelInfo declared_invalid_float;
+    declared_invalid_float.id = "test.declared_invalid_float";
+    declared_invalid_float.label = declared_invalid_float.id;
+    declared_invalid_float.space = PanelSpace::Floating;
+    declared_invalid_float.is_native = false;
+    declared_invalid_float.panel = std::make_shared<TestPanel>(false);
+    EXPECT_FALSE(registry.register_panel(
+        std::move(declared_invalid_float)));
+
+    PanelInfo info;
+    info.id = saved.id;
+    info.label = info.id;
+    info.space = PanelSpace::MainPanelTab;
+    info.enabled = true;
+    info.order = 42;
+    info.is_native = false;
+    info.panel = std::make_shared<TestPanel>(false);
+    ASSERT_TRUE(registry.register_panel(std::move(info)));
+
+    const auto registered = registry.get_panel(saved.id);
+    ASSERT_TRUE(registered.has_value());
+    EXPECT_EQ(registered->space, PanelSpace::MainPanelTab);
+    EXPECT_TRUE(registered->enabled);
+    EXPECT_EQ(registered->order, 42);
+
+    const auto captured = registry.capture_project_state();
+    const auto found = std::ranges::find(
+        captured, saved.id, &PanelProjectState::id);
+    ASSERT_NE(found, captured.end());
+    EXPECT_EQ(found->space, PanelSpace::MainPanelTab);
+    EXPECT_TRUE(found->enabled);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest,
+       LateRegisterAppliesPendingProjectFloatingState) {
+    using namespace lfs::vis::gui;
+
+    auto& registry = PanelRegistry::instance();
+    const PanelProjectState saved{
+        .id = "test.late_float",
+        .space = PanelSpace::Floating,
+        .enabled = true,
+        .float_x = 88.0f,
+        .float_y = 99.0f,
+        .float_user_height = 140.0f,
+        .float_last_bounds_valid = true,
+        .float_last_x = 88.0f,
+        .float_last_y = 99.0f,
+        .float_last_w = 320.0f,
+        .float_last_h = 140.0f,
+        .float_auto_center = false,
+        .float_stack_order = 4,
+    };
+    registry.apply_project_state({saved});
+    registerRecordingPanel("test.late_float");
+
+    const auto captured = registry.capture_project_state();
+    const auto found = std::ranges::find(
+        captured, saved.id, &PanelProjectState::id);
+    ASSERT_NE(found, captured.end());
+    EXPECT_TRUE(found->enabled);
+    EXPECT_FLOAT_EQ(found->float_x, saved.float_x);
+    EXPECT_FLOAT_EQ(found->float_y, saved.float_y);
+    EXPECT_FLOAT_EQ(found->float_last_w, saved.float_last_w);
+}
+
 TEST_F(PanelRegistryAnimationDemandTest, UnifiedRenderRequestCoversSpacePanelAndChildrenTargets) {
     using namespace lfs::vis::gui;
 
@@ -580,4 +707,56 @@ TEST_F(PanelRegistryAnimationDemandTest, DockDuringFloatingPollSkipsInteractionS
     ASSERT_TRUE(panel_details.has_value());
     EXPECT_EQ(panel_details->space, PanelSpace::MainPanelTab);
     EXPECT_EQ(panel_details->float_stack_order, 0u);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, PanelPayloadRoundTripAndReset) {
+    using namespace lfs::vis::gui;
+
+    auto panel = std::make_shared<ChromePanel>();
+    panel->chrome = R"({"metric_id":"scale","log_scale":true,"bin_count":64})";
+    PanelInfo info;
+    info.id = "lfs.histogram";
+    info.label = info.id;
+    info.space = PanelSpace::BottomDock;
+    info.is_native = false;
+    info.panel = panel;
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));
+
+    const auto captured =
+        PanelRegistry::instance().capture_panel_payloads();
+    ASSERT_EQ(captured.size(), 1u);
+    ASSERT_TRUE(captured.contains("lfs.histogram"));
+    EXPECT_NE(captured.at("lfs.histogram").find("\"metric_id\""), std::string::npos);
+    EXPECT_NE(captured.at("lfs.histogram").find("scale"), std::string::npos);
+
+    panel->chrome = R"({"metric_id":"opacity"})";
+    PanelRegistry::instance().apply_panel_payloads(captured);
+    EXPECT_EQ(panel->chrome, captured.at("lfs.histogram"));
+
+    PanelRegistry::instance().apply_panel_payloads({});
+    EXPECT_EQ(panel->chrome, "{}");
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, LateRegisterAppliesPendingPanelPayload) {
+    using namespace lfs::vis::gui;
+
+    std::unordered_map<std::string, std::string> payloads;
+    payloads.emplace(
+        "lfs.histogram",
+        R"({"metric_id":"opacity","compare_metric_id":"scale","log_scale":true})");
+    PanelRegistry::instance().apply_panel_payloads(payloads);
+
+    auto panel = std::make_shared<ChromePanel>();
+    panel->chrome = "{}";
+    PanelInfo info;
+    info.id = "lfs.histogram";
+    info.label = info.id;
+    info.space = PanelSpace::BottomDock;
+    info.is_native = false;
+    info.panel = panel;
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));
+
+    EXPECT_EQ(panel->apply_count, 1);
+    EXPECT_NE(panel->chrome.find("opacity"), std::string::npos);
+    EXPECT_NE(panel->chrome.find("log_scale"), std::string::npos);
 }

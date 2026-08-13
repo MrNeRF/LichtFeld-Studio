@@ -58,6 +58,7 @@ class AccountPanel(Panel):
     label = "Account"
     space = lf.ui.PanelSpace.FLOATING
     order = 95
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/account_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (440, 0)

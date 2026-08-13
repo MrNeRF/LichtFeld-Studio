@@ -257,6 +257,19 @@ namespace lfs::vis::gui {
         stopPlySequenceStreaming();
     }
 
+    float SequencerUIManager::timelineZoom() const {
+        return panel_ ? panel_->zoomLevel() : 1.0f;
+    }
+
+    float SequencerUIManager::timelinePan() const {
+        return panel_ ? panel_->panOffset() : 0.0f;
+    }
+
+    void SequencerUIManager::setTimelineView(const float zoom, const float pan) {
+        if (panel_)
+            panel_->setTimelineView(zoom, pan);
+    }
+
     void SequencerUIManager::destroyGraphicsResources() {
         stopPlySequenceStreaming();
         last_ply_sequence_frame_ = std::nullopt;

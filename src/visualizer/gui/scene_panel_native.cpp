@@ -682,6 +682,7 @@ namespace lfs::vis::gui {
         filter_input_revert_.bind(filter_input_el_, [this](Rml::Element&) {
             applyFilterInputValue();
         });
+        applyPendingTreeChrome();
     }
 
     void NativeScenePanel::syncPanel(const PanelDrawContext& ctx) {
@@ -1168,6 +1169,53 @@ namespace lfs::vis::gui {
         } else {
             setTab(Tab::Scene);
         }
+    }
+
+    SceneTreeSessionChrome NativeScenePanel::captureTreeChrome(
+        const core::Scene& scene) const {
+        SceneTreeSessionChrome chrome;
+        if (tree_el_) {
+            chrome.collapsed_uuids =
+                collapsedUuidsFromIds(scene, tree_el_->collapsedIds());
+            chrome.models_collapsed = tree_el_->modelsCollapsed();
+            chrome.filter_text = tree_el_->filterText();
+        }
+        if (filter_input_el_) {
+            chrome.filter_text =
+                filter_input_el_->GetAttribute<Rml::String>("value", chrome.filter_text);
+        }
+        return chrome;
+    }
+
+    void NativeScenePanel::applyTreeChrome(const SceneTreeSessionChrome& chrome) {
+        pending_tree_chrome_ = chrome;
+        applyPendingTreeChrome();
+    }
+
+    void NativeScenePanel::resetTreeChrome() {
+        pending_tree_chrome_.reset();
+        if (tree_el_) {
+            tree_el_->clearSessionCollapseUuids();
+            tree_el_->setModelsCollapsed(false);
+            tree_el_->setFilterText({});
+        }
+        if (filter_input_el_)
+            filter_input_el_->SetAttribute("value", "");
+        host_.markContentDirty();
+    }
+
+    void NativeScenePanel::applyPendingTreeChrome() {
+        if (!pending_tree_chrome_)
+            return;
+        const auto& chrome = *pending_tree_chrome_;
+        if (tree_el_) {
+            tree_el_->applySessionCollapseUuids(chrome.collapsed_uuids);
+            tree_el_->setModelsCollapsed(chrome.models_collapsed);
+            tree_el_->setFilterText(chrome.filter_text);
+        }
+        if (filter_input_el_)
+            filter_input_el_->SetAttribute("value", chrome.filter_text);
+        host_.markContentDirty();
     }
 
 } // namespace lfs::vis::gui

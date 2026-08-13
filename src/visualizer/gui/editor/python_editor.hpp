@@ -96,6 +96,8 @@ namespace lfs::vis::editor {
         std::string getTextStripped() const;
         void setText(const std::string& text);
         void clear();
+        void setActiveSessionLocator(std::string locator);
+        void clearActiveSessionLocator();
 
         bool consumeExecuteRequested();
         bool consumeTextChanged();

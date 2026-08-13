@@ -216,6 +216,32 @@ class TrainingPanel(Panel):
             self._set_scrub_value,
         )
 
+    def capture_chrome(self):
+        return {
+            "collapsed": sorted(self._collapsed),
+            "property_search": self._pv_search_query,
+            "steps_scaling_lock": bool(self._auto_scale_steps_locked),
+        }
+
+    def apply_chrome(self, payload):
+        self._collapsed = set(INITIALLY_COLLAPSED)
+        self._pv_search_query = ""
+        self._auto_scale_steps_locked = True
+        if not isinstance(payload, dict):
+            if self._handle:
+                self._handle.dirty_all()
+            return
+        collapsed = payload.get("collapsed")
+        if isinstance(collapsed, (list, tuple)):
+            self._collapsed = {str(name) for name in collapsed}
+        search = payload.get("property_search")
+        if isinstance(search, str):
+            self._pv_search_query = search
+        if "steps_scaling_lock" in payload:
+            self._auto_scale_steps_locked = bool(payload.get("steps_scaling_lock"))
+        if self._handle:
+            self._handle.dirty_all()
+
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("training")
         if model is None:

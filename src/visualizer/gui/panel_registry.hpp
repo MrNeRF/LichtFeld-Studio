@@ -190,6 +190,10 @@ namespace lfs::vis::gui {
         virtual std::optional<double> nextScheduledAnimationDelay() const { return std::nullopt; }
         virtual void reloadRmlResources() {}
         virtual void releaseRendererResources() {}
+        // Opaque per-panel chrome JSON. Empty capture means "no payload".
+        // apply of "{}" or missing keys must restore this panel's defaults.
+        [[nodiscard]] virtual std::string captureChromeJson() const { return {}; }
+        virtual void applyChromeJson(std::string_view json) { (void)json; }
     };
 
     struct PanelInfo {
@@ -210,6 +214,10 @@ namespace lfs::vis::gui {
         float initial_height = 0;
         float original_width = 0;
         float original_height = 0;
+        std::string default_parent_id;
+        PanelSpace default_space = PanelSpace::Floating;
+        int default_order = 100;
+        bool default_enabled = true;
         static constexpr int MAX_CONSECUTIVE_ERRORS = 3;
 
         bool has_option(PanelOption opt) const {
@@ -363,6 +371,14 @@ namespace lfs::vis::gui {
         // Drops only retained, unclamped project rectangles. Live panel
         // placement and registration are unchanged.
         void clear_project_state_retention();
+        void reset_project_state();
+        [[nodiscard]] std::unordered_map<std::string, std::string>
+        capture_panel_payloads() const;
+        // Replaces the pending payload map. Registered panels receive their
+        // payload, or "{}" when absent so leftover chrome cannot leak across
+        // projects. Late register_panel delivers a matching pending payload.
+        void apply_panel_payloads(
+            const std::unordered_map<std::string, std::string>& payloads);
         [[nodiscard]] uint64_t registration_revision() const;
         bool isPositionOverFloatingPanel(double x, double y) const;
         void set_panel_enabled(const std::string& id, bool enabled);
@@ -406,6 +422,7 @@ namespace lfs::vis::gui {
         uint64_t alloc_float_stack_order_locked();
         FloatingPanelInteraction& ensure_floating_interaction_locked(const PanelInfo& panel);
         void bring_floating_panel_to_front_locked(const PanelInfo& panel);
+        void reset_project_state_locked();
 
         mutable std::mutex mutex_;
         mutable std::mutex poll_mutex_;
@@ -418,6 +435,8 @@ namespace lfs::vis::gui {
         // repositions or resizes the panel.
         std::unordered_map<std::string, PanelProjectState>
             requested_project_floating_state_;
+        std::unordered_map<std::string, std::string>
+            requested_panel_payloads_;
         uint64_t next_float_stack_order_ = 1;
         uint64_t registration_revision_ = 0;
         int8_t floating_cursor_dir_x_ = 0;

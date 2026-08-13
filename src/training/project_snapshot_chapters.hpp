@@ -30,6 +30,8 @@ namespace lfs::training {
     // non-training chapter that can change outside the optimizer. The writer
     // reopens source_path lazily for clean heavy spans, applies this bundle,
     // then installs SCNG/SELM/PRMS/CKPT from the same optimizer safe point.
+    // Training-time periodic autosave does not use this path: it writes a
+    // light sidecar and carry-forwards the existing CKPT binding.
     // Save As therefore publishes one destination generation without
     // inheriting an unrelated destination project's identity.
     struct ProjectSnapshotDocumentContext {
@@ -112,5 +114,8 @@ namespace lfs::training {
     materialize_project_snapshot_cpu_chapters(
         ProjectSnapshotCpuState state,
         ProjectSnapshotChapters& output);
+
+    void absolutize_dataset_path_for_snapshot(
+        std::filesystem::path& path);
 
 } // namespace lfs::training

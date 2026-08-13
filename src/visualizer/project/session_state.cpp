@@ -5,15 +5,24 @@
 
 #include "project/session_state.hpp"
 
+#include "core/error.hpp"
+#include "core/error_bus.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/scene.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/python_console_panel.hpp"
+#include "gui/panels/windows_console_utils.hpp"
+#include "gui/scene_tree_session.hpp"
+#include "gui/ui_context.hpp"
 #include "input/input_controller.hpp"
+#include "io/video/video_export_options.hpp"
 #include "rendering/render_constants.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
@@ -38,6 +47,7 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -1453,13 +1463,18 @@ namespace lfs::vis::project {
         if (!prepared)
             return lfs::Status::failure(
                 std::move(prepared).error());
+        prepared->ticket = ++next_ticket_;
+        pending_ticket_ = prepared->ticket;
         pending_ = std::move(*prepared);
         return {};
     }
 
-    void GuiSessionRestoreCoordinator::stagePrepared(
+    GuiSessionRestoreTicket GuiSessionRestoreCoordinator::stagePrepared(
         PreparedGuiSessionRestore prepared) {
+        prepared.ticket = ++next_ticket_;
+        pending_ticket_ = prepared.ticket;
         pending_ = std::move(prepared);
+        return pending_ticket_;
     }
 
     void GuiSessionRestoreCoordinator::
@@ -1488,11 +1503,13 @@ namespace lfs::vis::project {
             return std::nullopt;
         auto result = std::move(pending_);
         pending_.reset();
+        pending_ticket_ = 0;
         return result;
     }
 
     void GuiSessionRestoreCoordinator::clear() noexcept {
         pending_.reset();
+        pending_ticket_ = 0;
     }
 
     namespace {
@@ -1558,6 +1575,7 @@ namespace lfs::vis::project {
                     optional_field("bottom_dock_height", &gui::PanelLayoutProjectState::bottom_dock_height),
                     optional_field("left_dock_width", &gui::PanelLayoutProjectState::left_dock_width),
                     optional_field("sequencer_visible", &gui::PanelLayoutProjectState::show_sequencer),
+                    optional_field("tab_scroll_offset", &gui::PanelLayoutProjectState::tab_scroll_offset),
                 };
             return fields;
         }
@@ -1636,6 +1654,52 @@ namespace lfs::vis::project {
             return fields;
         }
 
+        std::string video_preset_name(
+            const lfs::io::video::VideoPreset preset) {
+            using lfs::io::video::VideoPreset;
+            switch (preset) {
+            case VideoPreset::YOUTUBE_1080P:
+                return "youtube_1080p";
+            case VideoPreset::YOUTUBE_4K:
+                return "youtube_4k";
+            case VideoPreset::HD_720P:
+                return "hd_720p";
+            case VideoPreset::TIKTOK:
+                return "tiktok";
+            case VideoPreset::TIKTOK_HD:
+                return "tiktok_hd";
+            case VideoPreset::INSTAGRAM_SQUARE:
+                return "instagram_square";
+            case VideoPreset::INSTAGRAM_PORTRAIT:
+                return "instagram_portrait";
+            case VideoPreset::CUSTOM:
+                return "custom";
+            }
+            return "youtube_1080p";
+        }
+
+        std::optional<lfs::io::video::VideoPreset>
+        video_preset_from_name(const std::string_view name) {
+            using lfs::io::video::VideoPreset;
+            if (name == "youtube_1080p")
+                return VideoPreset::YOUTUBE_1080P;
+            if (name == "youtube_4k")
+                return VideoPreset::YOUTUBE_4K;
+            if (name == "hd_720p")
+                return VideoPreset::HD_720P;
+            if (name == "tiktok")
+                return VideoPreset::TIKTOK;
+            if (name == "tiktok_hd")
+                return VideoPreset::TIKTOK_HD;
+            if (name == "instagram_square")
+                return VideoPreset::INSTAGRAM_SQUARE;
+            if (name == "instagram_portrait")
+                return VideoPreset::INSTAGRAM_PORTRAIT;
+            if (name == "custom")
+                return VideoPreset::CUSTOM;
+            return std::nullopt;
+        }
+
         const auto& sequencer_preference_fields() {
             using Preferences = gui::panels::SequencerUIState;
             static const std::vector<JsonField<Preferences>> fields{
@@ -1645,6 +1709,28 @@ namespace lfs::vis::project {
                 optional_field("show_pip_preview", &Preferences::show_pip_preview),
                 optional_field("pip_preview_scale", &Preferences::pip_preview_scale),
                 optional_field("show_film_strip", &Preferences::show_film_strip),
+                custom_field<Preferences>(
+                    "preset",
+                    [](const Preferences& prefs) {
+                        return Json(video_preset_name(prefs.preset));
+                    },
+                    [](const Json& json,
+                       Preferences& prefs,
+                       std::string_view,
+                       const std::string_view field) {
+                        if (const auto name =
+                                scalar<std::string>(json, field)) {
+                            if (const auto parsed =
+                                    video_preset_from_name(*name)) {
+                                prefs.preset = *parsed;
+                            }
+                        }
+                        return lfs::Result<void>{};
+                    }),
+                optional_field("custom_width", &Preferences::custom_width),
+                optional_field("custom_height", &Preferences::custom_height),
+                optional_field("framerate", &Preferences::framerate),
+                optional_field("quality", &Preferences::quality),
             };
             return fields;
         }
@@ -1864,6 +1950,24 @@ namespace lfs::vis::project {
             fields_to_json(layout, fixed_layout_fields());
         fixed_payload["python_console_visible"] =
             console_visible;
+        fixed_payload["system_console_visible"] =
+            window_states.contains("system_console") &&
+            window_states.at("system_console");
+        fixed_payload["tab_strip_scroll"] =
+            gui_manager->tabStripScroll();
+        {
+            const auto tree =
+                gui_manager->captureSceneTreeChrome(
+                    viewer.getScene());
+            Json collapsed = Json::array();
+            for (const auto& uuid : tree.collapsed_uuids)
+                collapsed.push_back(uuid);
+            fixed_payload["scene_tree"] = Json{
+                {"collapsed_uuids", std::move(collapsed)},
+                {"models_collapsed", tree.models_collapsed},
+                {"filter_text", tree.filter_text},
+            };
+        }
         fixed_payload["window"] =
             fields_to_json(window, window_fields());
 
@@ -1874,7 +1978,18 @@ namespace lfs::vis::project {
             panels.push_back(
                 fields_to_json(panel, panel_fields()));
         }
-        const Json registry_payload{
+        Json panel_payloads = Json::object();
+        for (const auto& [id, text] :
+             gui::PanelRegistry::instance()
+                 .capture_panel_payloads()) {
+            try {
+                auto parsed = Json::parse(text);
+                if (parsed.is_object())
+                    panel_payloads[id] = std::move(parsed);
+            } catch (const nlohmann::json::exception&) {
+            }
+        }
+        Json registry_payload{
             {"panels", std::move(panels)},
             {"active_tabs",
              {
@@ -1885,6 +2000,9 @@ namespace lfs::vis::project {
                       ->scenePanelActiveTab()},
              }},
         };
+        if (!panel_payloads.empty())
+            registry_payload["panel_payloads"] =
+                std::move(panel_payloads);
 
         Json console_payload{
             {"active_tab", 0},
@@ -1897,6 +2015,13 @@ namespace lfs::vis::project {
                 console->getActiveTab();
             console_payload["font_scale"] =
                 console->getFontScale();
+            console_payload["splitter_ratio"] =
+                gui::panels::PythonConsoleState::
+                    splitterRatio();
+        } else {
+            console_payload["splitter_ratio"] =
+                gui::panels::PythonConsoleState::
+                    splitterRatio();
         }
 
         const Json gui_known{
@@ -2440,6 +2565,20 @@ namespace lfs::vis::project {
              fields_to_json(
                  sequencer_ui,
                  sequencer_preference_fields())},
+            {"view",
+             {
+                 {"zoom",
+                  gui_manager->sequencerUI()
+                      .timelineZoom()},
+                 {"pan",
+                  gui_manager->sequencerUI()
+                      .timelinePan()},
+                 {"selected_keyframe_id",
+                  controller.selectedKeyframeId()
+                      ? Json(*controller
+                                  .selectedKeyframeId())
+                      : Json(nullptr)},
+             }},
         };
         if (auto merged =
                 result.sequencer
@@ -2564,7 +2703,13 @@ namespace lfs::vis::project {
             return state;
         }
 
-        std::string read_clean_editor_file(
+        struct CleanEditorFileRead {
+            std::optional<std::string> text;
+            std::string error;
+            lfs::ErrorCode code = lfs::ErrorCode::NotFound;
+        };
+
+        CleanEditorFileRead read_clean_editor_file(
             const std::filesystem::path& path) {
             constexpr std::uintmax_t
                 max_editor_file_bytes =
@@ -2573,15 +2718,29 @@ namespace lfs::vis::project {
             const auto size =
                 std::filesystem::file_size(
                     path, error);
-            if (error ||
-                size > max_editor_file_bytes)
-                return {};
+            if (error)
+                return {.text = std::nullopt,
+                        .error =
+                            "Could not stat " +
+                            lfs::core::path_to_utf8(path),
+                        .code = lfs::ErrorCode::NotFound};
+            if (size > max_editor_file_bytes)
+                return {.text = std::nullopt,
+                        .error =
+                            "Editor file exceeds the 64 MiB restore limit: " +
+                            lfs::core::path_to_utf8(path),
+                        .code = lfs::ErrorCode::
+                            ResourceExhausted};
 
             std::ifstream stream;
             if (!lfs::core::open_file_for_read(
                     path, std::ios::binary,
                     stream)) {
-                return {};
+                return {.text = std::nullopt,
+                        .error =
+                            "Could not read editor file: " +
+                            lfs::core::path_to_utf8(path),
+                        .code = lfs::ErrorCode::NotFound};
             }
             std::string text(
                 static_cast<std::size_t>(size),
@@ -2592,9 +2751,44 @@ namespace lfs::vis::project {
                     static_cast<std::streamsize>(
                         text.size()));
                 if (!stream)
-                    return {};
+                    return {.text = std::nullopt,
+                            .error =
+                                "Could not read editor file: " +
+                                lfs::core::path_to_utf8(path),
+                            .code = lfs::ErrorCode::DataLoss};
             }
-            return text;
+            return {.text = std::move(text),
+                    .error = {},
+                    .code = lfs::ErrorCode::NotFound};
+        }
+
+        void publish_editor_restore_error(
+            const lfs::ErrorCode code,
+            std::string detail) {
+            lfs::ErrorBus::instance().publish(
+                lfs::ErrorNotification{
+                    .error = lfs::make_error(
+                        lfs::ErrorInit{
+                            .code = code,
+                            .domain = lfs::ErrorDomain::IO,
+                            .severity = lfs::Severity::Error,
+                            .retryability =
+                                lfs::Retryability::
+                                    NotRetryable,
+                            .operation_id = {},
+                            .user_message =
+                                "Editor file not restored",
+                            .detail = std::move(detail),
+                            .detection =
+                                LFS_SOURCE_SITE_CURRENT(),
+                            .fields = {},
+                            .native = std::nullopt,
+                        }),
+                    .surface = lfs::ErrorSurface::Toast,
+                    .actions = {},
+                    .operation_id =
+                        lfs::OperationId::generate(),
+                });
         }
 
         std::optional<Json> panel_camera_json(
@@ -2642,6 +2836,8 @@ namespace lfs::vis::project {
                 layout,
                 "GUIL.fixed_arrangement",
                 fixed_layout_fields());
+            if (!fixed.contains("tab_scroll_offset"))
+                layout.tab_scroll_offset = 0.0f;
 
             if (const auto window_json =
                     find_required_object(
@@ -2678,6 +2874,41 @@ namespace lfs::vis::project {
                             *scene_tab);
                 }
             }
+            if (const auto tree_json =
+                    find_required_object(
+                        fixed, "scene_tree");
+                tree_json != fixed.end()) {
+                gui::SceneTreeSessionChrome tree;
+                if (const auto uuids =
+                        find_required_array(
+                            *tree_json,
+                            "collapsed_uuids");
+                    uuids != tree_json->end()) {
+                    for (const auto& entry : *uuids) {
+                        if (entry.is_string())
+                            tree.collapsed_uuids.push_back(
+                                entry.get<std::string>());
+                    }
+                }
+                assign_optional(
+                    *tree_json, "models_collapsed",
+                    tree.models_collapsed);
+                assign_optional(
+                    *tree_json, "filter_text",
+                    tree.filter_text);
+                gui_manager->applySceneTreeChrome(tree);
+            } else {
+                gui_manager->resetSceneTreeChrome();
+            }
+
+            if (const auto tab_strip =
+                    scalar<float>(
+                        fixed, "tab_strip_scroll")) {
+                gui_manager->setTabStripScroll(*tab_strip);
+            } else {
+                gui_manager->setTabStripScroll(0.0f);
+            }
+
             gui_manager->panelLayout()
                 .applyProjectState(layout);
 
@@ -2717,6 +2948,22 @@ namespace lfs::vis::project {
             gui::PanelRegistry::instance()
                 .apply_project_state(panels);
 
+            std::unordered_map<std::string, std::string>
+                panel_payloads;
+            if (const auto payloads =
+                    find_required_object(
+                        registry, "panel_payloads");
+                payloads != registry.end()) {
+                for (const auto& [id, value] :
+                     payloads->items()) {
+                    if (value.is_object())
+                        panel_payloads.insert_or_assign(
+                            id, value.dump());
+                }
+            }
+            gui::PanelRegistry::instance()
+                .apply_panel_payloads(panel_payloads);
+
             if (auto* window_states =
                     gui_manager
                         ->getWindowStates()) {
@@ -2732,6 +2979,24 @@ namespace lfs::vis::project {
                 (*window_states)
                     ["python_console"] =
                         console_visible;
+                bool system_console_visible = false;
+                assign_optional(
+                    fixed,
+                    "system_console_visible",
+                    system_console_visible);
+#ifdef WIN32
+                gui::UIContext ctx{
+                    .viewer = &viewer,
+                    .window_states = window_states,
+                    .editor = nullptr,
+                    .sequencer_controller = nullptr,
+                    .fonts = {}};
+                gui::panels::SetSystemConsoleVisible(
+                    ctx, system_console_visible);
+#else
+                (*window_states)["system_console"] =
+                    system_console_visible;
+#endif
             }
 
             const Json console =
@@ -2754,14 +3019,35 @@ namespace lfs::vis::project {
                     console, "font_scale",
                     font_scale);
                 console_state->setActiveTab(
-                    std::clamp(active_tab, 0, 1));
+                    std::clamp(active_tab, 0, 2));
                 console_state->setFontScale(
                     font_scale);
+                if (const auto ratio =
+                        scalar<float>(
+                            console,
+                            "splitter_ratio")) {
+                    gui::panels::PythonConsoleState::
+                        setSplitterRatio(*ratio);
+                } else {
+                    gui::panels::PythonConsoleState::
+                        setSplitterRatio(0.6f);
+                }
+            } else if (const auto ratio =
+                           scalar<float>(
+                               console,
+                               "splitter_ratio")) {
+                gui::panels::PythonConsoleState::
+                    setSplitterRatio(*ratio);
+            } else {
+                gui::panels::PythonConsoleState::
+                    setSplitterRatio(0.6f);
             }
         }
 
         void apply_editor(
+            VisualizerImpl& viewer,
             const Json& root) {
+            (void)viewer;
             auto* console =
                 gui::panels::PythonConsoleState::
                     tryGetInstance();
@@ -2808,11 +3094,16 @@ namespace lfs::vis::project {
                                    std::string{});
                 } else if (
                     !locator->contains("://")) {
-                    text =
+                    auto read =
                         read_clean_editor_file(
-                            lfs::core::
-                                utf8_to_path(
-                                    *locator));
+                            lfs::core::utf8_to_path(
+                                *locator));
+                    if (!read.text) {
+                        publish_editor_restore_error(
+                            read.code, read.error);
+                        continue;
+                    }
+                    text = std::move(*read.text);
                 }
                 workspace.open_files.push_back(
                     editor::
@@ -2911,6 +3202,8 @@ namespace lfs::vis::project {
             }
             const auto desired_split =
                 restored->split_view_mode;
+            const auto saved_split_offset =
+                restored->split_view_offset;
             restored->split_view_mode =
                 rendering->getSettings()
                     .split_view_mode;
@@ -2924,6 +3217,17 @@ namespace lfs::vis::project {
             rendering->restoreSplitViewMode(
                 desired_split,
                 viewer.getViewport());
+            auto split_settings =
+                rendering->getSettings();
+            split_settings.split_view_offset =
+                saved_split_offset;
+            rendering->updateSettings(
+                split_settings);
+            if (auto* selection_tool =
+                    viewer.getSelectionTool()) {
+                selection_tool
+                    ->armPreserveRestoredRenderState();
+            }
 
             if (const auto split =
                     find_required_object(
@@ -3051,142 +3355,6 @@ namespace lfs::vis::project {
                 }
             }
 
-            if (const auto tools =
-                    find_required_object(
-                        root, "tools");
-                tools != root.end()) {
-                auto& registry =
-                    UnifiedToolRegistry::instance();
-                const auto active_tool =
-                    scalar<std::string>(
-                        *tools,
-                        "active_tool_id")
-                        .value_or(
-                            std::string{});
-                if (active_tool.empty()) {
-                    registry.clearActiveTool();
-                } else if (
-                    registry.poll(active_tool)) {
-                    registry.setActiveTool(
-                        active_tool);
-                } else {
-                    // The ID remains in retained VIEW, but is not made active
-                    // when its plugin is unavailable.
-                    registry.clearActiveTool();
-                }
-                if (const auto submode =
-                        scalar<std::string>(
-                            *tools,
-                            "active_submode_id")) {
-                    registry.setActiveSubmode(
-                        *submode);
-                }
-
-                auto& gizmo =
-                    gui_manager->gizmo();
-                if (const auto submode =
-                        scalar<std::string>(
-                            *tools,
-                            "selection_submode");
-                    submode) {
-                    if (const auto parsed =
-                            selection_submode_from_name(
-                                *submode)) {
-                        gizmo.setSelectionSubMode(
-                            *parsed);
-                    }
-                }
-                const auto operation =
-                    scalar<std::string>(
-                        *tools,
-                        "gizmo_operation");
-                gizmo.setOperation(
-                    operation &&
-                            *operation == "rotate"
-                        ? gui::GizmoOperation::
-                              Rotate
-                    : operation &&
-                            *operation == "scale"
-                        ? gui::GizmoOperation::
-                              Scale
-                        : gui::GizmoOperation::
-                              Translate);
-                const auto transform =
-                    scalar<std::string>(
-                        *tools,
-                        "transform_space");
-                gizmo.setTransformSpace(
-                    transform &&
-                            *transform == "world"
-                        ? TransformSpace::World
-                        : TransformSpace::Local);
-                const auto pivot =
-                    scalar<std::string>(
-                        *tools, "pivot_mode");
-                gizmo.setPivotMode(
-                    pivot &&
-                            *pivot ==
-                                "bounds_center"
-                        ? PivotMode::BoundsCenter
-                        : PivotMode::Origin);
-                const auto multi =
-                    scalar<std::string>(
-                        *tools,
-                        "multi_transform_mode");
-                gizmo.setMultiTransformMode(
-                    multi &&
-                            *multi == "individual"
-                        ? gui::MultiTransformMode::
-                              Individual
-                        : gui::MultiTransformMode::
-                              Selection);
-                if (const auto shape =
-                        scalar<std::string>(
-                            *tools,
-                            "crop_shape")) {
-                    gizmo.setCropToolShape(
-                        *shape);
-                }
-                if (const auto operation_name =
-                        scalar<std::string>(
-                            *tools,
-                            "crop_operation")) {
-                    gizmo.setCropToolOperation(
-                        *operation_name);
-                }
-                if (auto* selection_tool =
-                        viewer.getSelectionTool()) {
-                    if (const auto selection =
-                            find_required_object(
-                                *tools,
-                                "selection");
-                        selection !=
-                        tools->end()) {
-                        selection_tool
-                            ->restoreProjectPreferences(
-                                scalar<float>(
-                                    *selection,
-                                    "brush_radius")
-                                    .value_or(
-                                        20.0f),
-                                scalar<bool>(
-                                    *selection,
-                                    "crop_filter")
-                                    .value_or(
-                                        false),
-                                scalar<bool>(
-                                    *selection,
-                                    "depth_filter")
-                                    .value_or(
-                                        false),
-                                scalar<bool>(
-                                    *selection,
-                                    "restrict_to_selected_nodes")
-                                    .value_or(
-                                        true));
-                    }
-                }
-            }
             if (const auto sequencer_view =
                     find_required_object(
                         root, "sequencer_view");
@@ -3199,6 +3367,229 @@ namespace lfs::vis::project {
                         .show_camera_path);
             }
             rendering->markDirty(DirtyFlag::ALL);
+        }
+
+        std::optional<ToolType> builtin_tool_type(
+            const std::string_view id) {
+            if (id == "builtin.select")
+                return ToolType::Selection;
+            if (id == "builtin.translate")
+                return ToolType::Translate;
+            if (id == "builtin.rotate")
+                return ToolType::Rotate;
+            if (id == "builtin.scale")
+                return ToolType::Scale;
+            if (id == "builtin.mirror")
+                return ToolType::Mirror;
+            if (id == "builtin.align")
+                return ToolType::Align;
+            return std::nullopt;
+        }
+
+        void deactivate_tool(VisualizerImpl& viewer) {
+            lfs::core::events::tools::SetToolbarTool{
+                .tool_mode = static_cast<int>(ToolType::None)}
+                .emit();
+            viewer.getEditorContext().setActiveTool(
+                ToolType::None);
+            viewer.getEditorContext().clearActiveOperator();
+            UnifiedToolRegistry::instance()
+                .clearActiveTool();
+        }
+
+        void apply_view_tools(
+            VisualizerImpl& viewer,
+            const Json& root) {
+            auto* gui_manager =
+                viewer.getGuiManager();
+            auto* rendering =
+                viewer.getRenderingManager();
+            if (!gui_manager || !rendering) {
+                deactivate_tool(viewer);
+                return;
+            }
+            const bool sequencer_visible =
+                gui_manager->panelLayout().isShowSequencer();
+            const auto finish = [&] {
+                viewer.getEditorContext()
+                    .armToolRestoreGuard();
+                gui_manager->panelLayout()
+                    .setShowSequencer(sequencer_visible);
+                rendering->markDirty(DirtyFlag::ALL);
+            };
+
+            const auto tools =
+                find_required_object(root, "tools");
+            if (tools == root.end()) {
+                deactivate_tool(viewer);
+                finish();
+                return;
+            }
+
+            auto& editor = viewer.getEditorContext();
+            auto& registry = UnifiedToolRegistry::instance();
+            const auto active_tool =
+                scalar<std::string>(*tools,
+                                    "active_tool_id")
+                    .value_or(std::string{});
+
+            if (active_tool == "builtin.cropbox") {
+                const auto operation =
+                    scalar<std::string>(*tools,
+                                        "crop_operation")
+                        .value_or("translate");
+                const auto gizmo_type =
+                    operation == "rotate" ? "rotate" : operation == "scale" ? "scale"
+                                                                            : "translate";
+                editor.setActiveOperator(
+                    "builtin.cropbox", gizmo_type);
+                registry.setActiveTool(
+                    "builtin.cropbox");
+                gui_manager->gizmo()
+                    .setCropToolShape(
+                        scalar<std::string>(
+                            *tools, "crop_shape")
+                            .value_or("box"));
+                gui_manager->gizmo()
+                    .setCropToolOperation(operation);
+                if (!editor.hasSelection() ||
+                    editor.isToolsDisabled() ||
+                    !gui_manager->gizmo()
+                         .ensureCropToolStateForRestore()) {
+                    deactivate_tool(viewer);
+                }
+            } else if (const auto type =
+                           builtin_tool_type(active_tool);
+                       type && editor.isToolAvailable(*type)) {
+                lfs::core::events::tools::SetToolbarTool{
+                    .tool_mode = static_cast<int>(*type)}
+                    .emit();
+                if (editor.getActiveTool() != *type)
+                    deactivate_tool(viewer);
+            } else {
+                deactivate_tool(viewer);
+            }
+
+            auto submode = scalar<std::string>(
+                *tools, "selection_submode");
+            if (!submode)
+                submode = scalar<std::string>(
+                    *tools, "active_submode_id");
+            if (submode) {
+                if (const auto parsed =
+                        selection_submode_from_name(
+                            *submode)) {
+                    lfs::core::events::tools::SetSelectionSubMode{
+                        .selection_mode =
+                            static_cast<int>(*parsed)}
+                        .emit();
+                }
+            }
+            auto& gizmo = gui_manager->gizmo();
+            const auto operation =
+                scalar<std::string>(*tools,
+                                    "gizmo_operation");
+            gizmo.setOperation(
+                operation && *operation == "rotate"
+                    ? gui::GizmoOperation::Rotate
+                : operation && *operation == "scale"
+                    ? gui::GizmoOperation::Scale
+                    : gui::GizmoOperation::Translate);
+            gizmo.setTransformSpace(
+                scalar<std::string>(*tools,
+                                    "transform_space")
+                            .value_or("local") == "world"
+                    ? TransformSpace::World
+                    : TransformSpace::Local);
+            gizmo.setPivotMode(
+                scalar<std::string>(*tools,
+                                    "pivot_mode")
+                            .value_or("origin") ==
+                        "bounds_center"
+                    ? PivotMode::BoundsCenter
+                    : PivotMode::Origin);
+            gizmo.setMultiTransformMode(
+                scalar<std::string>(*tools,
+                                    "multi_transform_mode")
+                            .value_or("selection") ==
+                        "individual"
+                    ? gui::MultiTransformMode::Individual
+                    : gui::MultiTransformMode::Selection);
+            if (const auto shape =
+                    scalar<std::string>(*tools,
+                                        "crop_shape"))
+                gizmo.setCropToolShape(*shape);
+            if (const auto crop_operation =
+                    scalar<std::string>(*tools,
+                                        "crop_operation"))
+                gizmo.setCropToolOperation(*crop_operation);
+
+            if (auto* selection_tool =
+                    viewer.getSelectionTool()) {
+                if (const auto selection =
+                        find_required_object(*tools,
+                                             "selection");
+                    selection != tools->end()) {
+                    selection_tool->restoreProjectPreferences(
+                        scalar<float>(*selection,
+                                      "brush_radius")
+                            .value_or(20.0f),
+                        scalar<bool>(*selection,
+                                     "crop_filter")
+                            .value_or(false),
+                        scalar<bool>(*selection,
+                                     "depth_filter")
+                            .value_or(false),
+                        scalar<bool>(
+                            *selection,
+                            "restrict_to_selected_nodes")
+                            .value_or(true));
+                    const auto render_json =
+                        find_required_object(
+                            root, "render_settings");
+                    if (render_json != root.end()) {
+                        if (auto settings =
+                                renderSettingsFromProjectJson(
+                                    *render_json,
+                                    rendering->getSettings())) {
+                            const float near_plane =
+                                std::max(0.0f,
+                                         -settings
+                                              ->depth_filter_max.z);
+                            const float far_plane =
+                                std::max(near_plane + 0.01f,
+                                         -settings
+                                              ->depth_filter_min.z);
+                            const float half_width =
+                                std::max(
+                                    std::abs(settings
+                                                 ->depth_filter_min.x),
+                                    std::abs(settings
+                                                 ->depth_filter_max.x));
+                            selection_tool
+                                ->setDepthFilterRange(
+                                    settings
+                                        ->depth_filter_enabled,
+                                    near_plane, far_plane,
+                                    half_width);
+                            auto restored =
+                                rendering->getSettings();
+                            restored.crop_filter_for_selection =
+                                settings->crop_filter_for_selection;
+                            restored.depth_filter_enabled =
+                                settings->depth_filter_enabled;
+                            restored.depth_filter_min =
+                                settings->depth_filter_min;
+                            restored.depth_filter_max =
+                                settings->depth_filter_max;
+                            restored.depth_filter_transform =
+                                settings->depth_filter_transform;
+                            rendering->updateSettings(restored);
+                        }
+                    }
+                }
+            }
+            finish();
         }
 
         void apply_sequencer(
@@ -3360,6 +3751,35 @@ namespace lfs::vis::project {
                 controller.playbackSpeed();
             ui.sequence_fps =
                 controller.plySequenceFps();
+            if (auto* rendering =
+                    viewer.getRenderingManager()) {
+                ui.equirectangular =
+                    rendering->getSettings()
+                        .equirectangular;
+            }
+            if (const auto view =
+                    find_required_object(
+                        root, "view");
+                view != root.end()) {
+                float zoom = gui_manager
+                                 ->sequencerUI()
+                                 .timelineZoom();
+                float pan = gui_manager
+                                ->sequencerUI()
+                                .timelinePan();
+                assign_optional(*view, "zoom", zoom);
+                assign_optional(*view, "pan", pan);
+                gui_manager->sequencerUI()
+                    .setTimelineView(zoom, pan);
+                if (view->contains(
+                        "selected_keyframe_id") &&
+                    (*view)["selected_keyframe_id"]
+                        .is_number_unsigned()) {
+                    controller.selectKeyframeById(
+                        (*view)["selected_keyframe_id"]
+                            .get<std::uint64_t>());
+                }
+            }
             gui_manager->sequencerUI()
                 .syncKeyframesToSceneGraph();
         }
@@ -3393,13 +3813,13 @@ namespace lfs::vis::project {
         // GUIL console settings and EDTR are never consumed by a null owner.
         (void)gui::panels::PythonConsoleState::getInstance();
 
-        // VIEW runs after SCNG/CKPT/PPIS hydration. GUIL then applies only at
-        // the panels-ready boundary that delivered this prepared bundle.
+        // VIEW (except tools), GUIL, EDTR, and SEQR apply at the panels-ready
+        // boundary. Functional tool activation waits for hydration + SELM.
         apply_view(
             viewer, *view, bookmarks,
             prepared.environment_map_path);
         apply_guil(viewer, *gui);
-        apply_editor(*editor);
+        apply_editor(viewer, *editor);
         apply_sequencer(
             viewer, *sequencer,
             prepared.ply_sequence_directory);
@@ -3412,6 +3832,35 @@ namespace lfs::vis::project {
                 viewer.getRenderingManager()) {
             rendering->markDirty(DirtyFlag::ALL);
         }
+    }
+
+    void applyGuiSessionTools(
+        VisualizerImpl& viewer,
+        const PreparedGuiSessionRestore& prepared) {
+        auto* gui_manager = viewer.getGuiManager();
+        const bool sequencer_visible =
+            gui_manager &&
+            gui_manager->panelLayout().isShowSequencer();
+        auto view = chapter_root(
+            prepared.chapters.view.dom(), "VIEW");
+        if (!view) {
+            deactivate_tool(viewer);
+            if (gui_manager) {
+                gui_manager->panelLayout()
+                    .setShowSequencer(sequencer_visible);
+            }
+            return;
+        }
+        apply_view_tools(viewer, *view);
+    }
+
+    void applyDefaultGuiLayout(VisualizerImpl& viewer) {
+        auto gui = chapter_root(
+            lfs::io::project::default_session_chapter_dom(
+                lfs::io::project::SessionJsonChapterKind::GuiLayout),
+            "GUIL");
+        if (gui)
+            apply_guil(viewer, *gui);
     }
 
 } // namespace lfs::vis::project

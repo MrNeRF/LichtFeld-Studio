@@ -44,6 +44,10 @@ namespace lfs::vis {
     class VisualizerImplResetTest_ParametersValueChangeIsHardDirty_Test;
     class VisualizerImplResetTest_BaselineIdleCheckpointTrainerClosesWithoutTrainingPrompt_Test;
     class VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
+    class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
+    class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+    class VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
+    class VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -150,6 +154,7 @@ namespace lfs::vis::project {
         [[nodiscard]] bool
         isApplicationClosePending() const;
         void setSuppressTrainingAdoption(bool suppress);
+        void bindTrainerSnapshotTarget();
 
     private:
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
@@ -172,6 +177,10 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_ParametersValueChangeIsHardDirty_Test;
         friend class lfs::vis::VisualizerImplResetTest_BaselineIdleCheckpointTrainerClosesWithoutTrainingPrompt_Test;
         friend class lfs::vis::VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
+        friend class lfs::vis::VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
         enum class Hydration {
             Empty,
             ShellReady,
@@ -196,6 +205,7 @@ namespace lfs::vis::project {
             Compaction,
             TrainingAutosave,
             TrainingExplicitSave,
+            TrainingCloseSave,
         };
 
         struct DeclinedRecoveryIdentity {
@@ -209,8 +219,15 @@ namespace lfs::vis::project {
                 default;
         };
 
+        enum class DocumentSyncMode {
+            Default,
+            LightTrainingAutosave,
+        };
+
         [[nodiscard]] lfs::Result<void>
         synchronizeDocumentFromViewer();
+        [[nodiscard]] lfs::Result<void>
+        synchronizeDocumentFromViewer(DocumentSyncMode mode);
         [[nodiscard]] lfs::Result<void>
         openMaster(
             const std::filesystem::path& path,
@@ -244,6 +261,12 @@ namespace lfs::vis::project {
             std::filesystem::path master_path,
             std::uint64_t dirty_epoch,
             std::uint64_t scene_serial);
+        [[nodiscard]] lfs::Result<void>
+        startLiveTrainingSnapshotWrite(
+            ProjectWritePurpose purpose,
+            bool regenerate_preview);
+        [[nodiscard]] bool
+        isTrainingCheckpointStale() const;
         void queueProjectWriteSettlement(
             JobHandle handle);
         void settleProjectWrite();
@@ -266,7 +289,8 @@ namespace lfs::vis::project {
             std::shared_ptr<lfs::io::project::ProjectDocument> document,
             std::uint64_t epoch,
             std::uint64_t selection_mutation_serial,
-            std::vector<lfs::core::Uuid> selected_node_uuids);
+            std::vector<lfs::core::Uuid> selected_node_uuids,
+            std::uint64_t restore_ticket);
         [[nodiscard]] lfs::Result<void>
         persistSettings();
         void stopHydrationThreads();
@@ -283,6 +307,7 @@ namespace lfs::vis::project {
         std::filesystem::path settings_path_;
         std::atomic<std::uint64_t> epoch_{0};
         std::atomic<std::uint64_t> scene_mutation_serial_{0};
+        std::uint64_t active_restore_ticket_ = 0;
         std::atomic<std::uint64_t>
             selection_mutation_serial_{0};
         std::atomic<Hydration> hydration_{Hydration::Empty};

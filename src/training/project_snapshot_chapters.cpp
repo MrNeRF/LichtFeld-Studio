@@ -11,6 +11,7 @@
 #include <chrono>
 #include <format>
 #include <string>
+#include <system_error>
 
 namespace lfs::training {
 
@@ -42,6 +43,8 @@ namespace lfs::training {
                 parameters;
             parameters.dataset =
                 checkpoint_params.dataset;
+            absolutize_dataset_path_for_snapshot(
+                parameters.dataset.data_path);
             parameters.mcmc_session =
                 lfs::core::param::
                     OptimizationParameters::mcmc_defaults();
@@ -167,6 +170,8 @@ namespace lfs::training {
 
         const auto prms_begin = Clock::now();
         auto captured_parameters = parameters;
+        absolutize_dataset_path_for_snapshot(
+            captured_parameters.dataset.data_path);
         metrics.prms_ms =
             Milliseconds(Clock::now() - prms_begin)
                 .count();
@@ -255,6 +260,17 @@ namespace lfs::training {
         staged.document_context = std::move(context);
         output = std::move(staged);
         return {};
+    }
+
+    void absolutize_dataset_path_for_snapshot(
+        std::filesystem::path& path) {
+        if (path.empty() || path.is_absolute())
+            return;
+        std::error_code error;
+        auto absolute = std::filesystem::absolute(path, error);
+        if (error)
+            return;
+        path = absolute.lexically_normal();
     }
 
 } // namespace lfs::training

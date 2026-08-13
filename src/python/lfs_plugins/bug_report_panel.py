@@ -66,6 +66,7 @@ class BugReportPanel(Panel):
     label = "Report a bug"
     space = lf.ui.PanelSpace.FLOATING
     order = 96
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/bug_report_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (520, 0)

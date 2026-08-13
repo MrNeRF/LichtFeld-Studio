@@ -1,8 +1,27 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Built-in plugin panel registration."""
+"""Built-in plugin panel registration and per-panel GUIL chrome hooks."""
+
+from __future__ import annotations
 
 import traceback
+
+
+def capture_panel_chrome(panel):
+    """Return a JSON-serializable dict from ``panel.capture_chrome()``, or None."""
+    hook = getattr(panel, "capture_chrome", None)
+    if hook is None:
+        return None
+    payload = hook()
+    return payload if isinstance(payload, dict) else None
+
+
+def apply_panel_chrome(panel, payload):
+    """Deliver a payload (dict or None) to ``panel.apply_chrome()`` if present."""
+    hook = getattr(panel, "apply_chrome", None)
+    if hook is None:
+        return
+    hook(payload if isinstance(payload, dict) else {})
 
 
 def __getattr__(name):

@@ -3722,6 +3722,14 @@ namespace lfs::python {
             "Get the currently active tool id from C++ EditorContext");
 
         m.def(
+            "consume_tool_restore_guard", []() -> bool {
+                auto* editor = get_editor_context();
+                return editor &&
+                       editor->consumeToolRestoreGuard();
+            },
+            "Consume the one-shot native tool restore guard");
+
+        m.def(
             "is_tool_available", [](const std::string& id) -> bool {
                 static const std::unordered_map<std::string, vis::ToolType> tool_map = {
                     {"builtin.select", vis::ToolType::Selection},

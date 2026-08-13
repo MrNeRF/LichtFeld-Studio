@@ -97,7 +97,10 @@ namespace lfs::vis {
             // owners; VIEW/SEQR chapters store UUIDs, not raw machine paths.
             std::optional<std::filesystem::path> environment_map_path;
             std::optional<std::filesystem::path> ply_sequence_directory;
+            std::uint64_t ticket = 0;
         };
+
+        using GuiSessionRestoreTicket = std::uint64_t;
 
         [[nodiscard]] LFS_VIS_API
             lfs::Result<PreparedGuiSessionRestore>
@@ -121,7 +124,7 @@ namespace lfs::vis {
         public:
             [[nodiscard]] lfs::Result<void> stage(
                 lfs::io::project::ProjectSessionChapters chapters);
-            void stagePrepared(
+            [[nodiscard]] GuiSessionRestoreTicket stagePrepared(
                 PreparedGuiSessionRestore prepared);
             void onFirstGuiFrame();
             void onPanelsReady(std::uint64_t registration_revision);
@@ -137,9 +140,15 @@ namespace lfs::vis {
                 PreparedGuiSessionRestore>
             takeReady();
             void clear() noexcept;
+            [[nodiscard]] bool isCurrent(
+                GuiSessionRestoreTicket ticket) const noexcept {
+                return pending_ticket_ == ticket && ticket != 0;
+            }
 
         private:
             std::optional<PreparedGuiSessionRestore> pending_;
+            GuiSessionRestoreTicket next_ticket_ = 0;
+            GuiSessionRestoreTicket pending_ticket_ = 0;
             bool first_gui_frame_ready_ = false;
             bool panels_ready_ = false;
             std::uint64_t panels_registration_revision_ = 0;
@@ -161,6 +170,11 @@ namespace lfs::vis {
             VisualizerImpl& viewer,
             const PreparedGuiSessionRestore& prepared,
             std::vector<CameraBookmarkProjectState>& bookmarks);
+        LFS_VIS_API void applyGuiSessionTools(
+            VisualizerImpl& viewer,
+            const PreparedGuiSessionRestore& prepared);
+        LFS_VIS_API void applyDefaultGuiLayout(
+            VisualizerImpl& viewer);
 
     } // namespace project
 } // namespace lfs::vis

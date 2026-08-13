@@ -145,6 +145,9 @@ namespace lfs::vis {
         [[nodiscard]] bool needsLocalizationFrame() const;
 
         [[nodiscard]] float cachedPanelY() const { return cached_panel_y_; }
+        [[nodiscard]] float zoomLevel() const { return zoom_level_; }
+        [[nodiscard]] float panOffset() const { return pan_offset_; }
+        void setTimelineView(float zoom, float pan);
         [[nodiscard]] float getDisplayEndTime() const;
         [[nodiscard]] std::optional<sequencer::KeyframeId> hoveredKeyframeId() const;
 

@@ -150,6 +150,10 @@ namespace lfs::vis::tools {
             }
         }
 
+        if (preserve_restored_render_state_) {
+            preserve_restored_render_state_ = false;
+            return;
+        }
         if (enabled) {
             applySelectionFilterSettings(*tool_context_);
         } else {
@@ -179,7 +183,8 @@ namespace lfs::vis::tools {
         frustum_half_width_ = std::max(frustum_half_width, 0.05f);
 
         depth_filter_enabled_ = enabled;
-        if (!tool_context_ || !isEnabled()) {
+        if (!tool_context_ || !isEnabled() ||
+            preserve_restored_render_state_) {
             return;
         }
 

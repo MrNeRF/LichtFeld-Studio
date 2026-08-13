@@ -47,6 +47,7 @@ class ImagePreviewPanel(Panel):
     label = "Image Preview"
     space = lf.ui.PanelSpace.FLOATING
     order = 98
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/image_preview.rml"
     size = (900, 600)
     update_policy = "dirty"
@@ -94,6 +95,62 @@ class ImagePreviewPanel(Panel):
         self._last_training_params: tuple[int, int, bool] = (1, 0, False)
         self._decorator_cache: dict[str, str] = {}
         self._reactive_unsubscribers = []
+        self._pending_view_chrome = None
+
+    def capture_chrome(self):
+        return {
+            "camera_index": int(self._current_index),
+            "zoom": float(self._zoom),
+            "fit_to_window": bool(self._fit_to_window),
+            "pan_x": float(self._pan_x),
+            "pan_y": float(self._pan_y),
+            "rotation_quadrants": int(self._rotation_quadrants),
+            "show_filmstrip": bool(self._show_filmstrip),
+            "show_info": bool(self._show_info),
+            "show_overlay": bool(self._show_overlay),
+        }
+
+    def apply_chrome(self, payload):
+        self._current_index = 0
+        self._zoom = 1.0
+        self._fit_to_window = True
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._rotation_quadrants = 0
+        self._show_filmstrip = True
+        self._show_info = True
+        self._show_overlay = False
+        self._pending_view_chrome = payload if isinstance(payload, dict) else None
+        if self._pending_view_chrome:
+            self._apply_view_chrome(self._pending_view_chrome)
+        self._mark_dirty()
+
+    def _apply_view_chrome(self, payload):
+        index = payload.get("camera_index")
+        if isinstance(index, (int, float)):
+            index = int(index)
+            if self._image_paths:
+                self._current_index = max(0, min(index, len(self._image_paths) - 1))
+            else:
+                self._current_index = max(0, index)
+        zoom = payload.get("zoom")
+        if isinstance(zoom, (int, float)) and zoom > 0:
+            self._zoom = float(zoom)
+        if "fit_to_window" in payload:
+            self._fit_to_window = bool(payload.get("fit_to_window"))
+        if isinstance(payload.get("pan_x"), (int, float)):
+            self._pan_x = float(payload["pan_x"])
+        if isinstance(payload.get("pan_y"), (int, float)):
+            self._pan_y = float(payload["pan_y"])
+        rotation = payload.get("rotation_quadrants")
+        if isinstance(rotation, (int, float)):
+            self._rotation_quadrants = int(rotation) % 4
+        if "show_filmstrip" in payload:
+            self._show_filmstrip = bool(payload.get("show_filmstrip"))
+        if "show_info" in payload:
+            self._show_info = bool(payload.get("show_info"))
+        if "show_overlay" in payload:
+            self._show_overlay = bool(payload.get("show_overlay"))
 
     def _get_title(self) -> str:
         if self._image_paths:
@@ -241,6 +298,9 @@ class ImagePreviewPanel(Panel):
         self._last_training_params = self._get_training_params()
         self._rotation_quadrants = 0
         self._reset_view()
+        if self._pending_view_chrome:
+            self._apply_view_chrome(self._pending_view_chrome)
+            self._pending_view_chrome = None
         self._prev_image_index = -1
         self._crossfade_pending = False
         self._scroll_target = None

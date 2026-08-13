@@ -645,6 +645,12 @@ namespace lfs::vis {
         focal_edit_buffer_ = fmt::format("{:.1f}", current_focal_mm);
     }
 
+    void RmlSequencerPanel::setTimelineView(const float zoom, const float pan) {
+        zoom_level_ = std::clamp(zoom, panel_config::MIN_ZOOM, panel_config::MAX_ZOOM);
+        pan_offset_ = pan;
+        clampPanOffset();
+    }
+
     float RmlSequencerPanel::getDisplayEndTime() const {
         return sequencer_ui::displayEndTime(controller_.timeline(), zoom_level_);
     }

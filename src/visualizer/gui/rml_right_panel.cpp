@@ -17,6 +17,7 @@
 #include <RmlUi/Core/Element.h>
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <format>
 
 namespace lfs::vis::gui {
@@ -351,6 +352,17 @@ namespace lfs::vis::gui {
             el = el->GetParentNode();
         }
         return false;
+    }
+
+    void RmlRightPanel::setTabStripScroll(const float value) {
+        if (!std::isfinite(value))
+            return;
+        const float next = std::max(0.0f, value);
+        if (next == tab_scroll_left_)
+            return;
+        tab_scroll_left_ = next;
+        render_needed_ = true;
+        input_dirty_ = true;
     }
 
     CursorRequest RmlRightPanel::getCursorRequest() const {

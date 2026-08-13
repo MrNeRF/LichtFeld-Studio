@@ -5,15 +5,30 @@
 
 #include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
+#include "core/events.hpp"
+#include "core/parameters.hpp"
 #include "core/scene.hpp"
+#include "core/uuid.hpp"
 #include "gui/editor/python_editor.hpp"
+#include "gui/gui_manager.hpp"
+#include "gui/panels/python_console_panel.hpp"
+#include "gui/scene_tree_session.hpp"
+#include "gui/sequencer_ui_state.hpp"
 #include "io/project_document.hpp"
+#include "io/video/video_export_options.hpp"
 #include "licht_matrix_test_data.hpp"
 #include "licht_test_support.hpp"
 #include "project/session_state.hpp"
+#include "rendering/rendering_types.hpp"
 #include "sequencer/timeline.hpp"
+#include "tools/unified_tool_registry.hpp"
 #include "training/control/command_api.hpp"
+#include "training/project_snapshot_chapters.hpp"
+#include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "training/training_state.hpp"
+#include "visualizer_impl.hpp"
 
 #include <gtest/gtest.h>
 
@@ -64,6 +79,35 @@ namespace {
         lfs::test::licht::write_u64_le(
             bytes, offset,
             std::bit_cast<std::uint64_t>(value));
+    }
+
+    PreparedGuiSessionRestore
+    make_select_rectangle_restore() {
+        auto session = make_populated_session_chapters();
+        auto view = json_root(session.view.dom());
+        view["tools"]["active_tool_id"] = "builtin.select";
+        view["tools"]["selection_submode"] = "rectangle";
+        session.view = require_result(
+            ViewSessionChapter::parse(view.dump()));
+        return require_result(
+            prepareGuiSessionRestore(std::move(session)));
+    }
+
+    lfs::core::NodeId seed_splat_selection(
+        lfs::vis::VisualizerImpl& viewer) {
+        const auto node =
+            viewer.getScene().addSplatPlaceholder(
+                "Restore splat");
+        if (node == lfs::core::NULL_NODE)
+            return node;
+        viewer.getSceneManager()->changeContentType(
+            lfs::vis::SceneManager::ContentType::
+                SplatFiles);
+        viewer.getSceneManager()->selectNode(node);
+        viewer.getEditorContext().update(
+            viewer.getSceneManager(),
+            viewer.getTrainerManager());
+        return node;
     }
 
     TEST(P5SessionChapterTest,
@@ -126,6 +170,25 @@ namespace {
                              .contains(key))
                 << key;
         }
+    }
+
+    TEST(P5SessionChapterTest,
+         DefaultViewToolIdsAreRegisteredDefaults) {
+        const auto root = json_root(
+            default_session_chapter_dom(
+                SessionJsonChapterKind::View));
+        EXPECT_EQ(
+            root["tools"]["active_tool_id"],
+            "builtin.select");
+        EXPECT_EQ(
+            root["tools"]["active_submode_id"],
+            "centers");
+        EXPECT_EQ(
+            root["tools"]["selection_submode"],
+            "centers");
+        EXPECT_EQ(
+            root["tools"]["crop_operation"],
+            "translate");
     }
 
     TEST(P5SessionChapterTest,
@@ -441,6 +504,33 @@ namespace {
     }
 
     TEST(P5SessionChapterTest,
+         EditorDefaultBufferDropsOnlyEmptyStateAndKeepsTypedCode) {
+        using namespace lfs::vis::editor;
+        PythonEditor editor;
+        editor.restoreWorkspaceSessionState({});
+        EXPECT_TRUE(
+            editor.captureWorkspaceSessionState(
+                      "untitled://empty", false)
+                .open_files.empty());
+
+        editor.setText("typed = 1\n");
+        editor.setActiveSessionLocator(
+            "untitled://typed");
+        const auto captured =
+            editor.captureWorkspaceSessionState(
+                "/tmp/stale-locator.py", true);
+        ASSERT_EQ(captured.open_files.size(), 1u);
+        EXPECT_EQ(
+            captured.open_files.front().locator,
+            "untitled://typed");
+        EXPECT_EQ(
+            captured.open_files.front().text,
+            "typed = 1\n");
+        EXPECT_TRUE(
+            captured.open_files.front().modified);
+    }
+
+    TEST(P5SessionChapterTest,
          RetainedDomPreservesUnknownFieldsOnKnownPanel) {
         auto session = make_populated_session_chapters();
         const Json known{
@@ -605,6 +695,433 @@ namespace {
     }
 
     TEST(P5SessionChapterTest,
+         RestoreCoordinatorUsesDistinctTicketsForRepeatedOpens) {
+        GuiSessionRestoreCoordinator coordinator;
+        const auto first = coordinator.stagePrepared(
+            prepareGuiSessionRestore(
+                make_populated_session_chapters())
+                .value());
+        const auto second = coordinator.stagePrepared(
+            prepareGuiSessionRestore(
+                make_populated_session_chapters())
+                .value());
+        EXPECT_NE(first, second);
+        EXPECT_FALSE(coordinator.isCurrent(first));
+        EXPECT_TRUE(coordinator.isCurrent(second));
+        coordinator.clear();
+        EXPECT_FALSE(coordinator.isCurrent(second));
+    }
+
+    TEST(P5SessionChapterTest,
+         RestoreCoordinatorSecondOpenIsReadyWithoutRegating) {
+        GuiSessionRestoreCoordinator coordinator;
+        coordinator.onFirstGuiFrame();
+        coordinator.onPanelsReady(3);
+        const auto first = coordinator.stagePrepared(
+            prepareGuiSessionRestore(
+                make_populated_session_chapters())
+                .value());
+        ASSERT_TRUE(coordinator.ready());
+        ASSERT_TRUE(coordinator.takeReady());
+        EXPECT_FALSE(coordinator.isCurrent(first));
+
+        const auto second = coordinator.stagePrepared(
+            prepareGuiSessionRestore(
+                make_populated_session_chapters())
+                .value());
+        EXPECT_NE(first, second);
+        EXPECT_TRUE(coordinator.ready());
+        EXPECT_TRUE(coordinator.isCurrent(second));
+        ASSERT_TRUE(coordinator.takeReady());
+        EXPECT_FALSE(coordinator.hasPending());
+    }
+
+    TEST(P5SessionChapterTest,
+         NativeToolRestoreActivatesSelectionAndSubmode) {
+        lfs::event::EventBridge::instance().clear_all();
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        const auto node =
+            viewer.getScene().addSplatPlaceholder("Restore splat");
+        ASSERT_NE(node, lfs::core::NULL_NODE);
+        viewer.getSceneManager()->changeContentType(
+            lfs::vis::SceneManager::ContentType::SplatFiles);
+        viewer.getSceneManager()->selectNode(node);
+        viewer.getEditorContext().update(
+            viewer.getSceneManager(),
+            viewer.getTrainerManager());
+
+        auto session = make_populated_session_chapters();
+        auto view = json_root(session.view.dom());
+        view["tools"]["active_tool_id"] = "builtin.select";
+        view["tools"]["selection_submode"] = "rectangle";
+        session.view = require_result(
+            ViewSessionChapter::parse(view.dump()));
+        auto prepared = require_result(
+            prepareGuiSessionRestore(std::move(session)));
+
+        viewer.getGuiManager()->panelLayout().setShowSequencer(true);
+        applyGuiSessionTools(viewer, prepared);
+
+        EXPECT_EQ(
+            viewer.getEditorContext().getActiveTool(),
+            lfs::vis::ToolType::Selection);
+        EXPECT_EQ(
+            lfs::vis::UnifiedToolRegistry::instance()
+                .getActiveTool(),
+            "builtin.select");
+        EXPECT_EQ(
+            lfs::vis::UnifiedToolRegistry::instance()
+                .getActiveSubmode(),
+            "rectangle");
+        EXPECT_EQ(
+            viewer.getGuiManager()->gizmo().getSelectionSubMode(),
+            lfs::vis::SelectionSubMode::Rectangle);
+        EXPECT_TRUE(
+            viewer.getGuiManager()->panelLayout().isShowSequencer());
+    }
+
+    TEST(P5SessionChapterTest,
+         NativeToolRestoreWithoutSavedToolDeactivatesPreviousTool) {
+        lfs::event::EventBridge::instance().clear_all();
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        const auto node =
+            viewer.getScene().addSplatPlaceholder("Restore splat");
+        ASSERT_NE(node, lfs::core::NULL_NODE);
+        viewer.getSceneManager()->changeContentType(
+            lfs::vis::SceneManager::ContentType::SplatFiles);
+        viewer.getSceneManager()->selectNode(node);
+        viewer.getEditorContext().update(
+            viewer.getSceneManager(),
+            viewer.getTrainerManager());
+
+        auto first = make_populated_session_chapters();
+        auto first_view = json_root(first.view.dom());
+        first_view["tools"]["active_tool_id"] = "builtin.select";
+        first.view = require_result(
+            ViewSessionChapter::parse(first_view.dump()));
+        applyGuiSessionTools(
+            viewer,
+            require_result(
+                prepareGuiSessionRestore(std::move(first))));
+        ASSERT_EQ(
+            viewer.getEditorContext().getActiveTool(),
+            lfs::vis::ToolType::Selection);
+
+        auto second = make_populated_session_chapters();
+        auto second_view = json_root(second.view.dom());
+        second_view["tools"]["active_tool_id"] = "";
+        second.view = require_result(
+            ViewSessionChapter::parse(second_view.dump()));
+        applyGuiSessionTools(
+            viewer,
+            require_result(
+                prepareGuiSessionRestore(std::move(second))));
+        EXPECT_EQ(
+            viewer.getEditorContext().getActiveTool(),
+            lfs::vis::ToolType::None);
+        EXPECT_TRUE(
+            lfs::vis::UnifiedToolRegistry::instance()
+                .getActiveTool()
+                .empty());
+    }
+
+    TEST(P5SessionChapterTest,
+         ApplyGuiSessionDefersToolActivationUntilToolsApply) {
+        lfs::event::EventBridge::instance().clear_all();
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        const auto node =
+            viewer.getScene().addSplatPlaceholder("Restore splat");
+        ASSERT_NE(node, lfs::core::NULL_NODE);
+        viewer.getSceneManager()->changeContentType(
+            lfs::vis::SceneManager::ContentType::SplatFiles);
+        viewer.getSceneManager()->selectNode(node);
+        viewer.getEditorContext().update(
+            viewer.getSceneManager(),
+            viewer.getTrainerManager());
+
+        auto session = make_populated_session_chapters();
+        auto view = json_root(session.view.dom());
+        view["tools"]["active_tool_id"] = "builtin.select";
+        view["tools"]["selection_submode"] = "rectangle";
+        session.view = require_result(
+            ViewSessionChapter::parse(view.dump()));
+        auto prepared = require_result(
+            prepareGuiSessionRestore(std::move(session)));
+
+        std::vector<CameraBookmarkProjectState> bookmarks;
+        viewer.deactivateProjectTools();
+        applyGuiSession(viewer, prepared, bookmarks);
+        EXPECT_EQ(
+            viewer.getEditorContext().getActiveTool(),
+            lfs::vis::ToolType::None);
+
+        viewer.getEditorContext().update(
+            viewer.getSceneManager(),
+            viewer.getTrainerManager());
+        applyGuiSessionTools(viewer, prepared);
+        EXPECT_EQ(
+            viewer.getEditorContext().getActiveTool(),
+            lfs::vis::ToolType::Selection);
+        EXPECT_EQ(
+            viewer.getGuiManager()->gizmo().getSelectionSubMode(),
+            lfs::vis::SelectionSubMode::Rectangle);
+    }
+
+    TEST(P5SessionChapterTest,
+         HydrationTerminalThenApplyGuiSessionActivatesEditorTool) {
+        lfs::event::EventBridge::instance().clear_all();
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        ASSERT_NE(
+            seed_splat_selection(viewer),
+            lfs::core::NULL_NODE);
+        ASSERT_TRUE(
+            viewer.getSceneManager()->hasSelectedNode());
+
+        auto prepared = make_select_rectangle_restore();
+        const auto ticket =
+            viewer.stagePreparedProjectSessionRestore(
+                std::move(prepared));
+        ASSERT_NE(ticket, 0u);
+
+        lfs::event::ScopedHandler handlers;
+        int selection_applies = 0;
+        handlers.subscribe<
+            lfs::core::events::tools::SetToolbarTool>(
+            [&](const auto& event) {
+                if (event.tool_mode ==
+                    static_cast<int>(
+                        lfs::vis::ToolType::Selection)) {
+                    ++selection_applies;
+                }
+            });
+
+        viewer.noteHydrationTerminalForRestoreTicket(
+            ticket);
+        EXPECT_EQ(
+            viewer.getEditorContext().getActiveTool(),
+            lfs::vis::ToolType::None);
+        EXPECT_EQ(selection_applies, 0);
+
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        EXPECT_EQ(
+            viewer.getEditorContext().getActiveTool(),
+            lfs::vis::ToolType::Selection);
+        EXPECT_EQ(
+            lfs::vis::UnifiedToolRegistry::instance()
+                .getActiveTool(),
+            "builtin.select");
+        EXPECT_EQ(selection_applies, 1);
+        EXPECT_FALSE(
+            viewer.isProjectSessionRestorePending());
+
+        viewer.noteHydrationTerminalForRestoreTicket(
+            ticket);
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        viewer.tryApplyProjectSessionTools(ticket);
+        EXPECT_EQ(selection_applies, 1);
+        EXPECT_EQ(
+            viewer.getEditorContext().getActiveTool(),
+            lfs::vis::ToolType::Selection);
+    }
+
+    TEST(P5SessionChapterTest,
+         ToolsApplyOnceForBothHydrationAndOwnerReadyOrders) {
+        struct OrderCase {
+            const char* name;
+            bool hydration_first;
+        };
+        for (const auto& test : {
+                 OrderCase{"hydration-terminal-then-apply",
+                           true},
+                 OrderCase{"apply-then-hydration-terminal",
+                           false},
+             }) {
+            SCOPED_TRACE(test.name);
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::vis::ViewerOptions options;
+            options.show_startup_overlay = false;
+            lfs::vis::VisualizerImpl viewer(options);
+            ASSERT_NE(
+                seed_splat_selection(viewer),
+                lfs::core::NULL_NODE);
+            ASSERT_TRUE(
+                viewer.getSceneManager()
+                    ->hasSelectedNode());
+            viewer.deactivateProjectTools();
+            ASSERT_EQ(
+                viewer.getEditorContext().getActiveTool(),
+                lfs::vis::ToolType::None);
+
+            auto prepared = make_select_rectangle_restore();
+            const auto ticket =
+                viewer.stagePreparedProjectSessionRestore(
+                    std::move(prepared));
+            ASSERT_NE(ticket, 0u);
+
+            lfs::event::ScopedHandler handlers;
+            int selection_applies = 0;
+            handlers.subscribe<
+                lfs::core::events::tools::SetToolbarTool>(
+                [&](const auto& event) {
+                    if (event.tool_mode ==
+                        static_cast<int>(
+                            lfs::vis::ToolType::
+                                Selection)) {
+                        ++selection_applies;
+                    }
+                });
+
+            if (test.hydration_first) {
+                viewer.noteHydrationTerminalForRestoreTicket(
+                    ticket);
+                EXPECT_EQ(
+                    viewer.getEditorContext()
+                        .getActiveTool(),
+                    lfs::vis::ToolType::None);
+                EXPECT_EQ(selection_applies, 0);
+                viewer.noteGuiSessionRestoreOwnerReady(1);
+            } else {
+                viewer.noteGuiSessionRestoreOwnerReady(1);
+                EXPECT_EQ(
+                    viewer.getEditorContext()
+                        .getActiveTool(),
+                    lfs::vis::ToolType::None);
+                EXPECT_EQ(selection_applies, 0);
+                EXPECT_TRUE(
+                    viewer
+                        .isProjectSessionRestorePending());
+                viewer.noteHydrationTerminalForRestoreTicket(
+                    ticket);
+            }
+
+            EXPECT_EQ(
+                viewer.getEditorContext().getActiveTool(),
+                lfs::vis::ToolType::Selection);
+            EXPECT_EQ(selection_applies, 1);
+            EXPECT_FALSE(
+                viewer.isProjectSessionRestorePending());
+
+            viewer.noteHydrationTerminalForRestoreTicket(
+                ticket);
+            viewer.noteGuiSessionRestoreOwnerReady(1);
+            viewer.tryApplyProjectSessionTools(ticket);
+            EXPECT_EQ(selection_applies, 1);
+        }
+    }
+
+    TEST(P5SessionChapterTest,
+         EmptyToolRestoreKeepsSequencerVisibility) {
+        lfs::event::EventBridge::instance().clear_all();
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        viewer.getGuiManager()->panelLayout().setShowSequencer(true);
+
+        auto session = make_populated_session_chapters();
+        auto view = json_root(session.view.dom());
+        view["tools"]["active_tool_id"] = "";
+        session.view = require_result(
+            ViewSessionChapter::parse(view.dump()));
+        applyGuiSessionTools(
+            viewer,
+            require_result(
+                prepareGuiSessionRestore(std::move(session))));
+        EXPECT_EQ(
+            viewer.getEditorContext().getActiveTool(),
+            lfs::vis::ToolType::None);
+        EXPECT_TRUE(
+            viewer.getGuiManager()->panelLayout().isShowSequencer());
+    }
+
+    TEST(P5SessionChapterTest,
+         SplitViewOffsetSurvivesPlyComparisonRestore) {
+        lfs::event::EventBridge::instance().clear_all();
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        auto* rendering = viewer.getRenderingManager();
+        ASSERT_NE(rendering, nullptr);
+
+        auto staged = rendering->getSettings();
+        const auto saved_offset = std::size_t{7};
+        staged.split_view_mode =
+            rendering->getSettings().split_view_mode;
+        staged.split_view_offset = saved_offset;
+        rendering->updateSettings(staged);
+        rendering->restoreSplitViewMode(
+            lfs::vis::SplitViewMode::PLYComparison,
+            viewer.getViewport());
+        EXPECT_EQ(
+            rendering->getSettings().split_view_offset,
+            0u);
+
+        auto restored = rendering->getSettings();
+        restored.split_view_offset = saved_offset;
+        rendering->updateSettings(restored);
+        EXPECT_EQ(
+            rendering->getSettings().split_view_mode,
+            lfs::vis::SplitViewMode::PLYComparison);
+        EXPECT_EQ(
+            rendering->getSettings().split_view_offset,
+            saved_offset);
+    }
+
+    TEST(P5SessionChapterTest,
+         MissingEditorFileDoesNotLeaveCleanPathBuffer) {
+        lfs::event::EventBridge::instance().clear_all();
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+
+        auto session = make_populated_session_chapters();
+        Json editor{
+            {"version", 2},
+            {"open_files",
+             Json::array({
+                 {
+                     {"locator",
+                      "/no/such/restore-editor.py"},
+                     {"modified", false},
+                 },
+             })},
+            {"active_file",
+             "/no/such/restore-editor.py"},
+            {"vim_mode", false},
+            {"contains_embedded_secrets", false},
+        };
+        session.editor = require_result(
+            EditorSessionChapter::parse(editor.dump()));
+        std::vector<CameraBookmarkProjectState> bookmarks;
+        applyGuiSession(
+            viewer,
+            require_result(
+                prepareGuiSessionRestore(std::move(session))),
+            bookmarks);
+
+        auto& console =
+            lfs::vis::gui::panels::PythonConsoleState::
+                getInstance();
+        auto* python_editor = console.getEditor();
+        ASSERT_NE(python_editor, nullptr);
+        const auto captured =
+            python_editor->captureWorkspaceSessionState(
+                "untitled://missing", false);
+        EXPECT_TRUE(std::ranges::none_of(
+            captured.open_files, [](const auto& file) {
+                return file.locator ==
+                       "/no/such/restore-editor.py";
+            }));
+    }
+
+    TEST(P5SessionChapterTest,
          AutoloadOffNotStartedTerminalAppliesStagedRestore) {
         GuiSessionRestoreCoordinator coordinator;
         require_status(
@@ -669,6 +1186,26 @@ namespace {
         const auto valid =
             require_result(metrics.to_bytes());
         ASSERT_EQ(valid.size(), 68u);
+
+        MetricsChapter finished = metrics;
+        finished.finish_reason =
+            TrainingFinishReason::Completed;
+        const auto finished_bytes =
+            require_result(finished.to_bytes());
+        ASSERT_EQ(finished_bytes.size(), 72u);
+        const auto parsed_finished =
+            require_result(
+                MetricsChapter::from_bytes(
+                    finished_bytes));
+        EXPECT_EQ(
+            parsed_finished.finish_reason,
+            TrainingFinishReason::Completed);
+        const auto parsed_legacy =
+            require_result(
+                MetricsChapter::from_bytes(valid));
+        EXPECT_EQ(
+            parsed_legacy.finish_reason,
+            TrainingFinishReason::None);
 
         struct InvalidMetricsCase {
             std::string_view name;
@@ -792,12 +1329,172 @@ namespace {
                 lfs::training::Trainer>(
                 checkpoint_scene),
             9);
+        EXPECT_NEAR(
+            manager.getElapsedSeconds(),
+            125.5f, 0.001f);
+    }
+
+    TEST_F(P5MetricsRestoreTest,
+           ElapsedSurvivesCheckpointInstallThenMetrics) {
+        MetricsChapter metrics;
+        metrics.accumulated_training_seconds =
+            88.25;
+        lfs::core::Scene checkpoint_scene;
+        const auto cameras =
+            checkpoint_scene.addGroup("Cameras");
+        const auto training_cameras =
+            checkpoint_scene.addCameraGroup(
+                "Training", cameras, 1);
+        checkpoint_scene.addCamera(
+            "train.png",
+            training_cameras,
+            std::make_shared<lfs::core::Camera>());
+        lfs::vis::TrainerManager manager;
+        manager.setTrainerFromCheckpoint(
+            std::make_unique<
+                lfs::training::Trainer>(
+                checkpoint_scene),
+            4);
         EXPECT_FLOAT_EQ(
             manager.getElapsedSeconds(), 0.0f);
         manager.restoreProjectMetrics(metrics);
         EXPECT_NEAR(
             manager.getElapsedSeconds(),
-            125.5f, 0.001f);
+            88.25f, 0.001f);
+    }
+
+    TEST_F(P5MetricsRestoreTest,
+           FinishedRestoreDisablesResumeBothOrders) {
+        MetricsChapter metrics;
+        metrics.loss_history = {
+            {.iteration = 30, .value = 0.12f},
+        };
+        metrics.accumulated_training_seconds =
+            12.0;
+        metrics.finish_reason =
+            TrainingFinishReason::Completed;
+
+        const auto make_scene = [] {
+            auto scene = std::make_unique<
+                lfs::core::Scene>();
+            const auto cameras =
+                scene->addGroup("Cameras");
+            const auto training_cameras =
+                scene->addCameraGroup(
+                    "Training", cameras, 1);
+            scene->addCamera(
+                "train.png",
+                training_cameras,
+                std::make_shared<
+                    lfs::core::Camera>());
+            return scene;
+        };
+
+        {
+            auto scene = make_scene();
+            lfs::vis::TrainerManager manager;
+            manager.restoreProjectMetrics(metrics);
+            manager.setTrainerFromCheckpoint(
+                std::make_unique<
+                    lfs::training::Trainer>(
+                    *scene),
+                30);
+            EXPECT_EQ(
+                manager.getState(),
+                lfs::vis::TrainingState::Finished);
+            EXPECT_EQ(
+                manager.getStateMachine()
+                    .getFinishReason(),
+                lfs::vis::FinishReason::Completed);
+            EXPECT_FALSE(manager.canResume());
+            EXPECT_NEAR(
+                manager.getElapsedSeconds(),
+                12.0f, 0.001f);
+            EXPECT_FLOAT_EQ(
+                manager.getCurrentLoss(), 0.12f);
+        }
+        {
+            auto scene = make_scene();
+            lfs::vis::TrainerManager manager;
+            manager.setTrainerFromCheckpoint(
+                std::make_unique<
+                    lfs::training::Trainer>(
+                    *scene),
+                30);
+            EXPECT_EQ(
+                manager.getState(),
+                lfs::vis::TrainingState::Paused);
+            manager.restoreProjectMetrics(metrics);
+            EXPECT_EQ(
+                manager.getState(),
+                lfs::vis::TrainingState::Finished);
+            EXPECT_EQ(
+                manager.getStateMachine()
+                    .getFinishReason(),
+                lfs::vis::FinishReason::Completed);
+            EXPECT_FALSE(manager.canResume());
+            EXPECT_NEAR(
+                manager.getElapsedSeconds(),
+                12.0f, 0.001f);
+        }
+    }
+
+    TEST_F(P5MetricsRestoreTest,
+           IterationAtTotalRestoresCompletedWithoutFinishField) {
+        MetricsChapter metrics;
+        metrics.accumulated_training_seconds =
+            4.0;
+        lfs::core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        const auto training_cameras =
+            scene.addCameraGroup(
+                "Training", cameras, 1);
+        scene.addCamera(
+            "train.png",
+            training_cameras,
+            std::make_shared<lfs::core::Camera>());
+        auto trainer = std::make_unique<
+            lfs::training::Trainer>(scene);
+        auto params = trainer->getParams();
+        params.optimization.iterations = 10;
+        params.optimization.enable_sparsity =
+            false;
+        trainer->setParams(params);
+        lfs::vis::TrainerManager manager;
+        manager.restoreProjectMetrics(metrics);
+        manager.setTrainerFromCheckpoint(
+            std::move(trainer), 10);
+        EXPECT_EQ(
+            manager.getState(),
+            lfs::vis::TrainingState::Finished);
+        EXPECT_EQ(
+            manager.getStateMachine()
+                .getFinishReason(),
+            lfs::vis::FinishReason::Completed);
+        EXPECT_FALSE(manager.canResume());
+    }
+
+    TEST_F(P5MetricsRestoreTest,
+           ProjectCheckpointLocksSaveSteps) {
+        lfs::core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        const auto training_cameras =
+            scene.addCameraGroup(
+                "Training", cameras, 1);
+        scene.addCamera(
+            "train.png",
+            training_cameras,
+            std::make_shared<lfs::core::Camera>());
+        auto trainer = std::make_unique<
+            lfs::training::Trainer>(scene);
+        auto params = trainer->getParams();
+        params.resume_project =
+            std::filesystem::path{"/tmp/live.licht"};
+        trainer->setParams(params);
+        lfs::vis::TrainerManager manager;
+        manager.setTrainerFromCheckpoint(
+            std::move(trainer), 3);
+        EXPECT_FALSE(manager.canEditSaveSteps());
     }
 
     TEST_F(P5MetricsRestoreTest,
@@ -1179,6 +1876,140 @@ namespace {
         EXPECT_EQ(proven, registered)
             << "Every registered P5 row must reach an explicit "
                "save->load->Phase-A assertion";
+    }
+
+    TEST(P5SessionChapterTest, SceneTreeCollapseUsesStableUuidsNotNodeIds) {
+        lfs::core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        const auto models = scene.addGroup("Models");
+        ASSERT_NE(cameras, lfs::core::NULL_NODE);
+        ASSERT_NE(models, lfs::core::NULL_NODE);
+        const auto cameras_uuid = scene.getNodeUuid(cameras).to_string();
+        const auto models_uuid = scene.getNodeUuid(models).to_string();
+        EXPECT_FALSE(cameras_uuid.empty());
+        EXPECT_NE(cameras_uuid, models_uuid);
+
+        const auto collapsed = lfs::vis::gui::collapsedIdsFromUuids(
+            scene, {cameras_uuid});
+        EXPECT_TRUE(collapsed.contains(cameras));
+        EXPECT_FALSE(collapsed.contains(models));
+
+        const auto written = lfs::vis::gui::collapsedUuidsFromIds(
+            scene, collapsed);
+        ASSERT_EQ(written.size(), 1u);
+        EXPECT_EQ(written.front(), cameras_uuid);
+    }
+
+    TEST(P5SessionChapterTest, GuilPanelPayloadsAreAdditiveAndRetained) {
+        GuiLayoutChapter chapter;
+        Json root = json_root(chapter.dom());
+        auto& registry =
+            root["layouts"][0]["areas"][0]["spaces"][1]["opaque_payload"];
+        registry["panel_payloads"] = {
+            {"lfs.histogram",
+             {{"metric_id", "opacity"},
+              {"log_scale", true},
+              {"bin_count", 64},
+              {"vendor_extra", "keep"}}},
+        };
+        auto loaded = GuiLayoutChapter::parse(root.dump());
+        ASSERT_TRUE(loaded) << lfs::format_for_developer(loaded.error());
+
+        const Json known{
+            {"layouts",
+             Json::array({
+                 {
+                     {"areas",
+                      Json::array({
+                          {
+                              {"spaces",
+                               Json::array({
+                                   {
+                                       {"type", "panel_registry"},
+                                       {"opaque_payload",
+                                        {
+                                            {"panel_payloads",
+                                             {
+                                                 {"lfs.histogram",
+                                                  {{"metric_id", "scale"},
+                                                   {"log_scale", false}}},
+                                             }},
+                                        }},
+                                   },
+                               })},
+                          },
+                      })},
+                 },
+             })},
+        };
+        require_status(loaded->merge_known_state(known));
+        const Json merged = json_root(loaded->dom());
+        const auto& payload =
+            merged["layouts"][0]["areas"][0]["spaces"][1]
+                  ["opaque_payload"]["panel_payloads"]["lfs.histogram"];
+        EXPECT_EQ(payload["metric_id"], "scale");
+        EXPECT_EQ(payload["log_scale"], false);
+        EXPECT_EQ(payload["bin_count"], 64);
+        EXPECT_EQ(payload["vendor_extra"], "keep");
+    }
+
+    TEST(P5SessionChapterTest, SequencerExportPrefsAndViewRoundTrip) {
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        ASSERT_NE(viewer.getGuiManager(), nullptr);
+
+        auto session = make_populated_session_chapters();
+        auto seq = json_root(session.sequencer.dom());
+        seq["preferences"]["preset"] = "tiktok_hd";
+        seq["preferences"]["custom_width"] = 1280;
+        seq["preferences"]["custom_height"] = 720;
+        seq["preferences"]["framerate"] = 48;
+        seq["preferences"]["quality"] = 22;
+        seq["view"] = {
+            {"zoom", 2.5f},
+            {"pan", 1.25f},
+            {"selected_keyframe_id", nullptr},
+        };
+        session.sequencer = require_result(
+            SequencerSessionChapter::parse(seq.dump()));
+        auto prepared = require_result(
+            prepareGuiSessionRestore(std::move(session)));
+        std::vector<CameraBookmarkProjectState> bookmarks;
+        applyGuiSession(viewer, prepared, bookmarks);
+
+        const auto& ui = viewer.getGuiManager()->getSequencerUIState();
+        EXPECT_EQ(ui.preset, lfs::io::video::VideoPreset::TIKTOK_HD);
+        EXPECT_EQ(ui.custom_width, 1280);
+        EXPECT_EQ(ui.custom_height, 720);
+        EXPECT_EQ(ui.framerate, 48);
+        EXPECT_EQ(ui.quality, 22);
+        EXPECT_NEAR(viewer.getGuiManager()->sequencerUI().timelineZoom(), 2.5f, 1e-4f);
+        EXPECT_NEAR(viewer.getGuiManager()->sequencerUI().timelinePan(), 1.25f, 1e-4f);
+        if (const auto* rendering = viewer.getRenderingManager()) {
+            EXPECT_EQ(ui.equirectangular, rendering->getSettings().equirectangular);
+        }
+    }
+
+    TEST(P5SessionChapterTest, SnapshotAbsolutizesRelativeDatasetPath) {
+        std::filesystem::path relative{"data/bicycle"};
+        ASSERT_FALSE(relative.is_absolute());
+        lfs::training::absolutize_dataset_path_for_snapshot(relative);
+        EXPECT_TRUE(relative.is_absolute());
+        EXPECT_NE(relative.generic_string().find("bicycle"), std::string::npos);
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = "data/bicycle";
+        params.optimization.strategy = std::string(lfs::core::param::kStrategyMCMC);
+        lfs::core::Scene scene;
+        const auto training = scene.addSplatPlaceholder("Train");
+        ASSERT_NE(training, lfs::core::NULL_NODE);
+        scene.setTrainingModelNode(scene.getNodeUuid(training));
+        lfs::training::ProjectSnapshotCpuState cpu;
+        auto captured = lfs::training::capture_project_snapshot_cpu_state(
+            scene, params, lfs::core::generate_uuid_v4(), 1, cpu);
+        ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
+        EXPECT_TRUE(cpu.parameters.dataset.data_path.is_absolute());
     }
 
 } // namespace

@@ -74,6 +74,7 @@ namespace lfs::vis::gui {
         float left_dock_width = 320.0f;
         bool show_sequencer = false;
         std::string active_tab_id;
+        float tab_scroll_offset = 0.0f;
     };
 
     class LFS_VIS_API PanelLayoutManager {

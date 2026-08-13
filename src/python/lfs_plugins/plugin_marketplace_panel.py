@@ -76,6 +76,7 @@ class PluginMarketplacePanel(Panel):
     label = "Plugin Marketplace"
     space = lf.ui.PanelSpace.FLOATING
     order = 91
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/plugin_marketplace.rml"
     height_mode = lf.ui.PanelHeightMode.FILL
     size = (770, 560)

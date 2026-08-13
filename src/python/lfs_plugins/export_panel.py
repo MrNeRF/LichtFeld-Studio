@@ -76,6 +76,7 @@ class ExportPanel(Panel):
     label = "Export"
     space = lf.ui.PanelSpace.FLOATING
     order = 10
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/export_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (320, 0)

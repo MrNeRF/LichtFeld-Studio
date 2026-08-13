@@ -3092,6 +3092,32 @@ namespace lfs::vis::gui {
             native_scene_panel_->setProjectActiveTab(tab);
     }
 
+    SceneTreeSessionChrome GuiManager::captureSceneTreeChrome(
+        const lfs::core::Scene& scene) const {
+        return native_scene_panel_
+                   ? native_scene_panel_->captureTreeChrome(scene)
+                   : SceneTreeSessionChrome{};
+    }
+
+    void GuiManager::applySceneTreeChrome(
+        const SceneTreeSessionChrome& chrome) {
+        if (native_scene_panel_)
+            native_scene_panel_->applyTreeChrome(chrome);
+    }
+
+    void GuiManager::resetSceneTreeChrome() {
+        if (native_scene_panel_)
+            native_scene_panel_->resetTreeChrome();
+    }
+
+    float GuiManager::tabStripScroll() const {
+        return rml_right_panel_.tabStripScroll();
+    }
+
+    void GuiManager::setTabStripScroll(const float value) {
+        rml_right_panel_.setTabStripScroll(value);
+    }
+
     void GuiManager::initCustomCursors() {
         if (!pipette_cursor_) {
             // The tip of the dropper sits near the lower-left corner in the 24x24 Tabler asset.
@@ -3864,9 +3890,8 @@ namespace lfs::vis::gui {
         reg_panel("native.video_extractor", "Video Extractor",
                   make_panel(VideoExtractorPanel(video_widget_.get())),
                   PanelSpace::Floating, 11,
-                  0,
+                  static_cast<uint32_t>(PanelOption::DEFAULT_CLOSED),
                   1082.0f, 920.0f);
-        reg.set_panel_enabled("native.video_extractor", false);
 
         // Viewport overlays (ordered by draw priority)
         reg_panel("native.selection_overlay", "Selection Overlay",

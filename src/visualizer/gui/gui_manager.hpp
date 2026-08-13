@@ -23,6 +23,7 @@
 #include "gui/rml_toast_overlay.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/scene_tree_session.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/sequencer_ui_state.hpp"
 #include "gui/startup_overlay.hpp"
@@ -135,6 +136,12 @@ namespace lfs::vis {
             }
             [[nodiscard]] std::string scenePanelActiveTab() const;
             void setScenePanelActiveTab(std::string_view tab);
+            [[nodiscard]] SceneTreeSessionChrome captureSceneTreeChrome(
+                const lfs::core::Scene& scene) const;
+            void applySceneTreeChrome(const SceneTreeSessionChrome& chrome);
+            void resetSceneTreeChrome();
+            [[nodiscard]] float tabStripScroll() const;
+            void setTabStripScroll(float value);
 
             void requestExitConfirmation(
                 bool training_in_progress = false);
@@ -145,6 +152,7 @@ namespace lfs::vis {
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
+            void dismissStartupOverlay() { startup_overlay_.dismiss(); }
             [[nodiscard]] bool isStartupBlockingInput() const {
                 return startup_overlay_.blocksUnderlayInput();
             }

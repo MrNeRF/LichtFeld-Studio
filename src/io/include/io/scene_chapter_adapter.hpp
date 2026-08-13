@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -44,14 +45,17 @@ namespace lfs::io::project {
     [[nodiscard]] LFS_IO_API lfs::Result<CapturedSceneGraphState>
     capture_scene_graph_state(
         const lfs::core::Scene& scene,
-        const ScenePayloadBindings& payload_bindings);
+        const ScenePayloadBindings& payload_bindings,
+        std::span<const lfs::core::Uuid> omit_node_uuids = {});
 
     [[nodiscard]] LFS_IO_API lfs::Result<SceneGraphChapter>
     materialize_scene_graph_chapter(CapturedSceneGraphState state);
 
     [[nodiscard]] LFS_IO_API lfs::Result<SceneGraphChapter>
-    capture_scene_graph(const lfs::core::Scene& scene,
-                        const ScenePayloadBindings& payload_bindings);
+    capture_scene_graph(
+        const lfs::core::Scene& scene,
+        const ScenePayloadBindings& payload_bindings,
+        std::span<const lfs::core::Uuid> omit_node_uuids = {});
 
     // Phase-A API. The returned scene owns all restored nodes and payloads,
     // while its observables are already bound to target. target is not

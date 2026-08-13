@@ -347,14 +347,15 @@ namespace lfs::io::project {
                 {"camera_bookmarks", Json::array()},
                 {"tools",
                  {
-                     {"active_tool_id", "select"},
-                     {"selection_submode", ""},
+                     {"active_tool_id", "builtin.select"},
+                     {"active_submode_id", "centers"},
+                     {"selection_submode", "centers"},
                      {"gizmo_operation", "translate"},
                      {"transform_space", "world"},
                      {"pivot_mode", "origin"},
                      {"multi_transform_mode", "individual"},
                      {"crop_shape", "box"},
-                     {"crop_operation", "replace"},
+                     {"crop_operation", "translate"},
                      {"selection",
                       {
                           {"brush_radius", 20.0},
@@ -554,6 +555,23 @@ namespace lfs::io::project {
                         lfs::ErrorCode::DataLoss,
                         "The GUIL panel registry payload is invalid",
                         "GUIL.layouts.areas.spaces.panel_registry");
+                }
+                if (payload.contains("panel_payloads")) {
+                    if (!payload["panel_payloads"].is_object()) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            "GUIL panel_payloads must be an object map",
+                            "GUIL.layouts.areas.spaces.panel_registry.panel_payloads");
+                    }
+                    for (const auto& [id, value] :
+                         payload["panel_payloads"].items()) {
+                        if (!value.is_object()) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "Each GUIL panel payload must be an object",
+                                "GUIL.layouts.areas.spaces.panel_registry.panel_payloads");
+                        }
+                    }
                 }
                 return {};
             }
@@ -1263,6 +1281,14 @@ namespace lfs::io::project {
                 "METR last evaluation is invalid",
                 "METR.last_evaluation");
         }
+        if (static_cast<std::uint32_t>(finish_reason) >
+            static_cast<std::uint32_t>(
+                TrainingFinishReason::Error)) {
+            return fail<void>(
+                lfs::ErrorCode::DataLoss,
+                "METR finish reason is invalid",
+                "METR.finish_reason");
+        }
         return {};
     }
 
@@ -1323,6 +1349,13 @@ namespace lfs::io::project {
             };
         append_history(loss_history);
         append_history(psnr_history);
+        if (finish_reason !=
+            TrainingFinishReason::None) {
+            append_le<std::uint32_t>(
+                output,
+                static_cast<std::uint32_t>(
+                    finish_reason));
+        }
         return output;
     }
 
@@ -1405,12 +1438,21 @@ namespace lfs::io::project {
         const auto total_count =
             *loss_count + *psnr_count;
         if (total_count >
-                (std::numeric_limits<
-                     std::size_t>::max() -
-                 offset) /
-                    8u ||
-            offset + total_count * 8u !=
-                bytes.size()) {
+            (std::numeric_limits<
+                 std::size_t>::max() -
+             offset) /
+                8u) {
+            return fail<MetricsChapter>(
+                lfs::ErrorCode::DataLoss,
+                "METR payload size does not match its sample counts",
+                "METR.history");
+        }
+        const auto history_bytes =
+            total_count * 8u;
+        const auto history_end =
+            offset + history_bytes;
+        if (bytes.size() != history_end &&
+            bytes.size() != history_end + 4u) {
             return fail<MetricsChapter>(
                 lfs::ErrorCode::DataLoss,
                 "METR payload size does not match its sample counts",
@@ -1487,16 +1529,41 @@ namespace lfs::io::project {
             !valid) {
             return std::move(valid).error();
         }
-        if (preflight_offset != bytes.size()) {
+        if (preflight_offset != history_end) {
             return fail<MetricsChapter>(
                 lfs::ErrorCode::DataLoss,
                 "METR payload has trailing or misaligned bytes",
                 "METR.history");
         }
+        std::optional<std::uint32_t>
+            finish_reason_bits;
+        if (bytes.size() == history_end + 4u) {
+            auto parsed_reason =
+                read_le<std::uint32_t>(
+                    bytes, preflight_offset,
+                    "METR.finish_reason");
+            if (!parsed_reason ||
+                *parsed_reason >
+                    static_cast<std::uint32_t>(
+                        TrainingFinishReason::
+                            Error)) {
+                return fail<MetricsChapter>(
+                    lfs::ErrorCode::DataLoss,
+                    "METR finish reason is invalid",
+                    "METR.finish_reason");
+            }
+            finish_reason_bits = *parsed_reason;
+        }
 
         MetricsChapter result;
         result.accumulated_training_seconds =
             *accumulated;
+        if (finish_reason_bits &&
+            *finish_reason_bits != 0u) {
+            result.finish_reason =
+                static_cast<TrainingFinishReason>(
+                    *finish_reason_bits);
+        }
         if ((*flags & 1u) != 0u) {
             result.last_evaluation =
                 LastEvaluationMetrics{

@@ -195,6 +195,16 @@ namespace lfs::io::project {
             const LastEvaluationMetrics&) = default;
     };
 
+    // Additive METR trailer. Absent/zero means a resumable pause. Written
+    // only when the run actually finished so mid-training files stay
+    // byte-compatible with VERSION 1 readers.
+    enum class TrainingFinishReason : std::uint32_t {
+        None = 0,
+        Completed = 1,
+        UserStopped = 2,
+        Error = 3,
+    };
+
     class LFS_IO_API MetricsChapter {
     public:
         static constexpr std::uint32_t VERSION = 1;
@@ -213,6 +223,8 @@ namespace lfs::io::project {
         std::vector<MetricHistorySample> psnr_history;
         double accumulated_training_seconds = 0.0;
         std::optional<LastEvaluationMetrics> last_evaluation;
+        TrainingFinishReason finish_reason =
+            TrainingFinishReason::None;
 
         friend bool operator==(
             const MetricsChapter&,

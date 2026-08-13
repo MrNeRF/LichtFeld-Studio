@@ -7,6 +7,7 @@
 #include "py_ui.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
+#include "python_panel_chrome.hpp"
 
 #include <RmlUi/Core/ElementDocument.h>
 #include <cassert>
@@ -327,6 +328,14 @@ namespace lfs::vis::gui {
             lfs::python::bridge().prepare_ui();
         const lfs::python::GilAcquire gil;
         return nb::cast<bool>(panel_instance_.attr("poll")(lfs::python::get_app_context()));
+    }
+
+    std::string RmlImModePanelAdapter::captureChromeJson() const {
+        return capture_python_panel_chrome(panel_instance_);
+    }
+
+    void RmlImModePanelAdapter::applyChromeJson(const std::string_view json) {
+        apply_python_panel_chrome(panel_instance_, json);
     }
 
 } // namespace lfs::vis::gui

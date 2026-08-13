@@ -58,6 +58,14 @@ class Panel:
 
     def on_scene_changed(self, doc):
         del doc
+
+    def capture_chrome(self):
+        '''Optional per-panel GUIL payload. Return a dict or None.'''
+        return None
+
+    def apply_chrome(self, payload):
+        '''Restore capture_chrome() output. Missing keys keep defaults.'''
+        del payload
 """
 
 

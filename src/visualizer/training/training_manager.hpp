@@ -145,6 +145,7 @@ namespace lfs::vis {
         captureProjectMetrics() const;
         void restoreProjectMetrics(
             const lfs::io::project::MetricsChapter& metrics);
+        void clearRestoredProjectMetrics();
 
         // Access to trainer (for rendering, etc.)
         lfs::training::Trainer* getTrainer() { return trainer_.get(); }
@@ -285,6 +286,15 @@ namespace lfs::vis {
         lfs::core::param::OptimizationParameters pending_opt_params_;
         lfs::core::param::DatasetConfig pending_dataset_params_;
         std::optional<int> checkpoint_baseline_iteration_;
+        std::optional<std::chrono::steady_clock::duration>
+            restored_accumulated_training_time_;
+        std::optional<lfs::io::project::TrainingFinishReason>
+            restored_finish_reason_;
+        bool restored_finish_published_ = false;
+
+        [[nodiscard]] FinishReason resolvedRestoredFinishReason() const;
+        void applyRestoredCheckpointPresentation();
+        void publishRestoredTrainingStore();
     };
 
 } // namespace lfs::vis

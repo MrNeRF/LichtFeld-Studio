@@ -9,6 +9,7 @@
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
 #include "core/parameter_manager.hpp"
+#include "core/reactive/store.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
@@ -20,6 +21,7 @@
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
 #include "training/training_setup.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/visualizer_impl.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/window_manager.hpp"
@@ -50,6 +52,37 @@ namespace lfs::vis {
             params.save_steps = steps;
             if (params.enable_eval)
                 params.eval_steps = steps;
+        }
+
+        [[nodiscard]] lfs::io::project::TrainingFinishReason
+        toIoFinishReason(const FinishReason reason) {
+            switch (reason) {
+            case FinishReason::Completed:
+                return lfs::io::project::TrainingFinishReason::Completed;
+            case FinishReason::UserStopped:
+                return lfs::io::project::TrainingFinishReason::UserStopped;
+            case FinishReason::Error:
+                return lfs::io::project::TrainingFinishReason::Error;
+            case FinishReason::None:
+                break;
+            }
+            return lfs::io::project::TrainingFinishReason::None;
+        }
+
+        [[nodiscard]] FinishReason
+        fromIoFinishReason(
+            const lfs::io::project::TrainingFinishReason reason) {
+            switch (reason) {
+            case lfs::io::project::TrainingFinishReason::Completed:
+                return FinishReason::Completed;
+            case lfs::io::project::TrainingFinishReason::UserStopped:
+                return FinishReason::UserStopped;
+            case lfs::io::project::TrainingFinishReason::Error:
+                return FinishReason::Error;
+            case lfs::io::project::TrainingFinishReason::None:
+                break;
+            }
+            return FinishReason::None;
         }
 
         template <typename Fn>
@@ -488,6 +521,7 @@ namespace lfs::vis {
             pending_opt_params_ = params.optimization;
             pending_dataset_params_ = params.dataset;
             // A new training run has no resumable elapsed-time authority.
+            clearRestoredProjectMetrics();
             accumulated_training_time_ =
                 std::chrono::steady_clock::duration{0};
             checkpoint_baseline_iteration_.reset();
@@ -505,6 +539,9 @@ namespace lfs::vis {
 
             internal::TrainerReady{}.emit();
         }
+        if (viewer_) {
+            viewer_->bindTrainerProjectSnapshotTarget();
+        }
     }
 
     void TrainerManager::setTrainerFromCheckpoint(std::unique_ptr<lfs::training::Trainer> trainer, int checkpoint_iteration) {
@@ -519,26 +556,41 @@ namespace lfs::vis {
             const auto& params = trainer->getParams();
             pending_opt_params_ = params.optimization;
             pending_dataset_params_ = params.dataset;
-            // Checkpoint installation precedes optional METR hydration.
-            // Legacy checkpoints therefore start at zero, while a project
-            // METR chapter can replace this value before the first resume.
+            // METR may already have been applied (panels-ready before
+            // hydration). Keep that elapsed time; otherwise start at zero
+            // until restoreProjectMetrics runs.
             accumulated_training_time_ =
-                std::chrono::steady_clock::duration{0};
+                restored_accumulated_training_time_.value_or(
+                    std::chrono::steady_clock::duration{0});
             checkpoint_baseline_iteration_ = checkpoint_iteration;
 
-            std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
-            trainer_ = std::move(trainer);
-            if (scene_ && trainer_) {
-                scene_->setLiveModelMutex(&trainer_->getRenderMutex());
+            {
+                std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
+                trainer_ = std::move(trainer);
+                if (scene_ && trainer_) {
+                    scene_->setLiveModelMutex(&trainer_->getRenderMutex());
+                }
             }
             internal::TrainerReady{}.emit();
 
-            if (!state_machine_.transitionTo(TrainingState::Paused)) {
-                LOG_WARN("Failed to transition to Paused");
-            }
+            const FinishReason finish_reason =
+                resolvedRestoredFinishReason();
+            if (finish_reason != FinishReason::None) {
+                if (!state_machine_.transitionToFinished(finish_reason)) {
+                    LOG_WARN("Failed to transition restored trainer to Finished");
+                }
+            } else {
+                if (!state_machine_.transitionTo(TrainingState::Paused)) {
+                    LOG_WARN("Failed to transition to Paused");
+                }
 
-            state::TrainingPaused{.iteration = checkpoint_iteration}.emit();
-            LOG_DEBUG("Trainer paused from checkpoint (iteration {})", checkpoint_iteration);
+                state::TrainingPaused{.iteration = checkpoint_iteration}.emit();
+                LOG_DEBUG("Trainer paused from checkpoint (iteration {})", checkpoint_iteration);
+            }
+            applyRestoredCheckpointPresentation();
+        }
+        if (viewer_) {
+            viewer_->bindTrainerProjectSnapshotTarget();
         }
     }
 
@@ -1213,9 +1265,12 @@ namespace lfs::vis {
     }
 
     bool TrainerManager::canEditSaveSteps() const {
-        return !trainer_ ||
-               !trainer_->isInitialized() ||
-               !trainer_->getParams().resume_checkpoint.has_value();
+        if (!trainer_) {
+            return true;
+        }
+        const auto params = trainer_->getParams();
+        return !params.resume_checkpoint.has_value() &&
+               !params.resume_project.has_value();
     }
 
     bool TrainerManager::setSaveSteps(std::vector<size_t> save_steps) {
@@ -1395,6 +1450,8 @@ namespace lfs::vis {
         }
         result.accumulated_training_seconds =
             getElapsedSeconds();
+        result.finish_reason =
+            toIoFinishReason(state_machine_.getFinishReason());
         return result;
     }
 
@@ -1494,6 +1551,97 @@ namespace lfs::vis {
                 std::chrono::duration<double>(
                     metrics
                         .accumulated_training_seconds));
+        restored_accumulated_training_time_ =
+            accumulated_training_time_;
+        restored_finish_reason_ = metrics.finish_reason;
+        restored_finish_published_ = false;
+        if (trainer_) {
+            applyRestoredCheckpointPresentation();
+        }
+    }
+
+    void TrainerManager::clearRestoredProjectMetrics() {
+        restored_accumulated_training_time_.reset();
+        restored_finish_reason_.reset();
+        restored_finish_published_ = false;
+    }
+
+    FinishReason TrainerManager::resolvedRestoredFinishReason() const {
+        if (restored_finish_reason_ &&
+            *restored_finish_reason_ !=
+                lfs::io::project::TrainingFinishReason::None) {
+            return fromIoFinishReason(*restored_finish_reason_);
+        }
+        int iteration = getCurrentIteration();
+        if (checkpoint_baseline_iteration_ &&
+            *checkpoint_baseline_iteration_ > iteration) {
+            iteration = *checkpoint_baseline_iteration_;
+        }
+        const int total = getTotalIterations();
+        if (total > 0 && iteration >= total) {
+            return FinishReason::Completed;
+        }
+        return FinishReason::None;
+    }
+
+    void TrainerManager::applyRestoredCheckpointPresentation() {
+        if (!trainer_) {
+            return;
+        }
+        if (restored_accumulated_training_time_) {
+            accumulated_training_time_ =
+                *restored_accumulated_training_time_;
+        }
+        {
+            std::lock_guard<std::mutex> lock(loss_buffer_mutex_);
+            if (!loss_buffer_.empty()) {
+                trainer_->restore_current_loss(loss_buffer_.back());
+            }
+        }
+        const FinishReason finish_reason =
+            resolvedRestoredFinishReason();
+        if (finish_reason != FinishReason::None &&
+            getState() != TrainingState::Finished) {
+            if (!state_machine_.transitionToFinished(finish_reason)) {
+                LOG_WARN(
+                    "Failed to install restored finish state {}",
+                    static_cast<int>(finish_reason));
+            }
+        }
+        if (finish_reason != FinishReason::None &&
+            getState() == TrainingState::Finished &&
+            !restored_finish_published_) {
+            restored_finish_published_ = true;
+            suppress_completion_notification_.store(
+                true, std::memory_order_relaxed);
+            state::TrainingCompleted{
+                .iteration = getCurrentIteration(),
+                .final_loss = getCurrentLoss(),
+                .elapsed_seconds = getElapsedSeconds(),
+                .success = finish_reason != FinishReason::Error,
+                .user_stopped =
+                    finish_reason == FinishReason::UserStopped,
+                .error = std::nullopt,
+                .resource_exhausted = false,
+                .error_info = std::nullopt,
+                .suppress_notification = true}
+                .emit();
+        }
+        publishRestoredTrainingStore();
+    }
+
+    void TrainerManager::publishRestoredTrainingStore() {
+        auto& store = app_store();
+        lfs::core::reactive::BatchUpdate batch(store.store());
+        store.iteration.set(getCurrentIteration());
+        store.total_iterations.set(getTotalIterations());
+        store.loss.set(getCurrentLoss());
+        store.num_gaussians.set(
+            static_cast<std::int64_t>(getNumSplats()));
+        if (const auto last = getLastEvaluationMetrics()) {
+            store.eval_psnr.set(last->psnr);
+            store.eval_ssim.set(last->ssim);
+        }
     }
 
     void TrainerManager::trainingThreadFunc(std::stop_token stop_token) {

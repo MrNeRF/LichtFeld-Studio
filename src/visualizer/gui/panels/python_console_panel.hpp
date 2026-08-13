@@ -72,6 +72,9 @@ namespace lfs::vis::gui::panels {
         void resetFontScale() { font_scale_ = 1.0f; }
         void setFontScale(float scale);
 
+        [[nodiscard]] static float splitterRatio();
+        static void setSplitterRatio(float ratio);
+
         // Script execution
         bool isScriptRunning() const { return script_running_.load(); }
         void interruptScript();

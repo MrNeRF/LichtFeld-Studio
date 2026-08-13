@@ -14,6 +14,7 @@
 #include <functional>
 #include <glm/gtc/type_ptr.hpp>
 #include <ranges>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -419,11 +420,14 @@ namespace lfs::io::project {
 
     lfs::Result<CapturedSceneGraphState> capture_scene_graph_state(
         const lfs::core::Scene& scene,
-        const ScenePayloadBindings& payload_bindings) {
+        const ScenePayloadBindings& payload_bindings,
+        const std::span<const lfs::core::Uuid> omit_node_uuids) {
         CapturedSceneGraphState result;
         const lfs::core::Uuid training_uuid = scene.getTrainingModelNodeUuid();
+        std::unordered_set<lfs::core::Uuid> omitted(
+            omit_node_uuids.begin(), omit_node_uuids.end());
         result.training_model_uuid =
-            training_uuid.is_nil()
+            training_uuid.is_nil() || omitted.contains(training_uuid)
                 ? std::optional<lfs::core::Uuid>{}
                 : std::optional<lfs::core::Uuid>{training_uuid};
 
@@ -432,7 +436,8 @@ namespace lfs::io::project {
         std::unordered_set<lfs::core::NodeId> excluded;
         for (const lfs::core::SceneNode* node : all_nodes) {
             if (node->type == lfs::core::NodeType::KEYFRAME ||
-                node->type == lfs::core::NodeType::KEYFRAME_GROUP) {
+                node->type == lfs::core::NodeType::KEYFRAME_GROUP ||
+                omitted.contains(node->uuid)) {
                 excluded.insert(node->id);
             }
         }
@@ -504,9 +509,10 @@ namespace lfs::io::project {
 
     lfs::Result<SceneGraphChapter> capture_scene_graph(
         const lfs::core::Scene& scene,
-        const ScenePayloadBindings& payload_bindings) {
-        auto state =
-            capture_scene_graph_state(scene, payload_bindings);
+        const ScenePayloadBindings& payload_bindings,
+        const std::span<const lfs::core::Uuid> omit_node_uuids) {
+        auto state = capture_scene_graph_state(
+            scene, payload_bindings, omit_node_uuids);
         if (!state) {
             return std::move(state).error();
         }

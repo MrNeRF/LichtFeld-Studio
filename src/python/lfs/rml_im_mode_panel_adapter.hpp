@@ -13,6 +13,7 @@
 #include <nanobind/nanobind.h>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace nb = nanobind;
 
@@ -34,6 +35,8 @@ namespace lfs::vis::gui {
         bool needsAnimationFrame() const override;
         std::optional<double> nextScheduledAnimationDelay() const override;
         void reloadRmlResources() override;
+        [[nodiscard]] std::string captureChromeJson() const override;
+        void applyChromeJson(std::string_view json) override;
 
     private:
         void ensureHost();

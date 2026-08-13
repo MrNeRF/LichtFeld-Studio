@@ -61,6 +61,8 @@ namespace lfs::vis::gui {
         bool wantsKeyboard() const { return wants_keyboard_; }
         bool needsAnimationFrame() const;
         CursorRequest getCursorRequest() const;
+        [[nodiscard]] float tabStripScroll() const { return tab_scroll_left_; }
+        void setTabStripScroll(float value);
 
         std::function<void(const std::string&)> on_tab_changed;
         std::function<void(const std::string&)> on_tab_closed;

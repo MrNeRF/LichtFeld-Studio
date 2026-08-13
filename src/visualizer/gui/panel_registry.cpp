@@ -202,21 +202,63 @@ namespace lfs::vis::gui {
     }
 
     bool PanelRegistry::register_panel(PanelInfo info) {
-        std::lock_guard lock(mutex_);
-        assert(info.panel);
-        assert(!info.id.empty());
+        std::shared_ptr<IPanel> instance;
+        std::string pending_payload;
+        {
+            std::lock_guard lock(mutex_);
+            assert(info.panel);
+            assert(!info.id.empty());
 
-        if (!validatePanelContract(info, info.space))
-            return false;
+            if (!validatePanelContract(info, info.space))
+                return false;
 
-        info.original_width = info.initial_width;
-        info.original_height = info.initial_height;
+            info.original_width = info.initial_width;
+            info.original_height = info.initial_height;
+            info.default_parent_id = info.parent_id;
+            info.default_space = info.space;
+            info.default_order = info.order;
+            if (info.has_option(PanelOption::DEFAULT_CLOSED) &&
+                info.space == PanelSpace::Floating) {
+                info.enabled = false;
+            }
+            info.default_enabled = info.enabled;
 
-        if (disabled_overrides_.contains(info.id))
-            info.enabled = false;
+            if (const auto requested =
+                    requested_project_floating_state_.find(info.id);
+                requested != requested_project_floating_state_.end()) {
+                const auto& saved = requested->second;
+                info.parent_id = saved.parent_id;
+                info.space = saved.space;
+                info.order = saved.order;
+                info.enabled = saved.enabled;
+            }
 
-        for (auto& p : panels_) {
-            if (p.id == info.id) {
+            if (disabled_overrides_.contains(info.id))
+                info.enabled = false;
+
+            if (!validatePanelContract(info, info.space)) {
+                LOG_WARN(
+                    "Ignoring invalid saved placement for panel '{}'",
+                    info.id);
+                info.parent_id = info.default_parent_id;
+                info.space = info.default_space;
+                info.order = info.default_order;
+                info.enabled = info.default_enabled;
+                if (disabled_overrides_.contains(info.id))
+                    info.enabled = false;
+                requested_project_floating_state_.erase(info.id);
+            }
+
+            const auto take_pending_payload = [&](const std::string& id) {
+                if (const auto payload = requested_panel_payloads_.find(id);
+                    payload != requested_panel_payloads_.end()) {
+                    pending_payload = payload->second;
+                }
+            };
+
+            for (auto& p : panels_) {
+                if (p.id != info.id)
+                    continue;
                 uint64_t previous_stack_order = 0;
                 if (const auto it = floating_interactions_.find(info.id);
                     it != floating_interactions_.end()) {
@@ -229,24 +271,71 @@ namespace lfs::vis::gui {
                                                   ? previous_stack_order
                                                   : interaction.stack_order;
                     resetFloatingPanelSize(info, interaction, floatingUiScale());
+                    if (const auto requested =
+                            requested_project_floating_state_.find(info.id);
+                        requested != requested_project_floating_state_.end()) {
+                        const auto& saved = requested->second;
+                        interaction.x = saved.float_x;
+                        interaction.y = saved.float_y;
+                        interaction.user_height =
+                            std::max(saved.float_user_height, 0.0f);
+                        interaction.last_bounds_valid =
+                            saved.float_last_bounds_valid;
+                        interaction.last_x = saved.float_last_x;
+                        interaction.last_y = saved.float_last_y;
+                        interaction.last_width =
+                            std::max(saved.float_last_w, 0.0f);
+                        interaction.last_height =
+                            std::max(saved.float_last_h, 0.0f);
+                        interaction.auto_center = saved.float_auto_center;
+                        if (saved.float_stack_order != 0)
+                            interaction.stack_order = saved.float_stack_order;
+                    }
                 }
+                take_pending_payload(info.id);
                 p = std::move(info);
+                instance = p.panel;
                 ++registration_revision_;
-                return true;
+                goto apply_registered_chrome;
             }
-        }
 
-        if (info.space == PanelSpace::Floating) {
-            auto& interaction = ensure_floating_interaction_locked(info);
-            resetFloatingPanelSize(info, interaction, floatingUiScale());
+            if (info.space == PanelSpace::Floating) {
+                auto& interaction = ensure_floating_interaction_locked(info);
+                resetFloatingPanelSize(info, interaction, floatingUiScale());
+                if (const auto requested =
+                        requested_project_floating_state_.find(info.id);
+                    requested != requested_project_floating_state_.end()) {
+                    const auto& saved = requested->second;
+                    interaction.x = saved.float_x;
+                    interaction.y = saved.float_y;
+                    interaction.user_height =
+                        std::max(saved.float_user_height, 0.0f);
+                    interaction.last_bounds_valid =
+                        saved.float_last_bounds_valid;
+                    interaction.last_x = saved.float_last_x;
+                    interaction.last_y = saved.float_last_y;
+                    interaction.last_width =
+                        std::max(saved.float_last_w, 0.0f);
+                    interaction.last_height =
+                        std::max(saved.float_last_h, 0.0f);
+                    interaction.auto_center = saved.float_auto_center;
+                    if (saved.float_stack_order != 0)
+                        interaction.stack_order = saved.float_stack_order;
+                }
+            }
+            take_pending_payload(info.id);
+            instance = info.panel;
+            panels_.push_back(std::move(info));
+            std::stable_sort(panels_.begin(), panels_.end(), [](const PanelInfo& a, const PanelInfo& b) {
+                if (a.order != b.order)
+                    return a.order < b.order;
+                return a.label < b.label;
+            });
+            ++registration_revision_;
         }
-        panels_.push_back(std::move(info));
-        std::stable_sort(panels_.begin(), panels_.end(), [](const PanelInfo& a, const PanelInfo& b) {
-            if (a.order != b.order)
-                return a.order < b.order;
-            return a.label < b.label;
-        });
-        ++registration_revision_;
+apply_registered_chrome:
+        if (instance && !pending_payload.empty())
+            instance->applyChromeJson(pending_payload);
         return true;
     }
 
@@ -1187,15 +1276,18 @@ namespace lfs::vis::gui {
     void PanelRegistry::apply_project_state(
         const std::vector<PanelProjectState>& state) {
         std::lock_guard lock(mutex_);
-        requested_project_floating_state_.clear();
+        reset_project_state_locked();
         for (const auto& saved : state) {
             const auto found = std::find_if(
                 panels_.begin(), panels_.end(),
                 [&](const PanelInfo& panel) {
                     return panel.id == saved.id;
                 });
-            if (found == panels_.end())
+            if (found == panels_.end()) {
+                requested_project_floating_state_.insert_or_assign(
+                    saved.id, saved);
                 continue;
+            }
 
             PanelInfo candidate = *found;
             candidate.parent_id = saved.parent_id;
@@ -1255,6 +1347,79 @@ namespace lfs::vis::gui {
         requested_project_floating_state_.clear();
     }
 
+    std::unordered_map<std::string, std::string>
+    PanelRegistry::capture_panel_payloads() const {
+        std::vector<std::pair<std::string, std::shared_ptr<IPanel>>> owners;
+        {
+            std::lock_guard lock(mutex_);
+            owners.reserve(panels_.size());
+            for (const auto& panel : panels_) {
+                if (panel.panel)
+                    owners.emplace_back(panel.id, panel.panel);
+            }
+        }
+        std::unordered_map<std::string, std::string> payloads;
+        for (const auto& [id, panel] : owners) {
+            auto json = panel->captureChromeJson();
+            if (!json.empty())
+                payloads.insert_or_assign(id, std::move(json));
+        }
+        return payloads;
+    }
+
+    void PanelRegistry::apply_panel_payloads(
+        const std::unordered_map<std::string, std::string>& payloads) {
+        std::vector<std::pair<std::shared_ptr<IPanel>, std::string>> apply_list;
+        {
+            std::lock_guard lock(mutex_);
+            requested_panel_payloads_ = payloads;
+            apply_list.reserve(panels_.size());
+            for (const auto& panel : panels_) {
+                if (!panel.panel)
+                    continue;
+                const auto found = payloads.find(panel.id);
+                apply_list.emplace_back(
+                    panel.panel,
+                    found != payloads.end() ? found->second : std::string("{}"));
+            }
+        }
+        for (const auto& [panel, json] : apply_list)
+            panel->applyChromeJson(json);
+    }
+
+    void PanelRegistry::reset_project_state_locked() {
+        requested_project_floating_state_.clear();
+        requested_panel_payloads_.clear();
+        floating_interactions_.clear();
+        next_float_stack_order_ = 1;
+        for (auto& panel : panels_) {
+            panel.parent_id = panel.default_parent_id;
+            panel.space = panel.default_space;
+            panel.order = panel.default_order;
+            panel.enabled = panel.default_enabled;
+            if (disabled_overrides_.contains(panel.id))
+                panel.enabled = false;
+            if (panel.space == PanelSpace::Floating) {
+                auto& interaction =
+                    ensure_floating_interaction_locked(panel);
+                resetFloatingPanelSize(
+                    panel, interaction, floatingUiScale());
+            }
+        }
+        std::stable_sort(
+            panels_.begin(), panels_.end(),
+            [](const PanelInfo& lhs, const PanelInfo& rhs) {
+                if (lhs.order != rhs.order)
+                    return lhs.order < rhs.order;
+                return lhs.label < rhs.label;
+            });
+    }
+
+    void PanelRegistry::reset_project_state() {
+        std::lock_guard lock(mutex_);
+        reset_project_state_locked();
+    }
+
     uint64_t PanelRegistry::registration_revision() const {
         std::lock_guard lock(mutex_);
         return registration_revision_;
@@ -1282,13 +1447,32 @@ namespace lfs::vis::gui {
 
                     p.enabled = enabled;
                     if (enabled && p.space == PanelSpace::Floating) {
-                        requested_project_floating_state_.erase(p.id);
                         auto& interaction = ensure_floating_interaction_locked(p);
-                        interaction.x = NAN;
-                        interaction.y = NAN;
-                        interaction.auto_center = true;
-                        resetFloatingPanelSize(p, interaction, floatingUiScale());
-                        bring_floating_panel_to_front_locked(p);
+                        if (const auto requested =
+                                requested_project_floating_state_.find(p.id);
+                            requested != requested_project_floating_state_.end()) {
+                            const auto& saved = requested->second;
+                            interaction.x = saved.float_x;
+                            interaction.y = saved.float_y;
+                            interaction.user_height =
+                                std::max(saved.float_user_height, 0.0f);
+                            interaction.last_bounds_valid =
+                                saved.float_last_bounds_valid;
+                            interaction.last_x = saved.float_last_x;
+                            interaction.last_y = saved.float_last_y;
+                            interaction.last_width =
+                                std::max(saved.float_last_w, 0.0f);
+                            interaction.last_height =
+                                std::max(saved.float_last_h, 0.0f);
+                            interaction.auto_center = saved.float_auto_center;
+                        } else {
+                            interaction.x = NAN;
+                            interaction.y = NAN;
+                            interaction.auto_center = true;
+                            resetFloatingPanelSize(
+                                p, interaction, floatingUiScale());
+                            bring_floating_panel_to_front_locked(p);
+                        }
                     } else if (!enabled) {
                         if (auto interaction = floating_interactions_.find(id);
                             interaction != floating_interactions_.end()) {

@@ -3547,8 +3547,9 @@ namespace lfs::training {
         std::optional<ProjectSnapshotDocumentContext>
             document_context) {
         if (path.empty()) {
-            path = default_project_path();
+            path = live_or_default_project_path();
         }
+        attach_live_document_context(document_context);
         auto chapters =
             reserve_project_snapshot_chapters();
         std::lock_guard lock(project_snapshot_mutex_);
@@ -3578,6 +3579,15 @@ namespace lfs::training {
         }
         (*chapters)->document_context =
             std::move(document_context);
+        if ((*chapters)->document_context &&
+            pending_snapshot_finish_reason_ !=
+                lfs::io::project::
+                    TrainingFinishReason::None) {
+            (*chapters)
+                ->document_context->metrics
+                .finish_reason =
+                pending_snapshot_finish_reason_;
+        }
         // Coalesce to the newest destination. The next post-step safe point
         // consumes this request.
         prestaged_project_chapters_ =
@@ -3893,6 +3903,23 @@ namespace lfs::training {
             base_explicit_commit_uuid,
         const std::uint64_t autosave_sequence) {
         join_finished_project_writer();
+        if (write_kind ==
+            ProjectSnapshotWriteKind::Autosave) {
+            std::lock_guard lock(
+                project_snapshot_mutex_);
+            fail_project_request_locked(
+                request_id,
+                "Training-time autosave is light-only and does not capture a checkpoint");
+            if (prestaged_project_request_id_ ==
+                request_id) {
+                prestaged_project_chapters_.reset();
+                prestaged_project_request_id_ = 0;
+            }
+            LOG_INFO(
+                "Refusing training autosave checkpoint capture for request {}",
+                request_id);
+            return;
+        }
         if (!project_snapshot_service_ || !strategy_ ||
             !scene_) {
             {
@@ -4049,6 +4076,88 @@ namespace lfs::training {
                 .to_string(),
             capture_iteration,
             prepared_project_snapshot_->checkpoint_bytes());
+    }
+
+    void Trainer::consume_requested_project_snapshot(
+        const int iteration) {
+        join_finished_project_writer();
+        std::optional<std::filesystem::path>
+            requested_project_path;
+        std::vector<std::byte>
+            requested_project_preview_png;
+        std::uint64_t
+            requested_project_request_id = 0;
+        ProjectSnapshotWriteKind
+            requested_project_write_kind =
+                ProjectSnapshotWriteKind::
+                    Explicit;
+        lfs::core::Uuid
+            requested_project_base_commit_uuid;
+        std::uint64_t
+            requested_project_autosave_sequence =
+                0;
+        {
+            std::lock_guard lock(
+                project_snapshot_mutex_);
+            if (requested_project_path_) {
+                requested_project_path =
+                    std::move(
+                        *requested_project_path_);
+                requested_project_path_.reset();
+                requested_project_preview_png =
+                    std::move(
+                        requested_project_preview_png_);
+                requested_project_request_id =
+                    requested_project_request_id_
+                        .value_or(0);
+                requested_project_request_id_
+                    .reset();
+                requested_project_write_kind =
+                    std::exchange(
+                        requested_project_write_kind_,
+                        ProjectSnapshotWriteKind::
+                            Explicit);
+                requested_project_base_commit_uuid =
+                    std::exchange(
+                        requested_project_base_commit_uuid_,
+                        lfs::core::Uuid{});
+                requested_project_autosave_sequence =
+                    std::exchange(
+                        requested_project_autosave_sequence_,
+                        0);
+            }
+        }
+        if (requested_project_path) {
+            if (requested_project_write_kind ==
+                ProjectSnapshotWriteKind::
+                    Autosave) {
+                std::lock_guard lock(
+                    project_snapshot_mutex_);
+                fail_project_request_locked(
+                    requested_project_request_id,
+                    "Training-time autosave is light-only and does not capture a checkpoint");
+                if (prestaged_project_request_id_ ==
+                    requested_project_request_id) {
+                    prestaged_project_chapters_.reset();
+                    prestaged_project_request_id_ =
+                        0;
+                }
+                LOG_INFO(
+                    "Refusing training autosave checkpoint capture for request {}",
+                    requested_project_request_id);
+                return;
+            }
+            prepare_project_snapshot_at_safe_point(
+                iteration, *requested_project_path,
+                std::move(
+                    requested_project_preview_png),
+                requested_project_request_id,
+                requested_project_write_kind,
+                requested_project_base_commit_uuid,
+                requested_project_autosave_sequence);
+            capture_project_snapshot_at_safe_point(
+                iteration);
+        }
     }
 
     void Trainer::capture_project_snapshot_at_safe_point(
@@ -5226,8 +5335,11 @@ namespace lfs::training {
                     return StepDisposition::Stop;
                 }
 
-                // If paused, wait
+                // If paused, wait. Drain requested project snapshots at the
+                // last completed iteration — the current `iter` has not run.
                 while (is_paused_.load() && !stop_requested_.load() && !stop_token.stop_requested()) {
+                    consume_requested_project_snapshot(
+                        project_snapshot_iteration());
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     handle_control_requests(iter, stop_token);
                 }
@@ -7028,7 +7140,7 @@ namespace lfs::training {
                             iter);
                         static_cast<void>(
                             request_project_save(
-                                default_project_path()));
+                                live_or_default_project_path()));
                     }
 
                     // Publish a project generation at specified steps unless
@@ -7039,7 +7151,7 @@ namespace lfs::training {
                             !save_regular_phase_output) {
                             static_cast<void>(
                                 request_project_save(
-                                    default_project_path()));
+                                    live_or_default_project_path()));
                         }
                     }
 
@@ -7106,65 +7218,7 @@ namespace lfs::training {
                     lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::PostStep, ctx);
                 }
 
-                join_finished_project_writer();
-                std::optional<std::filesystem::path>
-                    requested_project_path;
-                std::vector<std::byte>
-                    requested_project_preview_png;
-                std::uint64_t
-                    requested_project_request_id = 0;
-                ProjectSnapshotWriteKind
-                    requested_project_write_kind =
-                        ProjectSnapshotWriteKind::
-                            Explicit;
-                lfs::core::Uuid
-                    requested_project_base_commit_uuid;
-                std::uint64_t
-                    requested_project_autosave_sequence =
-                        0;
-                {
-                    std::lock_guard lock(
-                        project_snapshot_mutex_);
-                    if (requested_project_path_) {
-                        requested_project_path =
-                            std::move(
-                                *requested_project_path_);
-                        requested_project_path_.reset();
-                        requested_project_preview_png =
-                            std::move(
-                                requested_project_preview_png_);
-                        requested_project_request_id =
-                            requested_project_request_id_
-                                .value_or(0);
-                        requested_project_request_id_
-                            .reset();
-                        requested_project_write_kind =
-                            std::exchange(
-                                requested_project_write_kind_,
-                                ProjectSnapshotWriteKind::
-                                    Explicit);
-                        requested_project_base_commit_uuid =
-                            std::exchange(
-                                requested_project_base_commit_uuid_,
-                                lfs::core::Uuid{});
-                        requested_project_autosave_sequence =
-                            std::exchange(
-                                requested_project_autosave_sequence_,
-                                0);
-                    }
-                }
-                if (requested_project_path) {
-                    prepare_project_snapshot_at_safe_point(
-                        iter, *requested_project_path,
-                        std::move(
-                            requested_project_preview_png),
-                        requested_project_request_id,
-                        requested_project_write_kind,
-                        requested_project_base_commit_uuid,
-                        requested_project_autosave_sequence);
-                    capture_project_snapshot_at_safe_point(
-                        iter);
-                }
+                consume_requested_project_snapshot(iter);
 
                 const auto project_hook =
                     getParams()
@@ -7759,12 +7813,18 @@ namespace lfs::training {
         apply_pending_params_at_safe_point();
         const auto terminal_save_started = std::chrono::steady_clock::now();
         saving_model_.store(true, std::memory_order_release);
+        pending_snapshot_finish_reason_ =
+            terminal_error
+                ? lfs::io::project::TrainingFinishReason::Error
+            : user_stopped
+                ? lfs::io::project::TrainingFinishReason::UserStopped
+                : lfs::io::project::TrainingFinishReason::Completed;
         try {
             LOG_INFO("Saving {} project at iteration {}...",
                      terminal_error ? "recovery" : (user_stopped ? "stopped" : "final"),
                      terminal_iteration);
             if (auto save_result = save_project_to(
-                    default_project_path(),
+                    live_or_default_project_path(),
                     terminal_iteration);
                 !save_result) {
                 append_terminal_error(lfs::make_error(lfs::ErrorInit{
@@ -7789,6 +7849,8 @@ namespace lfs::training {
         LOG_INFO("Terminal {} save phase took {:.3f}s",
                  user_stopped ? "stop" : "completion",
                  std::chrono::duration<double>(std::chrono::steady_clock::now() - terminal_save_started).count());
+        pending_snapshot_finish_reason_ =
+            lfs::io::project::TrainingFinishReason::None;
         saving_model_.store(false, std::memory_order_release);
 
         {
@@ -7872,10 +7934,62 @@ namespace lfs::training {
                "project.licht";
     }
 
+    std::filesystem::path
+    Trainer::live_or_default_project_path() const {
+        std::lock_guard lock(project_snapshot_mutex_);
+        if (live_project_path_ &&
+            !live_project_path_->empty()) {
+            return *live_project_path_;
+        }
+        return getParams().dataset.output_path /
+               "project.licht";
+    }
+
+    void Trainer::set_live_project_snapshot(
+        std::optional<std::filesystem::path> path,
+        std::function<std::optional<
+            ProjectSnapshotDocumentContext>()>
+            context_provider) {
+        std::lock_guard lock(project_snapshot_mutex_);
+        live_project_path_ = std::move(path);
+        live_document_context_provider_ =
+            std::move(context_provider);
+    }
+
+    void Trainer::attach_live_document_context(
+        std::optional<ProjectSnapshotDocumentContext>&
+            document_context) const {
+        if (document_context) {
+            return;
+        }
+        std::function<std::optional<
+            ProjectSnapshotDocumentContext>()>
+            provider;
+        {
+            std::lock_guard lock(
+                project_snapshot_mutex_);
+            provider = live_document_context_provider_;
+        }
+        if (!provider) {
+            return;
+        }
+        document_context = provider();
+    }
+
+    int Trainer::project_snapshot_iteration() const {
+        const int current = current_iteration_.load();
+        if (is_paused_.load() && current > 0) {
+            return current - 1;
+        }
+        return current;
+    }
+
     std::expected<std::filesystem::path, std::string>
     Trainer::save_project_to(
         const std::filesystem::path& requested_path,
-        const int iteration) {
+        const int iteration,
+        std::optional<ProjectSnapshotDocumentContext>
+            document_context) {
         if (!strategy_ || !scene_) {
             return std::unexpected(
                 "Cannot save project: no initialized training scene");
@@ -7885,9 +7999,10 @@ namespace lfs::training {
                 "Cannot save project: iteration is negative");
         }
 
+        attach_live_document_context(document_context);
         const auto path =
             requested_path.empty()
-                ? default_project_path()
+                ? live_or_default_project_path()
                 : requested_path;
         if (path.extension() != ".licht") {
             return std::unexpected(
@@ -7902,9 +8017,18 @@ namespace lfs::training {
                 lfs::format_for_developer(
                     chapters.error()));
         }
+        if (document_context &&
+            pending_snapshot_finish_reason_ !=
+                lfs::io::project::
+                    TrainingFinishReason::None) {
+            document_context->metrics.finish_reason =
+                pending_snapshot_finish_reason_;
+        }
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
+            (*chapters)->document_context =
+                std::move(document_context);
             prestaged_project_chapters_ =
                 std::move(*chapters);
             prestaged_project_request_id_ = 0;
@@ -7993,18 +8117,8 @@ namespace lfs::training {
             const auto disabled = scene_->getTrainingDisabledCameraUids();
             params.disabled_camera_uids.assign(disabled.begin(), disabled.end());
         }
+        absolutize_dataset_path_for_snapshot(params.dataset.data_path);
         return params;
-    }
-
-    void Trainer::save_final_project(
-        const int iteration) {
-        if (auto result = save_project_to(
-                default_project_path(), iteration);
-            !result) {
-            LOG_WARN(
-                "Failed to save final project: {}",
-                result.error());
-        }
     }
 
     std::expected<int, std::string> Trainer::load_checkpoint(

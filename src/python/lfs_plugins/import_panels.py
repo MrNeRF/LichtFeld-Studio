@@ -873,6 +873,7 @@ class DatasetImportPanel(_ImportDialogPanel):
     label = "Load Dataset"
     space = lf.ui.PanelSpace.FLOATING
     order = 11
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/dataset_import_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (560, 0)
@@ -1221,6 +1222,7 @@ class ResumeCheckpointPanel(_ImportDialogPanel):
     label = "Resume Checkpoint"
     space = lf.ui.PanelSpace.FLOATING
     order = 12
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/resume_checkpoint_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (580, 0)
@@ -1388,6 +1390,7 @@ class URLImportPanel(_ImportDialogPanel):
     label = "Import from URL"
     space = lf.ui.PanelSpace.FLOATING
     order = 13
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/url_import_panel.rml"
     height_mode = lf.ui.PanelHeightMode.FILL
     size = (560, 360)

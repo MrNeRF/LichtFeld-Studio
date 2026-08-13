@@ -85,6 +85,9 @@ namespace lfs::vis {
             LFS_VIS_API void setCropToolShape(const std::string& shape);
             [[nodiscard]] LFS_VIS_API std::string cropToolShape() const;
             LFS_VIS_API void setCropToolOperation(const std::string& operation);
+            [[nodiscard]] bool ensureCropToolStateForRestore() {
+                return ensureCropToolState();
+            }
             [[nodiscard]] LFS_VIS_API std::string cropToolOperation() const;
             LFS_VIS_API void applyActiveCropTool();
             LFS_VIS_API void deleteActiveCropToolVolume();

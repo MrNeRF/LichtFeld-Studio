@@ -51,6 +51,7 @@ namespace lfs::vis::gui {
             .left_dock_width = left_dock_width_,
             .show_sequencer = show_sequencer_,
             .active_tab_id = active_tab_id_,
+            .tab_scroll_offset = tab_scroll_offset_,
         };
     }
 
@@ -72,7 +73,9 @@ namespace lfs::vis::gui {
             left_dock_width_ = state.left_dock_width;
         show_sequencer_ = state.show_sequencer;
         active_tab_id_ = state.active_tab_id;
-        tab_scroll_offset_ = 0.0f;
+        tab_scroll_offset_ = std::isfinite(state.tab_scroll_offset)
+                                 ? std::max(0.0f, state.tab_scroll_offset)
+                                 : 0.0f;
     }
 
     bool PanelLayoutManager::syncActiveTab(const std::vector<PanelSummary>& main_tabs,

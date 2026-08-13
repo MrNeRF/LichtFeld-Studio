@@ -9,6 +9,7 @@
 #include "py_ui.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
+#include "python_panel_chrome.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -710,6 +711,14 @@ namespace lfs::vis::gui {
             if (ops.set_floating)
                 ops.set_floating(host_, floating_);
         }
+    }
+
+    std::string RmlPythonPanelAdapter::captureChromeJson() const {
+        return capture_python_panel_chrome(panel_instance_);
+    }
+
+    void RmlPythonPanelAdapter::applyChromeJson(const std::string_view json) {
+        apply_python_panel_chrome(panel_instance_, json);
     }
 
 } // namespace lfs::vis::gui

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/elements/scene_graph_element.hpp"
+#include "gui/scene_tree_session.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
@@ -508,6 +509,28 @@ namespace lfs::vis::gui {
         panel_screen_y_ = y;
     }
 
+    void SceneGraphElement::setModelsCollapsed(const bool collapsed) {
+        if (models_collapsed_ == collapsed)
+            return;
+        models_collapsed_ = collapsed;
+        markStateDirty();
+        syncVisibleRows(true);
+    }
+
+    void SceneGraphElement::applySessionCollapseUuids(
+        const std::vector<std::string>& uuids) {
+        session_collapsed_uuids_.clear();
+        session_collapsed_uuids_.insert(uuids.begin(), uuids.end());
+        session_collapse_pending_ = true;
+        tree_rebuild_needed_ = true;
+        markStateDirty();
+    }
+
+    void SceneGraphElement::clearSessionCollapseUuids() {
+        session_collapsed_uuids_.clear();
+        session_collapse_pending_ = false;
+    }
+
     void SceneGraphElement::setFilterText(const std::string_view text) {
         const std::string next(text);
         if (next == filter_text_)
@@ -887,9 +910,19 @@ namespace lfs::vis::gui {
 
         auto collapsed_ids = collapsed_ids_;
         collapsed_ids_.clear();
-        for (const auto& [id, _] : snapshots) {
-            if (collapsed_ids.contains(id))
-                collapsed_ids_.insert(id);
+        const bool apply_session_collapse =
+            session_collapse_pending_ && !snapshots.empty();
+        if (apply_session_collapse) {
+            const auto session_ids =
+                collapsedIdsFromUuids(scene, {session_collapsed_uuids_.begin(),
+                                              session_collapsed_uuids_.end()});
+            collapsed_ids_ = session_ids;
+            session_collapse_pending_ = false;
+        } else {
+            for (const auto& [id, _] : snapshots) {
+                if (collapsed_ids.contains(id))
+                    collapsed_ids_.insert(id);
+            }
         }
 
         for (auto& [id, snapshot] : snapshots) {
@@ -913,7 +946,8 @@ namespace lfs::vis::gui {
                 if (const auto* rendering = services().renderingOrNull())
                     snapshot.visible = rendering->getSettings().show_camera_frustums;
             }
-            if (!previous_ids.contains(id) &&
+            if (!apply_session_collapse &&
+                !previous_ids.contains(id) &&
                 snapshot.type == core::NodeType::CAMERA_GROUP &&
                 static_cast<int>(snapshot.children.size()) >= kAutoCollapseCameraGroupThreshold) {
                 collapsed_ids_.insert(id);

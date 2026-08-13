@@ -60,6 +60,10 @@ namespace lfs::vis::tools {
             depth_filter_enabled_ = depth_filter;
             restrict_to_selected_nodes_ =
                 restrict_to_selected_nodes;
+            armPreserveRestoredRenderState();
+        }
+        void armPreserveRestoredRenderState() {
+            preserve_restored_render_state_ = true;
         }
 
     protected:
@@ -79,6 +83,7 @@ namespace lfs::vis::tools {
         // Crop filter
         bool crop_filter_enabled_ = false;
         bool restrict_to_selected_nodes_ = true;
+        bool preserve_restored_render_state_ = false;
 
         static constexpr float DEPTH_MIN = 0.01f;
         static constexpr float DEPTH_MAX = 1000.0f;

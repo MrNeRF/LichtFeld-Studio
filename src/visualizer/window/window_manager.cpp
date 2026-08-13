@@ -1092,8 +1092,11 @@ namespace lfs::vis {
             std::max(state.width, kMinWindowWidth),
             std::max(state.height, kMinWindowHeight),
         };
-        const SDL_DisplayID display_id =
-            SDL_GetDisplayForWindow(window_);
+        const SDL_Point saved_point{state.x, state.y};
+        SDL_DisplayID display_id =
+            SDL_GetDisplayForPoint(&saved_point);
+        if (display_id == 0)
+            display_id = SDL_GetDisplayForWindow(window_);
         SDL_Rect available{};
         if (display_id != 0 &&
             SDL_GetDisplayUsableBounds(
@@ -1116,6 +1119,32 @@ namespace lfs::vis {
                 available.y + available.h - kVisibleEdge);
         }
 
+        SDL_Rect restore_area{
+            state.restore_x,
+            state.restore_y,
+            std::max(state.restore_width, kMinWindowWidth),
+            std::max(state.restore_height, kMinWindowHeight),
+        };
+        if (display_id != 0 &&
+            SDL_GetDisplayUsableBounds(
+                display_id, &available) &&
+            available.w > 0 && available.h > 0) {
+            restore_area.w = std::clamp(
+                restore_area.w, kMinWindowWidth,
+                std::max(available.w, kMinWindowWidth));
+            restore_area.h = std::clamp(
+                restore_area.h, kMinWindowHeight,
+                std::max(available.h, kMinWindowHeight));
+            constexpr int kVisibleEdge = 64;
+            restore_area.x = std::clamp(
+                restore_area.x,
+                available.x - restore_area.w + kVisibleEdge,
+                available.x + available.w - kVisibleEdge);
+            restore_area.y = std::clamp(
+                restore_area.y, available.y,
+                available.y + available.h - kVisibleEdge);
+        }
+
         SDL_SetWindowSize(
             window_, work_area.w, work_area.h);
         SDL_SetWindowPosition(
@@ -1123,12 +1152,10 @@ namespace lfs::vis {
         windowed_pos_ = {work_area.x, work_area.y};
         windowed_size_ = {work_area.w, work_area.h};
         borderless_restore_pos_ = {
-            state.restore_x, state.restore_y};
+            restore_area.x, restore_area.y};
         borderless_restore_size_ = {
-            std::max(state.restore_width,
-                     kMinWindowWidth),
-            std::max(state.restore_height,
-                     kMinWindowHeight),
+            restore_area.w,
+            restore_area.h,
         };
         if (state.maximized)
             maximizeBorderless(

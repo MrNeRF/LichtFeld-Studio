@@ -8,6 +8,7 @@
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
+#include "gui/scene_tree_session.hpp"
 
 #include <RmlUi/Core/EventListener.h>
 #include <cstdint>
@@ -45,6 +46,10 @@ namespace lfs::vis::gui {
         void releaseRendererResources() override { host_.releaseRendererResources(); }
         [[nodiscard]] std::string projectActiveTab() const;
         void setProjectActiveTab(std::string_view tab);
+        [[nodiscard]] SceneTreeSessionChrome captureTreeChrome(
+            const core::Scene& scene) const;
+        void applyTreeChrome(const SceneTreeSessionChrome& chrome);
+        void resetTreeChrome();
 
     private:
         struct EventListener : Rml::EventListener {
@@ -105,6 +110,7 @@ namespace lfs::vis::gui {
         bool syncSceneVisibility();
         bool handleEvent(Rml::Event& event);
         void applyFilterInputValue();
+        void applyPendingTreeChrome();
         void applyLogLevelSelection();
         void copyBufferedLogsToClipboard();
         void exportBufferedLogsToTextFile();
@@ -162,6 +168,7 @@ namespace lfs::vis::gui {
         Rml::Element* logging_empty_el_ = nullptr;
 
         Tab active_tab_ = Tab::Scene;
+        std::optional<SceneTreeSessionChrome> pending_tree_chrome_;
         std::string last_language_;
         uint64_t last_history_generation_ = 0;
         uint64_t last_log_generation_ = 0;

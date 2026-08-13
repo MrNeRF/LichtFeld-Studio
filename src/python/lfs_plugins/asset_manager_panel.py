@@ -403,6 +403,39 @@ class AssetManagerPanel(Panel):
         self._panel_space = lf.ui.PanelSpace.LEFT_DOCK
         self._is_floating = False
 
+    def capture_chrome(self):
+        return {
+            "folders_collapsed": bool(self._folders_collapsed),
+            "filters_collapsed": bool(self._filters_collapsed),
+            "sidebar_height": float(self._sidebar_height),
+            "right_panel_width": float(self._right_panel_width),
+            "bottom_panel_height": float(self._bottom_panel_height),
+        }
+
+    def apply_chrome(self, payload):
+        self._folders_collapsed = True
+        self._filters_collapsed = True
+        self._sidebar_height = 176.0
+        self._right_panel_width = 300.0
+        self._bottom_panel_height = 220.0
+        if isinstance(payload, dict):
+            if "folders_collapsed" in payload:
+                self._folders_collapsed = bool(payload.get("folders_collapsed"))
+            if "filters_collapsed" in payload:
+                self._filters_collapsed = bool(payload.get("filters_collapsed"))
+
+            def _positive_float(key, current):
+                value = payload.get(key)
+                if isinstance(value, (int, float)) and value > 0:
+                    return float(value)
+                return current
+
+            self._sidebar_height = _positive_float("sidebar_height", self._sidebar_height)
+            self._right_panel_width = _positive_float("right_panel_width", self._right_panel_width)
+            self._bottom_panel_height = _positive_float("bottom_panel_height", self._bottom_panel_height)
+        if self._handle:
+            self._handle.dirty_all()
+
     # ── Initialization ────────────────────────────────────────
 
     def _initialize_backend(self):

@@ -40,6 +40,7 @@
 #include "tools/align_tool.hpp"
 #include "tools/builtin_tools.hpp"
 #include "tools/selection_tool.hpp"
+#include "tools/unified_tool_registry.hpp"
 #include "visualizer/app_store.hpp"
 #include "window/vulkan_context.hpp"
 #include <SDL3/SDL_events.h>
@@ -1747,6 +1748,14 @@ namespace lfs::vis {
             store.training_state.set("ready");
             store.total_iterations.set(trainer_manager_->getTotalIterations());
             store.iteration.set(trainer_manager_->getCurrentIteration());
+            store.loss.set(trainer_manager_->getCurrentLoss());
+            store.num_gaussians.set(
+                static_cast<std::int64_t>(trainer_manager_->getNumSplats()));
+            if (const auto last =
+                    trainer_manager_->getLastEvaluationMetrics()) {
+                store.eval_psnr.set(last->psnr);
+                store.eval_ssim.set(last->ssim);
+            }
             python::update_trainer_loaded(true, trainer_manager_->getTotalIterations(),
                                           trainer_manager_->getCurrentIteration());
             python::update_training_state(false, "ready");
@@ -2795,6 +2804,9 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::resetProjectState() {
+        if (trainer_manager_) {
+            trainer_manager_->clearRestoredProjectMetrics();
+        }
         if (auto* const param_mgr = services().paramsOrNull()) {
             param_mgr->clearSession();
         }
@@ -2811,10 +2823,12 @@ namespace lfs::vis {
         pending_new_project_disposition_ =
             ProjectSwitchDisposition::RequireClean;
         gui_session_restore_.clear();
+        pending_project_tools_restore_.reset();
+        hydration_terminal_restore_ticket_.reset();
         retained_project_session_ = {};
         camera_bookmarks_.clear();
         gui::PanelRegistry::instance()
-            .clear_project_state_retention();
+            .reset_project_state();
     }
 
     lfs::Result<
@@ -2829,13 +2843,14 @@ namespace lfs::vis {
             project_root);
     }
 
-    void VisualizerImpl::
+    project::GuiSessionRestoreTicket VisualizerImpl::
         stagePreparedProjectSessionRestore(
             project::PreparedGuiSessionRestore
                 prepared) {
-        gui_session_restore_.stagePrepared(
+        const auto ticket = gui_session_restore_.stagePrepared(
             std::move(prepared));
         tryApplyProjectSessionRestore();
+        return ticket;
     }
 
     void VisualizerImpl::
@@ -2845,14 +2860,68 @@ namespace lfs::vis {
         if (!prepared)
             return;
         auto retained = prepared->chapters;
+        const auto ticket = prepared->ticket;
         project::applyGuiSession(
             *this, *prepared, camera_bookmarks_);
+        pending_project_tools_restore_ =
+            std::move(*prepared);
         retained_project_session_ =
             std::move(retained);
         LOG_INFO(
             "Applied GUIL/VIEW/EDTR/SEQR/METR after first GUI frame and panel registration revision {}",
             gui_session_restore_
                 .panelsRegistrationRevision());
+        // Tools apply from whichever of owner-ready and hydration-terminal
+        // finishes last for this ticket.
+        if (hydration_terminal_restore_ticket_ == ticket &&
+            ticket != 0) {
+            tryApplyProjectSessionTools(ticket);
+        }
+    }
+
+    void VisualizerImpl::tryApplyProjectSessionTools(
+        const project::GuiSessionRestoreTicket ticket) {
+        if (!pending_project_tools_restore_ ||
+            pending_project_tools_restore_->ticket != ticket) {
+            return;
+        }
+        auto prepared =
+            std::move(*pending_project_tools_restore_);
+        pending_project_tools_restore_.reset();
+        editor_context_.update(
+            scene_manager_.get(), trainer_manager_.get());
+        project::applyGuiSessionTools(*this, prepared);
+    }
+
+    void VisualizerImpl::noteHydrationTerminalForRestoreTicket(
+        const project::GuiSessionRestoreTicket ticket) {
+        if (ticket == 0)
+            return;
+        hydration_terminal_restore_ticket_ = ticket;
+        tryApplyProjectSessionTools(ticket);
+    }
+
+    void VisualizerImpl::noteGuiSessionRestoreOwnerReady(
+        const std::uint64_t panels_registration_revision) {
+        gui_session_restore_.onFirstGuiFrame();
+        gui_session_restore_.onPanelsReady(
+            panels_registration_revision);
+        tryApplyProjectSessionRestore();
+    }
+
+    void VisualizerImpl::bindTrainerProjectSnapshotTarget() {
+        if (project_lifecycle_) {
+            project_lifecycle_->bindTrainerSnapshotTarget();
+        }
+    }
+
+    void VisualizerImpl::deactivateProjectTools() {
+        lfs::core::events::tools::SetToolbarTool{
+            .tool_mode = static_cast<int>(ToolType::None)}
+            .emit();
+        editor_context_.setActiveTool(ToolType::None);
+        editor_context_.clearActiveOperator();
+        UnifiedToolRegistry::instance().clearActiveTool();
     }
 
     void VisualizerImpl::wakeMainLoop() const {

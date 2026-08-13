@@ -30,6 +30,7 @@ class Mesh2SplatPanel(Panel):
     label = "Mesh to Splat"
     space = lf.ui.PanelSpace.FLOATING
     order = 12
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/mesh2splat_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (420, 0)

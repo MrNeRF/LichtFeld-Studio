@@ -69,6 +69,9 @@ namespace lfs::vis {
         void consolidateModels() override;
         [[nodiscard]] std::expected<void, std::string> clearScene() override;
         core::Scene& getScene() override { return scene_manager_->getScene(); }
+        [[nodiscard]] const core::Scene& getScene() const {
+            return scene_manager_->getScene();
+        }
         bool postWork(WorkItem work) override;
         bool postRenderWork(WorkItem work);
         [[nodiscard]] bool isOnViewerThread() const override {
@@ -142,12 +145,22 @@ namespace lfs::vis {
                 references = nullptr,
             const std::filesystem::path& project_root =
                 {}) const;
-        void stagePreparedProjectSessionRestore(
+        [[nodiscard]] project::GuiSessionRestoreTicket
+        stagePreparedProjectSessionRestore(
             project::PreparedGuiSessionRestore prepared);
         [[nodiscard]] bool
         isProjectSessionRestorePending() const noexcept {
-            return gui_session_restore_.hasPending();
+            return gui_session_restore_.hasPending() ||
+                   pending_project_tools_restore_.has_value();
         }
+        void tryApplyProjectSessionTools(
+            project::GuiSessionRestoreTicket ticket);
+        void noteHydrationTerminalForRestoreTicket(
+            project::GuiSessionRestoreTicket ticket);
+        void noteGuiSessionRestoreOwnerReady(
+            std::uint64_t panels_registration_revision);
+        void deactivateProjectTools();
+        void bindTrainerProjectSnapshotTarget();
         // FPS monitoring
         [[nodiscard]] float getAverageFPS() const {
             return rendering_manager_ ? rendering_manager_->getAverageFPS() : 0.0f;
@@ -237,6 +250,10 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_ParametersValueChangeIsHardDirty_Test;
         friend class VisualizerImplResetTest_BaselineIdleCheckpointTrainerClosesWithoutTrainingPrompt_Test;
         friend class VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
+        friend class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
+        friend class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+        friend class VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
+        friend class VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;
@@ -435,6 +452,10 @@ namespace lfs::vis {
         std::filesystem::path pending_dataset_path_;
         project::GuiSessionRestoreCoordinator
             gui_session_restore_;
+        std::optional<project::PreparedGuiSessionRestore>
+            pending_project_tools_restore_;
+        std::optional<project::GuiSessionRestoreTicket>
+            hydration_terminal_restore_ticket_;
         lfs::io::project::ProjectSessionChapters
             retained_project_session_;
         std::vector<

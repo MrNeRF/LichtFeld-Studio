@@ -34,6 +34,7 @@
 #include <istream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <stop_token>
 #include <string_view>
@@ -49,7 +50,13 @@ namespace lfs::vis {
     class VisualizerImplResetTest_TrainingSnapshotCleanupTerminalizesProjectWrite_Test;
     class VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
     class VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
+    class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
+    class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
 } // namespace lfs::vis
+
+namespace lfs::vis::project {
+    class ProjectLifecycle;
+}
 
 namespace lfs::training {
     class AdamOptimizer;
@@ -182,6 +189,9 @@ namespace lfs::training {
             std::vector<std::byte> preview_png = {},
             std::optional<ProjectSnapshotDocumentContext>
                 document_context = std::nullopt);
+        // Queue helper used by request-machinery tests. Production training
+        // autosave is light-only (ProjectLifecycle::startAutosave) and must
+        // never reach GPU checkpoint capture; consume/prepare fail closed.
         [[nodiscard]] std::uint64_t
         request_project_autosave(
             std::filesystem::path master_path,
@@ -329,8 +339,33 @@ namespace lfs::training {
         // Project persistence. Standalone LFKP files are import-only; saves
         // always publish a .licht generation.
         [[nodiscard]] std::filesystem::path default_project_path() const;
+        [[nodiscard]] std::filesystem::path
+        live_or_default_project_path() const;
+        void set_live_project_snapshot(
+            std::optional<std::filesystem::path> path,
+            std::function<std::optional<
+                ProjectSnapshotDocumentContext>()>
+                context_provider = {});
+        [[nodiscard]] bool has_active_train_loop() const {
+            return is_running_.load() || is_paused_.load();
+        }
+        [[nodiscard]] bool can_flush_project_snapshot() const {
+            return project_snapshot_service_ && strategy_ &&
+                   scene_;
+        }
+        void restore_current_loss(const float loss) {
+            current_loss_.store(loss);
+        }
+        void set_pending_snapshot_finish_reason(
+            lfs::io::project::TrainingFinishReason reason) {
+            pending_snapshot_finish_reason_ = reason;
+        }
         std::expected<std::filesystem::path, std::string>
-        save_project_to(const std::filesystem::path& path, int iteration);
+        save_project_to(
+            const std::filesystem::path& path,
+            int iteration,
+            std::optional<ProjectSnapshotDocumentContext>
+                document_context = std::nullopt);
         std::expected<int, std::string> load_checkpoint(const std::filesystem::path& checkpoint_path);
         CheckpointLoadResult load_checkpoint(
             std::istream& source,
@@ -338,7 +373,6 @@ namespace lfs::training {
             std::string_view source_name = "embedded CKPT");
         [[nodiscard]] ProjectSnapshotRuntimeMetrics
         get_project_snapshot_metrics() const;
-        void save_final_project(int iteration);
 
         // Orderly shutdown - GPU sync, wait for async saves, release resources. Idempotent.
         void shutdown();
@@ -347,6 +381,9 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotCleanupTerminalizesProjectWrite_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
+        friend class lfs::vis::VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+        friend class lfs::vis::project::ProjectLifecycle;
         friend struct TrainerRetryTestAccess;
         friend struct TrainerCropboxMaskTestAccess;
 
@@ -534,6 +571,11 @@ namespace lfs::training {
         [[nodiscard]] lfs::Result<void>
         initialize_project_snapshot_service();
         void capture_project_snapshot_at_safe_point(int iteration);
+        void consume_requested_project_snapshot(int iteration);
+        [[nodiscard]] int project_snapshot_iteration() const;
+        void attach_live_document_context(
+            std::optional<ProjectSnapshotDocumentContext>&
+                document_context) const;
         void observe_training_step_duration(
             int iteration,
             double elapsed_ms,
@@ -689,6 +731,15 @@ namespace lfs::training {
             project_step_regression_;
         std::filesystem::path last_project_snapshot_path_;
         std::string last_project_writer_error_;
+        std::optional<std::filesystem::path>
+            live_project_path_;
+        std::function<std::optional<
+            ProjectSnapshotDocumentContext>()>
+            live_document_context_provider_;
+        lfs::io::project::TrainingFinishReason
+            pending_snapshot_finish_reason_ =
+                lfs::io::project::
+                    TrainingFinishReason::None;
 
         // Persistent photometric loss (workspace reuse across iterations)
         lfs::training::losses::PhotometricLoss photometric_loss_;

@@ -3269,6 +3269,18 @@ namespace lfs::vis::editor {
         impl_->setTextSilently("", std::nullopt);
     }
 
+    void PythonEditor::setActiveSessionLocator(
+        std::string locator) {
+        if (impl_->buffer != nullptr)
+            impl_->session_locators.insert_or_assign(
+                impl_->buffer, std::move(locator));
+    }
+
+    void PythonEditor::clearActiveSessionLocator() {
+        if (impl_->buffer != nullptr)
+            impl_->session_locators.erase(impl_->buffer);
+    }
+
     bool PythonEditor::consumeExecuteRequested() {
         const bool requested = execute_requested_;
         execute_requested_ = false;
@@ -3431,10 +3443,16 @@ namespace lfs::vis::editor {
                 auto* buffer =
                     &window->GetBuffer();
                 if (buffer->GetBufferType() !=
-                        Zep::BufferType::Normal ||
-                    buffer->HasFileFlags(
-                        Zep::FileFlags::
-                            DefaultBuffer)) {
+                    Zep::BufferType::Normal) {
+                    continue;
+                }
+                const auto buffer_text =
+                    buffer->GetBufferText(
+                        buffer->Begin(), buffer->End());
+                if (buffer_text.empty() &&
+                    (buffer->HasFileFlags(
+                         Zep::FileFlags::DefaultBuffer) ||
+                     buffer->GetFilePath().empty())) {
                     continue;
                 }
                 const auto [found, inserted] =
@@ -3503,13 +3521,12 @@ namespace lfs::vis::editor {
                     ? active_modified
                     : buffer->HasFileFlags(
                           Zep::FileFlags::Dirty);
+            const auto text = buffer->GetBufferText(
+                buffer->Begin(), buffer->End());
             result.open_files.push_back(
                 PythonEditorSessionFile{
                     .locator = locator,
-                    .text =
-                        buffer->GetBufferText(
-                            buffer->Begin(),
-                            buffer->End()),
+                    .text = text,
                     .modified = modified,
                     .editor =
                         capture_buffer_session_state(
@@ -3530,10 +3547,6 @@ namespace lfs::vis::editor {
             state) {
         impl_ = std::make_unique<Impl>();
         if (state.open_files.empty()) {
-            if (impl_->buffer != nullptr) {
-                impl_->buffer->SetFileFlags(
-                    Zep::FileFlags::DefaultBuffer);
-            }
             impl_->setVimModeEnabled(
                 state.vim_mode);
             return;
