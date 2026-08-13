@@ -125,6 +125,8 @@ namespace lfs::training {
         void set_phase(TrainingPhase phase);
 
         void update_snapshot(const HookContext& ctx, int max_iterations, bool is_paused, bool is_running, bool stop_requested, TrainingPhase phase);
+        void apply_training_paused(int iteration);
+        void bind_state_events();
         void clear_snapshot(const Trainer* trainer);
 
         [[nodiscard]] TrainingSnapshot snapshot() const;
@@ -166,6 +168,7 @@ namespace lfs::training {
         std::atomic<TrainingPhase> phase_{TrainingPhase::Idle};
         std::vector<LossHistoryPoint> loss_history_;
         int last_recorded_iteration_ = -1;
+        std::optional<std::size_t> training_paused_handler_id_;
     };
 
 } // namespace lfs::training

@@ -52,6 +52,10 @@ namespace lfs::vis {
     class VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
     class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
     class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+    class VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
+    class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
+    class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
+    class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -383,6 +387,10 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
         friend class lfs::vis::VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
+        friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
         friend class lfs::vis::project::ProjectLifecycle;
         friend struct TrainerRetryTestAccess;
         friend struct TrainerCropboxMaskTestAccess;
@@ -906,6 +914,32 @@ namespace lfs::training {
         int exportable_densify_barrier_depth_ = 0;
         GTLoadConfigSnapshot gt_load_config_snapshot_;
     };
+
+    enum class StaleTrainerDefaultRecovery : std::uint8_t {
+        FailLoudly,
+        RelocateAndFirstSave,
+    };
+
+    [[nodiscard]] constexpr StaleTrainerDefaultRecovery
+    stale_trainer_default_recovery(
+        const bool adopt_container_identity,
+        const bool open_failed,
+        const std::optional<lfs::ErrorCode> save_error) noexcept {
+        if (!adopt_container_identity) {
+            return StaleTrainerDefaultRecovery::FailLoudly;
+        }
+        if (open_failed ||
+            save_error == lfs::ErrorCode::Unsupported) {
+            return StaleTrainerDefaultRecovery::
+                RelocateAndFirstSave;
+        }
+        return StaleTrainerDefaultRecovery::FailLoudly;
+    }
+
+    [[nodiscard]] lfs::Result<std::filesystem::path>
+    relocate_unreadable_trainer_default_project(
+        const std::filesystem::path& destination,
+        const lfs::Error& cause);
 
     // test hook for cropbox damping mask cache.
     struct TrainerCropboxMaskTestAccess {

@@ -3880,4 +3880,438 @@ namespace lfs::vis {
         }
     }
 
+    TEST_F(VisualizerImplResetTest,
+           SaveAsRoutesThroughFinishedTrainer) {
+        // A Finished-only saveAs gate (active/pending only) falls through
+        // to synchronizeDocumentFromViewer and fails with
+        // "needs a safe-point project snapshot".
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto destination =
+            temporary / "finished-saveas.licht";
+        auto splat = lfs::test::licht::make_splat(2);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_FALSE(lifecycle->hasSourcePath());
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Train model");
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            trainer->strategy_ =
+                std::make_unique<lfs::training::MCMC>(
+                    *splat);
+            trainer->is_paused_.store(true);
+
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    viewer.getTrainerManager()
+                        ->getStateMachine());
+            if (state_machine.getState() ==
+                TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Running));
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Paused));
+            ASSERT_TRUE(
+                state_machine.transitionToFinished(
+                    FinishReason::UserStopped));
+            ASSERT_TRUE(viewer.getTrainerManager()
+                            ->isFinished());
+            ASSERT_TRUE(
+                trainer->can_flush_project_snapshot());
+
+            auto saved = lifecycle->saveAs(
+                destination, false, true);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            EXPECT_EQ(
+                lifecycle->project_write_purpose_,
+                project::ProjectLifecycle::
+                    ProjectWritePurpose::
+                        TrainingExplicitSave);
+            EXPECT_EQ(
+                lifecycle->project_write_destination_
+                    .lexically_normal(),
+                destination.lexically_normal());
+            {
+                std::lock_guard lock(
+                    trainer->project_snapshot_mutex_);
+                ASSERT_TRUE(
+                    trainer->requested_project_path_);
+                EXPECT_EQ(
+                    trainer->requested_project_path_
+                        ->lexically_normal(),
+                    destination.lexically_normal());
+            }
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           SaveAsRoutesThroughFailedTerminalSnapshotAftermath) {
+        // Returning adoptCompletedTrainingSnapshot's failure from saveAs
+        // after a failed terminal write dead-ends with
+        // "The latest training project generation failed."
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto destination =
+            temporary / "aftermath-saveas.licht";
+        const auto failed_path =
+            temporary / "failed-terminal.licht";
+        auto splat = lfs::test::licht::make_splat(2);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_FALSE(lifecycle->hasSourcePath());
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Train model");
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            trainer->strategy_ =
+                std::make_unique<lfs::training::MCMC>(
+                    *splat);
+            trainer->is_paused_.store(true);
+
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    viewer.getTrainerManager()
+                        ->getStateMachine());
+            if (state_machine.getState() ==
+                TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Running));
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Paused));
+            ASSERT_TRUE(
+                state_machine.transitionToFinished(
+                    FinishReason::UserStopped));
+            ASSERT_TRUE(viewer.getTrainerManager()
+                            ->isFinished());
+
+            trainer->last_project_writer_error_ =
+                "P3 first-save assembly refuses implicit replacement";
+            trainer->last_project_snapshot_path_ =
+                failed_path;
+            ASSERT_NE(
+                trainer->project_snapshot_service_,
+                nullptr);
+            trainer->project_snapshot_service_
+                ->testing_advance_completed_snapshots(
+                    1);
+            lifecycle
+                ->adopted_training_snapshot_count_ =
+                0;
+
+            auto saved = lifecycle->saveAs(
+                destination, false, true);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            EXPECT_EQ(
+                lifecycle->project_write_purpose_,
+                project::ProjectLifecycle::
+                    ProjectWritePurpose::
+                        TrainingExplicitSave);
+            EXPECT_EQ(
+                lifecycle->project_write_destination_
+                    .lexically_normal(),
+                destination.lexically_normal());
+            {
+                std::lock_guard lock(
+                    trainer->project_snapshot_mutex_);
+                ASSERT_TRUE(
+                    trainer->requested_project_path_);
+                EXPECT_EQ(
+                    trainer->requested_project_path_
+                        ->lexically_normal(),
+                    destination.lexically_normal());
+            }
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           InfoSurvivesFailedTerminalSnapshotAftermath) {
+        // Catches info() returning synchronizeDocumentFromViewer
+        // FailedPrecondition ("The training model needs a
+        // safe-point project snapshot") after a failed
+        // terminal generation. A GROUP training node skips
+        // the geometry CKPT check; a real unbound SPLAT
+        // node is the shape that killed MCP save_as
+        // preflight even after the adoption tolerance.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto failed_path =
+            temporary / "failed-terminal.licht";
+        auto splat = lfs::test::licht::make_splat(2);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_NE(lifecycle->document_, nullptr);
+            const auto expected_uuid =
+                lifecycle->document_->project_uuid()
+                    .to_string();
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model = scene.addSplat(
+                "Train model",
+                lfs::test::licht::make_splat(2));
+            ASSERT_NE(model, lfs::core::NULL_NODE);
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            trainer->strategy_ =
+                std::make_unique<lfs::training::MCMC>(
+                    *splat);
+            trainer->is_paused_.store(true);
+
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    viewer.getTrainerManager()
+                        ->getStateMachine());
+            if (state_machine.getState() ==
+                TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Running));
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Paused));
+            ASSERT_TRUE(
+                state_machine.transitionToFinished(
+                    FinishReason::UserStopped));
+            ASSERT_TRUE(viewer.getTrainerManager()
+                            ->isFinished());
+            ASSERT_TRUE(
+                trainer->can_flush_project_snapshot());
+            ASSERT_TRUE(
+                lifecycle
+                    ->canFlushFinishedTrainerSnapshot());
+
+            trainer->last_project_writer_error_ =
+                "P3 first-save assembly refuses implicit replacement";
+            trainer->last_project_snapshot_path_ =
+                failed_path;
+            ASSERT_NE(
+                trainer->project_snapshot_service_,
+                nullptr);
+            trainer->project_snapshot_service_
+                ->testing_advance_completed_snapshots(
+                    1);
+            lifecycle
+                ->adopted_training_snapshot_count_ =
+                0;
+
+            auto info = viewer.projectGetInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            EXPECT_EQ(info->project_uuid, expected_uuid);
+            EXPECT_EQ(
+                info->path,
+                lifecycle->document_->source_path());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual) {
+        // Equal counters mean nothing new to adopt.
+        // last_path is a nonexistent file: success
+        // proves ProjectDocument::open was not called.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto missing_path =
+            temporary / "never-written.licht";
+        ASSERT_FALSE(std::filesystem::exists(
+            missing_path));
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            trainer->last_project_snapshot_path_ =
+                missing_path;
+            ASSERT_EQ(
+                trainer->get_project_snapshot_metrics()
+                    .capture.completed_snapshots,
+                lifecycle
+                    ->adopted_training_snapshot_count_);
+
+            auto adopted =
+                lifecycle
+                    ->adoptCompletedTrainingSnapshot();
+            ASSERT_TRUE(adopted)
+                << lfs::format_for_developer(
+                       adopted.error());
+        }
+    }
+
 } // namespace lfs::vis
+
+namespace {
+
+    TEST(TrainerProjectWriterTest,
+         StaleDefaultRecoveryOnlyForAdoptIdentity) {
+        using lfs::training::StaleTrainerDefaultRecovery;
+        EXPECT_EQ(
+            lfs::training::stale_trainer_default_recovery(
+                false, true, std::nullopt),
+            StaleTrainerDefaultRecovery::FailLoudly);
+        EXPECT_EQ(
+            lfs::training::stale_trainer_default_recovery(
+                true, true, std::nullopt),
+            StaleTrainerDefaultRecovery::
+                RelocateAndFirstSave);
+        EXPECT_EQ(
+            lfs::training::stale_trainer_default_recovery(
+                true,
+                false,
+                lfs::ErrorCode::Unsupported),
+            StaleTrainerDefaultRecovery::
+                RelocateAndFirstSave);
+        EXPECT_EQ(
+            lfs::training::stale_trainer_default_recovery(
+                true,
+                false,
+                lfs::ErrorCode::AlreadyExists),
+            StaleTrainerDefaultRecovery::FailLoudly);
+        EXPECT_EQ(
+            lfs::training::stale_trainer_default_recovery(
+                false,
+                false,
+                lfs::ErrorCode::Unsupported),
+            StaleTrainerDefaultRecovery::FailLoudly);
+    }
+
+    TEST(TrainerProjectWriterTest,
+         RelocatesUnreadableTrainerDefaultAside) {
+        lfs::test::licht::TemporaryDirectory temporary;
+        const auto destination =
+            temporary.path / "project.licht";
+        {
+            std::ofstream out(
+                destination, std::ios::binary);
+            ASSERT_TRUE(out);
+            out << "not-a-licht-container";
+        }
+        ASSERT_TRUE(std::filesystem::exists(destination));
+        const auto cause = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::DataLoss,
+            .domain = lfs::ErrorDomain::IO,
+            .detail = "invalid magic",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
+        auto relocated = lfs::training::
+            relocate_unreadable_trainer_default_project(
+                destination, cause);
+        ASSERT_TRUE(relocated)
+            << lfs::format_for_developer(
+                   relocated.error());
+        EXPECT_FALSE(std::filesystem::exists(destination));
+        EXPECT_TRUE(std::filesystem::exists(*relocated));
+        EXPECT_EQ(
+            relocated->parent_path(),
+            destination.parent_path());
+        const auto name = relocated->filename().string();
+        const auto prefix =
+            destination.filename().string() + ".corrupt-";
+        ASSERT_GE(name.size(), prefix.size());
+        EXPECT_EQ(name.substr(0, prefix.size()), prefix);
+        auto failed = lfs::training::
+            relocate_unreadable_trainer_default_project(
+                destination, cause);
+        ASSERT_FALSE(failed);
+    }
+
+} // namespace

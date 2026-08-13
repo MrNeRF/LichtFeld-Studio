@@ -2369,4 +2369,11 @@ namespace lfs::training {
         return impl_->aggregate;
     }
 
+    void TrainingSnapshotService::
+        testing_advance_completed_snapshots(
+            const std::uint64_t count) {
+        std::scoped_lock lock(impl_->metrics_mutex);
+        impl_->aggregate.completed_snapshots += count;
+    }
+
 } // namespace lfs::training

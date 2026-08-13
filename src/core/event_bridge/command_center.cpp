@@ -13,6 +13,8 @@ namespace lfs::training {
     }
 
     CommandCenter::CommandCenter() {
+        bind_state_events();
+
         ops_.push_back({.name = "set_attribute",
                         .target = CommandTarget::Model,
                         .selectors = {SelectionKind::All, SelectionKind::Range, SelectionKind::Indices},

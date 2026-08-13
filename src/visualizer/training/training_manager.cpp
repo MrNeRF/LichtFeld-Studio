@@ -1567,9 +1567,12 @@ namespace lfs::vis {
     }
 
     FinishReason TrainerManager::resolvedRestoredFinishReason() const {
+        // UserStopped is a saved pause: resume unless the run already hit total.
         if (restored_finish_reason_ &&
             *restored_finish_reason_ !=
-                lfs::io::project::TrainingFinishReason::None) {
+                lfs::io::project::TrainingFinishReason::None &&
+            *restored_finish_reason_ !=
+                lfs::io::project::TrainingFinishReason::UserStopped) {
             return fromIoFinishReason(*restored_finish_reason_);
         }
         int iteration = getCurrentIteration();
@@ -1631,17 +1634,42 @@ namespace lfs::vis {
     }
 
     void TrainerManager::publishRestoredTrainingStore() {
+        int iteration = getCurrentIteration();
+        if (checkpoint_baseline_iteration_ &&
+            *checkpoint_baseline_iteration_ > iteration) {
+            iteration = *checkpoint_baseline_iteration_;
+        }
+        const int total_iterations = getTotalIterations();
+        const float loss = getCurrentLoss();
+        const int num_gaussians = getNumSplats();
+
         auto& store = app_store();
         lfs::core::reactive::BatchUpdate batch(store.store());
-        store.iteration.set(getCurrentIteration());
-        store.total_iterations.set(getTotalIterations());
-        store.loss.set(getCurrentLoss());
+        store.iteration.set(iteration);
+        store.total_iterations.set(total_iterations);
+        store.loss.set(loss);
         store.num_gaussians.set(
-            static_cast<std::int64_t>(getNumSplats()));
+            static_cast<std::int64_t>(num_gaussians));
         if (const auto last = getLastEvaluationMetrics()) {
             store.eval_psnr.set(last->psnr);
             store.eval_ssim.set(last->ssim);
         }
+
+        if (!trainer_) {
+            return;
+        }
+        lfs::training::CommandCenter::instance().update_snapshot(
+            lfs::training::HookContext{
+                .iteration = iteration,
+                .loss = loss,
+                .num_gaussians = static_cast<std::size_t>(
+                    std::max(0, num_gaussians)),
+                .trainer = trainer_.get()},
+            total_iterations,
+            isPaused(),
+            isRunning(),
+            false,
+            lfs::training::TrainingPhase::Idle);
     }
 
     void TrainerManager::trainingThreadFunc(std::stop_token stop_token) {
@@ -1731,6 +1759,8 @@ namespace lfs::vis {
 
     void TrainerManager::setupEventHandlers() {
         using namespace lfs::core::events;
+
+        lfs::training::CommandCenter::instance().bind_state_events();
 
         // Training control commands
         cmd::StartTraining::when([this](const auto&) {

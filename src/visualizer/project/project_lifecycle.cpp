@@ -1921,6 +1921,16 @@ namespace lfs::vis::project {
                trainer->get_current_iteration();
     }
 
+    bool ProjectLifecycle::canFlushFinishedTrainerSnapshot()
+        const {
+        auto* trainer = viewer_.getTrainer();
+        auto* manager = viewer_.getTrainerManager();
+        return trainer && manager &&
+               manager->isFinished() &&
+               trainer->can_flush_project_snapshot() &&
+               isTrainingCheckpointStale();
+    }
+
     lfs::Result<void>
     ProjectLifecycle::startLiveTrainingSnapshotWrite(
         const ProjectWritePurpose purpose,
@@ -2803,6 +2813,9 @@ namespace lfs::vis::project {
         const bool counter_advanced =
             metrics.capture.completed_snapshots >
             adopted_training_snapshot_count_;
+        if (!counter_advanced) {
+            return {};
+        }
         if (counter_advanced &&
             !metrics.last_writer_error.empty()) {
             return fail<void>(
@@ -3583,8 +3596,14 @@ namespace lfs::vis::project {
         if (auto adopted =
                 adoptCompletedTrainingSnapshot();
             !adopted) {
-            return lfs::Status::failure(
-                std::move(adopted).error());
+            if (canFlushFinishedTrainerSnapshot()) {
+                LOG_WARN(
+                    "Discarding unadoptable training snapshot; a finished trainer can still flush: {}",
+                    developerError(adopted.error()));
+            } else {
+                return lfs::Status::failure(
+                    std::move(adopted).error());
+            }
         }
         if (!document_ ||
             !document_->source_path()) {
@@ -3611,11 +3630,7 @@ namespace lfs::vis::project {
                     TrainingExplicitSave,
                 regenerate_preview);
         }
-        if (viewer_.getTrainer() &&
-            viewer_.getTrainerManager() &&
-            viewer_.getTrainerManager()
-                ->isFinished() &&
-            isTrainingCheckpointStale()) {
+        if (canFlushFinishedTrainerSnapshot()) {
             return startLiveTrainingSnapshotWrite(
                 ProjectWritePurpose::
                     TrainingExplicitSave,
@@ -3716,8 +3731,14 @@ namespace lfs::vis::project {
         if (auto adopted =
                 adoptCompletedTrainingSnapshot();
             !adopted) {
-            return lfs::Status::failure(
-                std::move(adopted).error());
+            if (canFlushFinishedTrainerSnapshot()) {
+                LOG_WARN(
+                    "Discarding unadoptable training snapshot; a finished trainer can still flush: {}",
+                    developerError(adopted.error()));
+            } else {
+                return lfs::Status::failure(
+                    std::move(adopted).error());
+            }
         }
         auto normalized =
             normalizedProjectPath(path);
@@ -3729,7 +3750,8 @@ namespace lfs::vis::project {
             trainer &&
             viewer_.getTrainerManager() &&
             (viewer_.getTrainerManager()->isTrainingActive() ||
-             viewer_.getTrainerManager()->isCompletionPending())) {
+             viewer_.getTrainerManager()->isCompletionPending() ||
+             canFlushFinishedTrainerSnapshot())) {
             if (viewer_.getTrainerManager()->isCompletionPending()) {
                 return fail<void>(
                     lfs::ErrorCode::FailedPrecondition,
@@ -5032,8 +5054,7 @@ namespace lfs::vis::project {
                  (manager->isTrainingActive() ||
                   manager
                       ->isCompletionPending())) ||
-                (manager && manager->isFinished() &&
-                 isTrainingCheckpointStale());
+                canFlushFinishedTrainerSnapshot();
             if (training_snapshot) {
                 auto started =
                     startLiveTrainingSnapshotWrite(
@@ -5266,7 +5287,22 @@ namespace lfs::vis::project {
         if (auto adopted =
                 adoptCompletedTrainingSnapshot();
             !adopted) {
-            return std::move(adopted).error();
+            // Unadoptable last training generation must
+            // not fail read surfaces; MCP save_as
+            // preflights through info().
+            const auto warning =
+                developerError(adopted.error());
+            if (warning !=
+                last_unadoptable_training_snapshot_warning_) {
+                last_unadoptable_training_snapshot_warning_ =
+                    warning;
+                LOG_WARN(
+                    "Discarding unadoptable training snapshot; project info continues with the current document: {}",
+                    warning);
+            }
+        } else {
+            last_unadoptable_training_snapshot_warning_
+                .clear();
         }
         const auto* manager =
             viewer_.getSceneManager();
@@ -5294,7 +5330,28 @@ namespace lfs::vis::project {
             if (auto synchronized =
                     synchronizeDocumentFromViewer();
                 !synchronized) {
-                return std::move(synchronized).error();
+                if (canFlushFinishedTrainerSnapshot()) {
+                    // Unbound finished training model has
+                    // no CKPT yet; save/saveAs can still
+                    // flush. Do not fail MCP preflight.
+                    const auto warning =
+                        developerError(
+                            synchronized.error());
+                    if (warning !=
+                        last_finished_trainer_info_sync_warning_) {
+                        last_finished_trainer_info_sync_warning_ =
+                            warning;
+                        LOG_WARN(
+                            "Skipping document sync for project info; a finished trainer can still flush: {}",
+                            warning);
+                    }
+                } else {
+                    return std::move(synchronized)
+                        .error();
+                }
+            } else {
+                last_finished_trainer_info_sync_warning_
+                    .clear();
             }
         }
         const auto dirty_chapters =

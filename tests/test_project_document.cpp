@@ -1254,6 +1254,114 @@ namespace {
         auto reader = ProjectReader::open(destination);
         ASSERT_TRUE(reader);
         EXPECT_EQ(reader->superblock().project_uuid, fixed_uuid(972));
+
+        // Non-default nested destinations keep the same P3 refusal.
+        const auto nested =
+            temporary.path / "nested" / "other.licht";
+        std::filesystem::create_directories(nested.parent_path());
+        auto nested_existing =
+            make_empty_document(fixed_uuid(975), 100);
+        ASSERT_TRUE(nested_existing->save(
+            nested, save_options(1975, 1400)));
+        auto nested_document =
+            make_empty_document(fixed_uuid(976), 100);
+        auto nested_refused = nested_document->save(
+            nested, save_options(1976, 1500));
+        ASSERT_FALSE(nested_refused);
+        EXPECT_EQ(
+            nested_refused.error().code(),
+            lfs::ErrorCode::AlreadyExists);
+        auto nested_reader = ProjectReader::open(nested);
+        ASSERT_TRUE(nested_reader);
+        EXPECT_EQ(
+            nested_reader->superblock().project_uuid,
+            fixed_uuid(975));
+    }
+
+    TEST(ProjectDocumentTest,
+         AppendIntoForeignContainerPreservesIdentity) {
+        // Missing uuid restore after overwriting PROJ with a
+        // foreign chapter is refused at project_document.cpp:838
+        // (DataLoss: PROJ UUID != container superblock UUID).
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "foreign.licht";
+        const Uuid container_uuid = fixed_uuid(9801);
+        const Uuid foreign_uuid = fixed_uuid(9802);
+        const Uuid checkpoint_uuid = fixed_uuid(9803);
+        const Uuid adopted_node = fixed_uuid(9804);
+
+        auto existing = make_empty_document(container_uuid, 100);
+        require_status(existing->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = fixed_uuid(9800),
+                .type = "group",
+                .name = "Original",
+                .child_order = 0,
+            }));
+        ASSERT_TRUE(existing->save(path, save_options(1980, 1000)));
+
+        auto opened = require_result_ptr(ProjectDocument::open(path));
+        const auto generation_before = opened->generation();
+        ASSERT_EQ(opened->project_uuid(), container_uuid);
+        auto created_at = opened->project().created_at_unix_ns();
+        ASSERT_TRUE(created_at);
+        const auto original_created_at = *created_at;
+
+        auto foreign = make_empty_document(foreign_uuid, 999);
+        opened->edit_project() = foreign->project();
+        ASSERT_TRUE(opened->edit_project().set_project_uuid(
+            container_uuid));
+        ASSERT_TRUE(opened->edit_project().set_created_at_unix_ns(
+            original_created_at));
+
+        opened->edit_scene_graph() = SceneGraphChapter();
+        require_status(opened->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = adopted_node,
+                .type = "splat",
+                .name = "AdoptedHead",
+                .child_order = 0,
+                .payload = PayloadBinding{
+                    .fourcc = "CKPT",
+                    .instance_uuid = checkpoint_uuid,
+                    .source_kind = "training",
+                },
+            }));
+        require_status(
+            opened->edit_scene_graph().set_training_model_uuid(
+                adopted_node));
+        for (const auto& uuid : opened->checkpoint_uuids()) {
+            static_cast<void>(opened->remove_checkpoint(uuid));
+        }
+        lfs::core::CheckpointHeader header;
+        header.iteration = 11;
+        header.num_gaussians = 2;
+        std::vector<std::byte> checkpoint_bytes(sizeof(header));
+        std::memcpy(
+            checkpoint_bytes.data(), &header, sizeof(header));
+        auto payload = LazyChunkValue::from_owned(
+            std::move(checkpoint_bytes), checkpoint_uuid);
+        ASSERT_TRUE(payload)
+            << lfs::format_for_developer(payload.error());
+        require_status(opened->set_checkpoint(
+            checkpoint_uuid, std::move(*payload)));
+
+        auto options = save_options(1981, 1100);
+        options.commit.snapshot_uuid = checkpoint_uuid;
+        auto saved = opened->save(path, options);
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        EXPECT_EQ(reopened->project_uuid(), container_uuid);
+        EXPECT_GT(reopened->generation(), generation_before);
+        auto head = reopened->scene_graph().find(adopted_node);
+        ASSERT_TRUE(head);
+        ASSERT_TRUE(*head);
+        EXPECT_EQ((*head)->name, "AdoptedHead");
+        const auto bound = reopened->checkpoint_uuids();
+        ASSERT_EQ(bound.size(), 1u);
+        EXPECT_EQ(bound.front(), checkpoint_uuid);
+        EXPECT_NE(reopened->find_checkpoint(checkpoint_uuid), nullptr);
     }
 
     TEST(ProjectDocumentTest,

@@ -4160,6 +4160,39 @@ namespace lfs::training {
         }
     }
 
+    lfs::Result<std::filesystem::path>
+    relocate_unreadable_trainer_default_project(
+        const std::filesystem::path& destination,
+        const lfs::Error& cause) {
+        const auto unix_seconds =
+            std::chrono::duration_cast<
+                std::chrono::seconds>(
+                std::chrono::system_clock::now()
+                    .time_since_epoch())
+                .count();
+        auto aside = destination;
+        aside += std::format(
+            ".corrupt-{}", unix_seconds);
+        std::error_code ec;
+        std::filesystem::rename(
+            destination, aside, ec);
+        if (ec) {
+            return lfs::from_std_error_code(
+                ec,
+                lfs::ErrorCode::Unavailable,
+                lfs::ErrorDomain::IO,
+                "rename unreadable trainer-default project aside",
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        LOG_WARN(
+            "Unreadable trainer-default project renamed aside from {} to {}: {}",
+            lfs::core::path_to_utf8(
+                destination),
+            lfs::core::path_to_utf8(aside),
+            lfs::format_for_developer(cause));
+        return aside;
+    }
+
     void Trainer::capture_project_snapshot_at_safe_point(
         const int iteration) {
         if (!prepared_project_snapshot_ ||
@@ -4397,12 +4430,15 @@ namespace lfs::training {
         project_writer_in_flight_.store(
             true, std::memory_order_release);
 
+        const auto default_destination =
+            default_project_path();
         try {
             project_writer_thread_ = std::jthread(
                 [this, path, chapters, cpu_state,
                  request_id, write_kind,
                  base_explicit_commit_uuid,
                  autosave_sequence,
+                 default_destination,
                  recovery_session =
                      recovery_session_,
                  preview_png =
@@ -4492,6 +4528,8 @@ namespace lfs::training {
                         std::optional<
                             std::filesystem::path>
                             source_path;
+                        bool adopt_container_identity =
+                            false;
                         if (document_context &&
                             document_context
                                 ->source_path) {
@@ -4503,37 +4541,28 @@ namespace lfs::training {
                             std::filesystem::exists(
                                 path)) {
                             source_path = path;
+                        } else if (
+                            document_context &&
+                            !document_context
+                                 ->source_path &&
+                            !document_context
+                                 ->allow_existing_destination_replacement &&
+                            path.lexically_normal() ==
+                                default_destination
+                                    .lexically_normal() &&
+                            std::filesystem::exists(
+                                path)) {
+                            source_path = path;
+                            adopt_container_identity =
+                                true;
                         }
                         bool save_as =
                             !source_path &&
                             std::filesystem::exists(
                                 path);
-                        if (source_path) {
-                            auto opened =
-                                lfs::io::project::
-                                    ProjectDocument::open(
-                                        *source_path,
-                                        {
-                                            .reader = {},
-                                            .geometry = {},
-                                            .defer_geometry_payloads =
-                                                true,
-                                        });
-                            if (!opened) {
-                                return std::move(opened)
-                                    .error()
-                                    .with_context(
-                                        "open training project for snapshot append",
-                                        LFS_SOURCE_SITE_CURRENT());
-                            }
-                            save_as =
-                                source_path
-                                    ->lexically_normal() !=
-                                path
-                                    .lexically_normal();
-                            document.emplace(
-                                std::move(*opened));
-                        } else {
+                        const auto create_fresh_document =
+                            [&]()
+                            -> lfs::Result<void> {
                             const auto created_ns =
                                 static_cast<std::uint64_t>(
                                     std::chrono::
@@ -4554,91 +4583,241 @@ namespace lfs::training {
                                             : project_uuid_,
                                         created_ns);
                             if (!created) {
-                                return std::move(created)
-                                    .error()
-                                    .with_context(
-                                        "create training project snapshot document",
-                                        LFS_SOURCE_SITE_CURRENT());
+                                return lfs::Status::failure(
+                                    std::move(created)
+                                        .error()
+                                        .with_context(
+                                            "create training project snapshot document",
+                                            LFS_SOURCE_SITE_CURRENT()));
                             }
                             document.emplace(
                                 std::move(*created));
+                            return {};
+                        };
+                        if (source_path) {
+                            auto opened =
+                                lfs::io::project::
+                                    ProjectDocument::open(
+                                        *source_path,
+                                        {
+                                            .reader = {},
+                                            .geometry = {},
+                                            .defer_geometry_payloads =
+                                                true,
+                                        });
+                            if (!opened) {
+                                if (stale_trainer_default_recovery(
+                                        adopt_container_identity,
+                                        true,
+                                        std::nullopt) ==
+                                    StaleTrainerDefaultRecovery::
+                                        RelocateAndFirstSave) {
+                                    if (auto relocated =
+                                            relocate_unreadable_trainer_default_project(
+                                                path,
+                                                opened.error());
+                                        !relocated) {
+                                        return std::move(
+                                                   opened)
+                                            .error()
+                                            .with_context(
+                                                "open training project for snapshot append",
+                                                LFS_SOURCE_SITE_CURRENT());
+                                    }
+                                    source_path.reset();
+                                    adopt_container_identity =
+                                        false;
+                                    save_as = false;
+                                } else {
+                                    return std::move(
+                                               opened)
+                                        .error()
+                                        .with_context(
+                                            "open training project for snapshot append",
+                                            LFS_SOURCE_SITE_CURRENT());
+                                }
+                            } else {
+                                save_as =
+                                    source_path
+                                        ->lexically_normal() !=
+                                    path
+                                        .lexically_normal();
+                                document.emplace(
+                                    std::move(*opened));
+                            }
+                        }
+                        if (!document) {
+                            if (auto created =
+                                    create_fresh_document();
+                                !created) {
+                                return std::move(created)
+                                    .error();
+                            }
                         }
 
-                        if (document_context) {
-                            document->edit_project() =
-                                document_context->project;
-                            document->edit_references() =
-                                document_context
-                                    ->references;
-                            document->edit_gui_layout() =
-                                document_context
-                                    ->gui_layout;
-                            document->edit_view() =
-                                document_context->view;
-                            document->edit_editor() =
-                                document_context
-                                    ->editor;
-                            document->edit_sequencer() =
-                                document_context
-                                    ->sequencer;
-                            document->edit_metrics() =
-                                document_context
-                                    ->metrics;
-                        }
-                        document->edit_scene_graph() =
-                            std::move(
-                                chapters->scene_graph);
-                        document->edit_selection() =
-                            std::move(
-                                chapters->selection);
-                        auto params_status =
-                            document
-                                ->edit_parameters()
-                                .set_snapshot(
-                                    chapters
-                                        ->parameters);
-                        if (!params_status) {
-                            return std::move(
-                                       params_status)
-                                .error()
-                                .with_context(
-                                    "stage project parameter snapshot",
-                                    LFS_SOURCE_SITE_CURRENT());
-                        }
-                        for (const auto& uuid :
-                             document
-                                 ->checkpoint_uuids()) {
-                            static_cast<void>(
+                        const auto stage_snapshot_chapters =
+                            [&](lfs::io::project::
+                                    ProjectDocument*
+                                        previous)
+                            -> lfs::Result<void> {
+                            if (document_context) {
+                                std::optional<
+                                    lfs::core::Uuid>
+                                    container_uuid;
+                                std::optional<
+                                    std::uint64_t>
+                                    container_created_at;
+                                if (adopt_container_identity) {
+                                    container_uuid =
+                                        document
+                                            ->project_uuid();
+                                    auto created_at =
+                                        document
+                                            ->project()
+                                            .created_at_unix_ns();
+                                    if (!created_at) {
+                                        return lfs::Status::failure(
+                                            std::move(
+                                                created_at)
+                                                .error()
+                                                .with_context(
+                                                    "read destination container created_at",
+                                                    LFS_SOURCE_SITE_CURRENT()));
+                                    }
+                                    container_created_at =
+                                        *created_at;
+                                }
+                                document->edit_project() =
+                                    document_context
+                                        ->project;
+                                if (adopt_container_identity) {
+                                    if (auto restored =
+                                            document
+                                                ->edit_project()
+                                                .set_project_uuid(
+                                                    *container_uuid);
+                                        !restored) {
+                                        return lfs::Status::failure(
+                                            std::move(
+                                                restored)
+                                                .error()
+                                                .with_context(
+                                                    "restore destination container project uuid",
+                                                    LFS_SOURCE_SITE_CURRENT()));
+                                    }
+                                    if (auto restored =
+                                            document
+                                                ->edit_project()
+                                                .set_created_at_unix_ns(
+                                                    *container_created_at);
+                                        !restored) {
+                                        return lfs::Status::failure(
+                                            std::move(
+                                                restored)
+                                                .error()
+                                                .with_context(
+                                                    "restore destination container created_at",
+                                                    LFS_SOURCE_SITE_CURRENT()));
+                                    }
+                                }
+                                document->edit_references() =
+                                    document_context
+                                        ->references;
+                                document->edit_gui_layout() =
+                                    document_context
+                                        ->gui_layout;
+                                document->edit_view() =
+                                    document_context
+                                        ->view;
+                                document->edit_editor() =
+                                    document_context
+                                        ->editor;
+                                document->edit_sequencer() =
+                                    document_context
+                                        ->sequencer;
+                                document->edit_metrics() =
+                                    document_context
+                                        ->metrics;
+                            }
+                            if (previous) {
+                                document->edit_scene_graph() =
+                                    std::move(
+                                        previous
+                                            ->edit_scene_graph());
+                                document->edit_selection() =
+                                    std::move(
+                                        previous
+                                            ->edit_selection());
+                            } else {
+                                document->edit_scene_graph() =
+                                    std::move(
+                                        chapters
+                                            ->scene_graph);
+                                document->edit_selection() =
+                                    std::move(
+                                        chapters
+                                            ->selection);
+                            }
+                            auto params_status =
                                 document
-                                    ->remove_checkpoint(
-                                        uuid));
-                        }
-                        auto lazy =
-                            lfs::io::project::
-                                LazyChunkValue::from_owned(
+                                    ->edit_parameters()
+                                    .set_snapshot(
+                                        chapters
+                                            ->parameters);
+                            if (!params_status) {
+                                return lfs::Status::failure(
+                                    std::move(
+                                        params_status)
+                                        .error()
+                                        .with_context(
+                                            "stage project parameter snapshot",
+                                            LFS_SOURCE_SITE_CURRENT()));
+                            }
+                            for (const auto& uuid :
+                                 document
+                                     ->checkpoint_uuids()) {
+                                static_cast<void>(
+                                    document
+                                        ->remove_checkpoint(
+                                            uuid));
+                            }
+                            auto lazy =
+                                lfs::io::project::
+                                    LazyChunkValue::from_owned(
+                                        captured
+                                            ->checkpoint_bytes,
+                                        captured
+                                            ->snapshot_uuid);
+                            if (!lazy) {
+                                return lfs::Status::failure(
+                                    std::move(lazy)
+                                        .error()
+                                        .with_context(
+                                            "own captured CKPT bytes",
+                                            LFS_SOURCE_SITE_CURRENT()));
+                            }
+                            auto checkpoint_status =
+                                document->set_checkpoint(
                                     captured
-                                        ->checkpoint_bytes,
-                                    captured
-                                        ->snapshot_uuid);
-                        if (!lazy) {
-                            return std::move(lazy)
-                                .error()
-                                .with_context(
-                                    "own captured CKPT bytes",
-                                    LFS_SOURCE_SITE_CURRENT());
-                        }
-                        auto checkpoint_status =
-                            document->set_checkpoint(
-                                captured
-                                    ->snapshot_uuid,
-                                std::move(*lazy));
-                        if (!checkpoint_status) {
-                            return std::move(
-                                       checkpoint_status)
-                                .error()
-                                .with_context(
-                                    "bind captured CKPT chapter",
-                                    LFS_SOURCE_SITE_CURRENT());
+                                        ->snapshot_uuid,
+                                    std::move(*lazy));
+                            if (!checkpoint_status) {
+                                return lfs::Status::failure(
+                                    std::move(
+                                        checkpoint_status)
+                                        .error()
+                                        .with_context(
+                                            "bind captured CKPT chapter",
+                                            LFS_SOURCE_SITE_CURRENT()));
+                            }
+                            return {};
+                        };
+                        if (auto staged =
+                                stage_snapshot_chapters(
+                                    nullptr);
+                            !staged) {
+                            return std::move(staged)
+                                .error();
                         }
 
                         const auto wallclock_ns =
@@ -4760,6 +4939,47 @@ namespace lfs::training {
                                              save_options);
                         };
                         auto saved = save_snapshot();
+                        if (!saved &&
+                            stale_trainer_default_recovery(
+                                adopt_container_identity,
+                                false,
+                                saved.error().code()) ==
+                                StaleTrainerDefaultRecovery::
+                                    RelocateAndFirstSave) {
+                            if (auto relocated =
+                                    relocate_unreadable_trainer_default_project(
+                                        path,
+                                        saved.error());
+                                !relocated) {
+                                return std::move(saved)
+                                    .error()
+                                    .with_context(
+                                        "append captured training project generation",
+                                        LFS_SOURCE_SITE_CURRENT());
+                            }
+                            source_path.reset();
+                            adopt_container_identity =
+                                false;
+                            save_as = false;
+                            auto previous =
+                                std::move(document);
+                            if (auto created =
+                                    create_fresh_document();
+                                !created) {
+                                return std::move(created)
+                                    .error();
+                            }
+                            if (auto staged =
+                                    stage_snapshot_chapters(
+                                        previous
+                                            ? &*previous
+                                            : nullptr);
+                                !staged) {
+                                return std::move(staged)
+                                    .error();
+                            }
+                            saved = save_snapshot();
+                        }
                         if (!saved) {
                             return std::move(saved)
                                 .error()

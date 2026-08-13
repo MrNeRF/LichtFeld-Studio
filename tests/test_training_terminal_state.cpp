@@ -3,6 +3,7 @@
 
 #include "core/camera.hpp"
 #include "core/event_bridge/control_boundary.hpp"
+#include "core/events.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "training/control/command_api.hpp"
@@ -33,6 +34,7 @@ namespace {
             const auto cameras = scene_.addGroup("Cameras");
             scene_.addCamera("camera.png", cameras, make_command_camera());
             trainer_ = std::make_unique<lfs::training::Trainer>(scene_);
+            lfs::training::CommandCenter::instance().bind_state_events();
         }
 
         void TearDown() override {
@@ -118,6 +120,18 @@ namespace {
         ASSERT_FALSE(result);
         EXPECT_NE(result.error().find("Non-finite"), std::string::npos);
         command_center.clear_snapshot(trainer);
+    }
+
+    TEST_F(TrainingTerminalStateTest, TrainingPausedSeedsSnapshotIterationAndPaused) {
+        auto& command_center = lfs::training::CommandCenter::instance();
+        command_center.clear_snapshot(command_center.snapshot().trainer);
+
+        lfs::core::events::state::TrainingPaused{.iteration = 8200}.emit();
+
+        const auto snapshot = command_center.snapshot();
+        EXPECT_EQ(snapshot.iteration, 8200);
+        EXPECT_TRUE(snapshot.is_paused);
+        EXPECT_FALSE(snapshot.is_running);
     }
 
 } // namespace

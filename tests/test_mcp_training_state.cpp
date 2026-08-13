@@ -4,6 +4,7 @@
 #include "core/camera.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/events.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "mcp/mcp_tools.hpp"
@@ -41,6 +42,7 @@ namespace {
             auto& command_center = lfs::training::CommandCenter::instance();
             command_center.clear_snapshot(command_center.snapshot().trainer);
             command_center.clear_loss_history();
+            command_center.bind_state_events();
             lfs::event::CommandCenterBridge::instance().set(&command_center);
         }
 
@@ -134,6 +136,19 @@ namespace {
         EXPECT_TRUE(result.at("is_refining").get<bool>());
         EXPECT_TRUE(result.at("is_paused").get<bool>());
         EXPECT_TRUE(result.at("is_running").get<bool>());
+    }
+
+    TEST_F(McpTrainingStateTest, TrainingGetStateReflectsTrainingPausedEvent) {
+        lfs::mcp::register_core_tools();
+
+        lfs::core::events::state::TrainingPaused{.iteration = 8200}.emit();
+
+        const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+            "training.get_state", nlohmann::json::object());
+
+        EXPECT_EQ(result.at("iteration"), 8200);
+        EXPECT_TRUE(result.at("is_paused").get<bool>());
+        EXPECT_FALSE(result.at("is_running").get<bool>());
     }
 
 } // namespace

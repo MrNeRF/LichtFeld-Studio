@@ -1261,13 +1261,19 @@ namespace {
         void SetUp() override {
             lfs::event::EventBridge::instance()
                 .clear_all();
-            lfs::training::CommandCenter::instance()
-                .clear_loss_history();
+            auto& command_center =
+                lfs::training::CommandCenter::instance();
+            command_center.clear_snapshot(
+                command_center.snapshot().trainer);
+            command_center.clear_loss_history();
         }
 
         void TearDown() override {
-            lfs::training::CommandCenter::instance()
-                .clear_loss_history();
+            auto& command_center =
+                lfs::training::CommandCenter::instance();
+            command_center.clear_snapshot(
+                command_center.snapshot().trainer);
+            command_center.clear_loss_history();
             lfs::event::EventBridge::instance()
                 .clear_all();
         }
@@ -1437,6 +1443,206 @@ namespace {
                 manager.getElapsedSeconds(),
                 12.0f, 0.001f);
         }
+    }
+
+    TEST_F(P5MetricsRestoreTest,
+           UserStoppedRestoreStaysPausedAndResumableBothOrders) {
+        MetricsChapter metrics;
+        metrics.loss_history = {
+            {.iteration = 20, .value = 0.21f},
+        };
+        metrics.accumulated_training_seconds =
+            7.5;
+        metrics.finish_reason =
+            TrainingFinishReason::UserStopped;
+
+        const auto make_scene = [] {
+            auto scene = std::make_unique<
+                lfs::core::Scene>();
+            const auto cameras =
+                scene->addGroup("Cameras");
+            const auto training_cameras =
+                scene->addCameraGroup(
+                    "Training", cameras, 1);
+            scene->addCamera(
+                "train.png",
+                training_cameras,
+                std::make_shared<
+                    lfs::core::Camera>());
+            return scene;
+        };
+
+        const auto expect_resumable =
+            [](lfs::vis::TrainerManager& manager) {
+                EXPECT_EQ(
+                    manager.getState(),
+                    lfs::vis::TrainingState::Paused);
+                EXPECT_EQ(
+                    manager.getStateMachine()
+                        .getFinishReason(),
+                    lfs::vis::FinishReason::None);
+                EXPECT_TRUE(manager.canResume());
+                EXPECT_TRUE(manager.canPerform(
+                    lfs::vis::TrainingAction::Resume));
+                EXPECT_FALSE(manager.canStart());
+                EXPECT_FALSE(manager.isFinished());
+                EXPECT_NEAR(
+                    manager.getElapsedSeconds(),
+                    7.5f, 0.001f);
+                const auto snapshot =
+                    lfs::training::CommandCenter::
+                        instance()
+                            .snapshot();
+                EXPECT_EQ(snapshot.iteration, 20);
+                EXPECT_TRUE(snapshot.is_paused);
+                EXPECT_FALSE(snapshot.is_running);
+            };
+
+        {
+            bool completed_emitted = false;
+            auto scene = make_scene();
+            lfs::vis::TrainerManager manager;
+            lfs::core::events::state::TrainingCompleted::
+                when([&](const auto&) {
+                    completed_emitted = true;
+                });
+            manager.restoreProjectMetrics(metrics);
+            manager.setTrainerFromCheckpoint(
+                std::make_unique<
+                    lfs::training::Trainer>(
+                    *scene),
+                20);
+            expect_resumable(manager);
+            EXPECT_FALSE(completed_emitted);
+        }
+        {
+            bool completed_emitted = false;
+            auto scene = make_scene();
+            lfs::vis::TrainerManager manager;
+            lfs::core::events::state::TrainingCompleted::
+                when([&](const auto&) {
+                    completed_emitted = true;
+                });
+            manager.setTrainerFromCheckpoint(
+                std::make_unique<
+                    lfs::training::Trainer>(
+                    *scene),
+                20);
+            EXPECT_EQ(
+                manager.getState(),
+                lfs::vis::TrainingState::Paused);
+            manager.restoreProjectMetrics(metrics);
+            expect_resumable(manager);
+            EXPECT_FALSE(completed_emitted);
+        }
+    }
+
+    TEST_F(P5MetricsRestoreTest,
+           ErrorRestoreDisablesResumeBothOrders) {
+        MetricsChapter metrics;
+        metrics.accumulated_training_seconds =
+            3.0;
+        metrics.finish_reason =
+            TrainingFinishReason::Error;
+
+        const auto make_scene = [] {
+            auto scene = std::make_unique<
+                lfs::core::Scene>();
+            const auto cameras =
+                scene->addGroup("Cameras");
+            const auto training_cameras =
+                scene->addCameraGroup(
+                    "Training", cameras, 1);
+            scene->addCamera(
+                "train.png",
+                training_cameras,
+                std::make_shared<
+                    lfs::core::Camera>());
+            return scene;
+        };
+
+        {
+            auto scene = make_scene();
+            lfs::vis::TrainerManager manager;
+            manager.restoreProjectMetrics(metrics);
+            manager.setTrainerFromCheckpoint(
+                std::make_unique<
+                    lfs::training::Trainer>(
+                    *scene),
+                8);
+            EXPECT_EQ(
+                manager.getState(),
+                lfs::vis::TrainingState::Finished);
+            EXPECT_EQ(
+                manager.getStateMachine()
+                    .getFinishReason(),
+                lfs::vis::FinishReason::Error);
+            EXPECT_FALSE(manager.canResume());
+            EXPECT_FALSE(manager.canStart());
+            EXPECT_NEAR(
+                manager.getElapsedSeconds(),
+                3.0f, 0.001f);
+        }
+        {
+            auto scene = make_scene();
+            lfs::vis::TrainerManager manager;
+            manager.setTrainerFromCheckpoint(
+                std::make_unique<
+                    lfs::training::Trainer>(
+                    *scene),
+                8);
+            EXPECT_EQ(
+                manager.getState(),
+                lfs::vis::TrainingState::Paused);
+            manager.restoreProjectMetrics(metrics);
+            EXPECT_EQ(
+                manager.getState(),
+                lfs::vis::TrainingState::Finished);
+            EXPECT_EQ(
+                manager.getStateMachine()
+                    .getFinishReason(),
+                lfs::vis::FinishReason::Error);
+            EXPECT_FALSE(manager.canResume());
+            EXPECT_FALSE(manager.canStart());
+        }
+    }
+
+    TEST_F(P5MetricsRestoreTest,
+           UserStoppedAtTotalRestoresCompleted) {
+        MetricsChapter metrics;
+        metrics.accumulated_training_seconds =
+            4.0;
+        metrics.finish_reason =
+            TrainingFinishReason::UserStopped;
+        lfs::core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        const auto training_cameras =
+            scene.addCameraGroup(
+                "Training", cameras, 1);
+        scene.addCamera(
+            "train.png",
+            training_cameras,
+            std::make_shared<lfs::core::Camera>());
+        auto trainer = std::make_unique<
+            lfs::training::Trainer>(scene);
+        auto params = trainer->getParams();
+        params.optimization.iterations = 10;
+        params.optimization.enable_sparsity =
+            false;
+        trainer->setParams(params);
+        lfs::vis::TrainerManager manager;
+        manager.restoreProjectMetrics(metrics);
+        manager.setTrainerFromCheckpoint(
+            std::move(trainer), 10);
+        EXPECT_EQ(
+            manager.getState(),
+            lfs::vis::TrainingState::Finished);
+        EXPECT_EQ(
+            manager.getStateMachine()
+                .getFinishReason(),
+            lfs::vis::FinishReason::Completed);
+        EXPECT_FALSE(manager.canResume());
+        EXPECT_FALSE(manager.canStart());
     }
 
     TEST_F(P5MetricsRestoreTest,

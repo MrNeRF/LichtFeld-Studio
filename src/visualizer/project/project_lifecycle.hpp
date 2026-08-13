@@ -46,6 +46,10 @@ namespace lfs::vis {
     class VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
     class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
     class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+    class VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
+    class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
+    class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
+    class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
     class VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
     class VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
 } // namespace lfs::vis
@@ -179,6 +183,10 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
         friend class lfs::vis::VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
+        friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
         enum class Hydration {
@@ -267,6 +275,8 @@ namespace lfs::vis::project {
             bool regenerate_preview);
         [[nodiscard]] bool
         isTrainingCheckpointStale() const;
+        [[nodiscard]] bool
+        canFlushFinishedTrainerSnapshot() const;
         void queueProjectWriteSettlement(
             JobHandle handle);
         void settleProjectWrite();
@@ -377,6 +387,10 @@ namespace lfs::vis::project {
             cached_project_info_;
         std::uint64_t
             adopted_training_snapshot_count_ = 0;
+        std::string
+            last_unadoptable_training_snapshot_warning_;
+        std::string
+            last_finished_trainer_info_sync_warning_;
         mutable std::mutex thread_mutex_;
         std::vector<std::jthread> hydration_threads_;
         std::atomic<CloseSaveState>
