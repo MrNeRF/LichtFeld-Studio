@@ -86,6 +86,9 @@ namespace lfs::vis {
         lfs::Result<void>
         projectSaveAs(const std::filesystem::path& path,
                       bool regenerate_preview = true) override;
+        lfs::Result<void> projectSaveAsExplicit(
+            const std::filesystem::path& path,
+            bool regenerate_preview = true);
         lfs::Result<ProjectOpenOutcome>
         projectOpen(
             const std::filesystem::path& path,
@@ -210,6 +213,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_SaveAsAndExitClearsSelectionDirtyBaseline_Test;
         friend class VisualizerImplResetTest_SaveAsAndExitClearsParameterDirtyBaseline_Test;
         friend class VisualizerImplResetTest_DialogSaveAsReplacesExistingFirstSave_Test;
+        friend class VisualizerImplResetTest_McpExplicitSaveAsReplacesExistingFirstSave_Test;
+        friend class VisualizerImplResetTest_McpImplicitSaveAsReportsTypedFailure_Test;
         friend class VisualizerImplResetTest_CancelExitAndNextWindowAttemptRecoverFromFailedCloseSave_Test;
         friend class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
         friend class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;

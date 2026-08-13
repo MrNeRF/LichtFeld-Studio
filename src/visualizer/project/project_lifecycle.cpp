@@ -1469,6 +1469,8 @@ namespace lfs::vis::project {
                         0.0F,
                     .project_write_error =
                         {},
+                    .project_write_error_code =
+                        std::nullopt,
                     .autosave_sequence =
                         autosave_sequence_,
                     .recovery_session =
@@ -1520,6 +1522,7 @@ namespace lfs::vis::project {
                       ->dirtySerial()
                 : 0;
         last_project_write_error_.clear();
+        last_project_write_error_code_.reset();
         std::vector<std::byte> owned_preview(
             options.preview_png.begin(),
             options.preview_png.end());
@@ -1577,7 +1580,9 @@ namespace lfs::vis::project {
                                                      destination,
                                                      options));
                         std::string error;
+                        std::optional<lfs::ErrorCode> error_code;
                         if (!saved) {
+                            error_code = saved.error().code();
                             error =
                                 developerError(
                                     saved.error());
@@ -1589,7 +1594,8 @@ namespace lfs::vis::project {
                         registry.finishWork(
                             handle,
                             stop.stop_requested(),
-                            std::move(error));
+                            std::move(error),
+                            error_code);
                         queueProjectWriteSettlement(
                             handle);
                     });
@@ -1656,6 +1662,7 @@ namespace lfs::vis::project {
                       ->dirtySerial()
                 : 0;
         last_project_write_error_.clear();
+        last_project_write_error_code_.reset();
         try {
             project_write_thread_ =
                 std::jthread(
@@ -2012,6 +2019,7 @@ namespace lfs::vis::project {
         project_write_automatic_ =
             automatic;
         last_project_write_error_.clear();
+        last_project_write_error_code_.reset();
         try {
             project_write_thread_ =
                 std::jthread(
@@ -2067,6 +2075,11 @@ namespace lfs::vis::project {
                                                         "Building and verifying compact project");
                                                 },
                                         });
+                        const auto compact_error_code =
+                            compacted
+                                ? std::optional<lfs::ErrorCode>{}
+                                : std::optional{
+                                      compacted.error().code()};
                         jobs.finishWork(
                             handle,
                             stop.stop_requested(),
@@ -2074,7 +2087,8 @@ namespace lfs::vis::project {
                                 ? std::string{}
                                 : developerError(
                                       compacted
-                                          .error()));
+                                          .error()),
+                            compact_error_code);
                         queueProjectWriteSettlement(
                             handle);
                     });
@@ -2133,8 +2147,11 @@ namespace lfs::vis::project {
         }
 
         std::string error = snapshot->error;
+        last_project_write_error_code_ = snapshot->error_code;
         if (snapshot->worker_canceled &&
             error.empty()) {
+            last_project_write_error_code_ =
+                lfs::ErrorCode::Cancelled;
             error =
                 "The project write was canceled.";
         }
@@ -2155,6 +2172,8 @@ namespace lfs::vis::project {
                 if (auto adopted =
                         adoptCompletedTrainingSnapshot();
                     !adopted) {
+                    last_project_write_error_code_ =
+                        adopted.error().code();
                     error =
                         developerError(
                             adopted.error());
@@ -2235,6 +2254,8 @@ namespace lfs::vis::project {
                             true,
                     });
             if (!reopened) {
+                last_project_write_error_code_ =
+                    reopened.error().code();
                 error = developerError(
                     reopened.error());
             } else {
@@ -3553,6 +3574,8 @@ namespace lfs::vis::project {
                 return lfs::Status::failure(
                     std::move(context).error());
             }
+            context->allow_existing_destination_replacement =
+                allow_existing_destination_replacement;
             std::vector<std::byte> preview;
             if (regenerate_preview) {
                 auto captured =
@@ -4977,6 +5000,9 @@ namespace lfs::vis::project {
             result.project_write_error =
                 job ? job->error
                     : std::string{};
+            result.project_write_error_code =
+                job ? job->error_code
+                    : std::nullopt;
             result.autosave_sequence =
                 autosave_sequence_;
             result.recovery_session =
@@ -5075,6 +5101,8 @@ namespace lfs::vis::project {
             .project_write_progress = 0.0F,
             .project_write_error =
                 last_project_write_error_,
+            .project_write_error_code =
+                last_project_write_error_code_,
             .autosave_sequence =
                 autosave_sequence_,
             .recovery_session =

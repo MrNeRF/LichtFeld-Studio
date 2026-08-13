@@ -2936,6 +2936,21 @@ namespace lfs::vis {
     }
 
     lfs::Result<void>
+    VisualizerImpl::projectSaveAsExplicit(
+        const std::filesystem::path& path,
+        const bool regenerate_preview) {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->saveAs(
+            path, regenerate_preview, true);
+    }
+
+    lfs::Result<void>
     VisualizerImpl::projectSaveAsFromDialog(
         const std::filesystem::path& path,
         const bool regenerate_preview) {

@@ -185,6 +185,11 @@ namespace lfs::app {
                      : json(
                            info
                                .project_write_error)},
+                {"project_write_error_code",
+                 info.project_write_error_code
+                     ? json(lfs::to_string(
+                           *info.project_write_error_code))
+                     : json(nullptr)},
                 {"autosave_sequence",
                  info.autosave_sequence},
                 {"recovery_session",
@@ -277,6 +282,22 @@ namespace lfs::app {
                 }
                 last_generation =
                     latest->generation;
+                if (!latest->project_write_running &&
+                    !latest->project_write_error.empty()) {
+                    return lfs::make_error(
+                        lfs::ErrorInit{
+                            .code = latest->project_write_error_code.value_or(
+                                lfs::ErrorCode::Unavailable),
+                            .domain = lfs::ErrorDomain::MCP,
+                            .severity = lfs::Severity::Error,
+                            .retryability = lfs::Retryability::NotRetryable,
+                            .operation_id = {},
+                            .user_message = "The project save failed.",
+                            .detail = latest->project_write_error,
+                            .detection = LFS_SOURCE_SITE_CURRENT(),
+                            .fields = {},
+                            .native = std::nullopt});
+                }
                 if (latest->path &&
                     latest->path->lexically_normal() ==
                         expected_path
@@ -352,9 +373,10 @@ namespace lfs::app {
                              .empty()) {
                         return lfs::make_error(
                             lfs::ErrorInit{
-                                .code =
-                                    lfs::ErrorCode::
-                                        Unavailable,
+                                .code = latest
+                                            ->project_write_error_code
+                                            .value_or(
+                                                lfs::ErrorCode::Unavailable),
                                 .domain =
                                     lfs::ErrorDomain::
                                         MCP,
@@ -2287,6 +2309,8 @@ namespace lfs::app {
                     .user_visible = true,
                 }},
             [viewer, viewer_impl](const json& args) -> json {
+                const bool explicit_destination =
+                    !args.at("path").get<std::string>().empty();
                 const auto path =
                     core::utf8_to_path(
                         args.at("path")
@@ -2312,9 +2336,11 @@ namespace lfs::app {
                         path_error.message());
                 }
                 auto result = post_render_and_wait(
-                    viewer_impl, [viewer, path] {
-                        return viewer->projectSaveAs(
-                            path, true);
+                    viewer_impl, [viewer, viewer_impl, path,
+                                  explicit_destination] {
+                        return explicit_destination
+                                   ? viewer_impl->projectSaveAsExplicit(path, true)
+                                   : viewer->projectSaveAs(path, true);
                     });
                 if (!result) {
                     return project_error_json(

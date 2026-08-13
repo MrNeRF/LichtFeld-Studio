@@ -79,6 +79,7 @@ namespace lfs::vis {
         std::string project_write_stage;
         float project_write_progress = 0.0F;
         std::string project_write_error;
+        std::optional<lfs::ErrorCode> project_write_error_code;
         std::uint64_t autosave_sequence = 0;
         bool recovery_session = false;
         bool compaction_suggested = false;

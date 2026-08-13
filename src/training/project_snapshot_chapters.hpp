@@ -51,6 +51,7 @@ namespace lfs::training {
         lfs::io::project::CommitKind
             durable_commit_kind =
                 lfs::io::project::CommitKind::Explicit;
+        bool allow_existing_destination_replacement = false;
         std::optional<
             lfs::io::project::WriterLockLease>
             writer_lock_lease = std::nullopt;

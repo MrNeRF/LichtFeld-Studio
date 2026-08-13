@@ -4571,6 +4571,10 @@ namespace lfs::training {
                                     .file_uuid =
                                         lfs::core::
                                             generate_uuid_v4(),
+                                    .allow_existing_destination_replacement =
+                                        document_context &&
+                                        document_context
+                                            ->allow_existing_destination_replacement,
                                     .preview_png =
                                         std::span<
                                             const std::byte>(
