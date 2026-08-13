@@ -434,6 +434,11 @@ namespace lichtfeld::Strings {
         inline constexpr const char* LANGUAGE = "preferences.language";
         inline constexpr const char* SELECT_LANGUAGE = "preferences.select_language";
         inline constexpr const char* SCENE_UPSCALER = "preferences.scene_upscaler";
+        inline constexpr const char* VIEWER_SPLAT_PRECISION = "preferences.viewer_splat_precision";
+        inline constexpr const char* VIEWER_SPLAT_PRECISION_DESCRIPTION =
+            "preferences.viewer_splat_precision_description";
+        inline constexpr const char* SPLAT_PRECISION_16 = "preferences.splat_precision_16";
+        inline constexpr const char* SPLAT_PRECISION_32 = "preferences.splat_precision_32";
         inline constexpr const char* SCENE_UPSCALER_NATIVE = "preferences.scene_upscaler_native";
         inline constexpr const char* SCENE_UPSCALER_SPATIAL = "preferences.scene_upscaler_spatial";
         inline constexpr const char* SCENE_UPSCALER_TEMPORAL = "preferences.scene_upscaler_temporal";

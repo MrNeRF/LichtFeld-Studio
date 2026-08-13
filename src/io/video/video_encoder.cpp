@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include <cstring>
 #include <cuda_runtime.h>
 #include <format>
 
@@ -110,6 +111,120 @@ namespace lfs::io::video {
                                                          .add("frame", frame_count_));
                 lfs::core::ErrorReporter::get().report(error, lfs::core::ReportChannel::OwnerLog);
                 return std::unexpected(std::string(e.what()));
+            } catch (const std::exception& e) {
+                return std::unexpected(std::string(e.what()));
+            }
+        }
+
+        std::expected<void, std::string> writeFrameGpuRgba8(
+            const void* const rgba_gpu_ptr, const int width, const int height,
+            const cudaStream_t stream) {
+            if (!is_open_ || !rgba_gpu_ptr || width != width_ || height != height_)
+                return std::unexpected("Invalid RGBA8 GPU video frame");
+            try {
+                if (use_nvenc_) {
+                    rgba8ToNv12Cuda(static_cast<const uint8_t*>(rgba_gpu_ptr),
+                                    frame_->data[0], frame_->data[1], width_, height_,
+                                    frame_->linesize[0], frame_->linesize[1], stream);
+                } else {
+                    rgba8ToYuv420pCuda(static_cast<const uint8_t*>(rgba_gpu_ptr),
+                                       y_gpu_, u_gpu_, v_gpu_, width_, height_, stream);
+                    if (auto result = checkCuda(cudaMemcpyAsync(
+                                                    y_pinned_, y_gpu_, y_plane_bytes_, cudaMemcpyDeviceToHost, stream),
+                                                "Video Y-plane copy");
+                        !result)
+                        return result;
+                    if (auto result = checkCuda(cudaMemcpyAsync(
+                                                    u_pinned_, u_gpu_, uv_plane_bytes_, cudaMemcpyDeviceToHost, stream),
+                                                "Video U-plane copy");
+                        !result)
+                        return result;
+                    if (auto result = checkCuda(cudaMemcpyAsync(
+                                                    v_pinned_, v_gpu_, uv_plane_bytes_, cudaMemcpyDeviceToHost, stream),
+                                                "Video V-plane copy");
+                        !result)
+                        return result;
+                }
+                if (auto result = checkCuda(cudaGetLastError(), "RGBA8 video conversion"); !result)
+                    return result;
+                const auto sync_status = stream ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
+                if (auto result = checkCuda(sync_status, "RGBA8 video synchronization"); !result)
+                    return result;
+                if (!use_nvenc_) {
+                    const int half_width = width_ / 2;
+                    const int half_height = height_ / 2;
+                    for (int row = 0; row < height_; ++row)
+                        std::memcpy(frame_->data[0] + row * frame_->linesize[0],
+                                    static_cast<uint8_t*>(y_pinned_) + row * width_, width_);
+                    for (int row = 0; row < half_height; ++row) {
+                        std::memcpy(frame_->data[1] + row * frame_->linesize[1],
+                                    static_cast<uint8_t*>(u_pinned_) + row * half_width, half_width);
+                        std::memcpy(frame_->data[2] + row * frame_->linesize[2],
+                                    static_cast<uint8_t*>(v_pinned_) + row * half_width, half_width);
+                    }
+                }
+                frame_->pts = frame_count_;
+                if (auto result = encodeFrame(frame_); !result)
+                    return result;
+                ++frame_count_;
+                return {};
+            } catch (const std::exception& e) {
+                return std::unexpected(std::string(e.what()));
+            }
+        }
+
+        std::expected<void, std::string> writeFrameGpuRgba16f(
+            const void* const rgba_gpu_ptr, const int width, const int height,
+            const cudaStream_t stream) {
+            if (!is_open_ || !rgba_gpu_ptr || width != width_ || height != height_)
+                return std::unexpected("Invalid RGBA16F GPU video frame");
+            try {
+                if (use_nvenc_) {
+                    rgba16fToNv12Cuda(rgba_gpu_ptr, frame_->data[0], frame_->data[1],
+                                      width_, height_, frame_->linesize[0],
+                                      frame_->linesize[1], stream);
+                } else {
+                    rgba16fToYuv420pCuda(rgba_gpu_ptr, y_gpu_, u_gpu_, v_gpu_,
+                                         width_, height_, stream);
+                    if (auto result = checkCuda(cudaMemcpyAsync(
+                                                    y_pinned_, y_gpu_, y_plane_bytes_, cudaMemcpyDeviceToHost, stream),
+                                                "Video Y-plane copy");
+                        !result)
+                        return result;
+                    if (auto result = checkCuda(cudaMemcpyAsync(
+                                                    u_pinned_, u_gpu_, uv_plane_bytes_, cudaMemcpyDeviceToHost, stream),
+                                                "Video U-plane copy");
+                        !result)
+                        return result;
+                    if (auto result = checkCuda(cudaMemcpyAsync(
+                                                    v_pinned_, v_gpu_, uv_plane_bytes_, cudaMemcpyDeviceToHost, stream),
+                                                "Video V-plane copy");
+                        !result)
+                        return result;
+                }
+                if (auto result = checkCuda(cudaGetLastError(), "RGBA16F video conversion"); !result)
+                    return result;
+                const auto sync_status = stream ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
+                if (auto result = checkCuda(sync_status, "RGBA16F video synchronization"); !result)
+                    return result;
+                if (!use_nvenc_) {
+                    const int half_width = width_ / 2;
+                    const int half_height = height_ / 2;
+                    for (int row = 0; row < height_; ++row)
+                        std::memcpy(frame_->data[0] + row * frame_->linesize[0],
+                                    static_cast<uint8_t*>(y_pinned_) + row * width_, width_);
+                    for (int row = 0; row < half_height; ++row) {
+                        std::memcpy(frame_->data[1] + row * frame_->linesize[1],
+                                    static_cast<uint8_t*>(u_pinned_) + row * half_width, half_width);
+                        std::memcpy(frame_->data[2] + row * frame_->linesize[2],
+                                    static_cast<uint8_t*>(v_pinned_) + row * half_width, half_width);
+                    }
+                }
+                frame_->pts = frame_count_;
+                if (auto result = encodeFrame(frame_); !result)
+                    return result;
+                ++frame_count_;
+                return {};
             } catch (const std::exception& e) {
                 return std::unexpected(std::string(e.what()));
             }
@@ -611,6 +726,18 @@ namespace lfs::io::video {
     std::expected<void, std::string> VideoEncoder::writeFrameGpu(
         const void* const rgb_gpu_ptr, const int width, const int height, void* const stream) {
         return impl_->writeFrameGpu(rgb_gpu_ptr, width, height, static_cast<cudaStream_t>(stream));
+    }
+
+    std::expected<void, std::string> VideoEncoder::writeFrameGpuRgba8(
+        const void* const rgba_gpu_ptr, const int width, const int height, void* const stream) {
+        return impl_->writeFrameGpuRgba8(
+            rgba_gpu_ptr, width, height, static_cast<cudaStream_t>(stream));
+    }
+
+    std::expected<void, std::string> VideoEncoder::writeFrameGpuRgba16f(
+        const void* const rgba_gpu_ptr, const int width, const int height, void* const stream) {
+        return impl_->writeFrameGpuRgba16f(
+            rgba_gpu_ptr, width, height, static_cast<cudaStream_t>(stream));
     }
 
     std::expected<void, std::string> VideoEncoder::close() {

@@ -27,8 +27,9 @@ namespace lfs::vis {
             glm::mat4 inverse_current_view_projection{1.0f};
             glm::mat4 previous_view_projection{1.0f};
             glm::ivec4 render_info{0};
+            glm::vec4 depth_info{0.0f};
         };
-        static_assert(sizeof(MotionUniform) == 144);
+        static_assert(sizeof(MotionUniform) == 160);
     } // namespace
 
     struct VulkanSceneMotionPass::Impl {
@@ -36,6 +37,9 @@ namespace lfs::vis {
             VkImage image = VK_NULL_HANDLE;
             VmaAllocation image_allocation = VK_NULL_HANDLE;
             VkImageView image_view = VK_NULL_HANDLE;
+            VkImage ndc_depth_image = VK_NULL_HANDLE;
+            VmaAllocation ndc_depth_allocation = VK_NULL_HANDLE;
+            VkImageView ndc_depth_view = VK_NULL_HANDLE;
             VkBuffer uniform_buffer = VK_NULL_HANDLE;
             VmaAllocation uniform_allocation = VK_NULL_HANDLE;
             glm::ivec2 extent{0, 0};
@@ -79,6 +83,12 @@ namespace lfs::vis {
                 LOG_ERROR("Scene-motion RG16F storage images are unsupported on this device");
                 return false;
             }
+            vkGetPhysicalDeviceFormatProperties(
+                ctx.physicalDevice(), VK_FORMAT_R32_SFLOAT, &format_properties);
+            if ((format_properties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) == 0) {
+                LOG_ERROR("Scene-motion R32F depth storage images are unsupported on this device");
+                return false;
+            }
             return true;
         }
 
@@ -93,6 +103,13 @@ namespace lfs::vis {
             }
             if (frame.image != VK_NULL_HANDLE) {
                 vmaDestroyImage(allocator, frame.image, frame.image_allocation);
+            }
+            if (frame.ndc_depth_view != VK_NULL_HANDLE) {
+                vkDestroyImageView(device, frame.ndc_depth_view, nullptr);
+            }
+            if (frame.ndc_depth_image != VK_NULL_HANDLE) {
+                vmaDestroyImage(allocator, frame.ndc_depth_image,
+                                frame.ndc_depth_allocation);
             }
             if (frame.uniform_buffer != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator, frame.uniform_buffer, frame.uniform_allocation);
@@ -150,12 +167,14 @@ namespace lfs::vis {
             context->setDebugObjectName(
                 VK_OBJECT_TYPE_SAMPLER, depth_sampler, "scene_motion.depth.sampler");
 
-            std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
             bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                            VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
             bindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
                            VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
             bindings[2] = {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
+                           VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+            bindings[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
                            VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
             VkDescriptorSetLayoutCreateInfo descriptor_info{};
             descriptor_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -297,6 +316,27 @@ namespace lfs::vis {
                     "Scene-motion image view creation failed")) {
                 return false;
             }
+            image_info.format = VK_FORMAT_R32_SFLOAT;
+            VmaAllocationInfo depth_result_info{};
+            if (!vk_try_bool(
+                    vmaCreateImage(allocator,
+                                   &image_info,
+                                   &allocation_info,
+                                   &frame.ndc_depth_image,
+                                   &frame.ndc_depth_allocation,
+                                   &depth_result_info),
+                    "vmaCreateImage(scene_motion.ndc_depth)",
+                    "Scene-motion NDC depth image allocation failed")) {
+                return false;
+            }
+            view_info.image = frame.ndc_depth_image;
+            view_info.format = VK_FORMAT_R32_SFLOAT;
+            if (!vk_try_bool(
+                    vkCreateImageView(device, &view_info, nullptr, &frame.ndc_depth_view),
+                    "vkCreateImageView(scene_motion.ndc_depth)",
+                    "Scene-motion NDC depth image view creation failed")) {
+                return false;
+            }
             frame.extent = extent;
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
                                          frame.image,
@@ -308,11 +348,21 @@ namespace lfs::vis {
                                          frame.image_view,
                                          "scene_motion.image[{}].view",
                                          frame_slot);
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
+                                         frame.ndc_depth_image,
+                                         "scene_motion.ndc_depth[{}][{}x{}]",
+                                         frame_slot,
+                                         extent.x,
+                                         extent.y);
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                         frame.ndc_depth_view,
+                                         "scene_motion.ndc_depth[{}].view",
+                                         frame_slot);
             frame.vram_label = std::format("rg16f:{}:{}x{}", frame_slot, extent.x, extent.y);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.scene_motion.image",
                 frame.vram_label,
-                static_cast<std::size_t>(result_info.size));
+                static_cast<std::size_t>(result_info.size + depth_result_info.size));
             return true;
         }
 
@@ -322,10 +372,12 @@ namespace lfs::vis {
                 frames.resize(frame_slot + 1);
             }
             auto& frame = frames[frame_slot];
-            if (frame.image != VK_NULL_HANDLE && frame.extent == extent) {
+            if (frame.image != VK_NULL_HANDLE && frame.ndc_depth_image != VK_NULL_HANDLE &&
+                frame.extent == extent) {
                 return true;
             }
-            if (frame.image != VK_NULL_HANDLE && !context->waitForSubmittedFrames()) {
+            if ((frame.image != VK_NULL_HANDLE || frame.ndc_depth_image != VK_NULL_HANDLE) &&
+                !context->waitForSubmittedFrames()) {
                 LOG_ERROR("VulkanSceneMotionPass: could not retire frames before resize: {}",
                           context->lastError());
                 return false;
@@ -343,6 +395,10 @@ namespace lfs::vis {
                                 params.render_extent.y,
                                 params.flip_y ? 1 : 0,
                                 0},
+                .depth_info = {params.depth_is_ndc ? 1.0f : 0.0f,
+                               params.camera_near,
+                               params.camera_far,
+                               0.0f},
             };
             void* mapped = nullptr;
             if (!vk_try_bool(vmaMapMemory(allocator, frame.uniform_allocation, &mapped),
@@ -375,7 +431,8 @@ namespace lfs::vis {
                 .flip_y = params.flip_y,
             };
             if (command_buffer == VK_NULL_HANDLE || params.depth_view == VK_NULL_HANDLE ||
-                !reprojection.valid()) {
+                !reprojection.valid() || !(params.camera_near > 0.0f) ||
+                !(params.camera_far > params.camera_near)) {
                 return false;
             }
             if (!createStaticResources() || !ensureFrame(frame_slot, params.render_extent)) {
@@ -415,6 +472,23 @@ namespace lfs::vis {
                                  : VK_ACCESS_2_NONE,
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            cmdImageBarrier2(command_buffer,
+                             frame.ndc_depth_image,
+                             VK_IMAGE_ASPECT_COLOR_BIT,
+                             frame.image_initialized ? VK_IMAGE_LAYOUT_GENERAL
+                                                     : VK_IMAGE_LAYOUT_UNDEFINED,
+                             VK_IMAGE_LAYOUT_GENERAL,
+                             frame.image_initialized
+                                 ? (VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT)
+                                 : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                             frame.image_initialized
+                                 ? (VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
+                                 : VK_ACCESS_2_NONE,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
             VkDescriptorImageInfo depth_info{};
             depth_info.sampler = depth_sampler;
@@ -426,7 +500,10 @@ namespace lfs::vis {
             VkDescriptorBufferInfo uniform_info{};
             uniform_info.buffer = frame.uniform_buffer;
             uniform_info.range = sizeof(MotionUniform);
-            std::array<VkWriteDescriptorSet, 3> writes{};
+            VkDescriptorImageInfo ndc_depth_info{};
+            ndc_depth_info.imageView = frame.ndc_depth_view;
+            ndc_depth_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            std::array<VkWriteDescriptorSet, 4> writes{};
             writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[0].dstBinding = 0;
             writes[0].descriptorCount = 1;
@@ -442,6 +519,11 @@ namespace lfs::vis {
             writes[2].descriptorCount = 1;
             writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             writes[2].pBufferInfo = &uniform_info;
+            writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[3].dstBinding = 3;
+            writes[3].descriptorCount = 1;
+            writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[3].pImageInfo = &ndc_depth_info;
 
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             context->vkCmdPushDescriptorSet()(command_buffer,
@@ -453,6 +535,17 @@ namespace lfs::vis {
             vkCmdDispatch(command_buffer, group_x, group_y, 1);
             cmdImageBarrier2(command_buffer,
                              frame.image,
+                             VK_IMAGE_ASPECT_COLOR_BIT,
+                             VK_IMAGE_LAYOUT_GENERAL,
+                             VK_IMAGE_LAYOUT_GENERAL,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+                                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+            cmdImageBarrier2(command_buffer,
+                             frame.ndc_depth_image,
                              VK_IMAGE_ASPECT_COLOR_BIT,
                              VK_IMAGE_LAYOUT_GENERAL,
                              VK_IMAGE_LAYOUT_GENERAL,
@@ -510,6 +603,18 @@ namespace lfs::vis {
     VkImage VulkanSceneMotionPass::motionImage(const std::size_t frame_slot) const {
         return impl_ && frame_slot < impl_->frames.size() ? impl_->frames[frame_slot].image
                                                           : VK_NULL_HANDLE;
+    }
+
+    VkImageView VulkanSceneMotionPass::ndcDepthView(const std::size_t frame_slot) const {
+        return impl_ && frame_slot < impl_->frames.size()
+                   ? impl_->frames[frame_slot].ndc_depth_view
+                   : VK_NULL_HANDLE;
+    }
+
+    VkImage VulkanSceneMotionPass::ndcDepthImage(const std::size_t frame_slot) const {
+        return impl_ && frame_slot < impl_->frames.size()
+                   ? impl_->frames[frame_slot].ndc_depth_image
+                   : VK_NULL_HANDLE;
     }
 
     SceneMotionContract VulkanSceneMotionPass::contract(const std::size_t frame_slot) const {

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -232,6 +233,12 @@ namespace lfs::vis {
     // LOD splat-budget multiplier.
     LFS_VIS_API void saveSceneRenderScalePreference(float scale);
     [[nodiscard]] LFS_VIS_API float loadSceneRenderScalePreference();
+    enum class ViewerSplatPrecision : uint8_t {
+        Float16 = 16,
+        Float32 = 32,
+    };
+    LFS_VIS_API void saveViewerSplatPrecisionPreference(ViewerSplatPrecision precision);
+    [[nodiscard]] LFS_VIS_API ViewerSplatPrecision loadViewerSplatPrecisionPreference();
     LFS_VIS_API void saveSceneUpscalerScalePreference(const std::string& backend_id, float scale);
     [[nodiscard]] LFS_VIS_API float loadSceneUpscalerScalePreference(
         const std::string& backend_id);

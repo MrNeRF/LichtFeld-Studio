@@ -55,6 +55,14 @@
         </div>
         <div class="section-content" data-if="scene_rendering_expanded">
           <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.viewer_splat_precision</span>
+            <select class="preferences-select" data-value="viewer_splat_precision_idx">
+              <option value="0">@tr:preferences.splat_precision_16</option>
+              <option value="1">@tr:preferences.splat_precision_32</option>
+            </select>
+          </div>
+          <span class="preferences-description">@tr:preferences.viewer_splat_precision_description</span>
+          <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.scene_upscaler</span>
             <select class="preferences-select" data-value="scene_upscaler_idx">
               <option data-for="upscaler : scene_upscalers" data-attr-value="upscaler.index">{{ upscaler.label }}</option>

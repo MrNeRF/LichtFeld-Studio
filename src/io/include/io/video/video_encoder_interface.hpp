@@ -21,6 +21,10 @@ namespace lfs::io::video {
 
         [[nodiscard]] virtual std::expected<void, std::string> writeFrameGpu(
             const void* rgba_gpu_ptr, int width, int height, void* cuda_stream = nullptr) = 0;
+        [[nodiscard]] virtual std::expected<void, std::string> writeFrameGpuRgba8(
+            const void* rgba_gpu_ptr, int width, int height, void* cuda_stream = nullptr) = 0;
+        [[nodiscard]] virtual std::expected<void, std::string> writeFrameGpuRgba16f(
+            const void* rgba_gpu_ptr, int width, int height, void* cuda_stream = nullptr) = 0;
 
         [[nodiscard]] virtual std::expected<void, std::string> close() = 0;
     };

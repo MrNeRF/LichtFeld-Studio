@@ -214,7 +214,8 @@ namespace lfs::vis {
             info.arrayLayers = 1;
             info.samples = VK_SAMPLE_COUNT_1_BIT;
             info.tiling = VK_IMAGE_TILING_OPTIMAL;
-            info.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            info.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
             info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VmaAllocationCreateInfo allocation_info{};
             allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -434,6 +435,13 @@ namespace lfs::vis {
             return VK_NULL_HANDLE;
         const auto& resource = impl_->views.at(viewIndex(view));
         return resource.has_history ? resource.images[resource.read_index].view : VK_NULL_HANDLE;
+    }
+
+    VkImage VulkanSceneTemporalResolvePass::outputImage(const TemporalViewId view) const {
+        if (!impl_)
+            return VK_NULL_HANDLE;
+        const auto& resource = impl_->views.at(viewIndex(view));
+        return resource.has_history ? resource.images[resource.read_index].image : VK_NULL_HANDLE;
     }
 
     SceneHistoryContract VulkanSceneTemporalResolvePass::contract(const TemporalViewId view) const {

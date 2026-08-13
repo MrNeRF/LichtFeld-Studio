@@ -151,12 +151,21 @@ namespace lfs::vis {
                 parameters.dilatedDepth = sharedResource(state, 0);
                 parameters.dilatedMotionVectors = sharedResource(state, 1);
                 parameters.reconstructedPrevNearestDepth = sharedResource(state, 2);
-                parameters.jitterOffset = {dispatch.jitter_pixels.x, dispatch.jitter_pixels.y};
+                // Report the exact cx/cy shift applied by LFS. With jittered
+                // motion vectors FSR derives and removes the frame-to-frame
+                // delta from these offsets internally.
+                const glm::vec2 dispatch_jitter =
+                    amdFsr3DispatchJitterOffset(dispatch.jitter_pixels);
+                parameters.jitterOffset = {dispatch_jitter.x, dispatch_jitter.y};
                 parameters.motionVectorScale = {1.0f, 1.0f};
                 parameters.renderSize = dimensions(dispatch.color.valid_extent);
                 parameters.upscaleSize = dimensions(dispatch.output_extent);
-                parameters.enableSharpening = false;
-                parameters.sharpness = 0.0f;
+                parameters.enableSharpening = true;
+                parameters.sharpness = dispatch.quality == SceneTemporalQuality::Performance
+                                           ? 0.3f
+                                       : dispatch.quality == SceneTemporalQuality::Quality
+                                           ? 0.1f
+                                           : 0.2f;
                 parameters.frameTimeDelta = dispatch.frame_time_seconds * 1000.0f;
                 parameters.preExposure = dispatch.exposure;
                 parameters.reset = state.reset_pending || dispatch.reset_reasons != TemporalResetReason::None;

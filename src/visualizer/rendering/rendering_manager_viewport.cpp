@@ -528,6 +528,48 @@ namespace lfs::vis {
         return result;
     }
 
+    std::optional<RenderingManager::PreviewVulkanFrame> RenderingManager::previewVulkanFrame() const {
+        return preview_vulkan_frame_;
+    }
+
+    bool RenderingManager::renderPreviewVulkanFrame(
+        const lfs::core::SplatData& model,
+        SceneRenderState scene_state,
+        const glm::mat3& camera_rotation,
+        const glm::vec3& camera_position,
+        const float focal_length_mm,
+        const int width,
+        const int height,
+        PreviewVulkanFrame& output,
+        std::string& error,
+        std::optional<lfs::rendering::CameraIntrinsics> intrinsics_override) {
+        if (width <= 0 || height <= 0) {
+            error = "Video-upscaler preview dimensions must be positive";
+            return false;
+        }
+        if (previewRenderNeedsTiling(width, height)) {
+            error = "Video upscalers do not support tiled preview rendering";
+            return false;
+        }
+
+        auto rendered = renderPreviewImageToPreviewSlotWithState(
+            nullptr, model, std::move(scene_state), camera_rotation, camera_position,
+            focal_length_mm, width, height, false, intrinsics_override, {}, {},
+            std::nullopt, std::nullopt, std::nullopt, false);
+        if (!rendered) {
+            error = rendered.error();
+            return false;
+        }
+        const auto frame = previewVulkanFrame();
+        if (!frame || !frame->valid()) {
+            error = "Video upscaler preview Vulkan resources are unavailable";
+            return false;
+        }
+        output = *frame;
+        error.clear();
+        return true;
+    }
+
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgb8(SceneManager* const scene_manager,
                                                                                 const glm::mat3& rotation,
                                                                                 const glm::vec3& position,
@@ -774,6 +816,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::releasePreviewImageResources() {
+        preview_vulkan_frame_.reset();
         if (vksplat_viewport_renderer_) {
             vksplat_viewport_renderer_->releasePreviewResources();
         }
@@ -1012,8 +1055,22 @@ namespace lfs::vis {
             VksplatViewportRenderer::OutputSlot::Preview,
             false);
         if (!render_result) {
+            preview_vulkan_frame_.reset();
             return std::unexpected(render_result.error());
         }
+        preview_vulkan_frame_ = PreviewVulkanFrame{
+            .color_image = render_result->image,
+            .color_view = render_result->image_view,
+            .color_layout = render_result->image_layout,
+            .depth_image = render_result->depth_image,
+            .depth_view = render_result->depth_image_view,
+            .depth_layout = render_result->depth_image_layout,
+            .extent = render_result->size,
+            .allocation_extent = render_result->alloc_size,
+            .generation = render_result->generation,
+            .completion_semaphore = render_result->completion_semaphore,
+            .completion_value = render_result->completion_value,
+        };
         return {};
     }
 

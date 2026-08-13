@@ -8,11 +8,20 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D u_depth;
 layout(set = 0, binding = 1, rg16f) uniform writeonly image2D u_motion;
+layout(set = 0, binding = 3, r32f) uniform writeonly image2D u_ndc_depth;
 layout(set = 0, binding = 2, std140) uniform ReprojectionParams {
     mat4 inverse_current_view_projection;
     mat4 previous_view_projection;
     ivec4 render_info; // xy = extent, z = flip_y
+    vec4 depth_info;   // x = source is NDC, y = near, z = far
 } params;
+
+float view_depth_to_ndc(float view_depth) {
+    float near_plane = params.depth_info.y;
+    float far_plane = params.depth_info.z;
+    return far_plane / (far_plane - near_plane) *
+           (1.0 - near_plane / max(view_depth, near_plane));
+}
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -20,8 +29,18 @@ void main() {
         return;
     }
 
-    float depth = texelFetch(u_depth, pixel, 0).r;
-    if (isnan(depth) || isinf(depth) || depth < 0.0 || depth >= 1.0) {
+    float source_depth = texelFetch(u_depth, pixel, 0).r;
+    float depth = source_depth;
+    bool valid_depth = !isnan(source_depth) && !isinf(source_depth);
+    if (params.depth_info.x < 0.5) {
+        valid_depth = valid_depth && source_depth > 0.0 && source_depth < 1.0e9;
+        depth = valid_depth ? view_depth_to_ndc(source_depth) : 1.0;
+    } else {
+        valid_depth = valid_depth && source_depth >= 0.0 && source_depth < 1.0;
+        depth = valid_depth ? source_depth : 1.0;
+    }
+    imageStore(u_ndc_depth, pixel, vec4(clamp(depth, 0.0, 1.0), 0.0, 0.0, 0.0));
+    if (!valid_depth) {
         imageStore(u_motion, pixel, vec4(0.0));
         return;
     }

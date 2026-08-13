@@ -2343,6 +2343,9 @@ namespace lfs::vis {
                                                         ? temporalState(TemporalViewId::Main).previous_view_projection
                                                         : params.mesh_view_projection,
                         .render_extent = params.scene_image_size,
+                        .depth_is_ndc = params.depth_blit.depth_is_ndc,
+                        .camera_near = params.scene_camera_near,
+                        .camera_far = params.scene_camera_far,
                         .includes_jitter = requirements.jitter,
                         .flip_y = params.scene_image_flip_y,
                     };
@@ -2364,6 +2367,9 @@ namespace lfs::vis {
                                                                 ? state.previous_view_projection
                                                                 : mesh_panel.view_projection,
                                 .render_extent = panel.image_size,
+                                .depth_is_ndc = false,
+                                .camera_near = mesh_panel.camera_near,
+                                .camera_far = mesh_panel.camera_far,
                                 .includes_jitter = requirements.jitter,
                                 .flip_y = panel.flip_y,
                             };
@@ -2484,6 +2490,9 @@ namespace lfs::vis {
                                                         ? main_temporal.previous_view_projection
                                                         : params.mesh_view_projection,
                         .render_extent = temporal_render_extent,
+                        .depth_is_ndc = params.depth_blit.depth_is_ndc,
+                        .camera_near = params.scene_camera_near,
+                        .camera_far = params.scene_camera_far,
                         .includes_jitter = params.scene_upscaler == SceneUpscalerBackend::Temporal,
                         .flip_y = params.scene_image_flip_y,
                     };
@@ -2540,6 +2549,9 @@ namespace lfs::vis {
                                                         ? state.previous_view_projection
                                                         : mesh_panel.view_projection,
                         .render_extent = panel.image_size,
+                        .depth_is_ndc = false,
+                        .camera_near = mesh_panel.camera_near,
+                        .camera_far = mesh_panel.camera_far,
                         .includes_jitter = true,
                         .flip_y = panel.flip_y,
                     };
@@ -2681,6 +2693,7 @@ namespace lfs::vis {
                                   0.1f);
                     previous_dispatch = now;
                     VulkanSceneUpscalerResource motion_resource{};
+                    VulkanSceneUpscalerResource effective_depth = depth;
                     if (requirements.motion_vectors) {
                         if (!scene_motion_pass.record(command_buffer, motion_params, motion_slot))
                             return false;
@@ -2692,6 +2705,14 @@ namespace lfs::vis {
                                                         {contract.width, contract.height},
                                                         {contract.width, contract.height},
                                                         color.generation);
+                        effective_depth = make_resource(
+                            scene_motion_pass.ndcDepthImage(motion_slot),
+                            scene_motion_pass.ndcDepthView(motion_slot),
+                            VK_FORMAT_R32_SFLOAT,
+                            VK_IMAGE_LAYOUT_GENERAL,
+                            {contract.width, contract.height},
+                            {contract.width, contract.height},
+                            depth.generation);
                     }
                     auto& state = temporalState(view);
                     const auto reset_reasons = temporalHistoryResetReasons(
@@ -2705,7 +2726,7 @@ namespace lfs::vis {
                     const VulkanSceneUpscalerDispatch dispatch{
                         .view = view,
                         .color = color,
-                        .depth = depth,
+                        .depth = effective_depth,
                         .motion = motion_resource,
                         .output_extent = output_extent,
                         .jitter_pixels = params.scene_jitter_pixels,

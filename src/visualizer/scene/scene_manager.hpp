@@ -95,6 +95,7 @@ namespace lfs::vis {
                                           const std::string& source_name,
                                           const std::string& desired_name,
                                           bool select_new_node = true);
+        [[nodiscard]] std::expected<void, std::string> applyViewerSplatPrecision(int bits);
         size_t consolidateNodeModels();
 
         [[nodiscard]] std::expected<void, std::string> canRemoveNode(core::NodeId id) const;

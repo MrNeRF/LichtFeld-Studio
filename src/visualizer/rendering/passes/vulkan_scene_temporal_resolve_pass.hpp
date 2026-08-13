@@ -76,6 +76,7 @@ namespace lfs::vis {
         void shutdown();
 
         [[nodiscard]] VkImageView outputView(TemporalViewId view) const;
+        [[nodiscard]] VkImage outputImage(TemporalViewId view) const;
         [[nodiscard]] SceneHistoryContract contract(TemporalViewId view) const;
         [[nodiscard]] bool initialized() const;
         [[nodiscard]] VulkanSceneTemporalResourceStats resourceStats() const;

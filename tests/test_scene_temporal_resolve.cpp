@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "visualizer/rendering/amd_fsr3_contract.hpp"
 #include "visualizer/rendering/passes/vulkan_scene_temporal_resolve_pass.hpp"
 #include "visualizer/rendering/scene_temporal_resolve.hpp"
 #include "visualizer/rendering/scene_upscaler_inputs.hpp"
@@ -20,17 +21,39 @@ namespace lfs::vis {
             const auto fallback =
                 sceneTemporalQualitySettings(static_cast<SceneTemporalQuality>(255));
 
-            EXPECT_LT(performance.history_weight, balanced.history_weight);
-            EXPECT_LT(balanced.history_weight, quality.history_weight);
+            EXPECT_GT(performance.history_weight, balanced.history_weight);
+            EXPECT_GT(balanced.history_weight, quality.history_weight);
             EXPECT_GT(performance.depth_threshold, balanced.depth_threshold);
             EXPECT_GT(balanced.depth_threshold, quality.depth_threshold);
-            EXPECT_LT(performance.motion_rejection_pixels,
+            EXPECT_GT(performance.motion_rejection_pixels,
                       balanced.motion_rejection_pixels);
-            EXPECT_LT(balanced.motion_rejection_pixels, quality.motion_rejection_pixels);
+            EXPECT_GT(balanced.motion_rejection_pixels, quality.motion_rejection_pixels);
             EXPECT_FLOAT_EQ(fallback.history_weight, balanced.history_weight);
             EXPECT_FLOAT_EQ(fallback.depth_threshold, balanced.depth_threshold);
             EXPECT_FLOAT_EQ(fallback.motion_rejection_pixels,
                             balanced.motion_rejection_pixels);
+        }
+
+        TEST(AmdFsr3Contract, DispatchJitterMatchesAppliedCameraPixelShift) {
+            const glm::vec2 previous_camera_jitter{0.25f, -0.375f};
+            const glm::vec2 current_camera_jitter{-0.125f, 0.25f};
+            const glm::vec2 previous_dispatch_jitter =
+                amdFsr3DispatchJitterOffset(previous_camera_jitter);
+            const glm::vec2 current_dispatch_jitter =
+                amdFsr3DispatchJitterOffset(current_camera_jitter);
+
+            EXPECT_FLOAT_EQ(current_dispatch_jitter.x, current_camera_jitter.x);
+            EXPECT_FLOAT_EQ(current_dispatch_jitter.y, current_camera_jitter.y);
+
+            // The scene-motion pass emits previous_pixel - current_pixel. FSR
+            // computes this same delta from the supplied offsets before removing
+            // jitter from motion vectors marked as jittered.
+            const glm::vec2 motion_jitter_delta =
+                previous_camera_jitter - current_camera_jitter;
+            const glm::vec2 fsr_cancellation_delta =
+                previous_dispatch_jitter - current_dispatch_jitter;
+            EXPECT_FLOAT_EQ(fsr_cancellation_delta.x, motion_jitter_delta.x);
+            EXPECT_FLOAT_EQ(fsr_cancellation_delta.y, motion_jitter_delta.y);
         }
 
         SceneUpscalerRequirements temporalRequirements() {

@@ -109,6 +109,7 @@ namespace {
         EXPECT_NE(contents.find("\"ui_scale\": \"auto\""), std::string::npos);
         EXPECT_NE(contents.find("\"language\": \"en\""), std::string::npos);
         const auto json = nlohmann::json::parse(contents);
+        EXPECT_EQ(json.at("viewer_splat_precision").get<int>(), 16);
         ASSERT_TRUE(json.at("mcp").is_object());
         EXPECT_TRUE(json.at("mcp").at("enabled").get<bool>());
         EXPECT_FALSE(json.at("mcp").at("expose_network").get<bool>());
