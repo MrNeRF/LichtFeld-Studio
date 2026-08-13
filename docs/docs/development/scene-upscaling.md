@@ -36,6 +36,47 @@ a missing runtime, an unsupported device or graphics API, a failed probe, or a
 recording failure causes an explicit fallback to Native. Unavailable optional
 features must not allocate adapters or input resources.
 
+## Splat quantization and video export
+
+Splat quantization is independent from the output image format and from the
+video encoder's color depth. It controls the SH storage used by the splat
+renderer:
+
+| Mode | Meaning |
+| --- | --- |
+| 16-bit | Default LichtFeld Studio representation for compact storage and fast rendering. |
+| 32-bit | Legacy FP32 representation for compatibility and comparison. |
+
+The same quantization choice is available in Preferences for the viewport and
+in the Sequencer for video export. Changing it does not convert the final video
+to 16-bit or 32-bit color; the export pipeline still produces the configured
+RGBA output for the selected encoder.
+
+Sequencer export uses the selected preset, backend, quality setting, and splat
+quantization independently. The preset controls output resolution and frame
+rate; the backend controls reconstruction of the scene render into that output
+extent. Optional DLSS and FSR 3.1 adapters are loaded lazily and fall back to
+Native if probing, initialization, or a frame resolve fails. This fallback is
+reported in the export log and does not alter the saved viewport preference.
+
+### Export-frame contract
+
+Video export owns a separate upscaler state from the interactive viewport. The
+state is created only for an export that needs a Vulkan adapter or temporal
+resolve and is destroyed when the export ends or is reset. Export frames use
+`TemporalViewId::Main`; they do not share viewport history. For temporal
+backends, each frame supplies matching depth, current-to-previous motion
+vectors, current and previous pixel jitter, and the render/output extents.
+History becomes valid only after the previous frame has completed successfully,
+and the first frame is submitted with an explicit first-frame reset reason.
+
+The export path records one scene render per output frame, then performs the
+selected spatial or temporal reconstruction before handing the final image to
+the encoder. A failed adapter probe, dispatch, resolve, or synchronization step
+must either use the declared Native fallback (when permitted by the export
+contract) or abort the export with a diagnostic; it must not silently reuse a
+stale frame or viewport history.
+
 ## Build configuration
 
 Both external integrations support 64-bit Windows and Linux Vulkan builds.
