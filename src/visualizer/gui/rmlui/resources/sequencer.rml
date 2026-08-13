@@ -97,19 +97,18 @@
                 <div id="btn-format" class="transport-btn text wide format-badge" data-tooltip="tooltip.seq_format">
                     <span id="format-label" class="transport-label">@tr:ui.youtube_1080p</span>
                     <span class="dropdown-arrow">&#x25be;</span>
-                    <span class="ctx-indicator">&#x25E2;</span>
                 </div>
                 <span id="resolution-info" class="transport-info">1920x1080</span>
-                <div id="btn-export-upscaler" class="transport-btn text wide">
+                <div id="btn-export-upscaler" class="transport-btn text wide" data-tooltip="preferences.scene_upscaler">
                     <span id="export-upscaler-label" class="transport-label">@tr:preferences.scene_upscaler_native</span>
                     <span class="dropdown-arrow">&#x25be;</span>
                 </div>
-                <div id="btn-export-quality" class="transport-btn text wide">
+                <div id="btn-export-quality" class="transport-btn text wide" data-tooltip="preferences.temporal_quality">
                     <span id="export-quality-label" class="transport-label">@tr:preferences.temporal_quality_balanced</span>
                     <span class="dropdown-arrow">&#x25be;</span>
                 </div>
-                <div id="btn-export-precision" class="transport-btn text">
-                    <span id="export-precision-label" class="transport-label">32-bit</span>
+                <div id="btn-export-precision" class="transport-btn text" data-tooltip="preferences.viewer_splat_precision_description">
+                    <span id="export-precision-label" class="transport-label">Splat · 16-bit</span>
                     <span class="dropdown-arrow">&#x25be;</span>
                 </div>
                 <span class="transport-info quality-group">Q</span>

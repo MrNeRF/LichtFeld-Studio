@@ -1393,9 +1393,9 @@ namespace lfs::vis::gui {
                 break;
             }
             case Target::EXPORT_PRECISION:
-                items.push_back({"16-bit", "precision_16", false, false, false,
+                items.push_back({std::format("Splat · {}", LOC("preferences.splat_precision_16")), "precision_16", false, false, false,
                                  ui_state_.export_splat_precision == lfs::io::video::VideoSplatPrecision::Float16});
-                items.push_back({"32-bit", "precision_32", false, false, false,
+                items.push_back({std::format("Splat · {}", LOC("preferences.splat_precision_32")), "precision_32", false, false, false,
                                  ui_state_.export_splat_precision == lfs::io::video::VideoSplatPrecision::Float32});
                 break;
             case Target::CLEAR: {

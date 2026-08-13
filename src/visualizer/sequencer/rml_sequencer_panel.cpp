@@ -87,10 +87,6 @@ namespace lfs::vis {
             return fmt::format("{:.2f} fps", clamped);
         }
 
-        [[nodiscard]] std::string formatPresetShort(const lfs::io::video::VideoPreset preset) {
-            return lfs::io::video::getPresetInfo(preset).name;
-        }
-
         [[nodiscard]] std::string formatTime(const float seconds) {
             const int mins = static_cast<int>(seconds) / 60;
             const float secs = seconds - static_cast<float>(mins * 60);
@@ -668,14 +664,13 @@ namespace lfs::vis {
                                    "btn-loop", "btn-add",
                                    "btn-camera-path", "btn-snap", "btn-follow",
                                    "btn-film-strip", "btn-preview", "btn-equirect", "btn-speed",
-                                   "btn-format", "btn-export-upscaler", "btn-export-quality", "btn-export-precision", "btn-save-path", "btn-load-path", "btn-load-sequence",
+                                    "btn-format", "btn-export-upscaler", "btn-export-quality", "btn-export-precision", "btn-save-path", "btn-load-path", "btn-load-sequence",
                                    "btn-export", "btn-clear", "btn-dock-toggle",
                                    "btn-close-panel"}) {
             auto* el = document_->GetElementById(btn_id);
             if (el)
                 el->AddEventListener(Rml::EventId::Click, &transport_listener_);
         }
-
         if (el_quality_scrub_) {
             el_quality_scrub_->AddEventListener(Rml::EventId::Mousedown, &quality_scrub_listener_);
             if (auto* body = document_->GetElementById("body")) {
@@ -1043,7 +1038,7 @@ namespace lfs::vis {
         if (el_sequence_fps_field_)
             el_sequence_fps_field_->SetClass("active", has_sequence);
         if (el_format_label_)
-            el_format_label_->SetInnerRML(formatPresetShort(ui_state_.preset));
+            el_format_label_->SetInnerRML(lfs::io::video::getPresetInfo(ui_state_.preset).name);
         if (el_resolution_info_) {
             const auto info = lfs::io::video::getPresetInfo(ui_state_.preset);
             const bool custom = ui_state_.preset == lfs::io::video::VideoPreset::CUSTOM;
@@ -1074,10 +1069,12 @@ namespace lfs::vis {
             }
         }
         if (el_export_precision_label_) {
-            el_export_precision_label_->SetInnerRML(
+            const char* precision_key =
                 ui_state_.export_splat_precision == lfs::io::video::VideoSplatPrecision::Float16
-                    ? "16-bit"
-                    : "32-bit");
+                    ? "preferences.splat_precision_16"
+                    : "preferences.splat_precision_32";
+            el_export_precision_label_->SetInnerRML(
+                fmt::format("Splat · {}", LOC(precision_key)));
         }
         if (!quality_scrub_editing_)
             syncQualityScrub();
