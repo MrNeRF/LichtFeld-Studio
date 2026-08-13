@@ -23,13 +23,17 @@ namespace lfs::vis {
         const SceneTemporalQuality quality) {
         switch (quality) {
         case SceneTemporalQuality::Performance:
-            return {.history_weight = 0.75f,
-                    .depth_threshold = 0.02f,
-                    .motion_rejection_pixels = 96.0f};
-        case SceneTemporalQuality::Quality:
+            // Prefer stable history over current-frame detail. This is the more
+            // permissive reconstruction intended for the performance preset.
             return {.history_weight = 0.95f,
-                    .depth_threshold = 0.005f,
+                    .depth_threshold = 0.02f,
                     .motion_rejection_pixels = 192.0f};
+        case SceneTemporalQuality::Quality:
+            // Preserve moving detail by trusting the current frame more and by
+            // rejecting long reprojections sooner.
+            return {.history_weight = 0.75f,
+                    .depth_threshold = 0.005f,
+                    .motion_rejection_pixels = 96.0f};
         case SceneTemporalQuality::Balanced:
         default:
             return {};

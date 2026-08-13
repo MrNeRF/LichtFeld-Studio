@@ -82,7 +82,7 @@ namespace lfs::io::video {
         int framerate = 30;
         int crf = 18;
         VideoUpscalerOptions upscaler{};
-        VideoSplatPrecision splat_precision = VideoSplatPrecision::Float32;
+        VideoSplatPrecision splat_precision = VideoSplatPrecision::Float16;
     };
 
     [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(

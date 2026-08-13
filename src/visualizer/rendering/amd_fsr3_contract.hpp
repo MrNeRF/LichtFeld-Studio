@@ -29,6 +29,14 @@ namespace lfs::vis {
         return AMD_FSR3_RECOMMENDED_INPUT_SCALES[1];
     }
 
+    // FidelityFX expects the actual pixel offset applied to the rendered camera,
+    // not the negated Halton sample sometimes used by SDK examples before their
+    // projection-convention conversion. LFS shifts cx/cy by these exact values.
+    [[nodiscard]] constexpr glm::vec2 amdFsr3DispatchJitterOffset(
+        const glm::vec2 applied_camera_jitter_pixels) {
+        return applied_camera_jitter_pixels;
+    }
+
     [[nodiscard]] inline bool validAmdFsr3Dispatch(
         const VulkanSceneUpscalerDispatch& dispatch) {
         constexpr SceneUpscalerRequirements requirements{

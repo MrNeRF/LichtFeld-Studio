@@ -268,7 +268,7 @@ namespace lfs::vis {
             std::string export_upscaler;
             int export_input_scale_milli = 1000;
             int export_upscaler_quality = 1;
-            int export_splat_precision = 32;
+            int export_splat_precision = 16;
             bool follow_playback = false;
             bool show_camera_path = false;
             bool snap_to_grid = false;

@@ -390,6 +390,13 @@ TEST(VideoExportUtilsTest, ValidateVideoExportOptionsRejectsInvalidValues) {
                                                             .crf = 18}));
 }
 
+TEST(VideoExportUtilsTest, VideoExportDefaultsToStandardFloat16SplatPrecision) {
+    const lfs::io::video::VideoExportOptions options{};
+
+    EXPECT_EQ(options.splat_precision,
+              lfs::io::video::VideoSplatPrecision::Float16);
+}
+
 TEST(VideoExportUtilsTest, ValidateVideoExportOptionsAcceptsNativeResolution) {
     auto result = lfs::vis::gui::validateVideoExportOptions({.width = 32768,
                                                              .height = 17280,

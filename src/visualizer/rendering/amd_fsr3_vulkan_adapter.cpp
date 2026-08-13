@@ -151,12 +151,12 @@ namespace lfs::vis {
                 parameters.dilatedDepth = sharedResource(state, 0);
                 parameters.dilatedMotionVectors = sharedResource(state, 1);
                 parameters.reconstructedPrevNearestDepth = sharedResource(state, 2);
-                // LFS applies +2*jitter/renderSize to both projection rows. In
-                // FidelityFX's Vulkan camera convention the corresponding
-                // dispatch offset keeps X and reverses Y (the SDK sample applies
-                // {-2*jitterX/width, +2*jitterY/height} to the projection, then
-                // dispatches {-jitterX, -jitterY}).
-                parameters.jitterOffset = {dispatch.jitter_pixels.x, -dispatch.jitter_pixels.y};
+                // Report the exact cx/cy shift applied by LFS. With jittered
+                // motion vectors FSR derives and removes the frame-to-frame
+                // delta from these offsets internally.
+                const glm::vec2 dispatch_jitter =
+                    amdFsr3DispatchJitterOffset(dispatch.jitter_pixels);
+                parameters.jitterOffset = {dispatch_jitter.x, dispatch_jitter.y};
                 parameters.motionVectorScale = {1.0f, 1.0f};
                 parameters.renderSize = dimensions(dispatch.color.valid_extent);
                 parameters.upscaleSize = dimensions(dispatch.output_extent);
