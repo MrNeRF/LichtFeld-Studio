@@ -274,6 +274,7 @@ if(ENABLE_COMPILER_CACHE)
            NOT MSVC AND
            CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$" AND
            COMPILER_CACHE_PATH_INDEPENDENT AND
+           CMAKE_GENERATOR MATCHES "^Ninja" AND
            NOT _IS_MULTI_CONFIG AND
            CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
             # Prefix maps normalize __FILE__, but older cache versions still
