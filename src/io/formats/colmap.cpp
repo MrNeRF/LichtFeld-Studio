@@ -2280,18 +2280,9 @@ namespace lfs::io {
         SkipTally image_tally;
 
         RecursiveFileCache image_cache(images_path, options.cancel_requested);
-        std::optional<MaskDirCache> mask_cache;
-        std::optional<DepthDirCache> depth_cache;
-        std::optional<NormalDirCache> normal_cache;
-        if (options.load_masks) {
-            mask_cache.emplace(base_path, options.cancel_requested);
-        }
-        if (options.load_depths) {
-            depth_cache.emplace(base_path, options.cancel_requested);
-        }
-        if (options.load_normals) {
-            normal_cache.emplace(base_path, options.cancel_requested);
-        }
+        MaskDirCache mask_cache(base_path, options.cancel_requested);
+        DepthDirCache depth_cache(base_path, options.cancel_requested);
+        NormalDirCache normal_cache(base_path, options.cancel_requested);
         bool used_recursive_image_lookup = false;
         size_t depth_matched_count = 0;
         size_t normal_matched_count = 0;
@@ -2498,20 +2489,22 @@ namespace lfs::io {
             camera_positions.push_back(cam_pos[2]);
 
             std::filesystem::path mask_path;
-            if (options.load_masks && mask_cache) {
-                if (auto mask_lookup = mask_cache->lookup(img.name); mask_lookup.found()) {
-                    mask_path = std::move(mask_lookup.path);
-                } else if (mask_lookup.ambiguous()) {
+            if (auto mask_lookup = mask_cache.lookup(img.name); mask_lookup.found()) {
+                mask_path = std::move(mask_lookup.path);
+            } else if (mask_lookup.ambiguous()) {
+                if (options.load_masks) {
                     return make_ambiguous_mask_reference_error(base_path, img.name);
                 }
+                LOG_WARN("Mask for image '{}' is ambiguous; skipping sidecar because mask usage is disabled",
+                         img.name);
             }
 
             std::filesystem::path depth_path;
-            if (options.load_depths && depth_cache) {
-                if (auto depth_lookup = depth_cache->lookup(img.name); depth_lookup.found()) {
-                    depth_path = std::move(depth_lookup.path);
-                    ++depth_matched_count;
-                } else if (depth_lookup.ambiguous()) {
+            if (auto depth_lookup = depth_cache.lookup(img.name); depth_lookup.found()) {
+                depth_path = std::move(depth_lookup.path);
+                ++depth_matched_count;
+            } else if (depth_lookup.ambiguous()) {
+                if (options.load_depths) {
                     return make_error(
                         ErrorCode::INVALID_DATASET,
                         std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
@@ -2519,14 +2512,16 @@ namespace lfs::io {
                                     img.name),
                         base_path);
                 }
+                LOG_WARN("Depth map for image '{}' is ambiguous; skipping sidecar because depth usage is disabled",
+                         img.name);
             }
 
             std::filesystem::path normal_path;
-            if (options.load_normals && normal_cache) {
-                if (auto normal_lookup = normal_cache->lookup(img.name); normal_lookup.found()) {
-                    normal_path = std::move(normal_lookup.path);
-                    ++normal_matched_count;
-                } else if (normal_lookup.ambiguous()) {
+            if (auto normal_lookup = normal_cache.lookup(img.name); normal_lookup.found()) {
+                normal_path = std::move(normal_lookup.path);
+                ++normal_matched_count;
+            } else if (normal_lookup.ambiguous()) {
+                if (options.load_normals) {
                     return make_error(
                         ErrorCode::INVALID_DATASET,
                         std::format("Normal map for image '{}' is ambiguous across the dataset normal folders. "
@@ -2534,6 +2529,8 @@ namespace lfs::io {
                                     img.name),
                         base_path);
                 }
+                LOG_WARN("Normal map for image '{}' is ambiguous; skipping sidecar because normal usage is disabled",
+                         img.name);
             }
 
             // Validate mask/depth dimensions match image dimensions
@@ -2544,7 +2541,7 @@ namespace lfs::io {
                 }
                 return *image_info;
             };
-            if (!mask_path.empty()) {
+            if (options.load_masks && !mask_path.empty()) {
                 auto [img_w, img_h, img_c] = get_image_info_cached();
                 auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
                 if (img_w != mask_w || img_h != mask_h) {
@@ -2555,7 +2552,7 @@ namespace lfs::io {
                                       mask_path);
                 }
             }
-            if (!depth_path.empty()) {
+            if (options.load_depths && !depth_path.empty()) {
                 auto [img_w, img_h, img_c] = get_image_info_cached();
                 auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
                 if (!sidecar_dimensions_match_contract(depth_w,
@@ -2571,7 +2568,7 @@ namespace lfs::io {
                                       depth_path);
                 }
             }
-            if (!normal_path.empty()) {
+            if (options.load_normals && !normal_path.empty()) {
                 auto [img_w, img_h, img_c] = get_image_info_cached();
                 auto [normal_w, normal_h, normal_c] = lfs::core::get_image_info(normal_path);
                 if (!sidecar_dimensions_match_contract(normal_w,
@@ -2623,7 +2620,7 @@ namespace lfs::io {
         Tensor scene_center = scene_center_tensor.mean({0}, false);
 
         LOG_INFO("Training with {} images", cameras.size());
-        if (depth_cache && depth_cache->has_depth_dirs()) {
+        if (depth_cache.has_depth_dirs()) {
             if (depth_matched_count == 0) {
                 LOG_WARN("Depth folder found but no depth map matched any of the {} images. "
                          "Depth files must share the image filename or its trailing frame number.",
@@ -2632,7 +2629,7 @@ namespace lfs::io {
                 LOG_INFO("Depth maps matched for {}/{} images", depth_matched_count, cameras.size());
             }
         }
-        if (normal_cache && normal_cache->has_normal_dirs()) {
+        if (normal_cache.has_normal_dirs()) {
             if (normal_matched_count == 0) {
                 LOG_WARN("Normal folder found but no normal map matched any of the {} images. "
                          "Normal files must share the image filename or its trailing frame number.",

@@ -139,9 +139,9 @@ namespace lfs::io {
             std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
             cameras.reserve(camera_infos.size());
 
-            // Get base path for optional sidecar lookup.  Do not scan unused
-            // sidecar folders: malformed auxiliary files must not block a load
-            // when their corresponding loss/feature is disabled.
+            // Sidecar paths are always associated so enabling masks/depth/normals
+            // after load works; malformed or ambiguous sidecar files only fail the
+            // load when the corresponding feature is enabled.
             std::filesystem::path base_path = transforms_file.parent_path();
             const auto has_sidecar_directory = [&base_path](const std::span<const char* const> folders) {
                 return std::ranges::any_of(folders, [&base_path](const char* folder) {
@@ -158,18 +158,9 @@ namespace lfs::io {
                 LOG_INFO("mask maps present but unused (mask usage disabled)");
             }
 
-            std::optional<MaskDirCache> mask_cache;
-            std::optional<DepthDirCache> depth_cache;
-            std::optional<NormalDirCache> normal_cache;
-            if (options.load_masks) {
-                mask_cache.emplace(base_path, options.cancel_requested);
-            }
-            if (options.load_depths) {
-                depth_cache.emplace(base_path, options.cancel_requested);
-            }
-            if (options.load_normals) {
-                normal_cache.emplace(base_path, options.cancel_requested);
-            }
+            MaskDirCache mask_cache(base_path, options.cancel_requested);
+            DepthDirCache depth_cache(base_path, options.cancel_requested);
+            NormalDirCache normal_cache(base_path, options.cancel_requested);
 
             for (size_t i = 0; i < camera_infos.size(); ++i) {
                 if ((i % 64) == 0) {
@@ -179,10 +170,10 @@ namespace lfs::io {
 
                 try {
                     std::filesystem::path mask_path;
-                    if (options.load_masks && mask_cache) {
-                        if (auto mask_lookup = mask_cache->lookup(info._image_name); mask_lookup.found()) {
-                            mask_path = std::move(mask_lookup.path);
-                        } else if (mask_lookup.ambiguous()) {
+                    if (auto mask_lookup = mask_cache.lookup(info._image_name); mask_lookup.found()) {
+                        mask_path = std::move(mask_lookup.path);
+                    } else if (mask_lookup.ambiguous()) {
+                        if (options.load_masks) {
                             return make_error(
                                 ErrorCode::INVALID_DATASET,
                                 std::format("Mask for image '{}' is ambiguous across the dataset mask folders. "
@@ -190,13 +181,15 @@ namespace lfs::io {
                                             info._image_name),
                                 base_path);
                         }
+                        LOG_WARN("Mask for image '{}' is ambiguous; skipping sidecar because mask usage is disabled",
+                                 info._image_name);
                     }
 
                     std::filesystem::path depth_path;
-                    if (options.load_depths && depth_cache) {
-                        if (auto depth_lookup = depth_cache->lookup(info._image_name); depth_lookup.found()) {
-                            depth_path = std::move(depth_lookup.path);
-                        } else if (depth_lookup.ambiguous()) {
+                    if (auto depth_lookup = depth_cache.lookup(info._image_name); depth_lookup.found()) {
+                        depth_path = std::move(depth_lookup.path);
+                    } else if (depth_lookup.ambiguous()) {
+                        if (options.load_depths) {
                             return make_error(
                                 ErrorCode::INVALID_DATASET,
                                 std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
@@ -204,13 +197,15 @@ namespace lfs::io {
                                             info._image_name),
                                 base_path);
                         }
+                        LOG_WARN("Depth map for image '{}' is ambiguous; skipping sidecar because depth usage is disabled",
+                                 info._image_name);
                     }
 
                     std::filesystem::path normal_path;
-                    if (options.load_normals && normal_cache) {
-                        if (auto normal_lookup = normal_cache->lookup(info._image_name); normal_lookup.found()) {
-                            normal_path = std::move(normal_lookup.path);
-                        } else if (normal_lookup.ambiguous()) {
+                    if (auto normal_lookup = normal_cache.lookup(info._image_name); normal_lookup.found()) {
+                        normal_path = std::move(normal_lookup.path);
+                    } else if (normal_lookup.ambiguous()) {
+                        if (options.load_normals) {
                             return make_error(
                                 ErrorCode::INVALID_DATASET,
                                 std::format("Normal map for image '{}' is ambiguous across the dataset normal folders. "
@@ -218,6 +213,8 @@ namespace lfs::io {
                                             info._image_name),
                                 base_path);
                         }
+                        LOG_WARN("Normal map for image '{}' is ambiguous; skipping sidecar because normal usage is disabled",
+                                 info._image_name);
                     }
 
                     // Validate mask/depth dimensions match image dimensions
@@ -228,7 +225,7 @@ namespace lfs::io {
                         }
                         return *image_info;
                     };
-                    if (!mask_path.empty()) {
+                    if (options.load_masks && !mask_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
                         if (img_w != mask_w || img_h != mask_h) {
@@ -239,7 +236,7 @@ namespace lfs::io {
                                               mask_path);
                         }
                     }
-                    if (!depth_path.empty()) {
+                    if (options.load_depths && !depth_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
                         if (img_w != depth_w || img_h != depth_h) {
@@ -250,7 +247,7 @@ namespace lfs::io {
                                               depth_path);
                         }
                     }
-                    if (!normal_path.empty()) {
+                    if (options.load_normals && !normal_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [normal_w, normal_h, normal_c] = lfs::core::get_image_info(normal_path);
                         if (img_w != normal_w || img_h != normal_h) {
