@@ -1,9 +1,14 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <numeric>
+#include <thread>
 #include <vector>
 
 #include "core/tensor.hpp"
@@ -446,5 +451,119 @@ TEST_F(TensorStreamTest, DtypeConversionLaunchesOnCurrentResultStream) {
     EXPECT_EQ(cpu_ptr[kNumel - 1], static_cast<int>(kNumel - 1));
 
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    destroyStreamSafely(stream);
+}
+
+// Bool->UInt8 is a raw D2D copy. empty() reuse of a same-size cached block
+// calls bridgeStreams and would order the copy after the producer, masking a
+// missing convert-side wait. This test uses a unique size so the UInt8 dest
+// is a fresh cudaMallocAsync (no reuse-bridge), then races a default-stream
+// .to() against a fill still gated on a non-blocking producer stream.
+TEST_F(TensorStreamTest, BoolToUInt8OrderedAgainstGatedProducerStream) {
+    cudaStream_t stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+
+    // Odd size unused elsewhere so the UInt8 dest misses the 8 MiB bucket cache.
+    constexpr size_t N = 7'340'033;
+
+    std::atomic<bool> gate_released{false};
+    const auto release_gate = [&gate_released]() {
+        gate_released.store(true, std::memory_order_release);
+    };
+    struct GateGuard {
+        std::atomic<bool>* released;
+        ~GateGuard() { released->store(true, std::memory_order_release); }
+    } gate_guard{&gate_released};
+
+    // Evict leftover same-bucket blocks so dest empty() cannot reuse-and-bridge.
+    CudaMemoryPool::instance().trim_cached_memory();
+
+    Tensor flags;
+    {
+        CUDAStreamGuard guard(stream);
+        flags = Tensor::empty({N}, Device::CUDA, DataType::Bool);
+        ASSERT_EQ(flags.stream(), stream);
+        ASSERT_EQ(flags.dtype(), DataType::Bool);
+
+        // Warm every in-place fill path this test will use; end at zeros.
+        // Stream-aware fill_ is required: the no-arg overload uses blocking
+        // H2D cudaMemcpy and would not enqueue on S.
+        flags.fill_(0.0f, stream);
+        flags.fill_(1.0f, stream);
+        flags.fill_(0.0f, stream);
+        ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+
+        ASSERT_EQ(cudaLaunchHostFunc(
+                      stream,
+                      [](void* userData) {
+                          auto* released = static_cast<std::atomic<bool>*>(userData);
+                          while (!released->load(std::memory_order_acquire)) {
+                          }
+                      },
+                      &gate_released),
+                  cudaSuccess);
+
+        flags.fill_(1.0f, stream);
+        // Force any deferred materialization without allocating or syncing.
+        (void)flags.data_ptr();
+    }
+
+    const uint64_t cross_before =
+        SizeBucketedPool::instance().stats().cross_stream_reuse.load();
+    const uint64_t misses_before =
+        SizeBucketedPool::instance().stats().cache_misses.load();
+
+    std::atomic<bool> to_finished{false};
+    std::thread watchdog([&] {
+        using namespace std::chrono_literals;
+        for (int i = 0; i < 500; ++i) {
+            if (to_finished.load(std::memory_order_acquire)) {
+                return;
+            }
+            std::this_thread::sleep_for(10ms);
+        }
+        // Unstick a wait on S so a failed ASSERT cannot hang the process.
+        gate_released.store(true, std::memory_order_release);
+    });
+
+    Tensor bytes = flags.to(DataType::UInt8);
+    to_finished.store(true, std::memory_order_release);
+    watchdog.join();
+
+    const cudaError_t query = cudaStreamQuery(stream);
+    const char* query_name = (query == cudaSuccess)         ? "Success"
+                             : (query == cudaErrorNotReady) ? "NotReady"
+                                                            : cudaGetErrorName(query);
+    (void)cudaGetLastError();
+
+    const uint64_t cross_after =
+        SizeBucketedPool::instance().stats().cross_stream_reuse.load();
+    const uint64_t misses_after =
+        SizeBucketedPool::instance().stats().cache_misses.load();
+
+    release_gate();
+    ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+    ASSERT_EQ(cudaStreamSynchronize(bytes.stream()), cudaSuccess);
+
+    auto vals = bytes.to_vector_uint8();
+    ASSERT_EQ(vals.size(), N);
+    const size_t ones =
+        static_cast<size_t>(std::count(vals.begin(), vals.end(), uint8_t{1}));
+
+    std::cout << "BoolToUInt8OrderedAgainstGatedProducerStream: ones=" << ones
+              << " N=" << N << " query=" << query_name
+              << " cache_misses_delta=" << (misses_after - misses_before)
+              << " cross_stream_reuse_delta=" << (cross_after - cross_before)
+              << std::endl;
+
+    ASSERT_EQ(query, cudaErrorNotReady)
+        << "producer stream was already idle after .to(); test is not exercising "
+           "the gated window (watchdog may have released the gate)";
+    ASSERT_EQ(cross_after, cross_before)
+        << "UInt8 empty() reused a cross-stream pool block; bridgeStreams would "
+           "mask a missing convert-side wait";
+    ASSERT_EQ(ones, N)
+        << "Bool->UInt8 copy was not ordered after the gated producer fill";
+
     destroyStreamSafely(stream);
 }

@@ -6290,6 +6290,12 @@ namespace lfs::training {
                 if (pipelined_normal_.is_valid()) {
                     pipelined_normal_.set_stream(training_stream_);
                 }
+                if (gt_image.is_valid()) {
+                    gt_image.set_stream(training_stream_);
+                }
+                if (pipelined_mask_.is_valid()) {
+                    pipelined_mask_.set_stream(training_stream_);
+                }
 
                 if (!logged_epoch2_loader_cache && epoch2_loader_sample_count > 0 &&
                     static_cast<size_t>(iter) >= epoch2_loader_sample_count) {

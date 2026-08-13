@@ -1760,9 +1760,12 @@ namespace lfs::core {
                     void* const destination = result.data_ptr();
                     const void* const source = data_ptr();
                     const size_t copy_bytes = bytes();
-                    LFS_CUDA_CHECK_MSG_ARGS(
-                        cudaMemcpy(destination, source, copy_bytes,
-                                   cudaMemcpyDeviceToDevice),
+                    const cudaStream_t execution_stream =
+                        prepare_inputs_for_stream({this}, result.stream());
+                    LFS_CUDA_CHECK_MSG_STREAM_ARGS(
+                        cudaMemcpyAsync(destination, source, copy_bytes,
+                                        cudaMemcpyDeviceToDevice, execution_stream),
+                        execution_stream,
                         reinterpret_cast<uintptr_t>(destination),
                         reinterpret_cast<uintptr_t>(source),
                         copy_bytes,
