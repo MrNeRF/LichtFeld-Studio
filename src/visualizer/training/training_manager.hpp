@@ -32,6 +32,7 @@ namespace lfs::vis {
 
     // Forward declarations
     class VisualizerImpl;
+    class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
 
     class LFS_VIS_API TrainerManager {
     public:
@@ -199,6 +200,8 @@ namespace lfs::vis {
             std::optional<std::string> error;
             std::optional<lfs::Error> typed_error;
         };
+
+        friend class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
 
         // Training thread function
         void trainingThreadFunc(std::stop_token stop_token);

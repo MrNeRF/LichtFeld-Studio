@@ -1069,11 +1069,10 @@ NB_MODULE(lichtfeld, m) {
                     inspect_autosave_recovery(
                         master_path);
             if (!inspection) {
-                throw std::runtime_error(
-                    std::format(
-                        "project_autosave_recovery_disposition failed: {}",
-                        lfs::format_for_developer(
-                            inspection.error())));
+                return inspection.error().code() ==
+                               lfs::ErrorCode::Unavailable
+                           ? "busy"
+                           : "unavailable";
             }
             using lfs::io::project::
                 RecoveryDisposition;
@@ -1093,7 +1092,8 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("path"),
         "Return autosave recovery disposition for a .licht master path "
-        "(\"none\", \"offer\", \"stale_deleted\", \"invalid\", \"ambiguous\")");
+        "(\"none\", \"offer\", \"stale_deleted\", \"invalid\", \"ambiguous\", "
+        "\"busy\", \"unavailable\")");
     m.def(
         "project_reopen_last_enabled", []() {
             auto* const viewer =
@@ -1159,7 +1159,7 @@ NB_MODULE(lichtfeld, m) {
             if (!viewer) {
                 return 5 * 60;
             }
-            auto info = viewer->projectGetInfo();
+            auto info = viewer->projectGetMenuInfo();
             return info
                        ? info
                              ->autosave_interval_seconds

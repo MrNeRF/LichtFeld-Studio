@@ -145,6 +145,8 @@ namespace lfs::vis {
 
             void requestExitConfirmation(
                 bool training_in_progress = false);
+            void dismissExitConfirmation();
+            void noteExitPopupMirror(bool open);
             bool isExitConfirmationPending() const;
 
             bool isCapturingInput() const;
@@ -293,6 +295,8 @@ namespace lfs::vis {
             ViewportLayout viewport_layout_;
             float menu_toolbar_right_edge_ = 0.0f;
             bool force_exit_ = false;
+            bool exit_confirmation_requested_ = false;
+            bool exit_confirmation_dismissed_ = false;
 
             std::unique_ptr<MenuBar> menu_bar_;
 

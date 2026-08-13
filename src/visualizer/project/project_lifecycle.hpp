@@ -52,6 +52,12 @@ namespace lfs::vis {
     class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
     class VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
     class VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
+    class VisualizerImplResetTest_CancelExitDuringCloseSaveDoesNotClose_Test;
+    class VisualizerImplResetTest_ProjectGetInfoSucceedsDuringCloseSave_Test;
+    class VisualizerImplResetTest_ProjectGetInfoSucceedsWithUnboundPausedTrainer_Test;
+    class VisualizerImplResetTest_FailedSaveAsAndExitResetsCloseLatches_Test;
+    class VisualizerImplResetTest_ForceExitWhileSavingDoesNotWaitForSettlement_Test;
+    class VisualizerImplResetTest_OpenAndNewProjectClearSuppressAdoption_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -158,7 +164,10 @@ namespace lfs::vis::project {
         [[nodiscard]] bool
         isApplicationClosePending() const;
         void setSuppressTrainingAdoption(bool suppress);
-        void bindTrainerSnapshotTarget();
+        void bindTrainerSnapshotTarget(
+            std::optional<std::filesystem::path> destination =
+                std::nullopt,
+            bool allow_existing_destination_replacement = false);
 
     private:
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
@@ -189,6 +198,12 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
+        friend class lfs::vis::VisualizerImplResetTest_CancelExitDuringCloseSaveDoesNotClose_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ProjectGetInfoSucceedsDuringCloseSave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ProjectGetInfoSucceedsWithUnboundPausedTrainer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_FailedSaveAsAndExitResetsCloseLatches_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ForceExitWhileSavingDoesNotWaitForSettlement_Test;
+        friend class lfs::vis::VisualizerImplResetTest_OpenAndNewProjectClearSuppressAdoption_Test;
         enum class Hydration {
             Empty,
             ShellReady,

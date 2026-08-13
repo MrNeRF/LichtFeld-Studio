@@ -6813,16 +6813,38 @@ namespace lfs::vis::gui {
 
     void GuiManager::requestExitConfirmation(
         const bool training_in_progress) {
+        exit_confirmation_requested_ = true;
+        exit_confirmation_dismissed_ = false;
+        lfs::python::set_exit_popup_open(true);
         startup_overlay_.dismiss();
         lfs::core::events::cmd::
             ShowExitConfirmation{
                 .training_in_progress =
                     training_in_progress}
                 .emit();
+        const bool overlay_live =
+            rml_modal_overlay_ &&
+            (rml_modal_overlay_->isOpen() ||
+             rml_modal_overlay_->hasPendingRequest());
+        if (!overlay_live) {
+            dismissExitConfirmation();
+        }
+    }
+
+    void GuiManager::dismissExitConfirmation() {
+        exit_confirmation_dismissed_ = true;
+        lfs::python::set_exit_popup_open(false);
+    }
+
+    void GuiManager::noteExitPopupMirror(const bool open) {
+        if (!open) {
+            exit_confirmation_dismissed_ = true;
+        }
     }
 
     bool GuiManager::isExitConfirmationPending() const {
-        return lfs::python::is_exit_popup_open();
+        return exit_confirmation_requested_ &&
+               !exit_confirmation_dismissed_;
     }
 
 } // namespace lfs::vis::gui

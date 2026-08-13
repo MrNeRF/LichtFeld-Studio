@@ -31,6 +31,10 @@ namespace lfs::vis {
         void setInterruptCallback(InterruptCallback cb) { interrupt_callback_ = cb; }
         void setFrameErrorCallback(FrameErrorCallback cb) { frame_error_callback_ = cb; }
         void setFrameCompletedCallback(FrameCompletedCallback cb) { frame_completed_callback_ = cb; }
+        // Invoked from a helper thread when the signal self-pipe/eventfd
+        // becomes readable. Must be safe to call from a non-viewer thread
+        // (wakeEventLoop / SDL_PushEvent). Never invoked from the handler.
+        void setWakeCallback(std::function<void()> cb) { wake_callback_ = std::move(cb); }
 
         void run();
 
@@ -43,6 +47,7 @@ namespace lfs::vis {
         InterruptCallback interrupt_callback_;
         FrameErrorCallback frame_error_callback_;
         FrameCompletedCallback frame_completed_callback_;
+        std::function<void()> wake_callback_;
     };
 
 } // namespace lfs::vis

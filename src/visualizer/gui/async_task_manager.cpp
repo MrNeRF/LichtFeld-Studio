@@ -1067,10 +1067,7 @@ namespace lfs::vis::gui {
             return;
 
         if (viewer_) {
-            if (auto info =
-                    viewer_->projectGetInfo();
-                info &&
-                info->contains_embedded_secrets) {
+            if (viewer_->projectContainsEmbeddedSecrets()) {
                 lfs::ErrorBus::instance().publish(
                     lfs::ErrorNotification{
                         .error = lfs::make_error(

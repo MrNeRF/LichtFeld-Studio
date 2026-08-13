@@ -56,6 +56,7 @@ namespace lfs::vis {
     struct LFS_VIS_API ProjectMenuInfo {
         bool reopen_last_project = true;
         bool auto_save_on_close = false;
+        std::uint64_t autosave_interval_seconds = 5 * 60;
         std::vector<ProjectRecentInfo> recent_projects;
     };
 
@@ -165,6 +166,8 @@ namespace lfs::vis {
                     info->reopen_last_project,
                 .auto_save_on_close =
                     info->auto_save_on_close,
+                .autosave_interval_seconds =
+                    info->autosave_interval_seconds,
                 .recent_projects =
                     std::move(
                         info->recent_projects),

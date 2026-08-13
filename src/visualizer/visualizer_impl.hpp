@@ -23,13 +23,16 @@
 #include "training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include "window/window_manager.hpp"
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -107,6 +110,7 @@ namespace lfs::vis {
         projectGetInfo() override;
         lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() override;
+        [[nodiscard]] bool projectContainsEmbeddedSecrets() const;
 
         // Getters for GUI (delegating to state manager)
         lfs::training::Trainer* getTrainer() const { return trainer_manager_->getTrainer(); }
@@ -258,6 +262,15 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
         friend class VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
         friend class VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
+        friend class VisualizerImplResetTest_CancelExitDuringCloseSaveDoesNotClose_Test;
+        friend class VisualizerImplResetTest_ProjectGetInfoSucceedsDuringCloseSave_Test;
+        friend class VisualizerImplResetTest_ProjectGetInfoSucceedsWithUnboundPausedTrainer_Test;
+        friend class VisualizerImplResetTest_FailedSaveAsAndExitResetsCloseLatches_Test;
+        friend class VisualizerImplResetTest_ForceExitWhileSavingDoesNotWaitForSettlement_Test;
+        friend class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
+        friend class VisualizerImplResetTest_OpenAndNewProjectClearSuppressAdoption_Test;
+        friend class VisualizerImplResetTest_ExitConfirmationPendingOwnedByGuiManager_Test;
+        friend class VisualizerImplResetTest_StopSaveAndExitBindsUntitledDestinationBeforeStop_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;
@@ -266,6 +279,14 @@ namespace lfs::vis {
         lfs::Result<void> projectSaveAsFromDialog(
             const std::filesystem::path& path,
             bool regenerate_preview);
+        void abandonSaveAndExitAttempt();
+        void armStopSaveAndExit(
+            std::optional<std::filesystem::path>
+                untitled_destination = std::nullopt);
+        void completeSaveAsAndExit(
+            const std::filesystem::path& path);
+        void armForceExitCompletionWatcher();
+        void stopForceExitCompletionWatcher();
 
         // Main loop callbacks
         bool initialize();
@@ -443,6 +464,13 @@ namespace lfs::vis {
         bool startup_plugin_preload_started_ = false;
         bool startup_project_open_attempted_ = false;
         bool close_save_notice_posted_ = false;
+        std::optional<std::filesystem::path>
+            pending_close_save_path_;
+        std::jthread force_exit_completion_watcher_;
+        std::atomic<bool> force_exit_wait_expired_{false};
+        bool force_exit_watcher_armed_ = false;
+        std::chrono::milliseconds
+            force_exit_completion_timeout_{30000};
         bool gui_panels_ready_emitted_ = false;
         std::uint64_t startup_plugin_load_status_revision_ = 0;
         bool plugin_preload_timing_active_ = false;

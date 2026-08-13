@@ -329,6 +329,7 @@ namespace lfs::vis {
         op::operators().clear();
 
         callback_cleanup_.clear();
+        stopForceExitCompletionWatcher();
         trainer_manager_.reset();
         tool_context_.reset();
         if (gui_manager_) {
@@ -958,44 +959,30 @@ namespace lfs::vis {
         main_loop_->setRenderCallback([this]() { render(); });
         main_loop_->setShutdownCallback([this]() { shutdown(); });
         main_loop_->setShouldCloseCallback([this]() { return allowclose(); });
+        main_loop_->setWakeCallback([this] { wakeMainLoop(); });
         main_loop_->setInterruptCallback([this]() {
-            const bool close_attempt_pending =
-                (window_manager_ &&
-                 window_manager_->shouldClose()) ||
-                (gui_manager_ &&
-                 (gui_manager_->isForceExit() ||
-                  gui_manager_
-                      ->isExitConfirmationPending())) ||
-                (project_lifecycle_ &&
-                 project_lifecycle_
-                     ->isApplicationClosePending()) ||
-                pending_training_action_ ==
-                    PendingTrainingAction::CloseSave ||
-                pending_training_action_ ==
+            // First interrupt is ForceExit: discard, stop
+            // training, close. The handler itself only
+            // woke this loop; a second interrupt _exit(1)s.
+            if (gui_manager_) {
+                gui_manager_->setForceExit(true);
+                gui_manager_->dismissExitConfirmation();
+            }
+            if (project_lifecycle_) {
+                project_lifecycle_
+                    ->markApplicationClosePending();
+                project_lifecycle_
+                    ->setSuppressTrainingAdoption(true);
+            }
+            if (trainer_manager_ &&
+                (trainer_manager_->isTrainingActive() ||
+                 trainer_manager_
+                     ->isCompletionPending())) {
+                pending_training_action_ =
                     PendingTrainingAction::CloseDiscard;
-            if (close_attempt_pending) {
-                if (gui_manager_) {
-                    gui_manager_->setForceExit(true);
-                }
-                if (project_lifecycle_) {
-                    project_lifecycle_
-                        ->markApplicationClosePending();
-                    project_lifecycle_
-                        ->setSuppressTrainingAdoption(
-                            true);
-                }
-                if (trainer_manager_ &&
-                    (trainer_manager_
-                         ->isTrainingActive() ||
-                     trainer_manager_
-                         ->isCompletionPending())) {
-                    pending_training_action_ =
-                        PendingTrainingAction::
-                            CloseDiscard;
-                    trainer_manager_->suppressCompletionNotification();
-                    if (trainer_manager_->canStop()) {
-                        trainer_manager_->stopTraining();
-                    }
+                trainer_manager_->suppressCompletionNotification();
+                if (trainer_manager_->canStop()) {
+                    trainer_manager_->stopTraining();
                 }
             }
             requestApplicationClose();
@@ -1410,14 +1397,7 @@ namespace lfs::vis {
             });
 
         cmd::RequestExit::when([this](const auto&) {
-            if (project_lifecycle_) {
-                project_lifecycle_
-                    ->resetCloseSaveAttempt();
-            }
-            close_save_notice_posted_ = false;
-            if (gui_manager_) {
-                gui_manager_->setForceExit(false);
-            }
+            abandonSaveAndExitAttempt();
             requestApplicationClose();
         });
 
@@ -1429,12 +1409,14 @@ namespace lfs::vis {
                     publish_project_error(
                         "Save Project",
                         has_path.error());
+                    abandonSaveAndExitAttempt();
                     return;
                 }
                 if (!*has_path) {
                     publish_project_error(
                         "Save Project",
                         "The project has no path; use Save As.");
+                    abandonSaveAndExitAttempt();
                     return;
                 }
                 if (auto saved = projectSave(false);
@@ -1442,34 +1424,19 @@ namespace lfs::vis {
                     publish_project_error(
                         "Save Project",
                         saved.error());
+                    abandonSaveAndExitAttempt();
                     return;
+                }
+                if (gui_manager_) {
+                    gui_manager_->dismissExitConfirmation();
                 }
                 requestApplicationClose();
             });
 
         cmd::SaveAsAndExit::when(
-            [this, publish_project_error](
-                const auto&) {
-                const auto path =
-                    gui::SaveProjectFileDialog();
-                if (path.empty()) {
-                    if (project_lifecycle_) {
-                        project_lifecycle_
-                            ->resetCloseSaveAttempt();
-                    }
-                    close_save_notice_posted_ =
-                        false;
-                    return;
-                }
-                if (auto saved =
-                        projectSaveAsFromDialog(path, false);
-                    !saved) {
-                    publish_project_error(
-                        "Save Project As",
-                        saved.error());
-                    return;
-                }
-                requestApplicationClose();
+            [this](const auto&) {
+                completeSaveAsAndExit(
+                    gui::SaveProjectFileDialog());
             });
 
         cmd::CancelExit::when([this](const auto&) {
@@ -1483,22 +1450,13 @@ namespace lfs::vis {
                 pending_training_action_posted_ =
                     false;
             }
-            if (project_lifecycle_) {
-                project_lifecycle_
-                    ->resetCloseSaveAttempt();
-            }
-            close_save_notice_posted_ = false;
-            if (gui_manager_) {
-                gui_manager_->setForceExit(false);
-            }
-            if (window_manager_) {
-                window_manager_->cancelClose();
-            }
+            abandonSaveAndExitAttempt();
         });
 
         cmd::ForceExit::when([this](const auto&) {
             if (gui_manager_) {
                 gui_manager_->setForceExit(true);
+                gui_manager_->dismissExitConfirmation();
             }
             if (project_lifecycle_) {
                 project_lifecycle_
@@ -1521,25 +1479,22 @@ namespace lfs::vis {
         });
 
         cmd::StopSaveAndExit::when([this](const auto&) {
-            if (gui_manager_) {
-                gui_manager_->setForceExit(false);
-            }
-            if (project_lifecycle_) {
-                project_lifecycle_
-                    ->markApplicationClosePending();
-                project_lifecycle_
-                    ->setSuppressTrainingAdoption(false);
-            }
             if (trainer_manager_ &&
                 (trainer_manager_->isTrainingActive() ||
                  trainer_manager_
                      ->isCompletionPending())) {
-                pending_training_action_ =
-                    PendingTrainingAction::CloseSave;
-                trainer_manager_->suppressCompletionNotification();
-                if (trainer_manager_->canStop()) {
-                    trainer_manager_->stopTraining();
+                auto has_path = projectHasPath();
+                if (!has_path || !*has_path) {
+                    const auto path =
+                        gui::SaveProjectFileDialog();
+                    if (path.empty()) {
+                        abandonSaveAndExitAttempt();
+                        return;
+                    }
+                    armStopSaveAndExit(path);
+                    return;
                 }
+                armStopSaveAndExit();
                 return;
             }
             auto has_path = projectHasPath();
@@ -2472,6 +2427,11 @@ namespace lfs::vis {
                     ->setSuppressTrainingAdoption(true);
             }
             if (training_blocks_close()) {
+                armForceExitCompletionWatcher();
+                if (force_exit_wait_expired_.load(
+                        std::memory_order_acquire)) {
+                    return finish_close();
+                }
                 pending_training_action_ =
                     PendingTrainingAction::CloseDiscard;
                 trainer_manager_->suppressCompletionNotification();
@@ -2524,6 +2484,15 @@ namespace lfs::vis {
                 return finish_close();
             case project::ProjectLifecycle::
                 CloseSaveStatus::Saving:
+                if (gui_manager_ &&
+                    gui_manager_->isForceExit()) {
+                    project_lifecycle_
+                        ->markApplicationClosePending();
+                    project_lifecycle_
+                        ->setSuppressTrainingAdoption(
+                            true);
+                    return finish_close();
+                }
                 if (!close_save_notice_posted_) {
                     close_save_notice_posted_ = true;
                     lfs::ErrorBus::instance().publish(
@@ -3036,6 +3005,129 @@ namespace lfs::vis {
             path, regenerate_preview, true);
     }
 
+    bool VisualizerImpl::projectContainsEmbeddedSecrets()
+        const {
+        return project_lifecycle_ &&
+               project_lifecycle_->containsEmbeddedSecrets();
+    }
+
+    void VisualizerImpl::abandonSaveAndExitAttempt() {
+        pending_close_save_path_.reset();
+        if (project_lifecycle_) {
+            project_lifecycle_->resetCloseSaveAttempt();
+        }
+        close_save_notice_posted_ = false;
+        if (gui_manager_) {
+            gui_manager_->setForceExit(false);
+            gui_manager_->dismissExitConfirmation();
+        }
+        if (window_manager_) {
+            window_manager_->cancelClose();
+        }
+    }
+
+    void VisualizerImpl::armStopSaveAndExit(
+        std::optional<std::filesystem::path>
+            untitled_destination) {
+        if (gui_manager_) {
+            gui_manager_->setForceExit(false);
+            gui_manager_->dismissExitConfirmation();
+        }
+        if (project_lifecycle_) {
+            project_lifecycle_
+                ->markApplicationClosePending();
+            project_lifecycle_
+                ->setSuppressTrainingAdoption(false);
+        }
+        if (untitled_destination) {
+            pending_close_save_path_ =
+                *untitled_destination;
+            if (project_lifecycle_) {
+                project_lifecycle_
+                    ->bindTrainerSnapshotTarget(
+                        *untitled_destination, true);
+            }
+        }
+        pending_training_action_ =
+            PendingTrainingAction::CloseSave;
+        if (trainer_manager_) {
+            trainer_manager_->suppressCompletionNotification();
+            if (trainer_manager_->canStop()) {
+                trainer_manager_->stopTraining();
+            }
+        }
+    }
+
+    void VisualizerImpl::completeSaveAsAndExit(
+        const std::filesystem::path& path) {
+        if (path.empty()) {
+            abandonSaveAndExitAttempt();
+            return;
+        }
+        if (auto saved =
+                projectSaveAsFromDialog(path, false);
+            !saved) {
+            lfs::ErrorBus::instance().publish(
+                makeFrameNotification(
+                    saved.error().code(),
+                    saved.error().domain(),
+                    saved.error().severity(),
+                    lfs::ErrorSurface::Toast,
+                    "Save Project As failed.",
+                    std::string(saved.error().detail()),
+                    {},
+                    LFS_SOURCE_SITE_CURRENT()));
+            abandonSaveAndExitAttempt();
+            return;
+        }
+        if (gui_manager_) {
+            gui_manager_->dismissExitConfirmation();
+        }
+        requestApplicationClose();
+    }
+
+    void VisualizerImpl::armForceExitCompletionWatcher() {
+        if (force_exit_watcher_armed_) {
+            return;
+        }
+        force_exit_watcher_armed_ = true;
+        force_exit_wait_expired_.store(
+            false, std::memory_order_release);
+        force_exit_completion_watcher_ = std::jthread(
+            [this](const std::stop_token stop) {
+                const auto deadline =
+                    std::chrono::steady_clock::now() +
+                    force_exit_completion_timeout_;
+                while (!stop.stop_requested()) {
+                    if (!trainer_manager_ ||
+                        !trainer_manager_
+                             ->isCompletionPending()) {
+                        break;
+                    }
+                    if (std::chrono::steady_clock::now() >=
+                        deadline) {
+                        force_exit_wait_expired_.store(
+                            true,
+                            std::memory_order_release);
+                        break;
+                    }
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(50));
+                }
+                if (!stop.stop_requested()) {
+                    requestApplicationClose();
+                }
+            });
+    }
+
+    void VisualizerImpl::stopForceExitCompletionWatcher() {
+        if (force_exit_completion_watcher_.joinable()) {
+            force_exit_completion_watcher_.request_stop();
+            force_exit_completion_watcher_.join();
+        }
+        force_exit_watcher_armed_ = false;
+    }
+
     lfs::Result<ProjectOpenOutcome>
     VisualizerImpl::projectOpen(
         const std::filesystem::path& path,
@@ -3225,6 +3317,14 @@ namespace lfs::vis {
                     RequireClean;
             break;
         case PendingTrainingAction::CloseSave: {
+            if (pending_close_save_path_) {
+                const auto path =
+                    std::exchange(
+                        pending_close_save_path_,
+                        std::nullopt);
+                completeSaveAsAndExit(*path);
+                break;
+            }
             auto has_path = projectHasPath();
             if (has_path && *has_path) {
                 lfs::core::events::cmd::SaveAndExit{}

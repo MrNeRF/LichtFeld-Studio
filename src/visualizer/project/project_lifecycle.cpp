@@ -1838,19 +1838,22 @@ namespace lfs::vis::project {
         return {};
     }
 
-    void ProjectLifecycle::bindTrainerSnapshotTarget() {
+    void ProjectLifecycle::bindTrainerSnapshotTarget(
+        std::optional<std::filesystem::path> destination,
+        const bool allow_existing_destination_replacement) {
         auto* trainer = viewer_.getTrainer();
         if (!trainer) {
             return;
         }
-        std::optional<std::filesystem::path> path;
-        if (document_ && document_->source_path()) {
+        std::optional<std::filesystem::path> path =
+            std::move(destination);
+        if (!path && document_ && document_->source_path()) {
             path = recovered_master_path_.value_or(
                 *document_->source_path());
         }
         trainer->set_live_project_snapshot(
             std::move(path),
-            [this]()
+            [this, allow_existing_destination_replacement]()
                 -> std::optional<
                     lfs::training::
                         ProjectSnapshotDocumentContext> {
@@ -1877,6 +1880,8 @@ namespace lfs::vis::project {
                             context.error()));
                     return std::nullopt;
                 }
+                context->allow_existing_destination_replacement =
+                    allow_existing_destination_replacement;
                 return std::move(*context);
             });
     }
@@ -2607,11 +2612,22 @@ namespace lfs::vis::project {
                     close_save_mutex_);
                 close_save_error_ = error;
             }
-            close_save_state_.store(
-                error.empty()
-                    ? CloseSaveState::Succeeded
-                    : CloseSaveState::Failed,
-                std::memory_order_release);
+            // CancelExit during Saving clears the close
+            // latch but does not abort the writer. A
+            // sticky Succeeded would skip later dirty
+            // checks, so settle to Idle when close is
+            // no longer wanted.
+            if (!application_close_pending_) {
+                close_save_state_.store(
+                    CloseSaveState::Idle,
+                    std::memory_order_release);
+            } else {
+                close_save_state_.store(
+                    error.empty()
+                        ? CloseSaveState::Succeeded
+                        : CloseSaveState::Failed,
+                    std::memory_order_release);
+            }
         }
         jobs.free(*project_write_job_);
         project_write_job_.reset();
@@ -4302,6 +4318,7 @@ namespace lfs::vis::project {
         cleanupRecoverySession();
         adopted_training_snapshot_count_ = 0;
         application_close_pending_ = false;
+        suppress_training_adoption_ = false;
         close_save_state_.store(
             CloseSaveState::Idle,
             std::memory_order_release);
@@ -4899,6 +4916,7 @@ namespace lfs::vis::project {
         cleanupRecoverySession();
         adopted_training_snapshot_count_ = 0;
         application_close_pending_ = false;
+        suppress_training_adoption_ = false;
         close_save_state_.store(
             CloseSaveState::Idle,
             std::memory_order_release);
@@ -4954,11 +4972,20 @@ namespace lfs::vis::project {
             if (auto adopted =
                     adoptCompletedTrainingSnapshot();
                 !adopted) {
-                LOG_ERROR(
-                    "Could not adopt the completed training project generation: {}",
-                    developerError(adopted.error()));
+                const auto warning =
+                    developerError(adopted.error());
+                if (warning !=
+                    last_unadoptable_training_snapshot_warning_) {
+                    last_unadoptable_training_snapshot_warning_ =
+                        warning;
+                    LOG_ERROR(
+                        "Could not adopt the completed training project generation: {}",
+                        warning);
+                }
                 return true;
             }
+            last_unadoptable_training_snapshot_warning_
+                .clear();
         }
         if (viewer_.getTrainer() &&
             viewer_.getTrainerManager() &&
@@ -5164,6 +5191,8 @@ namespace lfs::vis::project {
     }
 
     void ProjectLifecycle::resetCloseSaveAttempt() {
+        application_close_pending_ = false;
+        suppress_training_adoption_ = false;
         if (close_save_state_.load(
                 std::memory_order_acquire) ==
             CloseSaveState::Saving) {
@@ -5177,8 +5206,6 @@ namespace lfs::vis::project {
         close_save_state_.store(
             CloseSaveState::Idle,
             std::memory_order_release);
-        application_close_pending_ = false;
-        suppress_training_adoption_ = false;
     }
 
     std::string ProjectLifecycle::closeSaveError()
@@ -5210,6 +5237,8 @@ namespace lfs::vis::project {
                 settings_.reopen_last_project,
             .auto_save_on_close =
                 settings_.auto_save_on_close,
+            .autosave_interval_seconds =
+                settings_.autosave_interval_seconds,
             .recent_projects = {},
         };
         result.recent_projects.reserve(
@@ -5228,15 +5257,6 @@ namespace lfs::vis::project {
     lfs::Result<ProjectInfo>
     ProjectLifecycle::info() {
         settleProjectWrite();
-        if (close_save_state_.load(
-                std::memory_order_acquire) ==
-            CloseSaveState::Saving) {
-            return fail<ProjectInfo>(
-                lfs::ErrorCode::FailedPrecondition,
-                "The project is being saved before exit.",
-                "Project metadata is unavailable while the close save owns the document",
-                "project.save");
-        }
         if (!document_) {
             return fail<ProjectInfo>(
                 lfs::ErrorCode::FailedPrecondition,
@@ -5244,7 +5264,11 @@ namespace lfs::vis::project {
                 "Project lifecycle has not created or opened a document",
                 "project.document");
         }
-        if (project_write_job_) {
+        const bool close_save_running =
+            close_save_state_.load(
+                std::memory_order_acquire) ==
+            CloseSaveState::Saving;
+        if (close_save_running || project_write_job_) {
             auto result =
                 cached_project_info_
                     .value_or(ProjectInfo{});
@@ -5330,10 +5354,19 @@ namespace lfs::vis::project {
             if (auto synchronized =
                     synchronizeDocumentFromViewer();
                 !synchronized) {
-                if (canFlushFinishedTrainerSnapshot()) {
-                    // Unbound finished training model has
-                    // no CKPT yet; save/saveAs can still
-                    // flush. Do not fail MCP preflight.
+                const bool trainer_can_flush =
+                    (viewer_.getTrainer() &&
+                     trainer_manager &&
+                     (trainer_manager
+                          ->isTrainingActive() ||
+                      trainer_manager
+                          ->isCompletionPending())) ||
+                    canFlushFinishedTrainerSnapshot();
+                if (trainer_can_flush) {
+                    // Unbound active/paused/finished
+                    // training model has no CKPT yet;
+                    // save/saveAs can still flush. Do
+                    // not fail MCP preflight.
                     const auto warning =
                         developerError(
                             synchronized.error());
@@ -5342,7 +5375,7 @@ namespace lfs::vis::project {
                         last_finished_trainer_info_sync_warning_ =
                             warning;
                         LOG_WARN(
-                            "Skipping document sync for project info; a finished trainer can still flush: {}",
+                            "Skipping document sync for project info; a trainer can still flush: {}",
                             warning);
                     }
                 } else {
