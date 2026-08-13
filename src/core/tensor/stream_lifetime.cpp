@@ -6,14 +6,13 @@
 #include <algorithm>
 #include <atomic>
 #include <mutex>
-#include <shared_mutex>
 #include <vector>
 
 namespace lfs::core {
     namespace {
 
         struct RetiredStreamRegistry {
-            std::shared_mutex mutex;
+            std::mutex mutex;
             std::vector<cudaStream_t> streams;
             std::atomic<size_t> size{0};
         };
@@ -25,26 +24,22 @@ namespace lfs::core {
             return *instance;
         }
 
-        bool contains_locked(const std::vector<cudaStream_t>& streams, cudaStream_t stream) {
-            return std::find(streams.begin(), streams.end(), stream) != streams.end();
-        }
-
     } // namespace
 
-    void note_stream_retired(cudaStream_t stream) noexcept {
+    void retire_stream(cudaStream_t stream) noexcept {
         if (!stream) {
             return;
         }
         auto& reg = registry();
-        std::unique_lock lock(reg.mutex);
-        if (contains_locked(reg.streams, stream)) {
+        std::lock_guard lock(reg.mutex);
+        if (std::find(reg.streams.begin(), reg.streams.end(), stream) != reg.streams.end()) {
             return;
         }
         reg.streams.push_back(stream);
         reg.size.store(reg.streams.size(), std::memory_order_release);
     }
 
-    void note_stream_reused(cudaStream_t stream) noexcept {
+    void unretire_stream(cudaStream_t stream) noexcept {
         if (!stream) {
             return;
         }
@@ -52,13 +47,7 @@ namespace lfs::core {
         if (reg.size.load(std::memory_order_acquire) == 0) {
             return;
         }
-        {
-            std::shared_lock lock(reg.mutex);
-            if (!contains_locked(reg.streams, stream)) {
-                return;
-            }
-        }
-        std::unique_lock lock(reg.mutex);
+        std::lock_guard lock(reg.mutex);
         auto it = std::find(reg.streams.begin(), reg.streams.end(), stream);
         if (it == reg.streams.end()) {
             return;
@@ -75,8 +64,8 @@ namespace lfs::core {
         if (reg.size.load(std::memory_order_acquire) == 0) {
             return false;
         }
-        std::shared_lock lock(reg.mutex);
-        return contains_locked(reg.streams, stream);
+        std::lock_guard lock(reg.mutex);
+        return std::find(reg.streams.begin(), reg.streams.end(), stream) != reg.streams.end();
     }
 
 } // namespace lfs::core

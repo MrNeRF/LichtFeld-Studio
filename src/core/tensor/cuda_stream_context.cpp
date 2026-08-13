@@ -19,14 +19,14 @@ namespace lfs::core {
 
     void setCurrentCUDAStream(cudaStream_t stream) {
         if (stream) {
-            note_stream_reused(stream);
+            unretire_stream(stream);
         }
         tl_current_stream = stream;
     }
 
     void waitForCUDAStream(cudaStream_t execution_stream, cudaStream_t dependency_stream) {
-        note_stream_reused(execution_stream);
-        note_stream_reused(dependency_stream);
+        unretire_stream(execution_stream);
+        unretire_stream(dependency_stream);
         if (dependency_stream == nullptr || dependency_stream == execution_stream) {
             return;
         }

@@ -639,7 +639,7 @@ namespace lfs::core {
                        "Tensor constructor received null storage for a non-empty tensor");
 
         if (home_stream != nullptr && device_ == Device::CUDA) {
-            note_stream_reused(home_stream);
+            unretire_stream(home_stream);
         }
         state_->stream = home_stream;
         init_storage_meta();
@@ -862,7 +862,7 @@ namespace lfs::core {
 
     void Tensor::set_stream(cudaStream_t stream) {
         if (stream) {
-            note_stream_reused(stream);
+            unretire_stream(stream);
         }
         LFS_ASSERT_MSG(is_valid(),
                        "set_stream requires a valid tensor");
@@ -892,7 +892,7 @@ namespace lfs::core {
 
     void Tensor::record_stream(cudaStream_t stream) const {
         if (stream) {
-            note_stream_reused(stream);
+            unretire_stream(stream);
         }
         LFS_ASSERT_MSG(is_valid(),
                        "record_stream requires a valid tensor");

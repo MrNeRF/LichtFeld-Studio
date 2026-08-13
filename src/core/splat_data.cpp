@@ -12,7 +12,6 @@
 #include "nanoflann.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <expected>
@@ -800,7 +799,7 @@ namespace lfs::core {
     }
 
     void SplatData::detach_from_streams() {
-        const std::array tensors{
+        Tensor* const tensors[] = {
             &_means,
             &_sh0,
             &_shN,
@@ -811,33 +810,19 @@ namespace lfs::core {
             &_deleted,
             &_densification_info,
         };
-
-        std::array<cudaStream_t, tensors.size()> unique_streams{};
-        std::size_t unique_stream_count = 0;
-        for (const Tensor* tensor : tensors) {
+        for (Tensor* tensor : tensors) {
             if (!tensor->is_valid() || tensor->device() != Device::CUDA) {
                 continue;
             }
-            const cudaStream_t stream = tensor->stream();
-            if (stream != nullptr &&
-                std::find(unique_streams.begin(),
-                          unique_streams.begin() + unique_stream_count,
-                          stream) == unique_streams.begin() + unique_stream_count) {
-                unique_streams[unique_stream_count++] = stream;
+            if (const cudaStream_t stream = tensor->stream()) {
+                const cudaError_t sync_status = cudaStreamSynchronize(stream);
+                if (sync_status != cudaSuccess) {
+                    LOG_WARN("CUDA stream sync in detach_from_streams failed: {}",
+                             cudaGetErrorString(sync_status));
+                    (void)cudaGetLastError();
+                }
             }
-        }
-        for (std::size_t i = 0; i < unique_stream_count; ++i) {
-            const cudaError_t sync_status = cudaStreamSynchronize(unique_streams[i]);
-            if (sync_status != cudaSuccess) {
-                LOG_WARN("CUDA stream sync before detach_from_streams failed: {}",
-                         cudaGetErrorString(sync_status));
-            }
-        }
-
-        for (Tensor* tensor : tensors) {
-            if (tensor->is_valid() && tensor->device() == Device::CUDA) {
-                tensor->set_stream(nullptr);
-            }
+            tensor->set_stream(nullptr);
         }
     }
 

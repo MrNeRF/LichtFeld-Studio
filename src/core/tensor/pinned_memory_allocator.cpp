@@ -438,7 +438,7 @@ namespace lfs::core {
     }
 
     void PinnedMemoryAllocator::deallocate(void* ptr, const cudaStream_t stream) {
-        note_stream_reused(stream);
+        unretire_stream(stream);
         if (!ptr) {
             return;
         }
@@ -524,7 +524,7 @@ namespace lfs::core {
     }
 
     void PinnedMemoryAllocator::record_stream(void* ptr, const cudaStream_t stream) {
-        note_stream_reused(stream);
+        unretire_stream(stream);
         if (!ptr) {
             return;
         }

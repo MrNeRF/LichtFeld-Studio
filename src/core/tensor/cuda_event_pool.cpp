@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "internal/stream_lifetime.hpp"
 
+#include <atomic>
 #include <format>
 #include <string_view>
 
@@ -13,6 +14,14 @@ namespace lfs::core {
 
     namespace {
         std::atomic<bool> g_force_event_acquire_failure_for_testing{false};
+
+        void warn_bridge_skipped_once(cudaStream_t from, cudaStream_t to, const char* reason) {
+            static std::atomic<bool> warned{false};
+            if (!warned.exchange(true, std::memory_order_relaxed)) {
+                LOG_WARN("skipping stream bridge: {} (from_stream={}, to_stream={})",
+                         reason, static_cast<void*>(from), static_cast<void*>(to));
+            }
+        }
 
         void synchronize_stream_bridge_source(cudaStream_t from,
                                               cudaStream_t to,
@@ -117,12 +126,7 @@ namespace lfs::core {
             if (is_stream_retired(from)) {
                 // release_stream synchronized the stream before retiring it, so
                 // there is no pending work to order against.
-                static std::atomic<bool> warned{false};
-                if (!warned.exchange(true, std::memory_order_relaxed)) {
-                    LOG_WARN("source stream was retired before destruction; skipping bridge "
-                             "(from_stream={}, to_stream={})",
-                             static_cast<void*>(from), static_cast<void*>(to));
-                }
+                warn_bridge_skipped_once(from, to, "source stream retired before destruction");
                 return;
             }
             cudaStreamCaptureStatus capture = cudaStreamCaptureStatusNone;
@@ -131,12 +135,7 @@ namespace lfs::core {
                 (void)cudaGetLastError();
                 if (capture_status == cudaErrorInvalidResourceHandle ||
                     capture_status == cudaErrorContextIsDestroyed) {
-                    static std::atomic<bool> warned{false};
-                    if (!warned.exchange(true, std::memory_order_relaxed)) {
-                        LOG_WARN("source stream handle is invalid (already destroyed?); "
-                                 "skipping bridge (from_stream={}, to_stream={})",
-                                 static_cast<void*>(from), static_cast<void*>(to));
-                    }
+                    warn_bridge_skipped_once(from, to, "source stream handle invalid (already destroyed?)");
                     return;
                 }
                 synchronize_stream_bridge_source(from, to, "capture status query failed");

@@ -145,12 +145,12 @@ TEST_F(StaleStreamTeardownTest, DetachFromStreamsCoversBoundsThenCanonicalSuccee
 
 TEST_F(StaleStreamTeardownTest, RetiredStreamRegistryReuseCycle) {
     const auto fake = reinterpret_cast<cudaStream_t>(static_cast<uintptr_t>(0x1));
-    note_stream_retired(fake);
+    retire_stream(fake);
     EXPECT_TRUE(is_stream_retired(fake));
-    note_stream_reused(fake);
+    unretire_stream(fake);
     EXPECT_FALSE(is_stream_retired(fake));
 
-    note_stream_retired(nullptr);
+    retire_stream(nullptr);
     EXPECT_FALSE(is_stream_retired(nullptr));
     EXPECT_FALSE(is_stream_retired(fake));
 
@@ -170,31 +170,14 @@ TEST_F(StaleStreamTeardownTest, RetiredStreamRegistryReuseCycle) {
     ASSERT_EQ(cudaStreamDestroy(stream_a), cudaSuccess);
     EXPECT_TRUE(is_stream_retired(stream_a));
 
-    bool reused_handle = false;
-    for (int attempt = 0; attempt < 64; ++attempt) {
-        cudaStream_t stream_b = nullptr;
-        ASSERT_EQ(cudaStreamCreate(&stream_b), cudaSuccess);
-        if (stream_b == stream_a) {
-            reused_handle = true;
-            tensor.set_stream(stream_b);
-            EXPECT_FALSE(is_stream_retired(stream_b));
-            CudaMemoryPool::instance().release_stream(stream_b);
-            ASSERT_EQ(cudaStreamDestroy(stream_b), cudaSuccess);
-            break;
-        }
-        ASSERT_EQ(cudaStreamDestroy(stream_b), cudaSuccess);
-    }
-
-    if (!reused_handle) {
-        cudaStream_t stream_b = nullptr;
-        ASSERT_EQ(cudaStreamCreate(&stream_b), cudaSuccess);
-        note_stream_retired(stream_b);
-        EXPECT_TRUE(is_stream_retired(stream_b));
-        tensor.set_stream(stream_b);
-        EXPECT_FALSE(is_stream_retired(stream_b));
-        CudaMemoryPool::instance().release_stream(stream_b);
-        ASSERT_EQ(cudaStreamDestroy(stream_b), cudaSuccess);
-    }
+    cudaStream_t stream_b = nullptr;
+    ASSERT_EQ(cudaStreamCreate(&stream_b), cudaSuccess);
+    retire_stream(stream_b);
+    EXPECT_TRUE(is_stream_retired(stream_b));
+    tensor.set_stream(stream_b);
+    EXPECT_FALSE(is_stream_retired(stream_b));
+    CudaMemoryPool::instance().release_stream(stream_b);
+    ASSERT_EQ(cudaStreamDestroy(stream_b), cudaSuccess);
 
     // Pool-level APIs must un-retire a live-by-contract handle. Tests talk to
     // the pool directly (no Tensor::set_stream / setCurrentCUDAStream), and the
@@ -204,12 +187,12 @@ TEST_F(StaleStreamTeardownTest, RetiredStreamRegistryReuseCycle) {
     void* live = CudaMemoryPool::instance().allocate(256, stream_s);
     ASSERT_NE(live, nullptr);
 
-    note_stream_retired(stream_s);
+    retire_stream(stream_s);
     EXPECT_TRUE(is_stream_retired(stream_s));
     CudaMemoryPool::instance().record_stream(live, stream_s);
     EXPECT_FALSE(is_stream_retired(stream_s));
 
-    note_stream_retired(stream_s);
+    retire_stream(stream_s);
     EXPECT_TRUE(is_stream_retired(stream_s));
     void* reused = CudaMemoryPool::instance().allocate(256, stream_s);
     ASSERT_NE(reused, nullptr);
