@@ -18,7 +18,9 @@
 #include "core/events.hpp"
 #include "core/json_utils.hpp"
 #include "core/logger.hpp"
+#include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
@@ -1700,6 +1702,25 @@ namespace lfs::app {
             std::optional<std::shared_lock<std::shared_mutex>> model_lock;
         };
 
+        [[nodiscard]] core::ProvenanceStamp make_gui_export_stamp(const vis::SceneManager& scene_manager) {
+            auto stamp = core::make_provenance_stamp();
+            const auto* const trainer_manager = scene_manager.getTrainerManager();
+            if (trainer_manager) {
+                const int iteration = trainer_manager->getCurrentIteration();
+                // iteration 0 means an untrained scene, deliberately not stamped.
+                if (iteration > 0)
+                    stamp.iteration = iteration;
+            }
+            const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
+            if (trainer) {
+                const auto strategy = core::param::canonical_strategy_name(
+                    trainer->getParams().optimization.strategy);
+                if (!strategy.empty())
+                    stamp.strategy = std::string(strategy);
+            }
+            return stamp;
+        }
+
         BorrowExportPlan make_borrow_single_identity_export_plan(const vis::SceneManager& scene_manager,
                                                                  const std::vector<std::string>& node_names) {
             BorrowExportPlan plan;
@@ -1731,7 +1752,8 @@ namespace lfs::app {
                                                             const std::vector<std::string>& node_names,
                                                             const core::ExportFormat format,
                                                             const std::filesystem::path& path,
-                                                            const int sh_degree) {
+                                                            const int sh_degree,
+                                                            const bool include_provenance = true) {
             const auto& scene = scene_manager.getScene();
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             splats.reserve(node_names.size());
@@ -1761,41 +1783,44 @@ namespace lfs::app {
             truncate_sh_degree(*merged, sh_degree);
             borrow_plan.model_lock.reset();
 
+            const auto stamp = include_provenance ? make_gui_export_stamp(scene_manager)
+                                                  : core::make_minimal_provenance_stamp();
+
             switch (format) {
             case core::ExportFormat::PLY: {
                 if (auto result = io::save_ply(
-                        *merged, io::PlySaveOptions{.output_path = path, .binary = true, .async = false, .extra_attributes = {}});
+                        *merged, io::PlySaveOptions{.output_path = path, .binary = true, .async = false, .extra_attributes = {}, .provenance = stamp});
                     !result)
                     return std::unexpected(result.error().message);
                 break;
             }
             case core::ExportFormat::SOG: {
-                if (auto result = io::save_sog(*merged, io::SogSaveOptions{.output_path = path, .kmeans_iterations = 10}); !result)
+                if (auto result = io::save_sog(*merged, io::SogSaveOptions{.output_path = path, .kmeans_iterations = 10, .provenance = stamp}); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
             case core::ExportFormat::SPZ: {
-                if (auto result = io::save_spz(*merged, io::SpzSaveOptions{.output_path = path}); !result)
+                if (auto result = io::save_spz(*merged, io::SpzSaveOptions{.output_path = path, .provenance = stamp}); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
             case core::ExportFormat::HTML_VIEWER: {
-                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{.output_path = path}); !result)
+                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{.output_path = path, .provenance = stamp}); !result)
                     return std::unexpected(result.error());
                 break;
             }
             case core::ExportFormat::USD: {
-                if (auto result = io::save_usd(*merged, io::UsdSaveOptions{.output_path = path}); !result)
+                if (auto result = io::save_usd(*merged, io::UsdSaveOptions{.output_path = path, .provenance = stamp}); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
             case core::ExportFormat::NUREC_USDZ: {
-                if (auto result = io::save_nurec_usdz(*merged, io::NurecUsdzSaveOptions{.output_path = path}); !result)
+                if (auto result = io::save_nurec_usdz(*merged, io::NurecUsdzSaveOptions{.output_path = path, .provenance = stamp}); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
             case core::ExportFormat::RAD: {
-                if (auto result = io::save_rad(*merged, io::RadSaveOptions{.output_path = path}); !result)
+                if (auto result = io::save_rad(*merged, io::RadSaveOptions{.output_path = path, .provenance = stamp}); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
@@ -2506,14 +2531,20 @@ namespace lfs::app {
                     });
                 },
             .save_ply =
-                [viewer](const std::filesystem::path& path) {
-                    return post_and_wait(viewer, [viewer, path]() -> std::expected<void, std::string> {
+                [viewer](const std::filesystem::path& path, const bool include_provenance) {
+                    return post_and_wait(viewer, [viewer, path, include_provenance]() -> std::expected<void, std::string> {
                         auto& scene = viewer->getScene();
                         auto* model = scene.getTrainingModel();
                         if (!model)
                             return std::unexpected("No model to save");
 
-                        io::PlySaveOptions options{.output_path = path, .binary = true};
+                        const auto stamp = include_provenance
+                                               ? (viewer->getSceneManager()
+                                                      ? make_gui_export_stamp(*viewer->getSceneManager())
+                                                      : core::make_provenance_stamp())
+                                               : core::make_minimal_provenance_stamp();
+
+                        io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = stamp};
                         auto result = io::save_ply(*model, options);
                         if (!result)
                             return std::unexpected(result.error().message);
@@ -3367,13 +3398,15 @@ namespace lfs::app {
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
                         {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -3382,7 +3415,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::PLY, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::PLY, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -3408,13 +3441,15 @@ namespace lfs::app {
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
                         {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -3423,7 +3458,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SOG, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SOG, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -3449,13 +3484,15 @@ namespace lfs::app {
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
                         {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -3464,7 +3501,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SPZ, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SPZ, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -3490,13 +3527,15 @@ namespace lfs::app {
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
                         {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -3505,7 +3544,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::USD, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::USD, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -3531,13 +3570,15 @@ namespace lfs::app {
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
                         {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -3546,7 +3587,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::NUREC_USDZ, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::NUREC_USDZ, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -3572,13 +3613,15 @@ namespace lfs::app {
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
                         {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -3587,7 +3630,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::HTML_VIEWER, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::HTML_VIEWER, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -3613,13 +3656,15 @@ namespace lfs::app {
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
                         {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -3628,7 +3673,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::RAD, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::RAD, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{

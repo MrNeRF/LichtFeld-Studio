@@ -1212,6 +1212,8 @@
     "models": "모델",
     "no_models": "씬에 모델 없음",
     "sh_degree": "SH Degree",
+    "include_provenance": "출처 메타데이터",
+    "include_provenance_hint": "끄면 식별 필드는 빠지지만, 최소 빌드 식별(앱 버전 + 빌드 커밋)은 항상 포함됩니다",
     "spz_version": "SPZ 버전",
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (레거시)",

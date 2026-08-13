@@ -59,6 +59,16 @@
         </div>
       </div>
 
+      <!-- Provenance - hidden for COLMAP and SPZ v3 -->
+      <div class="ep-section" data-if="show_include_provenance">
+        <div class="setting-row setting-row--aligned" data-tooltip="export_dialog.include_provenance_hint">
+          <span class="setting-row__label-col">@tr:export_dialog.include_provenance</span>
+          <div class="setting-row__control-col">
+            <input type="checkbox" data-attrif-checked="include_provenance" data-event-change="toggle_include_provenance" />
+          </div>
+        </div>
+      </div>
+
       <!-- SPZ version - only shown for SPZ format -->
       <div class="ep-section" data-if="show_spz_version">
         <div class="setting-row setting-row--aligned">

@@ -1215,6 +1215,8 @@
     "spz_version": "VERSIÓN SPZ",
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (legado)",
+    "include_provenance": "DATOS DE PROCEDENCIA",
+    "include_provenance_hint": "Al desactivar se omiten los campos identificativos, pero siempre se incrusta una identificación mínima de la build (versión de la app + commit)",
     "export_merged": "Exportar Combinado...",
     "rad_export_mode": "RAD MODE",
     "rad_streamable": "RAD (streamable)",

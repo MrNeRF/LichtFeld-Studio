@@ -1537,7 +1537,7 @@ Callbacks registered with `lf.on_*` receive one positional hook payload. If you 
 | `get_current_view()`                                  | `ViewInfo`       | Current camera view        |
 | `get_viewport_render()`                               | `ViewportRender` | Current viewport image     |
 | `capture_viewport()`                                  | `ViewportRender` | Capture for async use      |
-| `export_viewport_image(path, format='', width=0, height=0, transparent=False, jpeg_quality=95)` | `dict` | Export active viewport to PNG/JPEG |
+| `export_viewport_image(path, format='', width=0, height=0, transparent=False, jpeg_quality=95, include_provenance=True)` | `dict` | Export active viewport to PNG/JPEG (`include_provenance=False` still embeds a minimal build stamp) |
 | `look_at(eye, target, up=(0,1,0))`                    | `(Tensor, Tensor)` | Compute `(rotation, translation)` for rendering |
 | `render_view(rotation, translation, width, height, fov=60, bg_color=None, with_depth=False, depth_mode='median')` | `Tensor \| tuple \| None` | Render active scene from camera |
 | `render_view_u8(rotation, translation, width, height, fov=60, bg_color=None, orthographic=None, ortho_scale=None)` | `Tensor \| None` | Render active scene as CPU uint8 RGB |
@@ -1571,6 +1571,7 @@ lf.export_scene(
     rad_flip_y: bool = False,
     rad_streamable: bool = True,
     spz_version: int = 4,    # SPZ only: 4 (zstd) or 3 (legacy gzip)
+    include_provenance: bool = True,  # False writes a minimal build stamp; ignored for COLMAP and SPZ v3
 )
 lf.save_config_file(path: str)
 ```
@@ -1584,17 +1585,19 @@ live application scene.
 |---|---|---|
 | `lf.io.load(path, format=None, resize_factor=None, max_width=None, images_folder=None, progress=None, min_track_length=None)` | `LoadResult` | Load splat file, point cloud, mesh-derived data, or dataset |
 | `lf.io.load_point_cloud(path)` | `(Tensor, Tensor)` | Load PLY point cloud as positions/colors |
-| `lf.io.save_ply(data, path, binary=True, progress=None, extra_attributes=None)` | `None` | Save `SplatData` as PLY |
-| `lf.io.save_point_cloud_ply(point_cloud, path, extra_attributes=None)` | `None` | Save `PointCloud` as PLY |
-| `lf.io.save_sog(data, path, kmeans_iterations=10, use_gpu=True, progress=None)` | `None` | Save SOG-compressed splats |
-| `lf.io.save_spz(data, path, version=4)` | `None` | Save SPZ splats (`version` 4=zstd, 3=legacy gzip) |
-| `lf.io.save_usd(data, path)` | `None` | Save OpenUSD gaussian file |
-| `lf.io.save_nurec_usdz(data, path)` | `None` | Save NuRec-compatible USDZ |
-| `lf.io.export_html(data, path, kmeans_iterations=10, progress=None)` | `None` | Self-contained HTML viewer |
-| `lf.io.save_image(path, image)` | `None` | Save PNG/JPG/TIFF/EXR from `[H,W,C]` or `[C,H,W]` tensor |
+| `lf.io.save_ply(data, path, binary=True, progress=None, extra_attributes=None, include_provenance=True)` | `None` | Save `SplatData` as PLY (`False` still embeds a minimal build stamp) |
+| `lf.io.save_point_cloud_ply(point_cloud, path, extra_attributes=None, include_provenance=True)` | `None` | Save `PointCloud` as PLY (`False` still embeds a minimal build stamp) |
+| `lf.io.save_sog(data, path, kmeans_iterations=10, use_gpu=True, progress=None, include_provenance=True)` | `None` | Save SOG-compressed splats (`False` still embeds a minimal build stamp) |
+| `lf.io.save_spz(data, path, version=4, include_provenance=True)` | `None` | Save SPZ splats (`version` 4=zstd, 3=legacy gzip; `include_provenance` ignored for v3) |
+| `lf.io.save_usd(data, path, include_provenance=True)` | `None` | Save OpenUSD gaussian file (`False` still embeds a minimal build stamp) |
+| `lf.io.save_nurec_usdz(data, path, include_provenance=True)` | `None` | Save NuRec-compatible USDZ (`False` still embeds a minimal build stamp) |
+| `lf.io.export_html(data, path, kmeans_iterations=10, progress=None, include_provenance=True)` | `None` | Self-contained HTML viewer (`False` still embeds a minimal build stamp) |
+| `lf.io.save_image(path, image, include_provenance=True)` | `None` | Save PNG/JPG/TIFF/EXR from `[H,W,C]` or `[C,H,W]` tensor (`False` still embeds a minimal build stamp on PNG/JPEG) |
 | `lf.io.is_dataset_path(path)` | `bool` | Dataset directory detection |
 | `lf.io.is_gaussian_splat_ply(path)` | `bool` | PLY schema check for gaussian splat attributes |
 | `lf.io.get_supported_formats()` / `get_supported_extensions()` | `list[str]` | Loader/exporter support |
+
+`include_provenance=False` writes a minimal build stamp (`app_version` + `build_commit`). The flag is ignored for COLMAP and SPZ v3 (legacy gzip), which have no stamp slot.
 
 `LoadResult` exposes `splat_data`, `point_cloud`, `cameras`,
 `scene_center`, `loader_used`, `load_time_ms`, `warnings`, and `is_dataset`.

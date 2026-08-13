@@ -107,6 +107,7 @@ class ExportPanel(Panel):
         # RAD export settings
         self._rad_flip_y = False  # Y-flip checkbox (off by default)
         self._rad_streamable = True
+        self._include_provenance = True
         self._doc = None  # Document reference for DOM access
         self._last_export_path = None  # Track last export path for Asset Manager
         self._last_export_format = None  # Track last export format for Asset Manager
@@ -155,6 +156,9 @@ class ExportPanel(Panel):
             self._set_rad_export_mode,
         )
         model.bind_event("toggle_rad_flip_y", self._on_toggle_rad_flip_y)
+        model.bind_func("include_provenance", lambda: self._include_provenance)
+        model.bind_func("show_include_provenance", self._show_include_provenance)
+        model.bind_event("toggle_include_provenance", self._on_toggle_include_provenance)
 
         model.bind_event("do_cancel", self._on_cancel)
         model.bind_event("do_cancel_export", self._on_cancel_export)
@@ -223,6 +227,17 @@ class ExportPanel(Panel):
         self._rad_flip_y = not self._rad_flip_y
         self._dirty_model("rad_flip_y")
 
+    def _show_include_provenance(self):
+        if self._format == ExportFormat.COLMAP:
+            return False
+        if self._format == ExportFormat.SPZ and self._spz_version == 3:
+            return False
+        return True
+
+    def _on_toggle_include_provenance(self, _handle, _ev, _args):
+        self._include_provenance = not self._include_provenance
+        self._dirty_model("include_provenance")
+
     def _set_rad_export_mode(self, value):
         streamable = str(value) != "non_stream"
         if streamable == self._rad_streamable:
@@ -238,7 +253,7 @@ class ExportPanel(Panel):
         if version not in (3, 4) or version == self._spz_version:
             return
         self._spz_version = version
-        self._dirty_model("spz_version")
+        self._dirty_model("spz_version", "show_include_provenance")
 
     def _get_scrub_value(self, prop):
         del prop
@@ -564,6 +579,7 @@ class ExportPanel(Panel):
             "show_model_selection",
             "show_sh_degree",
             "show_spz_version",
+            "show_include_provenance",
             "export_error_text",
             "rad_flip_y",
             "rad_export_mode",
@@ -711,7 +727,16 @@ class ExportPanel(Panel):
             return
 
         selected_nodes = [] if self._format == ExportFormat.COLMAP else self._get_selected_node_names()
-        default_name = "colmap_sparse" if self._format == ExportFormat.COLMAP else selected_nodes[0]
+        if self._format == ExportFormat.COLMAP:
+            default_name = "colmap_sparse"
+        else:
+            default_name = selected_nodes[0]
+            try:
+                iteration = lf.trainer_current_iteration()
+                if iteration > 0:
+                    default_name = f"{default_name}_{iteration}"
+            except Exception:
+                pass
         path = self._get_save_path(default_name)
 
         if path:
@@ -756,6 +781,7 @@ class ExportPanel(Panel):
                     rad_flip_y=self._rad_flip_y,
                     rad_streamable=self._rad_streamable,
                     spz_version=self._spz_version,
+                    include_provenance=self._include_provenance,
                 )
             finally:
                 self._request_reactive_update()

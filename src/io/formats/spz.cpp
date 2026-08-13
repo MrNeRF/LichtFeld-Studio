@@ -6,9 +6,11 @@
 #include "coordinate-system-adobe.h"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
 #include "load-spz.h"
+#include "provenance-lichtfeld.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -344,7 +346,13 @@ namespace lfs::io {
         }
     }
 
-    Result<void> save_spz(const SplatData& splat_data, const SpzSaveOptions& options) {
+    Result<void> save_spz(const SplatData& splat_data, const SpzSaveOptions& options_in) {
+        SpzSaveOptions options = options_in;
+        // v3 has no extension zone; leave the slot empty so legacy files stay clean.
+        if (options.version == 4 && !options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         auto start = std::chrono::high_resolution_clock::now();
 
         LOG_INFO("Saving SPZ file: {}", lfs::core::path_to_utf8(options.output_path));
@@ -383,6 +391,11 @@ namespace lfs::io {
             auto coord_ext = std::make_shared<spz::SpzExtensionCoordinateSystemAdobe>();
             coord_ext->coordinateSystem = spz::CoordinateSystem::RUB;
             cloud.extensions.push_back(coord_ext);
+            if (options.provenance) {
+                auto provenance_ext = std::make_shared<spz::SpzExtensionProvenanceLichtFeld>();
+                provenance_ext->json = core::provenance_to_json(*options.provenance);
+                cloud.extensions.push_back(std::move(provenance_ext));
+            }
         }
 #endif
 

@@ -45,30 +45,43 @@ def load(path: str | os.PathLike, format: str | None = None, resize_factor: int 
 def load_point_cloud(path: str | os.PathLike) -> tuple:
     """Load a PLY as point cloud, returns (means [N,3], colors [N,3]) tensors"""
 
-def save_ply(data: lichtfeld.scene.SplatData, path: str | os.PathLike, binary: bool = True, progress: object | None = None, extra_attributes: object | None = None) -> None:
+def save_ply(data: lichtfeld.scene.SplatData, path: str | os.PathLike, binary: bool = True, progress: object | None = None, extra_attributes: object | None = None, include_provenance: bool = True) -> None:
     """
-    Save splat data as PLY file with optional extra per-vertex float attributes
-    """
-
-def save_point_cloud_ply(point_cloud: lichtfeld.scene.PointCloud, path: str | os.PathLike, extra_attributes: object | None = None) -> None:
-    """
-    Save a point cloud as PLY file (xyz + colors) with optional extra per-vertex float attributes
+    Save splat data as PLY file with optional extra per-vertex float attributes. include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
     """
 
-def save_sog(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans_iterations: int = 10, use_gpu: bool = True, progress: object | None = None) -> None:
-    """Save splat data as SOG compressed file"""
+def save_point_cloud_ply(point_cloud: lichtfeld.scene.PointCloud, path: str | os.PathLike, extra_attributes: object | None = None, include_provenance: bool = True) -> None:
+    """
+    Save a point cloud as PLY file (xyz + colors) with optional extra per-vertex float attributes. include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
+    """
 
-def save_spz(data: lichtfeld.scene.SplatData, path: str | os.PathLike) -> None:
-    """Save splat data as SPZ compressed file"""
+def save_sog(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans_iterations: int = 10, use_gpu: bool = True, progress: object | None = None, include_provenance: bool = True) -> None:
+    """
+    Save splat data as SOG compressed file. include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
+    """
 
-def save_usd(data: lichtfeld.scene.SplatData, path: str | os.PathLike) -> None:
-    """Save splat data as OpenUSD gaussian file"""
+def save_spz(data: lichtfeld.scene.SplatData, path: str | os.PathLike, version: int = 4, include_provenance: bool = True) -> None:
+    """
+    Save splat data as SPZ compressed file.
 
-def save_nurec_usdz(data: lichtfeld.scene.SplatData, path: str | os.PathLike) -> None:
-    """Save splat data as NuRec USDZ compatible with PLY_to_USD / Omniverse"""
+    version: SPZ container version, 4 (zstd, default) or 3 (legacy gzip).
+    include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded. Ignored for SPZ v3.
+    """
 
-def export_html(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans_iterations: int = 10, progress: object | None = None) -> None:
-    """Export splat data as self-contained HTML viewer"""
+def save_usd(data: lichtfeld.scene.SplatData, path: str | os.PathLike, include_provenance: bool = True) -> None:
+    """
+    Save splat data as OpenUSD gaussian file. include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
+    """
+
+def save_nurec_usdz(data: lichtfeld.scene.SplatData, path: str | os.PathLike, include_provenance: bool = True) -> None:
+    """
+    Save splat data as NuRec USDZ compatible with PLY_to_USD / Omniverse. include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
+    """
+
+def export_html(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans_iterations: int = 10, progress: object | None = None, include_provenance: bool = True) -> None:
+    """
+    Export splat data as self-contained HTML viewer. include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
+    """
 
 def is_dataset_path(path: str | os.PathLike) -> bool:
     """Check if path is a dataset directory"""
@@ -84,7 +97,7 @@ def get_supported_formats() -> list[str]:
 def get_supported_extensions() -> list[str]:
     """Get list of supported file extensions"""
 
-def save_image(path: str | os.PathLike, image: lichtfeld.Tensor) -> None:
+def save_image(path: str | os.PathLike, image: lichtfeld.Tensor, include_provenance: bool = True) -> None:
     """
-    Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1].
+    Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1]. include_provenance (default true) writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.
     """

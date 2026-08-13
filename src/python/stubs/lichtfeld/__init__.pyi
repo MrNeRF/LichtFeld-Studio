@@ -346,9 +346,9 @@ def cancel_exit() -> None:
 def force_exit() -> None:
     """Explicitly discard unsaved changes and exit."""
 
-def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True) -> None:
+def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True) -> None:
     """
-    Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP.
+    Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
     """
 
 def save_config_file(path: str) -> None:
@@ -1330,7 +1330,7 @@ def capture_viewport() -> ViewportRender | None:
     Capture viewport render explicitly (may read back from GPU; clones data, safe to use from background threads)
     """
 
-def export_viewport_image(path: str, format: str = '', width: int = 0, height: int = 0, transparent: bool = False, jpeg_quality: int = 95) -> dict:
+def export_viewport_image(path: str, format: str = '', width: int = 0, height: int = 0, transparent: bool = False, jpeg_quality: int = 95, include_provenance: bool = True) -> dict:
     """
     Export the active viewport image to PNG or JPEG.
 
@@ -1341,6 +1341,7 @@ def export_viewport_image(path: str, format: str = '', width: int = 0, height: i
         height: Target height in pixels. If both dimensions are zero, captures the current viewport.
         transparent: For PNG only, export straight RGBA from the preview renderer.
         jpeg_quality: JPEG compression quality in [1, 100].
+        include_provenance: When true, writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.
 
     Returns:
         Dict with path, width, height, channels, format, and transparent.

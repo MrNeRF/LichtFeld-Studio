@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/converter.hpp"
+#include "core/checkpoint_format.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "indicators.hpp"
 #include "io/exporter.hpp"
@@ -20,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <print>
 
 namespace lfs::app {
@@ -224,29 +227,31 @@ namespace lfs::app {
             const param::OutputFormat format,
             const int sog_iterations,
             const param::RadExportMode rad_export_mode,
-            const int spz_version = 4,
+            const int spz_version,
+            const core::ProvenanceStamp& provenance,
             const lfs::io::ExportProgressCallback& progress = nullptr) {
             switch (format) {
             case param::OutputFormat::PLY:
-                return lfs::io::save_ply(splat, {.output_path = output, .binary = true, .progress_callback = progress});
+                return lfs::io::save_ply(splat, {.output_path = output, .binary = true, .progress_callback = progress, .provenance = provenance});
             case param::OutputFormat::SOG:
-                return lfs::io::save_sog(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress});
+                return lfs::io::save_sog(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress, .provenance = provenance});
             case param::OutputFormat::SPZ:
-                return lfs::io::save_spz(splat, {.output_path = output, .version = spz_version, .progress_callback = progress});
+                return lfs::io::save_spz(splat, {.output_path = output, .version = spz_version, .progress_callback = progress, .provenance = provenance});
             case param::OutputFormat::HTML:
-                return lfs::io::export_html(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress});
+                return lfs::io::export_html(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress, .provenance = provenance});
             case param::OutputFormat::USD:
             case param::OutputFormat::USDA:
             case param::OutputFormat::USDC:
-                return lfs::io::save_usd(splat, {.output_path = output, .progress_callback = progress});
+                return lfs::io::save_usd(splat, {.output_path = output, .progress_callback = progress, .provenance = provenance});
             case param::OutputFormat::RAD:
                 return lfs::io::save_rad(splat, {
                                                     .output_path = output,
                                                     .chunk_size = radChunkSizeForMode(rad_export_mode),
                                                     .progress_callback = progress,
+                                                    .provenance = provenance,
                                                 });
             }
-            return lfs::io::save_ply(splat, {.output_path = output, .binary = true, .progress_callback = progress});
+            return lfs::io::save_ply(splat, {.output_path = output, .binary = true, .progress_callback = progress, .provenance = provenance});
         }
 
         bool isPlyExtension(const std::filesystem::path& path) {
@@ -265,12 +270,45 @@ namespace lfs::app {
             return ext == ".rad";
         }
 
+        bool isResumeExtension(const std::filesystem::path& path) {
+            auto ext = path.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            return ext == ".resume";
+        }
+
+        [[nodiscard]] core::ProvenanceStamp make_convert_provenance(
+            const bool include_identifying,
+            const std::filesystem::path& input = {}) {
+            if (!include_identifying)
+                return core::make_minimal_provenance_stamp();
+
+            auto stamp = core::make_provenance_stamp();
+            if (isResumeExtension(input)) {
+                // Splat payload is already loaded by the convert path; peek the
+                // same .resume file only for iteration/strategy (header + params).
+                if (const auto header = core::load_checkpoint_header(input)) {
+                    if (header->iteration >= 0)
+                        stamp.iteration = header->iteration;
+                }
+                if (const auto ckpt_params = core::load_checkpoint_params(input)) {
+                    const auto strategy = param::canonical_strategy_name(
+                        ckpt_params->optimization.strategy);
+                    if (!strategy.empty())
+                        stamp.strategy = std::string(strategy);
+                }
+            }
+            return stamp;
+        }
+
         // RAD LOD -> RAD LOD can preserve node order and tree links while
         // re-encoding only the file chunk profile selected by the caller.
         bool rechunkRadFile(
             const std::filesystem::path& input,
             const std::filesystem::path& output,
-            const std::uint32_t target_chunk_size) {
+            const std::uint32_t target_chunk_size,
+            const core::ProvenanceStamp& provenance) {
             std::println("Re-chunking RAD LOD: {} -> {} ({}-splat chunks)",
                          path_to_utf8(input), path_to_utf8(output), target_chunk_size);
 
@@ -278,7 +316,8 @@ namespace lfs::app {
             const auto result = lfs::io::rechunk_rad_lod(
                 input, output, target_chunk_size, [&bar](const float progress) {
                     return bar.report(progress, "re-chunk");
-                });
+                },
+                provenance);
             if (!result) {
                 bar.abort();
                 LOG_ERROR("RAD re-chunk failed: {}", result.error().format());
@@ -347,6 +386,7 @@ namespace lfs::app {
             options.progress = [&bar](const float progress, const std::string& stage) {
                 return bar.report(progress, stage);
             };
+            options.provenance = make_convert_provenance(params.include_provenance, input);
 
             const auto result = lfs::io::convert_ply_to_rad_lod(input, output, options);
             if (!result) {
@@ -380,7 +420,8 @@ namespace lfs::app {
                     return false;
                 }
                 if (*lod_chunk_size) {
-                    return rechunkRadFile(input, output, radChunkSizeForMode(params.rad_export_mode));
+                    return rechunkRadFile(input, output, radChunkSizeForMode(params.rad_export_mode),
+                                          make_convert_provenance(params.include_provenance, input));
                 }
             }
 
@@ -421,6 +462,7 @@ namespace lfs::app {
             const auto result = saveSplat(
                 *splat, output, params.format, params.sog_iterations,
                 params.rad_export_mode, params.spz_version,
+                make_convert_provenance(params.include_provenance, input),
                 [&bar](const float progress, const std::string& stage) {
                     return bar.report(progress, stage);
                 });
@@ -481,7 +523,8 @@ namespace lfs::app {
             for (const auto& output : outputs) {
                 std::println("  Saving: {}", path_to_utf8(output.path));
                 const auto result = saveSplat(**splat, output.path, output.format, params.sog_iterations,
-                                              param::RadExportMode::Stream, params.spz_version);
+                                              param::RadExportMode::Stream, params.spz_version,
+                                              make_convert_provenance(params.include_provenance));
                 if (!result) {
                     LOG_ERROR("Save failed: {}", result.error().format());
                     std::println(stderr, "  Error: {}", result.error().message);

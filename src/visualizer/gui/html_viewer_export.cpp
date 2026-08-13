@@ -14,7 +14,8 @@ namespace lfs::vis::gui {
         const lfs::io::HtmlExportOptions io_options{
             .output_path = options.output_path,
             .kmeans_iterations = 10,
-            .progress_callback = options.progress_callback};
+            .progress_callback = options.progress_callback,
+            .provenance = options.provenance};
 
         auto result = lfs::io::export_html(splat_data, io_options);
         if (!result) {

@@ -1212,6 +1212,8 @@
     "models": "MODELLE",
     "no_models": "Keine Modelle in der Szene",
     "sh_degree": "SH GRAD",
+    "include_provenance": "HERKUNFTSDATEN",
+    "include_provenance_hint": "Deaktivieren entfernt identifizierende Felder; eine minimale Build-Kennung (App-Version + Build-Commit) wird dennoch eingebettet",
     "spz_version": "SPZ-VERSION",
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (veraltet)",

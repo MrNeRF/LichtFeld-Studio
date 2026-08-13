@@ -1212,6 +1212,8 @@
     "models": "MODELLEN",
     "no_models": "Geen modellen in scène",
     "sh_degree": "SH DEGREE",
+    "include_provenance": "HERKOMSTMETADATA",
+    "include_provenance_hint": "Uitschakelen verwijdert identificerende velden, maar een minimale build-identificatie (app-versie + build-commit) wordt altijd ingesloten",
     "spz_version": "SPZ-VERSIE",
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (legacy)",

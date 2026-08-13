@@ -25,6 +25,7 @@ SOFTWARE.
 #include "splat-extensions.h"
 #include "coordinate-system-adobe.h"
 #include "load-spz.h"
+#include "provenance-lichtfeld.h"
 #include "safe-orbit-camera-adobe.h"
 
 #include <sstream>
@@ -90,6 +91,24 @@ namespace spz {
                     return false;
                 std::istringstream iss(std::string(payload.data(), payload.size()));
                 auto rec = SpzExtensionCoordinateSystemAdobe::read(iss);
+                if (rec)
+                    out.push_back(std::move(*rec));
+                return true;
+            }
+            case SpzExtensionType::SPZ_LICHTFELD_provenance: {
+                if (byteLength > kMaxLichtFeldProvenanceBytes) {
+                    SpzLog("[SPZ WARNING] LichtFeld provenance payload %u exceeds %u bytes — skipped",
+                           static_cast<unsigned>(byteLength),
+                           static_cast<unsigned>(kMaxLichtFeldProvenanceBytes));
+                    if (byteLength > 0)
+                        is.ignore(static_cast<std::streamsize>(byteLength));
+                    return true;
+                }
+                std::vector<char> payload(byteLength);
+                if (!is.read(payload.data(), static_cast<std::streamsize>(byteLength)))
+                    return false;
+                std::istringstream iss(std::string(payload.data(), payload.size()));
+                auto rec = SpzExtensionProvenanceLichtFeld::read(iss);
                 if (rec)
                     out.push_back(std::move(*rec));
                 return true;

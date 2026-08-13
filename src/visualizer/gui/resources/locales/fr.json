@@ -1212,6 +1212,8 @@
     "models": "MODÈLES",
     "no_models": "Aucun modèle dans la scène",
     "sh_degree": "SH DEGREE",
+    "include_provenance": "MÉTADONNÉES DE PROVENANCE",
+    "include_provenance_hint": "Désactiver retire les champs identifiants, mais une identification minimale du build (version de l'app + commit) est toujours intégrée",
     "spz_version": "VERSION SPZ",
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (ancien)",

@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 #include "core/mapped_file.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
@@ -75,6 +76,8 @@ namespace lfs::io {
         constexpr uint32_t NATIVE_CHUNK_SIZE = kRadNativeChunkSplats;
         constexpr uint32_t SPARK_CHUNK_SIZE = kRadStreamableChunkSplats;
         constexpr uint32_t DEFAULT_RAD_FILE_CHUNK_SIZE = SPARK_CHUNK_SIZE;
+        constexpr uint32_t kMaxRadMetaBytes = 16 * 1024 * 1024;
+        constexpr uint32_t kMaxRadCommentBytes = 64 * 1024;
         static_assert(SPARK_CHUNK_SIZE % NATIVE_CHUNK_SIZE == 0,
                       "Spark RAD file chunks must split evenly into native pages");
         constexpr int GZ_LEVEL = 6;                   // Default gzip compression level
@@ -1218,7 +1221,9 @@ namespace lfs::io {
                     meta.sh_code_count = j.at("shCodeCount").get<uint32_t>();
                 }
                 if (j.contains("comment")) {
-                    meta.comment = j.at("comment").get<std::string>();
+                    auto comment = j.at("comment").get<std::string>();
+                    if (comment.size() <= kMaxRadCommentBytes)
+                        meta.comment = std::move(comment);
                 }
                 return meta;
             }
@@ -2412,11 +2417,13 @@ namespace lfs::io {
             explicit RadEncoder(int compression_level = GZ_LEVEL,
                                 bool flip_y = false,
                                 std::uint32_t file_chunk_size = DEFAULT_RAD_FILE_CHUNK_SIZE,
-                                ExportProgressCallback progress_callback = nullptr)
+                                ExportProgressCallback progress_callback = nullptr,
+                                std::optional<core::ProvenanceStamp> provenance = {})
                 : compression_level_(compression_level),
                   flip_y_(flip_y),
                   file_chunk_size_(normalized_export_chunk_size(file_chunk_size)),
-                  progress_callback_(std::move(progress_callback)) {}
+                  progress_callback_(std::move(progress_callback)),
+                  provenance_(std::move(provenance)) {}
 
             std::vector<uint8_t> encode(const SplatData& splat_data) {
                 // 0.0: Preparing data
@@ -2488,6 +2495,9 @@ namespace lfs::io {
                 meta.chunk_size = file_chunk_size_;
                 if (lod_tree) {
                     meta.splat_encoding = nlohmann::json{{"lodOpacity", true}};
+                }
+                if (provenance_) {
+                    meta.comment = core::provenance_to_json(*provenance_);
                 }
 
                 // Encode chunks in parallel. lfs_io already links TBB, so keep
@@ -2718,6 +2728,7 @@ namespace lfs::io {
             bool flip_y_;
             std::uint32_t file_chunk_size_;
             ExportProgressCallback progress_callback_;
+            std::optional<core::ProvenanceStamp> provenance_;
 
             bool report_progress(float progress, const std::string& stage) const {
                 if (progress_callback_) {
@@ -2747,6 +2758,9 @@ namespace lfs::io {
                 }
 
                 uint32_t meta_size = decode_u32(&data[4]);
+                if (meta_size > kMaxRadMetaBytes) {
+                    return std::unexpected("RAD metadata size exceeds limit");
+                }
 
                 // Read and parse metadata
                 if (8 + meta_size > data.size()) {
@@ -3081,6 +3095,9 @@ namespace lfs::io {
                 return std::unexpected("Invalid RAD magic number");
             }
             const std::uint32_t meta_size = decode_u32(header.data() + 4);
+            if (meta_size > kMaxRadMetaBytes) {
+                return std::unexpected("RAD metadata size exceeds limit");
+            }
             std::string meta_json(meta_size, '\0');
             in.read(meta_json.data(), meta_size);
             if (!in.good()) {
@@ -4450,7 +4467,12 @@ namespace lfs::io {
         return sliced;
     }
 
-    Result<void> save_rad(const SplatData& splat_data, const RadSaveOptions& options) {
+    Result<void> save_rad(const SplatData& splat_data, const RadSaveOptions& options_in) {
+        RadSaveOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         auto start = std::chrono::high_resolution_clock::now();
 
         LOG_INFO("Saving RAD file: {}", lfs::core::path_to_utf8(options.output_path));
@@ -4467,7 +4489,8 @@ namespace lfs::io {
         RadEncoder encoder(compression_level,
                            options.flip_y,
                            options.chunk_size,
-                           scale_export_progress(options.progress_callback, 0.0f, 0.95f));
+                           scale_export_progress(options.progress_callback, 0.0f, 0.95f),
+                           options.provenance);
         std::vector<uint8_t> data;
         try {
             data = encoder.encode(splat_data);
@@ -4750,6 +4773,7 @@ namespace lfs::io {
         RadGpuQuantization gpu_quantization = RadGpuQuantization::Auto;
         std::unique_ptr<cuda::RadEncodeGpuQuantizer> gpu_quant;
         bool gpu_quant_resolved = false;
+        std::optional<core::ProvenanceStamp> provenance;
 
         bool gpuQuantEnabled() {
             if (!gpu_quant_resolved) {
@@ -4775,7 +4799,8 @@ namespace lfs::io {
                                      const int compression_level,
                                      const bool emit_meta_sidecar,
                                      const std::uint32_t chunk_size,
-                                     const RadGpuQuantization gpu_quantization)
+                                     const RadGpuQuantization gpu_quantization,
+                                     std::optional<core::ProvenanceStamp> provenance)
         : impl_(std::make_unique<Impl>()) {
         impl_->output_path = std::move(output_path);
         impl_->total_count = total_count;
@@ -4789,6 +4814,10 @@ namespace lfs::io {
                 : GZ_LEVEL;
         impl_->emit_meta_sidecar = emit_meta_sidecar && lod_tree;
         impl_->gpu_quantization = gpu_quantization;
+        impl_->provenance = std::move(provenance);
+        if (!impl_->provenance) {
+            impl_->provenance = core::make_minimal_provenance_stamp();
+        }
     }
 
     RadStreamWriter::~RadStreamWriter() = default;
@@ -4811,7 +4840,13 @@ namespace lfs::io {
 
         const std::uint64_t expected_chunks =
             (s.total_count + s.file_chunk_size - 1) / s.file_chunk_size;
-        s.meta_reserved = pad8(static_cast<std::size_t>(512 + expected_chunks * 120));
+        // Reservation is written before finish() authors meta.comment. When a
+        // stamp is present, budget the serialized comment (JSON + escaping).
+        std::size_t comment_reserve = 0;
+        if (s.provenance) {
+            comment_reserve = core::provenance_to_json(*s.provenance).size() + 64;
+        }
+        s.meta_reserved = pad8(static_cast<std::size_t>(512 + expected_chunks * 120 + comment_reserve));
         s.ranges.reserve(static_cast<std::size_t>(expected_chunks));
 
         s.atomic_output.emplace(s.output_path);
@@ -5048,6 +5083,10 @@ namespace lfs::io {
         if (s.lod_tree) {
             meta.splat_encoding = nlohmann::json{{"lodOpacity", true}};
         }
+        if (!s.provenance) {
+            s.provenance = core::make_minimal_provenance_stamp();
+        }
+        meta.comment = core::provenance_to_json(*s.provenance);
 
         const std::string meta_json = meta.to_json().dump();
         if (meta_json.size() > s.meta_reserved) {
@@ -5580,7 +5619,8 @@ namespace lfs::io {
     Result<void> rechunk_rad_lod(const std::filesystem::path& input,
                                  const std::filesystem::path& output,
                                  const std::uint32_t target_chunk_size,
-                                 const RechunkProgressCallback& progress) {
+                                 const RechunkProgressCallback& progress,
+                                 std::optional<core::ProvenanceStamp> provenance) {
         auto info = read_rad_file_info(input);
         if (!info) {
             return make_error(ErrorCode::INVALID_HEADER, info.error(), input);
@@ -5610,7 +5650,8 @@ namespace lfs::io {
         }
 
         RadStreamWriter writer(output, meta.count, max_sh, /*lod_tree=*/true,
-                               GZ_LEVEL, /*emit_meta_sidecar=*/false, output_chunk_size);
+                               GZ_LEVEL, /*emit_meta_sidecar=*/false, output_chunk_size,
+                               RadGpuQuantization::Auto, std::move(provenance));
         if (auto opened = writer.open(); !opened) {
             return make_error(ErrorCode::WRITE_FAILURE, opened.error(), output);
         }

@@ -6,12 +6,14 @@
 
 #include "core/export.hpp"
 #include "core/point_cloud.hpp"
+#include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "io/error.hpp"
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -46,6 +48,7 @@ namespace lfs::io {
         ExportProgressCallback progress_callback = nullptr;
         // Additional per-vertex float properties appended after the built-in PLY schema.
         std::vector<PlyAttributeBlock> extra_attributes;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**
@@ -67,6 +70,7 @@ namespace lfs::io {
         int kmeans_iterations = 10;
         bool use_gpu = true;
         ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**
@@ -83,6 +87,7 @@ namespace lfs::io {
         std::filesystem::path output_path;
         int kmeans_iterations = 10;
         ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**
@@ -99,6 +104,7 @@ namespace lfs::io {
         std::filesystem::path output_path;
         int version = 4; // SPZ container version: 4 (zstd, current) or 3 (legacy gzip)
         ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**
@@ -114,6 +120,7 @@ namespace lfs::io {
     struct UsdSaveOptions {
         std::filesystem::path output_path;
         ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**
@@ -129,6 +136,7 @@ namespace lfs::io {
     struct NurecUsdzSaveOptions {
         std::filesystem::path output_path;
         ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**
@@ -151,6 +159,7 @@ namespace lfs::io {
         bool flip_y = false;                                  // Flip Y axis on export
         std::uint32_t chunk_size = kRadStreamableChunkSplats; // RAD splats per file chunk
         ExportProgressCallback progress_callback = nullptr;   // Progress callback
+        std::optional<core::ProvenanceStamp> provenance{};    // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**

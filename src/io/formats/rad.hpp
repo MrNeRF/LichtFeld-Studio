@@ -131,7 +131,8 @@ namespace lfs::io {
         const std::filesystem::path& input,
         const std::filesystem::path& output,
         std::uint32_t target_chunk_size,
-        const RechunkProgressCallback& progress = nullptr);
+        const RechunkProgressCallback& progress = nullptr,
+        std::optional<core::ProvenanceStamp> provenance = {});
     // Exposed for tests: scatter-derive parent/level over a BFS level-ordered,
     // children-contiguous links plane. child_start may be non-monotone across
     // parents within a level (multi-bucket converter layouts).
@@ -183,7 +184,8 @@ namespace lfs::io {
                         int compression_level = 6,
                         bool emit_meta_sidecar = false,
                         std::uint32_t chunk_size = kRadStreamableChunkSplats,
-                        RadGpuQuantization gpu_quantization = RadGpuQuantization::Auto);
+                        RadGpuQuantization gpu_quantization = RadGpuQuantization::Auto,
+                        std::optional<core::ProvenanceStamp> provenance = {});
         ~RadStreamWriter();
         RadStreamWriter(const RadStreamWriter&) = delete;
         RadStreamWriter& operator=(const RadStreamWriter&) = delete;
