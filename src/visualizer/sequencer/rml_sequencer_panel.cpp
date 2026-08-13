@@ -664,7 +664,7 @@ namespace lfs::vis {
                                    "btn-loop", "btn-add",
                                    "btn-camera-path", "btn-snap", "btn-follow",
                                    "btn-film-strip", "btn-preview", "btn-equirect", "btn-speed",
-                                    "btn-format", "btn-export-upscaler", "btn-export-quality", "btn-export-precision", "btn-save-path", "btn-load-path", "btn-load-sequence",
+                                   "btn-format", "btn-export-upscaler", "btn-export-quality", "btn-export-precision", "btn-save-path", "btn-load-path", "btn-load-sequence",
                                    "btn-export", "btn-clear", "btn-dock-toggle",
                                    "btn-close-panel"}) {
             auto* el = document_->GetElementById(btn_id);

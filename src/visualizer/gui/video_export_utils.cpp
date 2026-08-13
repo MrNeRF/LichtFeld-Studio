@@ -62,13 +62,14 @@ namespace lfs::vis::gui {
             auto loader = lfs::io::Loader::create();
             auto loaded = loader->load(path);
             if (!loaded) {
-                return std::unexpected("Failed to reload source '" + path.string() + "': " +
-                                       loaded.error().format());
+                return std::unexpected(LOCF(lichtfeld::Strings::Runtime::VIDEO_SOURCE_RELOAD_FAILED,
+                                            path.string(), loaded.error().format()));
             }
 
             auto* const splat = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&loaded->data);
             if (!splat || !*splat) {
-                return std::unexpected("Video source '" + path.string() + "' is not a Gaussian splat");
+                return std::unexpected(LOCF(lichtfeld::Strings::Runtime::VIDEO_SOURCE_NOT_SPLAT,
+                                            path.string()));
             }
 
             auto source = std::make_unique<lfs::core::SplatData>(std::move(**splat));
@@ -96,18 +97,18 @@ namespace lfs::vis::gui {
             const auto& source_scene = scene_manager.getScene();
             const auto visible_slots = source_scene.getVisibleSplatNodeSlots();
             if (visible_slots.empty()) {
-                return std::unexpected("Source FP32 video export requires at least one visible file-backed splat");
+                return std::unexpected(LOC(lichtfeld::Strings::Runtime::VIDEO_FP32_REQUIRES_VISIBLE_SOURCE));
             }
             lfs::core::Scene decoded_scene;
             for (const auto& slot : visible_slots) {
                 const auto* const node = slot.node;
                 if (!node) {
-                    return std::unexpected("Source FP32 video export found an invalid scene node");
+                    return std::unexpected(LOC(lichtfeld::Strings::Runtime::VIDEO_FP32_INVALID_NODE));
                 }
                 const auto source_path = scene_manager.getPlyPath(node->id);
                 if (!source_path) {
-                    return std::unexpected("Source FP32 video export is unavailable for generated node '" +
-                                           node->name + "'; 32-bit export requires its source asset");
+                    return std::unexpected(LOCF(lichtfeld::Strings::Runtime::VIDEO_FP32_GENERATED_NODE,
+                                                node->name));
                 }
 
                 auto source = loadSourceFloat32Splat(*source_path);
@@ -118,9 +119,8 @@ namespace lfs::vis::gui {
                                                 ? static_cast<size_t>(node->model->size())
                                                 : node->gaussian_count.load(std::memory_order_acquire);
                 if ((*source)->size() != current_size) {
-                    return std::unexpected(
-                        "Source FP32 video export cannot reproduce modified node '" + node->name +
-                        "' because its source Gaussian count differs from the current scene");
+                    return std::unexpected(LOCF(lichtfeld::Strings::Runtime::VIDEO_FP32_MODIFIED_NODE,
+                                                node->name));
                 }
 
                 if (node->model) {
@@ -135,14 +135,15 @@ namespace lfs::vis::gui {
 
                 const auto decoded_id = decoded_scene.addSplat(node->name, std::move(*source));
                 if (decoded_id == lfs::core::NULL_NODE) {
-                    return std::unexpected("Failed to reconstruct source node '" + node->name + "'");
+                    return std::unexpected(LOCF(lichtfeld::Strings::Runtime::VIDEO_FP32_RECONSTRUCT_FAILED,
+                                                node->name));
                 }
                 decoded_scene.setNodeTransform(node->name, source_scene.getWorldTransform(node->id));
             }
 
             const auto* const combined = decoded_scene.getCombinedModel();
             if (!combined || combined->size() == 0) {
-                return std::unexpected("Source FP32 video export produced an empty splat snapshot");
+                return std::unexpected(LOC(lichtfeld::Strings::Runtime::VIDEO_FP32_EMPTY_SNAPSHOT));
             }
             SourceFloat32Snapshot result;
             result.combined_model =
@@ -343,7 +344,7 @@ namespace lfs::vis::gui {
         if (const auto validation = lfs::io::video::validateVideoEncodingOptions(options); !validation)
             return std::unexpected(validation.error());
         if (const auto contract = videoExportUpscalerContract(options.upscaler.backend); !contract)
-            return std::unexpected("Video upscaler backend is not compiled or registered");
+            return std::unexpected(LOC(lichtfeld::Strings::Runtime::VIDEO_UPSCALER_UNAVAILABLE));
         return options;
     }
 

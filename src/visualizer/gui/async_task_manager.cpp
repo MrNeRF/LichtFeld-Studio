@@ -2491,7 +2491,7 @@ namespace lfs::vis::gui {
         const auto upscaler_contract = videoExportUpscalerContract(
             validated_options->upscaler.backend);
         if (!upscaler_contract) {
-            fail_start("Video upscaler backend is not compiled or registered");
+            fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_UPSCALER_UNAVAILABLE));
             return;
         }
         const auto snapshot_result = captureVideoExportSceneSnapshot(
@@ -2712,7 +2712,7 @@ namespace lfs::vis::gui {
                                                   : std::optional<lfs::core::Tensor>(std::move(weighted));
                             }
                             if (!accumulated)
-                                return std::unexpected("Video frame has no temporal samples");
+                                return std::unexpected(LOC(lichtfeld::Strings::Runtime::VIDEO_TEMPORAL_SAMPLES_MISSING));
                             return std::move(*accumulated);
                         });
                     render_time_ms += std::chrono::duration<double, std::milli>(

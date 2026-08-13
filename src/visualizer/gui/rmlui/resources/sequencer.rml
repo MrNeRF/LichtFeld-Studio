@@ -108,7 +108,7 @@
                     <span class="dropdown-arrow">&#x25be;</span>
                 </div>
                 <div id="btn-export-precision" class="transport-btn text" data-tooltip="preferences.viewer_splat_precision_description">
-                    <span id="export-precision-label" class="transport-label">Splat · 16-bit</span>
+                    <span id="export-precision-label" class="transport-label">@tr:preferences.splat_precision_16</span>
                     <span class="dropdown-arrow">&#x25be;</span>
                 </div>
                 <span class="transport-info quality-group">Q</span>
