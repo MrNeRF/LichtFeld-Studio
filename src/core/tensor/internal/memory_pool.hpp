@@ -13,6 +13,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "gpu_slab_allocator.hpp"
 #include "size_bucketed_pool.hpp"
+#include "stream_lifetime.hpp"
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <iomanip>
@@ -112,12 +113,14 @@ namespace lfs::core {
         }
 
         void* allocate(size_t bytes, cudaStream_t stream = nullptr) {
+            note_stream_reused(stream);
             return allocate_cuda_storage(bytes, stream);
         }
 
         void* try_allocate(size_t bytes,
                            cudaStream_t stream = nullptr,
                            cudaError_t* failure_status = nullptr) {
+            note_stream_reused(stream);
             LFS_CUDA_BREADCRUMB_STREAM("tensor.pool.allocate", stream);
             if (failure_status) {
                 *failure_status = cudaSuccess;
@@ -229,6 +232,7 @@ namespace lfs::core {
         void* try_allocate_exact_async(size_t bytes,
                                        cudaStream_t stream = nullptr,
                                        cudaError_t* failure_status = nullptr) {
+            note_stream_reused(stream);
             LFS_CUDA_BREADCRUMB_STREAM("tensor.pool.allocate_exact_async", stream);
             if (failure_status) {
                 *failure_status = cudaSuccess;
@@ -283,6 +287,7 @@ namespace lfs::core {
         // Marks `ptr` as used by `stream` beyond its home stream. The free will
         // bridge that use back into the home stream before the block is recycled.
         void record_stream(void* ptr, cudaStream_t stream) {
+            note_stream_reused(stream);
             if (!ptr)
                 return;
             bool map_miss = false;
@@ -346,11 +351,13 @@ namespace lfs::core {
             GPUSlabAllocator::instance().merge_stream_into_virgin(stream);
             SizeBucketedPool::instance().retag_stream(stream, nullptr);
             PinnedMemoryAllocator::instance().release_stream(stream);
+            note_stream_retired(stream);
         }
 
         // Moves `ptr`'s home to `stream` (declarative re-homing for tensors whose
         // future writes happen there). The old home becomes a recorded use.
         void rehome_stream(void* ptr, cudaStream_t stream) {
+            note_stream_reused(stream);
             if (!ptr)
                 return;
             bool map_miss = false;

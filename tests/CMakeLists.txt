@@ -124,6 +124,7 @@ set(TEST_FILES
     test_steady_alloc_invariant.cpp
     test_allocator_hygiene.cpp
     test_pinned_stream_teardown.cpp
+    test_stale_stream_teardown.cpp
     test_fastgs_sort_buffers.cpp
     test_warp_cull_blend.cpp
     test_warp_cull_bwd.cpp

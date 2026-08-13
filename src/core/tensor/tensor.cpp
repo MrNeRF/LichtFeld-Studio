@@ -13,6 +13,7 @@
 #include "internal/cuda_stream_context.hpp"
 #include "internal/lazy_executor.hpp"
 #include "internal/memory_pool.hpp"
+#include "internal/stream_lifetime.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_dtype_dispatch.hpp"
 #include "internal/tensor_impl.hpp"
@@ -637,6 +638,9 @@ namespace lfs::core {
         LFS_ASSERT_MSG(data_ != nullptr || shape_.elements() == 0,
                        "Tensor constructor received null storage for a non-empty tensor");
 
+        if (home_stream != nullptr && device_ == Device::CUDA) {
+            note_stream_reused(home_stream);
+        }
         state_->stream = home_stream;
         init_storage_meta();
         compute_alignment();
@@ -857,6 +861,9 @@ namespace lfs::core {
     }
 
     void Tensor::set_stream(cudaStream_t stream) {
+        if (stream) {
+            note_stream_reused(stream);
+        }
         LFS_ASSERT_MSG(is_valid(),
                        "set_stream requires a valid tensor");
         ensure_state();
@@ -884,6 +891,9 @@ namespace lfs::core {
     }
 
     void Tensor::record_stream(cudaStream_t stream) const {
+        if (stream) {
+            note_stream_reused(stream);
+        }
         LFS_ASSERT_MSG(is_valid(),
                        "record_stream requires a valid tensor");
         if (!data_owner_) {

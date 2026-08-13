@@ -4185,6 +4185,7 @@ namespace lfs::python {
                               node_name,
                               lfs::core::path_to_utf8(path),
                               result.error().message);
+                    lfs::core::events::state::ExportFailed{.error = result.error().message}.emit();
                 } else {
                     LOG_INFO("Saved '{}' to {}", node_name, lfs::core::path_to_utf8(path));
                 }

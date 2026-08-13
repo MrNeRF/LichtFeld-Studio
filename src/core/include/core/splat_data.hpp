@@ -303,6 +303,10 @@ namespace lfs::core {
         // to CPU first and unpacks there, avoiding a full canonical SH allocation on CUDA.
         Tensor shN_canonical_cpu() const;
 
+        // Synchronize every unique non-null CUDA home stream, then re-home all valid CUDA
+        // tensor members onto the default stream. Call before a trainer destroys its streams.
+        void detach_from_streams();
+
         // Replace _shN with the swizzled form of a canonical-layout source tensor.
         // `canonical` may be [N, K, 3] or [N, K*3]; K may be 0 for SH degree 0. The
         // swizzled buffer is allocated/resized to fit N with optional `capacity`.
@@ -462,7 +466,7 @@ namespace lfs::core {
         int _max_sh_degree = 0;
         float _scene_scale = 0.f;
 
-        // Parameters
+        // Parameters — any new Tensor member must be added to detach_from_streams().
         Tensor _means;
         Tensor _sh0;
         // When sh_value quant is ON: Float16 bit-pattern u16 codes,

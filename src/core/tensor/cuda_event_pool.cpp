@@ -3,6 +3,8 @@
 
 #include "internal/cuda_event_pool.hpp"
 #include "core/cuda_error.hpp"
+#include "core/logger.hpp"
+#include "internal/stream_lifetime.hpp"
 
 #include <format>
 #include <string_view>
@@ -22,6 +24,9 @@ namespace lfs::core {
                     std::format("from_stream={}, to_stream={}; reason={}",
                                 static_cast<void*>(from), static_cast<void*>(to), reason),
                     LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                // Drop the latched runtime error so later LFS_CUDA_LAUNCH_CHECK
+                // (cudaPeekAtLastError) does not misattribute this failure.
+                (void)cudaGetLastError();
             }
         }
     } // namespace
@@ -109,9 +114,31 @@ namespace lfs::core {
         // destroyed user stream handle can crash in the driver. Detect
         // capture status first; any query failure means the stream is unusable.
         if (from != nullptr) {
+            if (is_stream_retired(from)) {
+                // release_stream synchronized the stream before retiring it, so
+                // there is no pending work to order against.
+                static std::atomic<bool> warned{false};
+                if (!warned.exchange(true, std::memory_order_relaxed)) {
+                    LOG_WARN("source stream was retired before destruction; skipping bridge "
+                             "(from_stream={}, to_stream={})",
+                             static_cast<void*>(from), static_cast<void*>(to));
+                }
+                return;
+            }
             cudaStreamCaptureStatus capture = cudaStreamCaptureStatusNone;
-            if (cudaStreamIsCapturing(from, &capture) != cudaSuccess) {
+            const cudaError_t capture_status = cudaStreamIsCapturing(from, &capture);
+            if (capture_status != cudaSuccess) {
                 (void)cudaGetLastError();
+                if (capture_status == cudaErrorInvalidResourceHandle ||
+                    capture_status == cudaErrorContextIsDestroyed) {
+                    static std::atomic<bool> warned{false};
+                    if (!warned.exchange(true, std::memory_order_relaxed)) {
+                        LOG_WARN("source stream handle is invalid (already destroyed?); "
+                                 "skipping bridge (from_stream={}, to_stream={})",
+                                 static_cast<void*>(from), static_cast<void*>(to));
+                    }
+                    return;
+                }
                 synchronize_stream_bridge_source(from, to, "capture status query failed");
                 return;
             }
@@ -133,6 +160,7 @@ namespace lfs::core {
                     std::format("from_stream={}, to_stream={}; fallback=stream sync",
                                 static_cast<void*>(from), static_cast<void*>(to)),
                     LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                (void)cudaGetLastError();
             }
             if (record_status == cudaSuccess && wait_status != cudaSuccess) {
                 ensure_cuda_success(
@@ -140,6 +168,7 @@ namespace lfs::core {
                     std::format("from_stream={}, to_stream={}; fallback=stream sync",
                                 static_cast<void*>(from), static_cast<void*>(to)),
                     LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                (void)cudaGetLastError();
             }
             CudaEventPool::instance().release(edge);
             if (record_status == cudaSuccess && wait_status == cudaSuccess) {

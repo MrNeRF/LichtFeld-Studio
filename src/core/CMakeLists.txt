@@ -21,6 +21,7 @@ add_subdirectory(logger)
 set(TENSOR_SOURCES
         tensor/cuda_event_pool.cpp
         tensor/cuda_stream_context.cpp
+        tensor/stream_lifetime.cpp
         tensor/gpu_slab_allocator.cpp
         tensor/size_bucketed_pool.cpp
         tensor/lazy_config.cpp
