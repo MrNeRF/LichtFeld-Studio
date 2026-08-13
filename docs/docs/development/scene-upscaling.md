@@ -18,7 +18,7 @@ existing base-scale behavior and is the zero-optional-upscaler-cost baseline.
 | --- | --- | --- |
 | Native | Always | The normal LichtFeld Studio renderer using the existing base render scale, without an upscaling adapter, history, motion, or optional SDK cost. |
 | Spatial | Always | Limited internal spatial prototype used to validate resolution scaling, adapter lifetime, split view, and fallback contracts before external SDK integration. It is not intended as a quality-oriented production upscaler. |
-| Temporal | Always | Limited experimental temporal prototype used to validate per-view history, depth, motion, jitter, and reset contracts before external SDK integration. It is not intended to match production temporal upscalers. |
+| Temporal | Always | Built-in temporal reconstruction using per-view history, depth, motion, jitter, and reset contracts. |
 | NVIDIA DLSS | Optional build | DLSS Super Resolution through a user-provided NGX SDK. Frame Generation is not enabled. |
 | AMD FSR 3.1 | Optional build | FidelityFX FSR 3.1 upscaling through a user-provided SDK. Frame Interpolation is not enabled. |
 

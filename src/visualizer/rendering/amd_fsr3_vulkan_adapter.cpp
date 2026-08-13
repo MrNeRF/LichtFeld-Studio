@@ -151,12 +151,21 @@ namespace lfs::vis {
                 parameters.dilatedDepth = sharedResource(state, 0);
                 parameters.dilatedMotionVectors = sharedResource(state, 1);
                 parameters.reconstructedPrevNearestDepth = sharedResource(state, 2);
-                parameters.jitterOffset = {dispatch.jitter_pixels.x, dispatch.jitter_pixels.y};
+                // LFS applies +2*jitter/renderSize to both projection rows. In
+                // FidelityFX's Vulkan camera convention the corresponding
+                // dispatch offset keeps X and reverses Y (the SDK sample applies
+                // {-2*jitterX/width, +2*jitterY/height} to the projection, then
+                // dispatches {-jitterX, -jitterY}).
+                parameters.jitterOffset = {dispatch.jitter_pixels.x, -dispatch.jitter_pixels.y};
                 parameters.motionVectorScale = {1.0f, 1.0f};
                 parameters.renderSize = dimensions(dispatch.color.valid_extent);
                 parameters.upscaleSize = dimensions(dispatch.output_extent);
-                parameters.enableSharpening = false;
-                parameters.sharpness = 0.0f;
+                parameters.enableSharpening = true;
+                parameters.sharpness = dispatch.quality == SceneTemporalQuality::Performance
+                                           ? 0.3f
+                                       : dispatch.quality == SceneTemporalQuality::Quality
+                                           ? 0.1f
+                                           : 0.2f;
                 parameters.frameTimeDelta = dispatch.frame_time_seconds * 1000.0f;
                 parameters.preExposure = dispatch.exposure;
                 parameters.reset = state.reset_pending || dispatch.reset_reasons != TemporalResetReason::None;

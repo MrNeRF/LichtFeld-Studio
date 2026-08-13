@@ -25,6 +25,7 @@
 #include <optional>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 
 namespace lfs::vis {
     namespace {
@@ -35,6 +36,48 @@ namespace lfs::vis {
         std::mutex recommended_scales_mutex;
         std::array<float, 3> recommended_scales{};
         glm::ivec2 recommended_scales_output_extent{0, 0};
+        std::mutex ngx_lifetime_mutex;
+        std::unordered_map<VkDevice, std::size_t> ngx_device_users;
+
+        [[nodiscard]] NVSDK_NGX_Result acquireNgxDevice(
+            VulkanContext& context,
+            const wchar_t* const data_path) noexcept {
+            std::lock_guard lock(ngx_lifetime_mutex);
+            auto& users = ngx_device_users[context.device()];
+            if (users > 0) {
+                ++users;
+                return NVSDK_NGX_Result_Success;
+            }
+            const auto result = NVSDK_NGX_VULKAN_Init_with_ProjectID(
+                LFS_NVIDIA_DLSS_PROJECT_ID,
+                NVSDK_NGX_ENGINE_TYPE_CUSTOM,
+                "LichtFeld Studio",
+                data_path,
+                context.instance(),
+                context.physicalDevice(),
+                context.device(),
+                vkGetInstanceProcAddr,
+                vkGetDeviceProcAddr);
+            if (NVSDK_NGX_FAILED(result)) {
+                ngx_device_users.erase(context.device());
+                return result;
+            }
+            users = 1;
+            return result;
+        }
+
+        void releaseNgxDevice(const VkDevice device) noexcept {
+            if (device == VK_NULL_HANDLE)
+                return;
+            std::lock_guard lock(ngx_lifetime_mutex);
+            const auto found = ngx_device_users.find(device);
+            if (found == ngx_device_users.end())
+                return;
+            if (--found->second > 0)
+                return;
+            ngx_device_users.erase(found);
+            NVSDK_NGX_VULKAN_Shutdown1(device);
+        }
 
         [[nodiscard]] NVSDK_NGX_FeatureDiscoveryInfo discoveryInfo(
             const wchar_t* const application_data_path) noexcept {
@@ -191,16 +234,7 @@ namespace lfs::vis {
                     LOG_ERROR("Cannot convert NGX cache path '{}': {}", data_path.string(), exception.what());
                     return {.reason = SceneUpscalerAvailabilityReason::ProbeFailed};
                 }
-                const auto result = NVSDK_NGX_VULKAN_Init_with_ProjectID(
-                    LFS_NVIDIA_DLSS_PROJECT_ID,
-                    NVSDK_NGX_ENGINE_TYPE_CUSTOM,
-                    "LichtFeld Studio",
-                    wide_data_path.c_str(),
-                    context.instance(),
-                    context.physicalDevice(),
-                    context.device(),
-                    vkGetInstanceProcAddr,
-                    vkGetDeviceProcAddr);
+                const auto result = acquireNgxDevice(context, wide_data_path.c_str());
                 if (NVSDK_NGX_FAILED(result)) {
                     LOG_WARN("NGX Vulkan initialization failed: {:#x}",
                              static_cast<unsigned int>(result));
@@ -220,7 +254,7 @@ namespace lfs::vis {
                     LOG_WARN("NGX reports that Super Sampling is unavailable");
                     if (parameters_ != nullptr)
                         NVSDK_NGX_VULKAN_DestroyParameters(parameters_);
-                    NVSDK_NGX_VULKAN_Shutdown1(device_);
+                    releaseNgxDevice(device_);
                     context_ = nullptr;
                     device_ = VK_NULL_HANDLE;
                     allocator_ = VK_NULL_HANDLE;
@@ -344,7 +378,7 @@ namespace lfs::vis {
                     destroyView(state);
                 if (parameters_ != nullptr)
                     NVSDK_NGX_VULKAN_DestroyParameters(parameters_);
-                NVSDK_NGX_VULKAN_Shutdown1(device_);
+                releaseNgxDevice(device_);
                 parameters_ = nullptr;
                 allocator_ = VK_NULL_HANDLE;
                 device_ = VK_NULL_HANDLE;

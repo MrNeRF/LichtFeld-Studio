@@ -32,6 +32,19 @@ namespace lfs::io::video {
         int height,
         cudaStream_t stream = nullptr);
 
+    void rgba8ToNv12Cuda(const uint8_t* rgba_src, uint8_t* y_dst, uint8_t* uv_dst,
+                         int width, int height, int y_pitch = 0, int uv_pitch = 0,
+                         cudaStream_t stream = nullptr);
+    void rgba8ToYuv420pCuda(const uint8_t* rgba_src, uint8_t* y_dst, uint8_t* u_dst,
+                            uint8_t* v_dst, int width, int height,
+                            cudaStream_t stream = nullptr);
+    void rgba16fToNv12Cuda(const void* rgba_src, uint8_t* y_dst, uint8_t* uv_dst,
+                           int width, int height, int y_pitch = 0, int uv_pitch = 0,
+                           cudaStream_t stream = nullptr);
+    void rgba16fToYuv420pCuda(const void* rgba_src, uint8_t* y_dst, uint8_t* u_dst,
+                              uint8_t* v_dst, int width, int height,
+                              cudaStream_t stream = nullptr);
+
     // Convert NV12 (Y plane + interleaved UV plane) to RGB uint8 on GPU
     // Used for NVDEC hardware decoding output
     void nv12ToRgbCuda(

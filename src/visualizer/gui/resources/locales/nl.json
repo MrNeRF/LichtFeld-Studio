@@ -786,7 +786,7 @@
     "scene_upscaler": "Scène-upscaler",
     "scene_upscaler_native": "Native",
     "scene_upscaler_spatial": "Ruimtelijk",
-    "scene_upscaler_temporal": "Temporeel (experimenteel)",
+    "scene_upscaler_temporal": "Temporeel",
     "scene_upscaler_nvidia_dlss": "NVIDIA DLSS",
     "scene_upscaler_amd_fsr3": "AMD FidelityFX FSR 3.1",
     "temporal_quality": "Temporele kwaliteit",

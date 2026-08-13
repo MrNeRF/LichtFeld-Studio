@@ -367,6 +367,7 @@ namespace lfs::vis::gui {
             .input_height = scaled_dimension(options.height),
             .requires_upscale = !native && scale < 1.0f,
             .backend = options.upscaler.backend,
+            .quality = options.upscaler.quality,
         };
     }
 
@@ -388,11 +389,8 @@ namespace lfs::vis::gui {
         return makeVideoExportRenderPlan(native_options);
     }
 
-    int videoExportTemporalSampleCount(const lfs::io::video::VideoExportOptions& options) {
-        if (options.upscaler.backend != "temporal")
-            return 1;
-        constexpr std::array SAMPLE_COUNTS{2, 4, 8, 16};
-        return SAMPLE_COUNTS[static_cast<size_t>(std::clamp(options.upscaler.quality, 0, 3))];
+    int videoExportTemporalSampleCount(const lfs::io::video::VideoExportOptions&) {
+        return 1;
     }
 
     std::vector<float> videoExportSampleTimes(
@@ -434,7 +432,7 @@ namespace lfs::vis::gui {
         if (backend == "temporal") {
             return VideoExportUpscalerContract{
                 .id = "temporal",
-                .execution = VideoExportUpscalerExecution::TemporalAccumulation,
+                .execution = VideoExportUpscalerExecution::TemporalVulkanResolve,
             };
         }
         const auto descriptor = optional_registry.descriptor(backend);

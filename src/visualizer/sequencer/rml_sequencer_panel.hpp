@@ -93,6 +93,9 @@ namespace lfs::vis {
                             SNAP,
                             PREVIEW,
                             FORMAT,
+                            EXPORT_UPSCALER,
+                            EXPORT_QUALITY,
+                            EXPORT_PRECISION,
                             CLEAR };
         Target target = Target::NONE;
         float screen_x = 0.0f;
@@ -264,6 +267,7 @@ namespace lfs::vis {
             int quality = 0;
             std::string export_upscaler;
             int export_input_scale_milli = 1000;
+            int export_upscaler_quality = 1;
             int export_splat_precision = 32;
             bool follow_playback = false;
             bool show_camera_path = false;
@@ -363,6 +367,8 @@ namespace lfs::vis {
         Rml::Element* el_format_label_ = nullptr;
         Rml::Element* el_resolution_info_ = nullptr;
         Rml::Element* el_export_upscaler_label_ = nullptr;
+        Rml::Element* el_btn_export_quality_ = nullptr;
+        Rml::Element* el_export_quality_label_ = nullptr;
         Rml::Element* el_export_precision_label_ = nullptr;
         Rml::Element* el_quality_scrub_ = nullptr;
         Rml::Element* el_quality_fill_ = nullptr;

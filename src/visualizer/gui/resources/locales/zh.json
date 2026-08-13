@@ -793,7 +793,7 @@
     "scene_upscaler": "场景升频器",
     "scene_upscaler_native": "原生",
     "scene_upscaler_spatial": "空间",
-    "scene_upscaler_temporal": "时域（实验性）",
+    "scene_upscaler_temporal": "时域",
     "scene_upscaler_nvidia_dlss": "NVIDIA DLSS",
     "scene_upscaler_amd_fsr3": "AMD FidelityFX FSR 3.1",
     "temporal_quality": "时域质量",

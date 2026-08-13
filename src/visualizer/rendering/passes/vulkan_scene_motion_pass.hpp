@@ -23,6 +23,9 @@ namespace lfs::vis {
         glm::mat4 inverse_current_view_projection{1.0f};
         glm::mat4 previous_view_projection{1.0f};
         glm::ivec2 render_extent{0, 0};
+        bool depth_is_ndc = false;
+        float camera_near = 0.1f;
+        float camera_far = 1000.0f;
         bool includes_jitter = false;
         bool flip_y = false;
     };
@@ -52,6 +55,8 @@ namespace lfs::vis {
 
         [[nodiscard]] VkImageView motionView(std::size_t frame_slot) const;
         [[nodiscard]] VkImage motionImage(std::size_t frame_slot) const;
+        [[nodiscard]] VkImageView ndcDepthView(std::size_t frame_slot) const;
+        [[nodiscard]] VkImage ndcDepthImage(std::size_t frame_slot) const;
         [[nodiscard]] SceneMotionContract contract(std::size_t frame_slot) const;
         [[nodiscard]] bool initialized() const;
 

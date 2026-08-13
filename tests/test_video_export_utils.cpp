@@ -443,6 +443,7 @@ TEST(VideoExportUtilsTest, UpscaledRenderPlanUsesEvenInternalExtent) {
     EXPECT_LT(plan->input_width, plan->output_width);
     EXPECT_LT(plan->input_height, plan->output_height);
     EXPECT_TRUE(plan->requires_upscale);
+    EXPECT_EQ(plan->quality, 1);
 }
 
 TEST(VideoExportUtilsTest, RejectsInvalidOfflineUpscalerContract) {
@@ -463,18 +464,26 @@ TEST(VideoExportUtilsTest, RejectsInvalidOfflineUpscalerContract) {
     EXPECT_TRUE(lfs::vis::gui::makeVideoExportRenderPlan(options));
 }
 
-TEST(VideoExportUtilsTest, TemporalSampleTimesCoverOneCenteredFrameInterval) {
+TEST(VideoExportUtilsTest, TemporalBalancedUsesOneExactSample) {
     lfs::io::video::VideoExportOptions options{};
     options.upscaler.backend = "temporal";
     options.upscaler.input_scale = 0.5f;
     options.upscaler.quality = 1;
 
     const auto times = lfs::vis::gui::videoExportSampleTimes(1.0f, 0.1f, 0.0f, 2.0f, options);
-    ASSERT_EQ(times.size(), 4u);
-    EXPECT_FLOAT_EQ(times[0], 0.9625f);
-    EXPECT_FLOAT_EQ(times[1], 0.9875f);
-    EXPECT_FLOAT_EQ(times[2], 1.0125f);
-    EXPECT_FLOAT_EQ(times[3], 1.0375f);
+    ASSERT_EQ(times.size(), 1u);
+    EXPECT_FLOAT_EQ(times.front(), 1.0f);
+}
+
+TEST(VideoExportUtilsTest, TemporalPerformanceUsesOneExactSample) {
+    lfs::io::video::VideoExportOptions options{};
+    options.upscaler.backend = "temporal";
+    options.upscaler.input_scale = 0.5f;
+    options.upscaler.quality = 0;
+
+    const auto times = lfs::vis::gui::videoExportSampleTimes(1.0f, 0.1f, 0.0f, 2.0f, options);
+    ASSERT_EQ(times.size(), 1u);
+    EXPECT_FLOAT_EQ(times.front(), 1.0f);
 }
 
 TEST(VideoExportUtilsTest, NativeAndSpatialUseOneExactSample) {

@@ -190,6 +190,17 @@ namespace lfs::vis {
             }
         };
         [[nodiscard]] std::optional<PreviewVulkanFrame> previewVulkanFrame() const;
+        [[nodiscard]] bool renderPreviewVulkanFrame(
+            const lfs::core::SplatData& model,
+            SceneRenderState scene_state,
+            const glm::mat3& camera_rotation,
+            const glm::vec3& camera_position,
+            float focal_length_mm,
+            int width,
+            int height,
+            PreviewVulkanFrame& output,
+            std::string& error,
+            std::optional<lfs::rendering::CameraIntrinsics> intrinsics_override = std::nullopt);
         PreviewRgbd renderPreviewImageAndDepth(SceneManager* scene_manager,
                                                const glm::mat3& camera_rotation,
                                                const glm::vec3& camera_position,

@@ -29,7 +29,7 @@ namespace lfs::vis::gui {
     enum class VideoExportUpscalerExecution : uint8_t {
         Native,
         SpatialTensor,
-        TemporalAccumulation,
+        TemporalVulkanResolve,
         VulkanAdapter,
     };
 
@@ -82,6 +82,7 @@ namespace lfs::vis::gui {
         int input_height = 0;
         bool requires_upscale = false;
         std::string backend;
+        int quality = 1;
 
         bool operator==(const VideoExportRenderPlan&) const = default;
     };

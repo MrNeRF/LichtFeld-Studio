@@ -532,6 +532,44 @@ namespace lfs::vis {
         return preview_vulkan_frame_;
     }
 
+    bool RenderingManager::renderPreviewVulkanFrame(
+        const lfs::core::SplatData& model,
+        SceneRenderState scene_state,
+        const glm::mat3& camera_rotation,
+        const glm::vec3& camera_position,
+        const float focal_length_mm,
+        const int width,
+        const int height,
+        PreviewVulkanFrame& output,
+        std::string& error,
+        std::optional<lfs::rendering::CameraIntrinsics> intrinsics_override) {
+        if (width <= 0 || height <= 0) {
+            error = "Video-upscaler preview dimensions must be positive";
+            return false;
+        }
+        if (previewRenderNeedsTiling(width, height)) {
+            error = "Video upscalers do not support tiled preview rendering";
+            return false;
+        }
+
+        auto rendered = renderPreviewImageToPreviewSlotWithState(
+            nullptr, model, std::move(scene_state), camera_rotation, camera_position,
+            focal_length_mm, width, height, false, intrinsics_override, {}, {},
+            std::nullopt, std::nullopt, std::nullopt, false);
+        if (!rendered) {
+            error = rendered.error();
+            return false;
+        }
+        const auto frame = previewVulkanFrame();
+        if (!frame || !frame->valid()) {
+            error = "Video upscaler preview Vulkan resources are unavailable";
+            return false;
+        }
+        output = *frame;
+        error.clear();
+        return true;
+    }
+
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgb8(SceneManager* const scene_manager,
                                                                                 const glm::mat3& rotation,
                                                                                 const glm::vec3& position,

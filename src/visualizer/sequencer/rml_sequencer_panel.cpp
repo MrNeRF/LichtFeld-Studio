@@ -181,6 +181,13 @@ namespace lfs::vis {
         const auto& id = el->GetId();
         auto& ctrl = panel->controller_;
         auto& ui = panel->ui_state_;
+        const auto request_menu = [&](const TransportContextMenuRequest::Target target) {
+            const auto offset = el->GetAbsoluteOffset(Rml::BoxArea::Border);
+            panel->transport_ctx_request_ = {
+                target,
+                panel->cached_panel_x_ + offset.x,
+                panel->cached_panel_y_ + offset.y + el->GetBox().GetSize().y};
+        };
 
         if (id == "btn-skip-back")
             ctrl.seekToFirstKeyframe();
@@ -224,33 +231,13 @@ namespace lfs::vis {
             ui.playback_speed = SPEED_PRESETS[next];
             ctrl.setPlaybackSpeed(ui.playback_speed);
         } else if (id == "btn-format") {
-            using lfs::io::video::VideoPreset;
-            auto p = static_cast<int>(ui.preset);
-            p = (p + 1) % static_cast<int>(VideoPreset::CUSTOM);
-            ui.preset = static_cast<VideoPreset>(p);
-            const auto info = lfs::io::video::getPresetInfo(ui.preset);
-            ui.custom_width = info.width;
-            ui.custom_height = info.height;
-            ui.framerate = info.framerate;
+            request_menu(TransportContextMenuRequest::Target::FORMAT);
         } else if (id == "btn-export-upscaler") {
-            const auto options = videoExportUpscalerOptions();
-            const auto current = std::ranges::find(options, ui.export_upscaler,
-                                                   &SceneUpscalerOptionProxy::id);
-            if (ui.export_upscaler != "native" && ui.export_input_scale > 0.5f) {
-                ui.export_input_scale = 0.5f;
-            } else {
-                const size_t index = current == options.end()
-                                         ? 0
-                                         : (static_cast<size_t>(current - options.begin()) + 1) %
-                                               std::max<size_t>(options.size(), 1);
-                ui.export_upscaler = options.empty() ? "native" : options[index].id;
-                ui.export_input_scale = ui.export_upscaler == "native" ? 1.0f : 0.75f;
-            }
+            request_menu(TransportContextMenuRequest::Target::EXPORT_UPSCALER);
+        } else if (id == "btn-export-quality") {
+            request_menu(TransportContextMenuRequest::Target::EXPORT_QUALITY);
         } else if (id == "btn-export-precision") {
-            ui.export_splat_precision =
-                ui.export_splat_precision == lfs::io::video::VideoSplatPrecision::Float32
-                    ? lfs::io::video::VideoSplatPrecision::Float16
-                    : lfs::io::video::VideoSplatPrecision::Float32;
+            request_menu(TransportContextMenuRequest::Target::EXPORT_PRECISION);
         } else if (id == "btn-save-path")
             panel->save_path_requested_ = true;
         else if (id == "btn-load-path")
@@ -392,6 +379,10 @@ namespace lfs::vis {
         el_sequence_fps_input_ = nullptr;
         el_format_label_ = nullptr;
         el_resolution_info_ = nullptr;
+        el_export_upscaler_label_ = nullptr;
+        el_btn_export_quality_ = nullptr;
+        el_export_quality_label_ = nullptr;
+        el_export_precision_label_ = nullptr;
         el_quality_scrub_ = nullptr;
         el_quality_fill_ = nullptr;
         el_quality_display_ = nullptr;
@@ -500,6 +491,7 @@ namespace lfs::vis {
             .quality = ui_state_.quality,
             .export_upscaler = ui_state_.export_upscaler,
             .export_input_scale_milli = milli(ui_state_.export_input_scale),
+            .export_upscaler_quality = ui_state_.export_upscaler_quality,
             .export_splat_precision =
                 ui_state_.export_splat_precision == lfs::io::video::VideoSplatPrecision::Float16
                     ? 16
@@ -633,6 +625,8 @@ namespace lfs::vis {
         el_format_label_ = document_->GetElementById("format-label");
         el_resolution_info_ = document_->GetElementById("resolution-info");
         el_export_upscaler_label_ = document_->GetElementById("export-upscaler-label");
+        el_btn_export_quality_ = document_->GetElementById("btn-export-quality");
+        el_export_quality_label_ = document_->GetElementById("export-quality-label");
         el_export_precision_label_ = document_->GetElementById("export-precision-label");
         el_quality_scrub_ = document_->GetElementById("quality-scrub");
         el_quality_fill_ = document_->GetElementById("quality-fill");
@@ -674,7 +668,7 @@ namespace lfs::vis {
                                    "btn-loop", "btn-add",
                                    "btn-camera-path", "btn-snap", "btn-follow",
                                    "btn-film-strip", "btn-preview", "btn-equirect", "btn-speed",
-                                   "btn-format", "btn-export-upscaler", "btn-export-precision", "btn-save-path", "btn-load-path", "btn-load-sequence",
+                                   "btn-format", "btn-export-upscaler", "btn-export-quality", "btn-export-precision", "btn-save-path", "btn-load-path", "btn-load-sequence",
                                    "btn-export", "btn-clear", "btn-dock-toggle",
                                    "btn-close-panel"}) {
             auto* el = document_->GetElementById(btn_id);
@@ -1060,11 +1054,24 @@ namespace lfs::vis {
         }
         if (el_export_upscaler_label_) {
             const auto label = videoExportUpscalerLabel(ui_state_.export_upscaler);
-            el_export_upscaler_label_->SetInnerRML(
-                ui_state_.export_upscaler == "native"
-                    ? std::string(label)
-                    : fmt::format("{} {}%", label,
-                                  static_cast<int>(std::lround(ui_state_.export_input_scale * 100.0f))));
+            el_export_upscaler_label_->SetInnerRML(label);
+        }
+        if (el_btn_export_quality_)
+            el_btn_export_quality_->SetProperty(
+                "display", ui_state_.export_upscaler == "native" ? "none" : "flex");
+        if (el_export_quality_label_) {
+            if (ui_state_.export_upscaler == "spatial") {
+                el_export_quality_label_->SetInnerRML(fmt::format(
+                    "{}%", static_cast<int>(std::lround(ui_state_.export_input_scale * 100.0f))));
+            } else {
+                constexpr std::array<const char*, 3> QUALITY_KEYS{
+                    "preferences.temporal_quality_performance",
+                    "preferences.temporal_quality_balanced",
+                    "preferences.temporal_quality_quality"};
+                el_export_quality_label_->SetInnerRML(
+                    LOC(QUALITY_KEYS[static_cast<size_t>(
+                        std::clamp(ui_state_.export_upscaler_quality, 0, 2))]));
+            }
         }
         if (el_export_precision_label_) {
             el_export_precision_label_->SetInnerRML(
