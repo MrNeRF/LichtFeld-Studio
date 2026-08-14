@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "input/input_router.hpp"
 #include "visualizer/visualizer.hpp"
@@ -22,7 +23,7 @@ namespace lfs::vis {
     class InputController;
     class VulkanContext;
 
-    class WindowManager {
+    class LFS_VIS_API WindowManager {
     public:
         enum class ResizeIntent {
             Interactive,

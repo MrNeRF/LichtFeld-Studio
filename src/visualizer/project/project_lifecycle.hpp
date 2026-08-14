@@ -6,6 +6,7 @@
 #pragma once
 
 #include "core/error.hpp"
+#include "core/export.hpp"
 #include "core/uuid.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
@@ -100,7 +101,7 @@ namespace lfs::vis::project {
         const lfs::core::Uuid& project_uuid,
         const std::filesystem::path& path);
 
-    class ProjectLifecycle {
+    class LFS_VIS_API ProjectLifecycle {
     public:
         enum class CloseSaveStatus {
             NotDirty,

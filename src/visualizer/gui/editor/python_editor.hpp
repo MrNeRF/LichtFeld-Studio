@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -80,7 +82,7 @@ namespace lfs::vis::editor {
             const PythonEditorWorkspaceSessionState&) = default;
     };
 
-    class PythonEditor {
+    class LFS_VIS_API PythonEditor {
     public:
         PythonEditor();
         ~PythonEditor();
