@@ -699,7 +699,25 @@ namespace {
         auto inspection = inspect_autosave_recovery(master_path);
         ASSERT_TRUE(inspection)
             << lfs::format_for_developer(inspection.error());
-        EXPECT_EQ(inspection->disposition, RecoveryDisposition::Invalid);
+        // Would fail if inspect still returned Invalid or left the sidecar
+        // in place instead of quarantining the illegal overlay.
+        EXPECT_EQ(inspection->disposition, RecoveryDisposition::StaleDeleted);
+        EXPECT_FALSE(std::filesystem::exists(sidecar_path));
+        bool found_aside = false;
+        const auto prefix =
+            sidecar_path.filename().string() + ".corrupt-";
+        std::error_code error;
+        for (std::filesystem::directory_iterator
+                 iterator(sidecar_path.parent_path(), error),
+             end;
+             !error && iterator != end;
+             iterator.increment(error)) {
+            if (iterator->path().filename().string().starts_with(prefix)) {
+                found_aside = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(found_aside);
         ASSERT_FALSE(inspection->diagnostics.empty());
         EXPECT_TRUE(std::ranges::any_of(
             inspection->diagnostics,

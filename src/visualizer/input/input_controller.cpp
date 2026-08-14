@@ -2248,6 +2248,8 @@ namespace lfs::vis {
                         std::tolower(character));
                 });
             if (extension == ".licht") {
+                // Unpublished *.tmp.licht names still emit ProjectOpen so
+                // lifecycle can reject with unpublishedLichtUserMessage.
                 cmd::ProjectOpen{.path = dropped_path}.emit();
                 LOG_INFO(
                     "Opening project via drag-and-drop: {}",

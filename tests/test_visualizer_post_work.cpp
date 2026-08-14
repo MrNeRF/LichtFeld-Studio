@@ -7,6 +7,7 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/guarded_task.hpp"
+#include "core/main_loop.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "input/input_controller.hpp"
@@ -32,6 +33,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
 #include <cstring>
 #include <deque>
 #include <filesystem>
@@ -672,9 +674,6 @@ namespace lfs::vis {
             ASSERT_NE(gui, nullptr);
             installModalOverlay(gui->rml_modal_overlay_, gui->rmlui_manager_);
 
-            auto before_prompt =
-                viewer.projectGetInfo();
-            ASSERT_TRUE(before_prompt);
             auto pending = viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -688,15 +687,7 @@ namespace lfs::vis {
                 ProjectSwitchDisposition::DiscardChanges);
             ASSERT_TRUE(still_pending);
             EXPECT_EQ(*still_pending,
-                      ProjectOpenOutcome::
-                          RecoveryPromptPending);
-            auto while_pending =
-                viewer.projectGetInfo();
-            ASSERT_TRUE(while_pending);
-            EXPECT_EQ(while_pending->path,
-                      before_prompt->path);
-            EXPECT_EQ(while_pending->project_uuid,
-                      before_prompt->project_uuid);
+                      ProjectOpenOutcome::Opened);
             auto request = takeModalRequest(
                 gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
             ASSERT_EQ(
@@ -704,19 +695,31 @@ namespace lfs::vis {
                 "Recover Autosaved Project?");
             ASSERT_TRUE(request.on_cancel);
             request.on_cancel();
-            auto after_cancel =
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+            auto after_stale_cancel =
                 viewer.projectGetInfo();
-            ASSERT_TRUE(after_cancel);
-            EXPECT_EQ(after_cancel->path,
-                      before_prompt->path);
-            EXPECT_EQ(after_cancel->project_uuid,
-                      before_prompt->project_uuid);
+            ASSERT_TRUE(after_stale_cancel);
+            EXPECT_EQ(after_stale_cancel->path,
+                      other_path);
             EXPECT_FALSE(viewer.project_lifecycle_
                              ->recovery_prompt_pending_);
-            EXPECT_EQ(viewer.project_lifecycle_
-                          ->autosave_sequence_,
-                      before_prompt
-                          ->autosave_sequence);
+
+            pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(pending);
+            EXPECT_EQ(*pending,
+                      ProjectOpenOutcome::
+                          RecoveryPromptPending);
+            request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
+            ASSERT_TRUE(request.on_cancel);
+            request.on_cancel();
+            EXPECT_FALSE(viewer.project_lifecycle_
+                             ->recovery_prompt_pending_);
 
             pending = viewer.projectOpen(
                 project_path,
@@ -774,6 +777,73 @@ namespace lfs::vis {
                       lfs::io::project::
                           CommitKind::Explicit);
         }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds) {
+        // Latch left true after newProject made every later open()
+        // return RecoveryPromptPending with no modal.
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "latched.licht";
+        const auto empty_path =
+            temporary / "empty.licht";
+        write_recoverable_project(project_path);
+        write_empty_project(empty_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(gui->rml_modal_overlay_, gui->rmlui_manager_);
+
+            auto pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(pending);
+            EXPECT_EQ(*pending,
+                      ProjectOpenOutcome::
+                          RecoveryPromptPending);
+            auto created =
+                viewer.project_lifecycle_->newProject(
+                    ProjectSwitchDisposition::
+                        DiscardChanges);
+            ASSERT_TRUE(created)
+                << lfs::format_for_developer(
+                       created.error());
+            EXPECT_FALSE(viewer.project_lifecycle_
+                             ->recovery_prompt_pending_);
+            auto opened = viewer.projectOpen(
+                empty_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            EXPECT_EQ(*opened, ProjectOpenOutcome::Opened);
+        }
+    }
+
+    TEST(MainLoopSignalTest, InstallInterruptHandlersRestoresStolenTermAndInt) {
+        // Would fail if pycolmap/glog could steal SIGTERM/SIGINT and
+        // installInterruptHandlers did not put MainLoop's handler back.
+        auto stolen = +[](int) {};
+        auto previous_term = std::signal(SIGTERM, stolen);
+        MainLoop::installInterruptHandlers();
+        auto installed_term = std::signal(SIGTERM, stolen);
+        EXPECT_EQ(installed_term, MainLoop::interruptHandlerForTest());
+        std::signal(SIGTERM, previous_term);
+
+        auto previous_int = std::signal(SIGINT, stolen);
+        MainLoop::installInterruptHandlers();
+        auto installed_int = std::signal(SIGINT, stolen);
+        EXPECT_EQ(installed_int, MainLoop::interruptHandlerForTest());
+        std::signal(SIGINT, previous_int);
     }
 
     TEST_F(VisualizerImplResetTest,

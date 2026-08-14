@@ -454,6 +454,9 @@ namespace lfs::vis::gui {
             return {makeFilter("PPISP Sidecar Files", {".ppisp"})};
         }
 
+        // Native NFD/GTK filters are extension-only and cannot exclude
+        // *.tmp.licht. Unpublished picks are rejected later by
+        // ProjectLifecycle::normalizedProjectPath / isPublishedLichtPath.
         [[nodiscard]] std::vector<DialogFilter> projectFilters() {
             return {makeFilter("LichtFeld Projects", {".licht"})};
         }
@@ -633,6 +636,7 @@ namespace lfs::vis::gui {
     }
 
     std::filesystem::path OpenProjectFileDialog(const std::filesystem::path& defaultPath) {
+        // Filter stays {".licht"}; unpublished temps are rejected after pick.
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(projectFilters(), defaultPath), result);
         return result;
@@ -846,6 +850,7 @@ namespace lfs::vis::gui {
 
     std::filesystem::path SaveProjectFileDialog(const std::string& defaultName,
                                                 const std::filesystem::path& defaultPath) {
+        // Filter stays {".licht"}; unpublished temps are rejected after pick.
         std::filesystem::path result;
         runDialog(makeSaveFileRequest(projectFilters(), defaultPath, defaultName, ".licht"), result);
         return result;

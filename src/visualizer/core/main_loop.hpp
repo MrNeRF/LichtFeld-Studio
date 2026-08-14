@@ -38,6 +38,9 @@ namespace lfs::vis {
 
         void run();
 
+        static void installInterruptHandlers();
+        static void (*interruptHandlerForTest())(int);
+
     private:
         InitCallback init_callback_;
         UpdateCallback update_callback_;

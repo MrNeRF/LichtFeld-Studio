@@ -9,6 +9,7 @@
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
+#include "io/project_path.hpp"
 #include <algorithm>
 #include <any>
 #include <args.hxx>
@@ -663,6 +664,13 @@ namespace {
                                     std::tolower(character));
                             });
                         if (extension == ".licht") {
+                            if (!lfs::io::project::isPublishedLichtPath(
+                                    view_path)) {
+                                return std::unexpected(
+                                    lfs::io::project::
+                                        unpublishedLichtUserMessage(
+                                            view_path));
+                            }
                             params.project_path = view_path;
                         } else if (!is_supported(view_path)) {
                             return std::unexpected(std::format(
@@ -753,6 +761,13 @@ namespace {
                                 std::tolower(character));
                         });
                     if (extension == ".licht") {
+                        if (!lfs::io::project::isPublishedLichtPath(
+                                ckpt_path)) {
+                            return std::unexpected(
+                                lfs::io::project::
+                                    unpublishedLichtUserMessage(
+                                        ckpt_path));
+                        }
                         params.resume_project = ckpt_path;
                     } else {
                         params.resume_checkpoint = ckpt_path;

@@ -148,6 +148,47 @@ TEST(ArgumentParserTest, GuiViewProjectExtensionIsCaseInsensitive) {
     EXPECT_TRUE((*parsed)->view_paths.empty());
 }
 
+TEST(ArgumentParserTest,
+     ViewAndResumeRejectUnpublishedWriteTempLicht) {
+    // Would fail if -v / --resume still accepted
+    // *.project-write.*.tmp.licht as a published project.
+    const auto directory =
+        make_test_path("lfs_arg_parser_unpublished");
+    const auto temp_project =
+        std::filesystem::path(directory) /
+        "project.project-write.1.2.3.tmp.licht";
+    std::ofstream(temp_project).put('\n');
+    const auto temp_text = temp_project.string();
+
+    const char* view_argv[] = {
+        "LichtFeld-Studio",
+        "-v",
+        temp_text.c_str(),
+    };
+    auto view_parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(view_argv)),
+            view_argv);
+    ASSERT_FALSE(view_parsed);
+    EXPECT_NE(
+        view_parsed.error().find("project.licht"),
+        std::string::npos);
+
+    const char* resume_argv[] = {
+        "LichtFeld-Studio",
+        "--resume",
+        temp_text.c_str(),
+    };
+    auto resume_parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(resume_argv)),
+            resume_argv);
+    ASSERT_FALSE(resume_parsed);
+    EXPECT_NE(
+        resume_parsed.error().find("project.licht"),
+        std::string::npos);
+}
+
 TEST(ArgumentParserMetadataTest, OptimizationFlagBindingsResolveWithCompatibleTypes) {
     using lfs::core::args::OptimizationCliParseType;
     using lfs::core::prop::PropType;

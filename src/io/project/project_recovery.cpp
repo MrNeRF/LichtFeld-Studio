@@ -5,10 +5,12 @@
 
 #include "io/project_recovery.hpp"
 
+#include "core/logger.hpp"
 #include "project_container_internal.hpp"
 #include "project_recovery_internal.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <concepts>
 #include <format>
 #include <limits>
@@ -247,46 +249,6 @@ namespace lfs::io::project {
 
         [[nodiscard]] std::vector<
             std::filesystem::path>
-        compaction_temps(
-            const std::filesystem::path& master_path) {
-            std::vector<std::filesystem::path> result;
-            const auto directory =
-                master_path.parent_path().empty()
-                    ? std::filesystem::path{"."}
-                    : master_path.parent_path();
-            const auto prefix =
-                master_path.stem().string() +
-                ".compact.";
-            const auto backup_prefix =
-                master_path.stem().string() +
-                ".replace-backup.";
-            const auto suffix =
-                ".tmp" +
-                master_path.extension().string();
-            std::error_code error;
-            for (std::filesystem::directory_iterator
-                     iterator(directory, error),
-                 end;
-                 !error && iterator != end;
-                 iterator.increment(error)) {
-                const auto filename =
-                    iterator->path()
-                        .filename()
-                        .string();
-                if (starts_and_ends(
-                        filename, prefix, suffix) ||
-                    starts_and_ends(
-                        filename, backup_prefix,
-                        suffix)) {
-                    result.push_back(
-                        iterator->path());
-                }
-            }
-            return result;
-        }
-
-        [[nodiscard]] std::vector<
-            std::filesystem::path>
         recovery_session_temps(
             const std::filesystem::path& master_path) {
             std::vector<std::filesystem::path> result;
@@ -334,6 +296,206 @@ namespace lfs::io::project {
             }
             (void)removed;
             return {};
+        }
+
+        void record_remove_failure(
+            RecoveryInspection& into,
+            const std::filesystem::path& path,
+            const lfs::Error& error) {
+            into.diagnostics.push_back(
+                std::format(
+                    "{}: {}",
+                    path.filename().string(),
+                    lfs::format_for_developer(error)));
+        }
+
+        void best_effort_remove_into(
+            RecoveryInspection& into,
+            const std::filesystem::path& path) {
+            if (auto removed = remove_path(path);
+                !removed) {
+                record_remove_failure(
+                    into, path, removed.error());
+                return;
+            }
+            into.deleted_paths.push_back(path);
+        }
+
+        void quarantine_into(
+            RecoveryInspection& into,
+            const std::filesystem::path& source,
+            const std::string& reason) {
+            auto aside =
+                quarantine_project_artifact(source);
+            if (!aside) {
+                into.diagnostics.push_back(
+                    std::format(
+                        "{}: {} (quarantine failed: {})",
+                        source.filename().string(),
+                        reason,
+                        lfs::format_for_developer(
+                            aside.error())));
+                return;
+            }
+            into.deleted_paths.push_back(source);
+            into.diagnostics.push_back(
+                std::format(
+                    "{}: {} (quarantined to {})",
+                    source.filename().string(),
+                    reason,
+                    aside->filename().string()));
+        }
+
+        [[nodiscard]] bool is_write_temp_name(
+            const std::string_view filename,
+            const std::string_view stem,
+            const std::string_view suffix) {
+            return starts_and_ends(
+                       filename,
+                       std::string(stem) +
+                           ".project-write.",
+                       suffix) ||
+                   starts_and_ends(
+                       filename,
+                       std::string(stem) + ".compact.",
+                       suffix) ||
+                   starts_and_ends(
+                       filename,
+                       std::string(stem) +
+                           ".replace-backup.",
+                       suffix);
+        }
+
+        [[nodiscard]] bool is_master_corrupt_aside(
+            const std::string_view filename,
+            const std::filesystem::path& master_path) {
+            if (filename.find(".corrupt-") ==
+                std::string_view::npos) {
+                return false;
+            }
+            const auto stem =
+                master_path.stem().string();
+            const auto published =
+                master_path.filename().string();
+            return filename.starts_with(published) ||
+                   filename.starts_with(stem);
+        }
+
+        [[nodiscard]] std::uint64_t corrupt_stamp(
+            const std::string_view filename) {
+            const auto marker =
+                filename.find(".corrupt-");
+            if (marker == std::string_view::npos) {
+                return 0;
+            }
+            const auto rest =
+                filename.substr(marker + 9);
+            std::uint64_t stamp = 0;
+            std::size_t index = 0;
+            while (index < rest.size() &&
+                   rest[index] >= '0' &&
+                   rest[index] <= '9') {
+                const auto next =
+                    stamp * 10ull +
+                    static_cast<std::uint64_t>(
+                        rest[index] - '0');
+                if (next < stamp) {
+                    return stamp;
+                }
+                stamp = next;
+                ++index;
+            }
+            return stamp;
+        }
+
+        [[nodiscard]] std::string corrupt_group_key(
+            const std::string_view filename) {
+            const auto marker =
+                filename.find(".corrupt-");
+            if (marker == std::string_view::npos) {
+                return std::string(filename);
+            }
+            return std::string(filename.substr(0, marker));
+        }
+
+        void try_reclaim_write_temp(
+            RecoveryInspection& into,
+            const std::filesystem::path& temp_path,
+            const bool published_master_exists) {
+            {
+                auto lease =
+                    WriterLockLease::acquire(
+                        temp_path);
+                if (!lease) {
+                    if (lease.error().code() ==
+                        lfs::ErrorCode::Unavailable) {
+                        return;
+                    }
+                    record_remove_failure(
+                        into, temp_path,
+                        lease.error());
+                    return;
+                }
+            }
+            if (published_master_exists) {
+                best_effort_remove_into(
+                    into, temp_path);
+                return;
+            }
+            quarantine_into(
+                into,
+                temp_path,
+                "unpublished write temp preserved because the published master is absent");
+        }
+
+        void prune_corrupt_asides(
+            RecoveryInspection& into,
+            std::vector<std::filesystem::path> asides) {
+            struct Ranked {
+                std::filesystem::path path;
+                std::uint64_t stamp = 0;
+                std::filesystem::file_time_type mtime{};
+            };
+            std::map<std::string, std::vector<Ranked>>
+                groups;
+            for (auto& aside : asides) {
+                const auto name =
+                    aside.filename().string();
+                std::error_code error;
+                auto mtime =
+                    std::filesystem::last_write_time(
+                        aside, error);
+                if (error) {
+                    mtime = {};
+                }
+                groups[corrupt_group_key(name)].push_back(
+                    Ranked{
+                        .path = std::move(aside),
+                        .stamp = corrupt_stamp(name),
+                        .mtime = mtime,
+                    });
+            }
+            for (auto& [_, group] : groups) {
+                std::ranges::sort(
+                    group,
+                    [](const Ranked& lhs,
+                       const Ranked& rhs) {
+                        if (lhs.stamp != rhs.stamp) {
+                            return lhs.stamp > rhs.stamp;
+                        }
+                        if (lhs.mtime != rhs.mtime) {
+                            return lhs.mtime > rhs.mtime;
+                        }
+                        return lhs.path.generic_string() >
+                               rhs.path.generic_string();
+                    });
+                for (std::size_t index = 3;
+                     index < group.size();
+                     ++index) {
+                    best_effort_remove_into(
+                        into, group[index].path);
+                }
+            }
         }
 
     } // namespace
@@ -464,6 +626,126 @@ namespace lfs::io::project {
                    master_path.extension().string());
     }
 
+    lfs::Result<std::filesystem::path>
+    quarantine_project_artifact(
+        const std::filesystem::path& source) {
+        const auto unix_seconds =
+            std::chrono::duration_cast<
+                std::chrono::seconds>(
+                std::chrono::system_clock::now()
+                    .time_since_epoch())
+                .count();
+        auto aside = source;
+        aside += std::format(
+            ".corrupt-{}", unix_seconds);
+        constexpr int kMaxDisambiguators = 32;
+        for (int attempt = 0;
+             attempt <= kMaxDisambiguators;
+             ++attempt) {
+            auto candidate = aside;
+            if (attempt > 0) {
+                candidate += std::format(
+                    "-{}", attempt);
+            }
+            std::error_code exists_error;
+            if (std::filesystem::exists(
+                    candidate, exists_error) &&
+                !exists_error) {
+                continue;
+            }
+            std::error_code rename_error;
+            std::filesystem::rename(
+                source, candidate, rename_error);
+            if (!rename_error) {
+                return candidate;
+            }
+        }
+        return fail<std::filesystem::path>(
+            lfs::ErrorCode::Unavailable,
+            source,
+            "A corrupt project artifact could not be quarantined.",
+            "no unused .corrupt-* aside name was available",
+            "recovery.quarantine");
+    }
+
+    void sweep_orphan_project_artifacts(
+        const std::filesystem::path& master_path,
+        RecoveryInspection& into) {
+        const auto directory =
+            master_path.parent_path().empty()
+                ? std::filesystem::path{"."}
+                : master_path.parent_path();
+        const auto stem = master_path.stem().string();
+        const auto suffix =
+            ".tmp" + master_path.extension().string();
+        std::error_code master_stat_error;
+        const bool published_master_exists =
+            std::filesystem::is_regular_file(
+                master_path, master_stat_error) &&
+            !master_stat_error;
+        std::vector<std::filesystem::path> write_temps;
+        std::error_code error;
+        for (std::filesystem::directory_iterator
+                 iterator(directory, error),
+             end;
+             !error && iterator != end;
+             iterator.increment(error)) {
+            std::error_code type_error;
+            const auto entry = iterator->path();
+            const auto filename =
+                entry.filename().string();
+            if (filename.ends_with(".lock")) {
+                continue;
+            }
+            if (is_write_temp_name(
+                    filename, stem, suffix)) {
+                if (iterator->is_regular_file(
+                        type_error) &&
+                    !type_error) {
+                    write_temps.push_back(entry);
+                } else if (published_master_exists) {
+                    best_effort_remove_into(
+                        into, entry);
+                } else {
+                    quarantine_into(
+                        into,
+                        entry,
+                        "unpublished write temp preserved because the published master is absent");
+                }
+                continue;
+            }
+        }
+        for (const auto& temp : write_temps) {
+            try_reclaim_write_temp(
+                into,
+                temp,
+                published_master_exists);
+        }
+        std::vector<std::filesystem::path> corrupt_asides;
+        error.clear();
+        for (std::filesystem::directory_iterator
+                 iterator(directory, error),
+             end;
+             !error && iterator != end;
+             iterator.increment(error)) {
+            std::error_code type_error;
+            const auto entry = iterator->path();
+            const auto filename =
+                entry.filename().string();
+            if (filename.ends_with(".lock")) {
+                continue;
+            }
+            if (iterator->is_regular_file(type_error) &&
+                !type_error &&
+                is_master_corrupt_aside(
+                    filename, master_path)) {
+                corrupt_asides.push_back(entry);
+            }
+        }
+        prune_corrupt_asides(
+            into, std::move(corrupt_asides));
+    }
+
     namespace detail {
 
         lfs::Result<std::vector<ValidBoundAutosave>>
@@ -518,26 +800,17 @@ namespace lfs::io::project {
         }
 
         RecoveryInspection result;
-        for (const auto& temp :
-             compaction_temps(master_path)) {
-            if (auto removed = remove_path(temp);
-                !removed) {
-                return std::move(removed).error();
-            }
-            result.deleted_paths.push_back(temp);
-        }
+        sweep_orphan_project_artifacts(
+            master_path, result);
         for (const auto& temp :
              recovery_session_temps(master_path)) {
-            if (auto removed = remove_path(temp);
-                !removed) {
-                return std::move(removed).error();
-            }
-            result.deleted_paths.push_back(temp);
+            best_effort_remove_into(result, temp);
         }
 
         struct Valid {
             std::filesystem::path path;
             std::uint64_t sequence = 0;
+            std::uint64_t wallclock_unix_ns = 0;
             lfs::core::Uuid snapshot_uuid;
         };
         std::vector<Valid> valid;
@@ -553,21 +826,19 @@ namespace lfs::io::project {
                     candidate,
                     inspection_options);
             if (!sidecar) {
-                result.diagnostics.push_back(
-                    std::format(
-                        "{}: {}",
-                        candidate.filename().string(),
-                        lfs::format_for_developer(
-                            sidecar.error())));
-                if (candidate != stable) {
-                    if (auto removed =
-                            remove_path(candidate);
-                        !removed) {
-                        return std::move(removed)
-                            .error();
-                    }
-                    result.deleted_paths.push_back(
-                        candidate);
+                const auto reason = std::format(
+                    "{}: {}",
+                    candidate.filename().string(),
+                    lfs::format_for_developer(
+                        sidecar.error()));
+                if (candidate == stable) {
+                    quarantine_into(
+                        result, candidate, reason);
+                } else {
+                    result.diagnostics.push_back(
+                        reason);
+                    best_effort_remove_into(
+                        result, candidate);
                 }
                 continue;
             }
@@ -579,34 +850,42 @@ namespace lfs::io::project {
                     .base_explicit_commit_uuid ==
                 master->commit().commit_uuid;
             if (same_project && !same_base) {
-                if (auto removed =
-                        remove_path(candidate);
-                    !removed) {
-                    return std::move(removed).error();
+                best_effort_remove_into(
+                    result, candidate);
+                continue;
+            }
+            if (!same_project) {
+                const auto reason = std::format(
+                    "{}: project UUID does not match the master",
+                    candidate.filename().string());
+                if (candidate == stable) {
+                    quarantine_into(
+                        result, candidate, reason);
+                } else {
+                    result.diagnostics.push_back(
+                        reason);
+                    best_effort_remove_into(
+                        result, candidate);
                 }
-                result.deleted_paths.push_back(
-                    candidate);
                 continue;
             }
             auto complete =
                 validate_complete_overlay(
                     *master, *sidecar);
             if (!complete) {
-                result.diagnostics.push_back(
-                    std::format(
-                        "{}: {}",
-                        candidate.filename().string(),
-                        lfs::format_for_developer(
-                            complete.error())));
-                if (candidate != stable) {
-                    if (auto removed =
-                            remove_path(candidate);
-                        !removed) {
-                        return std::move(removed)
-                            .error();
-                    }
-                    result.deleted_paths.push_back(
-                        candidate);
+                const auto reason = std::format(
+                    "{}: {}",
+                    candidate.filename().string(),
+                    lfs::format_for_developer(
+                        complete.error()));
+                if (candidate == stable) {
+                    quarantine_into(
+                        result, candidate, reason);
+                } else {
+                    result.diagnostics.push_back(
+                        reason);
+                    best_effort_remove_into(
+                        result, candidate);
                 }
                 continue;
             }
@@ -615,6 +894,9 @@ namespace lfs::io::project {
                 .sequence =
                     sidecar->superblock()
                         .autosave_sequence,
+                .wallclock_unix_ns =
+                    sidecar->commit()
+                        .wallclock_unix_ns,
                 .snapshot_uuid =
                     sidecar->superblock()
                         .sidecar_snapshot_uuid,
@@ -626,7 +908,9 @@ namespace lfs::io::project {
                     detail::sync_parent_directory(
                         master_path);
                 !synced) {
-                return std::move(synced).error();
+                result.diagnostics.push_back(
+                    lfs::format_for_developer(
+                        synced.error()));
             }
         }
 
@@ -635,38 +919,54 @@ namespace lfs::io::project {
                 result.disposition =
                     RecoveryDisposition::
                         StaleDeleted;
-            } else if (
-                !result.diagnostics.empty()) {
-                result.disposition =
-                    RecoveryDisposition::Invalid;
             }
             return result;
         }
-        const auto highest =
-            std::ranges::max_element(
-                valid, {}, &Valid::sequence)
-                ->sequence;
-        std::vector<const Valid*> winners;
+        const auto& winner = *std::ranges::max_element(
+            valid, [](const Valid& lhs,
+                      const Valid& rhs) {
+                if (lhs.sequence != rhs.sequence) {
+                    return lhs.sequence < rhs.sequence;
+                }
+                if (lhs.wallclock_unix_ns !=
+                    rhs.wallclock_unix_ns) {
+                    return lhs.wallclock_unix_ns <
+                           rhs.wallclock_unix_ns;
+                }
+                return lhs.path.generic_string() <
+                       rhs.path.generic_string();
+            });
+        std::string loser_list;
         for (const auto& candidate : valid) {
-            if (candidate.sequence == highest) {
-                winners.push_back(&candidate);
+            if (candidate.path == winner.path) {
+                continue;
             }
-        }
-        if (winners.size() != 1) {
-            result.disposition =
-                RecoveryDisposition::Ambiguous;
-            result.diagnostics.push_back(
+            if (!loser_list.empty()) {
+                loser_list += ", ";
+            }
+            loser_list +=
+                candidate.path.filename().string();
+            quarantine_into(
+                result,
+                candidate.path,
                 std::format(
-                    "{} valid autosaves tie at sequence {}",
-                    winners.size(), highest));
-            return result;
+                    "losing autosave tie (seq {} wallclock {})",
+                    candidate.sequence,
+                    candidate.wallclock_unix_ns));
+        }
+        if (!loser_list.empty()) {
+            LOG_WARN(
+                "Selected autosave {} (seq={}, wallclock={}) over {}",
+                winner.path.filename().string(),
+                winner.sequence,
+                winner.wallclock_unix_ns,
+                loser_list);
         }
         result.disposition =
             RecoveryDisposition::Offer;
-        result.selected_path = winners.front()->path;
-        result.autosave_sequence = highest;
-        result.snapshot_uuid =
-            winners.front()->snapshot_uuid;
+        result.selected_path = winner.path;
+        result.autosave_sequence = winner.sequence;
+        result.snapshot_uuid = winner.snapshot_uuid;
         return result;
     }
 
@@ -678,16 +978,46 @@ namespace lfs::io::project {
             return lfs::Result<void>::failure(
                 std::move(lock).error());
         }
+        lfs::Result<void> cleanup_error;
         for (const auto& candidate :
              sidecar_candidates(master_path)) {
             if (auto removed =
                     remove_path(candidate);
                 !removed) {
-                return removed;
+                LOG_WARN(
+                    "Could not remove autosave artifact {}: {}",
+                    candidate.filename().string(),
+                    lfs::format_for_developer(
+                        removed.error()));
+                if (cleanup_error) {
+                    cleanup_error = std::move(removed);
+                }
             }
         }
-        return detail::sync_parent_directory(
-            master_path);
+        RecoveryInspection sweep;
+        sweep_orphan_project_artifacts(
+            master_path, sweep);
+        for (const auto& diagnostic :
+             sweep.diagnostics) {
+            LOG_WARN(
+                "Autosave artifact sweep: {}",
+                diagnostic);
+            if (cleanup_error) {
+                cleanup_error = fail<void>(
+                    lfs::ErrorCode::PermissionDenied,
+                    master_path,
+                    "A stale project artifact could not be removed.",
+                    diagnostic,
+                    "recovery.cleanup");
+            }
+        }
+        if (auto synced =
+                detail::sync_parent_directory(
+                    master_path);
+            !synced && cleanup_error) {
+            cleanup_error = std::move(synced);
+        }
+        return cleanup_error;
     }
 
     lfs::Result<RecoverySession>

@@ -17,6 +17,7 @@
 #include "core/path_utils.hpp"
 #include "gui/error_surface_types.hpp"
 #include "gui/gui_manager.hpp"
+#include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
 #include "io/selection_chapter.hpp"
@@ -637,7 +638,7 @@ namespace lfs::vis::project {
                     .count());
         }
 
-        [[nodiscard]] bool isLichtPath(
+        [[nodiscard]] bool isLichtExtension(
             const std::filesystem::path& path) {
             std::string extension =
                 path.extension().string();
@@ -650,11 +651,17 @@ namespace lfs::vis::project {
             return extension == ".licht";
         }
 
+        [[nodiscard]] bool isLichtPath(
+            const std::filesystem::path& path) {
+            return lfs::io::project::isPublishedLichtPath(
+                path);
+        }
+
         [[nodiscard]] lfs::Result<
             std::filesystem::path>
-        normalizedProjectPath(
+        resolveLichtFilePath(
             const std::filesystem::path& path) {
-            if (path.empty() || !isLichtPath(path)) {
+            if (path.empty() || !isLichtExtension(path)) {
                 return fail<std::filesystem::path>(
                     lfs::ErrorCode::InvalidArgument,
                     "A project path must end in .licht.",
@@ -672,6 +679,27 @@ namespace lfs::vis::project {
                     error.message(), "project.path");
             }
             return absolute.lexically_normal();
+        }
+
+        [[nodiscard]] lfs::Result<
+            std::filesystem::path>
+        normalizedProjectPath(
+            const std::filesystem::path& path) {
+            auto resolved = resolveLichtFilePath(path);
+            if (!resolved) {
+                return resolved;
+            }
+            if (!isLichtPath(path)) {
+                return fail<std::filesystem::path>(
+                    lfs::ErrorCode::InvalidArgument,
+                    lfs::io::project::
+                        unpublishedLichtUserMessage(
+                            path),
+                    std::format(
+                        "received '{}'", path.string()),
+                    "project.path");
+            }
+            return resolved;
         }
 
         [[nodiscard]] bool sameBytes(
@@ -1091,7 +1119,10 @@ namespace lfs::vis::project {
                     const bool exists =
                         std::filesystem::exists(
                             entry.last_known_path, error);
-                    return error || !exists;
+                    return error || !exists ||
+                           !lfs::io::project::
+                               isPublishedLichtPath(
+                                   entry.last_known_path);
                 }),
             settings.mru.end());
     }
@@ -1100,6 +1131,9 @@ namespace lfs::vis::project {
         ProjectLifecycleSettings& settings,
         const lfs::core::Uuid& project_uuid,
         const std::filesystem::path& path) {
+        if (!lfs::io::project::isPublishedLichtPath(path)) {
+            return;
+        }
         const auto resolved = resolveProjectMruPath(path);
         settings.mru.erase(
             std::remove_if(
@@ -1167,6 +1201,7 @@ namespace lfs::vis::project {
                     std::nullopt, {});
             }
         }
+        recovery_prompt_pending_ = false;
         epoch_.fetch_add(1, std::memory_order_acq_rel);
         project_write_thread_.request_stop();
         if (project_write_thread_.joinable()) {
@@ -3905,10 +3940,7 @@ namespace lfs::vis::project {
             std::chrono::steady_clock::now();
         project_open_started_at_ = open_started;
         project_first_render_pending_ = false;
-        if (recovery_prompt_pending_) {
-            return ProjectOpenOutcome::
-                RecoveryPromptPending;
-        }
+        recovery_prompt_pending_ = false;
         if (auto preflight =
                 preflightSwitch(disposition);
             !preflight) {
@@ -3947,29 +3979,6 @@ namespace lfs::vis::project {
                 autosave_sequence_,
                 inspection
                     ->autosave_sequence);
-        if (inspection->disposition ==
-            lfs::io::project::
-                RecoveryDisposition::
-                    Ambiguous) {
-            return fail<ProjectOpenOutcome>(
-                lfs::ErrorCode::FailedPrecondition,
-                "Multiple autosaves have the same newest sequence.",
-                inspection->diagnostics.empty()
-                    ? "Recovery requires an explicit candidate choice"
-                    : inspection
-                          ->diagnostics.front(),
-                "project.recovery");
-        }
-        if (inspection->disposition ==
-            lfs::io::project::RecoveryDisposition::Invalid) {
-            return fail<ProjectOpenOutcome>(
-                lfs::ErrorCode::DataLoss,
-                "The project autosave recovery state is invalid.",
-                inspection->diagnostics.empty()
-                    ? "The autosave sidecar failed recovery validation"
-                    : inspection->diagnostics.front(),
-                "project.recovery");
-        }
         if (inspection->disposition ==
                 lfs::io::project::
                     RecoveryDisposition::Offer &&
@@ -4010,6 +4019,8 @@ namespace lfs::vis::project {
                 *inspection->selected_path;
             const auto prompt_epoch =
                 epoch_.load(std::memory_order_acquire);
+            const auto prompt_generation =
+                ++recovery_prompt_generation_;
             lfs::core::ModalRequest request;
             request.title =
                 "Recover Autosaved Project?";
@@ -4026,12 +4037,15 @@ namespace lfs::vis::project {
             request.on_result =
                 [this, master, sidecar,
                  offered_identity,
-                 disposition, prompt_epoch](
+                 disposition, prompt_epoch,
+                 prompt_generation](
                     const lfs::core::
                         ModalResult& result) {
                     if (epoch_.load(
                             std::memory_order_acquire) !=
-                        prompt_epoch) {
+                            prompt_epoch ||
+                        recovery_prompt_generation_ !=
+                            prompt_generation) {
                         return;
                     }
                     recovery_prompt_pending_ =
@@ -4070,10 +4084,13 @@ namespace lfs::vis::project {
             request.on_cancel =
                 [this,
                  previous_autosave_sequence,
-                 prompt_epoch] {
+                 prompt_epoch,
+                 prompt_generation] {
                     if (epoch_.load(
                             std::memory_order_acquire) !=
-                        prompt_epoch) {
+                            prompt_epoch ||
+                        recovery_prompt_generation_ !=
+                            prompt_generation) {
                         return;
                     }
                     recovery_prompt_pending_ =
@@ -4189,6 +4206,7 @@ namespace lfs::vis::project {
     ProjectLifecycle::openMaster(
         const std::filesystem::path& path,
         const ProjectSwitchDisposition disposition) {
+        recovery_prompt_pending_ = false;
         if (auto preflight =
                 preflightSwitch(disposition);
             !preflight) {
@@ -4197,7 +4215,7 @@ namespace lfs::vis::project {
         const auto started =
             std::chrono::steady_clock::now();
         auto normalized =
-            normalizedProjectPath(path);
+            resolveLichtFilePath(path);
         if (!normalized) {
             return lfs::Status::failure(
                 std::move(normalized).error());
@@ -4924,6 +4942,7 @@ namespace lfs::vis::project {
         viewer_.resetProjectState();
         active_restore_ticket_ = 0;
         applyDefaultGuiLayout(viewer_);
+        recovery_prompt_pending_ = false;
         epoch_.fetch_add(
             1, std::memory_order_acq_rel);
         hydration_.store(

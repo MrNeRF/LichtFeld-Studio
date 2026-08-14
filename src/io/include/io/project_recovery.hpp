@@ -115,6 +115,26 @@ namespace lfs::io::project {
     recovery_session_temp_path(
         const std::filesystem::path& master_path);
 
+    // Renames `source` to `source.corrupt-<unix_seconds>` (with -N
+    // disambiguation). Bytes are preserved. The caller must already hold
+    // the master writer lock when `source` is a sidecar/temp of that master.
+    [[nodiscard]] LFS_IO_API
+        lfs::Result<std::filesystem::path>
+        quarantine_project_artifact(
+            const std::filesystem::path& source);
+
+    // Caller must already hold the master writer lock. Flock-free
+    // write/compact/replace-backup temps are deleted only when the
+    // published master file exists at `master_path` (it supersedes
+    // them). If that master is absent they are quarantined via
+    // `quarantine_project_artifact` so a crashed first publish is not
+    // `remove()`d. Prunes older `.corrupt-*` asides of this master
+    // (newest 3 per stem), including asides created by this sweep.
+    // Does not touch `.lock`, `.autosave`, or recovery-session temps.
+    LFS_IO_API void sweep_orphan_project_artifacts(
+        const std::filesystem::path& master_path,
+        RecoveryInspection& into);
+
     // Acquires the master writer lock, validates every stable/temp/backup
     // sidecar candidate, deletes stale candidates, and applies the exact
     // §9 predicate. It also removes orphan compaction temps after the master

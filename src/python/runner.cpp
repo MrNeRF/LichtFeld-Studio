@@ -313,6 +313,8 @@ _add_dll_dirs()
             publish_plugin_preload_status();
         }
 
+        // SIGTERM/SIGINT are reasserted on the GUI thread via
+        // MainLoop::installInterruptHandlers after preload becomes terminal.
         void finish_plugin_preload(const PluginPreloadState terminal_state,
                                    std::string detail,
                                    const bool mark_loaded) {

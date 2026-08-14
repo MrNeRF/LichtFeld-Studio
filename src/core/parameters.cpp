@@ -7,6 +7,7 @@
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
+#include "io/project_path.hpp"
 #include <any>
 #include <cctype>
 #include <chrono>
@@ -421,6 +422,26 @@ namespace lfs::core {
                     });
                 if (extension != ".licht") {
                     return "The project path must reference a .licht file";
+                }
+                if (!lfs::io::project::isPublishedLichtPath(*project_path)) {
+                    return lfs::io::project::unpublishedLichtUserMessage(
+                        *project_path);
+                }
+            }
+            if (resume_project) {
+                auto resume_extension = resume_project->extension().string();
+                std::ranges::transform(
+                    resume_extension, resume_extension.begin(),
+                    [](const unsigned char character) {
+                        return static_cast<char>(
+                            std::tolower(character));
+                    });
+                if (resume_extension != ".licht") {
+                    return "The resume project must reference a .licht file";
+                }
+                if (!lfs::io::project::isPublishedLichtPath(*resume_project)) {
+                    return lfs::io::project::unpublishedLichtUserMessage(
+                        *resume_project);
                 }
             }
             if (save_project_at_iteration && *save_project_at_iteration == 0) {

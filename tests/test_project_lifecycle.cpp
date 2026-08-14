@@ -298,4 +298,38 @@ namespace {
         EXPECT_TRUE(loaded->auto_save_on_close);
     }
 
+    TEST(ProjectLifecycleSettingsTest,
+         RememberProjectSkipsUnpublishedWriteTemp) {
+        // Would fail if rememberProject still inserted
+        // *.project-write.*.tmp.licht into MRU.
+        TemporaryDirectory temporary;
+        const auto temp_path =
+            temporary.path /
+            "project.project-write.1.2.3.tmp.licht";
+        createEmptyProjectFile(temp_path);
+        ProjectLifecycleSettings settings;
+        rememberProject(
+            settings, lfs::core::generate_uuid_v4(),
+            temp_path);
+        EXPECT_TRUE(settings.mru.empty());
+    }
+
+    TEST(ProjectLifecycleSettingsTest,
+         PruneMissingMruEntriesDropsUnpublishedPath) {
+        // Would fail if prune only checked existence and
+        // left unpublished temps in MRU.
+        TemporaryDirectory temporary;
+        const auto temp_path =
+            temporary.path /
+            "project.project-write.1.2.3.tmp.licht";
+        createEmptyProjectFile(temp_path);
+        ProjectLifecycleSettings settings;
+        settings.mru.push_back({
+            .project_uuid = lfs::core::generate_uuid_v4(),
+            .last_known_path = temp_path,
+        });
+        pruneMissingMruEntries(settings);
+        EXPECT_TRUE(settings.mru.empty());
+    }
+
 } // namespace

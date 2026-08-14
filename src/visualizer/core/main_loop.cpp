@@ -132,8 +132,7 @@ namespace lfs::vis {
         (void)read_fd;
 #endif
 
-        std::signal(SIGINT, signal_handler);
-        std::signal(SIGTERM, signal_handler);
+        installInterruptHandlers();
 
 #ifndef _WIN32
         std::jthread interrupt_wake_thread;
@@ -176,6 +175,7 @@ namespace lfs::vis {
         LOG_DEBUG("Entering main render loop");
 
         while (true) {
+            installInterruptHandlers();
             if (g_interrupt_requested.exchange(false, std::memory_order_acq_rel)) {
                 LOG_INFO("Interrupt signal received, shutting down");
                 if (!interrupt_callback_) {
@@ -229,6 +229,15 @@ namespace lfs::vis {
         close_interrupt_wake_fds();
 
         LOG_INFO("Main loop ended");
+    }
+
+    void MainLoop::installInterruptHandlers() {
+        std::signal(SIGINT, signal_handler);
+        std::signal(SIGTERM, signal_handler);
+    }
+
+    void (*MainLoop::interruptHandlerForTest())(int) {
+        return &signal_handler;
     }
 
 } // namespace lfs::vis

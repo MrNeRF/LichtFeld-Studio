@@ -1855,6 +1855,9 @@ namespace lfs::vis {
                 plugin_load_status.detail);
             assert(!plugin_load_started || !gui_manager_->isStartupBlockingInput());
             startup_plugin_load_status_revision_ = plugin_load_status.revision;
+            if (!plugin_load_status.active) {
+                MainLoop::installInterruptHandlers();
+            }
         }
         if (startup_plugin_preload_started_ &&
             !gui_panels_ready_emitted_ &&
@@ -1862,6 +1865,7 @@ namespace lfs::vis {
                 pluginPreloadTerminalForGuiPanels(
                     startup_plugin_preload_started_,
                     plugin_load_status.state)) {
+            MainLoop::installInterruptHandlers();
             gui_panels_ready_emitted_ = true;
             internal::GuiPanelsReady{
                 .registration_revision =

@@ -4,6 +4,7 @@
 #include "io/project/crc32c.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project_container.hpp"
+#include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
 
@@ -25,6 +26,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <ostream>
 #include <span>
 #include <stdexcept>
@@ -208,6 +210,24 @@ namespace {
             }
         }
         require_status(writer.commit());
+    }
+
+    [[nodiscard]] std::vector<fs::path> corrupt_asides_of(
+        const fs::path& original) {
+        std::vector<fs::path> found;
+        const auto prefix = original.filename().string() + ".corrupt-";
+        const auto directory = original.parent_path().empty()
+                                   ? fs::path{"."}
+                                   : original.parent_path();
+        std::error_code error;
+        for (fs::directory_iterator iterator(directory, error), end;
+             !error && iterator != end; iterator.increment(error)) {
+            const auto name = iterator->path().filename().string();
+            if (name.starts_with(prefix)) {
+                found.push_back(iterator->path());
+            }
+        }
+        return found;
     }
 
     TEST(ProjectContainerFormat, Crc32cKnownVector) {
@@ -2034,6 +2054,424 @@ namespace {
                                                    "probe.mul.ok");
             ASSERT_TRUE(ok_mul);
             EXPECT_EQ(*ok_mul, 1ull << 63);
+        }
+    }
+
+    TEST(ProjectContainerWriter,
+         InspectQuarantinesCorruptStableSidecarAndOpensMaster) {
+        // Would fail if inspect still returned Invalid or left the sidecar
+        // in place / unlinked it instead of renaming aside.
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "corrupt-sidecar.licht";
+        create_single_chunk_fixture(
+            master, 960, 961, 962, fixed_key("PROJ", 963),
+            R"({"master":"corrupt-sidecar"})");
+        const auto original = read_file_bytes(master);
+        const fs::path sidecar = autosave_sidecar_path(master);
+        const auto garbage = byte_vector("truncated-autosave-garbage");
+        write_file_bytes(sidecar, garbage);
+
+        auto inspection = inspect_autosave_recovery(master);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(inspection.error());
+        EXPECT_NE(inspection->disposition, RecoveryDisposition::Invalid);
+        EXPECT_NE(inspection->disposition, RecoveryDisposition::Ambiguous);
+        EXPECT_TRUE(
+            inspection->disposition == RecoveryDisposition::StaleDeleted ||
+            inspection->disposition == RecoveryDisposition::None);
+        EXPECT_FALSE(fs::exists(sidecar));
+        const auto asides = corrupt_asides_of(sidecar);
+        ASSERT_EQ(asides.size(), 1u);
+        EXPECT_EQ(read_file_bytes(asides.front()), garbage);
+        auto reader = ProjectReader::open(master);
+        ASSERT_TRUE(reader) << lfs::format_for_developer(reader.error());
+        EXPECT_EQ(read_file_bytes(master), original);
+    }
+
+    TEST(ProjectContainerWriter,
+         InspectQuarantinesWrongProjectUuidStableSidecar) {
+        // Would fail if a leftover sidecar from another project still
+        // produced Invalid or was unlinked instead of quarantined.
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "foreign-uuid.licht";
+        const fs::path foreign_master =
+            temporary.path / "foreign-src.licht";
+        create_single_chunk_fixture(
+            master, 964, 965, 966, fixed_key("PROJ", 967),
+            R"({"master":"foreign-uuid"})");
+        CreateOptions foreign_create = fixture_create_options(1060);
+        foreign_create.project_uuid = fixed_uuid(777);
+        {
+            ProjectWriter writer = require_result(
+                ProjectWriter::create(foreign_master, foreign_create));
+            const auto payload = byte_vector(R"({"master":"foreign-src"})");
+            require_status(writer.plan_commit(
+                fixture_commit_options(1061, 1062, 1)));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.write_chunk(
+                fixed_key("PROJ", 1063), payload));
+            require_status(writer.commit());
+        }
+        const fs::path sidecar = autosave_sidecar_path(master);
+        publish_complete_sidecar(
+            foreign_master, sidecar, 1, 968, 969, 970);
+        const auto original = read_file_bytes(sidecar);
+
+        auto inspection = inspect_autosave_recovery(master);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(inspection.error());
+        EXPECT_EQ(inspection->disposition, RecoveryDisposition::StaleDeleted);
+        EXPECT_FALSE(fs::exists(sidecar));
+        const auto asides = corrupt_asides_of(sidecar);
+        ASSERT_EQ(asides.size(), 1u);
+        EXPECT_EQ(read_file_bytes(asides.front()), original);
+        ASSERT_TRUE(ProjectReader::open(master));
+    }
+
+    TEST(ProjectContainerWriter,
+         InspectSucceedsWhenHygieneRemoveHitsNonEmptyDirectory) {
+        // Would fail if inspect still returned PermissionDenied when
+        // std::filesystem::remove cannot unlink a non-empty directory.
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "hygiene-dir.licht";
+        create_single_chunk_fixture(
+            master, 971, 972, 973, fixed_key("PROJ", 974),
+            R"({"master":"hygiene-dir"})");
+        const fs::path blocker =
+            temporary.path / "hygiene-dir.compact.killed.1.0.tmp.licht";
+        ASSERT_TRUE(fs::create_directory(blocker));
+        {
+            std::ofstream child(blocker / "child");
+            ASSERT_TRUE(child);
+            child << "blocks remove";
+        }
+
+        auto inspection = inspect_autosave_recovery(master);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(inspection.error());
+        EXPECT_NE(inspection->disposition, RecoveryDisposition::Invalid);
+        EXPECT_TRUE(
+            inspection->disposition == RecoveryDisposition::None ||
+            inspection->disposition == RecoveryDisposition::StaleDeleted);
+        ASSERT_FALSE(inspection->diagnostics.empty());
+        EXPECT_TRUE(std::ranges::any_of(
+            inspection->diagnostics, [&](const std::string& diagnostic) {
+                return diagnostic.find(blocker.filename().string()) !=
+                       std::string::npos;
+            }));
+        EXPECT_TRUE(fs::is_directory(blocker));
+    }
+
+    TEST(ProjectContainerWriter,
+         InspectPicksHigherWallclockOnSequenceTieAndQuarantinesLoser) {
+        // Would fail if inspect returned Ambiguous or picked the older
+        // wallclock when sequences match.
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "tie-clock.licht";
+        create_single_chunk_fixture(
+            master, 975, 976, 977, fixed_key("PROJ", 978),
+            R"({"master":"tie-clock"})");
+        const fs::path stable = autosave_sidecar_path(master);
+        const fs::path candidate =
+            temporary.path /
+            (master.filename().string() +
+             ".project-write.tie.1.0.tmp.autosave");
+        CommitOptions older = fixture_commit_options(979, 980, 1);
+        older.wallclock_unix_ns = 1'000;
+        CommitOptions newer = fixture_commit_options(981, 982, 1);
+        newer.wallclock_unix_ns = 2'000;
+        publish_complete_sidecar(
+            master, stable, 4, 983, 979, 980, older);
+        const auto parked = temporary.path / "parked-stable.aside";
+        fs::rename(stable, parked);
+        publish_complete_sidecar(
+            master, candidate, 4, 984, 981, 982, newer);
+        fs::rename(parked, stable);
+        const auto loser_bytes = read_file_bytes(stable);
+
+        auto inspection = inspect_autosave_recovery(master);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(inspection.error());
+        EXPECT_EQ(inspection->disposition, RecoveryDisposition::Offer);
+        ASSERT_TRUE(inspection->selected_path);
+        EXPECT_EQ(*inspection->selected_path, candidate);
+        EXPECT_FALSE(fs::exists(stable));
+        const auto asides = corrupt_asides_of(stable);
+        ASSERT_EQ(asides.size(), 1u);
+        EXPECT_EQ(read_file_bytes(asides.front()), loser_bytes);
+        EXPECT_TRUE(fs::is_regular_file(candidate));
+    }
+
+    TEST(ProjectContainerWriter,
+         InspectPicksLexicographicallyGreaterPathOnFullTieAndQuarantinesLoser) {
+        // Would fail if inspect returned Ambiguous or used an unstable
+        // path order. candidate filename is lexicographically greater
+        // than the stable sidecar (".project-write." > ".autosave").
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "tie-path.licht";
+        create_single_chunk_fixture(
+            master, 985, 986, 987, fixed_key("PROJ", 988),
+            R"({"master":"tie-path"})");
+        const fs::path stable = autosave_sidecar_path(master);
+        const fs::path candidate =
+            temporary.path /
+            (master.filename().string() +
+             ".project-write.tie.1.0.tmp.autosave");
+        ASSERT_GT(candidate.generic_string(), stable.generic_string());
+        CommitOptions tied = fixture_commit_options(989, 990, 1);
+        tied.wallclock_unix_ns = 3'000;
+        publish_complete_sidecar(
+            master, stable, 5, 991, 989, 990, tied);
+        const auto parked = temporary.path / "parked-stable.aside";
+        fs::rename(stable, parked);
+        CommitOptions tied_again = fixture_commit_options(992, 993, 1);
+        tied_again.wallclock_unix_ns = 3'000;
+        publish_complete_sidecar(
+            master, candidate, 5, 994, 992, 993, tied_again);
+        fs::rename(parked, stable);
+        const auto loser_bytes = read_file_bytes(stable);
+
+        auto inspection = inspect_autosave_recovery(master);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(inspection.error());
+        EXPECT_EQ(inspection->disposition, RecoveryDisposition::Offer);
+        ASSERT_TRUE(inspection->selected_path);
+        EXPECT_EQ(*inspection->selected_path, candidate);
+        EXPECT_FALSE(fs::exists(stable));
+        const auto asides = corrupt_asides_of(stable);
+        ASSERT_EQ(asides.size(), 1u);
+        EXPECT_EQ(read_file_bytes(asides.front()), loser_bytes);
+    }
+
+    TEST(ProjectContainerWriter,
+         InspectPicksHigherSequenceRegardlessOfWallclockOrPath) {
+        // Would fail if wallclock or path could beat a higher sequence.
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "seq-wins.licht";
+        create_single_chunk_fixture(
+            master, 995, 996, 997, fixed_key("PROJ", 998),
+            R"({"master":"seq-wins"})");
+        const fs::path stable = autosave_sidecar_path(master);
+        const fs::path candidate =
+            temporary.path /
+            (master.filename().string() +
+             ".project-write.tie.1.0.tmp.autosave");
+        CommitOptions low_seq_new_clock =
+            fixture_commit_options(999, 1000, 1);
+        low_seq_new_clock.wallclock_unix_ns = 9'000;
+        CommitOptions high_seq_old_clock =
+            fixture_commit_options(1001, 1002, 1);
+        high_seq_old_clock.wallclock_unix_ns = 1;
+        publish_complete_sidecar(
+            master, candidate, 1, 1003, 999, 1000,
+            low_seq_new_clock);
+        publish_complete_sidecar(
+            master, stable, 8, 1004, 1001, 1002,
+            high_seq_old_clock);
+
+        auto inspection = inspect_autosave_recovery(master);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(inspection.error());
+        EXPECT_EQ(inspection->disposition, RecoveryDisposition::Offer);
+        ASSERT_TRUE(inspection->selected_path);
+        EXPECT_EQ(*inspection->selected_path, stable);
+        EXPECT_EQ(inspection->autosave_sequence, 8u);
+        EXPECT_FALSE(fs::exists(candidate));
+        EXPECT_FALSE(corrupt_asides_of(candidate).empty());
+    }
+
+    TEST(ProjectContainerWriter, InspectDeletesFreeOwnedWriteTemp) {
+        // Would fail if project-write master temps were still invisible
+        // to inspect.
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "free-write.licht";
+        create_single_chunk_fixture(
+            master, 1005, 1006, 1007, fixed_key("PROJ", 1008),
+            R"({"master":"free-write"})");
+        const fs::path free_temp =
+            temporary.path / "free-write.project-write.free.1.0.tmp.licht";
+        write_file_bytes(free_temp, byte_vector("orphan write temp"));
+
+        auto inspection = inspect_autosave_recovery(master);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(inspection.error());
+        EXPECT_FALSE(fs::exists(free_temp));
+        EXPECT_TRUE(corrupt_asides_of(free_temp).empty());
+        EXPECT_NE(std::ranges::find(inspection->deleted_paths, free_temp),
+                  inspection->deleted_paths.end());
+    }
+
+    TEST(ProjectContainerWriter,
+         SweepQuarantinesFreeWriteTempWhenMasterAbsent) {
+        // Would fail if flock-free first-publish temps were remove()d
+        // when the destination master is absent, or left in place when
+        // a published master exists and the temp flock is free.
+        TemporaryDirectory temporary;
+        const fs::path missing = temporary.path / "missing.licht";
+        const fs::path missing_temp =
+            temporary.path /
+            "missing.project-write.crash.1.0.tmp.licht";
+        const auto only_copy = byte_vector("only copy of crashed first publish");
+        write_file_bytes(missing_temp, only_copy);
+        ASSERT_FALSE(fs::exists(missing));
+
+        RecoveryInspection absent;
+        sweep_orphan_project_artifacts(missing, absent);
+        EXPECT_FALSE(fs::exists(missing_temp));
+        EXPECT_FALSE(fs::exists(missing));
+        const auto asides = corrupt_asides_of(missing_temp);
+        ASSERT_EQ(asides.size(), 1u);
+        EXPECT_EQ(read_file_bytes(asides.front()), only_copy);
+        EXPECT_NE(std::ranges::find(absent.deleted_paths, missing_temp),
+                  absent.deleted_paths.end());
+        const auto joined = [&] {
+            std::string text;
+            for (const auto& line : absent.diagnostics) {
+                text += line;
+                text += '\n';
+            }
+            return text;
+        }();
+        EXPECT_NE(joined.find("quarantined"), std::string::npos);
+        EXPECT_EQ(joined.find("quarantine failed"), std::string::npos);
+
+        const fs::path present = temporary.path / "present.licht";
+        create_single_chunk_fixture(
+            present, 1025, 1026, 1027, fixed_key("PROJ", 1028),
+            R"({"master":"present"})");
+        const fs::path present_temp =
+            temporary.path /
+            "present.project-write.free.1.0.tmp.licht";
+        write_file_bytes(present_temp, byte_vector("superseded write temp"));
+
+        RecoveryInspection published;
+        sweep_orphan_project_artifacts(present, published);
+        EXPECT_TRUE(fs::exists(present));
+        EXPECT_FALSE(fs::exists(present_temp));
+        EXPECT_TRUE(corrupt_asides_of(present_temp).empty());
+        EXPECT_NE(std::ranges::find(published.deleted_paths, present_temp),
+                  published.deleted_paths.end());
+    }
+
+    TEST(ProjectContainerWriter, InspectKeepsHeldWriteTempAndRemovesFreeSiblings) {
+        // Would fail if sweep unlinked a temp whose WriterLockLease is held,
+        // or stopped deleting free compact/replace-backup temps.
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "held-write.licht";
+        create_single_chunk_fixture(
+            master, 1009, 1010, 1011, fixed_key("PROJ", 1012),
+            R"({"master":"held-write"})");
+        const fs::path held_temp =
+            temporary.path / "held-write.project-write.held.1.0.tmp.licht";
+        const fs::path compact_temp =
+            temporary.path / "held-write.compact.free.1.0.tmp.licht";
+        const fs::path backup_temp =
+            temporary.path / "held-write.replace-backup.free.1.0.tmp.licht";
+        write_file_bytes(held_temp, byte_vector("live write"));
+        write_file_bytes(compact_temp, byte_vector("orphan compact"));
+        write_file_bytes(backup_temp, byte_vector("orphan backup"));
+        auto held = WriterLockLease::acquire(held_temp);
+        ASSERT_TRUE(held) << lfs::format_for_developer(held.error());
+
+        auto inspection = inspect_autosave_recovery(master);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(inspection.error());
+        EXPECT_TRUE(fs::exists(held_temp));
+        EXPECT_FALSE(fs::exists(compact_temp));
+        EXPECT_FALSE(fs::exists(backup_temp));
+    }
+
+    TEST(ProjectContainerWriter, InspectPrunesCorruptAsidesToNewestThree) {
+        // Would fail if .corrupt-* asides grew without a per-stem cap.
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "prune-corrupt.licht";
+        create_single_chunk_fixture(
+            master, 1013, 1014, 1015, fixed_key("PROJ", 1016),
+            R"({"master":"prune-corrupt"})");
+        const std::array stamps{100, 200, 300, 400, 500};
+        for (const int stamp : stamps) {
+            write_file_bytes(
+                fs::path(master.string() +
+                         std::format(".corrupt-{}", stamp)),
+                byte_vector(std::format("aside-{}", stamp)));
+        }
+
+        auto inspection = inspect_autosave_recovery(master);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(inspection.error());
+        EXPECT_FALSE(fs::exists(fs::path(master.string() + ".corrupt-100")));
+        EXPECT_FALSE(fs::exists(fs::path(master.string() + ".corrupt-200")));
+        EXPECT_TRUE(fs::exists(fs::path(master.string() + ".corrupt-300")));
+        EXPECT_TRUE(fs::exists(fs::path(master.string() + ".corrupt-400")));
+        EXPECT_TRUE(fs::exists(fs::path(master.string() + ".corrupt-500")));
+    }
+
+    TEST(ProjectContainerWriter, InspectLeavesMasterLockFile) {
+        // Would fail if sweep started unlinking .lock siblings (O7).
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "keep-lock.licht";
+        create_single_chunk_fixture(
+            master, 1017, 1018, 1019, fixed_key("PROJ", 1020),
+            R"({"master":"keep-lock"})");
+        auto inspection = inspect_autosave_recovery(master);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(inspection.error());
+        auto lock_path = master;
+        lock_path += ".lock";
+        EXPECT_TRUE(fs::exists(lock_path));
+    }
+
+    TEST(ProjectContainerWriter,
+         RemoveAutosaveArtifactsSweepsFreeWriteTemp) {
+        // Would fail if remove_autosave_artifacts still skipped master
+        // project-write temps.
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "remove-sweep.licht";
+        create_single_chunk_fixture(
+            master, 1021, 1022, 1023, fixed_key("PROJ", 1024),
+            R"({"master":"remove-sweep"})");
+        const fs::path free_temp =
+            temporary.path /
+            "remove-sweep.project-write.free.1.0.tmp.licht";
+        write_file_bytes(free_temp, byte_vector("save-time orphan"));
+        auto removed = remove_autosave_artifacts(master);
+        ASSERT_TRUE(removed)
+            << lfs::format_for_developer(removed.error());
+        EXPECT_FALSE(fs::exists(free_temp));
+    }
+
+    TEST(ProjectPathTest, IsPublishedLichtPathTable) {
+        // Would fail if write/compact/backup/recovery temps or .autosave
+        // components were treated as published masters, or if
+        // myautosave.licht were rejected as a substring false positive.
+        const fs::path parent{"/tmp/licht-path-table"};
+        const struct {
+            const char* relative;
+            bool published;
+            const char* derived;
+        } rows[] = {
+            {"project.licht", true, nullptr},
+            {"session.LICHT", true, nullptr},
+            {"myautosave.licht", true, nullptr},
+            {"project.project-write.1.2.3.tmp.licht", false, "project.licht"},
+            {"project.compact.1.tmp.licht", false, "project.licht"},
+            {"project.replace-backup.1.tmp.licht", false, "project.licht"},
+            {"project.recovery-session.uuid.tmp.licht", false, "project.licht"},
+            {"project.licht.autosave", false, "project.licht"},
+            {"project.licht.corrupt-12", false, "project.licht"},
+            {"foo.autosave.licht", false, nullptr},
+        };
+        for (const auto& row : rows) {
+            SCOPED_TRACE(row.relative);
+            const fs::path path = parent / row.relative;
+            EXPECT_EQ(isPublishedLichtPath(path), row.published);
+            const auto derived = derivedPublishedMasterPath(path);
+            if (row.derived == nullptr) {
+                EXPECT_FALSE(derived.has_value());
+            } else {
+                ASSERT_TRUE(derived.has_value());
+                EXPECT_EQ(derived->filename(), fs::path(row.derived));
+            }
         }
     }
 

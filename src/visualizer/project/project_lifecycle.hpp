@@ -27,6 +27,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
     class VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
+    class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
     class VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
     class VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
     class VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
@@ -173,6 +174,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
         friend class lfs::vis::VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
+        friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
         friend class lfs::vis::VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
@@ -394,6 +396,7 @@ namespace lfs::vis::project {
             lfs::io::project::RecoverySession>
             recovery_session_;
         bool recovery_prompt_pending_ = false;
+        std::uint64_t recovery_prompt_generation_ = 0;
         std::optional<DeclinedRecoveryIdentity>
             declined_recovery_;
         mutable std::mutex
