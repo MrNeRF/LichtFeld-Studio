@@ -158,6 +158,9 @@ def test_menu_bar_uses_retained_bounds_for_submenu_hover():
     assert "RmlMenuBar::sizeOpenDropdowns" in menu_bar_cpp
     assert "GetScrollWidth()" in menu_bar_cpp
     assert 'GetElementsByClassName(submenus, "submenu-popup")' in menu_bar_cpp
+    assert "element->GetDisplay() == Rml::Style::Display::None" in menu_bar_cpp
+    assert "tested against the previous submenu geometry" in menu_bar_cpp
+    assert "a fast following click cannot hit the previous menu's rows" in menu_bar_cpp
     assert "rml_context_->GetElementAtPoint" not in menu_bar_cpp
     assert 'action == "window_toggle_fullscreen"' not in menu_bar_cpp
     assert 'ctor.Bind("menu_camera_buttons", &camera_buttons_)' in menu_bar_cpp

@@ -766,6 +766,10 @@ namespace lfs::vis::gui {
             return;
 
         menu_model_.DirtyVariable("dropdown_items");
+        // Apply the retained class change before another pointer event can be
+        // tested against the previous submenu geometry.
+        if (rml_context_)
+            rml_context_->Update();
         render_needed_ = true;
     }
 
@@ -780,6 +784,11 @@ namespace lfs::vis::gui {
         };
 
         const auto find_deepest = [&](const auto& self, Rml::Element* element) -> Rml::Element* {
+            // RmlUi retains layout boxes for display:none descendants. Do not
+            // let a closed submenu's stale rectangle win over the menu that is
+            // actually visible under the pointer.
+            if (!element || element->GetDisplay() == Rml::Style::Display::None)
+                return nullptr;
             for (int i = element->GetNumChildren() - 1; i >= 0; --i) {
                 if (auto* hit = self(self, element->GetChild(i)))
                     return hit;
@@ -1073,6 +1082,10 @@ namespace lfs::vis::gui {
         dropdown_popup_->SetProperty("top", std::format("{}px", label_offset.y + label_size.y));
         dropdown_container_->SetClass("visible", true);
         dropdown_overlay_->SetClass("visible", true);
+        // Top-level menus can switch on hover. Materialize the new records now
+        // so a fast following click cannot hit the previous menu's rows.
+        if (rml_context_)
+            rml_context_->Update();
         render_needed_ = true;
     }
 
