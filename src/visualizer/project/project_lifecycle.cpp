@@ -9,12 +9,14 @@
 #include "core/checkpoint_format.hpp"
 #include "core/config_paths.hpp"
 #include "core/data_loading_service.hpp"
+#include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/modal_request.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
+#include "gui/error_event_bridge.hpp"
 #include "gui/error_surface_types.hpp"
 #include "gui/gui_manager.hpp"
 #include "io/project_path.hpp"
@@ -120,6 +122,46 @@ namespace lfs::vis::project {
                 return source->parent_path();
             }
             return {};
+        }
+
+        void publishProjectToast(lfs::Error error,
+                                 const char* operation) {
+            lfs::Error contextual = std::move(error);
+            lfs::ErrorBus::instance().publish(
+                lfs::ErrorNotification{
+                    .error = std::move(contextual)
+                                 .with_context(
+                                     operation,
+                                     LFS_SOURCE_SITE_CURRENT()),
+                    .surface = lfs::ErrorSurface::Toast,
+                    .actions = {},
+                    .operation_id =
+                        lfs::OperationId::generate(),
+                });
+        }
+
+        void publishProjectToast(
+            const lfs::ErrorCode code,
+            const lfs::ErrorDomain domain,
+            std::string user_message,
+            const char* operation) {
+            publishProjectToast(
+                lfs::make_error(lfs::ErrorInit{
+                    .code = code,
+                    .domain = domain,
+                    .severity = lfs::Severity::Error,
+                    .retryability =
+                        lfs::Retryability::NotRetryable,
+                    .operation_id = {},
+                    .user_message =
+                        std::move(user_message),
+                    .detail = {},
+                    .detection =
+                        LFS_SOURCE_SITE_CURRENT(),
+                    .fields = {},
+                    .native = std::nullopt,
+                }),
+                operation);
         }
 
         void notifyTrainerRestoreFailure(
@@ -2642,15 +2684,12 @@ namespace lfs::vis::project {
                 LOG_ERROR(
                     "Project background write failed: {}",
                     error);
-                if (auto* gui = viewer_.getGuiManager()) {
-                    gui->enqueueToast({
-                        .title = "Project save failed",
-                        .message = error,
-                        .level = lfs::vis::gui::ErrorNoticeLevel::Error,
-                        .fingerprint = std::hash<std::string>{}(
-                            "project-write-failed"),
-                    });
-                }
+                publishProjectToast(
+                    last_project_write_error_code_.value_or(
+                        lfs::ErrorCode::Unavailable),
+                    lfs::ErrorDomain::IO,
+                    error,
+                    gui::error_op::kSave);
             }
             if (was_autosave) {
                 scheduleAutosaveFailureBackoff();
@@ -4084,18 +4123,9 @@ namespace lfs::vis::project {
                             "Recovery decision failed: {}",
                             developerError(
                                 opened.error()));
-                        if (auto* gui = viewer_.getGuiManager()) {
-                            gui->enqueueToast({
-                                .title = "Project recovery failed",
-                                .message = std::string(
-                                    opened.error().user_message().empty()
-                                        ? opened.error().detail()
-                                        : opened.error().user_message()),
-                                .level = lfs::vis::gui::ErrorNoticeLevel::Error,
-                                .fingerprint = std::hash<std::string>{}(
-                                    "project-recovery-failed"),
-                            });
-                        }
+                        publishProjectToast(
+                            opened.error(),
+                            gui::error_op::kOpenProject);
                     }
                 };
             request.on_cancel =
@@ -4912,17 +4942,11 @@ namespace lfs::vis::project {
                     LOG_ERROR(
                         "Project hydration failed; the coherent shell remains active: {}",
                         detail);
-                    if (auto* gui =
-                            viewer_.getGuiManager()) {
-                        gui->enqueueToast({
-                            .title = "Project open failed",
-                            .message = detail,
-                            .level =
-                                lfs::vis::gui::ErrorNoticeLevel::Error,
-                            .fingerprint = std::hash<std::string>{}(
-                                "project-hydration-failed"),
-                        });
-                    }
+                    publishProjectToast(
+                        lfs::ErrorCode::Unavailable,
+                        lfs::ErrorDomain::IO,
+                        detail,
+                        gui::error_op::kOpenProject);
                 },
             .cancel = [] {},
         });

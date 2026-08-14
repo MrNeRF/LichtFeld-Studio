@@ -34,6 +34,10 @@ namespace lfs::vis::gui {
         inline constexpr const char* kCudaCheck = "cuda_check";
         inline constexpr const char* kSave = "save";
         inline constexpr const char* kRenderFrame = "render_frame";
+        inline constexpr const char* kOpenProject = "open_project";
+        inline constexpr const char* kNewProject = "new_project";
+        inline constexpr const char* kCompact = "compact_project";
+        inline constexpr const char* kProjectSettings = "project_settings";
     } // namespace error_op
 
     LFS_VIS_API std::optional<lfs::ErrorNotification>

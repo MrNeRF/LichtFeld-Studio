@@ -67,15 +67,16 @@ namespace lfs::vis {
 
     namespace {
 
-        // Builds one frame-loop ErrorNotification carrying the kRenderFrame context
-        // frame, matching the bridge's make_error precedent (error_event_bridge.cpp).
+        // Generic ErrorBus publisher. Default operation is the frame-loop tag
+        // so existing renderer callers stay on kRenderFrame.
         lfs::ErrorNotification makeFrameNotification(const lfs::ErrorCode code,
                                                      const lfs::ErrorDomain domain,
                                                      const lfs::Severity severity,
                                                      const lfs::ErrorSurface surface,
                                                      std::string user_message, std::string detail,
                                                      std::vector<lfs::ErrorAction> actions,
-                                                     const lfs::core::SourceSite site) {
+                                                     const lfs::core::SourceSite site,
+                                                     const char* operation = gui::error_op::kRenderFrame) {
             lfs::Error base = lfs::make_error(lfs::ErrorInit{
                 .code = code,
                 .domain = domain,
@@ -89,7 +90,7 @@ namespace lfs::vis {
                 .native = std::nullopt,
             });
             return lfs::ErrorNotification{
-                .error = std::move(base).with_context(gui::error_op::kRenderFrame, site),
+                .error = std::move(base).with_context(operation, site),
                 .surface = surface,
                 .actions = std::move(actions),
                 .operation_id = lfs::OperationId::generate(),
@@ -1253,33 +1254,34 @@ namespace lfs::vis {
         });
 
         const auto publish_project_error =
-            [](std::string action, const auto& value) {
-                lfs::ErrorCode code = lfs::ErrorCode::Unavailable;
-                lfs::ErrorDomain domain = lfs::ErrorDomain::App;
-                lfs::Severity severity = lfs::Severity::Error;
-                std::string user_message =
-                    std::format("{} failed.", action);
-                std::string detail;
-                if constexpr (std::is_same_v<std::decay_t<decltype(value)>, lfs::Error>) {
-                    code = value.code();
-                    domain = value.domain();
-                    severity = value.severity();
-                    if (!value.user_message().empty())
-                        user_message = std::string(value.user_message());
-                    detail = std::string(value.detail());
+            [](std::string action, const auto& value,
+               const char* operation) {
+                if constexpr (std::is_same_v<std::decay_t<decltype(value)>,
+                                             lfs::Error>) {
                     LOG_ERROR("{} failed: {}", action,
                               lfs::format_for_developer(value));
+                    lfs::Error contextual = value;
+                    lfs::ErrorBus::instance().publish(
+                        lfs::ErrorNotification{
+                            .error = std::move(contextual).with_context(operation, LFS_SOURCE_SITE_CURRENT()),
+                            .surface = lfs::ErrorSurface::Toast,
+                            .actions = {},
+                            .operation_id = lfs::OperationId::generate(),
+                        });
                 } else {
-                    detail = std::string(value);
+                    const std::string detail = std::string(value);
                     LOG_ERROR("{} failed: {}", action, detail);
+                    lfs::ErrorBus::instance().publish(
+                        makeFrameNotification(
+                            lfs::ErrorCode::Unavailable,
+                            lfs::ErrorDomain::App,
+                            lfs::Severity::Error,
+                            lfs::ErrorSurface::Toast,
+                            std::format("{} failed.", action),
+                            detail, {},
+                            LFS_SOURCE_SITE_CURRENT(),
+                            operation));
                 }
-                lfs::ErrorBus::instance().publish(
-                    makeFrameNotification(
-                        code, domain, severity,
-                        lfs::ErrorSurface::Toast,
-                        std::move(user_message),
-                        std::move(detail), {},
-                        LFS_SOURCE_SITE_CURRENT()));
             };
 
         cmd::ProjectSave::when(
@@ -1288,7 +1290,8 @@ namespace lfs::vis {
                 if (!has_path) {
                     publish_project_error(
                         "Save Project",
-                        has_path.error());
+                        has_path.error(),
+                        gui::error_op::kSave);
                     return;
                 }
                 if (!*has_path) {
@@ -1302,7 +1305,8 @@ namespace lfs::vis {
                         !saved) {
                         publish_project_error(
                             "Save Project",
-                            saved.error());
+                            saved.error(),
+                            gui::error_op::kSave);
                     }
                     return;
                 }
@@ -1310,7 +1314,8 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Save Project",
-                        saved.error());
+                        saved.error(),
+                        gui::error_op::kSave);
                 }
             });
 
@@ -1345,7 +1350,8 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Save Project As",
-                        saved.error());
+                        saved.error(),
+                        gui::error_op::kSave);
                 }
             });
 
@@ -1380,7 +1386,8 @@ namespace lfs::vis {
                     }
                     publish_project_error(
                         "Open Project",
-                        opened.error());
+                        opened.error(),
+                        gui::error_op::kOpenProject);
                 }
             });
 
@@ -1392,7 +1399,8 @@ namespace lfs::vis {
                     !compacted) {
                     publish_project_error(
                         "Compact Project",
-                        compacted.error());
+                        compacted.error(),
+                        gui::error_op::kCompact);
                 }
             });
 
@@ -1408,14 +1416,16 @@ namespace lfs::vis {
                 if (!has_path) {
                     publish_project_error(
                         "Save Project",
-                        has_path.error());
+                        has_path.error(),
+                        gui::error_op::kSave);
                     abandonSaveAndExitAttempt();
                     return;
                 }
                 if (!*has_path) {
                     publish_project_error(
                         "Save Project",
-                        "The project has no path; use Save As.");
+                        "The project has no path; use Save As.",
+                        gui::error_op::kSave);
                     abandonSaveAndExitAttempt();
                     return;
                 }
@@ -1423,7 +1433,8 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Save Project",
-                        saved.error());
+                        saved.error(),
+                        gui::error_op::kSave);
                     abandonSaveAndExitAttempt();
                     return;
                 }
@@ -1513,7 +1524,8 @@ namespace lfs::vis {
                 if (!project_lifecycle_) {
                     publish_project_error(
                         "Update Project Settings",
-                        "Project lifecycle is unavailable.");
+                        "Project lifecycle is unavailable.",
+                        gui::error_op::kProjectSettings);
                     return;
                 }
                 if (auto saved =
@@ -1523,7 +1535,8 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Update Project Settings",
-                        saved.error());
+                        saved.error(),
+                        gui::error_op::kProjectSettings);
                 }
             });
 
@@ -1533,7 +1546,8 @@ namespace lfs::vis {
                 if (!project_lifecycle_) {
                     publish_project_error(
                         "Update Project Settings",
-                        "Project lifecycle is unavailable.");
+                        "Project lifecycle is unavailable.",
+                        gui::error_op::kProjectSettings);
                     return;
                 }
                 if (auto saved =
@@ -1543,7 +1557,8 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Update Project Settings",
-                        saved.error());
+                        saved.error(),
+                        gui::error_op::kProjectSettings);
                 }
             });
 
@@ -1553,7 +1568,8 @@ namespace lfs::vis {
                 if (!project_lifecycle_) {
                     publish_project_error(
                         "Update Project Settings",
-                        "Project lifecycle is unavailable.");
+                        "Project lifecycle is unavailable.",
+                        gui::error_op::kProjectSettings);
                     return;
                 }
                 if (auto saved =
@@ -1563,7 +1579,8 @@ namespace lfs::vis {
                     !saved) {
                     publish_project_error(
                         "Update Project Settings",
-                        saved.error());
+                        saved.error(),
+                        gui::error_op::kProjectSettings);
                 }
             });
 
@@ -2527,7 +2544,8 @@ namespace lfs::vis {
                         "The project could not be saved before exit.",
                         detail,
                         {},
-                        LFS_SOURCE_SITE_CURRENT()));
+                        LFS_SOURCE_SITE_CURRENT(),
+                        gui::error_op::kSave));
                 break;
             }
             case project::ProjectLifecycle::
@@ -2712,15 +2730,13 @@ namespace lfs::vis {
                 "New Project preflight failed: {}",
                 lfs::format_for_developer(
                     preflight.error()));
-            lfs::ErrorBus::instance().publish(
-                makeFrameNotification(
-                    preflight.error().code(),
-                    preflight.error().domain(),
-                    preflight.error().severity(),
-                    lfs::ErrorSurface::Toast,
-                    std::string(preflight.error().user_message()),
-                    std::string(preflight.error().detail()), {},
-                    LFS_SOURCE_SITE_CURRENT()));
+            lfs::Error contextual = preflight.error();
+            lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                .error = std::move(contextual).with_context(gui::error_op::kNewProject, LFS_SOURCE_SITE_CURRENT()),
+                .surface = lfs::ErrorSurface::Toast,
+                .actions = {},
+                .operation_id = lfs::OperationId::generate(),
+            });
             return;
         }
         if (gui_manager_) {
@@ -2764,15 +2780,13 @@ namespace lfs::vis {
                 "New Project failed: {}",
                 lfs::format_for_developer(
                     created.error()));
-            lfs::ErrorBus::instance().publish(
-                makeFrameNotification(
-                    created.error().code(),
-                    created.error().domain(),
-                    created.error().severity(),
-                    lfs::ErrorSurface::Toast,
-                    std::string(created.error().user_message()),
-                    std::string(created.error().detail()), {},
-                    LFS_SOURCE_SITE_CURRENT()));
+            lfs::Error contextual = created.error();
+            lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                .error = std::move(contextual).with_context(gui::error_op::kNewProject, LFS_SOURCE_SITE_CURRENT()),
+                .surface = lfs::ErrorSurface::Toast,
+                .actions = {},
+                .operation_id = lfs::OperationId::generate(),
+            });
         }
     }
 
@@ -3071,16 +3085,13 @@ namespace lfs::vis {
         if (auto saved =
                 projectSaveAsFromDialog(path, false);
             !saved) {
-            lfs::ErrorBus::instance().publish(
-                makeFrameNotification(
-                    saved.error().code(),
-                    saved.error().domain(),
-                    saved.error().severity(),
-                    lfs::ErrorSurface::Toast,
-                    "Save Project As failed.",
-                    std::string(saved.error().detail()),
-                    {},
-                    LFS_SOURCE_SITE_CURRENT()));
+            lfs::Error contextual = saved.error();
+            lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                .error = std::move(contextual).with_context(gui::error_op::kSave, LFS_SOURCE_SITE_CURRENT()),
+                .surface = lfs::ErrorSurface::Toast,
+                .actions = {},
+                .operation_id = lfs::OperationId::generate(),
+            });
             abandonSaveAndExitAttempt();
             return;
         }

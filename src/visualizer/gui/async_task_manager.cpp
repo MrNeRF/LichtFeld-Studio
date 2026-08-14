@@ -13,6 +13,7 @@
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
+#include "gui/error_event_bridge.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/string_keys.hpp"
@@ -1071,27 +1072,30 @@ namespace lfs::vis::gui {
                 lfs::ErrorBus::instance().publish(
                     lfs::ErrorNotification{
                         .error = lfs::make_error(
-                            lfs::ErrorInit{
-                                .code =
-                                    lfs::ErrorCode::
-                                        FailedPrecondition,
-                                .domain =
-                                    lfs::ErrorDomain::App,
-                                .severity =
-                                    lfs::Severity::Warning,
-                                .retryability =
-                                    lfs::Retryability::
-                                        NotRetryable,
-                                .operation_id = {},
-                                .user_message =
-                                    "This project contains unsaved editor buffers marked as potentially secret.",
-                                .detail =
-                                    "Review the embedded EDTR content before sharing the project or derived exports.",
-                                .detection =
-                                    LFS_SOURCE_SITE_CURRENT(),
-                                .fields = {},
-                                .native = std::nullopt,
-                            }),
+                                     lfs::ErrorInit{
+                                         .code =
+                                             lfs::ErrorCode::
+                                                 FailedPrecondition,
+                                         .domain =
+                                             lfs::ErrorDomain::App,
+                                         .severity =
+                                             lfs::Severity::Warning,
+                                         .retryability =
+                                             lfs::Retryability::
+                                                 NotRetryable,
+                                         .operation_id = {},
+                                         .user_message =
+                                             "This project contains unsaved editor buffers marked as potentially secret.",
+                                         .detail =
+                                             "Review the embedded EDTR content before sharing the project or derived exports.",
+                                         .detection =
+                                             LFS_SOURCE_SITE_CURRENT(),
+                                         .fields = {},
+                                         .native = std::nullopt,
+                                     })
+                                     .with_context(
+                                         error_op::kExport,
+                                         LFS_SOURCE_SITE_CURRENT()),
                         .surface =
                             lfs::ErrorSurface::Toast,
                         .actions = {},

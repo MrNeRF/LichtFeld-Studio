@@ -12,6 +12,7 @@
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "gui/editor/python_editor.hpp"
+#include "gui/error_event_bridge.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
@@ -2768,22 +2769,25 @@ namespace lfs::vis::project {
             lfs::ErrorBus::instance().publish(
                 lfs::ErrorNotification{
                     .error = lfs::make_error(
-                        lfs::ErrorInit{
-                            .code = code,
-                            .domain = lfs::ErrorDomain::IO,
-                            .severity = lfs::Severity::Error,
-                            .retryability =
-                                lfs::Retryability::
-                                    NotRetryable,
-                            .operation_id = {},
-                            .user_message =
-                                "Editor file not restored",
-                            .detail = std::move(detail),
-                            .detection =
-                                LFS_SOURCE_SITE_CURRENT(),
-                            .fields = {},
-                            .native = std::nullopt,
-                        }),
+                                 lfs::ErrorInit{
+                                     .code = code,
+                                     .domain = lfs::ErrorDomain::IO,
+                                     .severity = lfs::Severity::Error,
+                                     .retryability =
+                                         lfs::Retryability::
+                                             NotRetryable,
+                                     .operation_id = {},
+                                     .user_message =
+                                         "Editor file not restored",
+                                     .detail = std::move(detail),
+                                     .detection =
+                                         LFS_SOURCE_SITE_CURRENT(),
+                                     .fields = {},
+                                     .native = std::nullopt,
+                                 })
+                                 .with_context(
+                                     gui::error_op::kOpenProject,
+                                     LFS_SOURCE_SITE_CURRENT()),
                     .surface = lfs::ErrorSurface::Toast,
                     .actions = {},
                     .operation_id =
