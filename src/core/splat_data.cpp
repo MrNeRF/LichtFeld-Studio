@@ -1232,9 +1232,9 @@ namespace lfs::core {
             grow_direct(_sh0, capacity);
         if (_shN.is_valid()) {
             const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
-            // q16 (Float16 bit-pattern): capacity is pad-dropped uint16 cells.
-            // fp32: capacity is float4-swizzled float count.
-            if (_shN.dtype() == DataType::Float16) {
+            // q16: capacity is pad-dropped uint16 cells.
+            // fp32 and ieee-f16: capacity is float4-swizzled element count.
+            if (shN_value_quantized()) {
                 const size_t need = sh_value_quant::sh_value_u16_count(capacity, layout_rest);
                 if (need > 0)
                     grow_direct(_shN, need);

@@ -4908,52 +4908,6 @@ namespace lfs::app {
                     auto* const node = scene.getMutableNode(*node_name);
                     if (!node || !node->model)
                         return json{{"error", "Gaussian node not found: " + *node_name}};
-                    // Compact SH cannot be scattered via ptr<float>(). Decode,
-                    // scatter selected rows into the canonical [N,K,3] tensor,
-                    // then reinstall (W1 leaves the model fp32 and clears bounds).
-                    if (field_name == "shN" && node->model->shN_raw().is_valid() &&
-                        node->model->shN_raw().numel() > 0 &&
-                        node->model->max_sh_coeffs_rest() > 0 &&
-                        node->model->shN_raw().dtype() != core::DataType::Float32) {
-                        const size_t rest = node->model->max_sh_coeffs_rest();
-                        const size_t row_width = rest * size_t{3};
-                        if (row_width == 0 ||
-                            indices.size() > std::numeric_limits<size_t>::max() / row_width ||
-                            values.size() != row_width * indices.size()) {
-                            return json{{"error",
-                                         "Field slice expects " +
-                                             std::to_string(row_width * indices.size()) +
-                                             " values but received " + std::to_string(values.size())}};
-                        }
-                        for (const int index : indices) {
-                            if (index < 0 || static_cast<size_t>(index) >= node->model->size())
-                                return json{{"error", "Gaussian index out of range: " + std::to_string(index)}};
-                        }
-                        core::Tensor canon = node->model->shN_canonical();
-                        const auto index_tensor = core::Tensor::from_vector(
-                            indices, {indices.size()}, canon.device());
-                        const auto src_tensor = core::Tensor::from_vector(
-                            values,
-                            core::TensorShape({indices.size(), rest, size_t{3}}),
-                            canon.device());
-                        auto indices_for_copy = index_tensor;
-                        if (indices_for_copy.dtype() != core::DataType::Int32 &&
-                            indices_for_copy.dtype() != core::DataType::Int64) {
-                            indices_for_copy = indices_for_copy.to(core::DataType::Int32);
-                        }
-                        canon.index_copy_(0, indices_for_copy, src_tensor);
-                        node->model->shN_set_from_canonical(canon, node->model->means().capacity());
-                        scene.markPayloadDiverged(node->id);
-                        scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
-                        if (rendering_manager)
-                            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
-                        return json{
-                            {"success", true},
-                            {"node", *node_name},
-                            {"field", field_name},
-                            {"updated_count", static_cast<int64_t>(indices.size())},
-                        };
-                    }
                     if (auto result = vis::cap::writeGaussianField(
                             *scene_manager,
                             rendering_manager,

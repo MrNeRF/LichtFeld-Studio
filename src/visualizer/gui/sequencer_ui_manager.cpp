@@ -18,11 +18,11 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
-#include "lfs/training/sh_value_storage.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene/viewer_splat_quantize.hpp"
 #include "sequencer/interpolation.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/timeline_view_math.hpp"
@@ -242,56 +242,6 @@ namespace lfs::vis::gui {
                 return false;
             }
             return true;
-        }
-
-        [[nodiscard]] bool isPlyPath(const std::filesystem::path& path) {
-            auto extension = path.extension().string();
-            std::transform(extension.begin(), extension.end(), extension.begin(),
-                           [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            return extension == ".ply";
-        }
-
-        // Same renderer-ready guard as SceneManager's single-PLY load. Sequence
-        // playback binds one visible vulkan-external node through vksplat, so q16
-        // is safe here; skip (keep fp32) when interop storage is unavailable.
-        void quantizeViewerLoadedPlyShN(const std::filesystem::path& path,
-                                        lfs::core::SplatData& model) {
-            if (!isPlyPath(path)) {
-                return;
-            }
-            if (model.shN_value_quantized() ||
-                !model.shN_raw().is_valid() || model.shN_raw().numel() == 0) {
-                return;
-            }
-            if (!model.has_tensor_allocator() || !lfs::io::splatTensorsRendererReady(model)) {
-                LOG_WARN("Viewer PLY SH q16 skipped for '{}': Vulkan-external storage is unavailable or degraded",
-                         lfs::core::path_to_utf8(path));
-                return;
-            }
-
-            const std::size_t shN_before_bytes = model.shN_raw().bytes();
-            bool converted = false;
-            try {
-                converted = lfs::training::sh_value::apply_shN_value_quant(model);
-            } catch (const std::exception& e) {
-                LOG_WARN("Viewer PLY SH q16 failed for '{}'; retaining fp32 SH: {}",
-                         lfs::core::path_to_utf8(path), e.what());
-                return;
-            }
-            if (!converted) {
-                return;
-            }
-            if (!model.shN_value_quantized() || !lfs::io::splatTensorsRendererReady(model)) {
-                throw std::runtime_error(
-                    "Viewer PLY SH q16 produced a non-bindable codes/bounds pair");
-            }
-
-            const std::size_t shN_after_bytes =
-                model.shN_raw().bytes() + model.shN_value_bounds().bytes();
-            LOG_INFO(
-                "Viewer PLY SH q16: path='{}' gaussians={} before_bytes={} after_bytes={} saved_mib={:.3f}",
-                lfs::core::path_to_utf8(path), model.size(), shN_before_bytes, shN_after_bytes,
-                static_cast<double>(shN_before_bytes - shN_after_bytes) / (1024.0 * 1024.0));
         }
 
     } // namespace

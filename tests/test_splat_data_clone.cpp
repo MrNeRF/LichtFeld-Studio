@@ -201,12 +201,7 @@ TEST(SplatDataCloneTest, WritebackClearsQ16Pair) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(SplatDataCloneTest, ReserveCapacitySkipsRendererStorage) {
-    // Tensor::set_external_storage_kind is not a public hook; do not invent one.
-    // Real vulkan_external_buffer / splat.exportable growth is owned by
-    // capacity_ensure/migrate (grow_direct skips those kinds). Assert the
-    // intended cuda.direct rebuild instead: capacity grows, values survive.
-
+TEST(SplatDataCloneTest, ReserveCapacityRebuildsCudaDirect) {
     const size_t n = 64;
     auto means = Tensor::zeros_direct({n, size_t{3}}, n, Device::CUDA, DataType::Float32);
     auto sh0 = Tensor::zeros_direct({n, size_t{1}, size_t{3}}, n, Device::CUDA, DataType::Float32);
@@ -234,4 +229,52 @@ TEST(SplatDataCloneTest, ReserveCapacitySkipsRendererStorage) {
     EXPECT_EQ(model.means().external_storage_kind(), "cuda.direct");
     EXPECT_TRUE(tensors_equal(model.means(), means_before));
     EXPECT_TRUE(tensors_equal(model.shN_canonical(), shN_before));
+}
+
+TEST(SplatDataCloneTest, ReserveCapacitySkipsRendererStorage) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto model = make_random_sh3(kN);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
+    ASSERT_TRUE(model.shN_value_quantized());
+
+    constexpr size_t kCap = 1024;
+    auto storage_result = SplatExportableStorage::create(kCap, kShDegree, /*device=*/0, kCap * 4);
+    if (!storage_result) {
+        GTEST_SKIP() << "exportable create failed: " << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+
+    param::TrainingParameters params;
+    params.optimization.max_cap = static_cast<int>(kCap);
+    const auto result = migrateTrainingModelToAllocator(params, model, storage->make_allocator());
+    ASSERT_TRUE(result.has_value()) << result.error();
+
+    const auto means_kind = model.means().external_storage_kind();
+    const auto shN_kind = model.shN_raw().external_storage_kind();
+    ASSERT_TRUE(means_kind == "splat.exportable" || means_kind == "vulkan_external_buffer")
+        << "means kind=" << means_kind;
+    ASSERT_TRUE(shN_kind == "splat.exportable" || shN_kind == "vulkan_external_buffer")
+        << "shN kind=" << shN_kind;
+
+    const void* const means_ptr = model.means().data_ptr();
+    const void* const shN_ptr = model.shN_raw().data_ptr();
+    const size_t means_cap = model.means().capacity();
+    const size_t shN_cap = model.shN_raw().capacity();
+    const auto means_before = model.means().clone();
+    const auto shN_before = model.shN_canonical();
+
+    const size_t new_cap = std::max(means_cap, shN_cap) + 256;
+    model.reserve_capacity(new_cap);
+
+    EXPECT_EQ(model.means().data_ptr(), means_ptr);
+    EXPECT_EQ(model.shN_raw().data_ptr(), shN_ptr);
+    EXPECT_EQ(model.means().capacity(), means_cap);
+    EXPECT_EQ(model.shN_raw().capacity(), shN_cap);
+    EXPECT_EQ(model.means().external_storage_kind(), means_kind);
+    EXPECT_EQ(model.shN_raw().external_storage_kind(), shN_kind);
+    EXPECT_TRUE(model.shN_value_quantized());
+    EXPECT_TRUE(tensors_equal(model.means(), means_before));
+    EXPECT_TRUE(tensors_equal(model.shN_canonical(), shN_before));
+
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }

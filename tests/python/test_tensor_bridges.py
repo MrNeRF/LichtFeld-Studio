@@ -59,6 +59,18 @@ class TestFromDlpack:
         with pytest.raises(RuntimeError, match="contiguous"):
             lf.Tensor.from_dlpack(producer)
 
+    def test_empty_sliced_view_roundtrip(self, lf, numpy):
+        base = numpy.arange(12, dtype=numpy.float32).reshape(3, 4)
+        view = base[:, ::2][:, :0]
+        if not hasattr(view, "__dlpack__"):
+            pytest.skip("numpy cannot export an empty sliced DLPack producer")
+        try:
+            view.__dlpack__()
+        except Exception:
+            pytest.skip("numpy cannot export an empty sliced DLPack producer")
+        tensor = lf.Tensor.from_dlpack(view)
+        numpy.testing.assert_array_equal(tensor.numpy(), numpy.ascontiguousarray(view))
+
 
 class TestAddSplatDtype:
     def test_float16_shn_raises(self, lf):

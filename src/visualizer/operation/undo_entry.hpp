@@ -282,6 +282,40 @@ namespace lfs::vis::op {
             expected_topology_;
     };
 
+    class LFS_VIS_API ShNCanonicalRowsUndoEntry : public UndoEntry {
+    public:
+        ShNCanonicalRowsUndoEntry(std::string name,
+                                  UndoMetadata metadata,
+                                  std::string node_name,
+                                  lfs::core::Tensor indices,
+                                  lfs::core::Tensor before_rows,
+                                  lfs::core::Tensor after_rows,
+                                  SceneManager* scene);
+
+        void undo() override;
+        void redo() override;
+        [[nodiscard]] std::string name() const override { return name_; }
+        [[nodiscard]] UndoMetadata metadata() const override { return metadata_; }
+        [[nodiscard]] size_t estimatedBytes() const override;
+        [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override;
+        void offloadToCPU() override;
+        void restoreToPreferredDevice() override;
+        [[nodiscard]] DirtyMask dirtyFlags() const override;
+
+    private:
+        void apply(const lfs::core::Tensor& rows);
+
+        std::string name_;
+        UndoMetadata metadata_;
+        std::string node_name_;
+        SceneManager* scene_ = nullptr;
+        lfs::core::Tensor indices_;
+        lfs::core::Tensor before_rows_;
+        lfs::core::Tensor after_rows_;
+        lfs::core::Device preferred_device_ = lfs::core::Device::CUDA;
+        std::optional<SceneTopologyProof> expected_topology_;
+    };
+
     class LFS_VIS_API CropBoxUndoEntry : public UndoEntry {
     public:
         CropBoxUndoEntry(SceneManager& scene,

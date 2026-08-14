@@ -1397,6 +1397,9 @@ namespace lfs::python {
             int64_t expected = 1;
             for (int32_t i = dl.ndim - 1; i >= 0; --i) {
                 const int64_t extent = dl.shape[i];
+                if (extent == 0) {
+                    return true;
+                }
                 if (extent != 1 && dl.strides[i] != expected) {
                     return false;
                 }
