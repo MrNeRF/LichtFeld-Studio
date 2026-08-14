@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/events.hpp"
 #include "training/control/command_api.hpp"
 
 namespace lfs::training {
@@ -75,6 +76,26 @@ namespace lfs::training {
         mutable_fields_.push_back({"opacity", CommandTarget::Model, "[N]", "Opacity logits", true});
         mutable_fields_.push_back({"sh0", CommandTarget::Model, "[N,3]", "SH0 coefficients", true});
         mutable_fields_.push_back({"shN", CommandTarget::Model, "[N,?]", "Higher-order SH coefficients", true});
+    }
+
+    void CommandCenter::apply_training_paused(int iteration) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.iteration = iteration;
+        snapshot_.is_paused = true;
+        snapshot_.is_running = false;
+    }
+
+    void CommandCenter::bind_state_events() {
+        using lfs::core::events::state::TrainingPaused;
+        auto& bridge = lfs::event::EventBridge::instance();
+        if (training_paused_handler_id_) {
+            bridge.unsubscribe(typeid(TrainingPaused), *training_paused_handler_id_);
+            training_paused_handler_id_.reset();
+        }
+        training_paused_handler_id_ = TrainingPaused::when(
+            [this](const TrainingPaused& event) {
+                apply_training_paused(event.iteration);
+            });
     }
 
 } // namespace lfs::training

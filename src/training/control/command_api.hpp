@@ -126,7 +126,7 @@ namespace lfs::training {
 
         void update_snapshot(const HookContext& ctx, int max_iterations, bool is_paused, bool is_running, bool stop_requested, TrainingPhase phase);
         void apply_training_paused(int iteration);
-        void bind_state_events();
+        LFS_BRIDGE_API void bind_state_events();
         void clear_snapshot(const Trainer* trainer);
 
         [[nodiscard]] TrainingSnapshot snapshot() const;

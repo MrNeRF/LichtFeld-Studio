@@ -3,7 +3,6 @@
 
 #include "command_api.hpp"
 
-#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
@@ -189,26 +188,6 @@ namespace lfs::training {
             loss_history_.push_back({ctx.iteration, ctx.loss});
             last_recorded_iteration_ = ctx.iteration;
         }
-    }
-
-    void CommandCenter::apply_training_paused(int iteration) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        snapshot_.iteration = iteration;
-        snapshot_.is_paused = true;
-        snapshot_.is_running = false;
-    }
-
-    void CommandCenter::bind_state_events() {
-        using lfs::core::events::state::TrainingPaused;
-        auto& bridge = lfs::event::EventBridge::instance();
-        if (training_paused_handler_id_) {
-            bridge.unsubscribe(typeid(TrainingPaused), *training_paused_handler_id_);
-            training_paused_handler_id_.reset();
-        }
-        training_paused_handler_id_ = TrainingPaused::when(
-            [this](const TrainingPaused& event) {
-                apply_training_paused(event.iteration);
-            });
     }
 
     void CommandCenter::clear_snapshot(const Trainer* trainer) {
