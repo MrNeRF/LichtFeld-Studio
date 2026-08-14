@@ -227,6 +227,19 @@ def test_scene_header_hosts_asset_manager_launcher():
     assert 'id="asset-manager-button"' in scene_rml
     assert 'data-tooltip="toolbar.asset_manager"' in scene_rml
     assert ".scene-header-icon-button" in scene_rcss
+    header_rule = _rule_body(scene_rcss, ".scene-header-row")
+    assert "min-width: 0;" in header_rule
+    tab_bar_rule = _rule_body(scene_rcss, ".scene-tab-bar")
+    assert "min-width: 0;" in tab_bar_rule
+    assert "flex-grow: 1;" in tab_bar_rule
+    assert "flex-shrink: 1;" in tab_bar_rule
+    tab_rule = _rule_body(scene_rcss, ".scene-tab")
+    assert "min-width: 0;" in tab_rule
+    assert "flex-grow: 1;" in tab_rule
+    assert "flex-shrink: 1;" in tab_rule
+    assert "text-overflow: ellipsis;" in tab_rule
+    asset_button_rule = _rule_body(scene_rcss, ".scene-header-icon-button")
+    assert "flex-shrink: 0;" in asset_button_rule
     assert "width: 30dp;" in scene_rcss
     assert "height: 30dp;" in scene_rcss
     assert "width: 20dp;" in scene_rcss
