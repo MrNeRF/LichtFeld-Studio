@@ -5024,9 +5024,10 @@ namespace lfs::vis::project {
             CloseSaveState::Idle,
             std::memory_order_release);
         viewer_.deactivateProjectTools();
-        viewer_.resetProjectState();
+        // A new document clears project-owned data, but it is not a workspace
+        // preset. Preserve the live panel arrangement and desktop geometry.
+        viewer_.resetProjectState(/*reset_panel_registry=*/false);
         active_restore_ticket_ = 0;
-        applyDefaultGuiLayout(viewer_);
         recovery_prompt_pending_ = false;
         epoch_.fetch_add(
             1, std::memory_order_acq_rel);

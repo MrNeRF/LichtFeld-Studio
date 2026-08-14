@@ -64,9 +64,14 @@ recover to a visible position when displays or DPI settings have changed.
 
 Panel visibility, dock dimensions, active tabs, the sequencer, and other
 project workspace state belong to the GUIL chapter of the `.licht` project.
-Creating a new project starts from the built-in project layout; opening an
-existing project restores its saved workspace. Neither operation owns global
-preferences or desktop window placement.
+Opening an existing project restores that saved workspace. For compatibility,
+GUIL also retains the window state written by the current project format, while
+`config/window.json` supplies the user-global startup state.
+
+Creating a new project is intentionally different: it clears project-owned
+content without applying the default GUIL chapter, opening or closing panels,
+or changing the live desktop window geometry. It therefore preserves the
+workspace in which the user invoked New Project.
 
 ## Startup and reset operations
 

@@ -2790,7 +2790,7 @@ namespace lfs::vis {
         }
     }
 
-    void VisualizerImpl::resetProjectState() {
+    void VisualizerImpl::resetProjectState(const bool reset_panel_registry) {
         if (trainer_manager_) {
             trainer_manager_->clearRestoredProjectMetrics();
         }
@@ -2814,8 +2814,10 @@ namespace lfs::vis {
         hydration_terminal_restore_ticket_.reset();
         retained_project_session_ = {};
         camera_bookmarks_.clear();
-        gui::PanelRegistry::instance()
-            .reset_project_state();
+        if (reset_panel_registry) {
+            gui::PanelRegistry::instance()
+                .reset_project_state();
+        }
     }
 
     lfs::Result<

@@ -333,7 +333,7 @@ namespace lfs::vis {
         void performPendingTrainingAction();
         void requestApplicationClose();
         void performReset();
-        void resetProjectState();
+        void resetProjectState(bool reset_panel_registry = true);
         void tryApplyProjectSessionRestore();
 
         // Tool initialization

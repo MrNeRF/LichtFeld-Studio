@@ -3858,13 +3858,4 @@ namespace lfs::vis::project {
         apply_view_tools(viewer, *view);
     }
 
-    void applyDefaultGuiLayout(VisualizerImpl& viewer) {
-        auto gui = chapter_root(
-            lfs::io::project::default_session_chapter_dom(
-                lfs::io::project::SessionJsonChapterKind::GuiLayout),
-            "GUIL");
-        if (gui)
-            apply_guil(viewer, *gui);
-    }
-
 } // namespace lfs::vis::project

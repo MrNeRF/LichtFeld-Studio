@@ -173,8 +173,6 @@ namespace lfs::vis {
         LFS_VIS_API void applyGuiSessionTools(
             VisualizerImpl& viewer,
             const PreparedGuiSessionRestore& prepared);
-        LFS_VIS_API void applyDefaultGuiLayout(
-            VisualizerImpl& viewer);
 
     } // namespace project
 } // namespace lfs::vis
