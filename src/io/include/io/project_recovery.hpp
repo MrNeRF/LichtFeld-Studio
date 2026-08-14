@@ -75,8 +75,9 @@ namespace lfs::io::project {
         void attach_document() noexcept;
         void detach_document() noexcept;
         [[nodiscard]] bool document_attached() const noexcept;
-        // Deletes the staging file while the master remains locked, then
-        // invalidates all copies of the shared lock lease.
+        // Deletes the staging file, then requests lease release. The flock
+        // drops after remaining WriterLockLease copies are destroyed
+        // (d1dac3cfa).
         [[nodiscard]] lfs::Result<void> release();
 
     private:

@@ -10,6 +10,25 @@
 
 namespace {
 
+    TEST(HeadlessRunCoordinatorTest, InstallSignalHandlersRestoresStolenTermAndInt) {
+        lfs::app::HeadlessRunCoordinator coordinator;
+        auto stolen = +[](int) {};
+
+        auto previous_term = std::signal(SIGTERM, stolen);
+        lfs::app::HeadlessRunCoordinator::install_signal_handlers();
+        auto installed_term = std::signal(SIGTERM, stolen);
+        EXPECT_EQ(installed_term,
+                  lfs::app::HeadlessRunCoordinator::signal_handler_for_test());
+        std::signal(SIGTERM, previous_term);
+
+        auto previous_int = std::signal(SIGINT, stolen);
+        lfs::app::HeadlessRunCoordinator::install_signal_handlers();
+        auto installed_int = std::signal(SIGINT, stolen);
+        EXPECT_EQ(installed_int,
+                  lfs::app::HeadlessRunCoordinator::signal_handler_for_test());
+        std::signal(SIGINT, previous_int);
+    }
+
     TEST(HeadlessRunCoordinatorTest, SignalHandlerRequestsStopFromNormalThread) {
         lfs::app::HeadlessRunCoordinator coordinator;
 

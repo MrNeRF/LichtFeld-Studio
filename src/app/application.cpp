@@ -64,6 +64,21 @@ namespace lfs::app {
 
     namespace {
 
+        struct HeadlessPluginSignalGuard {
+            HeadlessPluginSignalGuard() {
+                python::set_plugin_preload_completion_hook(
+                    &HeadlessRunCoordinator::install_signal_handlers);
+            }
+
+            ~HeadlessPluginSignalGuard() {
+                python::set_plugin_preload_completion_hook(nullptr);
+            }
+
+            HeadlessPluginSignalGuard(const HeadlessPluginSignalGuard&) = delete;
+            HeadlessPluginSignalGuard& operator=(
+                const HeadlessPluginSignalGuard&) = delete;
+        };
+
         [[nodiscard]] lfs::Error training_project_error(
             const lfs::ErrorCode code,
             std::string detail,
@@ -381,6 +396,7 @@ namespace lfs::app {
 
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
             HeadlessRunCoordinator coordinator;
+            HeadlessPluginSignalGuard plugin_signals;
 
             {
                 core::Scene scene;
@@ -611,6 +627,7 @@ namespace lfs::app {
 
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
             HeadlessRunCoordinator coordinator;
+            HeadlessPluginSignalGuard plugin_signals;
 
             {
                 core::Scene scene;

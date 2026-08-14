@@ -2608,12 +2608,17 @@ namespace {
         ASSERT_FALSE(competing);
         EXPECT_EQ(competing.error().code(), lfs::ErrorCode::Unavailable);
 
-        auto merge_options = save_options(9869, 1400);
-        merge_options.commit.kind = CommitKind::Recovered;
-        merge_options.writer_lock_lease = session.writer_lock();
-        auto merged = recovered->save_as(master, merge_options);
-        ASSERT_TRUE(merged)
-            << lfs::format_for_developer(merged.error());
+        // d1dac3cfa: WriterLockLease::release only drops the flock after
+        // remaining copies are destroyed. Destroy the merge copy before
+        // session.release() so inspect can acquire the master lock.
+        {
+            auto merge_options = save_options(9869, 1400);
+            merge_options.commit.kind = CommitKind::Recovered;
+            merge_options.writer_lock_lease = session.writer_lock();
+            auto merged = recovered->save_as(master, merge_options);
+            ASSERT_TRUE(merged)
+                << lfs::format_for_developer(merged.error());
+        }
         ProjectReader durable = require_result(ProjectReader::open(master));
         EXPECT_EQ(durable.commit().kind, CommitKind::Recovered);
         auto durable_document = require_result_ptr(ProjectDocument::open(master));
