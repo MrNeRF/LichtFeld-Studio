@@ -5,11 +5,15 @@
 #include "gui/layout_state.hpp"
 #include "core/config_paths.hpp"
 #include "core/logger.hpp"
-#include "core/user_paths.hpp"
+#include <atomic>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
 namespace lfs::vis::gui {
+
+    namespace {
+        std::atomic<bool> g_persistence_enabled{true};
+    }
 
     std::filesystem::path LayoutState::getConfigDir() {
         return lfs::core::user_config_dir();
@@ -26,6 +30,9 @@ namespace lfs::vis::gui {
     }
 
     void LayoutState::saveUserPreferences() const {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return;
+
         try {
             const auto path =
                 getUserPreferencesPath();
