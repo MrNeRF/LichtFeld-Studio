@@ -517,7 +517,12 @@ add_executable(lichtfeld_tests ${TEST_SOURCES})
 
 # USD (pxr) headers from vcpkg pull in deprecated <ext/hash_set> and emit
 # #warning (-Wcpp). Third-party; suppress only for this translation unit.
-set_source_files_properties(test_usd_format.cpp PROPERTIES COMPILE_OPTIONS "-Wno-cpp")
+if(NOT MSVC)
+    set_source_files_properties(
+        test_usd_format.cpp
+        PROPERTIES COMPILE_OPTIONS "-Wno-cpp"
+    )
+endif()
 
 # Python integration tests import the in-tree extension at runtime.
 add_dependencies(lichtfeld_tests lfs_py)
@@ -640,9 +645,18 @@ target_link_libraries(lichtfeld_tests PRIVATE lfs_vulkan_rasterizer Vulkan::Vulk
 # Compiler options for CUDA debugging
 target_compile_options(lichtfeld_tests PRIVATE
     $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-lineinfo>
-    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
-    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
 )
+if(MSVC)
+    target_compile_options(lichtfeld_tests PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:/Od /Z7>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:/O2 /DNDEBUG>
+    )
+else()
+    target_compile_options(lichtfeld_tests PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
+    )
+endif()
 
 # Tensor-library hardening is intentionally isolated from the default test
 # tiers.  During the hardening phases these oracle tests are expected to expose
@@ -680,10 +694,17 @@ target_link_libraries(tensor_hardening_tests PRIVATE
     CUDA::curand
 )
 
-target_compile_options(tensor_hardening_tests PRIVATE
-    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
-    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
-)
+if(MSVC)
+    target_compile_options(tensor_hardening_tests PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:/Od /Z7>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:/O2 /DNDEBUG>
+    )
+else()
+    target_compile_options(tensor_hardening_tests PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
+    )
+endif()
 
 # =============================================================================
 # CTest registration
