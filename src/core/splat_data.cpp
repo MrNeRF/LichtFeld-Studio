@@ -1184,7 +1184,7 @@ namespace lfs::core {
                 return;
             if (t.capacity() >= cap_rows)
                 return;
-            if (!t.is_external_storage()) {
+            if (t.external_storage_kind().empty()) {
                 t.reserve(cap_rows);
                 return;
             }
