@@ -93,10 +93,9 @@ namespace lfs::training::test {
             if (!state) {
                 continue;
             }
-            // Same gate as AdamOptimizer::serialize. Legacy
-            // exp_avg_scale / exp_avg_sq stay empty after #1588
-            // and must not skip this capture (that would make
-            // expect_optimizer_moment_bytes_equal a no-op).
+            // Same gate as AdamOptimizer::serialize. Joint-only
+            // states after #1588 must not skip this capture (that
+            // would make expect_optimizer_moment_bytes_equal a no-op).
             const bool serialized =
                 state->is_joint() &&
                 state->exp_avg.is_valid() &&

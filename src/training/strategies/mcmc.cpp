@@ -126,15 +126,6 @@ namespace lfs::training {
                 }
                 if (!host_idx.empty())
                     optimizer.reset_state_at_indices(param_type, host_idx);
-            } else {
-                // Legacy: zero scales → moments dequantise to zero.
-                if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0) {
-                    return;
-                }
-                auto scale_zeros = lfs::core::Tensor::zeros(
-                    lfs::core::TensorShape({indices.numel()}), state->exp_avg_scale.device());
-                state->exp_avg_scale.index_put_(indices, scale_zeros);
-                state->exp_avg_sq_scale.index_put_(indices, scale_zeros);
             }
 
             // grad is transient (re-zeroed each step); only the contiguous case is handled here.
@@ -165,7 +156,7 @@ namespace lfs::training {
         const lfs::core::Tensor& dead_indices,
         ParamType param_type) {
 
-        // Reset optimizer state (exp_avg and exp_avg_sq) for rows whose params changed.
+        // Reset optimizer moment state for rows whose params changed.
         // Source rows get adjusted opacity/scaling; destination rows receive fresh params.
         _optimizer->relocate_params_at_indices_gpu(
             param_type,

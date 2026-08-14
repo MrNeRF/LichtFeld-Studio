@@ -853,7 +853,6 @@ namespace lfs::training {
                                                   : "opacity";
                 record_vram_tensor("optimizer.adam", prefix + ".grad", state->grad);
                 record_vram_tensor("optimizer.adam", prefix + ".exp_avg", state->exp_avg);
-                record_vram_tensor("optimizer.adam", prefix + ".exp_avg_sq", state->exp_avg_sq);
             }
         }
 

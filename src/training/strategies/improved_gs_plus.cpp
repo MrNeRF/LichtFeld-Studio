@@ -543,25 +543,6 @@ namespace lfs::training {
                             }
                             return;
                         }
-                    } else {
-                        // Legacy: zero scales → moments dequantise to zero.
-                        if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
-                            return;
-                        auto scale_zeros = lfs::core::Tensor::zeros(
-                            lfs::core::TensorShape({sampled_idxs.numel()}), state->exp_avg_scale.device());
-                        state->exp_avg_scale.index_put_(sampled_idxs, scale_zeros);
-                        state->exp_avg_sq_scale.index_put_(sampled_idxs, scale_zeros);
-
-                        if (param_type == ParamType::ShN) {
-                            if (layout_rest_u32 != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
-                                auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
-                                                   ? sampled_idxs
-                                                   : sampled_idxs.to(lfs::core::DataType::Int32);
-                                lfs::core::shN_swizzled_zero_at_indices(
-                                    state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
-                            }
-                            return;
-                        }
                     }
 
                     if (state->grad.is_valid() && state->grad.numel() > 0) {
@@ -703,7 +684,6 @@ namespace lfs::training {
         auto* state = _optimizer->get_state_mutable(ParamType::Opacity);
         if (state) {
             state->exp_avg.zero_();
-            state->exp_avg_sq.zero_();
         }
     }
 
@@ -972,8 +952,8 @@ namespace lfs::training {
         _splat_data->rotation_raw().index_put_(prune_indices, zero_rotation);
 
         // Zero optimizer states in-place (preserves capacity).
-        // joint codec has no exp_avg_scale — early-return left stale moments on
-        // pruned slots (reused after soft-delete). Mirror MCMC joint reset branch.
+        // Joint codec has no per-primitive moment scales — early-return left stale
+        // moments on pruned slots (reused after soft-delete). Mirror MCMC joint reset.
         auto zero_optimizer_state = [&](ParamType param_type) {
             auto* state = _optimizer->get_state_mutable(param_type);
             if (!state)
@@ -993,28 +973,6 @@ namespace lfs::training {
                 }
                 if (!host_idx.empty())
                     _optimizer->reset_state_at_indices(param_type, host_idx);
-                if (param_type == ParamType::ShN) {
-                    const auto layout_rest =
-                        static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-                    if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
-                        auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
-                                           ? prune_indices
-                                           : prune_indices.to(lfs::core::DataType::Int32);
-                        lfs::core::shN_swizzled_zero_at_indices(
-                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(),
-                            layout_rest);
-                    }
-                    return;
-                }
-            } else {
-                // Legacy: zero scales → moments dequantise to zero.
-                if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
-                    return;
-                auto scale_zeros = lfs::core::Tensor::zeros(
-                    lfs::core::TensorShape({prune_indices.numel()}), state->exp_avg_scale.device());
-                state->exp_avg_scale.index_put_(prune_indices, scale_zeros);
-                state->exp_avg_sq_scale.index_put_(prune_indices, scale_zeros);
-
                 if (param_type == ParamType::ShN) {
                     const auto layout_rest =
                         static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
@@ -1165,25 +1123,6 @@ namespace lfs::training {
                         }
                         if (!host_idx.empty())
                             _optimizer->reset_state_at_indices(param_type, host_idx);
-                        if (param_type == ParamType::ShN) {
-                            if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
-                                auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
-                                                   ? target_indices
-                                                   : target_indices.to(lfs::core::DataType::Int32);
-                                lfs::core::shN_swizzled_zero_at_indices(
-                                    state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
-                            }
-                            return;
-                        }
-                    } else {
-                        // Legacy: zero scales → moments dequantise to zero.
-                        if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
-                            return;
-                        auto scale_zeros = lfs::core::Tensor::zeros(
-                            lfs::core::TensorShape({target_indices.numel()}), state->exp_avg_scale.device());
-                        state->exp_avg_scale.index_put_(target_indices, scale_zeros);
-                        state->exp_avg_sq_scale.index_put_(target_indices, scale_zeros);
-
                         if (param_type == ParamType::ShN) {
                             if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
                                 auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
