@@ -185,6 +185,10 @@ namespace lfs::vis {
                         info->recent_projects),
             };
         }
+        virtual lfs::Result<void>
+        projectClearRecentFiles() {
+            return {};
+        }
 
         virtual ~Visualizer() = default;
     };

@@ -10,6 +10,7 @@
     "file.compact_project": "Project comprimeren",
     "file.auto_save_on_close": "Opslaan bij sluiten zonder te vragen",
     "file.no_recent_projects": "Geen recente projecten",
+    "file.clear_recent_projects": "Recente projecten wissen",
     "file.recent_entry": "{name} — {parent}",
     "file.import_dataset": "Dataset Importeren",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USD Importeren",

@@ -299,6 +299,12 @@ class Panel:
 
     def on_scene_changed(self, doc): ...
 
+    def capture_chrome(self):
+        """Optional per-panel GUIL payload. Return a dict or None."""
+
+    def apply_chrome(self, payload):
+        """Restore capture_chrome() output. Missing keys keep defaults."""
+
 class PanelSummary:
     @property
     def id(self) -> str: ...
@@ -2042,6 +2048,9 @@ def set_exit_popup_open(open: bool) -> None:
 
 def get_active_tool() -> str:
     """Get the currently active tool id from C++ EditorContext"""
+
+def consume_tool_restore_guard() -> bool:
+    """Consume the one-shot native tool restore guard"""
 
 def is_tool_available(id: str) -> bool:
     """Check whether a builtin tool is currently available"""

@@ -1,8 +1,13 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/event_bridge/event_bridge.hpp"
+#include "core/event_bus.hpp"
+#include "core/services.hpp"
 #include "licht_test_support.hpp"
+#include "operation/undo_history.hpp"
 #include "project/project_lifecycle.hpp"
+#include "visualizer/visualizer.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -330,6 +335,74 @@ namespace {
         });
         pruneMissingMruEntries(settings);
         EXPECT_TRUE(settings.mru.empty());
+    }
+
+    TEST(ProjectLifecycleSettingsTest,
+         ClearRecentProjectsEmptiesMenuInfoAndPersists) {
+        lfs::event::EventBridge::instance().clear_all();
+        lfs::core::event::bus().clear_all();
+        lfs::vis::services().clear();
+        lfs::vis::op::undoHistory().clear();
+
+        TemporaryDirectory temporary;
+        const auto settings_path =
+            temporary.path / "project_lifecycle.json";
+        const auto project_path =
+            temporary.path / "recent.licht";
+        createEmptyProjectFile(project_path);
+
+        ProjectLifecycleSettings settings;
+        rememberProject(
+            settings, lfs::core::generate_uuid_v4(),
+            project_path);
+        ASSERT_FALSE(settings.mru.empty());
+        ASSERT_TRUE(saveProjectLifecycleSettings(
+            settings_path, settings))
+            << "seed MRU settings";
+
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            settings_path;
+
+        {
+            auto viewer =
+                lfs::vis::Visualizer::create(options);
+            ASSERT_NE(viewer, nullptr);
+            auto info = viewer->projectGetMenuInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            ASSERT_EQ(info->recent_projects.size(), 1u);
+            EXPECT_EQ(
+                info->recent_projects.front()
+                    .last_known_path,
+                resolveProjectMruPath(project_path));
+
+            auto cleared =
+                viewer->projectClearRecentFiles();
+            ASSERT_TRUE(cleared)
+                << lfs::format_for_developer(
+                       cleared.error());
+
+            info = viewer->projectGetMenuInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            EXPECT_TRUE(info->recent_projects.empty());
+        }
+
+        auto reloaded =
+            loadProjectLifecycleSettings(settings_path);
+        ASSERT_TRUE(reloaded)
+            << lfs::format_for_developer(
+                   reloaded.error());
+        EXPECT_TRUE(reloaded->mru.empty());
+
+        lfs::vis::op::undoHistory().clear();
+        lfs::vis::services().clear();
+        lfs::core::event::bus().clear_all();
+        lfs::event::EventBridge::instance().clear_all();
     }
 
 } // namespace

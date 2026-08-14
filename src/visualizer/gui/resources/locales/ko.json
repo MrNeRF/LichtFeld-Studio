@@ -10,6 +10,7 @@
     "file.compact_project": "프로젝트 압축",
     "file.auto_save_on_close": "닫을 때 묻지 않고 저장",
     "file.no_recent_projects": "최근 프로젝트 없음",
+    "file.clear_recent_projects": "최근 프로젝트 지우기",
     "file.recent_entry": "{name} — {parent}",
     "file.import_dataset": "데이터셋 가져오기",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USD 가져오기",

@@ -1401,6 +1401,27 @@ namespace lfs::vis::project {
     }
 
     lfs::Result<void>
+    ProjectLifecycle::clearRecentProjects() {
+        std::vector<ProjectMruEntry> previous;
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            if (settings_.mru.empty()) {
+                return {};
+            }
+            previous = settings_.mru;
+            settings_.mru.clear();
+        }
+        if (auto saved = persistSettings(); !saved) {
+            const std::lock_guard lock(
+                settings_mutex_);
+            settings_.mru = std::move(previous);
+            return saved;
+        }
+        return {};
+    }
+
+    lfs::Result<void>
     ProjectLifecycle::setAutosaveIntervalSeconds(
         const std::uint64_t seconds) {
         std::uint64_t previous = 0;

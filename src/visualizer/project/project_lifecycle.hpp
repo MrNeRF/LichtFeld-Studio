@@ -156,6 +156,8 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         setAutoSaveOnClose(bool enabled);
         [[nodiscard]] lfs::Result<void>
+        clearRecentProjects();
+        [[nodiscard]] lfs::Result<void>
         setAutosaveIntervalSeconds(
             std::uint64_t seconds);
         [[nodiscard]] bool containsEmbeddedSecrets() const;

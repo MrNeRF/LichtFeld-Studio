@@ -10,6 +10,7 @@
     "file.compact_project": "Compacter le projet",
     "file.auto_save_on_close": "Enregistrer à la fermeture sans demander",
     "file.no_recent_projects": "Aucun projet récent",
+    "file.clear_recent_projects": "Effacer les projets récents",
     "file.recent_entry": "{name} — {parent}",
     "file.import_dataset": "Importer un Dataset",
     "file.import_ply": "Importer un PLY, SOG, SPZ, RAD, USD",

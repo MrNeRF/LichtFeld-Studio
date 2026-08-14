@@ -28,6 +28,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(tr=tr)
     lf_stub.project_recent_files = lambda: list(recent_paths)
+    lf_stub.project_clear_recent_files = lambda: None
     lf_stub.project_auto_save_on_close_enabled = lambda: False
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
@@ -85,4 +86,26 @@ def test_recent_project_entry_uses_compact_parent_hint_and_full_path_tooltip(
     recent_item = file_menu.FileMenu().menu_items()[2]["items"][0]
     assert recent_item["label"] == "project.licht — scans/garden"
     assert recent_item["tooltip"] == recent_path
+
+
+def test_open_recent_submenu_appends_clear_only_when_entries_exist(monkeypatch):
+    recent_path = "/home/paja/scans/garden/project.licht"
+    file_menu = _load_file_menu(monkeypatch, [recent_path])
+    cleared = []
+    file_menu.lf.project_clear_recent_files = lambda: cleared.append(True)
+
+    populated = file_menu.FileMenu().menu_items()[2]["items"]
+    assert populated[0]["label"] == "project.licht — scans/garden"
+    assert populated[1]["type"] == "separator"
+    assert populated[2]["label"] == "tr:menu.file.clear_recent_projects"
+    assert populated[2]["enabled"] is True
+    populated[2]["callback"]()
+    assert cleared == [True]
+
+    file_menu.lf.project_recent_files = lambda: []
+    empty = file_menu.FileMenu().menu_items()[2]["items"]
+    assert len(empty) == 1
+    assert empty[0]["label"] == "tr:menu.file.no_recent_projects"
+    assert empty[0]["enabled"] is False
+    assert empty[0].get("type", "item") == "item"
 

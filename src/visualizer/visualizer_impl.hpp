@@ -112,6 +112,8 @@ namespace lfs::vis {
         projectPollWrite() override;
         lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() override;
+        lfs::Result<void>
+        projectClearRecentFiles() override;
         [[nodiscard]] bool projectContainsEmbeddedSecrets() const;
 
         // Getters for GUI (delegating to state manager)

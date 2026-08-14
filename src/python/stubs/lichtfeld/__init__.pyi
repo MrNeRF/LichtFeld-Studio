@@ -284,9 +284,12 @@ def project_has_path() -> bool:
 def project_recent_files() -> list[str]:
     """Return the most-recently-used .licht project paths"""
 
+def project_clear_recent_files() -> None:
+    """Clear the most-recently-used .licht project list"""
+
 def project_autosave_recovery_disposition(path: str) -> str:
     """
-    Return autosave recovery disposition for a .licht master path ("none", "offer", "stale_deleted", "invalid", "ambiguous")
+    Return autosave recovery disposition for a .licht master path ("none", "offer", "stale_deleted", "invalid", "ambiguous", "busy", "unavailable")
     """
 
 def project_reopen_last_enabled() -> bool:

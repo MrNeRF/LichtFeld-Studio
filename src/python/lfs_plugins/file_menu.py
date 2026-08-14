@@ -323,6 +323,14 @@ class FileMenu:
                     "enabled": False,
                 }
             )
+        else:
+            recent_items.append(menu_separator())
+            recent_items.append(
+                menu_action(
+                    lf.ui.tr("menu.file.clear_recent_projects"),
+                    lf.project_clear_recent_files,
+                )
+            )
 
         return [
             menu_operator(NewProjectOperator),
