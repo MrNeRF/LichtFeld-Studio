@@ -278,6 +278,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_StopSaveAndExitBindsUntitledDestinationBeforeStop_Test;
         friend class VisualizerImplResetTest_InfoDoesNotMutateDocumentUntilExplicitSync_Test;
         friend class VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
+        friend class VisualizerImplResetTest_ReopenedTwoSplatProjectBuildsExternalCombinedModel_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;

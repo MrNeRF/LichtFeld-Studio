@@ -4941,6 +4941,95 @@ namespace lfs::vis {
         }
     }
 
+    TEST_F(VisualizerImplResetTest,
+           ReopenedTwoSplatProjectBuildsExternalCombinedModel) {
+        // Reopening a two-visible-splat .licht left the combined
+        // model on plain CUDA tensors (no Vulkan-external allocator),
+        // so VkSplat refused to render until one node was hidden.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto destination =
+            temporary / "two-splat-reopen.licht";
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+
+            auto& scene = viewer.getScene();
+            const auto splat_a = scene.addSplat(
+                "Splat A",
+                lfs::test::licht::make_splat(2));
+            const auto splat_b = scene.addSplat(
+                "Splat B",
+                lfs::test::licht::make_splat(2));
+            ASSERT_NE(splat_a, lfs::core::NULL_NODE);
+            ASSERT_NE(splat_b, lfs::core::NULL_NODE);
+
+            auto saved = lifecycle->saveAs(
+                destination, false, true);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    destination));
+        }
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            ASSERT_TRUE(
+                viewer.getWindowManager()->init());
+            ASSERT_TRUE(viewer.projectOpen(
+                destination,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+
+            auto& scene = viewer.getScene();
+            const auto* splat_a =
+                scene.getNode("Splat A");
+            const auto* splat_b =
+                scene.getNode("Splat B");
+            ASSERT_NE(splat_a, nullptr);
+            ASSERT_NE(splat_b, nullptr);
+            ASSERT_NE(splat_a->model, nullptr);
+            ASSERT_NE(splat_b->model, nullptr);
+
+            const auto* combined =
+                viewer.getScene().getCombinedModel();
+            ASSERT_NE(combined, nullptr);
+            EXPECT_TRUE(
+                combined->has_tensor_allocator());
+        }
+    }
+
 } // namespace lfs::vis
 
 namespace {

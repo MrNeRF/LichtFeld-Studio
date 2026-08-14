@@ -4573,6 +4573,10 @@ namespace lfs::vis::project {
             std::memory_order_release);
         auto allocator =
             manager->makeExternalSplatAllocator();
+        if (allocator) {
+            manager->getScene().setCombinedModelAllocator(
+                allocator);
+        }
         std::lock_guard lock(thread_mutex_);
         try {
             hydration_threads_.emplace_back(
