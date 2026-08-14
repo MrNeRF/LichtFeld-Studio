@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <exception>
 #include <functional>
 
 namespace lfs::vis {
 
-    class MainLoop {
+    class LFS_VIS_API MainLoop {
     public:
         using InitCallback = std::function<bool()>;
         using UpdateCallback = std::function<void()>;

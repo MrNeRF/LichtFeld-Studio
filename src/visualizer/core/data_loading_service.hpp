@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/events.hpp"
+#include "core/export.hpp"
 #include "core/parameters.hpp"
 #include <expected>
 #include <filesystem>
@@ -17,7 +18,7 @@ namespace lfs::vis {
 
 namespace lfs::vis {
 
-    class DataLoadingService {
+    class LFS_VIS_API DataLoadingService {
     public:
         explicit DataLoadingService(SceneManager* scene_manager);
         ~DataLoadingService();

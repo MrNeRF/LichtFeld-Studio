@@ -40,7 +40,7 @@ namespace lfs::vis {
 
     namespace gui {
 
-        class SequencerUIManager {
+        class LFS_VIS_API SequencerUIManager {
         public:
             SequencerUIManager(VisualizerImpl* viewer, panels::SequencerUIState& ui_state,
                                gui::RmlUIManager* rml_manager);
@@ -66,7 +66,7 @@ namespace lfs::vis {
             [[nodiscard]] float preferredFloatingHeight() const;
             // Serialized status of the active PLY sequence (empty when inactive).
             // Used by MCP tooling to verify playback/scrub behaviour.
-            [[nodiscard]] LFS_VIS_API std::string plyPlayerStatusJson() const;
+            [[nodiscard]] std::string plyPlayerStatusJson() const;
             [[nodiscard]] float timelineZoom() const;
             [[nodiscard]] float timelinePan() const;
             void setTimelineView(float zoom, float pan);
