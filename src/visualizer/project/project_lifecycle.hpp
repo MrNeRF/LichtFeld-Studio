@@ -315,7 +315,8 @@ namespace lfs::vis::project {
         void cancelBackgroundAutosaveIfRunning();
         void cleanupRecoverySession();
         [[nodiscard]] lfs::Result<void>
-        adoptCompletedTrainingSnapshot();
+        adoptCompletedTrainingSnapshot(
+            bool allow_during_application_close = false);
         [[nodiscard]] lfs::Result<std::vector<std::byte>>
         capturePreviewPng() const;
         [[nodiscard]] lfs::Result<void>

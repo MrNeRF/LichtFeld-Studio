@@ -37,6 +37,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -1184,6 +1185,186 @@ namespace {
                 reopened_splats,
                 fixed_uuid(952)),
             reopened_splats.end());
+    }
+
+    TEST(ProjectDocumentTest,
+         WholesaleSceneReplaceDropsOrphanDeferredPcldOnReconcile) {
+        // Catches trainer snapshot append: wholesale SCNG assignment leaves
+        // a deferred PCLD key unbound. Without
+        // remove_geometry_payloads_not_bound_by_scene(), save fails DataLoss
+        // at the deferred-key owner check.
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "orphan-pcld.licht";
+        const Uuid project_uuid = fixed_uuid(4401);
+        const Uuid point_uuid = fixed_uuid(4402);
+        const Uuid replacement_uuid = fixed_uuid(4403);
+
+        auto document = make_empty_document(project_uuid, 100);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = point_uuid,
+                .type = "pointcloud",
+                .name = "Initial points",
+                .child_order = 0,
+                .payload =
+                    PayloadBinding{
+                        .fourcc = "PCLD",
+                        .instance_uuid = point_uuid,
+                        .source_kind = "ply",
+                    },
+            }));
+        require_status(document->set_point_cloud(
+            point_uuid, PointCloudPayload(make_point_cloud(2))));
+        require_status(document->edit_project().upsert_embed_decision(
+            EmbedDecision{
+                .uuid = point_uuid,
+                .node_uuid = point_uuid,
+                .payload_fourcc = "PCLD",
+                .decision = "embedded",
+                .reason = "initial cloud",
+            }));
+        require_status(
+            document->edit_project().upsert_embedded_payload_provenance(
+                provenance(
+                    point_uuid, "PCLD", "assets/points.ply", 44)));
+        ASSERT_TRUE(document->save(path, save_options(4404, 200)));
+
+        auto opened = require_result_ptr(ProjectDocument::open(
+            path,
+            ProjectDocumentOpenOptions{
+                .defer_geometry_payloads = true,
+            }));
+        ASSERT_EQ(opened->point_cloud_uuids().size(), 1u);
+
+        opened->edit_scene_graph() = SceneGraphChapter();
+        require_status(opened->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = replacement_uuid,
+                .type = "group",
+                .name = "Training root",
+                .child_order = 0,
+            }));
+
+        auto refused = opened->save(path, save_options(4405, 300));
+        ASSERT_FALSE(refused);
+        EXPECT_EQ(refused.error().code(), lfs::ErrorCode::DataLoss);
+
+        opened->remove_geometry_payloads_not_bound_by_scene();
+        auto saved = opened->save(path, save_options(4406, 400));
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        EXPECT_TRUE(reopened->point_cloud_uuids().empty());
+        EXPECT_EQ(reopened->find_point_cloud(point_uuid), nullptr);
+        auto nodes = reopened->scene_graph().nodes();
+        ASSERT_TRUE(nodes);
+        EXPECT_TRUE(std::ranges::none_of(
+            *nodes, [](const SceneNodeRecord& node) {
+                return node.payload && node.payload->fourcc == "PCLD";
+            }));
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader);
+        const auto* pcld = reader->find(FOURCC_PCLD, point_uuid);
+        if (pcld != nullptr) {
+            EXPECT_EQ(pcld->row_kind, RowKind::Tombstone);
+        }
+    }
+
+    TEST(ProjectDocumentTest,
+         WholesaleSceneReplaceConvergesDirtyEpochAfterReconcileSaveAndAdopt) {
+        // GUI close-save loop: wholesale SCNG replace (training
+        // removed the point-cloud node) plus reconcile+save must
+        // clear PCLD dirty. An adopt-equivalent reopen and a
+        // second unbound-scene replace+reconcile must not mark
+        // PCLD dirty again.
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "orphan-pcld-converge.licht";
+        const Uuid project_uuid = fixed_uuid(4411);
+        const Uuid point_uuid = fixed_uuid(4412);
+        const Uuid replacement_uuid = fixed_uuid(4413);
+
+        const auto install_unbound_scene =
+            [&](ProjectDocument& document) {
+                document.edit_scene_graph() = SceneGraphChapter();
+                require_status(document.edit_scene_graph().upsert_node(
+                    SceneNodeRecord{
+                        .uuid = replacement_uuid,
+                        .type = "group",
+                        .name = "Training root",
+                        .child_order = 0,
+                    }));
+            };
+        const auto dirty_has = [](const ProjectDocument& document,
+                                  const std::string_view fourcc) {
+            const auto chapters = document.dirty_chapters();
+            return std::ranges::find(chapters, fourcc) != chapters.end();
+        };
+
+        auto document = make_empty_document(project_uuid, 100);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = point_uuid,
+                .type = "pointcloud",
+                .name = "Initial points",
+                .child_order = 0,
+                .payload =
+                    PayloadBinding{
+                        .fourcc = "PCLD",
+                        .instance_uuid = point_uuid,
+                        .source_kind = "ply",
+                    },
+            }));
+        require_status(document->set_point_cloud(
+            point_uuid, PointCloudPayload(make_point_cloud(2))));
+        require_status(document->edit_project().upsert_embed_decision(
+            EmbedDecision{
+                .uuid = point_uuid,
+                .node_uuid = point_uuid,
+                .payload_fourcc = "PCLD",
+                .decision = "embedded",
+                .reason = "initial cloud",
+            }));
+        require_status(
+            document->edit_project().upsert_embedded_payload_provenance(
+                provenance(
+                    point_uuid, "PCLD", "assets/points.ply", 45)));
+        ASSERT_TRUE(document->save(path, save_options(4414, 200)));
+        EXPECT_FALSE(document->dirty());
+
+        auto opened = require_result_ptr(ProjectDocument::open(
+            path,
+            ProjectDocumentOpenOptions{
+                .defer_geometry_payloads = true,
+            }));
+        ASSERT_EQ(opened->point_cloud_uuids().size(), 1u);
+        install_unbound_scene(*opened);
+        opened->remove_geometry_payloads_not_bound_by_scene();
+        EXPECT_TRUE(dirty_has(*opened, "PCLD"));
+        auto first_save = opened->save(path, save_options(4415, 300));
+        ASSERT_TRUE(first_save)
+            << lfs::format_for_developer(first_save.error());
+        EXPECT_FALSE(opened->dirty());
+        EXPECT_FALSE(dirty_has(*opened, "PCLD"));
+        EXPECT_FALSE(dirty_has(*opened, "SCNG"));
+
+        auto adopted = require_result_ptr(ProjectDocument::open(
+            path,
+            ProjectDocumentOpenOptions{
+                .defer_geometry_payloads = true,
+            }));
+        EXPECT_FALSE(adopted->dirty());
+        EXPECT_TRUE(adopted->point_cloud_uuids().empty());
+        EXPECT_EQ(adopted->find_point_cloud(point_uuid), nullptr);
+
+        install_unbound_scene(*adopted);
+        adopted->remove_geometry_payloads_not_bound_by_scene();
+        EXPECT_FALSE(dirty_has(*adopted, "PCLD"));
+        auto second_save = adopted->save(path, save_options(4416, 400));
+        ASSERT_TRUE(second_save)
+            << lfs::format_for_developer(second_save.error());
+        EXPECT_FALSE(adopted->dirty());
+        EXPECT_TRUE(adopted->dirty_chapters().empty());
     }
 
     TEST(ProjectDocumentTest,

@@ -2487,7 +2487,8 @@ namespace lfs::vis::project {
                     ProjectWritePurpose::
                         TrainingCloseSave) {
                 if (auto adopted =
-                        adoptCompletedTrainingSnapshot();
+                        adoptCompletedTrainingSnapshot(
+                            true);
                     !adopted) {
                     last_project_write_error_code_ =
                         adopted.error().code();
@@ -2922,9 +2923,17 @@ namespace lfs::vis::project {
     }
 
     lfs::Result<void>
-    ProjectLifecycle::adoptCompletedTrainingSnapshot() {
+    ProjectLifecycle::adoptCompletedTrainingSnapshot(
+        const bool allow_during_application_close) {
+        // ForceExit still suppresses adoption. Close-pending
+        // only blocks *silent* snapshot adoption (info /
+        // hasDirtyProject) so a background trainer write
+        // cannot clear the exit gate. Settlement of a
+        // GUI-requested training write must still rebase
+        // the in-memory document onto the published head.
         if (suppress_training_adoption_ ||
-            application_close_pending_) {
+            (application_close_pending_ &&
+             !allow_during_application_close)) {
             return {};
         }
         auto* trainer = viewer_.getTrainer();
@@ -3140,6 +3149,11 @@ namespace lfs::vis::project {
             document_->edit_scene_graph() =
                 std::move(*captured_scene);
         }
+        // Same bookkeeping as the trainer writer after a
+        // wholesale SCNG install: drop SPLT/PCLD/MESH
+        // payloads the captured scene no longer binds.
+        document_
+            ->remove_geometry_payloads_not_bound_by_scene();
 
         std::unordered_set<lfs::core::Uuid>
             live_splats;

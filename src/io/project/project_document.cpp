@@ -2458,6 +2458,88 @@ namespace lfs::io::project {
         return removed;
     }
 
+    void ProjectDocument::remove_geometry_payloads_not_bound_by_scene() {
+        auto nodes = impl_->scene_graph.nodes();
+        if (!nodes) {
+            return;
+        }
+
+        std::set<ChunkKey, ChunkKeyLess> bound;
+        for (const auto& node : *nodes) {
+            if (!node.payload) {
+                continue;
+            }
+            const auto& binding = *node.payload;
+            Fourcc fourcc{};
+            if (node.type == "splat" && binding.fourcc == "SPLT") {
+                fourcc = FOURCC_SPLT;
+            } else if (node.type == "pointcloud" &&
+                       binding.fourcc == "PCLD") {
+                fourcc = FOURCC_PCLD;
+            } else if (node.type == "mesh" && binding.fourcc == "MESH") {
+                fourcc = FOURCC_MESH;
+            } else {
+                continue;
+            }
+            bound.insert(ChunkKey{
+                .fourcc = fourcc,
+                .instance_uuid = node.uuid,
+            });
+        }
+
+        std::set<ChunkKey, ChunkKeyLess> orphans;
+        const auto consider = [&](const ChunkKey& key) {
+            if ((key.fourcc == FOURCC_SPLT || key.fourcc == FOURCC_PCLD ||
+                 key.fourcc == FOURCC_MESH) &&
+                !bound.contains(key)) {
+                orphans.insert(key);
+            }
+        };
+        for (const auto& [uuid, ignored] : impl_->splats) {
+            (void)ignored;
+            consider(ChunkKey{
+                .fourcc = FOURCC_SPLT,
+                .instance_uuid = uuid,
+            });
+        }
+        for (const auto& [uuid, ignored] : impl_->point_clouds) {
+            (void)ignored;
+            consider(ChunkKey{
+                .fourcc = FOURCC_PCLD,
+                .instance_uuid = uuid,
+            });
+        }
+        for (const auto& [uuid, ignored] : impl_->meshes) {
+            (void)ignored;
+            consider(ChunkKey{
+                .fourcc = FOURCC_MESH,
+                .instance_uuid = uuid,
+            });
+        }
+        for (const auto& key : impl_->deferred_geometry_keys) {
+            consider(key);
+        }
+        for (const auto& [key, ignored] : impl_->content_hashes) {
+            (void)ignored;
+            consider(key);
+        }
+
+        for (const auto& key : orphans) {
+            bool removed = false;
+            if (key.fourcc == FOURCC_SPLT) {
+                removed = remove_splat(key.instance_uuid);
+            } else if (key.fourcc == FOURCC_PCLD) {
+                removed = remove_point_cloud(key.instance_uuid);
+            } else if (key.fourcc == FOURCC_MESH) {
+                removed = remove_mesh(key.instance_uuid);
+            }
+            if (!removed) {
+                impl_->content_hashes.erase(key);
+                impl_->mark(key.fourcc, key.instance_uuid);
+            }
+        }
+    }
+
     std::vector<lfs::core::Uuid> ProjectDocument::splat_uuids() const {
         auto result = sorted_uuids(impl_->splats);
         for (const auto& key : impl_->deferred_geometry_keys) {

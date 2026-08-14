@@ -4760,6 +4760,8 @@ namespace lfs::training {
                                         chapters
                                             ->selection);
                             }
+                            document
+                                ->remove_geometry_payloads_not_bound_by_scene();
                             auto params_status =
                                 document
                                     ->edit_parameters()

@@ -273,6 +273,8 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         set_mesh(const lfs::core::Uuid& node_uuid, MeshPayload payload);
         [[nodiscard]] bool remove_mesh(const lfs::core::Uuid& node_uuid);
+        // Drop SPLT/PCLD/MESH payloads the current scene graph no longer binds.
+        void remove_geometry_payloads_not_bound_by_scene();
 
         [[nodiscard]] std::vector<lfs::core::Uuid> splat_uuids() const;
         [[nodiscard]] std::vector<lfs::core::Uuid> point_cloud_uuids() const;
