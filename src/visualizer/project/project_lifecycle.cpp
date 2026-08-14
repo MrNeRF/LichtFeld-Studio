@@ -1931,6 +1931,10 @@ namespace lfs::vis::project {
         if (uuids.empty()) {
             return true;
         }
+        if (cached_bound_checkpoint_iteration_) {
+            return *cached_bound_checkpoint_iteration_ !=
+                   trainer->get_current_iteration();
+        }
         const auto* checkpoint =
             document_->find_checkpoint(uuids.front());
         if (!checkpoint) {
@@ -1957,6 +1961,8 @@ namespace lfs::vis::project {
         if (!visited || !stored_iteration) {
             return true;
         }
+        cached_bound_checkpoint_iteration_ =
+            stored_iteration;
         return *stored_iteration !=
                trainer->get_current_iteration();
     }
@@ -2070,12 +2076,27 @@ namespace lfs::vis::project {
                 "Training-time autosave is light-only (no checkpoint capture)");
         }
 
-        auto base = lfs::io::project::
-            ProjectReader::open(
-                *document_->source_path());
-        if (!base) {
-            return lfs::Status::failure(
-                std::move(base).error());
+        const auto base_commit_uuid =
+            document_->source_commit_uuid();
+        if (!base_commit_uuid) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The open project has no in-memory source commit.",
+                "Autosave requires the already-held source reader",
+                "project.source_reader");
+        }
+        std::error_code exists_error;
+        if (!std::filesystem::exists(
+                *document_->source_path(),
+                exists_error) ||
+            exists_error) {
+            return fail<void>(
+                lfs::ErrorCode::NotFound,
+                "The project file is no longer available for autosave.",
+                exists_error
+                    ? exists_error.message()
+                    : "The master path disappeared after the project was opened",
+                "project.source_path");
         }
         const auto sequence =
             autosave_sequence_ + 1;
@@ -2097,8 +2118,7 @@ namespace lfs::vis::project {
                         lfs::core::
                             generate_uuid_v4(),
                     .base_explicit_commit_uuid =
-                        base->commit()
-                            .commit_uuid,
+                        *base_commit_uuid,
                     .autosave_sequence =
                         sequence,
                     .snapshot_uuid = {},
@@ -2127,21 +2147,20 @@ namespace lfs::vis::project {
     }
 
     void ProjectLifecycle::refreshStorageStats() {
-        const auto path =
-            recovered_master_path_
-                ? recovered_master_path_
-                : (document_
-                       ? document_
-                             ->source_path()
-                       : std::nullopt);
-        if (!path) {
-            storage_stats_ = {};
-            compaction_suggested_ = false;
+        const auto* reader =
+            document_ ? document_->source_reader()
+                      : nullptr;
+        if (!reader) {
+            if (!document_ ||
+                !document_->source_path()) {
+                storage_stats_ = {};
+                compaction_suggested_ = false;
+            }
             return;
         }
         auto stats =
             lfs::io::project::
-                project_storage_stats(*path);
+                project_storage_stats(*reader);
         if (!stats) {
             LOG_WARN(
                 "Could not inspect .licht dead bytes: {}",
@@ -2501,6 +2520,8 @@ namespace lfs::vis::project {
                     std::make_shared<
                         ProjectDocument>(
                         std::move(*reopened));
+                cached_bound_checkpoint_iteration_
+                    .reset();
             }
         }
 
@@ -2689,11 +2710,6 @@ namespace lfs::vis::project {
         }
         const auto now =
             std::chrono::steady_clock::now();
-        if (now >= next_storage_check_at_) {
-            refreshStorageStats();
-            next_storage_check_at_ =
-                now + std::chrono::minutes(1);
-        }
         const bool training =
             viewer_.getTrainerManager() &&
             viewer_.getTrainerManager()
@@ -2912,6 +2928,7 @@ namespace lfs::vis::project {
             std::make_shared<ProjectDocument>(
                 std::move(*opened));
         cached_project_info_.reset();
+        cached_bound_checkpoint_iteration_.reset();
         adopted_training_snapshot_count_ =
             metrics.capture.completed_snapshots;
         hydration_.store(
@@ -4331,6 +4348,7 @@ namespace lfs::vis::project {
             std::chrono::steady_clock::now();
 
         cached_project_info_.reset();
+        cached_bound_checkpoint_iteration_.reset();
         document_ = candidate;
         bindTrainerSnapshotTarget();
         cleanupRecoverySession();
@@ -4710,6 +4728,13 @@ namespace lfs::vis::project {
                                     const auto trainer_restored_at =
                                         std::chrono::steady_clock::
                                             now();
+                                    if (report
+                                            .checkpoint_header) {
+                                        cached_bound_checkpoint_iteration_ =
+                                            report
+                                                .checkpoint_header
+                                                ->iteration;
+                                    }
                                     hydration_.store(
                                         Hydration::Complete,
                                         std::memory_order_release);
@@ -4928,6 +4953,7 @@ namespace lfs::vis::project {
         }
         stopHydrationThreads();
         cached_project_info_.reset();
+        cached_bound_checkpoint_iteration_.reset();
         document_ =
             std::make_shared<ProjectDocument>(
                 std::move(*created));
@@ -5273,6 +5299,34 @@ namespace lfs::vis::project {
         return result;
     }
 
+    ProjectWritePoll ProjectLifecycle::pollWrite() {
+        settleProjectWrite();
+        ProjectWritePoll poll;
+        if (project_write_job_) {
+            const auto job = viewer_.jobs().peek(
+                *project_write_job_);
+            poll.running =
+                !job || job->running();
+            if (job) {
+                poll.error = job->error;
+                poll.error_code = job->error_code;
+            }
+        }
+        if (document_) {
+            poll.generation = document_->generation();
+            poll.path =
+                recovered_master_path_
+                    ? recovered_master_path_
+                    : document_->source_path();
+        }
+        if (poll.error.empty()) {
+            poll.error = last_project_write_error_;
+            poll.error_code =
+                last_project_write_error_code_;
+        }
+        return poll;
+    }
+
     lfs::Result<ProjectInfo>
     ProjectLifecycle::info() {
         settleProjectWrite();
@@ -5369,43 +5423,12 @@ namespace lfs::vis::project {
             training_active &&
             !trainer_manager
                  ->isPausedAtCheckpointBaseline();
-        if (!blank_untitled && !training_forces_dirty) {
-            if (auto synchronized =
-                    synchronizeDocumentFromViewer();
-                !synchronized) {
-                const bool trainer_can_flush =
-                    (viewer_.getTrainer() &&
-                     trainer_manager &&
-                     (trainer_manager
-                          ->isTrainingActive() ||
-                      trainer_manager
-                          ->isCompletionPending())) ||
-                    canFlushFinishedTrainerSnapshot();
-                if (trainer_can_flush) {
-                    // Unbound active/paused/finished
-                    // training model has no CKPT yet;
-                    // save/saveAs can still flush. Do
-                    // not fail MCP preflight.
-                    const auto warning =
-                        developerError(
-                            synchronized.error());
-                    if (warning !=
-                        last_finished_trainer_info_sync_warning_) {
-                        last_finished_trainer_info_sync_warning_ =
-                            warning;
-                        LOG_WARN(
-                            "Skipping document sync for project info; a trainer can still flush: {}",
-                            warning);
-                    }
-                } else {
-                    return std::move(synchronized)
-                        .error();
-                }
-            } else {
-                last_finished_trainer_info_sync_warning_
-                    .clear();
-            }
-        }
+        const bool parameter_dirty = [&] {
+            const auto* parameter_manager =
+                viewer_.getParameterManager();
+            return parameter_manager &&
+                   parameter_manager->isDirty();
+        }();
         const auto dirty_chapters =
             blank_untitled
                 ? std::vector<std::string>{}
@@ -5413,7 +5436,12 @@ namespace lfs::vis::project {
         const bool hard_dirty =
             training_forces_dirty ||
             (!blank_untitled &&
-             hasHardDirtyChapters(*document_));
+             (scene_dirty_.load(
+                  std::memory_order_acquire) ||
+              payload_dirty_.load(
+                  std::memory_order_acquire) ||
+              parameter_dirty ||
+              hasHardDirtyChapters(*document_)));
         const bool session_dirty =
             !blank_untitled &&
             hasSessionSoftDirtyChapters(*document_);

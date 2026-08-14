@@ -181,6 +181,9 @@ namespace lfs::io::project {
 
     [[nodiscard]] LFS_IO_API
         lfs::Result<ProjectStorageStats>
+        project_storage_stats(const ProjectReader& reader);
+    [[nodiscard]] LFS_IO_API
+        lfs::Result<ProjectStorageStats>
         project_storage_stats(
             const std::filesystem::path& master_path);
 

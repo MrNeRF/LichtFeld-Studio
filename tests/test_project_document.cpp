@@ -542,6 +542,31 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
+         SaveReportReusesRefreshedSourceReader) {
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "save-report-reader.licht";
+        auto document =
+            make_empty_document(fixed_uuid(911), 100);
+        const auto report = require_result(
+            document->save(path, save_options(911, 200)));
+        ASSERT_NE(document->source_reader(), nullptr);
+        ASSERT_TRUE(document->source_commit_uuid());
+        EXPECT_EQ(
+            *document->source_commit_uuid(),
+            report.commit_uuid);
+        EXPECT_EQ(
+            document->generation(),
+            report.generation);
+        EXPECT_EQ(
+            document->source_reader()->commit().generation,
+            report.generation);
+        EXPECT_EQ(
+            document->source_reader()->commit().snapshot_uuid,
+            report.snapshot_uuid);
+    }
+
+    TEST(ProjectDocumentTest,
          InvalidPendingParametersRefuseHydrationBeforeSceneMutation) {
         auto document = make_empty_document(fixed_uuid(910), 100);
         require_status(document->edit_parameters().dom().set(

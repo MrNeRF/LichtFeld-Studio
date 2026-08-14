@@ -60,6 +60,14 @@ namespace lfs::vis {
         std::vector<ProjectRecentInfo> recent_projects;
     };
 
+    struct LFS_VIS_API ProjectWritePoll {
+        bool running = false;
+        std::uint64_t generation = 0;
+        std::optional<std::filesystem::path> path;
+        std::string error;
+        std::optional<lfs::ErrorCode> error_code;
+    };
+
     struct LFS_VIS_API ProjectInfo {
         std::optional<std::filesystem::path> path;
         std::string project_uuid;
@@ -155,6 +163,10 @@ namespace lfs::vis {
         projectHasPath() = 0;
         virtual lfs::Result<ProjectInfo>
         projectGetInfo() = 0;
+        virtual lfs::Result<ProjectWritePoll>
+        projectPollWrite() {
+            return ProjectWritePoll{};
+        }
         virtual lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() {
             auto info = projectGetInfo();

@@ -1296,21 +1296,15 @@ namespace lfs::io::project {
     }
 
     lfs::Result<ProjectStorageStats>
-    project_storage_stats(
-        const std::filesystem::path& master_path) {
-        auto reader =
-            ProjectReader::open(master_path);
-        if (!reader) {
-            return std::move(reader).error();
-        }
+    project_storage_stats(const ProjectReader& reader) {
         ProjectStorageStats result;
         result.physical_bytes =
-            reader->physical_file_size();
+            reader.physical_file_size();
         std::uint64_t live =
             APPEND_REGION_OFFSET +
             COMMIT_RECORD_BYTES +
-            reader->commit().index_stored_bytes;
-        for (const auto& row : reader->chunks()) {
+            reader.commit().index_stored_bytes;
+        for (const auto& row : reader.chunks()) {
             if (row.row_kind != RowKind::Live) {
                 continue;
             }
@@ -1341,7 +1335,7 @@ namespace lfs::io::project {
                         sizeof(std::uint32_t)) {
                     return fail<ProjectStorageStats>(
                         lfs::ErrorCode::ResourceExhausted,
-                        master_path,
+                        reader.path(),
                         "The project block-CRC estimate overflowed.",
                         row.key_string(),
                         "storage.block_crc_bytes");
@@ -1367,7 +1361,7 @@ namespace lfs::io::project {
                         live) {
                 return fail<ProjectStorageStats>(
                     lfs::ErrorCode::ResourceExhausted,
-                    master_path,
+                    reader.path(),
                     "The project live-byte estimate overflowed.",
                     row.key_string(),
                     "storage.live_bytes");
@@ -1389,6 +1383,17 @@ namespace lfs::io::project {
                     result.physical_bytes);
         }
         return result;
+    }
+
+    lfs::Result<ProjectStorageStats>
+    project_storage_stats(
+        const std::filesystem::path& master_path) {
+        auto reader =
+            ProjectReader::open(master_path);
+        if (!reader) {
+            return std::move(reader).error();
+        }
+        return project_storage_stats(*reader);
     }
 
 } // namespace lfs::io::project

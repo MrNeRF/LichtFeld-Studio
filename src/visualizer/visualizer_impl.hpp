@@ -108,6 +108,8 @@ namespace lfs::vis {
         projectHasPath() override;
         lfs::Result<ProjectInfo>
         projectGetInfo() override;
+        lfs::Result<ProjectWritePoll>
+        projectPollWrite() override;
         lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() override;
         [[nodiscard]] bool projectContainsEmbeddedSecrets() const;
@@ -272,6 +274,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_OpenAndNewProjectClearSuppressAdoption_Test;
         friend class VisualizerImplResetTest_ExitConfirmationPendingOwnedByGuiManager_Test;
         friend class VisualizerImplResetTest_StopSaveAndExitBindsUntitledDestinationBeforeStop_Test;
+        friend class VisualizerImplResetTest_InfoDoesNotMutateDocumentUntilExplicitSync_Test;
+        friend class VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;

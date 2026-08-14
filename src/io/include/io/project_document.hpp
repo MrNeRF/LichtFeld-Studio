@@ -193,6 +193,9 @@ namespace lfs::io::project {
 
         [[nodiscard]] const std::optional<std::filesystem::path>&
         source_path() const noexcept;
+        [[nodiscard]] const ProjectReader* source_reader() const noexcept;
+        [[nodiscard]] std::optional<lfs::core::Uuid>
+        source_commit_uuid() const noexcept;
         [[nodiscard]] std::span<const ProjectDocumentDegradedState>
         degraded_states() const noexcept;
         [[nodiscard]] const lfs::core::Uuid& project_uuid() const noexcept;

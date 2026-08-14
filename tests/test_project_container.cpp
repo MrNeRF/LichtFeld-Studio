@@ -869,6 +869,21 @@ namespace {
 
         const ProjectStorageStats stats =
             require_result(project_storage_stats(path));
+        {
+            const auto reader =
+                require_result(ProjectReader::open(path));
+            const auto from_reader =
+                require_result(project_storage_stats(reader));
+            EXPECT_EQ(
+                from_reader.physical_bytes,
+                stats.physical_bytes);
+            EXPECT_EQ(
+                from_reader.estimated_live_bytes,
+                stats.estimated_live_bytes);
+            EXPECT_EQ(from_reader.dead_bytes, stats.dead_bytes);
+            EXPECT_DOUBLE_EQ(
+                from_reader.dead_ratio, stats.dead_ratio);
+        }
         const auto physical_before = fs::file_size(path);
         require_status(ProjectWriter::compact(
             path,

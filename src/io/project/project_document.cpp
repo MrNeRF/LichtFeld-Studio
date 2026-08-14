@@ -1968,6 +1968,18 @@ namespace lfs::io::project {
         return impl_->source_path;
     }
 
+    const ProjectReader* ProjectDocument::source_reader() const noexcept {
+        return impl_->source_reader.get();
+    }
+
+    std::optional<lfs::core::Uuid>
+    ProjectDocument::source_commit_uuid() const noexcept {
+        if (!impl_->source_reader) {
+            return std::nullopt;
+        }
+        return impl_->source_reader->commit().commit_uuid;
+    }
+
     std::span<const ProjectDocumentDegradedState>
     ProjectDocument::degraded_states() const noexcept {
         return impl_->degraded_states;
@@ -3257,13 +3269,9 @@ namespace lfs::io::project {
             !refreshed) {
             return std::move(refreshed).error();
         }
-        auto reader = ProjectReader::open(*normalized);
-        if (!reader) {
-            return std::move(reader).error();
-        }
-        report.generation = reader->commit().generation;
-        report.commit_uuid = reader->commit().commit_uuid;
-        report.snapshot_uuid = reader->commit().snapshot_uuid;
+        report.generation = impl_->source_reader->commit().generation;
+        report.commit_uuid = impl_->source_reader->commit().commit_uuid;
+        report.snapshot_uuid = impl_->source_reader->commit().snapshot_uuid;
         return report;
     }
 

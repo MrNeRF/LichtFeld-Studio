@@ -59,6 +59,8 @@ namespace lfs::vis {
     class VisualizerImplResetTest_FailedSaveAsAndExitResetsCloseLatches_Test;
     class VisualizerImplResetTest_ForceExitWhileSavingDoesNotWaitForSettlement_Test;
     class VisualizerImplResetTest_OpenAndNewProjectClearSuppressAdoption_Test;
+    class VisualizerImplResetTest_InfoDoesNotMutateDocumentUntilExplicitSync_Test;
+    class VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -137,6 +139,7 @@ namespace lfs::vis::project {
         [[nodiscard]] bool isDirty();
         [[nodiscard]] bool hasSourcePath() const;
         [[nodiscard]] lfs::Result<ProjectInfo> info();
+        [[nodiscard]] ProjectWritePoll pollWrite();
         [[nodiscard]] ProjectMenuInfo menuInfo() const;
         [[nodiscard]] lfs::Result<void>
         preflightSwitch(
@@ -206,6 +209,8 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_FailedSaveAsAndExitResetsCloseLatches_Test;
         friend class lfs::vis::VisualizerImplResetTest_ForceExitWhileSavingDoesNotWaitForSettlement_Test;
         friend class lfs::vis::VisualizerImplResetTest_OpenAndNewProjectClearSuppressAdoption_Test;
+        friend class lfs::vis::VisualizerImplResetTest_InfoDoesNotMutateDocumentUntilExplicitSync_Test;
+        friend class lfs::vis::VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
         enum class Hydration {
             Empty,
             ShellReady,
@@ -407,8 +412,8 @@ namespace lfs::vis::project {
             adopted_training_snapshot_count_ = 0;
         std::string
             last_unadoptable_training_snapshot_warning_;
-        std::string
-            last_finished_trainer_info_sync_warning_;
+        mutable std::optional<int>
+            cached_bound_checkpoint_iteration_;
         mutable std::mutex thread_mutex_;
         std::vector<std::jthread> hydration_threads_;
         std::atomic<CloseSaveState>

@@ -3296,12 +3296,32 @@ namespace lfs::vis {
                 << lfs::format_for_developer(
                        info.error());
             EXPECT_TRUE(info->dirty);
-            EXPECT_NE(
+            EXPECT_EQ(
                 std::find(
                     info->dirty_chapters.begin(),
                     info->dirty_chapters.end(),
                     "PRMS"),
                 info->dirty_chapters.end());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            auto synchronized =
+                lifecycle
+                    ->synchronizeDocumentFromViewer();
+            ASSERT_TRUE(synchronized)
+                << lfs::format_for_developer(
+                       synchronized.error());
+            const auto synced =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(synced)
+                << lfs::format_for_developer(
+                       synced.error());
+            EXPECT_NE(
+                std::find(
+                    synced->dirty_chapters.begin(),
+                    synced->dirty_chapters.end(),
+                    "PRMS"),
+                synced->dirty_chapters.end());
             EXPECT_TRUE(
                 viewer.project_lifecycle_
                     ->hasDirtyProject());
@@ -3347,9 +3367,12 @@ namespace lfs::vis {
             ASSERT_NE(model, lfs::core::NULL_NODE);
             scene.setTrainingModelNode(model);
 
-            // Negative: without active training the
-            // CKPT invariant still hard-fails sync.
-            auto blocked = viewer.projectGetInfo();
+            auto query = viewer.projectGetInfo();
+            ASSERT_TRUE(query)
+                << lfs::format_for_developer(
+                       query.error());
+            EXPECT_TRUE(query->dirty);
+            auto blocked = viewer.projectSave(false);
             ASSERT_FALSE(blocked);
             EXPECT_EQ(
                 blocked.error().code(),
@@ -4749,6 +4772,172 @@ namespace lfs::vis {
             EXPECT_EQ(
                 trainer->live_or_default_project_path(),
                 chosen);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           InfoDoesNotMutateDocumentUntilExplicitSync) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "info-no-mutate.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_NE(lifecycle->document_, nullptr);
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Unsynced scene dirt"),
+                lfs::core::NULL_NODE);
+
+            const auto before =
+                lifecycle->document_->scene_graph()
+                    .to_bytes();
+            for (int i = 0; i < 3; ++i) {
+                const auto info =
+                    viewer.projectGetInfo();
+                ASSERT_TRUE(info)
+                    << lfs::format_for_developer(
+                           info.error());
+                EXPECT_TRUE(info->dirty);
+                EXPECT_EQ(
+                    lifecycle->document_->scene_graph()
+                        .to_bytes(),
+                    before);
+            }
+
+            auto synchronized =
+                lifecycle
+                    ->synchronizeDocumentFromViewer();
+            ASSERT_TRUE(synchronized)
+                << lfs::format_for_developer(
+                       synchronized.error());
+            EXPECT_NE(
+                lifecycle->document_->scene_graph()
+                    .to_bytes(),
+                before);
+            const auto after = viewer.projectGetInfo();
+            ASSERT_TRUE(after)
+                << lfs::format_for_developer(
+                       after.error());
+            EXPECT_TRUE(after->dirty);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           BoundCheckpointIterationCacheSkipsHeaderWhenWarm) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "ckpt-iter-cache.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            auto* const trainer_manager =
+                viewer.getTrainerManager();
+            trainer_manager->setTrainerFromCheckpoint(
+                std::make_unique<lfs::training::Trainer>(
+                    scene),
+                0);
+            ASSERT_EQ(
+                trainer_manager->getCurrentIteration(),
+                0);
+
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_NE(lifecycle->document_, nullptr);
+            EXPECT_TRUE(
+                lifecycle
+                    ->isTrainingCheckpointStale());
+
+            const auto checkpoint_uuid =
+                lfs::core::generate_uuid_v4();
+            auto payload =
+                lfs::io::project::LazyChunkValue::
+                    from_owned(
+                        std::vector<std::byte>(
+                            16, std::byte{0}),
+                        checkpoint_uuid);
+            ASSERT_TRUE(payload)
+                << lfs::format_for_developer(
+                       payload.error());
+            ASSERT_TRUE(
+                lifecycle->document_->set_checkpoint(
+                    checkpoint_uuid,
+                    std::move(*payload)));
+            EXPECT_TRUE(
+                lifecycle
+                    ->isTrainingCheckpointStale());
+
+            lifecycle
+                ->cached_bound_checkpoint_iteration_ =
+                0;
+            EXPECT_FALSE(
+                lifecycle
+                    ->isTrainingCheckpointStale());
+            EXPECT_FALSE(
+                lifecycle
+                    ->isTrainingCheckpointStale());
+
+            lifecycle
+                ->cached_bound_checkpoint_iteration_
+                .reset();
+            EXPECT_TRUE(
+                lifecycle
+                    ->isTrainingCheckpointStale());
         }
     }
 

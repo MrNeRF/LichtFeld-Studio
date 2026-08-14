@@ -3159,6 +3159,18 @@ namespace lfs::vis {
         return project_lifecycle_->info();
     }
 
+    lfs::Result<ProjectWritePoll>
+    VisualizerImpl::projectPollWrite() {
+        if (!project_lifecycle_) {
+            return visualizerFailure<ProjectWritePoll>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->pollWrite();
+    }
+
     lfs::Result<ProjectMenuInfo>
     VisualizerImpl::projectGetMenuInfo() {
         if (!project_lifecycle_) {
