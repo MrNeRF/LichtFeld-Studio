@@ -158,7 +158,7 @@ namespace {
         fs::remove_all(root, ec);
     }
 
-    TEST(LocalizationPersistence, SavesReloadsAndFallsBackFromUnavailableLanguage) {
+    TEST(LocalizationSelection, DefaultsToEnglishAndFallsBackFromUnavailableLanguage) {
         const auto root = makeTempConfigRoot("language");
         const auto locales = root / "locales";
         fs::create_directories(locales);
@@ -178,27 +178,13 @@ namespace {
             ASSERT_TRUE(manager.setLanguage("de"));
             EXPECT_EQ(manager.getCurrentLanguage(), "de");
 
-            const auto preference = root / "config" / "LichtFeldStudio" / "language_preference";
-            ASSERT_TRUE(fs::exists(preference));
-            {
-                std::ifstream saved(preference);
-                std::string language;
-                ASSERT_TRUE(saved >> language);
-                EXPECT_EQ(language, "de");
-            }
-
             ASSERT_TRUE(manager.initialize(locales.string()));
-            EXPECT_EQ(manager.getCurrentLanguage(), "de");
+            EXPECT_EQ(manager.getCurrentLanguage(), "en");
 
             ASSERT_TRUE(fs::remove(locales / "de.json"));
             ASSERT_TRUE(manager.initialize(locales.string()));
             EXPECT_EQ(manager.getCurrentLanguage(), "en");
-            {
-                std::ifstream saved(preference);
-                std::string language;
-                ASSERT_TRUE(saved >> language);
-                EXPECT_EQ(language, "en");
-            }
+            EXPECT_FALSE(manager.setLanguage("de"));
         }
 
         std::error_code ec;

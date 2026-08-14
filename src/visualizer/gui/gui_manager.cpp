@@ -17,6 +17,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include "core/tensor.hpp"
+#include "core/user_paths.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/error_event_bridge.hpp"
@@ -73,6 +74,7 @@
 #include "visualizer_impl.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/window_manager.hpp"
+#include "window/window_state_utils.hpp"
 #include <OpenImageIO/imageio.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -92,6 +94,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -2995,6 +2998,57 @@ namespace lfs::vis::gui {
                 return nullptr;
             }
         }
+
+        std::optional<WindowManager::PersistentWindowState> loadWindowState() {
+            if (!automaticWindowStatePersistenceEnabled())
+                return std::nullopt;
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths) {
+                LOG_WARN("Unable to resolve window state path: {}", paths.error());
+                return std::nullopt;
+            }
+            std::error_code filesystem_error;
+            if (!std::filesystem::is_regular_file(paths->windowStateFile(), filesystem_error)) {
+                if (filesystem_error)
+                    LOG_WARN("Unable to inspect window state: {}", filesystem_error.message());
+                return std::nullopt;
+            }
+            try {
+                std::ifstream file(paths->windowStateFile());
+                const auto json = nlohmann::json::parse(file);
+                WindowManager::PersistentWindowState state;
+                state.x = json.value("x", state.x);
+                state.y = json.value("y", state.y);
+                state.width = json.value("width", state.width);
+                state.height = json.value("height", state.height);
+                state.maximized = json.value("maximized", state.maximized);
+                if (state.width <= 0 || state.height <= 0)
+                    return std::nullopt;
+                return state;
+            } catch (const std::exception& error) {
+                LOG_WARN("Unable to load window state: {}", error.what());
+                return std::nullopt;
+            }
+        }
+
+        void saveWindowState(const WindowManager::PersistentWindowState& state) {
+            if (!automaticWindowStatePersistenceEnabled())
+                return;
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths) {
+                LOG_WARN("Unable to resolve window state path: {}", paths.error());
+                return;
+            }
+            const nlohmann::json json = {
+                {"x", state.x},
+                {"y", state.y},
+                {"width", state.width},
+                {"height", state.height},
+                {"maximized", state.maximized},
+            };
+            if (const auto result = paths->writeWindowStateAtomically(json.dump(2) + '\n'); !result)
+                LOG_WARN("Unable to save window state: {}", result.error());
+        }
     } // namespace
 
     GuiManager::GuiManager(VisualizerImpl* viewer)
@@ -3004,6 +3058,10 @@ namespace lfs::vis::gui {
           async_tasks_(viewer) {
 
         panel_layout_.loadState();
+        if (const auto saved_window = loadWindowState()) {
+            if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr)
+                window_manager->setInitialWindowState(*saved_window);
+        }
         {
             LayoutState state;
             state.load();
@@ -3252,12 +3310,14 @@ namespace lfs::vis::gui {
         if (!loc.initialize(locale_path)) {
             LOG_WARN("Failed to initialize localization system, using default strings");
         } else {
-            const std::string saved_language = lfs::vis::loadLanguagePreference();
-            if (!saved_language.empty() && !loc.setLanguage(saved_language)) {
-                LOG_WARN("Saved language preference '{}' is unavailable; using {}",
-                         saved_language,
-                         loc.getCurrentLanguage());
-                lfs::vis::clearLanguagePreference();
+            if (!viewer_->options_.safe_mode) {
+                const std::string saved_language = lfs::vis::loadLanguagePreference();
+                if (!saved_language.empty() && !loc.setLanguage(saved_language)) {
+                    LOG_WARN("Saved language preference '{}' is unavailable; using {}",
+                             saved_language,
+                             loc.getCurrentLanguage());
+                    lfs::vis::clearLanguagePreference();
+                }
             }
             LOG_INFO("Localization initialized with language: {}", loc.getCurrentLanguageName());
         }
@@ -3287,6 +3347,13 @@ namespace lfs::vis::gui {
         }
 
         applyDefaultStyle();
+        if (auto* const input_controller = viewer_->getInputController()) {
+            if (const auto mode = InputController::cameraNavigationModeFromName(
+                    lfs::vis::loadCameraNavigationPreference())) {
+                input_controller->setCameraNavigationMode(*mode);
+            }
+            input_controller->setCameraViewSnapEnabled(lfs::vis::loadCameraViewSnapPreference());
+        }
         rebuildFonts(current_ui_scale_);
 
         initMenuBar();
@@ -3366,7 +3433,7 @@ namespace lfs::vis::gui {
         };
         rml_viewport_overlay_.init(&rmlui_manager_);
         rml_menu_bar_.init(&rmlui_manager_);
-        rml_status_bar_.init(&rmlui_manager_);
+        rml_status_bar_.init(&rmlui_manager_, viewer_->options_.safe_mode);
         if (global_context_menu_)
             global_context_menu_->preload();
         if (rml_modal_overlay_)
@@ -3807,6 +3874,9 @@ namespace lfs::vis::gui {
         if (dev_resource_watch_.scan_future.valid())
             dev_resource_watch_.scan_future.wait();
 
+        if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr)
+            saveWindowState(window_manager->persistentWindowState());
+
         if (video_widget_)
             video_widget_->shutdown();
 
@@ -3937,10 +4007,6 @@ namespace lfs::vis::gui {
         reg_panel("native.pie_menu", "Pie Menu",
                   make_panel(PieMenuPanel(&gizmo_manager_)),
                   PanelSpace::ViewportOverlay, 950);
-
-        reg_panel("native.startup_overlay", "Startup Overlay",
-                  make_panel(StartupOverlayPanel(&startup_overlay_, &drag_drop_hovering_)),
-                  PanelSpace::ViewportOverlay, 0);
     }
 
     VulkanViewportPassParams GuiManager::buildVulkanViewportParams(const VkExtent2D extent,
@@ -4797,6 +4863,10 @@ namespace lfs::vis::gui {
         draw_ctx.viewport = &viewport_layout_;
         draw_ctx.scene = scene;
         draw_ctx.ui_hidden = ui_hidden_;
+        draw_ctx.screen_bounds = PanelDrawBounds{
+            .width = static_cast<float>(sdl_input.window_w),
+            .height = static_cast<float>(sdl_input.window_h),
+        };
         draw_ctx.frame_serial = ++panel_frame_serial_;
         draw_ctx.scene_generation = python::get_scene_generation();
         draw_ctx.suppress_non_native_panels = startup_plugin_preload_blocking_python;
@@ -5617,10 +5687,21 @@ namespace lfs::vis::gui {
                                            panel_input.screen_h,
                                            panel_input.screen_x,
                                            panel_input.screen_y,
-                                           viewport_layout_.pos.x,
-                                           viewport_layout_.pos.y,
-                                           viewport_layout_.size.x,
-                                           viewport_layout_.size.y);
+                                           panel_input.screen_x,
+                                           panel_input.screen_y,
+                                           static_cast<float>(panel_input.screen_w),
+                                           static_cast<float>(panel_input.screen_h));
+            }
+            if (startup_overlay_.isVisible()) {
+                LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.startup_overlay", 0.25);
+                startup_overlay_.render({
+                                            .pos = {0.0f, 0.0f},
+                                            .size = {
+                                                static_cast<float>(panel_input.screen_w),
+                                                static_cast<float>(panel_input.screen_h),
+                                            },
+                                        },
+                                        drag_drop_hovering_);
             }
             if (rml_modal_overlay_->hasPendingRenderWork()) {
                 LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.modal_overlay", 0.25);
@@ -6836,6 +6917,49 @@ namespace lfs::vis::gui {
         if (!overlay_live) {
             dismissExitConfirmation();
         }
+    }
+
+    void GuiManager::openPreferences() {
+        PanelRegistry::instance().set_panel_enabled("lfs.preferences", true);
+    }
+
+    std::expected<void, std::string> GuiManager::resetLayout() {
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (!paths)
+            return std::unexpected(paths.error());
+        if (const auto backup = paths->resetLayout(); !backup)
+            return std::unexpected(backup.error());
+
+        panel_layout_.applyProjectState(PanelLayoutProjectState{});
+        auto& registry = PanelRegistry::instance();
+        registry.reset_project_state();
+        registry.apply_panel_payloads({});
+        resetSceneTreeChrome();
+
+        window_states_.clear();
+        window_states_["scene_panel"] = true;
+        window_states_["system_console"] = false;
+        window_states_["training_tab"] = false;
+        window_states_["export_dialog"] = false;
+        window_states_["python_console"] = false;
+        show_vram_hud_ = false;
+        perf_hud_expanded_ = false;
+        return {};
+    }
+
+    std::expected<void, std::string> GuiManager::resetWindowState() {
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (!paths)
+            return std::unexpected(paths.error());
+        if (const auto backup = paths->resetWindowState(); !backup)
+            return std::unexpected(backup.error());
+
+        auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
+        if (!window_manager)
+            return std::unexpected(std::string(LOC("preferences.window_manager_unavailable")));
+        if (!window_manager->resetPersistentWindowState())
+            return std::unexpected(std::string(LOC("preferences.window_state_reset_failed")));
+        return {};
     }
 
     void GuiManager::dismissExitConfirmation() {

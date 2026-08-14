@@ -104,6 +104,7 @@ namespace lfs::vis::gui {
         bool is_training = false;
         bool suppress_non_native_panels = false;
         std::optional<PanelDrawBounds> bounds;
+        std::optional<PanelDrawBounds> screen_bounds;
     };
 
     struct FloatingPanelAnchor {

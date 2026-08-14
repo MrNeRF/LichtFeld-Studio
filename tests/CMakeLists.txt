@@ -341,6 +341,7 @@ set(TEST_FILES
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp
     test_user_paths.cpp
+    test_window_state.cpp
     test_crash_handler.cpp
     test_gpu_teardown_order.cpp
     test_logger.cpp

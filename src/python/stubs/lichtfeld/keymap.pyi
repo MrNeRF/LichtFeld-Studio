@@ -77,6 +77,8 @@ class Action(enum.Enum):
 
     TOGGLE_PERFORMANCE_HUD = 77
 
+    OPEN_PREFERENCES = 78
+
     PASTE_SELECTION = 33
 
     DEPTH_ADJUST_FAR = 34

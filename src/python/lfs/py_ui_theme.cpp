@@ -114,6 +114,14 @@ namespace lfs::python {
         m.def("set_theme_vignette_enabled", &lfs::vis::setThemeVignetteEnabled, "Set theme vignette enabled");
         m.def("set_theme_vignette_intensity", &lfs::vis::setThemeVignetteIntensity, "Set theme vignette intensity");
         m.def("set_theme_vignette_style", &lfs::vis::setThemeVignetteStyle, "Set vignette intensity, radius, and softness");
+        m.def("remember_camera_navigation", &lfs::vis::rememberCameraNavigationPreference,
+              "Return whether camera navigation is persisted between launches");
+        m.def("set_remember_camera_navigation", &lfs::vis::setRememberCameraNavigationPreference,
+              nb::arg("enabled"), "Enable or disable camera navigation persistence");
+        m.def("remember_camera_view_snap", &lfs::vis::rememberCameraViewSnapPreference,
+              "Return whether camera view snap is persisted between launches");
+        m.def("set_remember_camera_view_snap", &lfs::vis::setRememberCameraViewSnapPreference,
+              nb::arg("enabled"), "Enable or disable camera view snap persistence");
     }
 
 } // namespace lfs::python

@@ -132,6 +132,7 @@ namespace lfs::vis::input {
         SELECT_MODE_SPHERE,
         CUT_SELECTION,
         TOGGLE_PERFORMANCE_HUD,
+        OPEN_PREFERENCES,
 
     };
 

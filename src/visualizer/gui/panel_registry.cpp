@@ -135,6 +135,22 @@ namespace lfs::vis::gui {
         }
 
         FloatingPanelAnchor floatingAnchorRect(const PanelDrawContext& ctx) {
+            // Floating panels may overlap docked panels. Constraining them to
+            // the viewport makes their usable area shrink with the docks.
+            if (ctx.screen_bounds && ctx.screen_bounds->valid()) {
+                const auto& screen = *ctx.screen_bounds;
+                const float screen_bottom = screen.y + screen.height;
+                const float top = ctx.viewport && ctx.viewport->size.y > 0.0f
+                                      ? std::max(screen.y, ctx.viewport->pos.y)
+                                      : screen.y;
+                return {
+                    .x = screen.x,
+                    .y = top,
+                    .width = screen.width,
+                    .height = std::max(0.0f, screen_bottom - top),
+                };
+            }
+
             if (ctx.viewport && ctx.viewport->size.x > 0.0f && ctx.viewport->size.y > 0.0f) {
                 return {
                     .x = ctx.viewport->pos.x,

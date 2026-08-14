@@ -60,7 +60,7 @@ namespace lfs::vis::gui {
 
     class RmlStatusBar {
     public:
-        void init(RmlUIManager* mgr);
+        void init(RmlUIManager* mgr, bool safe_mode);
         // Thread-safe one-line transient status text (ErrorBus StatusOnly
         // surface). Picked up by the next periodic content refresh; auto-clears.
         void postStatusMessage(std::string text, ErrorNoticeLevel level);
@@ -154,6 +154,8 @@ namespace lfs::vis::gui {
         SaveStepInteractionState save_step_interaction_;
 
         struct ModelState {
+            bool safe_mode = false;
+            std::string safe_mode_text;
             std::string mode_text;
             std::string mode_color;
             bool show_training = false;

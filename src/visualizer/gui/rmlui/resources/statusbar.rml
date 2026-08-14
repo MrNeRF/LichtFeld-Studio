@@ -2,8 +2,9 @@
 <head>
     <link type="text/rcss" href="statusbar.rcss"/>
 </head>
-<body id="body" data-model="status_bar">
+<body id="body" data-model="status_bar" data-class-safe-mode="safe_mode">
     <div id="status-left">
+        <span id="safe-mode-badge" class="hidden" data-class-hidden="!safe_mode" data-attr-title="safe_mode_text">{{ safe_mode_text }}</span>
         <span id="mode-text" data-style-color="mode_color">{{ mode_text }}</span>
         <div id="training-section" class="hidden" data-class-hidden="!show_training">
             <span class="separator section-sep">|</span>

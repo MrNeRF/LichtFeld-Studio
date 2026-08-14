@@ -10,6 +10,7 @@
 #include "internal/resource_paths.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -1052,9 +1053,13 @@ namespace lfs::vis {
     }
 
     namespace {
-        std::filesystem::path getThemeConfigDir() {
+        std::optional<std::filesystem::path> getThemePreferencesPath() {
             const auto paths = lfs::core::UserPaths::resolve();
-            return paths ? paths->configDir() : std::filesystem::current_path() / "config";
+            if (!paths) {
+                LOG_WARN("Unable to resolve user settings path: {}; theme preferences are disabled", paths.error());
+                return std::nullopt;
+            }
+            return paths->preferencesFile();
         }
 
         [[nodiscard]] bool preferencesDisabled() {
@@ -1064,7 +1069,10 @@ namespace lfs::vis {
         [[nodiscard]] nlohmann::json loadPreferences() {
             if (preferencesDisabled())
                 return nlohmann::json::object();
-            std::ifstream file(getThemeConfigDir() / "preferences.json");
+            const auto path = getThemePreferencesPath();
+            if (!path)
+                return nlohmann::json::object();
+            std::ifstream file(*path);
             nlohmann::json preferences;
             if (file) {
                 file >> preferences;
@@ -1075,25 +1083,14 @@ namespace lfs::vis {
         void savePreferences(nlohmann::json preferences) {
             if (preferencesDisabled())
                 return;
-            const auto path = getThemeConfigDir() / "preferences.json";
-            std::filesystem::create_directories(path.parent_path());
-            preferences["schema_version"] = 1;
-            std::ofstream file(path);
-            if (file)
-                file << preferences.dump(2);
-        }
-
-        [[nodiscard]] std::optional<std::string> loadLegacyPreference(const char* const filename) {
             const auto paths = lfs::core::UserPaths::resolve();
-            if (!paths)
-                return std::nullopt;
-            for (const auto& legacy_dir : paths->legacyConfigDirs()) {
-                std::ifstream file(legacy_dir / filename);
-                std::string value;
-                if (file >> value)
-                    return value;
+            if (!paths) {
+                LOG_WARN("Unable to resolve user settings path: {}; theme preferences are disabled", paths.error());
+                return;
             }
-            return std::nullopt;
+            preferences["schema_version"] = 1;
+            if (const auto result = paths->writePreferencesAtomically(preferences.dump(2) + '\n'); !result)
+                LOG_WARN("Unable to save theme preferences: {}", result.error());
         }
     } // namespace
 
@@ -1117,11 +1114,6 @@ namespace lfs::vis {
             const std::string normalized = normalizeThemeIdImpl(pref);
             if (isKnownThemePresetId(normalized))
                 return normalized;
-            if (const auto legacy = loadLegacyPreference("theme_preference")) {
-                const auto legacy_normalized = normalizeThemeIdImpl(*legacy);
-                if (isKnownThemePresetId(legacy_normalized))
-                    return legacy_normalized;
-            }
         } catch (...) {
             // Silently ignore - not critical
         }
@@ -1149,18 +1141,13 @@ namespace lfs::vis {
                 const auto& ui_scale = preferences["ui_scale"];
                 if (ui_scale.is_string() && ui_scale.get<std::string>() == "auto")
                     return 0.0f;
-                // Compatibility with the short-lived array representation from
-                // the initial preferences.json migration.
-                if (ui_scale.is_array() && ui_scale.size() == 1 &&
-                    ui_scale.front().is_string() && ui_scale.front().get<std::string>() == "auto") {
-                    return 0.0f;
-                }
                 // Compatibility with preferences.json written by earlier builds.
-                if (ui_scale.is_number())
-                    return ui_scale.get<float>();
+                if (ui_scale.is_number()) {
+                    const float scale = ui_scale.get<float>();
+                    if (std::isfinite(scale) && scale >= 1.0f && scale <= 4.0f)
+                        return scale;
+                }
             }
-            if (const auto legacy = loadLegacyPreference("ui_scale"))
-                return std::stof(*legacy);
         } catch (const std::exception& e) {
             LOG_WARN("Failed to load UI scale preference: {}", e.what());
         }
@@ -1199,6 +1186,104 @@ namespace lfs::vis {
             savePreferences(std::move(preferences));
         } catch (const std::exception& e) {
             LOG_WARN("Failed to clear language preference: {}", e.what());
+        }
+    }
+
+    void saveCameraNavigationPreference(const std::string& mode) {
+        try {
+            if (!rememberCameraNavigationPreference())
+                return;
+            const bool known_mode = mode == "orbit" || mode == "trackball" ||
+                                    mode == "fpv" || mode == "drone";
+            auto preferences = loadPreferences();
+            preferences["camera_navigation_mode"] = known_mode ? mode : "orbit";
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save camera navigation preference: {}", e.what());
+        }
+    }
+
+    std::string loadCameraNavigationPreference() {
+        try {
+            if (preferencesDisabled() || !rememberCameraNavigationPreference())
+                return "orbit";
+            const auto preferences = loadPreferences();
+            const std::string mode = preferences.value("camera_navigation_mode", "orbit");
+            if (mode == "orbit" || mode == "trackball" || mode == "fpv" || mode == "drone")
+                return mode;
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load camera navigation preference: {}", e.what());
+        }
+        return "orbit";
+    }
+
+    void setRememberCameraNavigationPreference(const bool enabled) {
+        try {
+            auto preferences = loadPreferences();
+            preferences["remember_camera_navigation"] = enabled;
+            if (!enabled)
+                preferences.erase("camera_navigation_mode");
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save camera navigation persistence preference: {}", e.what());
+        }
+    }
+
+    bool rememberCameraNavigationPreference() {
+        try {
+            if (preferencesDisabled())
+                return false;
+            return loadPreferences().value("remember_camera_navigation", false);
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load camera navigation persistence preference: {}", e.what());
+            return false;
+        }
+    }
+
+    void saveCameraViewSnapPreference(const bool enabled) {
+        try {
+            if (!rememberCameraViewSnapPreference())
+                return;
+            auto preferences = loadPreferences();
+            preferences["camera_view_snap"] = enabled;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save camera view snap preference: {}", e.what());
+        }
+    }
+
+    bool loadCameraViewSnapPreference() {
+        try {
+            if (preferencesDisabled() || !rememberCameraViewSnapPreference())
+                return false;
+            const auto preferences = loadPreferences();
+            return preferences.value("camera_view_snap", false);
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load camera view snap preference: {}", e.what());
+            return false;
+        }
+    }
+
+    void setRememberCameraViewSnapPreference(const bool enabled) {
+        try {
+            auto preferences = loadPreferences();
+            preferences["remember_camera_view_snap"] = enabled;
+            if (!enabled)
+                preferences.erase("camera_view_snap");
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save camera view snap persistence preference: {}", e.what());
+        }
+    }
+
+    bool rememberCameraViewSnapPreference() {
+        try {
+            if (preferencesDisabled())
+                return false;
+            return loadPreferences().value("remember_camera_view_snap", false);
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load camera view snap persistence preference: {}", e.what());
+            return false;
         }
     }
 

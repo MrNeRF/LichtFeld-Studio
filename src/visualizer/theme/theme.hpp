@@ -234,6 +234,17 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API std::string loadLanguagePreference();
     LFS_VIS_API void clearLanguagePreference();
 
+    // Camera-navigation preferences are user interface choices, shared by the
+    // Preferences panel, the toolbar, and the Python API.
+    LFS_VIS_API void saveCameraNavigationPreference(const std::string& mode);
+    [[nodiscard]] LFS_VIS_API std::string loadCameraNavigationPreference();
+    LFS_VIS_API void setRememberCameraNavigationPreference(bool enabled);
+    [[nodiscard]] LFS_VIS_API bool rememberCameraNavigationPreference();
+    LFS_VIS_API void saveCameraViewSnapPreference(bool enabled);
+    [[nodiscard]] LFS_VIS_API bool loadCameraViewSnapPreference();
+    LFS_VIS_API void setRememberCameraViewSnapPreference(bool enabled);
+    [[nodiscard]] LFS_VIS_API bool rememberCameraViewSnapPreference();
+
     // Color utilities
     [[nodiscard]] LFS_VIS_API ThemeColor lighten(const ThemeColor& color, float amount);
     [[nodiscard]] LFS_VIS_API ThemeColor darken(const ThemeColor& color, float amount);

@@ -9,6 +9,7 @@
 #include "python_panel_adapter.hpp"
 #include "rml_im_mode_panel_adapter.hpp"
 #include "rml_python_panel_adapter.hpp"
+#include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui/rmlui/rml_theme.hpp"
 
@@ -618,6 +619,26 @@ namespace lfs::python {
                 gui::PanelRegistry::instance().set_panel_enabled(panel_id, enabled);
             },
             nb::arg("panel_id"), nb::arg("enabled"), "Enable or disable a panel by id");
+
+        m.def(
+            "reset_layout", []() -> std::string {
+                auto* const gui_manager = get_gui_manager();
+                if (!gui_manager)
+                    return "GUI manager is unavailable";
+                const auto result = gui_manager->resetLayout();
+                return result ? std::string{} : result.error();
+            },
+            "Reset the saved UI layout and apply the default dock arrangement immediately.");
+
+        m.def(
+            "reset_window_state", []() -> std::string {
+                auto* const gui_manager = get_gui_manager();
+                if (!gui_manager)
+                    return "GUI manager is unavailable";
+                const auto result = gui_manager->resetWindowState();
+                return result ? std::string{} : result.error();
+            },
+            "Reset persisted window geometry and apply the default geometry immediately.");
 
         m.def(
             "is_panel_enabled", [](const std::string& panel_id) {

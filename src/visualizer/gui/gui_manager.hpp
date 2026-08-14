@@ -36,6 +36,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <future>
 #include <limits>
@@ -146,6 +147,9 @@ namespace lfs::vis {
 
             void requestExitConfirmation(
                 bool training_in_progress = false);
+            void openPreferences();
+            [[nodiscard]] std::expected<void, std::string> resetLayout();
+            [[nodiscard]] std::expected<void, std::string> resetWindowState();
             void dismissExitConfirmation();
             void noteExitPopupMirror(bool open);
             bool isExitConfirmationPending() const;

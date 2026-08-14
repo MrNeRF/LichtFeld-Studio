@@ -19,6 +19,7 @@
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/rendering_types.hpp"
+#include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 #include "window/window_manager.hpp"
 
@@ -931,6 +932,7 @@ namespace lfs::vis::gui {
                 return;
             if (const auto mode = lfs::vis::InputController::cameraNavigationModeFromName(value)) {
                 ic->setCameraNavigationMode(*mode);
+                lfs::vis::saveCameraNavigationPreference(value);
             }
         } else if (action == "toggle_projection") {
             if (!rm)
@@ -954,6 +956,8 @@ namespace lfs::vis::gui {
         } else if (action == "toggle_camera_view_snap") {
             if (auto* ic = lfs::vis::InputController::instance())
                 ic->setCameraViewSnapEnabled(!ic->cameraViewSnapEnabled());
+            if (const auto* ic = lfs::vis::InputController::instance())
+                lfs::vis::saveCameraViewSnapPreference(ic->cameraViewSnapEnabled());
         } else if (action == "toggle_independent_split_view") {
             if (auto* ic = lfs::vis::InputController::instance())
                 ic->toggleIndependentSplitView();
@@ -972,6 +976,7 @@ namespace lfs::vis::gui {
             }
         }
 
+        rebuildToolbarButtons();
         render_needed_ = true;
     }
 

@@ -9,6 +9,7 @@
 #include "core/checkpoint_format.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_version.hpp"
+#include "core/environment.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
@@ -41,8 +42,8 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "sequencer/timeline.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
-#include "visualizer/gui/panels/python_scripts_panel.hpp"
 #include "visualizer/gui/layout_state.hpp"
+#include "visualizer/gui/panels/python_scripts_panel.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include "visualizer/input/input_bindings.hpp"
@@ -1059,12 +1060,14 @@ namespace lfs::app {
         }
 
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
-            python::set_user_plugin_loading_enabled(!params->safe_mode);
-            vis::gui::LayoutState::setPersistenceEnabled(!params->safe_mode);
-            vis::input::InputBindings::setPersistenceEnabled(!params->safe_mode);
+            const bool safe_mode = params->safe_mode ||
+                                   lfs::core::environment::flag("LFS_SAFE_MODE", false);
+            python::set_user_plugin_loading_enabled(!safe_mode);
+            vis::gui::LayoutState::setPersistenceEnabled(!safe_mode);
+            vis::input::InputBindings::setPersistenceEnabled(!safe_mode);
             if (const auto paths = lfs::core::UserPaths::resolve()) {
                 const auto reset_file = [&paths](const bool requested, const char* const label,
-                                                  const auto& reset) {
+                                                 const auto& reset) {
                     if (!requested)
                         return;
                     const auto result = reset();
@@ -1077,29 +1080,21 @@ namespace lfs::app {
                         LOG_INFO("Reset {}. No existing settings file required a backup", label);
                     }
                 };
-                reset_file(params->reset_preferences, "preferences", [&paths] { return paths->resetPreferences(); });
-                reset_file(params->reset_layout, "layout", [&paths] { return paths->resetLayout(); });
+                const bool reset_preferences = params->reset_preferences || params->reset_all_settings;
+                const bool reset_layout = params->reset_layout || params->reset_all_settings;
+                reset_file(reset_preferences, "preferences", [&paths] { return paths->resetPreferences(); });
+                reset_file(reset_layout, "layout", [&paths] { return paths->resetLayout(); });
+                reset_file(params->reset_all_settings, "window", [&paths] { return paths->resetWindowState(); });
 
-                if (!params->safe_mode && !params->reset_layout) {
-                    const auto migration = paths->migrateLegacyGuiSettings();
-                    if (!migration) {
-                        LOG_WARN("Legacy GUI settings migration skipped: {}", migration.error());
-                    } else if (!migration->empty()) {
-                        LOG_INFO("Migrated {} legacy GUI settings file(s) into {}",
-                                 migration->size(), lfs::core::path_to_utf8(paths->configDir()));
-                    }
-                } else if (params->reset_layout) {
-                    LOG_INFO("Legacy layout migration skipped because --reset-layout was requested");
-                }
             } else {
                 LOG_WARN("Unable to resolve user settings path: {}", paths.error());
             }
 
-            if (params->safe_mode) {
+            if (safe_mode) {
                 LOG_WARN("Safe mode active: user plugin loading is disabled for this process");
             }
 
-            const std::string window_title = params->safe_mode
+            const std::string window_title = safe_mode
                                                  ? "LichtFeld Studio (Safe Mode)"
                                                  : "LichtFeld Studio";
 
@@ -1141,6 +1136,7 @@ namespace lfs::app {
                 .height = 720,
                 .antialiasing = false,
                 .show_startup_overlay = !disable_splash,
+                .safe_mode = safe_mode,
                 .gut = params->optimization.gut,
                 .graphics_backend = graphics_backend,
                 .startup_project = startup_project,
