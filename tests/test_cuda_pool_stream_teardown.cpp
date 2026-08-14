@@ -4,6 +4,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/internal/stream_lifetime.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -43,7 +44,7 @@ TEST_F(CudaPoolStreamTeardownTest,
     cudaStream_t retired = nullptr;
     ASSERT_EQ(cudaStreamCreateWithFlags(&retired, cudaStreamNonBlocking), cudaSuccess);
     pool.release_stream(retired);
-    EXPECT_TRUE(pool.is_stream_severed(retired));
+    EXPECT_TRUE(is_stream_retired(retired));
     ASSERT_EQ(cudaStreamDestroy(retired), cudaSuccess);
 
     cudaStream_t recycled = nullptr;
@@ -51,7 +52,7 @@ TEST_F(CudaPoolStreamTeardownTest,
     auto tensor = Tensor::empty({1 << 20}, Device::CUDA);
     prepare_inputs_for_stream({&tensor}, recycled);
 
-    EXPECT_FALSE(pool.is_stream_severed(recycled));
+    EXPECT_FALSE(is_stream_retired(recycled));
     tensor = Tensor{};
 
     pool.release_stream(recycled);

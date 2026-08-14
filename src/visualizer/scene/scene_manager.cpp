@@ -41,7 +41,6 @@
 #include "window/vulkan_context.hpp"
 #include "window/window_manager.hpp"
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <cuda_runtime.h>
 #include <format>
@@ -172,6 +171,15 @@ namespace lfs::vis {
             return name;
         }
 
+        // Codes and bounds are one declared representation; install before degree validation.
+        void installShNValueBounds(lfs::core::SplatData& dst, lfs::core::Tensor bounds) {
+            dst.shN_value_bounds() = std::move(bounds);
+            auto& shN = dst.shN_raw();
+            if (shN.is_valid() && shN.shape().rank() > 0 && shN.capacity() < shN.shape()[0]) {
+                shN.reserve(shN.shape()[0]);
+            }
+        }
+
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData> cloneSplatDataToCpu(
             const lfs::core::SplatData& src) {
             auto shN = src.clone_shN_storage();
@@ -189,51 +197,10 @@ namespace lfs::vis {
                 src.opacity_raw().cpu(),
                 src.get_scene_scale(),
                 lfs::core::SplatData::ShNLayout::Swizzled);
-            if (src.shN_value_bounds().is_valid())
-                result->shN_value_bounds() = src.shN_value_bounds().cpu();
+            if (src.shN_value_quantized())
+                installShNValueBounds(*result, src.shN_value_bounds().cpu());
             result->set_active_sh_degree(src.get_active_sh_degree());
             return result;
-        }
-
-        void detachSplatDataFromTrainerStreams(lfs::core::SplatData& model) {
-            const std::array tensors{
-                &model.means_raw(),
-                &model.sh0_raw(),
-                &model.shN_raw(),
-                &model.scaling_raw(),
-                &model.rotation_raw(),
-                &model.opacity_raw(),
-                &model.deleted(),
-                &model._densification_info,
-            };
-
-            std::array<cudaStream_t, tensors.size()> unique_streams{};
-            std::size_t unique_stream_count = 0;
-            for (const lfs::core::Tensor* tensor : tensors) {
-                if (!tensor->is_valid() || tensor->device() != lfs::core::Device::CUDA) {
-                    continue;
-                }
-                const cudaStream_t stream = tensor->stream();
-                if (stream != nullptr &&
-                    std::find(unique_streams.begin(),
-                              unique_streams.begin() + unique_stream_count,
-                              stream) == unique_streams.begin() + unique_stream_count) {
-                    unique_streams[unique_stream_count++] = stream;
-                }
-            }
-            for (std::size_t i = 0; i < unique_stream_count; ++i) {
-                const cudaError_t sync_status = cudaStreamSynchronize(unique_streams[i]);
-                if (sync_status != cudaSuccess) {
-                    LOG_WARN("CUDA stream sync before edit-mode trainer clear failed: {}",
-                             cudaGetErrorString(sync_status));
-                }
-            }
-
-            for (lfs::core::Tensor* tensor : tensors) {
-                if (tensor->is_valid() && tensor->device() == lfs::core::Device::CUDA) {
-                    tensor->set_stream(nullptr);
-                }
-            }
         }
 
         [[nodiscard]] bool prepareSplatDataForEditMode(lfs::core::SplatData& model) {
@@ -248,7 +215,7 @@ namespace lfs::vis {
                     model.refresh_deleted_count();
                 }
                 model._densification_info = lfs::core::Tensor{};
-                detachSplatDataFromTrainerStreams(model);
+                model.detach_from_streams();
             } catch (const std::exception& e) {
                 LOG_ERROR("Failed to prepare splat data for edit mode: {}", e.what());
                 return false;
@@ -4761,6 +4728,8 @@ namespace lfs::vis {
             src.scaling_raw().cuda(), src.rotation_raw().cuda(), src.opacity_raw().cuda(),
             src.get_scene_scale(),
             lfs::core::SplatData::ShNLayout::Swizzled);
+        if (src.shN_value_quantized())
+            installShNValueBounds(*data, src.shN_value_bounds().cuda());
         data->set_active_sh_degree(src.get_active_sh_degree());
 
         const std::string name = makeUniqueCounterNodeName(scene_, "Selection", clipboard_counter_);
@@ -4911,6 +4880,8 @@ namespace lfs::vis {
                     entry.data->scaling_raw().cuda(), entry.data->rotation_raw().cuda(), entry.data->opacity_raw().cuda(),
                     entry.data->get_scene_scale(),
                     lfs::core::SplatData::ShNLayout::Swizzled);
+                if (entry.data->shN_value_quantized())
+                    installShNValueBounds(*paste_data, entry.data->shN_value_bounds().cuda());
                 paste_data->set_active_sh_degree(entry.data->get_active_sh_degree());
 
                 if (auto allocator = makeExternalSplatAllocator()) {

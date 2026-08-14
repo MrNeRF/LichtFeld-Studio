@@ -17,30 +17,6 @@ namespace lfs::vis::gui {
 
     namespace {
 
-        std::unique_ptr<lfs::core::SplatData> cloneSplatData(const lfs::core::SplatData& src) {
-            auto cloned = std::make_unique<lfs::core::SplatData>(
-                src.get_max_sh_degree(),
-                src.means_raw().clone(),
-                src.sh0_raw().clone(),
-                src.clone_shN_storage(),
-                src.scaling_raw().clone(),
-                src.rotation_raw().clone(),
-                src.opacity_raw().clone(),
-                src.get_scene_scale(),
-                lfs::core::SplatData::ShNLayout::Swizzled);
-            if (src.shN_value_bounds().is_valid())
-                cloned->shN_value_bounds() = src.shN_value_bounds().clone();
-            cloned->set_active_sh_degree(src.get_active_sh_degree());
-            cloned->set_max_sh_degree(src.get_max_sh_degree());
-            if (src.has_deleted_mask()) {
-                cloned->deleted() = src.deleted().clone();
-            }
-            if (src._densification_info.is_valid()) {
-                cloned->_densification_info = src._densification_info.clone();
-            }
-            return cloned;
-        }
-
         std::shared_ptr<lfs::core::PointCloud> clonePointCloud(const lfs::core::PointCloud& src) {
             auto cloned = std::make_shared<lfs::core::PointCloud>();
             cloned->means = src.means.is_valid() ? src.means.clone() : src.means;
@@ -100,7 +76,7 @@ namespace lfs::vis::gui {
 
         if (const auto* const model = scene_manager.getModelForRendering();
             model && model->size() > 0) {
-            snapshot.combined_model = std::shared_ptr<lfs::core::SplatData>(cloneSplatData(*model).release());
+            snapshot.combined_model = std::make_shared<lfs::core::SplatData>(model->clone());
             if (auto allocator = lfs::vis::makeViewerSplatTensorAllocator()) {
                 if (auto migrated = lfs::io::migrateSplatTensorsToAllocator(*snapshot.combined_model, allocator);
                     !migrated) {

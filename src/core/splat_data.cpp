@@ -672,6 +672,40 @@ namespace lfs::core {
 
     SplatData::~SplatData() = default;
 
+    SplatData SplatData::clone() const {
+        // Tensor::clone() copies neither the name nor the row capacity.
+        const auto cloned = [](const Tensor& src, const char* name = nullptr) {
+            if (!src.is_valid())
+                return Tensor{};
+            Tensor t = src.clone();
+            if (name)
+                t.set_name(name);
+            return t;
+        };
+
+        SplatData copy;
+        copy._max_sh_degree = _max_sh_degree;
+        copy._active_sh_degree = _active_sh_degree;
+        copy._scene_scale = _scene_scale;
+        copy._means = cloned(_means, "splat.positions");
+        copy._sh0 = cloned(_sh0, "splat.sh0");
+        copy._shN = cloned(_shN, "splat.shN");
+        copy._shN_value_bounds = cloned(_shN_value_bounds, "splat.shN_value_bounds");
+        copy._scaling = cloned(_scaling, "splat.scaling");
+        copy._rotation = cloned(_rotation, "splat.rotation");
+        copy._opacity = cloned(_opacity, "splat.opacity");
+        copy._densification_info = cloned(_densification_info, "splat.densification_info");
+        copy._deleted = cloned(_deleted, "splat.deleted_mask");
+        copy._deleted_count.store(_deleted_count.load(std::memory_order_relaxed),
+                                  std::memory_order_relaxed);
+        // q16 degree validation requires shN row capacity >= its reserved row count.
+        if (copy._shN.is_valid() && copy._shN.shape().rank() > 0 &&
+            copy._shN.capacity() < copy._shN.shape()[0]) {
+            copy._shN.reserve(copy._shN.shape()[0]);
+        }
+        return copy;
+    }
+
     // ========== MOVE SEMANTICS ==========
 
     SplatData::SplatData(SplatData&& other) noexcept
@@ -798,6 +832,34 @@ namespace lfs::core {
             shN = shN.to(_sh0.device());
         }
         return _sh0.cat(shN, 1);
+    }
+
+    void SplatData::detach_from_streams() {
+        Tensor* const tensors[] = {
+            &_means,
+            &_sh0,
+            &_shN,
+            &_shN_value_bounds,
+            &_scaling,
+            &_rotation,
+            &_opacity,
+            &_deleted,
+            &_densification_info,
+        };
+        for (Tensor* tensor : tensors) {
+            if (!tensor->is_valid() || tensor->device() != Device::CUDA) {
+                continue;
+            }
+            if (const cudaStream_t stream = tensor->stream()) {
+                const cudaError_t sync_status = cudaStreamSynchronize(stream);
+                if (sync_status != cudaSuccess) {
+                    LOG_WARN("CUDA stream sync in detach_from_streams failed: {}",
+                             cudaGetErrorString(sync_status));
+                    (void)cudaGetLastError();
+                }
+            }
+            tensor->set_stream(nullptr);
+        }
     }
 
     Tensor SplatData::shN_canonical() const {

@@ -275,6 +275,51 @@ TEST_F(ColmapImageLayoutTest, ResolvesNestedImagesByBasename) {
     EXPECT_TRUE(fs::equivalent(cameras[0]->mask_path(), nested_mask));
 }
 
+TEST_F(ColmapImageLayoutTest, AssociatesMaskPathWhenMaskLoadingDisabled) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path image_path = dataset_dir / "images" / "frame_0001.png";
+    const fs::path mask_path = dataset_dir / "masks" / "frame_0001.png";
+
+    write_minimal_colmap_text_dataset(dataset_dir, "frame_0001.png");
+    write_png(image_path);
+    write_png(mask_path);
+
+    auto result = lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    const auto& cameras = std::get<0>(result->value);
+
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_TRUE(cameras[0]->has_mask());
+    EXPECT_TRUE(fs::equivalent(cameras[0]->mask_path(), mask_path));
+}
+
+TEST_F(ColmapImageLayoutTest, LoadsDatasetWithPartialMaskCoverage) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path image_1 = dataset_dir / "images" / "frame_0001.png";
+    const fs::path image_2 = dataset_dir / "images" / "frame_0002.png";
+    const fs::path mask_1 = dataset_dir / "masks" / "frame_0001.png";
+
+    write_minimal_colmap_text_dataset(
+        dataset_dir,
+        std::vector<std::string>{"frame_0001.png", "frame_0002.png"});
+    write_png(image_1);
+    write_png(image_2);
+    write_png(mask_1);
+
+    auto result =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_masks = true});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    const auto& cameras = std::get<0>(result->value);
+
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_TRUE(cameras[0]->has_mask());
+    EXPECT_TRUE(fs::equivalent(cameras[0]->mask_path(), mask_1));
+    EXPECT_FALSE(cameras[1]->has_mask());
+    EXPECT_TRUE(cameras[1]->mask_path().empty());
+}
+
 TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedColmapIds) {
     const fs::path dataset_dir = temp_dir_ / "dataset";
 
@@ -364,11 +409,57 @@ TEST_F(ColmapImageLayoutTest, BrokenDepthIsIgnoredUnlessDepthLoadingIsEnabled) {
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
     ASSERT_TRUE(without_depth.has_value()) << without_depth.error().format();
     ASSERT_EQ(std::get<0>(without_depth->value).size(), 1u);
-    EXPECT_FALSE(std::get<0>(without_depth->value)[0]->has_depth());
+    EXPECT_TRUE(std::get<0>(without_depth->value)[0]->has_depth()); // associated, unvalidated
 
     const auto with_depth =
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_depths = true});
     ASSERT_FALSE(with_depth.has_value());
+}
+
+TEST_F(ColmapImageLayoutTest, AmbiguousMaskOnlyFailsWhenMaskLoadingEnabled) {
+    const fs::path dataset_dir = temp_dir_ / "ambiguous_mask_dataset";
+    const fs::path image_path = dataset_dir / "images" / "frame_0001.png";
+    const fs::path mask_a = dataset_dir / "masks" / "Frame_0001.png";
+    const fs::path mask_b = dataset_dir / "masks" / "FRAME_0001.PNG";
+
+    write_minimal_colmap_text_dataset(dataset_dir, "frame_0001.png");
+    write_png(image_path);
+    write_png(mask_a);
+    write_png(mask_b);
+    if (fs::equivalent(mask_a, mask_b)) {
+        GTEST_SKIP() << "case-insensitive filesystem";
+    }
+
+    const auto without_masks =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+    ASSERT_TRUE(without_masks.has_value()) << without_masks.error().format();
+    ASSERT_EQ(std::get<0>(without_masks->value).size(), 1u);
+    EXPECT_TRUE(std::get<0>(without_masks->value)[0]->mask_path().empty());
+
+    const auto with_masks =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_masks = true});
+    ASSERT_FALSE(with_masks.has_value());
+}
+
+TEST_F(ColmapImageLayoutTest, CaseVariantMaskResolvedByExactPathMatch) {
+    const fs::path dataset_dir = temp_dir_ / "exact_mask_dataset";
+    const fs::path image_path = dataset_dir / "images" / "frame_0001.png";
+    const fs::path mask_a = dataset_dir / "masks" / "frame_0001.png";
+    const fs::path mask_b = dataset_dir / "masks" / "FRAME_0001.PNG";
+
+    write_minimal_colmap_text_dataset(dataset_dir, "frame_0001.png");
+    write_png(image_path);
+    write_png(mask_a);
+    write_png(mask_b);
+    if (fs::equivalent(mask_a, mask_b)) {
+        GTEST_SKIP() << "case-insensitive filesystem";
+    }
+
+    const auto with_masks =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_masks = true});
+    ASSERT_TRUE(with_masks.has_value()) << with_masks.error().format();
+    ASSERT_EQ(std::get<0>(with_masks->value).size(), 1u);
+    EXPECT_TRUE(fs::equivalent(std::get<0>(with_masks->value)[0]->mask_path(), mask_a));
 }
 
 TEST_F(ColmapImageLayoutTest, AcceptsIntegerRatioDepthForScaledImages) {

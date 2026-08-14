@@ -248,6 +248,7 @@ set(TEST_FILES
     test_allocator_hygiene.cpp
     test_pinned_stream_teardown.cpp
     test_cuda_pool_stream_teardown.cpp
+    test_stale_stream_teardown.cpp
     test_fastgs_sort_buffers.cpp
     test_warp_cull_blend.cpp
     test_warp_cull_bwd.cpp
@@ -264,6 +265,7 @@ set(TEST_FILES
     test_joint_adam_codec.cpp
     test_sh_value_codec.cpp
     test_sh_value_storage.cpp
+    test_splat_data_clone.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
     test_tensor_views.cpp
