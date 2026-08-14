@@ -4069,6 +4069,284 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           SaveWhilePausedTrainingRoutesThroughLiveTrainer) {
+        // Treating completion_pending_ as "publishing the final
+        // snapshot" rejects Save Project while paused instead of
+        // starting the live trainer snapshot write.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "paused-save.licht";
+        write_empty_project(project_path);
+        auto splat = lfs::test::licht::make_splat(2);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Train model");
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            trainer->strategy_ =
+                std::make_unique<lfs::training::MCMC>(
+                    *splat);
+            trainer->is_paused_.store(true);
+
+            auto* const trainer_manager =
+                viewer.getTrainerManager();
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    trainer_manager->getStateMachine());
+            if (state_machine.getState() ==
+                TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Running));
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Paused));
+            trainer_manager->completion_pending_.store(
+                true, std::memory_order_release);
+            trainer_manager->training_joined_ = false;
+
+            auto saved = lifecycle->save(false);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            EXPECT_EQ(
+                lifecycle->project_write_purpose_,
+                project::ProjectLifecycle::
+                    ProjectWritePurpose::
+                        TrainingExplicitSave);
+            {
+                std::lock_guard lock(
+                    trainer->project_snapshot_mutex_);
+                ASSERT_TRUE(
+                    trainer->requested_project_path_);
+                EXPECT_EQ(
+                    trainer->requested_project_path_
+                        ->lexically_normal(),
+                    project_path.lexically_normal());
+            }
+
+            trainer_manager->completion_pending_.store(
+                false, std::memory_order_release);
+            trainer_manager->training_joined_ = true;
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           SaveWhileStoppingStillBlocksUntilSnapshotPublished) {
+        // The stop-window save gate must still refuse Save Project
+        // while the trainer is Stopping and publishing its final
+        // snapshot.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "stopping-save.licht";
+        write_empty_project(project_path);
+        auto splat = lfs::test::licht::make_splat(2);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Train model");
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            trainer->strategy_ =
+                std::make_unique<lfs::training::MCMC>(
+                    *splat);
+            trainer->is_paused_.store(false);
+
+            auto* const trainer_manager =
+                viewer.getTrainerManager();
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    trainer_manager->getStateMachine());
+            if (state_machine.getState() ==
+                TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Running));
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Stopping));
+            trainer_manager->completion_pending_.store(
+                true, std::memory_order_release);
+            trainer_manager->training_joined_ = false;
+
+            auto saved = lifecycle->save(false);
+            ASSERT_FALSE(saved);
+            EXPECT_EQ(
+                saved.error().user_message(),
+                "Wait for training completion before saving.");
+
+            trainer_manager->completion_pending_.store(
+                false, std::memory_order_release);
+            trainer_manager->training_joined_ = true;
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           SaveAsWhilePausedTrainingRoutesThroughLiveTrainer) {
+        // The same completion_pending_ inner gate on saveAs rejects
+        // Save As during paused training instead of routing through
+        // the live trainer snapshot write.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto destination =
+            temporary / "paused-saveas.licht";
+        auto splat = lfs::test::licht::make_splat(2);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_FALSE(lifecycle->hasSourcePath());
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Train model");
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            trainer->strategy_ =
+                std::make_unique<lfs::training::MCMC>(
+                    *splat);
+            trainer->is_paused_.store(true);
+
+            auto* const trainer_manager =
+                viewer.getTrainerManager();
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    trainer_manager->getStateMachine());
+            if (state_machine.getState() ==
+                TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Running));
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Paused));
+            trainer_manager->completion_pending_.store(
+                true, std::memory_order_release);
+            trainer_manager->training_joined_ = false;
+
+            auto saved = lifecycle->saveAs(
+                destination, false, true);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            EXPECT_EQ(
+                lifecycle->project_write_purpose_,
+                project::ProjectLifecycle::
+                    ProjectWritePurpose::
+                        TrainingExplicitSave);
+            {
+                std::lock_guard lock(
+                    trainer->project_snapshot_mutex_);
+                ASSERT_TRUE(
+                    trainer->requested_project_path_);
+                EXPECT_EQ(
+                    trainer->requested_project_path_
+                        ->lexically_normal(),
+                    destination.lexically_normal());
+            }
+
+            trainer_manager->completion_pending_.store(
+                false, std::memory_order_release);
+            trainer_manager->training_joined_ = true;
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
            SaveAsRoutesThroughFailedTerminalSnapshotAftermath) {
         // Returning adoptCompletedTrainingSnapshot's failure from saveAs
         // after a failed terminal write dead-ends with
