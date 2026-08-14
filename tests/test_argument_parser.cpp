@@ -181,6 +181,31 @@ TEST(ArgumentParserTest, CommandLineOverridesConfigAfterLoading) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.opacity_lr, 0.0375f);
 }
 
+TEST(ArgumentParserTest, ParsesRecoveryFlagsAsProcessLocalStartupPolicy) {
+    const auto data_path = make_test_path("lfs_arg_parser_recovery_data");
+    const auto output_path = make_test_path("lfs_arg_parser_recovery_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--safe-mode",
+        "--reset-preferences",
+        "--reset-layout",
+        "--reset-all-settings"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_TRUE((*parsed)->safe_mode);
+    EXPECT_TRUE((*parsed)->reset_preferences);
+    EXPECT_TRUE((*parsed)->reset_layout);
+    EXPECT_TRUE((*parsed)->reset_all_settings);
+}
+
 TEST(ArgumentParserTest, Mesh2SplatParsesOutputPathAndOptions) {
     const auto dir = make_test_path("lfs_mesh2splat_arg_parser");
     const auto input = std::filesystem::path(dir) / "input.obj";

@@ -13,6 +13,7 @@
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "visualizer/visualizer.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -36,40 +37,47 @@ namespace lfs::vis {
             }
 
             void TearDown() override {
+                setRuntimeServiceControls({});
                 gui::guiFocusState().reset();
                 services().clear();
                 restoreHome();
             }
+
+            [[nodiscard]] const std::filesystem::path& isolatedHome() const { return temp_home_; }
 
         private:
             std::optional<std::string> old_home_;
             std::filesystem::path temp_home_;
 
             void isolateInputProfileHome() {
-#ifndef _WIN32
-                if (const char* home = std::getenv("HOME")) {
+                if (const char* home = std::getenv("LFS_HOME")) {
                     old_home_ = home;
                 }
                 temp_home_ = std::filesystem::temp_directory_path() /
                              ("lfs_input_focus_home_" +
                               std::to_string(reinterpret_cast<std::uintptr_t>(this)));
                 std::filesystem::create_directories(temp_home_);
-                setenv("HOME", temp_home_.string().c_str(), 1);
+#ifdef _WIN32
+                _putenv_s("LFS_HOME", temp_home_.string().c_str());
+#else
+                setenv("LFS_HOME", temp_home_.string().c_str(), 1);
 #endif
             }
 
             void restoreHome() {
-#ifndef _WIN32
+#ifdef _WIN32
+                _putenv_s("LFS_HOME", old_home_ ? old_home_->c_str() : "");
+#else
                 if (old_home_) {
-                    setenv("HOME", old_home_->c_str(), 1);
+                    setenv("LFS_HOME", old_home_->c_str(), 1);
                 } else {
-                    unsetenv("HOME");
+                    unsetenv("LFS_HOME");
                 }
+#endif
                 if (!temp_home_.empty()) {
                     std::error_code ec;
                     std::filesystem::remove_all(temp_home_, ec);
                 }
-#endif
             }
         };
     } // namespace
@@ -1023,6 +1031,29 @@ namespace lfs::vis {
         std::filesystem::remove(profile_path);
     }
 
+    TEST_F(InputControllerFocusTest, SafeModeAllowsExplicitExchangeWithoutAutoPersistingMigration) {
+        const auto keymap_dir = isolatedHome() / "config" / "keymaps";
+        std::filesystem::create_directories(keymap_dir);
+        const auto canonical_profile = keymap_dir / "Default.json";
+        const std::string original_profile =
+            R"({"name":"Default","version":19,"bindings":[]})";
+        std::ofstream(canonical_profile) << original_profile;
+
+        input::InputBindings::setPersistenceEnabled(false);
+        input::InputBindings bindings;
+        const bool imported = bindings.loadProfileFromFile(canonical_profile);
+        std::ifstream persisted_profile(canonical_profile);
+        const std::string after((std::istreambuf_iterator<char>(persisted_profile)), {});
+        const auto explicit_export = isolatedHome() / "exported.json";
+        const bool exported = bindings.saveProfileToFile(explicit_export);
+        input::InputBindings::setPersistenceEnabled(true);
+
+        EXPECT_TRUE(imported);
+        EXPECT_EQ(after, original_profile);
+        EXPECT_TRUE(exported);
+        EXPECT_TRUE(std::filesystem::is_regular_file(explicit_export));
+    }
+
     TEST_F(InputControllerFocusTest, HistogramZoomMarkedDefaultsToCtrlScroll) {
         input::InputBindings bindings;
 
@@ -1199,6 +1230,189 @@ namespace lfs::vis {
                         .getTriggerForAction(input::Action::TOOL_MIRROR,
                                              input::ToolMode::GLOBAL)
                         .has_value());
+    }
+
+    TEST_F(InputControllerFocusTest, McpServerShortcutInvokesOnlyEnabledRuntimeControl) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        int enabled_calls = 0;
+        int binding_calls = 0;
+        setRuntimeServiceControls({
+            .toggle_mcp_enabled = [&] {
+                ++enabled_calls;
+                return true; },
+            .toggle_mcp_binding = [&] {
+                ++binding_calls;
+                return true; },
+        });
+
+        EXPECT_EQ(controller.getBindings().getActionForKey(
+                      input::ToolMode::GLOBAL, input::KEY_M,
+                      input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_SERVER);
+
+        controller.handleKey(input::KEY_M, input::ACTION_PRESS,
+                             input::MODIFIER_CTRL | input::MODIFIER_SHIFT);
+
+        EXPECT_EQ(enabled_calls, 1);
+        EXPECT_EQ(binding_calls, 0);
+    }
+
+    TEST_F(InputControllerFocusTest, McpBindingShortcutInvokesOnlyBindingRuntimeControl) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        int enabled_calls = 0;
+        int binding_calls = 0;
+        setRuntimeServiceControls({
+            .toggle_mcp_enabled = [&] {
+                ++enabled_calls;
+                return true; },
+            .toggle_mcp_binding = [&] {
+                ++binding_calls;
+                return true; },
+        });
+
+        EXPECT_EQ(controller.getBindings().getActionForKey(
+                      input::ToolMode::GLOBAL, input::KEY_N,
+                      input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_BINDING);
+
+        controller.handleKey(input::KEY_N, input::ACTION_PRESS,
+                             input::MODIFIER_CTRL | input::MODIFIER_SHIFT);
+
+        EXPECT_EQ(enabled_calls, 0);
+        EXPECT_EQ(binding_calls, 1);
+    }
+
+    TEST_F(InputControllerFocusTest, McpBindingShortcutBypassesPythonKeyboardCapture) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+
+        int calls = 0;
+        setRuntimeServiceControls({
+            .toggle_mcp_binding = [&] {
+                ++calls;
+                return true;
+            },
+        });
+
+        lfs::python::request_keyboard_capture("mcp-shortcut-test");
+        controller.handleKey(input::KEY_N, input::ACTION_PRESS,
+                             input::MODIFIER_CTRL | input::MODIFIER_SHIFT);
+        lfs::python::release_keyboard_capture("mcp-shortcut-test");
+
+        EXPECT_EQ(calls, 1);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyOneProfileMigratesMcpBindingShortcut) {
+        const auto profile_path = std::filesystem::temp_directory_path() /
+                                  "lfs_input_bindings_legacy_v21.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV21",
+  "version": 21,
+  "bindings": []
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_N,
+                                         input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_BINDING);
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyTwoProfileReplacesLegacyMcpBindingShortcut) {
+        const auto profile_path = std::filesystem::temp_directory_path() /
+                                  "lfs_input_bindings_legacy_v22.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV22",
+  "version": 22,
+  "bindings": [
+    {
+      "mode": 0,
+      "action": 79,
+      "description": "Toggle MCP Local/Network Binding",
+      "trigger_type": "key",
+      "key": 77,
+      "modifiers": 6,
+      "on_repeat": false
+    }
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_N,
+                                         input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_BINDING);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_M,
+                                         input::MODIFIER_CTRL | input::MODIFIER_ALT),
+                  input::Action::NONE);
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyFourProfileReconcilesPreferencesMcpAndHudActions) {
+        const auto profile_path = std::filesystem::temp_directory_path() /
+                                  "lfs_input_bindings_legacy_v24.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV24",
+  "version": 24,
+  "bindings": [
+    {"mode": 0, "action": 77, "description": "Preferences", "trigger_type": "key", "key": 44, "modifiers": 2, "on_repeat": false},
+    {"mode": 0, "action": 78, "description": "Toggle MCP server", "trigger_type": "key", "key": 77, "modifiers": 3, "on_repeat": false},
+    {"mode": 0, "action": 79, "description": "Toggle MCP binding", "trigger_type": "key", "key": 78, "modifiers": 3, "on_repeat": false},
+    {"mode": 0, "action": 80, "description": "Performance HUD", "trigger_type": "key", "key": 299, "modifiers": 0, "on_repeat": false}
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_COMMA,
+                                         input::MODIFIER_CTRL),
+                  input::Action::OPEN_PREFERENCES);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_M,
+                                         input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_SERVER);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_N,
+                                         input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_BINDING);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_F10,
+                                         input::MODIFIER_NONE),
+                  input::Action::TOGGLE_PERFORMANCE_HUD);
+
+        std::filesystem::remove(profile_path);
     }
 
     TEST_F(InputControllerFocusTest, ToolLocalOperationalShortcutsDoNotResolveAcrossModes) {

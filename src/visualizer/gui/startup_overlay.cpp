@@ -70,8 +70,10 @@ namespace lfs::vis::gui {
                 return;
 
             const auto& lang = available[idx];
-            if (loc.setLanguage(lang))
+            if (loc.setLanguage(lang)) {
+                lfs::vis::saveLanguagePreference(lang);
                 lfs::vis::publish_language_generation();
+            }
             if (mgr_ && (lang == "ja" || lang == "ko" || lang == "zh"))
                 mgr_->ensureCjkFontsLoaded();
         }
@@ -202,6 +204,11 @@ namespace lfs::vis::gui {
     }
 
     void StartupOverlay::dismiss() {
+        if (lfs::vis::loadLanguagePreference().empty()) {
+            const auto& language = lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+            if (!language.empty())
+                lfs::vis::saveLanguagePreference(language);
+        }
         visible_ = false;
         input_ = nullptr;
         last_mouse_valid_ = false;
@@ -248,10 +255,7 @@ namespace lfs::vis::gui {
     }
 
     bool StartupOverlay::blocksUnderlayInput() const {
-        if (!visible_)
-            return false;
-        std::lock_guard lock(plugin_load_mutex_);
-        return !plugin_load_state_started_;
+        return visible_;
     }
 
     static std::string escapeRmlText(const std::string& input) {
@@ -315,6 +319,9 @@ namespace lfs::vis::gui {
             return;
 
         auto& loc = lfs::event::LocalizationManager::getInstance();
+        if (auto* row = document_->GetElementById("lang-row")) {
+            row->SetProperty("display", lfs::vis::loadLanguagePreference().empty() ? "flex" : "none");
+        }
         const auto langs = loc.getAvailableLanguages();
         const auto names = loc.getAvailableLanguageNames();
         const auto& current = loc.getCurrentLanguage();
@@ -771,10 +778,10 @@ namespace lfs::vis::gui {
 
             if (key_action) {
                 LOG_DEBUG("StartupOverlay: dismissed by key action");
-                visible_ = false;
+                dismiss();
             } else if (mouse_clicked) {
                 LOG_DEBUG("StartupOverlay: dismissed by mouse click");
-                visible_ = false;
+                dismiss();
             }
         }
     }

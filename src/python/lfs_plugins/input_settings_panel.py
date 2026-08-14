@@ -120,6 +120,9 @@ class InputSettingsPanel(Panel):
         "ui_global": [
             lf.keymap.Action.TOGGLE_UI,
             lf.keymap.Action.TOGGLE_FULLSCREEN,
+            lf.keymap.Action.OPEN_PREFERENCES,
+            lf.keymap.Action.TOGGLE_MCP_SERVER,
+            lf.keymap.Action.TOGGLE_MCP_BINDING,
             lf.keymap.Action.HISTOGRAM_ZOOM_MARKED,
             lf.keymap.Action.TOGGLE_PERFORMANCE_HUD,
         ],
@@ -232,14 +235,13 @@ class InputSettingsPanel(Panel):
         self._request_model_update()
 
     def _on_export_profile(self, _handle, _ev, _args):
-        tr = lf.ui.tr
-        path = lf.ui.save_file_dialog(tr("input_settings.export_dialog_title"), "json")
+        profile_name = lf.keymap.get_current_profile()
+        path = lf.ui.save_json_file_dialog(f"{profile_name}.json")
         if path:
             lf.keymap.export_profile(path)
 
     def _on_import_profile(self, _handle, _ev, _args):
-        tr = lf.ui.tr
-        path = lf.ui.open_file_dialog(tr("input_settings.import_dialog_title"), "json")
+        path = lf.ui.open_json_file_dialog()
         if path:
             self._clear_pending_conflict()
             lf.keymap.import_profile(path)

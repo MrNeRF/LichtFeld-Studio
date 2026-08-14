@@ -5,16 +5,23 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "rendering/scene_temporal_resolve.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
+#include "rendering/temporal_frame_tracker.hpp"
 #include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
+#include "vulkan_scene_motion_pass.hpp"
+#include "vulkan_scene_temporal_resolve_pass.hpp"
 #include "vulkan_split_view_pass.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
+#include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -24,6 +31,116 @@ namespace lfs::core {
 
 namespace lfs::vis {
     class VulkanContext;
+
+    [[nodiscard]] constexpr bool temporalViewportRuntimeEligible(
+        const bool split_view,
+        const bool external_scene_image,
+        const bool depth_available,
+        const bool projection_supported,
+        const glm::ivec2 render_extent,
+        const glm::ivec2 output_extent) {
+        return !split_view && external_scene_image && depth_available && projection_supported &&
+               render_extent.x > 0 && render_extent.y > 0 && output_extent.x > 0 &&
+               output_extent.y > 0;
+    }
+
+    [[nodiscard]] constexpr std::size_t temporalMotionResourceSlot(
+        const std::size_t frame_slot, const TemporalViewId view) {
+        return frame_slot * static_cast<std::size_t>(TemporalViewId::Count) +
+               static_cast<std::size_t>(view);
+    }
+
+    [[nodiscard]] constexpr bool splitTemporalRuntimeEligible(
+        const VulkanSplitViewParams& split,
+        const std::size_t mesh_panel_count,
+        const bool projection_supported,
+        const bool scene_stable) {
+        const auto panel_valid = [](const VulkanSplitViewPanel& panel) {
+            return panel.external_image != VK_NULL_HANDLE &&
+                   panel.external_image_view != VK_NULL_HANDLE &&
+                   panel.depth_image_view != VK_NULL_HANDLE && panel.image_size.x > 0 &&
+                   panel.image_size.y > 0;
+        };
+        return split.enabled && mesh_panel_count == 2 && projection_supported && scene_stable &&
+               panel_valid(split.left) && panel_valid(split.right);
+    }
+
+    [[nodiscard]] constexpr glm::ivec2 splitTemporalOutputExtent(
+        const glm::ivec2 output_extent, const float start, const float end) {
+        return {
+            std::max(1, static_cast<int>(static_cast<float>(output_extent.x) *
+                                             std::max(0.0f, end - start) +
+                                         0.5f)),
+            std::max(1, output_extent.y),
+        };
+    }
+
+    [[nodiscard]] constexpr bool temporalSourceUnchanged(
+        const VkImage previous_image,
+        const std::uint64_t previous_generation,
+        const VkImage current_image,
+        const std::uint64_t current_generation) {
+        return previous_image != VK_NULL_HANDLE && previous_image == current_image &&
+               previous_generation == current_generation;
+    }
+
+    [[nodiscard]] constexpr bool optionalUpscalerOutputReusable(
+        const bool previous_valid,
+        const TemporalResetReason reset_reasons,
+        const VkImage previous_image,
+        const std::uint64_t previous_generation,
+        const VkImage current_image,
+        const std::uint64_t current_generation,
+        const bool output_valid) {
+        return previous_valid && reset_reasons == TemporalResetReason::None && output_valid &&
+               temporalSourceUnchanged(previous_image,
+                                       previous_generation,
+                                       current_image,
+                                       current_generation);
+    }
+
+    [[nodiscard]] constexpr TemporalResetReason temporalHistoryResetReasons(
+        const bool history_valid,
+        const std::uint64_t previous_scene_identity,
+        const std::uint64_t current_scene_identity,
+        const std::uint64_t previous_reset_generation,
+        const std::uint64_t current_reset_generation,
+        const SceneTemporalQuality previous_quality = SceneTemporalQuality::Balanced,
+        const SceneTemporalQuality current_quality = SceneTemporalQuality::Balanced) {
+        if (!history_valid) {
+            return TemporalResetReason::FirstFrame;
+        }
+
+        auto reasons = TemporalResetReason::None;
+        if (previous_scene_identity != current_scene_identity) {
+            reasons |= TemporalResetReason::Scene;
+        }
+        if (previous_reset_generation != current_reset_generation) {
+            reasons |= TemporalResetReason::Requested;
+        }
+        if (previous_quality != current_quality) {
+            reasons |= TemporalResetReason::Quality;
+        }
+        return reasons;
+    }
+
+    [[nodiscard]] constexpr bool temporalHistoryRequiresReset(
+        const bool history_valid,
+        const std::uint64_t previous_scene_identity,
+        const std::uint64_t current_scene_identity,
+        const std::uint64_t previous_reset_generation,
+        const std::uint64_t current_reset_generation,
+        const SceneTemporalQuality previous_quality = SceneTemporalQuality::Balanced,
+        const SceneTemporalQuality current_quality = SceneTemporalQuality::Balanced) {
+        return history_valid &&
+               temporalHistoryResetReasons(history_valid,
+                                           previous_scene_identity,
+                                           current_scene_identity,
+                                           previous_reset_generation,
+                                           current_reset_generation,
+                                           previous_quality,
+                                           current_quality) != TemporalResetReason::None;
+    }
 
     struct VulkanViewportOverlayVertex {
         glm::vec2 position{0.0f};
@@ -113,10 +230,28 @@ namespace lfs::vis {
         VkImageView external_scene_image_view = VK_NULL_HANDLE;
         VkImageLayout external_scene_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         std::uint64_t external_scene_image_generation = 0;
+        // Exact physical viewport extent selected by the scene renderer. Keeping
+        // this separate avoids reconstructing integer pixels from GUI floats.
+        glm::ivec2 scene_output_extent{0, 0};
         // Interactive resize deliberately keeps the last complete interop image
         // until the render extent settles. Do not replace that binding with an
         // incompletely prepared image during the deferral window.
         bool preserve_scene_image_binding = false;
+        std::string scene_upscaler_id = "native";
+        SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
+        SceneTemporalQuality scene_temporal_quality = SceneTemporalQuality::Balanced;
+        bool scene_temporal_projection_supported = true;
+        bool scene_temporal_stable = true;
+        std::uint64_t scene_identity = 0;
+        std::uint64_t scene_temporal_reset_generation = 0;
+        glm::vec2 scene_jitter_pixels{0.0f};
+        float scene_camera_near = 0.1f;
+        float scene_camera_far = 1000.0f;
+        float scene_camera_vertical_fov_radians = 1.0f;
+        bool scene_camera_orthographic = false;
+        // Dormant unless the effective backend explicitly requests motion vectors.
+        // The depth view is filled from depth_blit after prepare when omitted here.
+        VulkanSceneMotionParams scene_motion;
 
         bool grid_enabled = false;
         glm::mat4 grid_view{1.0f};
@@ -176,6 +311,10 @@ namespace lfs::vis {
 
         [[nodiscard]] bool init(VulkanContext& context);
         void prepare(VulkanContext& context, const VulkanViewportPassParams& params);
+        [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const;
+        [[nodiscard]] bool recordPreRenderWork(VkCommandBuffer command_buffer,
+                                               const VulkanViewportPassParams& params);
+        [[nodiscard]] SceneMotionContract sceneMotionContract(std::size_t frame_slot) const;
         void record(VkCommandBuffer command_buffer,
                     VkExtent2D framebuffer_extent,
                     const VulkanViewportPassParams& params);

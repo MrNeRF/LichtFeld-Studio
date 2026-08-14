@@ -617,7 +617,7 @@ namespace lfs::python {
         group.id = "render_settings";
         group.name = "Render Settings";
 
-        auto add_color3 = [&](std::array<float, 3> Proxy::*member, const std::string& id, const std::string& name,
+        auto add_color3 = [&](std::array<float, 3> Proxy::* member, const std::string& id, const std::string& name,
                               const std::string& desc, std::array<double, 3> default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -637,7 +637,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_bool = [&](bool Proxy::*member, const std::string& id, const std::string& name, const std::string& desc,
+        auto add_bool = [&](bool Proxy::* member, const std::string& id, const std::string& name, const std::string& desc,
                             bool default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -654,7 +654,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_float = [&](float Proxy::*member, const std::string& id, const std::string& name,
+        auto add_float = [&](float Proxy::* member, const std::string& id, const std::string& name,
                              const std::string& desc, double default_val, double min_val, double max_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -673,7 +673,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_int_enum = [&](int Proxy::*member, const std::string& id, const std::string& name,
+        auto add_int_enum = [&](int Proxy::* member, const std::string& id, const std::string& name,
                                 const std::string& desc, std::vector<EnumItem> items, int default_idx) {
             PropertyMeta meta;
             meta.id = id;
@@ -708,7 +708,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_string = [&](std::string Proxy::*member, const std::string& id, const std::string& name,
+        auto add_string = [&](std::string Proxy::* member, const std::string& id, const std::string& name,
                               const std::string& desc, const std::string& default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -789,6 +789,26 @@ namespace lfs::python {
                      2);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
+        add_float(&Proxy::scene_upscaler_scale,
+                  "scene_upscaler_scale",
+                  "Upscaler Input Scale",
+                  "Input-resolution multiplier applied independently of the base render scale",
+                  1.0,
+                  0.25,
+                  1.0);
+        add_string(&Proxy::scene_upscaler,
+                   "scene_upscaler",
+                   "Scene Upscaler",
+                   "Stable identifier of the reconstruction filter used when presenting the scene image",
+                   "native");
+        add_int_enum(&Proxy::scene_temporal_quality,
+                     "scene_temporal_quality",
+                     "Temporal Quality",
+                     "History quality used by the native temporal scene upscaler",
+                     {{"Performance", "performance", 0},
+                      {"Balanced", "balanced", 1},
+                      {"Quality", "quality", 2}},
+                     1);
         add_float(&Proxy::depth_view_min, "depth_view_min", "Depth Near", "Depth-map visualization near range",
                   lfs::rendering::DEFAULT_DEPTH_VIEW_MIN, 0.0, lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
         add_float(&Proxy::depth_view_max, "depth_view_max", "Depth Far", "Depth-map visualization far range",
@@ -835,7 +855,7 @@ namespace lfs::python {
                      {{"Manual", "MANUAL", 0}, {"Auto", "AUTO", 1}}, 1);
 
         using PPISP = vis::PPISPOverrides;
-        const auto add_ppisp_float = [&](float PPISP::*member, const char* id, const char* name,
+        const auto add_ppisp_float = [&](float PPISP::* member, const char* id, const char* name,
                                          const char* desc, double def, double min_v, double max_v) {
             PropertyMeta meta;
             meta.id = id;
@@ -854,7 +874,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        const auto add_ppisp_bool = [&](bool PPISP::*member, const char* id, const char* name,
+        const auto add_ppisp_bool = [&](bool PPISP::* member, const char* id, const char* name,
                                         const char* desc, bool def) {
             PropertyMeta meta;
             meta.id = id;
@@ -925,6 +945,16 @@ namespace lfs::python {
             settings_.gut = rendering::isGutBackend(
                 static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
         }
+        vis::update_render_settings(settings_);
+        request_redraw();
+    }
+
+    void PyRenderSettings::set_scene_upscaler(const std::string& backend_id,
+                                              const float input_scale,
+                                              const int quality) {
+        settings_.scene_upscaler = backend_id;
+        settings_.scene_upscaler_scale = std::clamp(input_scale, 0.25f, 1.0f);
+        settings_.scene_temporal_quality = std::clamp(quality, 0, 2);
         vis::update_render_settings(settings_);
         request_redraw();
     }
@@ -1331,6 +1361,29 @@ namespace lfs::python {
         if (!settings)
             return std::nullopt;
         return PyRenderSettings(std::move(*settings));
+    }
+
+    nb::list get_scene_upscaler_options() {
+        nb::list result;
+        for (const auto& option : vis::get_scene_upscaler_options()) {
+            nb::dict record;
+            record["id"] = option.id;
+            record["label_key"] = option.label_key;
+            nb::list recommended_scales;
+            for (const float scale : option.recommended_input_scales)
+                recommended_scales.append(scale);
+            record["recommended_input_scales"] = std::move(recommended_scales);
+            result.append(std::move(record));
+        }
+        return result;
+    }
+
+    bool reset_temporal_history() {
+        auto* const rendering_manager = get_rendering_manager();
+        if (!rendering_manager)
+            return false;
+        rendering_manager->requestTemporalHistoryReset();
+        return true;
     }
 
     nb::dict get_lod_stats() {
@@ -1932,6 +1985,12 @@ Args:
             .def_prop_ro("__property_group__", &PyRenderSettings::property_group)
             .def("get", &PyRenderSettings::get, nb::arg("name"), "Get property value by name")
             .def("set", &PyRenderSettings::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
+            .def("set_scene_upscaler",
+                 &PyRenderSettings::set_scene_upscaler,
+                 nb::arg("backend_id"),
+                 nb::arg("input_scale"),
+                 nb::arg("quality"),
+                 "Atomically select a scene upscaler and its contextual settings")
             .def("prop_info", &PyRenderSettings::prop_info, nb::arg("name"))
             .def("get_all_properties", &PyRenderSettings::get_all_properties,
                  "Get all property descriptors as Python Property objects")
@@ -1954,6 +2013,10 @@ Args:
             .def("__dir__", &PyRenderSettings::python_dir);
 
         m.def("get_render_settings", &get_render_settings);
+        m.def("get_scene_upscaler_options", &get_scene_upscaler_options,
+              "Return scene upscalers selectable on the active runtime and device");
+        m.def("reset_temporal_history", &reset_temporal_history,
+              "Discard scene temporal history and request a fresh render");
         m.def("get_lod_stats", &get_lod_stats,
               "Get LOD statistics: {enabled, selected, budget, levels:[{level, count}, ...]}");
     }

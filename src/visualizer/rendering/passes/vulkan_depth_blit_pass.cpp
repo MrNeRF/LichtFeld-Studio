@@ -71,6 +71,8 @@ namespace lfs::vis {
         struct FrameDescriptor {
             VkDescriptorSet set = VK_NULL_HANDLE;
             VkImageView bound_view = VK_NULL_HANDLE;
+            VkImage bound_image = VK_NULL_HANDLE;
+            VkImageLayout bound_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::uint64_t bound_generation = 0;
         };
         std::vector<FrameDescriptor> frame_descriptors;
@@ -659,6 +661,8 @@ namespace lfs::vis {
             uploaded_tensor = nullptr;
             for (auto& descriptor : frame_descriptors) {
                 descriptor.bound_view = VK_NULL_HANDLE;
+                descriptor.bound_image = VK_NULL_HANDLE;
+                descriptor.bound_layout = VK_IMAGE_LAYOUT_UNDEFINED;
                 descriptor.bound_generation = 0;
             }
         }
@@ -903,13 +907,17 @@ namespace lfs::vis {
 
         void rebindDescriptor(FrameDescriptor& descriptor,
                               VkImageView view,
+                              VkImage bound_image,
+                              VkImageLayout bound_layout,
                               const std::uint64_t generation = 0) {
-            if (view == VK_NULL_HANDLE ||
-                (view == descriptor.bound_view && generation == descriptor.bound_generation)) {
+            if (view == VK_NULL_HANDLE || bound_layout == VK_IMAGE_LAYOUT_UNDEFINED ||
+                (view == descriptor.bound_view && bound_image == descriptor.bound_image &&
+                 bound_layout == descriptor.bound_layout &&
+                 generation == descriptor.bound_generation)) {
                 return;
             }
             VkDescriptorImageInfo di{};
-            di.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            di.imageLayout = bound_layout;
             di.imageView = view;
             di.sampler = sampler;
             VkWriteDescriptorSet w{};
@@ -921,6 +929,8 @@ namespace lfs::vis {
             w.pImageInfo = &di;
             vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
             descriptor.bound_view = view;
+            descriptor.bound_image = bound_image;
+            descriptor.bound_layout = bound_layout;
             descriptor.bound_generation = generation;
         }
 
@@ -932,21 +942,31 @@ namespace lfs::vis {
             if (params.external_image_view != VK_NULL_HANDLE) {
                 rebindDescriptor(descriptor,
                                  params.external_image_view,
+                                 params.external_image,
+                                 params.external_image_layout,
                                  params.external_image_generation);
                 return;
             }
             if (!params.depth || !params.depth->is_valid()) {
                 descriptor.bound_view = VK_NULL_HANDLE;
+                descriptor.bound_image = VK_NULL_HANDLE;
+                descriptor.bound_layout = VK_IMAGE_LAYOUT_UNDEFINED;
                 descriptor.bound_generation = 0;
                 retireAndDestroyImage("depth image release");
                 return;
             }
             if (params.depth.get() == uploaded_tensor && image != VK_NULL_HANDLE) {
-                rebindDescriptor(descriptor, image_view);
+                rebindDescriptor(descriptor,
+                                 image_view,
+                                 image,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 return;
             }
             if (uploadDepth(*params.depth)) {
-                rebindDescriptor(descriptor, image_view);
+                rebindDescriptor(descriptor,
+                                 image_view,
+                                 image,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             }
         }
 
@@ -1039,6 +1059,23 @@ namespace lfs::vis {
 
     VkImageView VulkanDepthBlitPass::depthView(const std::size_t frame_slot) const {
         return impl_ ? impl_->descriptorForFrame(frame_slot).bound_view : VK_NULL_HANDLE;
+    }
+
+    VkImage VulkanDepthBlitPass::depthImage(const std::size_t frame_slot) const {
+        if (!impl_)
+            return VK_NULL_HANDLE;
+        const auto& descriptor = impl_->descriptorForFrame(frame_slot);
+        if (descriptor.bound_view == VK_NULL_HANDLE)
+            return VK_NULL_HANDLE;
+        return descriptor.bound_image;
+    }
+
+    VkImageLayout VulkanDepthBlitPass::depthLayout(const std::size_t frame_slot) const {
+        if (!impl_)
+            return VK_IMAGE_LAYOUT_UNDEFINED;
+        const auto& descriptor = impl_->descriptorForFrame(frame_slot);
+        return descriptor.bound_view != VK_NULL_HANDLE ? descriptor.bound_layout
+                                                       : VK_IMAGE_LAYOUT_UNDEFINED;
     }
 
 } // namespace lfs::vis

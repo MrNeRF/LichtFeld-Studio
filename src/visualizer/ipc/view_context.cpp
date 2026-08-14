@@ -15,6 +15,7 @@ namespace lfs::vis {
         CaptureViewportRenderCallback capture_viewport_render_callback;
         GetRenderSettingsCallback get_render_settings_callback;
         SetRenderSettingsCallback set_render_settings_callback;
+        GetSceneUpscalerOptionsCallback get_scene_upscaler_options_callback;
         SetViewCallback set_view_callback;
         SetViewForPanelCallback set_view_for_panel_callback;
         SetFovCallback set_fov_callback;
@@ -130,6 +131,18 @@ namespace lfs::vis {
         if (s.set_render_settings_callback) {
             s.set_render_settings_callback(settings);
         }
+    }
+
+    void set_scene_upscaler_options_callback(GetSceneUpscalerOptionsCallback callback) {
+        state().get_scene_upscaler_options_callback = std::move(callback);
+    }
+
+    std::vector<SceneUpscalerOptionProxy> get_scene_upscaler_options() {
+        const auto& callback = state().get_scene_upscaler_options_callback;
+        if (!callback) {
+            return {{.id = "native", .label_key = "preferences.scene_upscaler_native"}};
+        }
+        return callback();
     }
 
 } // namespace lfs::vis

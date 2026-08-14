@@ -2,19 +2,77 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
 #include "visualizer/internal/resource_paths.hpp"
 #include "visualizer/theme/theme.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
 namespace {
+
+    class ScopedLfsHome {
+    public:
+        explicit ScopedLfsHome(const std::filesystem::path& path) {
+            if (const char* previous = std::getenv("LFS_HOME"))
+                previous_ = previous;
+#ifdef _WIN32
+            (void)_putenv_s("LFS_HOME", path.string().c_str());
+#else
+            (void)setenv("LFS_HOME", path.string().c_str(), 1);
+#endif
+        }
+
+        ~ScopedLfsHome() {
+#ifdef _WIN32
+            (void)_putenv_s("LFS_HOME", previous_ ? previous_->c_str() : "");
+#else
+            if (previous_)
+                (void)setenv("LFS_HOME", previous_->c_str(), 1);
+            else
+                (void)unsetenv("LFS_HOME");
+#endif
+        }
+
+    private:
+        std::optional<std::string> previous_;
+    };
+
+    class ScopedSafeMode {
+    public:
+        ScopedSafeMode() {
+            if (const char* previous = std::getenv("LFS_SAFE_MODE"))
+                previous_ = previous;
+#ifdef _WIN32
+            (void)_putenv_s("LFS_SAFE_MODE", "1");
+#else
+            (void)setenv("LFS_SAFE_MODE", "1", 1);
+#endif
+        }
+
+        ~ScopedSafeMode() {
+#ifdef _WIN32
+            (void)_putenv_s("LFS_SAFE_MODE", previous_ ? previous_->c_str() : "");
+#else
+            if (previous_)
+                (void)setenv("LFS_SAFE_MODE", previous_->c_str(), 1);
+            else
+                (void)unsetenv("LFS_SAFE_MODE");
+#endif
+        }
+
+    private:
+        std::optional<std::string> previous_;
+    };
 
     std::vector<lfs::vis::ThemePresetInfo> themePresetInfos() {
         std::vector<lfs::vis::ThemePresetInfo> infos;
@@ -118,4 +176,262 @@ TEST(ThemeRegistry, CurrentThemeUsesStablePresetId) {
     if (!original_theme.empty()) {
         EXPECT_TRUE(lfs::vis::setThemeByName(original_theme));
     }
+}
+
+TEST(ThemePreferencesContract, InvalidValuesFallBackToBuiltInDefaults) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_theme_preferences_invalid";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+    std::ofstream(paths->preferencesFile())
+        << R"({"theme":"not-a-theme","ui_scale":999,"language":42})";
+
+    EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "dark");
+    EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 1.0f);
+    EXPECT_EQ(lfs::vis::loadViewerSplatPrecisionPreference(),
+              lfs::vis::ViewerSplatPrecision::Float16);
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
+    EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, MalformedJsonFallsBackToBuiltInDefaults) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_theme_preferences_malformed";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+    std::ofstream(paths->preferencesFile()) << "{broken";
+
+    EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "dark");
+    EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 1.0f);
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
+    EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, SceneRenderScaleRoundTripsAndRejectsInvalidValues) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_scene_render_scale_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    lfs::vis::saveSceneRenderScalePreference(0.5f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 0.5f);
+
+    lfs::vis::saveSceneRenderScalePreference(0.1f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 0.25f);
+    lfs::vis::saveSceneRenderScalePreference(2.0f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 1.0f);
+
+    std::ofstream(paths->preferencesFile()) << R"({"scene_render_scale":"invalid"})";
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 1.0f);
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, ViewerSplatPrecisionDefaultsTo16AndRoundTrips) {
+    const auto root = std::filesystem::temp_directory_path() /
+                      "lfs_viewer_splat_precision_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    EXPECT_EQ(lfs::vis::loadViewerSplatPrecisionPreference(),
+              lfs::vis::ViewerSplatPrecision::Float16);
+    lfs::vis::saveViewerSplatPrecisionPreference(lfs::vis::ViewerSplatPrecision::Float32);
+    EXPECT_EQ(lfs::vis::loadViewerSplatPrecisionPreference(),
+              lfs::vis::ViewerSplatPrecision::Float32);
+    lfs::vis::saveViewerSplatPrecisionPreference(lfs::vis::ViewerSplatPrecision::Float16);
+    EXPECT_EQ(lfs::vis::loadViewerSplatPrecisionPreference(),
+              lfs::vis::ViewerSplatPrecision::Float16);
+
+    std::ofstream(paths->preferencesFile()) << R"({"viewer_splat_precision":24})";
+    EXPECT_EQ(lfs::vis::loadViewerSplatPrecisionPreference(),
+              lfs::vis::ViewerSplatPrecision::Float16);
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, SceneUpscalerRoundTripsAndRejectsMalformedValues) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_scene_upscaler_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    lfs::vis::saveSceneUpscalerPreference("spatial");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "spatial");
+    lfs::vis::saveSceneUpscalerPreference("temporal");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "temporal");
+    lfs::vis::saveSceneUpscalerPreference("nvidia-dlss");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "nvidia-dlss");
+    lfs::vis::saveSceneUpscalerPreference("invalid id!");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
+
+    std::ofstream(paths->preferencesFile()) << R"({"scene_upscaler":42})";
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, SceneUpscalerScalesAreIndependentAndNativeIsFixed) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_scene_upscaler_scales";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    lfs::vis::saveSceneUpscalerScalePreference("spatial", 0.5f);
+    lfs::vis::saveSceneUpscalerScalePreference("temporal", 0.67f);
+    lfs::vis::saveSceneUpscalerScalePreference("nvidia-dlss", 0.75f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneUpscalerScalePreference("spatial"), 0.5f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneUpscalerScalePreference("temporal"), 0.67f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneUpscalerScalePreference("nvidia-dlss"), 0.75f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneUpscalerScalePreference("native"), 1.0f);
+
+    lfs::vis::saveSceneUpscalerQualityPreference("temporal", "performance");
+    lfs::vis::saveSceneUpscalerQualityPreference("nvidia-dlss", "quality");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerQualityPreference("temporal"), "performance");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerQualityPreference("nvidia-dlss"), "quality");
+
+    lfs::vis::saveSceneUpscalerScalePreference("spatial", 0.1f);
+    EXPECT_FLOAT_EQ(lfs::vis::loadSceneUpscalerScalePreference("spatial"), 0.25f);
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, TemporalQualityRoundTripsAndRejectsUnknownValues) {
+    const auto root =
+        std::filesystem::temp_directory_path() / "lfs_temporal_quality_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    lfs::vis::saveSceneTemporalQualityPreference("performance");
+    EXPECT_EQ(lfs::vis::loadSceneTemporalQualityPreference(), "performance");
+    lfs::vis::saveSceneTemporalQualityPreference("quality");
+    EXPECT_EQ(lfs::vis::loadSceneTemporalQualityPreference(), "quality");
+    lfs::vis::saveSceneTemporalQualityPreference("unknown");
+    EXPECT_EQ(lfs::vis::loadSceneTemporalQualityPreference(), "balanced");
+
+    std::ofstream(paths->preferencesFile()) << R"({"scene_temporal_quality":42})";
+    EXPECT_EQ(lfs::vis::loadSceneTemporalQualityPreference(), "balanced");
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, McpPreferencesRoundTripAndValidateInput) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_mcp_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    const auto defaults = lfs::vis::loadMcpPreferences();
+    EXPECT_TRUE(defaults.enabled);
+    EXPECT_FALSE(defaults.expose_network);
+    EXPECT_EQ(defaults.port, 45677);
+    EXPECT_FALSE(defaults.request_logging);
+
+    lfs::vis::saveMcpPreferences({.enabled = false, .expose_network = true, .port = 50123, .request_logging = true});
+    const auto saved = lfs::vis::loadMcpPreferences();
+    EXPECT_FALSE(saved.enabled);
+    EXPECT_TRUE(saved.expose_network);
+    EXPECT_EQ(saved.port, 50123);
+    EXPECT_TRUE(saved.request_logging);
+
+    std::ofstream(paths->preferencesFile())
+        << R"({"mcp":{"enabled":"yes","expose_network":7,"port":70000}})";
+    const auto invalid = lfs::vis::loadMcpPreferences();
+    EXPECT_TRUE(invalid.enabled);
+    EXPECT_FALSE(invalid.expose_network);
+    EXPECT_EQ(invalid.port, 45677);
+    EXPECT_FALSE(invalid.request_logging);
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, PerformanceHudPreferencesRoundTripAndValidateInput) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_performance_hud_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    const auto defaults = lfs::vis::loadPerfHudPreferences();
+    EXPECT_FALSE(defaults.visible);
+    EXPECT_TRUE(defaults.expanded);
+
+    lfs::vis::savePerfHudPreferences({.visible = true, .expanded = false});
+    const auto saved = lfs::vis::loadPerfHudPreferences();
+    EXPECT_TRUE(saved.visible);
+    EXPECT_FALSE(saved.expanded);
+
+    std::ofstream(paths->preferencesFile())
+        << R"({"performance_hud":{"visible":"yes","expanded":7}})";
+    const auto invalid = lfs::vis::loadPerfHudPreferences();
+    EXPECT_FALSE(invalid.visible);
+    EXPECT_TRUE(invalid.expanded);
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_theme_preferences_safe_mode";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+    const std::string original = R"({"theme":"light","ui_scale":1.5,"language":"it","mcp":{"enabled":false,"expose_network":true,"port":50000}})";
+    std::ofstream(paths->preferencesFile()) << original;
+
+    {
+        const ScopedSafeMode safe_mode;
+        EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "dark");
+        EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
+        EXPECT_FLOAT_EQ(lfs::vis::loadSceneRenderScalePreference(), 1.0f);
+        EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
+        EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
+        const auto mcp = lfs::vis::loadMcpPreferences();
+        EXPECT_TRUE(mcp.enabled);
+        EXPECT_FALSE(mcp.expose_network);
+        EXPECT_EQ(mcp.port, 45677);
+        EXPECT_FALSE(mcp.request_logging);
+        const auto perf_hud = lfs::vis::loadPerfHudPreferences();
+        EXPECT_FALSE(perf_hud.visible);
+        EXPECT_TRUE(perf_hud.expanded);
+        lfs::vis::saveThemePreferenceName("gruvbox");
+        lfs::vis::saveUiScalePreference(2.0f);
+        lfs::vis::saveSceneRenderScalePreference(0.5f);
+        lfs::vis::saveSceneUpscalerPreference("spatial");
+        lfs::vis::saveLanguagePreference("fr");
+        lfs::vis::saveMcpPreferences({.enabled = true, .expose_network = false, .port = 45677, .request_logging = true});
+        lfs::vis::savePerfHudPreferences({.visible = true, .expanded = false});
+    }
+
+    std::ifstream file(paths->preferencesFile());
+    const std::string persisted((std::istreambuf_iterator<char>(file)), {});
+    EXPECT_EQ(persisted, original);
+    file.close();
+    std::filesystem::remove_all(root, error);
 }

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/async_task_manager.hpp"
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
@@ -21,11 +22,17 @@
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
 #include "python/runner.hpp"
+#include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/mesh2splat.hpp"
 #include "rendering/mesh_offscreen_renderer.hpp"
 #include "rendering/passes/vulkan_mesh_pass.hpp"
+#include "rendering/passes/vulkan_scene_motion_pass.hpp"
+#include "rendering/passes/vulkan_scene_temporal_resolve_pass.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/scene_temporal_resolve.hpp"
+#include "rendering/temporal_frame_tracker.hpp"
+#include "rendering/vulkan_scene_upscaler_controller.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
 #include "sequencer/keyframe.hpp"
@@ -35,16 +42,19 @@
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
+#include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/window_manager.hpp"
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <filesystem>
 #include <format>
 #include <functional>
 #include <future>
+#include <limits>
 #include <shared_mutex>
 #include <string_view>
 #include <type_traits>
@@ -354,6 +364,370 @@ namespace lfs::vis::gui {
         }
     };
 
+    struct VideoExportUpscalerState {
+        VulkanContext* context = nullptr;
+        VkCommandPool command_pool = VK_NULL_HANDLE;
+        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+        VkFence fence = VK_NULL_HANDLE;
+        VulkanContext::ExternalBuffer cuda_buffer;
+        VulkanContext::ExternalSemaphore cuda_semaphore;
+        rendering::CudaVulkanBufferInterop cuda_buffer_interop;
+        rendering::CudaTimelineSemaphore cuda_timeline;
+        rendering::CudaVulkanUploadStream cuda_stream;
+        VkDeviceSize cuda_buffer_capacity = 0;
+        std::uint64_t cuda_timeline_value = 0;
+        VulkanSceneMotionPass motion_pass;
+        VulkanSceneTemporalResolvePass temporal_resolve_pass;
+        VulkanSceneUpscalerController controller{optionalSceneUpscalerRegistry()};
+        glm::mat4 previous_view_projection{1.0f};
+        glm::vec2 previous_jitter_pixels{0.0f};
+        std::uint64_t sequence = 0;
+        bool has_history = false;
+        std::string active_backend;
+        std::string error;
+
+        ~VideoExportUpscalerState() { shutdown(); }
+
+        void shutdown() {
+            controller.deactivate();
+            temporal_resolve_pass.shutdown();
+            motion_pass.shutdown();
+            cuda_timeline.reset();
+            cuda_buffer_interop.reset();
+            cuda_stream.reset();
+            if (context && context->device() != VK_NULL_HANDLE) {
+                context->destroyExternalSemaphore(cuda_semaphore);
+                context->destroyExternalBuffer(cuda_buffer);
+                if (fence != VK_NULL_HANDLE)
+                    vkDestroyFence(context->device(), fence, nullptr);
+                if (command_pool != VK_NULL_HANDLE)
+                    vkDestroyCommandPool(context->device(), command_pool, nullptr);
+            }
+            context = nullptr;
+            command_pool = VK_NULL_HANDLE;
+            command_buffer = VK_NULL_HANDLE;
+            fence = VK_NULL_HANDLE;
+            cuda_buffer_capacity = 0;
+            cuda_timeline_value = 0;
+            has_history = false;
+            previous_jitter_pixels = {};
+            sequence = 0;
+            active_backend.clear();
+        }
+
+        [[nodiscard]] static float halton(std::uint64_t index, const std::uint64_t base) {
+            float value = 0.0f;
+            float fraction = 1.0f;
+            while (index > 0) {
+                fraction /= static_cast<float>(base);
+                value += fraction * static_cast<float>(index % base);
+                index /= base;
+            }
+            return value;
+        }
+
+        [[nodiscard]] glm::vec2 currentJitterPixels() const {
+            const auto index = sequence + 1;
+            return {halton(index, 2) - 0.5f, halton(index, 3) - 0.5f};
+        }
+
+        [[nodiscard]] bool initialize(VulkanContext& requested_context,
+                                      const std::string_view backend) {
+            if (context == &requested_context && active_backend == backend)
+                return true;
+            shutdown();
+            context = &requested_context;
+            VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+            pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+            pool_info.queueFamilyIndex = context->graphicsQueueFamily();
+            if (vkCreateCommandPool(context->device(), &pool_info, nullptr, &command_pool) != VK_SUCCESS) {
+                error = "Failed to create the video-upscaler command pool";
+                shutdown();
+                return false;
+            }
+            VkCommandBufferAllocateInfo allocate{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            allocate.commandPool = command_pool;
+            allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocate.commandBufferCount = 1;
+            if (vkAllocateCommandBuffers(context->device(), &allocate, &command_buffer) != VK_SUCCESS) {
+                error = "Failed to allocate the video-upscaler command buffer";
+                shutdown();
+                return false;
+            }
+            VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            if (vkCreateFence(context->device(), &fence_info, nullptr, &fence) != VK_SUCCESS ||
+                !motion_pass.init(*context) || !cuda_stream.init() ||
+                (backend == "temporal" && !temporal_resolve_pass.init(*context))) {
+                error = "Failed to initialize video-upscaler Vulkan resources";
+                shutdown();
+                return false;
+            }
+            if (backend == "temporal") {
+                active_backend = backend;
+                return true;
+            }
+            SceneUpscalerProbeContext probe{};
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(context->physicalDevice(), &properties);
+            probe.graphics_api_version = properties.apiVersion;
+            probe.vendor_id = properties.vendorID;
+            probe.device_id = properties.deviceID;
+            if (!controller.select(backend, probe, *context)) {
+                error = std::format("Video upscaler '{}' is unavailable on this Vulkan device", backend);
+                shutdown();
+                return false;
+            }
+            active_backend = backend;
+            return true;
+        }
+
+        [[nodiscard]] bool ensureCudaOutput(const VkDeviceSize bytes) {
+            if (cuda_buffer_interop.valid() && cuda_timeline.valid() &&
+                cuda_buffer_capacity >= bytes)
+                return true;
+            cuda_timeline.reset();
+            cuda_buffer_interop.reset();
+            context->destroyExternalSemaphore(cuda_semaphore);
+            context->destroyExternalBuffer(cuda_buffer);
+            cuda_buffer_capacity = 0;
+            cuda_timeline_value = 0;
+
+            if (!context->createExternalBuffer(
+                    bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, cuda_buffer,
+                    "video_export.cuda_output", active_backend) ||
+                !context->createExternalTimelineSemaphore(
+                    0, cuda_semaphore, "video_export.cuda_output")) {
+                error = std::format("Failed to create Vulkan/CUDA video output: {}",
+                                    context->lastError());
+                return false;
+            }
+            const auto buffer_handle = context->releaseExternalBufferNativeHandle(cuda_buffer);
+            const auto semaphore_handle =
+                context->releaseExternalSemaphoreNativeHandle(cuda_semaphore);
+            if (!cuda_buffer_interop.init({
+                    .memory_handle = buffer_handle,
+                    .allocation_size = static_cast<size_t>(cuda_buffer.allocation_size),
+                    .size = static_cast<size_t>(bytes),
+                    .dedicated_allocation = context->externalMemoryDedicatedAllocationEnabled(),
+                }) ||
+                !cuda_timeline.init({
+                    .semaphore_handle = semaphore_handle,
+                    .initial_value = 0,
+                })) {
+                error = std::format("Failed to import video output into CUDA: {}{}",
+                                    cuda_buffer_interop.lastError(), cuda_timeline.lastError());
+                return false;
+            }
+            cuda_buffer_capacity = bytes;
+            return true;
+        }
+
+        [[nodiscard]] cudaStream_t cudaStream() const { return cuda_stream.stream(); }
+
+        [[nodiscard]] bool evaluate(const VideoExportVulkanFrameInputs& inputs,
+                                    const glm::mat4& current_view_projection,
+                                    const float frame_time_seconds,
+                                    const float camera_near,
+                                    const float camera_far,
+                                    const float camera_vertical_fov_radians,
+                                    const int quality,
+                                    lfs::core::Tensor& frame) {
+            const bool temporal_output = active_backend == "temporal";
+            const VkDeviceSize component_bytes = temporal_output ? 2u : 1u;
+            const VkDeviceSize bytes = static_cast<VkDeviceSize>(inputs.output_extent.x) *
+                                       static_cast<VkDeviceSize>(inputs.output_extent.y) * 4u *
+                                       component_bytes;
+            if (!ensureCudaOutput(bytes))
+                return false;
+            if (has_history &&
+                vkWaitForFences(context->device(), 1, &fence, VK_TRUE,
+                                std::numeric_limits<std::uint64_t>::max()) != VK_SUCCESS) {
+                error = "Failed to retire the previous video-upscaler frame";
+                return false;
+            }
+            vkResetFences(context->device(), 1, &fence);
+            vkResetCommandPool(context->device(), command_pool, 0);
+            VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            if (vkBeginCommandBuffer(command_buffer, &begin) != VK_SUCCESS) {
+                error = "Failed to begin the video-upscaler command buffer";
+                return false;
+            }
+
+            const glm::mat4 previous = has_history ? previous_view_projection : current_view_projection;
+            const VulkanSceneMotionParams motion{
+                .enabled = true,
+                .depth_view = inputs.depth.view,
+                .depth_generation = inputs.depth.generation,
+                .inverse_current_view_projection = glm::inverse(current_view_projection),
+                .previous_view_projection = previous,
+                .render_extent = inputs.color.valid_extent,
+                .depth_is_ndc = false,
+                .camera_near = camera_near,
+                .camera_far = camera_far,
+                .includes_jitter = true,
+                .flip_y = false,
+            };
+            if (!motion_pass.record(command_buffer, motion, 0)) {
+                error = "Failed to record video-export motion vectors";
+                return false;
+            }
+            auto dispatch = VulkanSceneUpscalerDispatch{
+                .view = TemporalViewId::Main,
+                .color = inputs.color,
+                .depth = {
+                    .image = motion_pass.ndcDepthImage(0),
+                    .view = motion_pass.ndcDepthView(0),
+                    .format = VK_FORMAT_R32_SFLOAT,
+                    .layout = VK_IMAGE_LAYOUT_GENERAL,
+                    .valid_extent = inputs.color.valid_extent,
+                    .allocation_extent = inputs.color.valid_extent,
+                    .generation = inputs.depth.generation,
+                },
+                .motion = {
+                    .image = motion_pass.motionImage(0),
+                    .view = motion_pass.motionView(0),
+                    .format = VK_FORMAT_R16G16_SFLOAT,
+                    .layout = VK_IMAGE_LAYOUT_GENERAL,
+                    .valid_extent = inputs.color.valid_extent,
+                    .allocation_extent = inputs.color.valid_extent,
+                    .generation = inputs.color.generation,
+                },
+                .output_extent = inputs.output_extent,
+                .jitter_pixels = inputs.jitter_pixels,
+                .previous_jitter_pixels = inputs.previous_jitter_pixels,
+                .motion_includes_jitter = true,
+                .frame_time_seconds = frame_time_seconds,
+                .camera_near = camera_near,
+                .camera_far = camera_far,
+                .camera_vertical_fov_radians = camera_vertical_fov_radians,
+                .sequence = sequence,
+                .reset_reasons = has_history ? TemporalResetReason::None : TemporalResetReason::FirstFrame,
+                .quality = static_cast<SceneTemporalQuality>(std::clamp(quality, 0, 2)),
+            };
+            VkImage output_image = VK_NULL_HANDLE;
+            VkImageLayout output_layout = VK_IMAGE_LAYOUT_GENERAL;
+            if (active_backend == "temporal") {
+                const auto settings = sceneTemporalQualitySettings(dispatch.quality);
+                const auto prior = temporal_resolve_pass.contract(TemporalViewId::Main);
+                const VulkanSceneTemporalResolveParams resolve{
+                    .enabled = true,
+                    .view = TemporalViewId::Main,
+                    .current_color_view = inputs.color.view,
+                    .motion_view = motion_pass.motionView(0),
+                    .current_color_layout = inputs.color.layout,
+                    .motion_layout = VK_IMAGE_LAYOUT_GENERAL,
+                    .render_extent = inputs.color.valid_extent,
+                    .output_extent = inputs.output_extent,
+                    .current_allocation_extent = inputs.color.allocation_extent,
+                    .sequence = prior.available() ? prior.sequence : 0,
+                    .history_valid = has_history && prior.available(),
+                    .history_weight = settings.history_weight,
+                    .motion_rejection_pixels = settings.motion_rejection_pixels,
+                };
+                if (!temporal_resolve_pass.record(command_buffer, resolve)) {
+                    error = "Temporal video upscaler dispatch failed";
+                    return false;
+                }
+                output_image = temporal_resolve_pass.outputImage(TemporalViewId::Main);
+            } else {
+                if (!controller.record(command_buffer, dispatch)) {
+                    error = std::format("Video upscaler '{}' dispatch failed", active_backend);
+                    return false;
+                }
+                const auto output = controller.output(TemporalViewId::Main);
+                if (!output.valid(inputs.output_extent)) {
+                    error = "Video upscaler returned an invalid output image";
+                    return false;
+                }
+                output_image = output.color.image;
+                output_layout = output.color.layout;
+            }
+            if (output_image == VK_NULL_HANDLE) {
+                error = "Video upscaler returned no output image";
+                return false;
+            }
+            cmdImageBarrier2(command_buffer,
+                             output_image,
+                             VK_IMAGE_ASPECT_COLOR_BIT,
+                             output_layout,
+                             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                             VK_ACCESS_2_TRANSFER_READ_BIT);
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.imageExtent = {static_cast<uint32_t>(inputs.output_extent.x),
+                                static_cast<uint32_t>(inputs.output_extent.y), 1};
+            vkCmdCopyImageToBuffer(command_buffer, output_image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   cuda_buffer.buffer, 1, &copy);
+            cmdImageBarrier2(command_buffer,
+                             output_image,
+                             VK_IMAGE_ASPECT_COLOR_BIT,
+                             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                             output_layout,
+                             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                             VK_ACCESS_2_TRANSFER_READ_BIT,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             temporal_output ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
+                                             : VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
+                error = "Failed to end the video-upscaler command buffer";
+                return false;
+            }
+            VkTimelineSemaphoreSubmitInfo timeline{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+            timeline.waitSemaphoreValueCount = inputs.completion_semaphore != VK_NULL_HANDLE ? 1u : 0u;
+            timeline.pWaitSemaphoreValues = &inputs.completion_value;
+            const std::uint64_t cuda_ready_value = ++cuda_timeline_value;
+            timeline.signalSemaphoreValueCount = 1;
+            timeline.pSignalSemaphoreValues = &cuda_ready_value;
+            const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+            VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            submit.pNext = &timeline;
+            submit.waitSemaphoreCount = timeline.waitSemaphoreValueCount;
+            submit.pWaitSemaphores = timeline.waitSemaphoreValueCount ? &inputs.completion_semaphore : nullptr;
+            submit.pWaitDstStageMask = timeline.waitSemaphoreValueCount ? &wait_stage : nullptr;
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &command_buffer;
+            submit.signalSemaphoreCount = 1;
+            submit.pSignalSemaphores = &cuda_semaphore.semaphore;
+            if (vkQueueSubmit(context->graphicsQueue(), 1, &submit, fence) != VK_SUCCESS) {
+                error = "Failed to submit the video-upscaler command buffer";
+                return false;
+            }
+            // The preview color/depth images belong to the viewport renderer and
+            // may be recycled as soon as this viewer-thread task returns. Keep
+            // them borrowed until the upscaler, temporal resolve and output copy
+            // have all completed. The CUDA timeline wait alone is asynchronous
+            // on the CPU and therefore cannot protect those Vulkan inputs from
+            // reuse by the following GUI frame.
+            if (vkWaitForFences(context->device(), 1, &fence, VK_TRUE,
+                                std::numeric_limits<std::uint64_t>::max()) != VK_SUCCESS) {
+                error = "Failed to complete the video-upscaler Vulkan work";
+                return false;
+            }
+            if (!cuda_timeline.cudaWait(cuda_ready_value, cuda_stream.stream())) {
+                error = std::format("Failed to wait for Vulkan video output in CUDA: {}",
+                                    cuda_timeline.lastError());
+                return false;
+            }
+            frame = lfs::core::Tensor::from_blob(
+                cuda_buffer_interop.devicePointer(),
+                {static_cast<size_t>(inputs.output_extent.y), static_cast<size_t>(inputs.output_extent.x), size_t{4}},
+                lfs::core::Device::CUDA,
+                temporal_output ? lfs::core::DataType::Float16 : lfs::core::DataType::UInt8,
+                cuda_stream.stream());
+            previous_view_projection = current_view_projection;
+            previous_jitter_pixels = inputs.jitter_pixels;
+            has_history = true;
+            ++sequence;
+            return true;
+        }
+    };
+
     [[nodiscard]] bool isValidVideoExportMeshLayer(
         const MeshLayer& layer,
         const int width,
@@ -530,6 +904,8 @@ namespace lfs::vis::gui {
         if (normalize_uint8) {
             frame = frame / 255.0f;
         }
+        if (frame.size(2) == 4)
+            frame = frame.slice(2, 0, 3).contiguous();
         frame = frame.permute({2, 0, 1}).contiguous();
         if (frame.device() != lfs::core::Device::CUDA) {
             frame = frame.cuda();
@@ -544,17 +920,43 @@ namespace lfs::vis::gui {
             .orthographic = frame_view.orthographic};
     }
 
+    std::expected<lfs::core::Tensor, std::string> reconstructVideoExportFrame(
+        lfs::core::Tensor frame,
+        const VideoExportRenderPlan& plan) {
+        if (!plan.requires_upscale)
+            return frame;
+
+        if (plan.backend != "spatial" && plan.backend != "temporal") {
+            return std::unexpected(std::format(
+                "Video upscaler '{}' requires the Vulkan adapter export path", plan.backend));
+        }
+
+        try {
+            return lfs::core::lanczos_resize_float_chw(
+                frame.contiguous(), plan.output_height, plan.output_width, 2);
+        } catch (const std::exception& error) {
+            return std::unexpected(std::format(
+                "Failed to reconstruct video frame with '{}': {}", plan.backend, error.what()));
+        } catch (...) {
+            return std::unexpected(std::format(
+                "Failed to reconstruct video frame with '{}': unknown error", plan.backend));
+        }
+    }
+
     std::expected<lfs::core::Tensor, std::string> renderVideoExportFrame(
         RenderingManager& rendering_manager,
         rendering::RenderingEngine& engine,
         VideoExportEnvironmentState& environment_state,
         VideoExportMeshRendererState* mesh_renderer_state,
+        VideoExportUpscalerState* upscaler_state,
         VulkanContext* vulkan_context,
         const VideoExportSceneSnapshot& snapshot,
         const RenderSettings& render_settings,
         const lfs::sequencer::CameraState& cam_state,
-        const int width,
-        const int height) {
+        const VideoExportRenderPlan& render_plan,
+        const float frame_time_seconds) {
+        const int width = render_plan.input_width;
+        const int height = render_plan.input_height;
         const auto viewport = makeVideoExportViewport(cam_state, render_settings, width, height);
         const auto frame_view = makeVideoExportFrameView(cam_state, render_settings, width, height);
         const bool render_environment = environmentBackgroundEnabled(render_settings);
@@ -585,7 +987,7 @@ namespace lfs::vis::gui {
                         return std::unexpected(render_result ? LOC(lichtfeld::Strings::Runtime::RENDERED_POINT_CLOUD_INVALID)
                                                              : render_result.error());
                     }
-                    return *render_result->image;
+                    return reconstructVideoExportFrame(*render_result->image, render_plan);
                 }
 
                 auto render_result = engine.renderPointCloudGpuFrame(*snapshot.combined_model, request);
@@ -597,6 +999,77 @@ namespace lfs::vis::gui {
             } else {
                 auto scene_state = makeVideoExportGaussianSceneState(snapshot);
                 const auto camera_rotation = glm::mat3_cast(cam_state.rotation);
+                const bool vulkan_upscaler = render_plan.backend == "temporal" ||
+                                             (render_plan.backend != "native" &&
+                                              render_plan.backend != "spatial");
+                if (vulkan_upscaler) {
+                    const auto contract = videoExportUpscalerContract(render_plan.backend);
+                    if (!contract || !upscaler_state || !vulkan_context)
+                        return std::unexpected(
+                            "The selected video upscaler has no active Vulkan export session");
+                    if (!upscaler_state->initialize(*vulkan_context, render_plan.backend))
+                        return std::unexpected(upscaler_state->error);
+
+                    const glm::vec2 jitter = upscaler_state->currentJitterPixels();
+                    const auto [focal_x, focal_y] = rendering::computePixelFocalLengths(
+                        {width, height}, cam_state.focal_length_mm);
+                    const rendering::CameraIntrinsics intrinsics{
+                        .focal_x = focal_x,
+                        .focal_y = focal_y,
+                        .center_x = static_cast<float>(width) * 0.5f + jitter.x,
+                        .center_y = static_cast<float>(height) * 0.5f + jitter.y,
+                    };
+                    RenderingManager::PreviewVulkanFrame preview_frame;
+                    std::string preview_error;
+                    if (!rendering_manager.renderPreviewVulkanFrame(
+                            *snapshot.combined_model, std::move(scene_state), camera_rotation,
+                            cam_state.position, cam_state.focal_length_mm, width, height,
+                            preview_frame, preview_error, intrinsics))
+                        return std::unexpected(std::move(preview_error));
+
+                    const VideoExportVulkanFrameInputs inputs{
+                        .color = {
+                            .image = preview_frame.color_image,
+                            .view = preview_frame.color_view,
+                            .format = VK_FORMAT_R8G8B8A8_UNORM,
+                            .layout = preview_frame.color_layout,
+                            .valid_extent = preview_frame.extent,
+                            .allocation_extent = preview_frame.allocation_extent,
+                            .generation = preview_frame.generation,
+                        },
+                        .depth = {
+                            .image = preview_frame.depth_image,
+                            .view = preview_frame.depth_view,
+                            .format = VK_FORMAT_R32_SFLOAT,
+                            .layout = preview_frame.depth_layout,
+                            .valid_extent = preview_frame.extent,
+                            .allocation_extent = preview_frame.allocation_extent,
+                            .generation = preview_frame.generation,
+                        },
+                        .output_extent = {render_plan.output_width, render_plan.output_height},
+                        .jitter_pixels = jitter,
+                        .previous_jitter_pixels = upscaler_state->previous_jitter_pixels,
+                        .history_valid = upscaler_state->has_history,
+                        .exposure = 1.0f,
+                        .completion_semaphore = preview_frame.completion_semaphore,
+                        .completion_value = preview_frame.completion_value,
+                    };
+                    lfs::core::Tensor vendor_frame;
+                    auto jittered_viewport = viewport;
+                    jittered_viewport.projection_jitter_ndc = temporalJitterNdc(
+                        upscaler_state->sequence, {width, height});
+                    const glm::mat4 view_projection = jittered_viewport.getProjectionMatrix(
+                                                          frame_view.near_plane, frame_view.far_plane) *
+                                                      frame_view.getViewMatrix();
+                    if (!upscaler_state->evaluate(
+                            inputs, view_projection, frame_time_seconds,
+                            frame_view.near_plane, frame_view.far_plane,
+                            rendering::focalLengthToVFovRad(cam_state.focal_length_mm),
+                            render_plan.quality, vendor_frame))
+                        return std::unexpected(upscaler_state->error);
+                    auto vendor_image = std::make_shared<lfs::core::Tensor>(std::move(vendor_frame));
+                    return std::move(*vendor_image);
+                }
                 auto preview_image = render_environment
                                          ? rendering_manager.renderPreviewImageRgba8(
                                                *snapshot.combined_model,
@@ -620,7 +1093,7 @@ namespace lfs::vis::gui {
                 }
 
                 if (!requires_composite_pass) {
-                    return std::move(*video_frame);
+                    return reconstructVideoExportFrame(std::move(*video_frame), render_plan);
                 }
 
                 auto frame_image = std::make_shared<lfs::core::Tensor>(std::move(*video_frame));
@@ -663,7 +1136,7 @@ namespace lfs::vis::gui {
                     return std::unexpected(readback_result ? LOC(lichtfeld::Strings::Runtime::RENDERED_POINT_CLOUD_INVALID)
                                                            : readback_result.error());
                 }
-                return *(*readback_result);
+                return reconstructVideoExportFrame(*(*readback_result), render_plan);
             }
 
             primary_frame = std::move(*render_result);
@@ -787,6 +1260,10 @@ namespace lfs::vis::gui {
         }
     }
 
+    void AsyncTaskManager::resetVideoExportUpscalerState() {
+        video_export_upscaler_state_.reset();
+    }
+
     void AsyncTaskManager::shutdown() {
         if (export_state_.active.load())
             cancelExport();
@@ -802,6 +1279,7 @@ namespace lfs::vis::gui {
         if (viewer_ && viewer_->isOnViewerThread()) {
             resetVideoExportEnvironmentState();
             resetVideoExportMeshRendererState();
+            resetVideoExportUpscalerState();
         }
 
         if (import_state_.thread) {
@@ -931,6 +1409,16 @@ namespace lfs::vis::gui {
             } else {
                 options.provenance = core::make_minimal_provenance_stamp();
             }
+            options.upscaler.backend = evt.upscaler_backend;
+            options.upscaler.input_scale = evt.upscaler_input_scale;
+            options.upscaler.quality = evt.upscaler_quality;
+            options.upscaler.fallback = evt.upscaler_fallback ==
+                                                static_cast<int>(io::video::VideoUpscalerFallback::Native)
+                                            ? io::video::VideoUpscalerFallback::Native
+                                            : io::video::VideoUpscalerFallback::Abort;
+            options.splat_precision = evt.splat_precision == 16
+                                          ? io::video::VideoSplatPrecision::Float16
+                                          : io::video::VideoSplatPrecision::Float32;
             startVideoExport(path, options);
         });
     }
@@ -2000,8 +2488,14 @@ namespace lfs::vis::gui {
             fail_start(validated_options.error());
             return;
         }
-
-        const auto snapshot_result = captureVideoExportSceneSnapshot(*scene_manager);
+        const auto upscaler_contract = videoExportUpscalerContract(
+            validated_options->upscaler.backend);
+        if (!upscaler_contract) {
+            fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_UPSCALER_UNAVAILABLE));
+            return;
+        }
+        const auto snapshot_result = captureVideoExportSceneSnapshot(
+            *scene_manager, validated_options->splat_precision);
         if (!snapshot_result) {
             fail_start(snapshot_result.error());
             return;
@@ -2015,17 +2509,44 @@ namespace lfs::vis::gui {
 
         const auto export_options = *validated_options;
         const auto render_settings = rendering_manager->getSettings();
+        const bool supports_reconstruction =
+            !environmentBackgroundEnabled(render_settings) && snapshot_result->meshes.empty();
+        const auto render_plan = resolveVideoExportRenderPlan(
+            export_options, supports_reconstruction);
+        if (!render_plan) {
+            fail_start(render_plan.error());
+            return;
+        }
+        if (render_plan->backend != export_options.upscaler.backend) {
+            LOG_WARN("Video upscaler '{}' is unavailable for this scene composition; using '{}'",
+                     export_options.upscaler.backend,
+                     render_plan->backend);
+        }
         const float duration = timeline.duration();
         const int total_frames = static_cast<int>(std::ceil(duration * export_options.framerate)) + 1;
         const int width = export_options.width;
         const int height = export_options.height;
 
-        std::vector<lfs::sequencer::CameraState> frame_states;
-        frame_states.reserve(total_frames);
+        struct VideoExportFrameSample {
+            float clip_time = 0.0f;
+            lfs::sequencer::CameraState camera;
+        };
+        std::vector<std::vector<VideoExportFrameSample>> frame_samples;
+        frame_samples.reserve(total_frames);
         const float start_time = timeline.startTime();
+        const float end_time = timeline.endTime();
         const float time_step = 1.0f / static_cast<float>(export_options.framerate);
-        for (int i = 0; i < total_frames; ++i)
-            frame_states.push_back(timeline.evaluate(start_time + static_cast<float>(i) * time_step));
+        for (int i = 0; i < total_frames; ++i) {
+            const float frame_time = start_time + static_cast<float>(i) * time_step;
+            const auto sample_times = videoExportSampleTimes(
+                frame_time, time_step, start_time, end_time, export_options);
+            auto& samples = frame_samples.emplace_back();
+            samples.reserve(sample_times.size());
+            for (const float sample_time : sample_times) {
+                samples.push_back({.clip_time = sample_time,
+                                   .camera = timeline.evaluate(sample_time)});
+            }
+        }
 
         video_export_state_.active.store(true);
         video_export_state_.cancel_requested.store(false);
@@ -2047,19 +2568,38 @@ namespace lfs::vis::gui {
         if (!snapshot_result->meshes.empty()) {
             video_export_mesh_renderer_state_ = std::make_unique<VideoExportMeshRendererState>();
         }
+        resetVideoExportUpscalerState();
+        if (upscaler_contract->execution == VideoExportUpscalerExecution::VulkanAdapter ||
+            upscaler_contract->execution == VideoExportUpscalerExecution::TemporalVulkanResolve) {
+            video_export_upscaler_state_ = std::make_unique<VideoExportUpscalerState>();
+        }
 
-        LOG_INFO("Starting video export: {} frames at {}x{}", total_frames, width, height);
+        LOG_INFO("Starting video export: {} frames at {}x{} ({}: {}x{} -> {}x{})",
+                 total_frames,
+                 width,
+                 height,
+                 render_plan->backend,
+                 render_plan->input_width,
+                 render_plan->input_height,
+                 render_plan->output_width,
+                 render_plan->output_height);
+        if (export_options.upscaler.backend == "temporal") {
+            LOG_INFO("Temporal video export: Vulkan history resolve, one render per frame");
+        }
 
         video_export_state_.thread.emplace(
-            [this, viewer = viewer_, path, export_options, total_frames, width, height,
-             engine, scene_manager, rendering_manager, render_settings, start_time, time_step,
+            [this, viewer = viewer_, path, export_options, render_plan = *render_plan,
+             total_frames, width, height,
+             engine, scene_manager, rendering_manager, render_settings, time_step,
              environment_state = video_export_environment_state_.get(),
              mesh_renderer_state = video_export_mesh_renderer_state_.get(),
+             upscaler_state = video_export_upscaler_state_.get(),
              snapshot = *snapshot_result,
-             frame_states = std::move(frame_states)](std::stop_token stop_token) mutable {
+             frame_samples = std::move(frame_samples)](std::stop_token stop_token) mutable {
                 bool cancelled = false;
                 auto cleanup_video_export_state = [this, viewer]() {
-                    if (!video_export_environment_state_ && !video_export_mesh_renderer_state_) {
+                    if (!video_export_environment_state_ && !video_export_mesh_renderer_state_ &&
+                        !video_export_upscaler_state_) {
                         return;
                     }
                     auto cleanup_result = postToViewerAndWait(
@@ -2067,6 +2607,7 @@ namespace lfs::vis::gui {
                         [this]() -> std::expected<void, std::string> {
                             resetVideoExportMeshRendererState();
                             resetVideoExportEnvironmentState();
+                            resetVideoExportUpscalerState();
                             return {};
                         });
                     if (!cleanup_result) {
@@ -2115,6 +2656,8 @@ namespace lfs::vis::gui {
                     return;
                 }
 
+                double render_time_ms = 0.0;
+                double encode_time_ms = 0.0;
                 for (int frame = 0; frame < total_frames; ++frame) {
                     if (stop_token.stop_requested() || video_export_state_.cancel_requested.load()) {
                         LOG_INFO("Video export cancelled at frame {}", frame);
@@ -2122,33 +2665,59 @@ namespace lfs::vis::gui {
                         break;
                     }
 
+                    const auto render_started = std::chrono::steady_clock::now();
                     auto frame_tensor = postToViewerAndWait(
                         viewer,
                         [viewer, engine, scene_manager, rendering_manager, environment_state,
-                         mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height,
-                         cam_state = frame_states[frame],
-                         clip_time = start_time + static_cast<float>(frame) * time_step]()
+                         mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, render_plan,
+                         upscaler_state, time_step,
+                         samples = frame_samples[frame]]()
                             -> std::expected<lfs::core::Tensor, std::string> {
-                            if (lfs::python::has_scene_time_callback()) {
-                                lfs::python::tick_scene_time_callback(clip_time);
-                                refreshVideoExportMeshTransforms(
-                                    *snapshot_ptr, scene_manager->getScene());
-                            }
                             auto* const window_manager = viewer->getWindowManager();
                             auto* const vulkan_context =
                                 window_manager != nullptr ? window_manager->getVulkanContext() : nullptr;
-                            return renderVideoExportFrame(
-                                *rendering_manager,
-                                *engine,
-                                *environment_state,
-                                mesh_renderer_state,
-                                vulkan_context,
-                                *snapshot_ptr,
-                                render_settings,
-                                cam_state,
-                                width,
-                                height);
+                            std::optional<lfs::core::Tensor> accumulated;
+                            const float sample_weight = 1.0f / static_cast<float>(samples.size());
+                            for (const auto& sample : samples) {
+                                if (lfs::python::has_scene_time_callback()) {
+                                    lfs::python::tick_scene_time_callback(sample.clip_time);
+                                    refreshVideoExportMeshTransforms(
+                                        *snapshot_ptr, scene_manager->getScene());
+                                }
+                                auto rendered = renderVideoExportFrame(
+                                    *rendering_manager,
+                                    *engine,
+                                    *environment_state,
+                                    mesh_renderer_state,
+                                    upscaler_state,
+                                    vulkan_context,
+                                    *snapshot_ptr,
+                                    render_settings,
+                                    sample.camera,
+                                    render_plan,
+                                    time_step);
+                                if (!rendered)
+                                    return std::unexpected(rendered.error());
+                                if ((rendered->dtype() == lfs::core::DataType::UInt8 ||
+                                     rendered->dtype() == lfs::core::DataType::Float16) &&
+                                    rendered->ndim() == 3 && rendered->size(2) == 4 &&
+                                    samples.size() == 1) {
+                                    accumulated = std::move(*rendered);
+                                    continue;
+                                }
+                                auto weighted = std::move(*rendered) * sample_weight;
+                                accumulated = accumulated
+                                                  ? std::optional<lfs::core::Tensor>(
+                                                        std::move(*accumulated) + weighted)
+                                                  : std::optional<lfs::core::Tensor>(std::move(weighted));
+                            }
+                            if (!accumulated)
+                                return std::unexpected(LOC(lichtfeld::Strings::Runtime::VIDEO_TEMPORAL_SAMPLES_MISSING));
+                            return std::move(*accumulated);
                         });
+                    render_time_ms += std::chrono::duration<double, std::milli>(
+                                          std::chrono::steady_clock::now() - render_started)
+                                          .count();
 
                     if (!frame_tensor) {
                         LOG_ERROR("Failed to render frame {}: {}", frame, frame_tensor.error());
@@ -2162,17 +2731,41 @@ namespace lfs::vis::gui {
                         break;
                     }
 
+                    const bool direct_rgba8 = frame_tensor->dtype() == lfs::core::DataType::UInt8 &&
+                                              frame_tensor->ndim() == 3 &&
+                                              frame_tensor->size(2) == 4;
+                    const bool direct_rgba16f = frame_tensor->dtype() == lfs::core::DataType::Float16 &&
+                                                frame_tensor->ndim() == 3 &&
+                                                frame_tensor->size(2) == 4;
                     auto export_frame = frame_tensor->contiguous();
-                    auto image_hwc = export_frame.permute({1, 2, 0}).contiguous();
+                    auto image_hwc = direct_rgba8 || direct_rgba16f
+                                         ? export_frame
+                                         : export_frame.permute({1, 2, 0}).contiguous();
 
                     if (frame == 0) {
-                        LOG_INFO("Video export: CHW shape=[{},{},{}] -> HWC shape=[{},{},{}]",
-                                 export_frame.shape()[0], export_frame.shape()[1], export_frame.shape()[2],
+                        LOG_INFO("Video export input: {} shape=[{},{},{}]",
+                                 direct_rgba8     ? "RGBA8 HWC zero-copy"
+                                 : direct_rgba16f ? "RGBA16F HWC zero-copy"
+                                                  : "RGB float HWC",
                                  image_hwc.shape()[0], image_hwc.shape()[1], image_hwc.shape()[2]);
                     }
 
                     const auto* const gpu_ptr = image_hwc.data_ptr();
-                    auto write_result = encoder->writeFrameGpu(gpu_ptr, width, height, nullptr);
+                    const auto encode_started = std::chrono::steady_clock::now();
+                    auto write_result = direct_rgba8
+                                            ? encoder->writeFrameGpuRgba8(
+                                                  gpu_ptr, width, height,
+                                                  static_cast<void*>(image_hwc.stream()))
+                                        : direct_rgba16f
+                                            ? encoder->writeFrameGpuRgba16f(
+                                                  gpu_ptr, width, height,
+                                                  static_cast<void*>(image_hwc.stream()))
+                                            : encoder->writeFrameGpu(
+                                                  gpu_ptr, width, height,
+                                                  static_cast<void*>(image_hwc.stream()));
+                    encode_time_ms += std::chrono::duration<double, std::milli>(
+                                          std::chrono::steady_clock::now() - encode_started)
+                                          .count();
                     if (!write_result) {
                         {
                             std::lock_guard lock(video_export_state_.mutex);
@@ -2193,6 +2786,13 @@ namespace lfs::vis::gui {
                         video_export_state_.stage = LOCF(lichtfeld::Strings::Runtime::VIDEO_ENCODING_FRAME, frame + 1, total_frames);
                     }
                     publishVideoExportOverlayState();
+                    if ((frame + 1) % 30 == 0 || frame + 1 == total_frames) {
+                        const double completed = static_cast<double>(frame + 1);
+                        LOG_INFO("Video export timing ({}): render/upscale {:.1f} ms/frame, encode {:.1f} ms/frame",
+                                 render_plan.backend,
+                                 render_time_ms / completed,
+                                 encode_time_ms / completed);
+                    }
                 }
 
                 {

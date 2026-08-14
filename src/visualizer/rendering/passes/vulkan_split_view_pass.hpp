@@ -26,7 +26,15 @@ namespace lfs::vis {
         // upload path. The caller owns the image and must keep it alive through
         // the viewport pass record/submit.
         VkImageView external_image_view = VK_NULL_HANDLE;
+        VkImage external_image = VK_NULL_HANDLE;
+        VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         std::uint64_t external_image_generation = 0;
+        VkImageView depth_image_view = VK_NULL_HANDLE;
+        VkImage depth_image = VK_NULL_HANDLE;
+        VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        std::uint64_t depth_image_generation = 0;
+        glm::ivec2 image_size{0, 0};
+        glm::ivec2 allocation_size{0, 0};
         // Valid-region UV for padded panel textures (default identity).
         glm::vec2 uv_scale{1.0f, 1.0f};
         glm::vec2 uv_clamp_max{1.0f, 1.0f};
@@ -34,9 +42,11 @@ namespace lfs::vis {
 
     struct VulkanSplitViewParams {
         bool enabled = false;
+        bool spatial_filter = false;
         VulkanSplitViewPanel left;
         VulkanSplitViewPanel right;
         float split_position = 0.5f;
+        glm::ivec2 coordinate_extent{0, 0};  // source coordinate space for content_rect
         glm::ivec4 content_rect{0, 0, 0, 0}; // x, y, w, h (letterboxed)
         glm::vec3 background{0.0f};
     };

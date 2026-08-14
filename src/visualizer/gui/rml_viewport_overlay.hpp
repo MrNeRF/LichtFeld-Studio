@@ -91,6 +91,7 @@ namespace lfs::vis::gui {
         void setGTMetricsOverlay(GTMetricsOverlayState state);
         void setLodStatsOverlay(LodStatsOverlayState state);
         void setVramHudOverlay(VramHudOverlayState state);
+        void resetVramHudLayout();
         void reloadResources();
         void render();
         void renderCached();

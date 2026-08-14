@@ -20,8 +20,10 @@
 #include "rendering/rendering.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
 #include "rendering_types.hpp"
+#include "scene_depth_contract.hpp"
 #include "spark_lod_controller.hpp"
 #include "split_view_service.hpp"
+#include "temporal_frame_tracker.hpp"
 #include "viewport_appearance_correction.hpp"
 #include "viewport_artifact_service.hpp"
 #include "viewport_frame_lifecycle_service.hpp"
@@ -168,6 +170,37 @@ namespace lfs::vis {
             std::shared_ptr<lfs::core::Tensor> image;
             std::shared_ptr<lfs::core::Tensor> depth;
         };
+        struct PreviewVulkanFrame {
+            VkImage color_image = VK_NULL_HANDLE;
+            VkImageView color_view = VK_NULL_HANDLE;
+            VkImageLayout color_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VkImage depth_image = VK_NULL_HANDLE;
+            VkImageView depth_view = VK_NULL_HANDLE;
+            VkImageLayout depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            glm::ivec2 extent{0, 0};
+            glm::ivec2 allocation_extent{0, 0};
+            std::uint64_t generation = 0;
+            VkSemaphore completion_semaphore = VK_NULL_HANDLE;
+            std::uint64_t completion_value = 0;
+
+            [[nodiscard]] bool valid() const {
+                return color_image != VK_NULL_HANDLE && color_view != VK_NULL_HANDLE &&
+                       depth_image != VK_NULL_HANDLE && depth_view != VK_NULL_HANDLE &&
+                       extent.x > 0 && extent.y > 0;
+            }
+        };
+        [[nodiscard]] std::optional<PreviewVulkanFrame> previewVulkanFrame() const;
+        [[nodiscard]] bool renderPreviewVulkanFrame(
+            const lfs::core::SplatData& model,
+            SceneRenderState scene_state,
+            const glm::mat3& camera_rotation,
+            const glm::vec3& camera_position,
+            float focal_length_mm,
+            int width,
+            int height,
+            PreviewVulkanFrame& output,
+            std::string& error,
+            std::optional<lfs::rendering::CameraIntrinsics> intrinsics_override = std::nullopt);
         PreviewRgbd renderPreviewImageAndDepth(SceneManager* scene_manager,
                                                const glm::mat3& camera_rotation,
                                                const glm::vec3& camera_position,
@@ -232,6 +265,9 @@ namespace lfs::vis {
         void markDirty();
         void markDirty(DirtyMask flags);
         void markCameraPoseChanged();
+        void requestCameraSettleRender(bool reset_temporal_history = false);
+        // Explicitly discard temporal history and schedule a fresh render.
+        void requestTemporalHistoryReset();
 
         [[nodiscard]] bool pollDirtyState();
 
@@ -497,6 +533,14 @@ namespace lfs::vis {
         struct VulkanMeshFrame {
             glm::mat4 view_projection{1.0f};
             glm::vec3 camera_position{0.0f};
+            glm::vec2 scene_jitter_pixels{0.0f};
+            float camera_near = 0.1f;
+            float camera_far = 1000.0f;
+            float camera_vertical_fov_radians = 1.0f;
+            bool camera_orthographic = false;
+            std::uint64_t scene_identity = 0;
+            std::uint64_t temporal_reset_generation = 0;
+            bool temporal_scene_stable = true;
             std::vector<lfs::vis::VulkanMeshDrawItem> items;
             std::vector<lfs::vis::VulkanMeshViewportPanel> panels;
             lfs::vis::VulkanEnvironmentParams environment;
@@ -510,6 +554,10 @@ namespace lfs::vis {
         [[nodiscard]] VulkanMeshFrame getVulkanMeshFrame() const {
             std::lock_guard lock(vulkan_mesh_frame_mutex_);
             return vulkan_mesh_frame_;
+        }
+        [[nodiscard]] SceneDepthContract getSceneDepthContract() const {
+            std::lock_guard lock(scene_depth_contract_mutex_);
+            return scene_depth_contract_;
         }
         void clearVulkanMeshFrame() {
             std::lock_guard lock(vulkan_mesh_frame_mutex_);
@@ -697,9 +745,11 @@ namespace lfs::vis {
         static constexpr auto GT_COMPARISON_IMAGE_RETRY_COOLDOWN = std::chrono::seconds(2);
 
         void applySplitModeChange(const SplitViewService::ModeChangeResult& result);
+        void updateSceneDepthContract(SceneDepthContract contract, glm::ivec2 render_extent);
         void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
         void requestRenderFollowUp();
+        void requestTemporalFollowUp();
         void notifyAsyncLodResultsReady();
         void requestResizeTrainingPause(TrainerManager* trainer_manager);
         void releaseResizeTrainingPause();
@@ -751,7 +801,11 @@ namespace lfs::vis {
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
         std::uint64_t viewport_projection_generation_ = 1;
+        std::uint64_t temporal_scene_revision_ = 1;
+        std::atomic<std::uint64_t> temporal_camera_reset_generation_{1};
+        TemporalConvergenceController temporal_convergence_;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
+        std::optional<PreviewVulkanFrame> preview_vulkan_frame_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
         std::unique_ptr<SparkLodController> lod_controller_;
         const lfs::core::SplatData* lod_controller_model_ = nullptr;
@@ -852,6 +906,8 @@ namespace lfs::vis {
         mutable std::mutex settings_mutex_;
         mutable std::mutex camera_metrics_mutex_;
         mutable std::mutex vulkan_mesh_frame_mutex_;
+        mutable std::mutex scene_depth_contract_mutex_;
+        SceneDepthContract scene_depth_contract_;
         VulkanMeshFrame vulkan_mesh_frame_;
         std::optional<CameraMetricsOverlayState> latest_camera_metrics_;
         std::optional<CameraMetricsJobRequest> pending_camera_metrics_request_;

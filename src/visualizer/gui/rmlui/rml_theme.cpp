@@ -548,7 +548,7 @@ namespace lfs::vis::gui::rml_theme {
                 {"modal.surface", colorToRmlAlpha(p.surface, 0.98f)},
                 {"modal.border", colorToRmlAlpha(p.border, 0.4f)},
                 {"modal.backdrop", colorToRmlAlpha(is_light ? ThemeColor{0.12f, 0.14f, 0.18f, 1.0f} : p.background,
-                                                   is_light ? 0.18f : 0.44f)},
+                                                   0.61f)},
                 {"overlay.surface", colorToRmlAlpha(p.surface, 0.95f)},
                 {"overlay.border", colorToRmlAlpha(p.border, 0.4f)},
                 {"viewport.icon_dim", colorToRmlAlpha(p.text, 0.9f)},

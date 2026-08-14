@@ -42,11 +42,17 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/rendering_manager_events.cpp
         rendering/rendering_manager_vulkan.cpp
         rendering/rendering_manager_viewport.cpp
+        rendering/scene_upscaler_registry.cpp
+        rendering/vulkan_scene_upscaler_controller.cpp
         rendering/lod_page_cache.cpp
         rendering/lod_upload_engine.cpp
         rendering/spark_lod_controller.cpp
         rendering/split_view_composition.cpp
         rendering/split_view_service.cpp
+        rendering/temporal_frame_tracker.cpp
+        rendering/scene_temporal_coordinator.cpp
+        rendering/scene_upscaler_inputs.cpp
+        rendering/scene_temporal_resolve.cpp
         rendering/viewport_artifact_service.cpp
         rendering/viewport_frame_lifecycle_service.cpp
         rendering/viewport_interop_service.cpp
@@ -57,6 +63,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/passes/vulkan_mesh_pass.cpp
         rendering/passes/vulkan_environment_pass.cpp
         rendering/passes/vulkan_depth_blit_pass.cpp
+        rendering/passes/vulkan_scene_motion_pass.cpp
+        rendering/passes/vulkan_scene_temporal_resolve_pass.cpp
         rendering/passes/vulkan_split_view_pass.cpp
         rendering/framerate_controller.cpp
 
@@ -65,6 +73,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # GUI system
         gui/gui_manager.cpp
+        gui/gui_focus_state.cpp
         gui/vulkan_ui_texture.cpp
         gui/global_context_menu.cpp
         gui/gizmo_manager.cpp
@@ -268,6 +277,27 @@ target_sources(lfs_visualizer
         rendering/vulkan_external_tensor.cpp
         rendering/point_cloud_vulkan_renderer.cpp)
 
+if(LFS_NVIDIA_DLSS_AVAILABLE)
+    target_sources(lfs_visualizer PRIVATE
+        rendering/nvidia_dlss_vulkan_adapter.cpp)
+    target_link_libraries(lfs_visualizer PRIVATE NVIDIA::NGX)
+    target_compile_definitions(lfs_visualizer PRIVATE
+        LFS_HAS_NVIDIA_DLSS=1
+        LFS_NVIDIA_DLSS_PROJECT_ID="${LFS_NVIDIA_DLSS_PROJECT_ID}")
+endif()
+
+if(LFS_AMD_FSR3_AVAILABLE)
+    target_sources(lfs_visualizer PRIVATE
+        rendering/amd_fsr3_vulkan_adapter.cpp)
+    target_link_libraries(lfs_visualizer PRIVATE
+        AMD::FidelityFXFsr3Upscaler
+        AMD::FidelityFXVkBackend)
+    target_compile_definitions(lfs_visualizer PRIVATE LFS_HAS_AMD_FSR3=1)
+    if(LFS_AMD_FSR3_BUILD_TARGET)
+        add_dependencies(lfs_visualizer "${LFS_AMD_FSR3_BUILD_TARGET}")
+    endif()
+endif()
+
 # The CPU chunk decoders round multiplies and adds separately; FMA contraction
 # in the dequant kernel would break CPU/GPU bit-parity (guarded by gtest).
 set_source_files_properties(rendering/lod_page_dequant_cuda.cu PROPERTIES
@@ -290,6 +320,7 @@ set(LFS_VIEWPORT_SHADER_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/shader
 target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/screen_quad.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/screen_quad.vert.spv.h" kScreenQuadVertSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene.frag.spv.h" kSceneFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_spatial.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_spatial.frag.spv.h" kSceneSpatialFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vignette.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vignette.frag.spv.h" kVignetteFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/grid.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/grid.vert.spv.h" kGridVertSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/grid.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/grid.frag.spv.h" kGridFragSpv)
@@ -312,6 +343,8 @@ compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/environment.fra
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/depth_blit.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/depth_blit.frag.spv.h" kDepthBlitFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/split_view.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/split_view.frag.spv.h" kSplitViewFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vksplat_compose.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vksplat_compose.comp.spv.h" kVkSplatComposeCompSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_motion_reproject.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_motion_reproject.comp.spv.h" kSceneMotionReprojectCompSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_temporal_resolve.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_temporal_resolve.comp.spv.h" kSceneTemporalResolveCompSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.vert.spv.h" kPointCloudVertSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.frag.spv.h" kPointCloudFragSpv)
 

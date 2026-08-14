@@ -98,7 +98,11 @@ namespace lfs::core {
         std::lock_guard<std::mutex> lock(mutex_);
         for (cudaEvent_t event : pool_) {
             const cudaError_t destroy_status = cudaEventDestroy(event);
-            if (destroy_status != cudaSuccess) {
+            // During process teardown the CUDA runtime may already be unloading.
+            // In that state the event is no longer usable and reporting the
+            // destroy failure only creates a misleading shutdown error.
+            if (destroy_status != cudaSuccess &&
+                destroy_status != cudaErrorCudartUnloading) {
                 ensure_cuda_success(
                     destroy_status, "cudaEventDestroy(tensor event pool shutdown)", {},
                     LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);

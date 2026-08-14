@@ -8,9 +8,13 @@
 #include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "vulkan_result.hpp"
+#ifdef LFS_HAS_NVIDIA_DLSS
+#include "rendering/nvidia_dlss_vulkan_adapter.hpp"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -22,6 +26,7 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <set>
 #include <stop_token>
 #include <string_view>
@@ -388,21 +393,16 @@ namespace lfs::vis {
             create_info.pUserData = const_cast<bool*>(validation_errors_fatal);
         }
 
-        [[nodiscard]] std::filesystem::path defaultPipelineCachePath() {
-#ifdef _WIN32
-            if (const char* local_app_data = std::getenv("LOCALAPPDATA"); local_app_data && local_app_data[0] != '\0') {
-                return std::filesystem::path(local_app_data) / "LichtFeld" / "pipeline_cache.bin";
+        [[nodiscard]] std::optional<std::filesystem::path> defaultPipelineCachePath() {
+            if (lfs::core::environment::flag("LFS_SAFE_MODE", false))
+                return std::nullopt;
+
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths) {
+                LOG_WARN("Unable to resolve Vulkan cache path: {}", paths.error());
+                return std::nullopt;
             }
-            return std::filesystem::current_path() / "LichtFeld" / "pipeline_cache.bin";
-#else
-            if (const char* xdg_cache_home = std::getenv("XDG_CACHE_HOME"); xdg_cache_home && xdg_cache_home[0] != '\0') {
-                return std::filesystem::path(xdg_cache_home) / "lichtfeld" / "pipeline_cache.bin";
-            }
-            if (const char* home = std::getenv("HOME"); home && home[0] != '\0') {
-                return std::filesystem::path(home) / ".cache" / "lichtfeld" / "pipeline_cache.bin";
-            }
-            return std::filesystem::current_path() / ".cache" / "lichtfeld" / "pipeline_cache.bin";
-#endif
+            return paths->cacheDir() / "pipeline_cache.bin";
         }
 
         [[nodiscard]] bool readFile(const std::filesystem::path& path, std::vector<char>& data) {
@@ -1423,6 +1423,25 @@ namespace lfs::vis {
         return true;
     }
 
+    bool VulkanContext::suspendFrameRendering(const Frame& frame) {
+        if (!frame_active_ || active_frame_index_ >= command_buffers_.size() ||
+            frame.command_buffer == VK_NULL_HANDLE ||
+            frame.command_buffer != command_buffers_[active_frame_index_]) {
+            return fail("Cannot suspend Vulkan rendering for an inactive or mismatched frame");
+        }
+        return finishActiveRendering(frame.command_buffer);
+    }
+
+    bool VulkanContext::resumeFrameRendering(const Frame& frame) {
+        if (!frame_active_ || frame_rendering_active_ ||
+            active_frame_index_ >= command_buffers_.size() ||
+            frame.command_buffer == VK_NULL_HANDLE ||
+            frame.command_buffer != command_buffers_[active_frame_index_]) {
+            return fail("Cannot resume Vulkan rendering for an inactive, active, or mismatched frame");
+        }
+        return restartActiveRendering(frame.command_buffer, frame);
+    }
+
     bool VulkanContext::endFrame() {
         if (!frame_active_) {
             return fail(std::format(
@@ -2120,6 +2139,24 @@ namespace lfs::vis {
                 available_extension_count);
             available_extensions.resize(available_extension_count);
         }
+#ifdef LFS_HAS_NVIDIA_DLSS
+        if (lfs::core::environment::flag("LFS_SAFE_MODE", false))
+            disableNvidiaDlssVulkanBootstrap();
+        const auto dlss_instance_extensions = nvidiaDlssVulkanBootstrapReady()
+                                                  ? nvidiaDlssRequiredInstanceExtensions()
+                                                  : std::vector<std::string>{};
+        const bool dlss_instance_extensions_available =
+            std::ranges::all_of(dlss_instance_extensions, [&](const std::string& extension) {
+                return extensionAvailable(available_extensions, extension.c_str());
+            });
+        if (dlss_instance_extensions_available) {
+            for (const auto& extension : dlss_instance_extensions)
+                appendUniqueExtension(extensions, extension.c_str());
+        } else {
+            disableNvidiaDlssVulkanBootstrap();
+            LOG_WARN("NVIDIA DLSS disabled: a required Vulkan instance extension is unavailable");
+        }
+#endif
         instance_external_memory_capabilities_enabled_ =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
         if (instance_external_memory_capabilities_enabled_) {
@@ -2553,6 +2590,21 @@ namespace lfs::vis {
         }
 
         std::vector<const char*> extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+#ifdef LFS_HAS_NVIDIA_DLSS
+        const auto dlss_device_extensions =
+            nvidiaDlssRequiredDeviceExtensions(instance_, physical_device_);
+        const bool dlss_device_extensions_available =
+            std::ranges::all_of(dlss_device_extensions, [&](const std::string& extension) {
+                return extensionAvailable(available_extensions, extension.c_str());
+            });
+        if (dlss_device_extensions_available) {
+            for (const auto& extension : dlss_device_extensions)
+                appendUniqueExtension(extensions, extension.c_str());
+        } else {
+            disableNvidiaDlssVulkanBootstrap();
+            LOG_WARN("NVIDIA DLSS disabled: a required Vulkan device extension is unavailable");
+        }
+#endif
         const bool has_external_memory =
             instance_external_memory_capabilities_enabled_ &&
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
@@ -4390,6 +4442,11 @@ namespace lfs::vis {
                                          ? pixel_count * image_count * bytes_per_pixel
                                          : 0;
         recordCurrentVulkanBytes("vulkan.external.swapchain", "driver_owned_images_estimate", swapchain_estimated_bytes_);
+        auto& vram_profiler = lfs::diagnostics::VramProfiler::instance();
+        vram_profiler.setGauge("viewer.resolution.output.width_px", extent.width);
+        vram_profiler.setGauge("viewer.resolution.output.height_px", extent.height);
+        vram_profiler.setGauge("viewer.resolution.output.pixels", static_cast<double>(pixel_count));
+        vram_profiler.setGauge("viewer.resolution.output.swapchain_images", image_count);
         swapchain_images_in_flight_.assign(image_count, VK_NULL_HANDLE);
         swapchain_format_ = surface_format.format;
         swapchain_extent_fixed_to_surface_ = extent_fixed_to_surface;
@@ -4767,14 +4824,14 @@ namespace lfs::vis {
             return fail("Pipeline cache requires an initialized Vulkan device");
         }
 
-        const std::filesystem::path path = defaultPipelineCachePath();
+        const auto path = defaultPipelineCachePath();
         std::vector<char> cache_data;
-        if (readFile(path, cache_data)) {
+        if (path && readFile(*path, cache_data)) {
             VkPhysicalDeviceProperties device_props{};
             vkGetPhysicalDeviceProperties(physical_device_, &device_props);
             if (const char* reason = pipelineCacheRejectReason(cache_data, device_props)) {
                 LOG_WARN("Discarding on-disk Vulkan pipeline cache ({}): {} — pipelines will be recompiled",
-                         lfs::core::path_to_utf8(path), reason);
+                         lfs::core::path_to_utf8(*path), reason);
                 cache_data.clear();
             }
         }
@@ -4802,7 +4859,7 @@ namespace lfs::vis {
                            "lichtfeld.pipeline_cache");
         if (!cache_data.empty()) {
             LOG_INFO("Loaded Vulkan pipeline cache: {} ({} bytes)",
-                     lfs::core::path_to_utf8(path),
+                     lfs::core::path_to_utf8(*path),
                      cache_data.size());
         }
         return true;
@@ -4813,7 +4870,7 @@ namespace lfs::vis {
             return;
         }
 
-        const std::filesystem::path path = defaultPipelineCachePath();
+        const auto path = defaultPipelineCachePath();
         std::size_t cache_size = 0;
         VkResult result = vkGetPipelineCacheData(device_, pipeline_cache_, &cache_size, nullptr);
         if (result == VK_SUCCESS && cache_size > 0) {
@@ -4822,16 +4879,18 @@ namespace lfs::vis {
             if (result == VK_SUCCESS && cache_size > 0) {
                 cache_data.resize(cache_size);
                 std::error_code ec;
-                std::filesystem::create_directories(path.parent_path(), ec);
-                if (!ec) {
+                if (path) {
+                    std::filesystem::create_directories(path->parent_path(), ec);
+                }
+                if (path && !ec) {
                     std::ofstream file;
-                    if (lfs::core::open_file_for_write(path,
+                    if (lfs::core::open_file_for_write(*path,
                                                        std::ios::binary | std::ios::trunc,
                                                        file)) {
                         file.write(cache_data.data(), static_cast<std::streamsize>(cache_data.size()));
                         if (file) {
                             LOG_INFO("Saved Vulkan pipeline cache: {} ({} bytes)",
-                                     lfs::core::path_to_utf8(path),
+                                     lfs::core::path_to_utf8(*path),
                                      cache_data.size());
                         }
                     }
@@ -4906,6 +4965,11 @@ namespace lfs::vis {
             recordCurrentVulkanBytes("vulkan.external.swapchain", "driver_owned_images_estimate", 0);
             swapchain_estimated_bytes_ = 0;
         }
+        auto& vram_profiler = lfs::diagnostics::VramProfiler::instance();
+        vram_profiler.setGauge("viewer.resolution.output.width_px", 0.0);
+        vram_profiler.setGauge("viewer.resolution.output.height_px", 0.0);
+        vram_profiler.setGauge("viewer.resolution.output.pixels", 0.0);
+        vram_profiler.setGauge("viewer.resolution.output.swapchain_images", 0.0);
     }
 
     bool VulkanContext::waitForFrameFences() {

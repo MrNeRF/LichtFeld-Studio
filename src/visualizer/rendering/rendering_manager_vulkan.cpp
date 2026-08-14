@@ -9,12 +9,15 @@
 #include "core/memory_pressure.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "model_renderability.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene_upscaler_registry.hpp"
+#include "temporal_frame_tracker.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "viewport_appearance_correction.hpp"
@@ -41,10 +44,63 @@
 
 namespace lfs::vis {
 
+    void RenderingManager::updateSceneDepthContract(
+        SceneDepthContract contract, const glm::ivec2 render_extent) {
+        {
+            std::lock_guard lock(scene_depth_contract_mutex_);
+            scene_depth_contract_ = contract;
+        }
+        auto& profiler = lfs::diagnostics::VramProfiler::instance();
+        profiler.setGauge("viewer.depth.available", contract.available() ? 1.0 : 0.0);
+        profiler.setGauge("viewer.depth.valid",
+                          contract.available() && contract.valid() ? 1.0 : 0.0);
+        profiler.setGauge("viewer.depth.encoding", static_cast<double>(contract.encoding));
+        profiler.setGauge("viewer.depth.storage", static_cast<double>(contract.storage));
+        profiler.setGauge("viewer.depth.width_px", contract.width);
+        profiler.setGauge("viewer.depth.height_px", contract.height);
+        profiler.setGauge("viewer.depth.matches_render_extent",
+                          contract.matchesRenderExtent(render_extent.x, render_extent.y) ? 1.0 : 0.0);
+    }
+
     namespace {
         constexpr double kGpuLodRenderCapacityOverhead = 1.20;
         constexpr float kInteractiveResizeRenderScale = 0.33f;
         constexpr auto kTrainingOutputResizeStableDelay = std::chrono::milliseconds(500);
+
+        void publishViewportResolutionDiagnostics(
+            const glm::ivec2 viewport_size,
+            const glm::ivec2 render_size,
+            const float requested_scale,
+            const float effective_scale,
+            const bool resize_deferring,
+            const bool interactive_resize,
+            const bool memory_pressure) {
+            const int viewport_width = std::max(viewport_size.x, 0);
+            const int viewport_height = std::max(viewport_size.y, 0);
+            const int render_width = std::max(render_size.x, 0);
+            const int render_height = std::max(render_size.y, 0);
+            const double viewport_pixels =
+                static_cast<double>(viewport_width) * static_cast<double>(viewport_height);
+            const double render_pixels =
+                static_cast<double>(render_width) * static_cast<double>(render_height);
+
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.setGauge("viewer.resolution.viewport.width_px", viewport_width);
+            profiler.setGauge("viewer.resolution.viewport.height_px", viewport_height);
+            profiler.setGauge("viewer.resolution.viewport.pixels", viewport_pixels);
+            profiler.setGauge("viewer.resolution.scene.width_px", render_width);
+            profiler.setGauge("viewer.resolution.scene.height_px", render_height);
+            profiler.setGauge("viewer.resolution.scene.pixels", render_pixels);
+            profiler.setGauge("viewer.resolution.scene.requested_scale", requested_scale);
+            profiler.setGauge("viewer.resolution.scene.effective_scale", effective_scale);
+            profiler.setGauge(
+                "viewer.resolution.scene.pixel_ratio",
+                viewport_pixels > 0.0 ? render_pixels / viewport_pixels : 0.0);
+            profiler.setGauge("viewer.resolution.scene.valid", render_pixels > 0.0 ? 1.0 : 0.0);
+            profiler.setGauge("viewer.resolution.resize_deferring", resize_deferring ? 1.0 : 0.0);
+            profiler.setGauge("viewer.resolution.interactive_resize", interactive_resize ? 1.0 : 0.0);
+            profiler.setGauge("viewer.resolution.memory_pressure", memory_pressure ? 1.0 : 0.0);
+        }
 
         struct LodObjectFrame {
             glm::mat4 object_to_view{1.0f};
@@ -887,8 +943,21 @@ namespace lfs::vis {
         [[nodiscard]] RenderingManager::VulkanMeshFrame populateMeshFrame(
             const FrameContext& frame_ctx,
             const RenderSettings& settings,
-            const VulkanSplitViewParams& split_view_params) {
+            const VulkanSplitViewParams& split_view_params,
+            const std::uint64_t scene_revision,
+            const std::uint64_t temporal_reset_generation) {
             RenderingManager::VulkanMeshFrame frame;
+            if (frame_ctx.model) {
+                const auto address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(frame_ctx.model));
+                frame.scene_identity = address ^
+                                       (static_cast<std::uint64_t>(frame_ctx.model->size()) << 17u) ^
+                                       (frame_ctx.model->param_layout_generation() << 33u) ^
+                                       scene_revision;
+            }
+            frame.temporal_scene_stable = !frame_ctx.training_active;
+            frame.temporal_reset_generation = temporal_reset_generation;
+            frame.scene_jitter_pixels = frame_ctx.scene_jitter_pixels;
             const auto vp_data = frame_ctx.makeViewportData();
             frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
             frame.camera_position = vp_data.translation;
@@ -932,6 +1001,11 @@ namespace lfs::vis {
             }
 
             const auto frame_view = frame_ctx.makeFrameView();
+            frame.camera_near = frame_view.near_plane;
+            frame.camera_far = frame_view.far_plane;
+            frame.camera_vertical_fov_radians =
+                lfs::rendering::focalLengthToVFovRad(frame_view.focal_length_mm);
+            frame.camera_orthographic = frame_view.orthographic;
             frame.environment.enabled = environmentBackgroundEnabled(settings);
             frame.environment.map_path = settings.environment_map_path;
             frame.environment.camera_to_world = vp_data.rotation;
@@ -1476,6 +1550,18 @@ namespace lfs::vis {
                 vksplat_viewport_renderer_->setLiveSubmitCallback({});
             }
             releaseResizeTrainingPause();
+            const float requested_scale = effectiveSceneRenderScale(
+                frame_settings.render_scale,
+                frame_settings.scene_upscaler_scale,
+                frame_settings.scene_upscaler != "native");
+            publishViewportResolutionDiagnostics(
+                current_size,
+                {0, 0},
+                requested_scale,
+                requested_scale,
+                false,
+                false,
+                lfs::core::MemoryPressureCoordinator::instance().pressure_active());
             return {.image = vulkan_viewport_image_,
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};
@@ -1588,23 +1674,45 @@ namespace lfs::vis {
             markDirty(resize_result.dirty);
         }
         const bool resize_deferring = frame_lifecycle_service_.isResizeDeferring();
-        float scale = std::clamp(frame_settings.render_scale, 0.25f, 1.0f);
+        const bool memory_pressure_active =
+            lfs::core::MemoryPressureCoordinator::instance().pressure_active();
+        const float requested_scale = effectiveSceneRenderScale(
+            frame_settings.render_scale,
+            frame_settings.scene_upscaler_scale,
+            frame_settings.scene_upscaler != "native");
+        float scale = requested_scale;
         if (resize_result.render_interactive_frame) {
             scale = std::min(scale, kInteractiveResizeRenderScale);
         }
         // Under an active VRAM pressure lease, halve the viewer render resolution
         // to shrink per-frame output allocation. Restored automatically once the
         // coordinator observes sustained headroom. Does not affect training.
-        if (lfs::core::MemoryPressureCoordinator::instance().pressure_active()) {
-            scale = std::clamp(scale * 0.5f, 0.25f, 1.0f);
+        if (memory_pressure_active) {
+            scale = clampSceneRenderScale(scale * 0.5f);
         }
-        glm::ivec2 render_size(
-            std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * scale)), 1),
-            std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * scale)), 1));
+        const glm::ivec2 render_size = computeSceneRenderSize(current_size, scale);
+        publishViewportResolutionDiagnostics(
+            current_size,
+            render_size,
+            requested_scale,
+            scale,
+            resize_deferring,
+            resize_result.render_interactive_frame,
+            memory_pressure_active);
+        auto& resolution_profiler = lfs::diagnostics::VramProfiler::instance();
+        resolution_profiler.setGauge("viewer.resolution.scene.base_scale",
+                                     frame_settings.render_scale);
+        resolution_profiler.setGauge("viewer.resolution.scene.upscaler_scale",
+                                     frame_settings.scene_upscaler == "native"
+                                         ? 1.0
+                                         : frame_settings.scene_upscaler_scale);
         const DirtyMask pending_dirty = dirty_mask_.load(std::memory_order_relaxed);
         const bool only_split_position_pending =
             (pending_dirty & ~DirtyFlag::SPLIT_POSITION) == 0;
+        const bool split_position_requires_panel_rerender =
+            split_view_service_.isIndependentDualActive(frame_settings);
         if ((pending_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
+            !split_position_requires_panel_rerender &&
             vulkan_viewport_image_size_ == render_size &&
             has_cached_split_view_output() &&
             update_cached_split_position(!only_split_position_pending)) {
@@ -1746,6 +1854,20 @@ namespace lfs::vis {
         }
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
+        constexpr DirtyMask temporal_source_dirty =
+            DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::MESH |
+            DirtyFlag::VIEWPORT | DirtyFlag::BACKGROUND | DirtyFlag::SPLIT_VIEW;
+        const bool temporal_jitter_enabled =
+            sceneUpscalerRequirementsForId(frame_settings.scene_upscaler).jitter &&
+            !frame_settings.orthographic && !frame_settings.equirectangular;
+        temporal_convergence_.prepare(
+            temporal_jitter_enabled,
+            (frame_dirty & temporal_source_dirty) != 0);
+        if ((frame_dirty & (DirtyFlag::SPLATS | DirtyFlag::MESH)) != 0) {
+            ++temporal_scene_revision_;
+            if (temporal_scene_revision_ == 0)
+                ++temporal_scene_revision_;
+        }
         if (lod_controller_ && lod_controller_->hasReadyResults()) {
             frame_dirty |= DirtyFlag::CAMERA;
         }
@@ -1753,7 +1875,8 @@ namespace lfs::vis {
             frame_dirty |= DirtyFlag::CAMERA;
         }
         constexpr DirtyMask projection_dirty =
-            DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::VIEWPORT | DirtyFlag::SPLIT_VIEW;
+            DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::VIEWPORT |
+            DirtyFlag::SPLIT_VIEW | DirtyFlag::TEMPORAL;
         if ((frame_dirty & projection_dirty) != 0) {
             ++viewport_projection_generation_;
             if (viewport_projection_generation_ == 0) {
@@ -1807,6 +1930,7 @@ namespace lfs::vis {
 
         const DirtyMask split_deferred_dirty = frame_dirty & ~DirtyFlag::SPLIT_POSITION;
         if ((frame_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
+            !split_position_requires_panel_rerender &&
             has_cached_viewport_output &&
             update_cached_split_position(split_deferred_dirty != 0)) {
             const DirtyMask deferred_dirty = split_deferred_dirty;
@@ -1962,6 +2086,7 @@ namespace lfs::vis {
 
         framerate_controller_.beginFrame();
 
+        const glm::vec2 temporal_jitter = temporal_convergence_.jitter();
         const FrameContext frame_ctx{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,
@@ -1980,7 +2105,22 @@ namespace lfs::vis {
             .current_camera_id = camera_interaction_service_.currentCameraId(),
             .hovered_gaussian_id = viewport_overlay_service_.hoveredGaussianId(),
             .selection_flash_intensity = getSelectionFlashIntensity(),
-            .view_panels = {}};
+            .view_panels = {},
+            .scene_jitter_pixels = temporal_jitter};
+
+        auto& temporal_profiler = lfs::diagnostics::VramProfiler::instance();
+        temporal_profiler.setGauge("viewer.temporal.jitter_x", temporal_jitter.x);
+        temporal_profiler.setGauge("viewer.temporal.jitter_y", temporal_jitter.y);
+        temporal_profiler.setGauge("viewer.temporal.convergence_remaining",
+                                   static_cast<double>(temporal_convergence_.remaining()));
+        const auto complete_temporal_convergence_frame = [&] {
+            const bool needs_follow_up = temporal_convergence_.completeSuccessfulFrame();
+            temporal_profiler.setGauge("viewer.temporal.convergence_remaining",
+                                       static_cast<double>(temporal_convergence_.remaining()));
+            if (needs_follow_up) {
+                requestTemporalFollowUp();
+            }
+        };
 
         std::shared_ptr<lfs::core::Tensor> rendered_image;
         lfs::rendering::FrameMetadata rendered_metadata{};
@@ -2011,11 +2151,18 @@ namespace lfs::vis {
                         const auto& layout = (*layouts)[index];
                         const glm::ivec2 panel_size{std::max(layout.width, 1), render_size.y};
                         const auto panel_view = frame_ctx.makeViewportData(viewport, panel_size);
+                        const auto panel_frame_view = frame_ctx.makeFrameView(viewport, panel_size);
                         frame.panels.push_back(lfs::vis::VulkanMeshViewportPanel{
                             .start_position = layout.start_position,
                             .end_position = layout.end_position,
                             .view_projection = panel_view.getProjectionMatrix() * panel_view.getViewMatrix(),
-                            .camera_position = panel_view.translation});
+                            .camera_position = panel_view.translation,
+                            .camera_near = panel_frame_view.near_plane,
+                            .camera_far = panel_frame_view.far_plane,
+                            .camera_vertical_fov_radians =
+                                lfs::rendering::focalLengthToVFovRad(
+                                    panel_frame_view.focal_length_mm),
+                            .orthographic = panel_frame_view.orthographic});
                     };
                 append_panel(context.viewport, 0);
                 append_panel(split_view_service_.secondaryViewport(), 1);
@@ -2025,7 +2172,13 @@ namespace lfs::vis {
             std::shared_ptr<lfs::core::Tensor> image;
             lfs::rendering::FrameMetadata metadata;
             VkImageView external_image_view = VK_NULL_HANDLE;
+            VkImage external_image = VK_NULL_HANDLE;
+            VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             std::uint64_t external_image_generation = 0;
+            VkImageView depth_image_view = VK_NULL_HANDLE;
+            VkImage depth_image = VK_NULL_HANDLE;
+            VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            std::uint64_t depth_image_generation = 0;
             bool flip_y = false;
             glm::ivec2 size{0, 0};
             glm::ivec2 alloc_size{0, 0};
@@ -2289,7 +2442,13 @@ namespace lfs::vis {
                     return RenderedPanel{.image = nullptr,
                                          .metadata = std::move(metadata),
                                          .external_image_view = result->image_view,
+                                         .external_image = result->image,
+                                         .external_image_layout = result->image_layout,
                                          .external_image_generation = result->generation,
+                                         .depth_image_view = result->depth_image_view,
+                                         .depth_image = result->depth_image,
+                                         .depth_image_layout = result->depth_image_layout,
+                                         .depth_image_generation = result->depth_generation,
                                          .flip_y = result->flip_y,
                                          .size = result->size,
                                          .alloc_size = result->alloc_size};
@@ -2318,7 +2477,15 @@ namespace lfs::vis {
                     .normalize_x_to_panel = normalize_x_to_panel,
                     .flip_y = panel.flip_y,
                     .external_image_view = panel.external_image_view,
+                    .external_image = panel.external_image,
+                    .external_image_layout = panel.external_image_layout,
                     .external_image_generation = panel.external_image_generation,
+                    .depth_image_view = panel.depth_image_view,
+                    .depth_image = panel.depth_image,
+                    .depth_image_layout = panel.depth_image_layout,
+                    .depth_image_generation = panel.depth_image_generation,
+                    .image_size = valid,
+                    .allocation_size = alloc,
                     .uv_scale = outputUvScale(valid, alloc),
                     .uv_clamp_max = outputUvClampMax(valid, alloc),
                 };
@@ -3037,6 +3204,10 @@ namespace lfs::vis {
             return cached_frame_result();
         }
 
+        if (pending_split_view.enabled) {
+            pending_split_view.coordinate_extent = render_size;
+        }
+
         const bool render_point_cloud = frame_settings.point_cloud_mode || !has_visible_gaussian_model;
 
         if (rendered_image || pending_split_view.enabled) {
@@ -3225,14 +3396,34 @@ namespace lfs::vis {
                 viewport_interaction_context_.scene_manager = scene_manager;
                 split_view_service_.updateInfo(FrameResources{});
 
+                updateSceneDepthContract(
+                    makeSceneDepthContract(
+                        render_result->depth_image_view != VK_NULL_HANDLE,
+                        SceneDepthStorage::VulkanImage,
+                        true,
+                        render_result->size.x,
+                        render_result->size.y,
+                        pc_request.frame_view.near_plane,
+                        pc_request.frame_view.far_plane,
+                        pc_request.frame_view.orthographic,
+                        render_result->flip_y),
+                    render_size);
+
                 if (!frame_ctx.scene_state.meshes.empty() ||
                     environmentBackgroundEnabled(frame_settings)) {
-                    auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
+                    auto mesh_frame = populateMeshFrame(
+                        frame_ctx,
+                        frame_settings,
+                        pending_split_view,
+                        temporal_scene_revision_,
+                        temporal_camera_reset_generation_.load(std::memory_order_relaxed));
                     populate_independent_split_mesh_panels(mesh_frame);
                     if (render_result->depth_image_view != VK_NULL_HANDLE) {
                         // Hardware depth attachment stores Vulkan-native NDC z; the
                         // depth-blit pass can use it directly without near/far conversion.
                         mesh_frame.depth_blit.external_image_view = render_result->depth_image_view;
+                        mesh_frame.depth_blit.external_image = render_result->depth_image;
+                        mesh_frame.depth_blit.external_image_layout = render_result->depth_image_layout;
                         mesh_frame.depth_blit.external_image_generation = render_result->depth_generation;
                         mesh_frame.depth_blit.depth_is_ndc = true;
                         mesh_frame.depth_blit.flip_y = render_result->flip_y;
@@ -3499,10 +3690,17 @@ namespace lfs::vis {
                                 environmentBackgroundEnabled(frame_settings) ||
                                 render_result.depth_image_view != VK_NULL_HANDLE;
                             if (publish_mesh_frame) {
-                                auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
+                                auto mesh_frame = populateMeshFrame(
+                                    frame_ctx,
+                                    frame_settings,
+                                    pending_split_view,
+                                    temporal_scene_revision_,
+                                    temporal_camera_reset_generation_.load(std::memory_order_relaxed));
                                 populate_independent_split_mesh_panels(mesh_frame);
                                 if (render_result.depth_image_view != VK_NULL_HANDLE) {
                                     mesh_frame.depth_blit.external_image_view = render_result.depth_image_view;
+                                    mesh_frame.depth_blit.external_image = render_result.depth_image;
+                                    mesh_frame.depth_blit.external_image_layout = render_result.depth_image_layout;
                                     mesh_frame.depth_blit.external_image_generation = render_result.depth_generation;
                                     mesh_frame.depth_blit.depth_is_ndc = false;
                                     mesh_frame.depth_blit.flip_y = render_result.flip_y;
@@ -3525,6 +3723,18 @@ namespace lfs::vis {
                             } else {
                                 clearVulkanMeshFrame();
                             }
+                            updateSceneDepthContract(
+                                makeSceneDepthContract(
+                                    render_result.depth_image_view != VK_NULL_HANDLE,
+                                    SceneDepthStorage::VulkanImage,
+                                    false,
+                                    render_result.size.x,
+                                    render_result.size.y,
+                                    request.frame_view.near_plane,
+                                    request.frame_view.far_plane,
+                                    request.frame_view.orthographic,
+                                    render_result.flip_y),
+                                render_size);
                         };
 
                         const lfs::rendering::FrameView capture_frame_view = request.frame_view;
@@ -3629,6 +3839,7 @@ namespace lfs::vis {
                                     split_view_service_.updateInfo(FrameResources{});
                                     publish_mesh_frame_for_vksplat();
                                     release_inactive_split_outputs();
+                                    complete_temporal_convergence_frame();
 
                                     return {.image = vulkan_viewport_image_,
                                             .image_generation = vulkan_viewport_image_generation_,
@@ -3707,6 +3918,7 @@ namespace lfs::vis {
 
                         publish_mesh_frame_for_vksplat();
                         release_inactive_split_outputs();
+                        complete_temporal_convergence_frame();
 
                         return {.image = {},
                                 .external_image = vulkan_external_viewport_image_,
@@ -3821,29 +4033,56 @@ namespace lfs::vis {
             clearVulkanMeshFrame();
         }
 
+        const std::shared_ptr<lfs::core::Tensor> tensor_depth =
+            rendered_image && rendered_metadata.depth_panel_count > 0
+                ? rendered_metadata.depth_panels[0].depth
+                : nullptr;
+        const float tensor_depth_near = rendered_metadata.near_plane > 0.0f
+                                            ? rendered_metadata.near_plane
+                                            : 0.1f;
+        const float tensor_depth_far = rendered_metadata.far_plane > 0.0f
+                                           ? rendered_metadata.far_plane
+                                           : 1000.0f;
+        const bool tensor_depth_shape_valid = tensor_depth && tensor_depth->is_valid() &&
+                                              tensor_depth->ndim() == 3 &&
+                                              tensor_depth->size(0) == 1;
+        if (rendered_image) {
+            updateSceneDepthContract(
+                makeSceneDepthContract(
+                    tensor_depth_shape_valid,
+                    SceneDepthStorage::Tensor,
+                    rendered_metadata.depth_is_ndc,
+                    tensor_depth_shape_valid ? static_cast<int>(tensor_depth->size(2)) : 0,
+                    tensor_depth_shape_valid ? static_cast<int>(tensor_depth->size(1)) : 0,
+                    tensor_depth_near,
+                    tensor_depth_far,
+                    rendered_metadata.orthographic,
+                    false),
+                render_size);
+        }
+
         if ((rendered_image || render_error.empty() || pending_split_view.enabled) &&
             (environmentBackgroundEnabled(frame_settings) || !frame_ctx.scene_state.meshes.empty() ||
              pending_split_view.enabled)) {
-            VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
+            VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(
+                frame_ctx,
+                frame_settings,
+                pending_split_view,
+                temporal_scene_revision_,
+                temporal_camera_reset_generation_.load(std::memory_order_relaxed));
             populate_independent_split_mesh_panels(gpu_mesh_frame);
 
             // Splat depth -> mesh-pass z-test source. Only meaningful when the
             // active render path produced a tensor-backed depth output.
-            if (rendered_image && rendered_metadata.depth_panel_count > 0 &&
-                rendered_metadata.depth_panels[0].depth &&
-                rendered_metadata.depth_panels[0].depth->is_valid()) {
-                gpu_mesh_frame.depth_blit.depth = rendered_metadata.depth_panels[0].depth;
+            if (tensor_depth_shape_valid) {
+                gpu_mesh_frame.depth_blit.depth = tensor_depth;
                 gpu_mesh_frame.depth_blit.depth_is_ndc = rendered_metadata.depth_is_ndc;
                 // Depth and color tensors share storage orientation; the viewport
                 // pass already flips the screen quad's UVs for the color image,
                 // so the depth-blit pass inherits that flip and needs no extra one.
                 gpu_mesh_frame.depth_blit.flip_y = false;
-                gpu_mesh_frame.depth_blit.near_plane = rendered_metadata.near_plane > 0.0f
-                                                           ? rendered_metadata.near_plane
-                                                           : 0.1f;
-                gpu_mesh_frame.depth_blit.far_plane = rendered_metadata.far_plane > 0.0f
-                                                          ? rendered_metadata.far_plane
-                                                          : 1000.0f;
+                gpu_mesh_frame.depth_blit.near_plane = tensor_depth_near;
+                gpu_mesh_frame.depth_blit.far_plane = tensor_depth_far;
             }
 
             setVulkanMeshFrame(std::move(gpu_mesh_frame));
@@ -4055,6 +4294,7 @@ namespace lfs::vis {
             split_info_resources.split_info = std::move(*rendered_split_info);
         }
         split_view_service_.updateInfo(split_info_resources);
+        complete_temporal_convergence_frame();
 
         return {.image = vulkan_viewport_image_,
                 .image_generation = vulkan_viewport_image_generation_,

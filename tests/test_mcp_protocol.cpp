@@ -711,7 +711,57 @@ namespace lfs::mcp {
         ASSERT_TRUE(body.contains("error"));
         EXPECT_EQ(body["error"]["code"], JsonRpcError::PARSE_ERROR);
 
+        const auto status = server.status();
+        EXPECT_EQ(status.request_count, 1u);
+        EXPECT_EQ(status.success_count, 0u);
+        EXPECT_EQ(status.error_count, 1u);
+        EXPECT_EQ(status.endpoints,
+                  (std::vector<std::string>{
+                      "http://127.0.0.1:47691/mcp",
+                      "http://localhost:47691/mcp",
+                  }));
+
         server.stop();
+    }
+
+    TEST(McpHttpServerTest, ActiveConfigPublishesRequestedStatusImmediately) {
+        McpHttpServer server;
+        ASSERT_TRUE(server.start(McpHttpConfig{.enabled = false, .port = 47694}));
+        setActiveMcpHttpServer(&server);
+
+        EXPECT_TRUE(applyActiveMcpHttpConfig({
+            .enabled = false,
+            .expose_network = true,
+            .port = 47695,
+            .request_logging = false,
+        }));
+        const auto status = activeMcpHttpStatus();
+        setActiveMcpHttpServer(nullptr);
+
+        EXPECT_FALSE(status.enabled);
+        EXPECT_TRUE(status.expose_network);
+        EXPECT_EQ(status.port, 47695);
+        ASSERT_GE(status.endpoints.size(), 2u);
+        EXPECT_EQ(status.endpoints[0], "http://127.0.0.1:47695/mcp");
+        EXPECT_EQ(status.endpoints[1], "http://localhost:47695/mcp");
+    }
+
+    TEST(McpHttpServerTest, DisabledAndInvalidConfigurationsReportTruthfulStatus) {
+        McpHttpServer server;
+        EXPECT_TRUE(server.start(McpHttpConfig{.enabled = false, .expose_network = true, .port = 50001}));
+        auto status = server.status();
+        EXPECT_FALSE(status.enabled);
+        EXPECT_FALSE(status.running);
+        EXPECT_TRUE(status.expose_network);
+        EXPECT_EQ(status.port, 50001);
+        EXPECT_TRUE(status.error.empty());
+        EXPECT_FALSE(status.request_logging);
+
+        EXPECT_FALSE(server.applyConfig(McpHttpConfig{.enabled = true, .port = 0}));
+        status = server.status();
+        EXPECT_TRUE(status.enabled);
+        EXPECT_FALSE(status.running);
+        EXPECT_FALSE(status.error.empty());
     }
 
     TEST(McpHttpServerTest, ToolHandlerThrowRespondsWithInternalErrorAndEchoedIdNoLeak) {

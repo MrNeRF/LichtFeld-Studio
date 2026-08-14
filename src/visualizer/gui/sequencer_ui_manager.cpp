@@ -18,6 +18,7 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
+#include "ipc/view_context.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -1285,7 +1286,15 @@ namespace lfs::vis::gui {
                 .width = w,
                 .height = h,
                 .framerate = ui_state_.framerate,
-                .crf = ui_state_.quality}
+                .crf = ui_state_.quality,
+                .upscaler_backend = ui_state_.export_upscaler,
+                .upscaler_input_scale = ui_state_.export_input_scale,
+                .upscaler_quality = ui_state_.export_upscaler_quality,
+                .upscaler_fallback = static_cast<int>(lfs::io::video::VideoUpscalerFallback::Native),
+                .splat_precision = ui_state_.export_splat_precision ==
+                                           lfs::io::video::VideoSplatPrecision::Float16
+                                       ? 16
+                                       : 32}
                 .emit();
         }
 
@@ -1344,6 +1353,51 @@ namespace lfs::vis::gui {
                 }
                 break;
             }
+            case Target::EXPORT_UPSCALER: {
+                items.push_back({LOC("preferences.scene_upscaler"), "", false, true});
+                for (const auto& option : get_scene_upscaler_options()) {
+                    if (option.id != "native" && option.id != "spatial" &&
+                        option.id != "temporal" && option.id != "nvidia-dlss" &&
+                        option.id != "amd-fsr3")
+                        continue;
+                    items.push_back({LOC(option.label_key.c_str()),
+                                     std::format("upscaler_{}", option.id),
+                                     false, false, false,
+                                     ui_state_.export_upscaler == option.id});
+                }
+                break;
+            }
+            case Target::EXPORT_QUALITY: {
+                if (ui_state_.export_upscaler == "spatial") {
+                    items.push_back({LOC("preferences.scene_render_scale"), "", false, true});
+                    constexpr std::array<float, 4> scales{0.5f, 0.75f, 0.9f, 1.0f};
+                    for (const float scale : scales) {
+                        items.push_back({std::format("{}%", static_cast<int>(std::lround(scale * 100.0f))),
+                                         std::format("export_scale_{}", static_cast<int>(std::lround(scale * 100.0f))),
+                                         false, false, false,
+                                         std::abs(ui_state_.export_input_scale - scale) < 0.001f});
+                    }
+                    break;
+                }
+                items.push_back({LOC("preferences.temporal_quality"), "", false, true});
+                constexpr std::array<const char*, 3> keys{
+                    "preferences.temporal_quality_performance",
+                    "preferences.temporal_quality_balanced",
+                    "preferences.temporal_quality_quality"};
+                for (int quality = 0; quality < 3; ++quality) {
+                    items.push_back({LOC(keys[static_cast<size_t>(quality)]),
+                                     std::format("quality_{}", quality),
+                                     false, false, false,
+                                     ui_state_.export_upscaler_quality == quality});
+                }
+                break;
+            }
+            case Target::EXPORT_PRECISION:
+                items.push_back({std::format("Splat · {}", LOC("preferences.splat_precision_16")), "precision_16", false, false, false,
+                                 ui_state_.export_splat_precision == lfs::io::video::VideoSplatPrecision::Float16});
+                items.push_back({std::format("Splat · {}", LOC("preferences.splat_precision_32")), "precision_32", false, false, false,
+                                 ui_state_.export_splat_precision == lfs::io::video::VideoSplatPrecision::Float32});
+                break;
             case Target::CLEAR: {
                 items.push_back({LOC("context_menu.clear_confirm"), "", false, true});
                 items.push_back({LOC("context_menu.confirm"), "clear_confirm"});
@@ -1378,6 +1432,26 @@ namespace lfs::vis::gui {
                                        ui_state_.framerate = info.framerate;
                                    }
                                    break;
+                               case Target::EXPORT_UPSCALER:
+                                   if (action.starts_with("upscaler_"))
+                                       ui_state_.export_upscaler = action.substr(9);
+                                   break;
+                               case Target::EXPORT_QUALITY:
+                                   if (action.starts_with("export_scale_")) {
+                                       ui_state_.export_input_scale = std::clamp(
+                                           std::stof(std::string(action.substr(13))) / 100.0f,
+                                           0.25f, 1.0f);
+                                   } else if (action.starts_with("quality_")) {
+                                       ui_state_.export_upscaler_quality =
+                                           std::clamp(std::stoi(std::string(action.substr(8))), 0, 2);
+                                   }
+                                   break;
+                               case Target::EXPORT_PRECISION:
+                                   if (action == "precision_16")
+                                       ui_state_.export_splat_precision = lfs::io::video::VideoSplatPrecision::Float16;
+                                   else if (action == "precision_32")
+                                       ui_state_.export_splat_precision = lfs::io::video::VideoSplatPrecision::Float32;
+                                   break;
                                case Target::CLEAR:
                                    if (action == "clear_confirm" &&
                                        (controller_.timeline().realKeyframeCount() > 0 || controller_.timeline().hasAnimationClip() ||
@@ -1392,6 +1466,37 @@ namespace lfs::vis::gui {
                                    break;
                                case Target::NONE:
                                    break;
+                               }
+                               if (target == Target::EXPORT_UPSCALER ||
+                                   (target == Target::EXPORT_QUALITY &&
+                                    (ui_state_.export_upscaler == "nvidia-dlss" ||
+                                     ui_state_.export_upscaler == "amd-fsr3"))) {
+                                   if (ui_state_.export_upscaler == "native") {
+                                       ui_state_.export_input_scale = 1.0f;
+                                   } else {
+                                       const auto options = get_scene_upscaler_options();
+                                       const auto selected = std::ranges::find(
+                                           options, ui_state_.export_upscaler,
+                                           &SceneUpscalerOptionProxy::id);
+                                       if (selected != options.end() &&
+                                           (ui_state_.export_upscaler == "nvidia-dlss" ||
+                                            ui_state_.export_upscaler == "amd-fsr3")) {
+                                           const size_t quality = static_cast<size_t>(
+                                               std::clamp(ui_state_.export_upscaler_quality, 0, 2));
+                                           const float recommended =
+                                               selected->recommended_input_scales[quality];
+                                           constexpr std::array<float, 3> FALLBACK_SCALES{
+                                               0.5f, 1.0f / 1.7f, 1.0f / 1.5f};
+                                           ui_state_.export_input_scale =
+                                               recommended > 0.0f && recommended <= 1.0f
+                                                   ? recommended
+                                                   : FALLBACK_SCALES[quality];
+                                       }
+                                       if (target == Target::EXPORT_UPSCALER &&
+                                           (ui_state_.export_upscaler == "spatial" ||
+                                            ui_state_.export_upscaler == "temporal"))
+                                           ui_state_.export_input_scale = 0.75f;
+                                   }
                                }
                            });
             }

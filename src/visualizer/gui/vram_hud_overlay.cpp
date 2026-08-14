@@ -7,7 +7,6 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
-#include "gui/layout_state.hpp"
 #include "gui/string_keys.hpp"
 #include "visualizer/app_store.hpp"
 
@@ -264,35 +263,9 @@ namespace lfs::vis::gui {
         tab_listener_.owner = this;
         anno_filter_listener_.owner = this;
         anno_filter_clear_listener_.owner = this;
-        loadPersistedState();
     }
 
     VramHudOverlay::~VramHudOverlay() = default;
-
-    void VramHudOverlay::loadPersistedState() {
-        LayoutState ls;
-        ls.load();
-        pos_x_ = ls.vram_hud_x;
-        pos_y_ = ls.vram_hud_y;
-        size_w_ = ls.vram_hud_width;
-        size_h_ = ls.vram_hud_height;
-        if (ls.vram_hud_active_tab == "overview" || ls.vram_hud_active_tab == "ledger" ||
-            ls.vram_hud_active_tab == "allocations" ||
-            ls.vram_hud_active_tab == "annotations" || ls.vram_hud_active_tab == "tree") {
-            active_tab_ = ls.vram_hud_active_tab;
-        }
-        collapsed_paths_.clear();
-        default_collapse_applied_ = false;
-        ledger_default_collapse_applied_ = false;
-        for (const auto& p : ls.vram_hud_collapsed_paths) {
-            collapsed_paths_.insert(p);
-            if (p.rfind("ledger/", 0) == 0) {
-                ledger_default_collapse_applied_ = true;
-            } else {
-                default_collapse_applied_ = true;
-            }
-        }
-    }
 
     void VramHudOverlay::schedulePersistSave() {
         persistence_dirty_ = true;
@@ -302,15 +275,6 @@ namespace lfs::vis::gui {
         if (!persistence_dirty_)
             return;
         (void)sanitizeGeometry();
-        LayoutState ls;
-        ls.load();
-        ls.vram_hud_x = pos_x_;
-        ls.vram_hud_y = pos_y_;
-        ls.vram_hud_width = size_w_;
-        ls.vram_hud_height = size_h_;
-        ls.vram_hud_active_tab = active_tab_;
-        ls.vram_hud_collapsed_paths.assign(collapsed_paths_.begin(), collapsed_paths_.end());
-        ls.save();
         persistence_dirty_ = false;
     }
 
@@ -771,6 +735,30 @@ namespace lfs::vis::gui {
         last_perf_expanded_ = state_.perf_hud.expanded;
         last_perf_snapshot_ = state_.perf_hud.snapshot;
         last_sequence_ = state_.snapshot.sequence;
+        apply();
+    }
+
+    void VramHudOverlay::resetLayout() {
+        pos_x_ = -1.0f;
+        pos_y_ = -1.0f;
+        size_w_ = -1.0f;
+        size_h_ = -1.0f;
+        active_tab_ = "overview";
+        collapsed_paths_.clear();
+        default_collapse_applied_ = false;
+        dragging_header_ = false;
+        dragging_resize_ = false;
+        pointer_captured_ = false;
+        persistence_dirty_ = false;
+
+        if (root_) {
+            root_->SetProperty("left", "auto");
+            root_->SetProperty("right", "16dp");
+            root_->SetProperty("top", "16dp");
+            root_->SetProperty("width", "620dp");
+            root_->SetProperty("height", "72%");
+        }
+        refreshTabClasses();
         apply();
     }
 

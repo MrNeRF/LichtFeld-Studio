@@ -4,112 +4,44 @@
 
 #include "gui/layout_state.hpp"
 #include "core/logger.hpp"
+#include "core/user_paths.hpp"
+#include <atomic>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
-#ifdef _WIN32
-#include <cstdlib>
-#include <shlobj.h>
-#else
-#include <pwd.h>
-#include <unistd.h>
-#endif
-
 namespace lfs::vis::gui {
 
+    namespace {
+        std::atomic<bool> g_persistence_enabled{true};
+    }
+
     std::filesystem::path LayoutState::getConfigDir() {
-        std::filesystem::path config_dir;
-#ifdef _WIN32
-        wchar_t path[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, path))) {
-            config_dir = std::filesystem::path(path) / "LichtFeldStudio";
-        } else {
-            const char* appdata = std::getenv("APPDATA");
-            if (appdata) {
-                config_dir = std::filesystem::path(appdata) / "LichtFeldStudio";
-            } else {
-                config_dir = std::filesystem::current_path() / "config";
-            }
-        }
-#else
-        const char* xdg = std::getenv("XDG_CONFIG_HOME");
-        if (xdg) {
-            config_dir = std::filesystem::path(xdg) / "LichtFeldStudio";
-        } else {
-            const char* home = std::getenv("HOME");
-            if (!home) {
-                struct passwd* pw = getpwuid(getuid());
-                if (pw)
-                    home = pw->pw_dir;
-            }
-            if (home) {
-                config_dir = std::filesystem::path(home) / ".config" / "LichtFeldStudio";
-            } else {
-                config_dir = std::filesystem::current_path() / "config";
-            }
-        }
-#endif
-        return config_dir;
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (paths)
+            return paths->configDir();
+        LOG_WARN("Unable to resolve user settings path: {}; layout persistence is disabled", paths.error());
+        return {};
     }
 
     std::filesystem::path LayoutState::getConfigPath() {
-        return getConfigDir() / "layout.json";
+        const auto config_dir = getConfigDir();
+        return config_dir.empty() ? std::filesystem::path{} : config_dir / "layout.json";
     }
 
-    void LayoutState::save() const {
+    void LayoutState::load(const bool log_success) {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return;
         try {
             const auto path = getConfigPath();
-            std::filesystem::create_directories(path.parent_path());
-
-            nlohmann::json j;
-            j["right_panel_width"] = right_panel_width;
-            j["scene_panel_ratio"] = scene_panel_ratio;
-            j["python_console_width"] = python_console_width;
-            j["bottom_dock_height"] = bottom_dock_height;
-            j["show_sequencer"] = show_sequencer;
-
-            if (!file_association.empty())
-                j["file_association"] = file_association;
-
-            nlohmann::json windows;
-            for (const auto& [name, visible] : window_visibility) {
-                windows[name] = visible;
-            }
-            j["windows"] = windows;
-
-            nlohmann::json vram_hud;
-            vram_hud["x"] = vram_hud_x;
-            vram_hud["y"] = vram_hud_y;
-            vram_hud["width"] = vram_hud_width;
-            vram_hud["height"] = vram_hud_height;
-            vram_hud["active_tab"] = vram_hud_active_tab;
-            vram_hud["collapsed"] = vram_hud_collapsed_paths;
-            j["vram_hud"] = vram_hud;
-
-            nlohmann::json perf_hud;
-            perf_hud["visible"] = perf_hud_visible;
-            perf_hud["expanded"] = perf_hud_expanded;
-            j["perf_hud"] = perf_hud;
-
-            std::ofstream file(path);
-            if (file) {
-                file << j.dump(2);
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to save layout state: {}", e.what());
-        } catch (...) {
-            LOG_WARN("Failed to save layout state: unknown error");
-        }
-    }
-
-    void LayoutState::load() {
-        try {
-            const auto path = getConfigPath();
+            if (path.empty())
+                return;
             if (!std::filesystem::exists(path))
                 return;
 
             std::ifstream file(path);
             if (!file)
+                return;
+            if (file.peek() == std::ifstream::traits_type::eof())
                 return;
 
             const auto j = nlohmann::json::parse(file);
@@ -117,7 +49,9 @@ namespace lfs::vis::gui {
             scene_panel_ratio = j.value("scene_panel_ratio", scene_panel_ratio);
             python_console_width = j.value("python_console_width", python_console_width);
             bottom_dock_height = j.value("bottom_dock_height", bottom_dock_height);
+            left_dock_width = j.value("left_dock_width", left_dock_width);
             show_sequencer = j.value("show_sequencer", show_sequencer);
+            active_main_tab = j.value("active_main_tab", active_main_tab);
             file_association = j.value("file_association", file_association);
 
             if (j.contains("windows") && j["windows"].is_object()) {
@@ -128,32 +62,15 @@ namespace lfs::vis::gui {
                 }
             }
 
-            if (j.contains("vram_hud") && j["vram_hud"].is_object()) {
-                const auto& vh = j["vram_hud"];
-                vram_hud_x = vh.value("x", vram_hud_x);
-                vram_hud_y = vh.value("y", vram_hud_y);
-                vram_hud_width = vh.value("width", vram_hud_width);
-                vram_hud_height = vh.value("height", vram_hud_height);
-                vram_hud_active_tab = vh.value("active_tab", vram_hud_active_tab);
-                if (vh.contains("collapsed") && vh["collapsed"].is_array()) {
-                    vram_hud_collapsed_paths.clear();
-                    for (const auto& entry : vh["collapsed"]) {
-                        if (entry.is_string())
-                            vram_hud_collapsed_paths.push_back(entry.get<std::string>());
-                    }
-                }
-            }
-
-            if (j.contains("perf_hud") && j["perf_hud"].is_object()) {
-                const auto& ph = j["perf_hud"];
-                perf_hud_visible = ph.value("visible", perf_hud_visible);
-                perf_hud_expanded = ph.value("expanded", perf_hud_expanded);
-            }
-
-            LOG_INFO("Layout state loaded from {}", path.string());
+            if (log_success)
+                LOG_INFO("Layout state loaded from {}", path.string());
         } catch (const std::exception& e) {
             LOG_WARN("Failed to load layout state: {}", e.what());
         }
+    }
+
+    void LayoutState::setPersistenceEnabled(const bool enabled) noexcept {
+        g_persistence_enabled.store(enabled, std::memory_order_release);
     }
 
 } // namespace lfs::vis::gui

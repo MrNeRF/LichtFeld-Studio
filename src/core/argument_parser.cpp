@@ -479,6 +479,10 @@ namespace {
             ::args::Group ui_group(parser, "UI OPTIONS:");
             ::args::Flag headless(ui_group, "headless", lfs::core::args::optimization_cli_help("--headless"), {"headless"});
             ::args::Flag auto_train(ui_group, "train", "Start training immediately on startup", {"train"});
+            ::args::Flag safe_mode(ui_group, "safe_mode", "Start with user plugins disabled (recovery mode)", {"safe-mode"});
+            ::args::Flag reset_preferences(ui_group, "reset_preferences", "Back up and reset application preferences", {"reset-preferences"});
+            ::args::Flag reset_layout(ui_group, "reset_layout", "Back up and reset the UI layout", {"reset-layout"});
+            ::args::Flag reset_all_settings(ui_group, "reset_all_settings", "Back up and reset preferences, layout, and window state", {"reset-all-settings"});
 #ifndef LFS_BUILD_PORTABLE
             ::args::Flag no_splash(ui_group, "no_splash", "Skip splash screen on startup", {"no-splash"});
 #endif
@@ -974,6 +978,10 @@ namespace {
                                         enable_eval_flag = bool(enable_eval),
                                         headless_flag = bool(headless),
                                         auto_train_flag = bool(auto_train),
+                                        safe_mode_flag = bool(safe_mode),
+                                        reset_preferences_flag = bool(reset_preferences),
+                                        reset_layout_flag = bool(reset_layout),
+                                        reset_all_settings_flag = bool(reset_all_settings),
 #ifdef LFS_BUILD_PORTABLE
                                         no_splash_flag = false,
 #else
@@ -1066,6 +1074,10 @@ namespace {
                 setFlag(enable_eval_flag, opt.enable_eval);
                 setFlag(headless_flag, opt.headless);
                 setFlag(auto_train_flag, opt.auto_train);
+                setFlag(safe_mode_flag, params.safe_mode);
+                setFlag(reset_preferences_flag, params.reset_preferences);
+                setFlag(reset_layout_flag, params.reset_layout);
+                setFlag(reset_all_settings_flag, params.reset_all_settings);
                 setFlag(no_splash_flag, opt.no_splash);
                 setFlag(debug_python_flag, opt.debug_python);
                 setVal(debug_python_port_val, opt.debug_python_port);

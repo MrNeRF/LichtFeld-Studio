@@ -36,9 +36,22 @@ body {
 }
 
 #floating-title {
+    flex: 1 1 0;
     font-size: 12dp;
     font-weight: bold;
     color: #cdd6f4;
+}
+
+#header-primary-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6dp;
+    flex-shrink: 0;
+}
+
+.header-action {
+    height: 24dp;
 }
 
 #floating-actions {
@@ -46,7 +59,7 @@ body {
     align-items: center;
     justify-content: flex-end;
     gap: 6dp;
-    flex-shrink: 0;
+    flex: 1 1 0;
 }
 
 .floating-header-action {

@@ -33,7 +33,15 @@
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#ifdef LFS_HAS_NVIDIA_DLSS
+#include "rendering/nvidia_dlss_vulkan_adapter.hpp"
+#endif
+#ifdef LFS_HAS_AMD_FSR3
+#include "rendering/amd_fsr3_vulkan_adapter.hpp"
+#endif
+#include "rendering/scene_upscaler_registry.hpp"
 #include "scene/scene_manager.hpp"
+#include "theme/theme.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/builtin_tools.hpp"
 #include "tools/selection_tool.hpp"
@@ -226,6 +234,17 @@ namespace lfs::vis {
         // Set initial antialiasing
         RenderSettings initial_settings;
         initial_settings.antialiasing = options.antialiasing;
+        initial_settings.scene_upscaler =
+            options.safe_mode ? "native" : loadSceneUpscalerPreference();
+        initial_settings.render_scale = loadSceneRenderScalePreference();
+        initial_settings.scene_upscaler_scale =
+            loadSceneUpscalerScalePreference(initial_settings.scene_upscaler);
+        const auto temporal_quality_preference =
+            loadSceneUpscalerQualityPreference(initial_settings.scene_upscaler);
+        initial_settings.scene_temporal_quality = temporal_quality_preference == "performance"
+                                                      ? 0
+                                                  : temporal_quality_preference == "quality" ? 2
+                                                                                             : 1;
         initial_settings.gut = options.gut;
         initial_settings.raster_backend = options.gut
                                               ? lfs::rendering::GaussianRasterBackend::ThreeDgut
@@ -871,11 +890,64 @@ namespace lfs::vis {
                 if (!rendering_manager_)
                     return;
                 auto s = rendering_manager_->getSettings();
+                const float previous_render_scale = s.render_scale;
+                const float previous_upscaler_scale = s.scene_upscaler_scale;
+                const std::string previous_scene_upscaler = s.scene_upscaler;
+                const int previous_temporal_quality = s.scene_temporal_quality;
                 vis::apply_proxy(s, proxy);
+                if (!sceneUpscalerBackendFromId(s.scene_upscaler) &&
+                    !optionalSceneUpscalerRegistry().descriptor(s.scene_upscaler)) {
+                    s.scene_upscaler = "native";
+                }
+                s.scene_temporal_quality = std::clamp(s.scene_temporal_quality, 0, 2);
                 rendering_manager_->updateSettings(s);
+                const auto applied_settings = rendering_manager_->getSettings();
+                const float applied_render_scale = applied_settings.render_scale;
+                if (std::abs(applied_render_scale - previous_render_scale) > 0.0001f)
+                    saveSceneRenderScalePreference(applied_render_scale);
+                if (std::abs(applied_settings.scene_upscaler_scale - previous_upscaler_scale) > 0.0001f)
+                    saveSceneUpscalerScalePreference(applied_settings.scene_upscaler,
+                                                     applied_settings.scene_upscaler_scale);
+                const std::string applied_scene_upscaler =
+                    applied_settings.scene_upscaler;
+                if (applied_scene_upscaler != previous_scene_upscaler)
+                    saveSceneUpscalerPreference(applied_scene_upscaler);
+                const int applied_temporal_quality =
+                    applied_settings.scene_temporal_quality;
+                if (applied_temporal_quality != previous_temporal_quality)
+                    saveSceneUpscalerQualityPreference(
+                        applied_scene_upscaler,
+                        applied_temporal_quality == 0   ? "performance"
+                        : applied_temporal_quality == 2 ? "quality"
+                                                        : "balanced");
                 wakeMainLoop();
             });
         callback_cleanup_.add([] { vis::set_render_settings_callbacks(nullptr, nullptr); });
+        vis::set_scene_upscaler_options_callback([this] {
+            SceneUpscalerProbeContext context{.safe_mode = options_.safe_mode};
+            if (const auto* const vulkan =
+                    window_manager_ ? window_manager_->getVulkanContext() : nullptr;
+                vulkan && vulkan->physicalDevice() != VK_NULL_HANDLE) {
+                VkPhysicalDeviceProperties properties{};
+                vkGetPhysicalDeviceProperties(vulkan->physicalDevice(), &properties);
+                context.graphics_api_version = properties.apiVersion;
+                context.vendor_id = properties.vendorID;
+                context.device_id = properties.deviceID;
+            }
+
+            std::vector<SceneUpscalerOptionProxy> result;
+            for (const auto& entry : availableSceneUpscalerCatalog(
+                     optionalSceneUpscalerRegistry(), context)) {
+                SceneUpscalerOptionProxy option{.id = entry.id, .label_key = entry.label_key};
+#ifdef LFS_HAS_NVIDIA_DLSS
+                if (entry.id == "nvidia-dlss")
+                    option.recommended_input_scales = nvidiaDlssRecommendedInputScales();
+#endif
+                result.push_back(std::move(option));
+            }
+            return result;
+        });
+        callback_cleanup_.add([] { vis::set_scene_upscaler_options_callback(nullptr); });
     }
 
     void VisualizerImpl::setupComponentConnections() {
@@ -1334,6 +1406,13 @@ namespace lfs::vis {
                 }
             }
             window_initialized_ = true;
+#ifdef LFS_HAS_NVIDIA_DLSS
+            if (nvidiaDlssVulkanBootstrapReady())
+                registerNvidiaDlssVulkanAdapter();
+#endif
+#ifdef LFS_HAS_AMD_FSR3
+            registerAmdFsr3VulkanAdapter();
+#endif
 
             window_manager_->pollEvents();
             window_manager_->updateWindowSize();

@@ -562,7 +562,11 @@ namespace lfs::vis::gui {
         const auto& id = target->GetId();
 
         if (id == "modal-backdrop") {
-            overlay->cancel();
+            // A modal choice must be made explicitly through one of its buttons.
+            // In particular, clicking outside the dialog must not invoke the
+            // cancellation callback: callers may associate that callback with
+            // teardown or another state change, and the backdrop is not a choice.
+            event.StopPropagation();
             return;
         }
 

@@ -25,6 +25,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "theme/theme.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
 #include "training/components/ppisp.hpp"
@@ -66,8 +67,15 @@ namespace lfs::vis {
         }
 
         void quantizeViewerLoadedPlyShN(const std::filesystem::path& path,
-                                        lfs::io::LoadResult& load_result) {
+                                        lfs::io::LoadResult& load_result,
+                                        const ViewerSplatPrecision precision =
+                                            loadViewerSplatPrecisionPreference()) {
             if (!isPlyPath(path)) {
+                return;
+            }
+            if (precision == ViewerSplatPrecision::Float32) {
+                LOG_INFO("Viewer PLY SH kept at fp32 by preference: path='{}'",
+                         lfs::core::path_to_utf8(path));
                 return;
             }
 
@@ -689,6 +697,125 @@ namespace lfs::vis {
             return std::nullopt;
         }
         return it->second;
+    }
+
+    std::expected<void, std::string> SceneManager::applyViewerSplatPrecision(const int bits) {
+        if (bits != 16 && bits != 32) {
+            return std::unexpected("Viewer splat precision must be 16 or 32 bits");
+        }
+
+        const ContentType content_type = getContentType();
+        if (content_type == ContentType::Empty) {
+            return {};
+        }
+        if (content_type != ContentType::SplatFiles) {
+            return std::unexpected(
+                "Viewport splat precision can only be changed for static file-backed splats");
+        }
+
+        struct Replacement {
+            std::string name;
+            std::unique_ptr<core::SplatData> model;
+        };
+        std::vector<Replacement> replacements;
+        const auto nodes = scene_.getNodes();
+        replacements.reserve(nodes.size());
+
+        bool found_splat = false;
+        bool already_applied = true;
+        for (const auto* const node : nodes) {
+            if (!node || node->type != core::NodeType::SPLAT || !node->model)
+                continue;
+            found_splat = true;
+            if (!node->model->shN_raw().is_valid() ||
+                node->model->shN_raw().numel() == 0) {
+                continue;
+            }
+            const bool resident_is_16_bit = node->model->shN_value_quantized();
+            if (resident_is_16_bit != (bits == 16)) {
+                already_applied = false;
+                break;
+            }
+        }
+        if (found_splat && already_applied)
+            return {};
+
+        for (const auto* const node : nodes) {
+            if (!node || node->type != core::NodeType::SPLAT || !node->model) {
+                continue;
+            }
+
+            const auto path = getPlyPath(node->id);
+            if (!path || !isPlyPath(*path)) {
+                return std::unexpected(
+                    "Cannot change viewport splat precision for node '" + node->name +
+                    "': an original PLY source is required");
+            }
+
+            auto loader = lfs::io::Loader::create();
+            auto splat_allocator = makeViewerSplatTensorAllocator();
+            lfs::io::LoadOptions options{
+                .resize_factor = -1,
+                .max_width = 0,
+                .images_folder = "images",
+                .validate_only = false,
+                .splat_tensor_allocator = splat_allocator};
+            auto loaded = loader->load(*path, options);
+            if (!loaded) {
+                return std::unexpected(
+                    "Failed to reload '" + lfs::core::path_to_utf8(*path) + "': " +
+                    loaded.error().format());
+            }
+
+            quantizeViewerLoadedPlyShN(
+                *path,
+                *loaded,
+                bits == 32 ? ViewerSplatPrecision::Float32
+                           : ViewerSplatPrecision::Float16);
+            auto* const splat =
+                std::get_if<std::shared_ptr<core::SplatData>>(&loaded->data);
+            if (!splat || !*splat) {
+                return std::unexpected(
+                    "Reloaded source for node '" + node->name + "' is not a splat model");
+            }
+            const bool loaded_has_shN = (*splat)->shN_raw().is_valid() &&
+                                        (*splat)->shN_raw().numel() != 0;
+            if (loaded_has_shN &&
+                (*splat)->shN_value_quantized() != (bits == 16)) {
+                return std::unexpected(
+                    "Failed to prepare " + std::to_string(bits) +
+                    "-bit viewport storage for node '" + node->name + "'");
+            }
+            if ((*splat)->size() != node->model->size()) {
+                return std::unexpected(
+                    "Cannot change viewport splat precision for modified node '" + node->name +
+                    "': its source Gaussian count differs from the resident model");
+            }
+
+            (*splat)->set_active_sh_degree(node->model->get_active_sh_degree());
+            if (node->model->has_deleted_mask() &&
+                node->model->deleted().numel() == (*splat)->size()) {
+                (*splat)->deleted() = node->model->deleted().clone();
+            }
+            replacements.push_back({.name = node->name,
+                                    .model = std::make_unique<core::SplatData>(std::move(**splat))});
+        }
+
+        if (!found_splat || replacements.empty()) {
+            return std::unexpected("The current scene has no file-backed PLY splats");
+        }
+
+        core::Scene::Transaction transaction(scene_);
+        for (auto& replacement : replacements) {
+            scene_.replaceNodeModel(replacement.name, std::move(replacement.model));
+        }
+        if (auto* const rendering = services().renderingOrNull()) {
+            rendering->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
+        }
+        python::bump_scene_generation();
+        LOG_INFO("Viewport splat precision applied immediately: {}-bit ({} node(s))",
+                 bits, replacements.size());
+        return {};
     }
 
     std::optional<std::filesystem::path> SceneManager::getPlyPath(std::string name) const {

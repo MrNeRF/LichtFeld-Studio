@@ -4,6 +4,7 @@
 
 #include "py_ui.hpp"
 #include "control/command_api.hpp"
+#include "core/environment.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
@@ -13,6 +14,7 @@
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/user_paths.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/rml_menu_bar.hpp"
@@ -21,6 +23,7 @@
 #include "gui/vulkan_ui_texture.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
+#include "mcp/mcp_http_server.hpp"
 #include "py_command.hpp"
 #include "py_gizmo.hpp"
 #include "py_keymap.hpp"
@@ -71,6 +74,7 @@
 #include <memory>
 #include <mutex>
 #include <stack>
+#include <stdexcept>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -4735,6 +4739,140 @@ namespace lfs::python {
             "Get saved UI scale preference (0.0 = auto)");
 
         m.def(
+            "set_viewer_splat_precision",
+            [](const int bits) {
+                if (bits != 16 && bits != 32)
+                    throw std::invalid_argument("Viewer splat precision must be 16 or 32 bits");
+                if (auto* const scene_manager = get_scene_manager()) {
+                    if (auto result = scene_manager->applyViewerSplatPrecision(bits); !result)
+                        throw std::runtime_error(result.error());
+                }
+                vis::saveViewerSplatPrecisionPreference(
+                    bits == 32 ? vis::ViewerSplatPrecision::Float32
+                               : vis::ViewerSplatPrecision::Float16);
+            },
+            nb::arg("bits"),
+            "Apply and persist viewer splat SH precision (16 or 32 bits)");
+
+        m.def(
+            "get_viewer_splat_precision",
+            []() {
+                return vis::loadViewerSplatPrecisionPreference() ==
+                               vis::ViewerSplatPrecision::Float32
+                           ? 32
+                           : 16;
+            },
+            "Get the persisted viewer splat SH precision in bits");
+
+        m.def(
+            "set_scene_upscaler_scale",
+            [](const std::string& backend_id, const float scale) {
+                vis::saveSceneUpscalerScalePreference(backend_id, scale);
+            },
+            nb::arg("backend_id"), nb::arg("scale"),
+            "Persist the input scale associated with one scene upscaler");
+
+        m.def(
+            "get_scene_upscaler_scale",
+            [](const std::string& backend_id) {
+                return vis::loadSceneUpscalerScalePreference(backend_id);
+            },
+            nb::arg("backend_id"),
+            "Get the persisted input scale associated with one scene upscaler");
+
+        m.def(
+            "set_scene_upscaler_quality",
+            [](const std::string& backend_id, const std::string& quality_id) {
+                vis::saveSceneUpscalerQualityPreference(backend_id, quality_id);
+            },
+            nb::arg("backend_id"), nb::arg("quality_id"),
+            "Persist the quality preset associated with one scene upscaler");
+
+        m.def(
+            "get_scene_upscaler_quality",
+            [](const std::string& backend_id) {
+                return vis::loadSceneUpscalerQualityPreference(backend_id);
+            },
+            nb::arg("backend_id"),
+            "Get the persisted quality preset associated with one scene upscaler");
+
+        m.def(
+            "get_mcp_preferences",
+            [] {
+                const auto state = vis::loadMcpPreferences();
+                nb::dict result;
+                const bool safe_mode = core::environment::flag("LFS_SAFE_MODE", false);
+                result["enabled"] = !safe_mode && state.enabled;
+                result["expose_network"] = state.expose_network;
+                result["port"] = state.port;
+                result["request_logging"] = !safe_mode && state.request_logging;
+                return result;
+            },
+            "Get persisted MCP HTTP server preferences");
+
+        m.def(
+            "set_mcp_preferences",
+            [](const bool enabled, const bool expose_network, const int port,
+               const bool request_logging) {
+                if (port < 1 || port > 65535)
+                    throw nb::value_error("MCP port must be between 1 and 65535");
+                vis::saveMcpPreferences({
+                    .enabled = enabled,
+                    .expose_network = expose_network,
+                    .port = port,
+                    .request_logging = request_logging,
+                });
+                return mcp::applyActiveMcpHttpConfig({
+                    .enabled = enabled,
+                    .expose_network = expose_network,
+                    .port = port,
+                    .request_logging = request_logging,
+                });
+            },
+            nb::arg("enabled"), nb::arg("expose_network"), nb::arg("port"),
+            nb::arg("request_logging") = false,
+            "Persist and immediately apply MCP HTTP server preferences");
+
+        m.def(
+            "get_mcp_status",
+            [] {
+                const auto status = mcp::activeMcpHttpStatus();
+                nb::dict result;
+                result["enabled"] = status.enabled;
+                result["running"] = status.running;
+                result["expose_network"] = status.expose_network;
+                result["port"] = status.port;
+                result["request_count"] = status.request_count;
+                result["success_count"] = status.success_count;
+                result["error_count"] = status.error_count;
+                result["endpoints"] = status.endpoints;
+                result["request_logging"] = status.request_logging;
+                result["log_file"] = status.log_file;
+                result["error"] = status.error;
+                return result;
+            },
+            "Get current MCP HTTP server runtime status");
+
+        m.def(
+            "get_mcp_log_directory",
+            [] {
+                const auto paths = core::UserPaths::resolve();
+                if (!paths)
+                    throw std::runtime_error(paths.error());
+                if (!core::environment::flag("LFS_SAFE_MODE", false)) {
+                    if (const auto ensured = paths->ensureDirectories(); !ensured)
+                        throw std::runtime_error(ensured.error());
+                }
+                return core::path_to_utf8(paths->mcpLogDir());
+            },
+            "Return the MCP per-session log directory, creating it if needed");
+
+        m.def(
+            "take_preferences_section_request",
+            [] { return vis::gui::consumePreferencesSectionRequest(); },
+            "Consume a requested Preferences section name");
+
+        m.def(
             "set_clipboard_text",
             [](const std::string& text) { SDL_SetClipboardText(text.c_str()); },
             nb::arg("text"), "Copy text to the system clipboard");
@@ -4783,6 +4921,7 @@ namespace lfs::python {
             "set_language",
             [](const std::string& lang_code) {
                 if (lfs::event::LocalizationManager::getInstance().setLanguage(lang_code)) {
+                    lfs::vis::saveLanguagePreference(lang_code);
                     if (lang_code == "ja" || lang_code == "ko" || lang_code == "zh")
                         if (auto* const gui_manager = get_gui_manager())
                             gui_manager->ensureCjkFontsLoaded();
@@ -4803,6 +4942,10 @@ namespace lfs::python {
         m.def(
             "get_languages",
             []() -> std::vector<std::tuple<std::string, std::string>> {
+                // The language list itself contains CJK names even when the
+                // active language is Latin-script.
+                if (auto* const gui_manager = get_gui_manager())
+                    gui_manager->ensureCjkFontsLoaded();
                 auto& loc = lfs::event::LocalizationManager::getInstance();
                 auto codes = loc.getAvailableLanguages();
                 auto names = loc.getAvailableLanguageNames();

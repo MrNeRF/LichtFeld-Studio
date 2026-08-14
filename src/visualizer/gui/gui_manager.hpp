@@ -37,6 +37,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <future>
 #include <limits>
@@ -61,6 +62,9 @@ namespace lfs::vis {
     class WindowManager;
 
     namespace gui {
+        LFS_VIS_API void openPreferencesPanel(std::string section = {});
+        [[nodiscard]] LFS_VIS_API std::string consumePreferencesSectionRequest();
+
         struct GuiHitTestResult {
             bool blocks_pointer = false;
             bool blocks_mouse_button = false;
@@ -108,6 +112,7 @@ namespace lfs::vis {
 
             // Window visibility
             void showWindow(const std::string& name, bool show = true);
+            [[nodiscard]] std::expected<void, std::string> resetLayout();
 
             // Viewport region access
             glm::vec2 getViewportPos() const;
@@ -133,6 +138,7 @@ namespace lfs::vis {
             [[nodiscard]] std::unordered_map<std::string, bool>* getWindowStates() { return &window_states_; }
 
             void requestExitConfirmation();
+            void openPreferences();
             bool isExitConfirmationPending() const;
 
             bool isCapturingInput() const;
@@ -252,6 +258,7 @@ namespace lfs::vis {
             // UI state only
             std::unordered_map<std::string, bool> window_states_;
             bool show_main_panel_ = true;
+            bool reset_window_geometry_on_next_start_ = false;
             bool show_vram_hud_ = false;
             bool perf_hud_expanded_ = true;
             bool vram_hud_visible_published_ = false;

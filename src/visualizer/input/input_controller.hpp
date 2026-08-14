@@ -304,6 +304,7 @@ namespace lfs::vis {
 
         // Camera movement tracking (motion flag + idle timeout; does not pause training)
         bool camera_is_moving_ = false;
+        bool camera_settle_requires_temporal_reset_ = false;
         std::chrono::steady_clock::time_point last_camera_movement_time_;
         static constexpr auto camera_movement_timeout_ = std::chrono::milliseconds(500);
 

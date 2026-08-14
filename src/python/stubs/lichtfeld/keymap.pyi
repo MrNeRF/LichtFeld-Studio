@@ -157,6 +157,12 @@ class Action(enum.Enum):
 
     TOGGLE_CAMERA_FRUSTUMS = 72
 
+    OPEN_PREFERENCES = 77
+
+    TOGGLE_MCP_SERVER = 78
+
+    TOGGLE_MCP_BINDING = 79
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 

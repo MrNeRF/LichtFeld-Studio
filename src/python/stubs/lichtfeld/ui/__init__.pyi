@@ -217,6 +217,18 @@ def set_theme_vignette_intensity(arg: float, /) -> None:
 def set_theme_vignette_style(arg0: float, arg1: float, arg2: float, /) -> None:
     """Set vignette intensity, radius, and softness"""
 
+def remember_camera_navigation() -> bool:
+    """Return whether camera navigation is persisted between launches"""
+
+def set_remember_camera_navigation(enabled: bool) -> None:
+    """Enable or disable camera navigation persistence"""
+
+def remember_camera_view_snap() -> bool:
+    """Return whether camera view snap is persisted between launches"""
+
+def set_remember_camera_view_snap(enabled: bool) -> None:
+    """Enable or disable camera view snap persistence"""
+
 class PanelSpace(enum.Enum):
     SIDE_PANEL = 0
 
@@ -357,6 +369,14 @@ def get_panel_names(space: PanelSpace = PanelSpace.FLOATING) -> list[str]:
 
 def set_panel_enabled(panel_id: str, enabled: bool) -> None:
     """Enable or disable a panel by id"""
+
+def reset_layout() -> str:
+    """
+    Reset the saved UI layout and apply the default dock arrangement immediately.
+    """
+
+def reset_window_state() -> str:
+    """Reset persisted window geometry for the next launch."""
 
 def is_panel_enabled(panel_id: str) -> bool:
     """Check if a panel is enabled"""
@@ -2518,6 +2538,39 @@ def get_ui_scale() -> float:
 
 def get_ui_scale_preference() -> float:
     """Get saved UI scale preference (0.0 = auto)"""
+
+def set_viewer_splat_precision(bits: int) -> None:
+    """Apply and persist viewer splat SH precision (16 or 32 bits)"""
+
+def get_viewer_splat_precision() -> int:
+    """Get the persisted viewer splat SH precision in bits"""
+
+def set_scene_upscaler_scale(backend_id: str, scale: float) -> None:
+    """Persist the input scale associated with one scene upscaler"""
+
+def get_scene_upscaler_scale(backend_id: str) -> float:
+    """Get the persisted input scale associated with one scene upscaler"""
+
+def set_scene_upscaler_quality(backend_id: str, quality_id: str) -> None:
+    """Persist the quality preset associated with one scene upscaler"""
+
+def get_scene_upscaler_quality(backend_id: str) -> str:
+    """Get the persisted quality preset associated with one scene upscaler"""
+
+def get_mcp_preferences() -> dict:
+    """Get persisted MCP HTTP server preferences"""
+
+def set_mcp_preferences(enabled: bool, expose_network: bool, port: int, request_logging: bool = False) -> bool:
+    """Persist and immediately apply MCP HTTP server preferences"""
+
+def get_mcp_status() -> dict:
+    """Get current MCP HTTP server runtime status"""
+
+def get_mcp_log_directory() -> str:
+    """Return the MCP per-session log directory, creating it if needed"""
+
+def take_preferences_section_request() -> str:
+    """Consume a requested Preferences section name"""
 
 def set_clipboard_text(text: str) -> None:
     """Copy text to the system clipboard"""

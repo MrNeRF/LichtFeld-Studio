@@ -29,27 +29,36 @@ namespace lfs::vis::gui {
 
     PanelLayoutManager::PanelLayoutManager() = default;
 
-    void PanelLayoutManager::loadState() {
+    LayoutState PanelLayoutManager::loadState() {
         LayoutState state;
         state.load();
-        // right_panel_width_ intentionally not loaded — always start at default
+        right_panel_width_ = state.right_panel_width;
         scene_panel_ratio_ = state.scene_panel_ratio;
         python_console_width_ = state.python_console_width;
         bottom_dock_height_ = state.bottom_dock_height;
         left_dock_width_ = state.left_dock_width;
-        show_sequencer_ = false;
+        show_sequencer_ = state.show_sequencer;
+        active_tab_id_ = state.active_main_tab;
+        return state;
     }
 
-    void PanelLayoutManager::saveState() const {
-        LayoutState state;
-        state.load();
-        // right_panel_width not saved — always start at default
-        state.scene_panel_ratio = scene_panel_ratio_;
-        state.python_console_width = python_console_width_;
-        state.bottom_dock_height = bottom_dock_height_;
-        state.left_dock_width = left_dock_width_;
-        state.show_sequencer = show_sequencer_;
-        state.save();
+    void PanelLayoutManager::applyState(const LayoutState& state) {
+        right_panel_width_ = state.right_panel_width;
+        scene_panel_ratio_ = state.scene_panel_ratio;
+        python_console_width_ = state.python_console_width;
+        bottom_dock_height_ = state.bottom_dock_height;
+        left_dock_width_ = state.left_dock_width;
+        show_sequencer_ = state.show_sequencer;
+        active_tab_id_ = state.active_main_tab;
+        tab_scroll_offset_ = 0.0f;
+        tab_content_total_h_ = 0.0f;
+        python_console_resizing_ = false;
+        bottom_dock_resizing_ = false;
+        left_dock_resizing_ = false;
+        python_console_hovering_edge_ = false;
+        bottom_dock_hovering_edge_ = false;
+        left_dock_hovering_edge_ = false;
+        cursor_request_ = CursorRequest::None;
     }
 
     bool PanelLayoutManager::syncActiveTab(const std::vector<PanelSummary>& main_tabs,

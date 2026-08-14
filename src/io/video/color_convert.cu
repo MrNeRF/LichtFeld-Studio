@@ -4,6 +4,7 @@
 #include "color_convert.cuh"
 
 #include "core/cuda_error.hpp"
+#include <cuda_fp16.h>
 
 namespace lfs::io::video {
 
@@ -200,6 +201,139 @@ namespace lfs::io::video {
 
         rgbToYuv420pKernel<<<grid, block, 0, stream>>>(rgb_src, y_dst, u_dst, v_dst, width, height);
         LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rgb_to_yuv420p");
+    }
+
+    template <bool NV12>
+    __global__ void rgba8ToYuv420Kernel(
+        const uint8_t* __restrict__ rgba, uint8_t* __restrict__ y_plane,
+        uint8_t* __restrict__ u_or_uv, uint8_t* __restrict__ v_plane,
+        const int width, const int height, const int y_pitch, const int uv_pitch) {
+        const int x = blockIdx.x * blockDim.x + threadIdx.x;
+        const int y = blockIdx.y * blockDim.y + threadIdx.y;
+        if (x >= width || y >= height)
+            return;
+        const int index = (y * width + x) * 4;
+        const int r = rgba[index];
+        const int g = rgba[index + 1];
+        const int b = rgba[index + 2];
+        y_plane[y * y_pitch + x] = clampU8(((KR_Y * r + KG_Y * g + KB_Y * b + 128) >> 8) + 16);
+        if ((x & 1) != 0 || (y & 1) != 0)
+            return;
+
+        int r_sum = 0, g_sum = 0, b_sum = 0, count = 0;
+        for (int dy = 0; dy < 2 && y + dy < height; ++dy) {
+            for (int dx = 0; dx < 2 && x + dx < width; ++dx) {
+                const int sample = ((y + dy) * width + x + dx) * 4;
+                r_sum += rgba[sample];
+                g_sum += rgba[sample + 1];
+                b_sum += rgba[sample + 2];
+                ++count;
+            }
+        }
+        const int r_avg = r_sum / count;
+        const int g_avg = g_sum / count;
+        const int b_avg = b_sum / count;
+        const uint8_t u = clampU8(((KR_U * r_avg + KG_U * g_avg + KB_U * b_avg + 128) >> 8) + 128);
+        const uint8_t v = clampU8(((KR_V * r_avg + KG_V * g_avg + KB_V * b_avg + 128) >> 8) + 128);
+        if constexpr (NV12) {
+            const int uv_index = (y / 2) * uv_pitch + x;
+            u_or_uv[uv_index] = u;
+            u_or_uv[uv_index + 1] = v;
+        } else {
+            const int uv_index = (y / 2) * (width / 2) + x / 2;
+            u_or_uv[uv_index] = u;
+            v_plane[uv_index] = v;
+        }
+    }
+
+    void rgba8ToNv12Cuda(const uint8_t* const rgba_src, uint8_t* const y_dst,
+                         uint8_t* const uv_dst, const int width, const int height,
+                         const int y_pitch, const int uv_pitch, cudaStream_t stream) {
+        const dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+        const dim3 grid((width + BLOCK_SIZE - 1) / BLOCK_SIZE,
+                        (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        rgba8ToYuv420Kernel<true><<<grid, block, 0, stream>>>(
+            rgba_src, y_dst, uv_dst, nullptr, width, height,
+            y_pitch > 0 ? y_pitch : width, uv_pitch > 0 ? uv_pitch : width);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rgba8_to_nv12");
+    }
+
+    void rgba8ToYuv420pCuda(const uint8_t* const rgba_src, uint8_t* const y_dst,
+                            uint8_t* const u_dst, uint8_t* const v_dst,
+                            const int width, const int height, cudaStream_t stream) {
+        const dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+        const dim3 grid((width + BLOCK_SIZE - 1) / BLOCK_SIZE,
+                        (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        rgba8ToYuv420Kernel<false><<<grid, block, 0, stream>>>(
+            rgba_src, y_dst, u_dst, v_dst, width, height, width, width / 2);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rgba8_to_yuv420p");
+    }
+
+    template <bool NV12>
+    __global__ void rgba16fToYuv420Kernel(
+        const __half* __restrict__ rgba, uint8_t* __restrict__ y_plane,
+        uint8_t* __restrict__ u_or_uv, uint8_t* __restrict__ v_plane,
+        const int width, const int height, const int y_pitch, const int uv_pitch) {
+        const int x = blockIdx.x * blockDim.x + threadIdx.x;
+        const int y = blockIdx.y * blockDim.y + threadIdx.y;
+        if (x >= width || y >= height)
+            return;
+        const int index = (y * width + x) * 4;
+        const int r = floatToU8(__half2float(rgba[index]));
+        const int g = floatToU8(__half2float(rgba[index + 1]));
+        const int b = floatToU8(__half2float(rgba[index + 2]));
+        y_plane[y * y_pitch + x] = clampU8(((KR_Y * r + KG_Y * g + KB_Y * b + 128) >> 8) + 16);
+        if ((x & 1) != 0 || (y & 1) != 0)
+            return;
+
+        int r_sum = 0, g_sum = 0, b_sum = 0, count = 0;
+        for (int dy = 0; dy < 2 && y + dy < height; ++dy) {
+            for (int dx = 0; dx < 2 && x + dx < width; ++dx) {
+                const int sample = ((y + dy) * width + x + dx) * 4;
+                r_sum += floatToU8(__half2float(rgba[sample]));
+                g_sum += floatToU8(__half2float(rgba[sample + 1]));
+                b_sum += floatToU8(__half2float(rgba[sample + 2]));
+                ++count;
+            }
+        }
+        const int r_avg = r_sum / count;
+        const int g_avg = g_sum / count;
+        const int b_avg = b_sum / count;
+        const uint8_t u = clampU8(((KR_U * r_avg + KG_U * g_avg + KB_U * b_avg + 128) >> 8) + 128);
+        const uint8_t v = clampU8(((KR_V * r_avg + KG_V * g_avg + KB_V * b_avg + 128) >> 8) + 128);
+        if constexpr (NV12) {
+            const int uv_index = (y / 2) * uv_pitch + x;
+            u_or_uv[uv_index] = u;
+            u_or_uv[uv_index + 1] = v;
+        } else {
+            const int uv_index = (y / 2) * (width / 2) + x / 2;
+            u_or_uv[uv_index] = u;
+            v_plane[uv_index] = v;
+        }
+    }
+
+    void rgba16fToNv12Cuda(const void* const rgba_src, uint8_t* const y_dst,
+                           uint8_t* const uv_dst, const int width, const int height,
+                           const int y_pitch, const int uv_pitch, cudaStream_t stream) {
+        const dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+        const dim3 grid((width + BLOCK_SIZE - 1) / BLOCK_SIZE,
+                        (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        rgba16fToYuv420Kernel<true><<<grid, block, 0, stream>>>(
+            static_cast<const __half*>(rgba_src), y_dst, uv_dst, nullptr, width, height,
+            y_pitch > 0 ? y_pitch : width, uv_pitch > 0 ? uv_pitch : width);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rgba16f_to_nv12");
+    }
+
+    void rgba16fToYuv420pCuda(const void* const rgba_src, uint8_t* const y_dst,
+                              uint8_t* const u_dst, uint8_t* const v_dst,
+                              const int width, const int height, cudaStream_t stream) {
+        const dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+        const dim3 grid((width + BLOCK_SIZE - 1) / BLOCK_SIZE,
+                        (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        rgba16fToYuv420Kernel<false><<<grid, block, 0, stream>>>(
+            static_cast<const __half*>(rgba_src), y_dst, u_dst, v_dst, width, height,
+            width, width / 2);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rgba16f_to_yuv420p");
     }
 
     __global__ void nv12ToRgbKernel(

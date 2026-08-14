@@ -2,8 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "theme.hpp"
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
 #include "internal/resource_paths.hpp"
 #include <algorithm>
 #include <cctype>
@@ -1049,46 +1051,54 @@ namespace lfs::vis {
     }
 
     namespace {
-        std::filesystem::path getThemeConfigDir() {
-            std::filesystem::path config_dir;
-#ifdef _WIN32
-            const char* path = std::getenv("APPDATA");
-            if (path) {
-                config_dir = std::filesystem::path(path) / "LichtFeldStudio";
-            } else {
-                config_dir = std::filesystem::current_path() / "config";
+        std::optional<std::filesystem::path> getThemePreferencesPath() {
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths) {
+                LOG_WARN("Unable to resolve user settings path: {}; theme preferences are disabled", paths.error());
+                return std::nullopt;
             }
-#else
-            const char* xdg = std::getenv("XDG_CONFIG_HOME");
-            if (xdg) {
-                config_dir = std::filesystem::path(xdg) / "LichtFeldStudio";
-            } else {
-                const char* home = std::getenv("HOME");
-                if (home) {
-                    config_dir = std::filesystem::path(home) / ".config" / "LichtFeldStudio";
-                } else {
-                    config_dir = std::filesystem::current_path() / "config";
-                }
-            }
-#endif
-            return config_dir;
+            return paths->preferencesFile();
         }
+
+        [[nodiscard]] bool preferencesDisabled() {
+            return lfs::core::environment::flag("LFS_SAFE_MODE", false);
+        }
+
+        [[nodiscard]] nlohmann::json loadPreferences() {
+            if (preferencesDisabled())
+                return nlohmann::json::object();
+            const auto path = getThemePreferencesPath();
+            if (!path)
+                return nlohmann::json::object();
+            std::ifstream file(*path);
+            nlohmann::json preferences;
+            if (file) {
+                file >> preferences;
+            }
+            return preferences.is_object() ? preferences : nlohmann::json::object();
+        }
+
+        void savePreferences(nlohmann::json preferences) {
+            if (preferencesDisabled())
+                return;
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths) {
+                LOG_WARN("Unable to resolve user settings path: {}; theme preferences are disabled", paths.error());
+                return;
+            }
+            preferences["schema_version"] = 1;
+            if (const auto result = paths->writePreferencesAtomically(preferences.dump(2) + '\n'); !result)
+                LOG_WARN("Unable to save theme preferences: {}", result.error());
+        }
+
     } // namespace
 
     void saveThemePreferenceName(const std::string& theme_name) {
         try {
-            const auto config_dir = getThemeConfigDir();
-            std::filesystem::create_directories(config_dir);
-            const auto pref_path = config_dir / "theme_preference";
-            std::ofstream file(pref_path);
-            if (file) {
-                const std::string normalized = normalizeThemeIdImpl(theme_name);
-                if (isKnownThemePresetId(normalized)) {
-                    file << normalized;
-                } else {
-                    file << "dark";
-                }
-            }
+            auto preferences = loadPreferences();
+            const std::string normalized = normalizeThemeIdImpl(theme_name);
+            preferences["theme"] = isKnownThemePresetId(normalized) ? normalized : "dark";
+            savePreferences(std::move(preferences));
         } catch (...) {
             // Silently ignore - not critical
         }
@@ -1096,18 +1106,13 @@ namespace lfs::vis {
 
     std::string loadThemePreferenceName() {
         try {
-            const auto config_dir = getThemeConfigDir();
-            const auto pref_path = config_dir / "theme_preference";
-            if (std::filesystem::exists(pref_path)) {
-                std::ifstream file(pref_path);
-                std::string pref;
-                if (file >> pref) {
-                    const std::string normalized = normalizeThemeIdImpl(pref);
-                    if (isKnownThemePresetId(normalized)) {
-                        return normalized;
-                    }
-                }
-            }
+            if (preferencesDisabled())
+                return "dark";
+            const auto preferences = loadPreferences();
+            const std::string pref = preferences.value("theme", "");
+            const std::string normalized = normalizeThemeIdImpl(pref);
+            if (isKnownThemePresetId(normalized))
+                return normalized;
         } catch (...) {
             // Silently ignore - not critical
         }
@@ -1116,13 +1121,11 @@ namespace lfs::vis {
 
     void saveUiScalePreference(float scale) {
         try {
-            const auto config_dir = getThemeConfigDir();
-            std::filesystem::create_directories(config_dir);
-            const auto pref_path = config_dir / "ui_scale";
-            std::ofstream file(pref_path);
-            if (file) {
-                file << scale;
-            }
+            auto preferences = loadPreferences();
+            // Keep the user's choice distinct from the scale currently reported by a monitor.
+            // A zero scale is the public API's automatic-mode sentinel.
+            preferences["ui_scale"] = scale <= 0.0f ? json("auto") : json(scale);
+            savePreferences(std::move(preferences));
         } catch (const std::exception& e) {
             LOG_WARN("Failed to save UI scale preference: {}", e.what());
         }
@@ -1130,18 +1133,435 @@ namespace lfs::vis {
 
     float loadUiScalePreference() {
         try {
-            const auto config_dir = getThemeConfigDir();
-            const auto pref_path = config_dir / "ui_scale";
-            if (std::filesystem::exists(pref_path)) {
-                std::ifstream file(pref_path);
-                float scale = 0.0f;
-                if (file >> scale)
-                    return scale;
+            if (preferencesDisabled())
+                return 0.0f;
+            const auto preferences = loadPreferences();
+            if (preferences.contains("ui_scale")) {
+                const auto& ui_scale = preferences["ui_scale"];
+                if (ui_scale.is_string() && ui_scale.get<std::string>() == "auto")
+                    return 0.0f;
+                // Compatibility with preferences.json written by earlier builds.
+                if (ui_scale.is_number()) {
+                    const float scale = ui_scale.get<float>();
+                    if (std::isfinite(scale) && scale >= 1.0f && scale <= 4.0f)
+                        return scale;
+                }
             }
         } catch (const std::exception& e) {
             LOG_WARN("Failed to load UI scale preference: {}", e.what());
         }
         return 0.0f;
+    }
+
+    void saveSceneRenderScalePreference(float scale) {
+        try {
+            auto preferences = loadPreferences();
+            const float sanitized = std::isfinite(scale) ? std::clamp(scale, 0.25f, 1.0f) : 1.0f;
+            preferences["scene_render_scale"] = sanitized;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save scene render scale preference: {}", e.what());
+        }
+    }
+
+    float loadSceneRenderScalePreference() {
+        try {
+            if (preferencesDisabled())
+                return 1.0f;
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("scene_render_scale");
+            if (it != preferences.end() && it->is_number()) {
+                const float scale = it->get<float>();
+                if (std::isfinite(scale) && scale >= 0.25f && scale <= 1.0f)
+                    return scale;
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load scene render scale preference: {}", e.what());
+        }
+        return 1.0f;
+    }
+
+    void saveViewerSplatPrecisionPreference(const ViewerSplatPrecision precision) {
+        try {
+            auto preferences = loadPreferences();
+            preferences["viewer_splat_precision"] =
+                precision == ViewerSplatPrecision::Float32 ? 32 : 16;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save viewer splat precision preference: {}", e.what());
+        }
+    }
+
+    ViewerSplatPrecision loadViewerSplatPrecisionPreference() {
+        try {
+            if (preferencesDisabled())
+                return ViewerSplatPrecision::Float16;
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("viewer_splat_precision");
+            if (it != preferences.end() && it->is_number_integer() && it->get<int>() == 32)
+                return ViewerSplatPrecision::Float32;
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load viewer splat precision preference: {}", e.what());
+        }
+        return ViewerSplatPrecision::Float16;
+    }
+
+    void saveSceneUpscalerScalePreference(const std::string& backend_id, const float scale) {
+        try {
+            if (backend_id.empty())
+                return;
+            auto preferences = loadPreferences();
+            const float sanitized = backend_id == "native"
+                                        ? 1.0f
+                                        : std::clamp(std::isfinite(scale) ? scale : 1.0f,
+                                                     0.25f,
+                                                     1.0f);
+            preferences["scene_upscaler_scales"][backend_id] = sanitized;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save scene upscaler scale preference: {}", e.what());
+        }
+    }
+
+    float loadSceneUpscalerScalePreference(const std::string& backend_id) {
+        if (backend_id == "native")
+            return 1.0f;
+        try {
+            if (preferencesDisabled())
+                return 1.0f;
+            const auto preferences = loadPreferences();
+            const auto scales = preferences.find("scene_upscaler_scales");
+            if (scales != preferences.end() && scales->is_object()) {
+                const auto it = scales->find(backend_id);
+                if (it != scales->end() && it->is_number()) {
+                    const float scale = it->get<float>();
+                    if (std::isfinite(scale) && scale >= 0.25f && scale <= 1.0f)
+                        return scale;
+                }
+            }
+
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load scene upscaler scale preference: {}", e.what());
+        }
+        return 1.0f;
+    }
+
+    void saveSceneUpscalerQualityPreference(const std::string& backend_id,
+                                            const std::string& quality_id) {
+        try {
+            if (backend_id.empty())
+                return;
+            auto preferences = loadPreferences();
+            const std::string sanitized =
+                quality_id == "performance" || quality_id == "quality" ? quality_id : "balanced";
+            preferences["scene_upscaler_qualities"][backend_id] = sanitized;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save scene upscaler quality preference: {}", e.what());
+        }
+    }
+
+    std::string loadSceneUpscalerQualityPreference(const std::string& backend_id) {
+        try {
+            if (preferencesDisabled())
+                return "balanced";
+            const auto preferences = loadPreferences();
+            const auto qualities = preferences.find("scene_upscaler_qualities");
+            if (qualities != preferences.end() && qualities->is_object()) {
+                const auto it = qualities->find(backend_id);
+                if (it != qualities->end() && it->is_string()) {
+                    const auto quality = it->get<std::string>();
+                    if (quality == "performance" || quality == "balanced" || quality == "quality")
+                        return quality;
+                }
+            }
+            const auto legacy = preferences.find("scene_temporal_quality");
+            if (legacy != preferences.end() && legacy->is_string()) {
+                const auto quality = legacy->get<std::string>();
+                if (quality == "performance" || quality == "balanced" || quality == "quality")
+                    return quality;
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load scene upscaler quality preference: {}", e.what());
+        }
+        return "balanced";
+    }
+
+    void saveSceneUpscalerPreference(const std::string& backend_id) {
+        try {
+            auto preferences = loadPreferences();
+            const bool valid_id = !backend_id.empty() &&
+                                  std::ranges::all_of(backend_id, [](const unsigned char c) {
+                                      return std::isalnum(c) || c == '-' || c == '_';
+                                  });
+            preferences["scene_upscaler"] = valid_id ? backend_id : "native";
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save scene upscaler preference: {}", e.what());
+        }
+    }
+
+    std::string loadSceneUpscalerPreference() {
+        try {
+            if (preferencesDisabled())
+                return "native";
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("scene_upscaler");
+            if (it != preferences.end() && it->is_string()) {
+                const auto value = it->get<std::string>();
+                const bool valid_id = !value.empty() &&
+                                      std::ranges::all_of(value, [](const unsigned char c) {
+                                          return std::isalnum(c) || c == '-' || c == '_';
+                                      });
+                if (valid_id)
+                    return value;
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load scene upscaler preference: {}", e.what());
+        }
+        return "native";
+    }
+
+    void saveSceneTemporalQualityPreference(const std::string& quality_id) {
+        try {
+            auto preferences = loadPreferences();
+            preferences["scene_temporal_quality"] =
+                quality_id == "performance" || quality_id == "quality" ? quality_id : "balanced";
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save scene temporal quality preference: {}", e.what());
+        }
+    }
+
+    std::string loadSceneTemporalQualityPreference() {
+        try {
+            if (preferencesDisabled())
+                return "balanced";
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("scene_temporal_quality");
+            if (it != preferences.end() && it->is_string()) {
+                const auto value = it->get<std::string>();
+                if (value == "performance" || value == "quality")
+                    return value;
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load scene temporal quality preference: {}", e.what());
+        }
+        return "balanced";
+    }
+
+    void saveLanguagePreference(const std::string& language_code) {
+        try {
+            if (language_code.empty())
+                return;
+            auto preferences = loadPreferences();
+            preferences["language"] = language_code;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save language preference: {}", e.what());
+        }
+    }
+
+    std::string loadLanguagePreference() {
+        try {
+            if (preferencesDisabled())
+                return {};
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("language");
+            return it != preferences.end() && it->is_string() ? it->get<std::string>() : std::string{};
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load language preference: {}", e.what());
+            return {};
+        }
+    }
+
+    void clearLanguagePreference() {
+        try {
+            auto preferences = loadPreferences();
+            preferences.erase("language");
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to clear language preference: {}", e.what());
+        }
+    }
+
+    void saveCameraNavigationPreference(const std::string& mode) {
+        try {
+            if (!rememberCameraNavigationPreference())
+                return;
+            const bool known_mode = mode == "orbit" || mode == "trackball" ||
+                                    mode == "fpv" || mode == "drone";
+            auto preferences = loadPreferences();
+            preferences["camera_navigation_mode"] = known_mode ? mode : "orbit";
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save camera navigation preference: {}", e.what());
+        }
+    }
+
+    std::string loadCameraNavigationPreference() {
+        try {
+            if (preferencesDisabled() || !rememberCameraNavigationPreference())
+                return "orbit";
+            const auto preferences = loadPreferences();
+            const std::string mode = preferences.value("camera_navigation_mode", "orbit");
+            if (mode == "orbit" || mode == "trackball" || mode == "fpv" || mode == "drone")
+                return mode;
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load camera navigation preference: {}", e.what());
+        }
+        return "orbit";
+    }
+
+    void setRememberCameraNavigationPreference(const bool enabled) {
+        try {
+            auto preferences = loadPreferences();
+            preferences["remember_camera_navigation"] = enabled;
+            if (!enabled)
+                preferences.erase("camera_navigation_mode");
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save camera navigation persistence preference: {}", e.what());
+        }
+    }
+
+    bool rememberCameraNavigationPreference() {
+        try {
+            if (preferencesDisabled())
+                return false;
+            return loadPreferences().value("remember_camera_navigation", false);
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load camera navigation persistence preference: {}", e.what());
+            return false;
+        }
+    }
+
+    void saveCameraViewSnapPreference(const bool enabled) {
+        try {
+            if (!rememberCameraViewSnapPreference())
+                return;
+            auto preferences = loadPreferences();
+            preferences["camera_view_snap"] = enabled;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save camera view snap preference: {}", e.what());
+        }
+    }
+
+    bool loadCameraViewSnapPreference() {
+        try {
+            if (preferencesDisabled() || !rememberCameraViewSnapPreference())
+                return false;
+            const auto preferences = loadPreferences();
+            return preferences.value("camera_view_snap", false);
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load camera view snap preference: {}", e.what());
+            return false;
+        }
+    }
+
+    void saveMcpPreferences(const McpPreferenceState& state) {
+        try {
+            if (preferencesDisabled())
+                return;
+            auto preferences = loadPreferences();
+            preferences["mcp"] = {
+                {"enabled", state.enabled},
+                {"expose_network", state.expose_network},
+                {"port", std::clamp(state.port, 1, 65535)},
+                {"request_logging", state.request_logging},
+            };
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& error) {
+            LOG_WARN("Failed to save MCP preferences: {}", error.what());
+        }
+    }
+
+    McpPreferenceState loadMcpPreferences() {
+        McpPreferenceState result;
+        if (preferencesDisabled())
+            return result;
+        try {
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("mcp");
+            if (it == preferences.end() || !it->is_object())
+                return result;
+            if (const auto enabled = it->find("enabled"); enabled != it->end() && enabled->is_boolean())
+                result.enabled = enabled->get<bool>();
+            if (const auto expose = it->find("expose_network"); expose != it->end() && expose->is_boolean())
+                result.expose_network = expose->get<bool>();
+            if (const auto port = it->find("port"); port != it->end() && port->is_number_integer()) {
+                const int value = port->get<int>();
+                if (value >= 1 && value <= 65535)
+                    result.port = value;
+            }
+            if (const auto logging = it->find("request_logging"); logging != it->end() && logging->is_boolean())
+                result.request_logging = logging->get<bool>();
+        } catch (const std::exception& error) {
+            LOG_WARN("Failed to load MCP preferences: {}", error.what());
+        }
+        return result;
+    }
+
+    void savePerfHudPreferences(const PerfHudPreferenceState& state) {
+        try {
+            if (preferencesDisabled())
+                return;
+            auto preferences = loadPreferences();
+            preferences["performance_hud"] = {
+                {"visible", state.visible},
+                {"expanded", state.expanded},
+            };
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& error) {
+            LOG_WARN("Failed to save performance HUD preferences: {}", error.what());
+        }
+    }
+
+    PerfHudPreferenceState loadPerfHudPreferences() {
+        PerfHudPreferenceState result;
+        if (preferencesDisabled())
+            return result;
+        try {
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("performance_hud");
+            if (it == preferences.end() || !it->is_object())
+                return result;
+            if (const auto visible = it->find("visible");
+                visible != it->end() && visible->is_boolean()) {
+                result.visible = visible->get<bool>();
+            }
+            if (const auto expanded = it->find("expanded");
+                expanded != it->end() && expanded->is_boolean()) {
+                result.expanded = expanded->get<bool>();
+            }
+        } catch (const std::exception& error) {
+            LOG_WARN("Failed to load performance HUD preferences: {}", error.what());
+        }
+        return result;
+    }
+
+    void setRememberCameraViewSnapPreference(const bool enabled) {
+        try {
+            auto preferences = loadPreferences();
+            preferences["remember_camera_view_snap"] = enabled;
+            if (!enabled)
+                preferences.erase("camera_view_snap");
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save camera view snap persistence preference: {}", e.what());
+        }
+    }
+
+    bool rememberCameraViewSnapPreference() {
+        try {
+            if (preferencesDisabled())
+                return false;
+            return loadPreferences().value("remember_camera_view_snap", false);
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load camera view snap persistence preference: {}", e.what());
+            return false;
+        }
     }
 
     void setThemeVignetteEnabled(bool enabled) {

@@ -8,6 +8,7 @@
 #include "core/checkpoint_format.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_version.hpp"
+#include "core/environment.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
@@ -19,6 +20,7 @@
 #include "core/scene.hpp"
 #include "core/session_breadcrumb.hpp"
 #include "core/tensor.hpp"
+#include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
 #include "tcp/include/tcp_publisher.hpp"
@@ -37,9 +39,12 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "sequencer/timeline.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
+#include "visualizer/gui/layout_state.hpp"
 #include "visualizer/gui/panels/python_scripts_panel.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
+#include "visualizer/input/input_bindings.hpp"
+#include "visualizer/theme/theme.hpp"
 #include <cmath>
 #include <condition_variable>
 #include <cuda_runtime.h>
@@ -47,6 +52,7 @@
 #include <mutex>
 #include <print>
 #include <rasterization_api.h>
+#include <string>
 #include <string_view>
 
 #ifdef WIN32
@@ -610,7 +616,59 @@ namespace lfs::app {
             });
         }
 
+        bool resetRequestedUserSettings(const lfs::core::param::TrainingParameters& params) {
+            if (!params.reset_preferences && !params.reset_layout && !params.reset_all_settings)
+                return true;
+
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths) {
+                LOG_ERROR("Unable to resolve user settings path: {}", paths.error());
+                return false;
+            }
+            const auto reset_file = [&]<typename Reset>(const bool requested,
+                                                        const char* const label,
+                                                        Reset&& reset) {
+                if (!requested)
+                    return true;
+                const auto result = reset();
+                if (!result) {
+                    LOG_ERROR("Unable to reset {}: {}", label, result.error());
+                    return false;
+                }
+                if (*result) {
+                    LOG_INFO("Reset {}. Backup saved to {}", label,
+                             lfs::core::path_to_utf8(**result));
+                } else {
+                    LOG_INFO("Reset {}. No existing settings file required a backup", label);
+                }
+                return true;
+            };
+            bool success = true;
+            success = reset_file(params.reset_preferences || params.reset_all_settings, "preferences",
+                                 [&paths] { return paths->resetPreferences(); }) &&
+                      success;
+            success = reset_file(params.reset_layout || params.reset_all_settings, "layout",
+                                 [&paths] { return paths->resetLayout(); }) &&
+                      success;
+            success = reset_file(params.reset_all_settings, "window",
+                                 [&paths] { return paths->resetWindowState(); }) &&
+                      success;
+            return success;
+        }
+
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+            const bool safe_mode = params->safe_mode || lfs::core::environment::flag("LFS_SAFE_MODE", false);
+            python::set_user_plugin_loading_enabled(!safe_mode);
+            vis::gui::LayoutState::setPersistenceEnabled(!safe_mode);
+            vis::input::InputBindings::setPersistenceEnabled(!safe_mode);
+            if (safe_mode) {
+                LOG_WARN("Safe mode active: user plugin loading is disabled for this process");
+            }
+
+            const std::string window_title = safe_mode
+                                                 ? "LichtFeld Studio (Safe Mode)"
+                                                 : "LichtFeld Studio";
+
             if (!params->python_scripts.empty()) {
                 vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
             }
@@ -639,12 +697,68 @@ namespace lfs::app {
             });
 
             constexpr auto graphics_backend = lfs::vis::GraphicsBackend::Vulkan;
+            mcp::McpHttpServer mcp_http({.enable_resources = true});
+            mcp::setActiveMcpHttpServer(&mcp_http);
+            const auto mcp_preferences = vis::loadMcpPreferences();
+            vis::setRuntimeServiceControls({
+                .toggle_mcp_enabled = [] {
+                    const auto status = mcp::activeMcpHttpStatus();
+                    const mcp::McpHttpConfig config{
+                        .enabled = !status.enabled,
+                        .expose_network = status.expose_network,
+                        .port = status.port,
+                        .request_logging = status.request_logging,
+                    };
+                    if (!mcp::applyActiveMcpHttpConfig(config))
+                        return false;
+                    vis::saveMcpPreferences({
+                        .enabled = config.enabled,
+                        .expose_network = config.expose_network,
+                        .port = config.port,
+                        .request_logging = config.request_logging,
+                    });
+                    return true; },
+                .toggle_mcp_binding = [] {
+                    const auto status = mcp::activeMcpHttpStatus();
+                    const mcp::McpHttpConfig config{
+                        .enabled = status.enabled,
+                        .expose_network = !status.expose_network,
+                        .port = status.port,
+                        .request_logging = status.request_logging,
+                    };
+                    if (!mcp::applyActiveMcpHttpConfig(config))
+                        return false;
+                    vis::saveMcpPreferences({
+                        .enabled = config.enabled,
+                        .expose_network = config.expose_network,
+                        .port = config.port,
+                        .request_logging = config.request_logging,
+                    });
+                    return true; },
+            });
             auto viewer = vis::Visualizer::create({
-                .title = "LichtFeld Studio",
+                .title = window_title,
                 .width = 1280,
                 .height = 720,
                 .antialiasing = false,
                 .show_startup_overlay = !disable_splash,
+                .safe_mode = safe_mode,
+                .mcp_status_provider = [] {
+                    const auto status = mcp::activeMcpHttpStatus();
+                    return vis::RuntimeServiceStatus{
+                        .enabled = status.enabled,
+                        .running = status.running,
+                        .network_exposed = status.expose_network,
+                        .port = status.port,
+                        .request_count = status.request_count,
+                        .success_count = status.success_count,
+                        .error_count = status.error_count,
+                        .endpoints = status.endpoints,
+                        .request_logging = status.request_logging,
+                        .log_file = status.log_file,
+                        .error = status.error,
+                    };
+                },
                 .gut = params->optimization.gut,
                 .graphics_backend = graphics_backend,
             });
@@ -683,15 +797,21 @@ namespace lfs::app {
             register_gui_scene_tools(viewer.get());
             register_gui_scene_resources(viewer.get());
 
-            mcp::McpHttpServer mcp_http({.enable_resources = true});
             viewer->setShutdownRequestedCallback([&mcp_http]() {
                 mcp_http.stop();
             });
-            if (!mcp_http.start())
+            if (!mcp_http.start({
+                    .enabled = !safe_mode && mcp_preferences.enabled,
+                    .expose_network = mcp_preferences.expose_network,
+                    .port = mcp_preferences.port,
+                    .request_logging = !safe_mode && mcp_preferences.request_logging,
+                }))
                 LOG_ERROR("Failed to start MCP HTTP server");
 
             viewer->run();
 
+            vis::setRuntimeServiceControls({});
+            mcp::setActiveMcpHttpServer(nullptr);
             mcp_http.stop();
 
             python::finalize();
@@ -721,6 +841,9 @@ namespace lfs::app {
     } // namespace
 
     int Application::run(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+        if (!resetRequestedUserSettings(*params))
+            return 1;
+
         // Pre-initialize CacheLoader for the exe module.
         // On Windows, lfs_io (static lib) is linked into both the exe and
         // lfs_visualizer.dll, giving each its own CacheLoader singleton.

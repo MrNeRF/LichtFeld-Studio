@@ -24,6 +24,11 @@ namespace lfs::vis::gui::panels {
         int custom_height = 1080;
         int framerate = 30;
         int quality = 18;
+        std::string export_upscaler = "native";
+        float export_input_scale = 1.0f;
+        int export_upscaler_quality = 1;
+        lfs::io::video::VideoSplatPrecision export_splat_precision =
+            lfs::io::video::VideoSplatPrecision::Float16;
     };
 
 } // namespace lfs::vis::gui::panels

@@ -206,6 +206,9 @@ set(TEST_FILES
     test_training_terminal_state.cpp
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp
+    test_user_paths.cpp
+    test_safe_mode.cpp
+    test_window_state.cpp
     test_crash_handler.cpp
     test_gpu_teardown_order.cpp
     test_logger.cpp
@@ -306,7 +309,14 @@ set(TEST_FILES
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rml_im_mode_layout.cpp
+    test_scene_upscaler_registry.cpp
+    test_scene_depth_contract.cpp
+    test_scene_motion_contract.cpp
+    test_scene_temporal_plan.cpp
+    test_scene_temporal_coordinator.cpp
+    test_scene_temporal_resolve.cpp
     test_status_bar_fit.cpp
+    test_temporal_frame_tracker.cpp
     test_rotated_sh_correctness.cpp
     test_tensor_stream.cpp
     test_tensor_d4_from_blob_stream.cpp
@@ -379,7 +389,9 @@ add_executable(lichtfeld_tests ${TEST_SOURCES})
 
 # USD (pxr) headers from vcpkg pull in deprecated <ext/hash_set> and emit
 # #warning (-Wcpp). Third-party; suppress only for this translation unit.
-set_source_files_properties(test_usd_format.cpp PROPERTIES COMPILE_OPTIONS "-Wno-cpp")
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+    set_source_files_properties(test_usd_format.cpp PROPERTIES COMPILE_OPTIONS "-Wno-cpp")
+endif()
 
 # Python integration tests import the in-tree extension at runtime.
 add_dependencies(lichtfeld_tests lfs_py)

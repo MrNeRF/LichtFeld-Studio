@@ -54,6 +54,7 @@ namespace lfs::rendering {
         float focal_length_mm = DEFAULT_FOCAL_LENGTH_MM;
         bool orthographic = false;
         float ortho_scale = DEFAULT_ORTHO_SCALE;
+        glm::vec2 projection_jitter_ndc{0.0f};
 
         [[nodiscard]] glm::mat4 getViewMatrix() const {
             return makeViewMatrix(rotation, translation);
@@ -62,7 +63,15 @@ namespace lfs::rendering {
         [[nodiscard]] glm::mat4 getProjectionMatrix(const float near_plane = DEFAULT_NEAR_PLANE,
                                                     const float far_plane = DEFAULT_FAR_PLANE) const {
             const float vfov = focalLengthToVFov(focal_length_mm);
-            return createProjectionMatrix(size, vfov, orthographic, ortho_scale, near_plane, far_plane);
+            glm::mat4 projection =
+                createProjectionMatrix(size, vfov, orthographic, ortho_scale, near_plane, far_plane);
+            if (!orthographic && projection_jitter_ndc != glm::vec2(0.0f)) {
+                for (int column = 0; column < 4; ++column) {
+                    projection[column][0] += projection_jitter_ndc.x * projection[column][3];
+                    projection[column][1] += projection_jitter_ndc.y * projection[column][3];
+                }
+            }
+            return projection;
         }
     };
 

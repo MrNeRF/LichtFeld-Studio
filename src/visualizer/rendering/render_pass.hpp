@@ -8,6 +8,7 @@
 #include "internal/viewport.hpp"
 #include "rendering_types.hpp"
 #include "scene/scene_render_state.hpp"
+#include "temporal_frame_tracker.hpp"
 #include <chrono>
 #include <optional>
 #include <rendering/frame_contract.hpp>
@@ -85,6 +86,9 @@ namespace lfs::vis {
         int hovered_gaussian_id = -1;
         float selection_flash_intensity = 0;
         std::vector<FrameViewPanel> view_panels;
+        // Existing backends leave this at zero. Temporal producers set it once,
+        // before request construction, so all scene consumers share one camera.
+        glm::vec2 scene_jitter_pixels{0.0f};
 
         [[nodiscard]] const FrameViewPanel* findViewPanel(const SplitViewPanelId panel_id) const {
             for (const auto& panel : view_panels) {
@@ -97,17 +101,19 @@ namespace lfs::vis {
 
         [[nodiscard]] lfs::rendering::FrameView makeFrameView(const Viewport& source,
                                                               const glm::ivec2 size) const {
-            return {.rotation = source.getRotationMatrix(),
-                    .translation = source.getTranslation(),
-                    .size = size,
-                    .focal_length_mm = settings.focal_length_mm,
-                    .intrinsics_override = std::nullopt,
-                    .near_plane = lfs::rendering::DEFAULT_NEAR_PLANE,
-                    .far_plane = settings.depth_clip_enabled ? settings.depth_clip_far
-                                                             : lfs::rendering::DEFAULT_FAR_PLANE,
-                    .orthographic = settings.orthographic,
-                    .ortho_scale = source.ortho_scale_override.value_or(settings.ortho_scale),
-                    .background_color = settings.background_color};
+            const lfs::rendering::FrameView view{
+                .rotation = source.getRotationMatrix(),
+                .translation = source.getTranslation(),
+                .size = size,
+                .focal_length_mm = settings.focal_length_mm,
+                .intrinsics_override = std::nullopt,
+                .near_plane = lfs::rendering::DEFAULT_NEAR_PLANE,
+                .far_plane = settings.depth_clip_enabled ? settings.depth_clip_far
+                                                         : lfs::rendering::DEFAULT_FAR_PLANE,
+                .orthographic = settings.orthographic,
+                .ortho_scale = source.ortho_scale_override.value_or(settings.ortho_scale),
+                .background_color = settings.background_color};
+            return applySceneViewJitter(view, scene_jitter_pixels);
         }
 
         [[nodiscard]] lfs::rendering::FrameView makeFrameView() const {
@@ -126,7 +132,14 @@ namespace lfs::vis {
                     .size = frame_view.size,
                     .focal_length_mm = frame_view.focal_length_mm,
                     .orthographic = frame_view.orthographic,
-                    .ortho_scale = frame_view.ortho_scale};
+                    .ortho_scale = frame_view.ortho_scale,
+                    .projection_jitter_ndc =
+                        frame_view.orthographic || size.x <= 0 || size.y <= 0
+                            ? glm::vec2(0.0f)
+                            : glm::vec2(2.0f * scene_jitter_pixels.x /
+                                            static_cast<float>(size.x),
+                                        2.0f * scene_jitter_pixels.y /
+                                            static_cast<float>(size.y))};
         }
 
         [[nodiscard]] lfs::rendering::ViewportData makeViewportData() const {

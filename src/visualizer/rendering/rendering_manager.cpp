@@ -202,6 +202,17 @@ namespace lfs::vis {
         markDirty(DirtyFlag::CAMERA);
     }
 
+    void RenderingManager::requestCameraSettleRender(const bool reset_temporal_history) {
+        if (reset_temporal_history) {
+            temporal_camera_reset_generation_.fetch_add(1, std::memory_order_relaxed);
+        }
+        requestRenderFollowUp();
+    }
+
+    void RenderingManager::requestTemporalHistoryReset() {
+        requestCameraSettleRender(true);
+    }
+
     bool RenderingManager::pollDirtyState() {
         if (const DirtyMask animation_dirty = animation_state_.pollDirtyState(); animation_dirty) {
             dirty_mask_.fetch_or(animation_dirty, std::memory_order_relaxed);
@@ -216,6 +227,19 @@ namespace lfs::vis {
 
     void RenderingManager::requestRenderFollowUp() {
         dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
+
+        std::function<void()> wake_callback;
+        {
+            std::scoped_lock lock(wake_callback_mutex_);
+            wake_callback = wake_callback_;
+        }
+        if (wake_callback) {
+            wake_callback();
+        }
+    }
+
+    void RenderingManager::requestTemporalFollowUp() {
+        dirty_mask_.fetch_or(DirtyFlag::TEMPORAL, std::memory_order_relaxed);
 
         std::function<void()> wake_callback;
         {
@@ -431,6 +455,9 @@ namespace lfs::vis {
     void RenderingManager::updateSettings(const RenderSettings& new_settings,
                                           const DirtyMask dirty_flags) {
         RenderSettings sanitized_settings = new_settings;
+        sanitized_settings.render_scale = clampSceneRenderScale(sanitized_settings.render_scale);
+        sanitized_settings.scene_upscaler_scale =
+            std::clamp(sanitized_settings.scene_upscaler_scale, 0.25f, 1.0f);
         bool clear_metrics = false;
         bool lod_request_changed = false;
         bool lod_enabled_turned_on = false;

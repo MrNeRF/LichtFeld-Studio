@@ -1530,6 +1530,7 @@ namespace lfs::vis {
         if (scroll_action == input::Action::CAMERA_ROLL) {
             target_viewport.camera.rotate_roll(delta);
         } else if (scroll_action == input::Action::CAMERA_ZOOM) {
+            camera_settle_requires_temporal_reset_ = true;
             // In orthographic mode, adjust ortho_scale instead of camera position
             if (services().renderingOrNull()) {
                 auto settings = services().renderingOrNull()->getSettings();
@@ -1595,7 +1596,14 @@ namespace lfs::vis {
             return;
         }
 
-        if (lfs::python::has_keyboard_capture_request()) {
+        const auto tool_mode = getCurrentToolMode();
+        auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
+        if (bound_action == input::Action::NONE) {
+            bound_action = resolveCrossToolActivationShortcut(bindings_, tool_mode, logical_key, mods);
+        }
+
+        if (lfs::python::has_keyboard_capture_request() &&
+            input::shortcutScopeForAction(bound_action) != input::ShortcutScope::Global) {
             return;
         }
 
@@ -1604,11 +1612,6 @@ namespace lfs::vis {
         SDL_GetMouseState(&mx_f, &my_f);
         double mx = mx_f, my = my_f;
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
-        const auto tool_mode = getCurrentToolMode();
-        auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
-        if (bound_action == input::Action::NONE) {
-            bound_action = resolveCrossToolActivationShortcut(bindings_, tool_mode, logical_key, mods);
-        }
         if (action == input::ACTION_PRESS &&
             dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
             return;
@@ -1692,6 +1695,21 @@ namespace lfs::vis {
             case input::Action::TOGGLE_GT_COMPARISON:
                 cmd::ToggleGTComparison{}.emit();
                 return;
+
+            case input::Action::OPEN_PREFERENCES:
+                if (gui)
+                    gui->openPreferences();
+                return;
+
+            case input::Action::TOGGLE_MCP_SERVER: {
+                toggleMcpRuntimeEnabled();
+                return;
+            }
+
+            case input::Action::TOGGLE_MCP_BINDING: {
+                toggleMcpRuntimeBinding();
+                return;
+            }
 
             case input::Action::TOGGLE_CAMERA_FRUSTUMS:
                 if (auto* rendering_manager = services().renderingOrNull()) {
@@ -3032,6 +3050,13 @@ namespace lfs::vis {
         auto now = std::chrono::steady_clock::now();
         if (now - last_camera_movement_time_ >= camera_movement_timeout_) {
             camera_is_moving_ = false;
+            // Scroll gestures (notably two-finger touchpad zoom) have no release
+            // event. Request one settled frame after their idle timeout so
+            // temporal reconstruction does not remain on the last moving frame.
+            if (auto* const rendering = services().renderingOrNull()) {
+                rendering->requestCameraSettleRender(camera_settle_requires_temporal_reset_);
+            }
+            camera_settle_requires_temporal_reset_ = false;
         }
     }
 

@@ -138,3 +138,18 @@ Tests remain opt-in, keeping test-only package restore and target generation
 out of the normal application loop without changing any shipped feature. The
 canonical [source build guide](../../building_and_distribution.md#tests)
 documents the test build targets, CTest tiers, and required real-data layout.
+
+## Optional scene-upscaling SDKs
+
+Optional vendor upscalers are disabled by default: both
+`LFS_ENABLE_NVIDIA_DLSS` and `LFS_ENABLE_AMD_FSR3` are `OFF` in a fresh cache.
+LichtFeld Studio neither downloads nor redistributes their SDKs: the person
+compiling the application must obtain the SDK, accept its terms, and provide
+its path at configure time.
+The complete platform, runtime-staging, fallback, and rendering contracts are
+documented in [Scene upscaling and temporal rendering](scene-upscaling).
+
+The base scene render scale remains an independent renderer setting. Optional
+backend scales are input multipliers applied to that base scale; vendor quality
+presets may select the multiplier recommended by their SDK. Selecting or
+disabling an upscaler does not overwrite the base renderer setting.

@@ -41,6 +41,7 @@ namespace lfs::vis::gui {
         void onDocumentDestroyed();
 
         void setState(State state);
+        void resetLayout();
         [[nodiscard]] bool isVisible() const noexcept { return state_.visible || state_.perf_hud.visible; }
         [[nodiscard]] bool needsAnimationFrame() const noexcept {
             return pointer_captured_ || sparkline_tick_due();
@@ -105,7 +106,6 @@ namespace lfs::vis::gui {
         void toggleNode(const std::string& path);
         void enableDetailedTracking();
         void pruneCollapsedSet();
-        void loadPersistedState();
         void schedulePersistSave();
         void persistNow();
         void applyPersistedGeometry();

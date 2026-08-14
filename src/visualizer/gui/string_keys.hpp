@@ -433,6 +433,24 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TITLE = "preferences.title";
         inline constexpr const char* LANGUAGE = "preferences.language";
         inline constexpr const char* SELECT_LANGUAGE = "preferences.select_language";
+        inline constexpr const char* SCENE_UPSCALER = "preferences.scene_upscaler";
+        inline constexpr const char* VIEWER_SPLAT_PRECISION = "preferences.viewer_splat_precision";
+        inline constexpr const char* VIEWER_SPLAT_PRECISION_DESCRIPTION =
+            "preferences.viewer_splat_precision_description";
+        inline constexpr const char* SPLAT_PRECISION_16 = "preferences.splat_precision_16";
+        inline constexpr const char* SPLAT_PRECISION_32 = "preferences.splat_precision_32";
+        inline constexpr const char* SCENE_UPSCALER_NATIVE = "preferences.scene_upscaler_native";
+        inline constexpr const char* SCENE_UPSCALER_SPATIAL = "preferences.scene_upscaler_spatial";
+        inline constexpr const char* SCENE_UPSCALER_TEMPORAL = "preferences.scene_upscaler_temporal";
+        inline constexpr const char* SCENE_UPSCALER_AMD_FSR3 =
+            "preferences.scene_upscaler_amd_fsr3";
+        inline constexpr const char* TEMPORAL_QUALITY = "preferences.temporal_quality";
+        inline constexpr const char* TEMPORAL_QUALITY_PERFORMANCE =
+            "preferences.temporal_quality_performance";
+        inline constexpr const char* TEMPORAL_QUALITY_BALANCED =
+            "preferences.temporal_quality_balanced";
+        inline constexpr const char* TEMPORAL_QUALITY_QUALITY =
+            "preferences.temporal_quality_quality";
     } // namespace Preferences
 
     namespace MainPanel {
@@ -1074,6 +1092,16 @@ namespace lichtfeld::Strings {
         inline constexpr const char* VIDEO_RENDERING_ENGINE_UNAVAILABLE = "runtime.video_rendering_engine_unavailable";
         inline constexpr const char* VIDEO_SPLAT_PREPARATION_FAILED = "runtime.video_splat_preparation_failed";
         inline constexpr const char* VIDEO_NO_RENDERABLE_CONTENT = "runtime.video_no_renderable_content";
+        inline constexpr const char* VIDEO_UPSCALER_UNAVAILABLE = "runtime.video_upscaler_unavailable";
+        inline constexpr const char* VIDEO_TEMPORAL_SAMPLES_MISSING = "runtime.video_temporal_samples_missing";
+        inline constexpr const char* VIDEO_SOURCE_RELOAD_FAILED = "runtime.video_source_reload_failed";
+        inline constexpr const char* VIDEO_SOURCE_NOT_SPLAT = "runtime.video_source_not_splat";
+        inline constexpr const char* VIDEO_FP32_REQUIRES_VISIBLE_SOURCE = "runtime.video_fp32_requires_visible_source";
+        inline constexpr const char* VIDEO_FP32_INVALID_NODE = "runtime.video_fp32_invalid_node";
+        inline constexpr const char* VIDEO_FP32_GENERATED_NODE = "runtime.video_fp32_generated_node";
+        inline constexpr const char* VIDEO_FP32_MODIFIED_NODE = "runtime.video_fp32_modified_node";
+        inline constexpr const char* VIDEO_FP32_RECONSTRUCT_FAILED = "runtime.video_fp32_reconstruct_failed";
+        inline constexpr const char* VIDEO_FP32_EMPTY_SNAPSHOT = "runtime.video_fp32_empty_snapshot";
         inline constexpr const char* RENDERED_POINT_CLOUD_INVALID = "runtime.rendered_point_cloud_invalid";
         inline constexpr const char* SCENE_MANAGER_NOT_INITIALIZED = "runtime.scene_manager_not_initialized";
         inline constexpr const char* IMPORT_FAILED_DETAIL = "runtime.import_failed_detail";

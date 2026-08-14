@@ -19,6 +19,7 @@
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/rendering_types.hpp"
+#include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 #include "window/window_manager.hpp"
 
@@ -679,6 +680,15 @@ namespace lfs::vis::gui {
         };
 
         const auto find_deepest = [&](const auto& self, Rml::Element* element) -> Rml::Element* {
+            // RmlUi retains the previous geometry for display:none submenus.
+            // A CSS-hovered popup is visible before the retained model receives
+            // its open class, so accept either state and ignore hidden siblings.
+            if (element->IsClassSet("submenu-popup")) {
+                const auto* parent = element->GetParentNode();
+                if (!parent || (!parent->IsClassSet("open") &&
+                                !parent->IsPseudoClassSet("hover")))
+                    return nullptr;
+            }
             for (int i = element->GetNumChildren() - 1; i >= 0; --i) {
                 if (auto* hit = self(self, element->GetChild(i)))
                     return hit;
@@ -831,6 +841,7 @@ namespace lfs::vis::gui {
                 return;
             if (const auto mode = lfs::vis::InputController::cameraNavigationModeFromName(value)) {
                 ic->setCameraNavigationMode(*mode);
+                lfs::vis::saveCameraNavigationPreference(value);
             }
         } else if (action == "toggle_projection") {
             if (!rm)
@@ -854,6 +865,8 @@ namespace lfs::vis::gui {
         } else if (action == "toggle_camera_view_snap") {
             if (auto* ic = lfs::vis::InputController::instance())
                 ic->setCameraViewSnapEnabled(!ic->cameraViewSnapEnabled());
+            if (const auto* ic = lfs::vis::InputController::instance())
+                lfs::vis::saveCameraViewSnapPreference(ic->cameraViewSnapEnabled());
         } else if (action == "toggle_independent_split_view") {
             if (auto* ic = lfs::vis::InputController::instance())
                 ic->toggleIndependentSplitView();
@@ -872,6 +885,10 @@ namespace lfs::vis::gui {
             }
         }
 
+        // The toolbar is a retained Rml data model. Rebuild immediately after
+        // a toolbar action so selected icons always reflect the just-applied
+        // runtime state, even when no other frame invalidation occurs.
+        rebuildToolbarButtons();
         render_needed_ = true;
     }
 
@@ -966,6 +983,10 @@ namespace lfs::vis::gui {
         dropdown_popup_->SetProperty("top", std::format("{}px", label_offset.y + label_size.y));
         dropdown_container_->SetClass("visible", true);
         dropdown_overlay_->SetClass("visible", true);
+        // A top-level menu can switch by hover. Update now so the following
+        // pointer move is tested against this menu's items, not the previous
+        // menu's retained layout.
+        rml_context_->Update();
         render_needed_ = true;
     }
 

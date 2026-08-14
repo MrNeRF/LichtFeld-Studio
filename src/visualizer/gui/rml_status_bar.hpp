@@ -9,10 +9,12 @@
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <mutex>
 #include <optional>
@@ -58,9 +60,10 @@ namespace lfs::vis::gui {
         bool has_message_ = false;
     };
 
-    class RmlStatusBar {
+    class LFS_VIS_API RmlStatusBar {
     public:
-        void init(RmlUIManager* mgr);
+        void init(RmlUIManager* mgr, bool safe_mode,
+                  std::function<RuntimeServiceStatus()> mcp_status_provider);
         // Thread-safe one-line transient status text (ErrorBus StatusOnly
         // surface). Picked up by the next periodic content refresh; auto-clears.
         void postStatusMessage(std::string text, ErrorNoticeLevel level);
@@ -72,6 +75,8 @@ namespace lfs::vis::gui {
                           int screen_w, int screen_h);
         void processInput(const PanelInputState& input, float bar_x, float bar_y,
                           float bar_w, float bar_h);
+        [[nodiscard]] float overlayHeight() const;
+        [[nodiscard]] bool isOverlayPoint(float local_x, float local_y, float bar_w) const;
 
     private:
         friend class RmlStatusBarTestAccess;
@@ -86,8 +91,8 @@ namespace lfs::vis::gui {
         bool updateContent(const PanelDrawContext& ctx, bool force_refresh);
         bool updateTheme();
         bool layoutFits(float reserve_px) const;
-        LFS_VIS_API void fitToAvailableWidth(bool allow_expand);
-        LFS_VIS_API void applyFitLevel(int level);
+        void fitToAvailableWidth(bool allow_expand);
+        void applyFitLevel(int level);
         void queueCachedVulkanContext(float x, float y, float w_px, float h_px,
                                       int screen_w, int screen_h,
                                       int render_w, int render_h,
@@ -119,6 +124,9 @@ namespace lfs::vis::gui {
         Rml::EventListener* git_commit_listener_ = nullptr;
         Rml::EventListener* gpu_icon_listener_ = nullptr;
         Rml::EventListener* account_listener_ = nullptr;
+        Rml::EventListener* mcp_toggle_listener_ = nullptr;
+        Rml::EventListener* mcp_power_listener_ = nullptr;
+        Rml::EventListener* mcp_preferences_listener_ = nullptr;
 
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
@@ -203,12 +211,26 @@ namespace lfs::vis::gui {
             std::string fps_color;
             std::string fps_label;
             std::string git_commit;
+            bool safe_mode = false;
+            std::string safe_mode_text;
+            bool mcp_details_expanded = false;
+            std::string mcp_summary;
+            std::string mcp_details;
+            std::string mcp_tooltip;
+            std::string mcp_color;
+            std::string mcp_preferences_label;
+            bool mcp_server_enabled = false;
+            std::string mcp_toggle_label;
+            std::string mcp_total_text;
+            std::string mcp_success_text;
+            std::string mcp_error_text;
             bool show_status_message = false;
             std::string status_message_text;
             std::string status_message_color;
         };
 
         ModelState model_;
+        std::function<RuntimeServiceStatus()> mcp_status_provider_;
         StatusMessageState status_message_;
         GpuMemoryInfo cached_gpu_mem_;
         std::future<GpuMemoryInfo> pending_gpu_mem_;
@@ -223,6 +245,7 @@ namespace lfs::vis::gui {
         float last_dp_ratio_ = 0.0f;
         uint32_t section_signature_ = 0;
         uint32_t last_section_signature_ = 0;
+        std::uint64_t last_runtime_service_revision_ = 0;
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         int last_document_h_ = 0;

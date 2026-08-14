@@ -6,8 +6,10 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -15,19 +17,14 @@
 #include <ranges>
 #include <unordered_map>
 
-#ifdef _WIN32
-#include <shlobj.h>
-#else
-#include <pwd.h>
-#include <unistd.h>
-#endif
-
 namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 20; // Version 20 adds the performance HUD toggle.
-        constexpr Action LAST_ACTION = Action::TOGGLE_PERFORMANCE_HUD;
+        std::atomic<bool> g_persistence_enabled{true};
+
+        constexpr int PROFILE_VERSION = 25; // Version 25 reconciles Preferences/MCP/HUD action ids with upstream.
+        constexpr Action LAST_ACTION = Action::TOGGLE_MCP_BINDING;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -210,8 +207,9 @@ namespace lfs::vis::input {
 
     InputBindings::InputBindings() {
         const auto config_dir = getConfigDir();
-        const auto saved_path = config_dir / "Default.json";
-        if (std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path)) {
+        const auto saved_path = config_dir ? *config_dir / "Default.json" : std::filesystem::path{};
+        if (config_dir && g_persistence_enabled.load(std::memory_order_acquire) &&
+            std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path)) {
             return;
         }
 
@@ -222,9 +220,17 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::loadProfile(const std::string& name) {
+        if (!g_persistence_enabled.load(std::memory_order_acquire)) {
+            auto profile = createDefaultProfile();
+            current_profile_name_ = profile.name;
+            bindings_ = std::move(profile.bindings);
+            rebuildLookupMaps();
+            notifyBindingsChanged();
+            return;
+        }
         const auto config_dir = getConfigDir();
-        const auto path = config_dir / (name + ".json");
-        if (std::filesystem::exists(path) && loadProfileFromFile(path)) {
+        const auto path = config_dir ? *config_dir / (name + ".json") : std::filesystem::path{};
+        if (config_dir && std::filesystem::exists(path) && loadProfileFromFile(path)) {
             return;
         }
 
@@ -241,35 +247,26 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::saveProfile(const std::string& name) const {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return;
         const auto config_dir = getConfigDir();
-        std::filesystem::create_directories(config_dir);
-        const auto path = config_dir / (name + ".json");
+        if (!config_dir)
+            return;
+        std::filesystem::create_directories(*config_dir);
+        const auto path = *config_dir / (name + ".json");
         saveProfileToFile(path);
     }
 
-    std::filesystem::path InputBindings::getConfigDir() {
-        std::filesystem::path config_dir;
-#ifdef _WIN32
-        wchar_t path[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, path))) {
-            config_dir = std::filesystem::path(path) / "LichtFeldStudio" / "input_profiles";
-        } else {
-            config_dir = std::filesystem::current_path() / "config" / "input_profiles";
-        }
-#else
-        const char* home = getenv("HOME");
-        if (!home) {
-            struct passwd* pw = getpwuid(getuid());
-            if (pw)
-                home = pw->pw_dir;
-        }
-        if (home) {
-            config_dir = std::filesystem::path(home) / ".config" / "LichtFeldStudio" / "input_profiles";
-        } else {
-            config_dir = std::filesystem::current_path() / "config" / "input_profiles";
-        }
-#endif
-        return config_dir;
+    std::optional<std::filesystem::path> InputBindings::getConfigDir() {
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (paths)
+            return paths->keymapDir();
+        LOG_WARN("Unable to resolve input profile path: {}; profile persistence is disabled", paths.error());
+        return std::nullopt;
+    }
+
+    void InputBindings::setPersistenceEnabled(const bool enabled) noexcept {
+        g_persistence_enabled.store(enabled, std::memory_order_release);
     }
 
     bool InputBindings::saveProfileToFile(const std::filesystem::path& path) const {
@@ -353,6 +350,7 @@ namespace lfs::vis::input {
 
             current_profile_name_ = profile_name;
             bindings_.clear();
+            size_t action_id_remaps = 0;
 
             for (const auto& b : j["bindings"]) {
                 const int mode_value = b.value("mode", 0);
@@ -367,7 +365,29 @@ namespace lfs::vis::input {
                 Binding binding;
                 // Version 1 had no mode field, default to GLOBAL
                 binding.mode = static_cast<ToolMode>(mode_value);
-                binding.action = static_cast<Action>(action_value);
+                int canonical_action_value = action_value;
+                if (version >= 21 && version < 25) {
+                    // These profile versions were emitted before the upstream
+                    // HUD action was placed ahead of Preferences and MCP.
+                    switch (action_value) {
+                    case 77:
+                        canonical_action_value = static_cast<int>(Action::OPEN_PREFERENCES);
+                        break;
+                    case 78:
+                        canonical_action_value = static_cast<int>(Action::TOGGLE_MCP_SERVER);
+                        break;
+                    case 79:
+                        canonical_action_value = static_cast<int>(Action::TOGGLE_MCP_BINDING);
+                        break;
+                    case 80:
+                        canonical_action_value = static_cast<int>(Action::TOGGLE_PERFORMANCE_HUD);
+                        break;
+                    default:
+                        break;
+                    }
+                    action_id_remaps += canonical_action_value != action_value ? 1 : 0;
+                }
+                binding.action = static_cast<Action>(canonical_action_value);
                 binding.description = b.value("description", getActionName(binding.action));
 
                 // Cross-version safeguard: if the stored description doesn't
@@ -442,7 +462,7 @@ namespace lfs::vis::input {
             }
 
             const size_t collapsed = collapseRedundantModeBindings(version);
-            const size_t migrated = collapsed + migrateLoadedProfile(version);
+            const size_t migrated = action_id_remaps + collapsed + migrateLoadedProfile(version);
 
             rebuildLookupMaps();
             LOG_INFO("Loaded profile '{}' ({} bindings) from {}", current_profile_name_, bindings_.size(), lfs::core::path_to_utf8(path));
@@ -450,11 +470,14 @@ namespace lfs::vis::input {
             // Auto-persist the canonical Default profile so disk stays current
             // after a versioned migration. User-imported files are left untouched;
             // the migration still applies in memory.
-            if (migrated > 0 && version < PROFILE_VERSION) {
+            if (g_persistence_enabled.load(std::memory_order_acquire) &&
+                migrated > 0 && version < PROFILE_VERSION) {
                 std::error_code ec;
-                const auto config_default = getConfigDir() / "Default.json";
-                if (std::filesystem::equivalent(path, config_default, ec)) {
-                    saveProfileToFile(config_default);
+                const auto config_dir = getConfigDir();
+                if (config_dir) {
+                    const auto config_default = *config_dir / "Default.json";
+                    if (std::filesystem::equivalent(path, config_default, ec))
+                        saveProfileToFile(config_default);
                 }
             }
             notifyBindingsChanged();
@@ -472,6 +495,30 @@ namespace lfs::vis::input {
 
         const Profile defaults = createDefaultProfile();
         size_t added = 0;
+        if (version < 24) {
+            const KeyTrigger old_mcp_binding{KEY_M, MODIFIER_CTRL | MODIFIER_ALT};
+            const KeyTrigger new_mcp_binding{KEY_N, MODIFIER_CTRL | MODIFIER_SHIFT};
+            auto old_binding = std::ranges::find_if(bindings_, [&](const Binding& binding) {
+                const auto* trigger = std::get_if<KeyTrigger>(&binding.trigger);
+                return binding.mode == ToolMode::GLOBAL &&
+                       binding.action == Action::TOGGLE_MCP_BINDING && trigger &&
+                       trigger->key == old_mcp_binding.key &&
+                       trigger->modifiers == old_mcp_binding.modifiers;
+            });
+            const bool new_trigger_in_use = std::ranges::any_of(bindings_, [&](const Binding& binding) {
+                const auto* trigger = std::get_if<KeyTrigger>(&binding.trigger);
+                return binding.mode == ToolMode::GLOBAL && trigger &&
+                       trigger->key == new_mcp_binding.key &&
+                       trigger->modifiers == new_mcp_binding.modifiers;
+            });
+            if (old_binding != bindings_.end() && !new_trigger_in_use) {
+                old_binding->trigger = new_mcp_binding;
+                old_binding->description = "Toggle MCP binding";
+                ++added;
+                LOG_INFO("Migrating profile '{}' MCP binding shortcut from Ctrl+Alt+M to Ctrl+Shift+N",
+                         current_profile_name_);
+            }
+        }
         for (const auto& def : defaults.bindings) {
             // Version 12 adds Shift+scroll as a *parallel* trigger for
             // BRUSH_RESIZE — the existing Ctrl+scroll binding stays, so the
@@ -503,7 +550,11 @@ namespace lfs::vis::input {
                 (version < 17 && def.action == Action::SELECTION_INTERSECT) ||
                 (version < 18 && selection_volume_shortcut) ||
                 (version < 19 && def.action == Action::CUT_SELECTION) ||
-                (version < 20 && def.action == Action::TOGGLE_PERFORMANCE_HUD);
+                ((version < 20 || (version >= 21 && version < 25)) &&
+                 def.action == Action::TOGGLE_PERFORMANCE_HUD) ||
+                (version < 21 && def.action == Action::OPEN_PREFERENCES) ||
+                (version < 22 && def.action == Action::TOGGLE_MCP_SERVER) ||
+                (version < 23 && def.action == Action::TOGGLE_MCP_BINDING);
             if (!should_add) {
                 continue;
             }
@@ -610,9 +661,12 @@ namespace lfs::vis::input {
     std::vector<std::string> InputBindings::getAvailableProfiles() const {
         std::vector<std::string> profiles = {"Default"};
 
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return profiles;
+
         const auto config_dir = getConfigDir();
-        if (std::filesystem::exists(config_dir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(config_dir)) {
+        if (config_dir && std::filesystem::exists(*config_dir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(*config_dir)) {
                 if (entry.path().extension() == ".json") {
                     const std::string name = lfs::core::path_to_utf8(entry.path().stem());
                     if (name != "Default") {
@@ -1007,6 +1061,9 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_F12, MODIFIER_NONE}, Action::TOGGLE_UI, "Hide UI"},
             {KeyTrigger{KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
             {KeyTrigger{KEY_F10, MODIFIER_NONE}, Action::TOGGLE_PERFORMANCE_HUD, "Performance HUD"},
+            {KeyTrigger{KEY_COMMA, MODIFIER_CTRL}, Action::OPEN_PREFERENCES, "Preferences"},
+            {KeyTrigger{KEY_M, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_SERVER, "Toggle MCP server"},
+            {KeyTrigger{KEY_N, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_BINDING, "Toggle MCP binding"},
             {MouseScrollTrigger{MODIFIER_CTRL}, Action::HISTOGRAM_ZOOM_MARKED, "Zoom histogram at cursor"},
             // Sequencer
             {KeyTrigger{KEY_K, MODIFIER_NONE}, Action::SEQUENCER_ADD_KEYFRAME, "Add keyframe"},
@@ -1168,6 +1225,9 @@ namespace lfs::vis::input {
         case Action::PIE_MENU: return "Pie Menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "Toggle Camera Frustums";
+        case Action::OPEN_PREFERENCES: return "Open Preferences";
+        case Action::TOGGLE_MCP_SERVER: return "Toggle MCP Server";
+        case Action::TOGGLE_MCP_BINDING: return "Toggle MCP Local/Network Binding";
         default: return "Unknown";
         }
     }
@@ -1250,6 +1310,9 @@ namespace lfs::vis::input {
         case Action::PIE_MENU: return "pie_menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "toggle_camera_frustums";
+        case Action::OPEN_PREFERENCES: return "open_preferences";
+        case Action::TOGGLE_MCP_SERVER: return "toggle_mcp_server";
+        case Action::TOGGLE_MCP_BINDING: return "toggle_mcp_binding";
         default: return {};
         }
     }
@@ -1930,6 +1993,9 @@ namespace lfs::vis::input {
         case Action::TOGGLE_UI:
         case Action::TOGGLE_FULLSCREEN:
         case Action::TOGGLE_PERFORMANCE_HUD:
+        case Action::OPEN_PREFERENCES:
+        case Action::TOGGLE_MCP_SERVER:
+        case Action::TOGGLE_MCP_BINDING:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:
             return d_ui_scroll;
@@ -1964,6 +2030,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_UI:
         case Action::TOGGLE_FULLSCREEN:
         case Action::TOGGLE_PERFORMANCE_HUD:
+        case Action::OPEN_PREFERENCES:
         case Action::SELECT_MODE_CENTERS:
         case Action::SELECT_MODE_RECTANGLE:
         case Action::SELECT_MODE_POLYGON:
@@ -1994,6 +2061,10 @@ namespace lfs::vis::input {
         case Action::TOGGLE_CAMERA_FRUSTUMS:
         case Action::CYCLE_SELECTION_VIS:
             return ShortcutScope::GlobalWhenNotTextEditing;
+
+        case Action::TOGGLE_MCP_SERVER:
+        case Action::TOGGLE_MCP_BINDING:
+            return ShortcutScope::Global;
 
         case Action::CAMERA_MOVE_FORWARD:
         case Action::CAMERA_MOVE_BACKWARD:

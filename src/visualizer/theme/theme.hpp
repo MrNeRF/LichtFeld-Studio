@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -223,9 +224,67 @@ namespace lfs::vis {
     LFS_VIS_API void saveThemePreferenceName(const std::string& theme_name);
     [[nodiscard]] LFS_VIS_API std::string loadThemePreferenceName(); // Returns a canonical theme id
 
-    // UI scale preference (0.0 = auto from OS)
+    // UI scale preference. The API represents automatic OS scaling as 0.0;
+    // preferences.json serializes that selection as the explicit string "auto".
     LFS_VIS_API void saveUiScalePreference(float scale);
     [[nodiscard]] LFS_VIS_API float loadUiScalePreference();
+
+    // Scene render resolution preference, independent from UI scaling and the
+    // LOD splat-budget multiplier.
+    LFS_VIS_API void saveSceneRenderScalePreference(float scale);
+    [[nodiscard]] LFS_VIS_API float loadSceneRenderScalePreference();
+    enum class ViewerSplatPrecision : uint8_t {
+        Float16 = 16,
+        Float32 = 32,
+    };
+    LFS_VIS_API void saveViewerSplatPrecisionPreference(ViewerSplatPrecision precision);
+    [[nodiscard]] LFS_VIS_API ViewerSplatPrecision loadViewerSplatPrecisionPreference();
+    LFS_VIS_API void saveSceneUpscalerScalePreference(const std::string& backend_id, float scale);
+    [[nodiscard]] LFS_VIS_API float loadSceneUpscalerScalePreference(
+        const std::string& backend_id);
+    LFS_VIS_API void saveSceneUpscalerQualityPreference(const std::string& backend_id,
+                                                        const std::string& quality_id);
+    [[nodiscard]] LFS_VIS_API std::string loadSceneUpscalerQualityPreference(
+        const std::string& backend_id);
+    LFS_VIS_API void saveSceneUpscalerPreference(const std::string& backend_id);
+    [[nodiscard]] LFS_VIS_API std::string loadSceneUpscalerPreference();
+    LFS_VIS_API void saveSceneTemporalQualityPreference(const std::string& quality_id);
+    [[nodiscard]] LFS_VIS_API std::string loadSceneTemporalQualityPreference();
+
+    // Language preference. An empty result means that the user has not chosen
+    // a language yet and the first-run startup selector should be shown.
+    LFS_VIS_API void saveLanguagePreference(const std::string& language_code);
+    [[nodiscard]] LFS_VIS_API std::string loadLanguagePreference();
+    LFS_VIS_API void clearLanguagePreference();
+
+    // Camera-navigation preferences are user interface choices, shared by the
+    // Preferences panel, the toolbar, and the Python API.
+    LFS_VIS_API void saveCameraNavigationPreference(const std::string& mode);
+    [[nodiscard]] LFS_VIS_API std::string loadCameraNavigationPreference();
+    LFS_VIS_API void setRememberCameraNavigationPreference(bool enabled);
+    [[nodiscard]] LFS_VIS_API bool rememberCameraNavigationPreference();
+    LFS_VIS_API void saveCameraViewSnapPreference(bool enabled);
+    [[nodiscard]] LFS_VIS_API bool loadCameraViewSnapPreference();
+
+    struct McpPreferenceState {
+        bool enabled = true;
+        bool expose_network = false;
+        int port = 45677;
+        bool request_logging = false;
+    };
+
+    LFS_VIS_API void saveMcpPreferences(const McpPreferenceState& state);
+    [[nodiscard]] LFS_VIS_API McpPreferenceState loadMcpPreferences();
+
+    struct PerfHudPreferenceState {
+        bool visible = false;
+        bool expanded = true;
+    };
+
+    LFS_VIS_API void savePerfHudPreferences(const PerfHudPreferenceState& state);
+    [[nodiscard]] LFS_VIS_API PerfHudPreferenceState loadPerfHudPreferences();
+    LFS_VIS_API void setRememberCameraViewSnapPreference(bool enabled);
+    [[nodiscard]] LFS_VIS_API bool rememberCameraViewSnapPreference();
 
     // Color utilities
     [[nodiscard]] LFS_VIS_API ThemeColor lighten(const ThemeColor& color, float amount);

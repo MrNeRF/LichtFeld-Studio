@@ -17,6 +17,67 @@ TEST(RenderSettingsDefaults, CameraFrustumsAreDisabledByDefault) {
     EXPECT_FALSE(proxy_settings.show_camera_frustums);
     EXPECT_FLOAT_EQ(render_settings.camera_frustum_scale, 0.25f);
     EXPECT_FLOAT_EQ(proxy_settings.camera_frustum_scale, 0.25f);
+    EXPECT_EQ(render_settings.scene_upscaler, "native");
+    EXPECT_FLOAT_EQ(render_settings.scene_upscaler_scale, 1.0f);
+    EXPECT_EQ(render_settings.scene_temporal_quality, 1);
+    EXPECT_EQ(proxy_settings.scene_upscaler, "native");
+    EXPECT_FLOAT_EQ(proxy_settings.scene_upscaler_scale, 1.0f);
+    EXPECT_EQ(proxy_settings.scene_temporal_quality, 1);
+}
+
+TEST(RenderSettingsProxy, SceneUpscalerRoundTrips) {
+    lfs::vis::RenderSettings settings;
+    settings.scene_upscaler = "spatial";
+    settings.scene_upscaler_scale = 0.5f;
+
+    auto proxy = lfs::vis::to_proxy(settings);
+    EXPECT_EQ(proxy.scene_upscaler, "spatial");
+    EXPECT_FLOAT_EQ(proxy.scene_upscaler_scale, 0.5f);
+
+    lfs::vis::RenderSettings roundtrip;
+    lfs::vis::apply_proxy(roundtrip, proxy);
+    EXPECT_EQ(roundtrip.scene_upscaler, "spatial");
+    EXPECT_FLOAT_EQ(roundtrip.scene_upscaler_scale, 0.5f);
+
+    settings.scene_upscaler = "temporal";
+    proxy = lfs::vis::to_proxy(settings);
+    EXPECT_EQ(proxy.scene_upscaler, "temporal");
+    roundtrip = {};
+    lfs::vis::apply_proxy(roundtrip, proxy);
+    EXPECT_EQ(roundtrip.scene_upscaler, "temporal");
+
+    settings.scene_temporal_quality = 2;
+    proxy = lfs::vis::to_proxy(settings);
+    EXPECT_EQ(proxy.scene_temporal_quality, 2);
+    roundtrip = {};
+    lfs::vis::apply_proxy(roundtrip, proxy);
+    EXPECT_EQ(roundtrip.scene_temporal_quality, 2);
+}
+
+TEST(SceneUpscalerOptions, UsesNativeFallbackWithoutRuntimeCatalog) {
+    lfs::vis::set_scene_upscaler_options_callback(nullptr);
+
+    const auto options = lfs::vis::get_scene_upscaler_options();
+
+    ASSERT_EQ(options.size(), 1U);
+    EXPECT_EQ(options.front().id, "native");
+    EXPECT_EQ(options.front().label_key, "preferences.scene_upscaler_native");
+}
+
+TEST(SceneUpscalerOptions, ReturnsRuntimeCatalogWithoutReencodingStableIds) {
+    lfs::vis::set_scene_upscaler_options_callback([] {
+        return std::vector<lfs::vis::SceneUpscalerOptionProxy>{
+            {.id = "native", .label_key = "preferences.scene_upscaler_native"},
+            {.id = "optional.test", .label_key = "preferences.scene_upscaler_optional_test"},
+        };
+    });
+
+    const auto options = lfs::vis::get_scene_upscaler_options();
+    lfs::vis::set_scene_upscaler_options_callback(nullptr);
+
+    ASSERT_EQ(options.size(), 2U);
+    EXPECT_EQ(options.back().id, "optional.test");
+    EXPECT_EQ(options.back().label_key, "preferences.scene_upscaler_optional_test");
 }
 
 TEST(RenderSettingsProxy, DepthFilterTransformRoundTrips) {
