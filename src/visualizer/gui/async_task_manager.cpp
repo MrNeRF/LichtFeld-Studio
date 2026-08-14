@@ -121,28 +121,6 @@ namespace lfs::vis::gui {
             window_manager->wakeEventLoop();
     }
 
-    [[nodiscard]] std::unique_ptr<lfs::core::SplatData> cloneSplatData(const lfs::core::SplatData& src) {
-        auto cloned = std::make_unique<lfs::core::SplatData>(
-            src.get_max_sh_degree(),
-            src.means_raw().clone(),
-            src.sh0_raw().clone(),
-            src.shN_raw().is_valid() ? src.shN_raw().clone() : lfs::core::Tensor{},
-            src.scaling_raw().clone(),
-            src.rotation_raw().clone(),
-            src.opacity_raw().clone(),
-            src.get_scene_scale(),
-            lfs::core::SplatData::ShNLayout::Swizzled);
-        cloned->set_active_sh_degree(src.get_active_sh_degree());
-        cloned->set_max_sh_degree(src.get_max_sh_degree());
-        if (src.has_deleted_mask()) {
-            cloned->deleted() = src.deleted().clone();
-        }
-        if (src._densification_info.is_valid()) {
-            cloned->_densification_info = src._densification_info.clone();
-        }
-        return cloned;
-    }
-
     void truncateSHDegree(lfs::core::SplatData& splat, const int target_degree) {
         splat.set_sh_degree(target_degree);
     }
@@ -2465,7 +2443,7 @@ namespace lfs::vis::gui {
                     int64_t{1},
                     std::max<int64_t>(int64_t{1}, input_count));
                 return SimplifyCapture{
-                    .model = cloneSplatData(*node->model),
+                    .model = std::make_unique<lfs::core::SplatData>(node->model->clone()),
                     .source_name = source_name,
                     .output_name = std::format("{}_{}", source_name, target_count),
                 };

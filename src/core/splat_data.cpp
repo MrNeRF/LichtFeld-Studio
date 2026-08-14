@@ -670,6 +670,40 @@ namespace lfs::core {
 
     SplatData::~SplatData() = default;
 
+    SplatData SplatData::clone() const {
+        // Tensor::clone() copies neither the name nor the row capacity.
+        const auto cloned = [](const Tensor& src, const char* name = nullptr) {
+            if (!src.is_valid())
+                return Tensor{};
+            Tensor t = src.clone();
+            if (name)
+                t.set_name(name);
+            return t;
+        };
+
+        SplatData copy;
+        copy._max_sh_degree = _max_sh_degree;
+        copy._active_sh_degree = _active_sh_degree;
+        copy._scene_scale = _scene_scale;
+        copy._means = cloned(_means, "splat.positions");
+        copy._sh0 = cloned(_sh0, "splat.sh0");
+        copy._shN = cloned(_shN, "splat.shN");
+        copy._shN_value_bounds = cloned(_shN_value_bounds);
+        copy._scaling = cloned(_scaling, "splat.scaling");
+        copy._rotation = cloned(_rotation, "splat.rotation");
+        copy._opacity = cloned(_opacity, "splat.opacity");
+        copy._densification_info = cloned(_densification_info);
+        copy._deleted = cloned(_deleted);
+        copy._deleted_count.store(_deleted_count.load(std::memory_order_relaxed),
+                                  std::memory_order_relaxed);
+        // q16 degree validation requires shN row capacity >= its reserved row count.
+        if (copy._shN.is_valid() && copy._shN.shape().rank() > 0 &&
+            copy._shN.capacity() < copy._shN.shape()[0]) {
+            copy._shN.reserve(copy._shN.shape()[0]);
+        }
+        return copy;
+    }
+
     // ========== MOVE SEMANTICS ==========
 
     SplatData::SplatData(SplatData&& other) noexcept

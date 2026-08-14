@@ -224,6 +224,10 @@ namespace lfs::core {
                   float scene_scale,
                   ShNLayout shN_layout = ShNLayout::Canonical);
 
+        // Deep-copies scalars and tensors, including q16 bounds. Skips allocator,
+        // capacity hook, LOD tree, frozen ranges, and layout generation.
+        [[nodiscard]] SplatData clone() const;
+
         // ========== Computed getters ==========
         Tensor get_means() const;
         Tensor get_opacity() const;  // Returns sigmoid(opacity_raw)

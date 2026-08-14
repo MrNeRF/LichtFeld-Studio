@@ -689,25 +689,7 @@ namespace lfs::vis::op {
         }
 
         std::unique_ptr<lfs::core::SplatData> cloneSplatData(const lfs::core::SplatData& src) {
-            auto cloned = std::make_unique<lfs::core::SplatData>(
-                src.get_max_sh_degree(),
-                src.means_raw().clone(),
-                src.sh0_raw().clone(),
-                src.shN_raw().is_valid() ? src.shN_raw().clone() : lfs::core::Tensor{},
-                src.scaling_raw().clone(),
-                src.rotation_raw().clone(),
-                src.opacity_raw().clone(),
-                src.get_scene_scale(),
-                lfs::core::SplatData::ShNLayout::Swizzled);
-            cloned->set_active_sh_degree(src.get_active_sh_degree());
-            cloned->set_max_sh_degree(src.get_max_sh_degree());
-            if (src.has_deleted_mask()) {
-                cloned->deleted() = src.deleted().clone();
-            }
-            if (src._densification_info.is_valid()) {
-                cloned->_densification_info = src._densification_info.clone();
-            }
-            return cloned;
+            return std::make_unique<lfs::core::SplatData>(src.clone());
         }
 
         std::unique_ptr<lfs::core::SplatData> cloneRendererReadySplatData(

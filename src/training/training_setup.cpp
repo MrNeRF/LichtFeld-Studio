@@ -447,10 +447,11 @@ namespace lfs::training {
                                               std::move(opacity),
                                               scene_scale,
                                               lfs::core::SplatData::ShNLayout::Swizzled);
-                migrated.set_active_sh_degree(active_sh);
                 if (shN_bounds.is_valid()) {
+                    // Codes and bounds are one declared representation; install before degree validation.
                     migrated.shN_value_bounds() = std::move(shN_bounds);
                 }
+                migrated.set_active_sh_degree(active_sh);
                 if (deleted.is_valid()) {
                     migrated.deleted() = std::move(deleted);
                 }
