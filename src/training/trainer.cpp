@@ -3416,6 +3416,8 @@ namespace lfs::training {
         LOG_DEBUG("GPU memory released");
 
         initialized_ = false;
+        pause_requested_ = false;
+        is_paused_ = false;
         {
             std::lock_guard<std::mutex> lock(params_mutex_);
             is_running_ = false;
@@ -8073,6 +8075,11 @@ namespace lfs::training {
             lfs::io::project::TrainingFinishReason::None;
         saving_model_.store(false, std::memory_order_release);
 
+        // A dead train loop must not report an active pause: stale is_paused_
+        // keeps has_active_train_loop() true, so finished-trainer saves skip
+        // the synchronous flush and wait forever on a safe point.
+        pause_requested_ = false;
+        is_paused_ = false;
         {
             std::lock_guard<std::mutex> lock(params_mutex_);
             is_running_ = false;
