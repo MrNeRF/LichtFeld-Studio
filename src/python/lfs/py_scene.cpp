@@ -373,6 +373,20 @@ namespace lfs::python {
                                const int sh_degree,
                                const float scene_scale,
                                const int32_t parent) {
+        const auto require_float32 = [](const char* field, const PyTensor& tensor) {
+            const auto dtype = tensor.tensor().dtype();
+            if (dtype != core::DataType::Float32) {
+                throw std::runtime_error(std::string("add_splat: ") + field +
+                                         " must be float32, got " + core::dtype_name(dtype));
+            }
+        };
+        require_float32("means", means);
+        require_float32("sh0", sh0);
+        require_float32("shN", shN);
+        require_float32("scaling", scaling);
+        require_float32("rotation", rotation);
+        require_float32("opacity", opacity);
+
         std::optional<vis::op::SceneGraphStateSnapshot> history_before;
         if (auto* const scene_manager = get_scene_manager()) {
             history_before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name});

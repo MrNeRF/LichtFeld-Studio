@@ -988,6 +988,21 @@ namespace lfs::core {
         const size_t needed_floats = sh_swizzled_float_count(n, layout_rest);
         const size_t needed_capacity = sh_swizzled_float_count(cap, layout_rest);
 
+        // SH degree 2: q16 cell count (rest*3=24/prim) equals ieee-f16 float4-swizzle
+        // count (slots*4=24/prim). Size/capacity reuse cannot distinguish the two,
+        // so a declared q16 pair must be dropped before any numel check — otherwise
+        // IEEE halfs land in the codes buffer while bounds stay attached.
+        const auto replace_shN_fp32 = [&]() {
+            const bool drop_bounds = _shN.is_valid() && _shN.dtype() == DataType::Float16;
+            _shN = allocate_swizzled_shN(n, cap, layout_rest);
+            if (drop_bounds) {
+                _shN_value_bounds = Tensor{};
+            }
+        };
+        if (shN_value_quantized()) {
+            replace_shN_fp32();
+        }
+
         // Adjust _shN's logical size to match the new N without losing reserved capacity
         // when possible. Reallocating drops the pre-alloc buffer and can break async
         // pointer aliasing for downstream kernels; we only do it when capacity is short.
@@ -998,11 +1013,11 @@ namespace lfs::core {
                 // N shrank (e.g. random_choose, crop, prune-then-compact). The Tensor lib
                 // doesn't have a "shrink logical size" op other than reassigning shape.
                 // Allocate a smaller buffer in this case — it's a one-shot edit operation.
-                _shN = allocate_swizzled_shN(n, cap, layout_rest);
+                replace_shN_fp32();
             }
             // else: numel() == needed_floats, nothing to do.
         } else {
-            _shN = allocate_swizzled_shN(n, cap, layout_rest);
+            replace_shN_fp32();
         }
 
         const auto src_rest = std::min(canonical_rest_coefficients(canonical), layout_rest);
@@ -1186,6 +1201,16 @@ namespace lfs::core {
                 return;
             if (t.external_storage_kind().empty()) {
                 t.reserve(cap_rows);
+                return;
+            }
+            // Renderer-backed tensors grow with live N via capacity_ensure / migrate.
+            // Rebuilding them onto private zeros_direct detaches the zero-copy block.
+            // cuda.direct still rebuilds here (checkpoint resume).
+            const auto kind = t.external_storage_kind();
+            if (kind == "vulkan_external_buffer" || kind == "splat.exportable") {
+                LOG_DEBUG("reserve_capacity: skip grow of renderer-backed storage "
+                          "(kind={}); growth is owned by capacity_ensure/migrate",
+                          kind);
                 return;
             }
             auto grown = Tensor::zeros_direct(t.shape(), cap_rows, t.device(), t.dtype());

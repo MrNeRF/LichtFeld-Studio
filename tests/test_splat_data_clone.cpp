@@ -8,6 +8,7 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/training_setup.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <gtest/gtest.h>
 #include <optional>
@@ -22,10 +23,21 @@ namespace {
     constexpr size_t kN = 600; // ≥ 2 q16 blocks
     constexpr int kShDegree = 3;
 
-    SplatData make_random_sh3(const size_t n, const uint32_t seed = 42) {
+    [[nodiscard]] size_t rest_coeffs_for_degree(const int sh_degree) {
+        if (sh_degree <= 0)
+            return 0;
+        if (sh_degree == 1)
+            return 3;
+        if (sh_degree == 2)
+            return 8;
+        return 15;
+    }
+
+    SplatData make_random_model(const size_t n, const int sh_degree, const uint32_t seed = 42) {
+        const size_t rest = rest_coeffs_for_degree(sh_degree);
         auto means = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
         auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto shN_can = Tensor::zeros({n, size_t{15}, size_t{3}}, Device::CUDA, DataType::Float32);
+        auto shN_can = Tensor::zeros({n, rest, size_t{3}}, Device::CUDA, DataType::Float32);
         auto scaling = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
         auto rotation = Tensor::zeros({n, size_t{4}}, Device::CUDA, DataType::Float32);
         auto opacity = Tensor::zeros({n, size_t{1}}, Device::CUDA, DataType::Float32);
@@ -33,11 +45,13 @@ namespace {
         {
             std::mt19937 rng(seed);
             std::normal_distribution<float> nd(0.0f, 0.15f);
-            auto cpu = shN_can.cpu();
-            auto* p = cpu.ptr<float>();
-            for (size_t i = 0; i < n * 15 * 3; ++i)
-                p[i] = nd(rng);
-            shN_can = cpu.to(Device::CUDA);
+            if (rest > 0) {
+                auto cpu = shN_can.cpu();
+                auto* p = cpu.ptr<float>();
+                for (size_t i = 0; i < n * rest * 3; ++i)
+                    p[i] = nd(rng);
+                shN_can = cpu.to(Device::CUDA);
+            }
 
             auto rcpu = rotation.cpu();
             auto* r = rcpu.ptr<float>();
@@ -46,7 +60,11 @@ namespace {
             rotation = rcpu.to(Device::CUDA);
         }
 
-        return SplatData(kShDegree, means, sh0, shN_can, scaling, rotation, opacity, 1.0f);
+        return SplatData(sh_degree, means, sh0, shN_can, scaling, rotation, opacity, 1.0f);
+    }
+
+    SplatData make_random_sh3(const size_t n, const uint32_t seed = 42) {
+        return make_random_model(n, kShDegree, seed);
     }
 
     [[nodiscard]] bool tensors_equal(const Tensor& a, const Tensor& b) {
@@ -154,4 +172,66 @@ TEST(SplatDataCloneTest, Q16CloneMigratesToExportableAllocator) {
     EXPECT_TRUE(tensors_equal(copy.shN_canonical(), canonical_before));
 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(SplatDataCloneTest, WritebackClearsQ16Pair) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+
+    // Degree 2: q16 cell count equals ieee-f16 swizzle count. Degree 3 does not.
+    for (const int sh_degree : {2, 3}) {
+        auto model = make_random_model(kN, sh_degree);
+        ASSERT_TRUE(sh_value::apply_shN_value_quant(model)) << "degree=" << sh_degree;
+        ASSERT_TRUE(model.shN_value_quantized()) << "degree=" << sh_degree;
+
+        const auto captured = model.shN_canonical();
+        const size_t cap = model.means().is_valid()
+                               ? std::max(model.means().capacity(), static_cast<size_t>(model.size()))
+                               : static_cast<size_t>(model.size());
+        model.shN_set_from_canonical(captured, cap);
+
+        EXPECT_FALSE(model.shN_value_quantized()) << "degree=" << sh_degree;
+        EXPECT_TRUE(!model.shN_value_bounds().is_valid() ||
+                    model.shN_value_bounds().numel() == 0)
+            << "degree=" << sh_degree;
+        ASSERT_TRUE(model.shN().is_valid()) << "degree=" << sh_degree;
+        EXPECT_EQ(model.shN().dtype(), DataType::Float32) << "degree=" << sh_degree;
+        EXPECT_TRUE(tensors_equal(model.shN_canonical(), captured)) << "degree=" << sh_degree;
+    }
+
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(SplatDataCloneTest, ReserveCapacitySkipsRendererStorage) {
+    // Tensor::set_external_storage_kind is not a public hook; do not invent one.
+    // Real vulkan_external_buffer / splat.exportable growth is owned by
+    // capacity_ensure/migrate (grow_direct skips those kinds). Assert the
+    // intended cuda.direct rebuild instead: capacity grows, values survive.
+
+    const size_t n = 64;
+    auto means = Tensor::zeros_direct({n, size_t{3}}, n, Device::CUDA, DataType::Float32);
+    auto sh0 = Tensor::zeros_direct({n, size_t{1}, size_t{3}}, n, Device::CUDA, DataType::Float32);
+    auto shN_can = Tensor::zeros_direct({n, size_t{15}, size_t{3}}, n, Device::CUDA, DataType::Float32);
+    auto scaling = Tensor::zeros_direct({n, size_t{3}}, n, Device::CUDA, DataType::Float32);
+    auto rotation = Tensor::zeros_direct({n, size_t{4}}, n, Device::CUDA, DataType::Float32);
+    auto opacity = Tensor::zeros_direct({n, size_t{1}}, n, Device::CUDA, DataType::Float32);
+    means.fill_(1.25f);
+    shN_can.fill_(0.05f);
+
+    auto model = SplatData(kShDegree, std::move(means), std::move(sh0), std::move(shN_can),
+                           std::move(scaling), std::move(rotation), std::move(opacity), 1.0f);
+    ASSERT_EQ(model.means().external_storage_kind(), "cuda.direct");
+    ASSERT_EQ(model.shN().external_storage_kind(), "cuda.direct");
+
+    const auto means_before = model.means().clone();
+    const auto shN_before = model.shN_canonical();
+    const size_t old_means_cap = model.means().capacity();
+    const size_t old_shN_cap = model.shN().capacity();
+    const size_t new_cap = old_means_cap + 256;
+    model.reserve_capacity(new_cap);
+
+    EXPECT_GE(model.means().capacity(), new_cap);
+    EXPECT_GT(model.shN().capacity(), old_shN_cap);
+    EXPECT_EQ(model.means().external_storage_kind(), "cuda.direct");
+    EXPECT_TRUE(tensors_equal(model.means(), means_before));
+    EXPECT_TRUE(tensors_equal(model.shN_canonical(), shN_before));
 }
