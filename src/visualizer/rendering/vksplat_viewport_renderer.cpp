@@ -1874,7 +1874,16 @@ namespace lfs::vis {
     }
 
     VksplatViewportRenderer::~VksplatViewportRenderer() {
-        reset();
+        try {
+            reset();
+        } catch (const lfs::Exception& e) {
+            LOG_ERROR("VkSplat viewport renderer reset failed during destruction: {}",
+                      lfs::format_for_developer(e.error()));
+        } catch (const std::exception& e) {
+            LOG_ERROR("VkSplat viewport renderer reset failed during destruction: {}", e.what());
+        } catch (...) {
+            LOG_ERROR("VkSplat viewport renderer reset failed during destruction with an unknown error");
+        }
     }
 
     void VksplatViewportRenderer::releaseOutputSlot(const OutputSlot output_slot, const bool evict) {
@@ -2082,8 +2091,17 @@ namespace lfs::vis {
         if (initialized_) {
             detachManagedBuffers();
             releaseGpuLodTreeStorage();
-            renderer_.cleanupBuffers(buffers_);
-            renderer_.cleanup();
+            try {
+                renderer_.cleanupBuffers(buffers_);
+                renderer_.cleanup();
+            } catch (const lfs::Exception& e) {
+                LOG_ERROR("VkSplat renderer cleanup during reset failed: {}",
+                          lfs::format_for_developer(e.error()));
+            } catch (const std::exception& e) {
+                LOG_ERROR("VkSplat renderer cleanup during reset failed: {}", e.what());
+            } catch (...) {
+                LOG_ERROR("VkSplat renderer cleanup during reset failed with an unknown error");
+            }
         }
         for (auto& slot : cuda_opacity_copies_) {
             slot.interop.reset();
