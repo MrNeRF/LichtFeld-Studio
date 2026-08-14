@@ -10,6 +10,7 @@
 
 #include <cstring>
 #include <gtest/gtest.h>
+#include <optional>
 #include <random>
 #include <vector>
 
@@ -52,7 +53,7 @@ namespace {
         if (!a.is_valid() || !b.is_valid()) {
             return a.is_valid() == b.is_valid();
         }
-        if (a.dtype() != b.dtype() || a.numel() != b.numel()) {
+        if (a.dtype() != b.dtype() || a.shape() != b.shape()) {
             return false;
         }
         auto ac = a.cpu().contiguous();

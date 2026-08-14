@@ -688,12 +688,12 @@ namespace lfs::core {
         copy._means = cloned(_means, "splat.positions");
         copy._sh0 = cloned(_sh0, "splat.sh0");
         copy._shN = cloned(_shN, "splat.shN");
-        copy._shN_value_bounds = cloned(_shN_value_bounds);
+        copy._shN_value_bounds = cloned(_shN_value_bounds, "splat.shN_value_bounds");
         copy._scaling = cloned(_scaling, "splat.scaling");
         copy._rotation = cloned(_rotation, "splat.rotation");
         copy._opacity = cloned(_opacity, "splat.opacity");
-        copy._densification_info = cloned(_densification_info);
-        copy._deleted = cloned(_deleted);
+        copy._densification_info = cloned(_densification_info, "splat.densification_info");
+        copy._deleted = cloned(_deleted, "splat.deleted_mask");
         copy._deleted_count.store(_deleted_count.load(std::memory_order_relaxed),
                                   std::memory_order_relaxed);
         // q16 degree validation requires shN row capacity >= its reserved row count.
