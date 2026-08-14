@@ -32,10 +32,9 @@ namespace lfs::training::test {
         std::int64_t step_count = 0;
         std::size_t capacity = 0;
         std::size_t size = 0;
+        // Serializer writes only these two tensors (joint codec).
         TensorByteSnapshot exp_avg;
-        TensorByteSnapshot exp_avg_sq;
-        TensorByteSnapshot exp_avg_scale;
-        TensorByteSnapshot exp_avg_sq_scale;
+        TensorByteSnapshot joint_bounds;
     };
 
     struct AdamMomentByteSnapshot {
@@ -94,11 +93,14 @@ namespace lfs::training::test {
             if (!state) {
                 continue;
             }
+            // Same gate as AdamOptimizer::serialize. Legacy
+            // exp_avg_scale / exp_avg_sq stay empty after #1588
+            // and must not skip this capture (that would make
+            // expect_optimizer_moment_bytes_equal a no-op).
             const bool serialized =
+                state->is_joint() &&
                 state->exp_avg.is_valid() &&
-                state->exp_avg_sq.is_valid() &&
-                state->exp_avg_scale.is_valid() &&
-                state->exp_avg_sq_scale.is_valid();
+                state->joint_bounds.is_valid();
             if (!serialized) {
                 continue;
             }
@@ -109,14 +111,9 @@ namespace lfs::training::test {
             captured.size = state->size;
             captured.exp_avg =
                 capture_tensor_bytes(state->exp_avg);
-            captured.exp_avg_sq =
-                capture_tensor_bytes(state->exp_avg_sq);
-            captured.exp_avg_scale =
+            captured.joint_bounds =
                 capture_tensor_bytes(
-                    state->exp_avg_scale);
-            captured.exp_avg_sq_scale =
-                capture_tensor_bytes(
-                    state->exp_avg_sq_scale);
+                    state->joint_bounds);
         }
         return result;
     }
@@ -172,10 +169,9 @@ namespace lfs::training::test {
                 actual.get_state(types[index]);
             const bool actual_serialized =
                 state &&
+                state->is_joint() &&
                 state->exp_avg.is_valid() &&
-                state->exp_avg_sq.is_valid() &&
-                state->exp_avg_scale.is_valid() &&
-                state->exp_avg_sq_scale.is_valid();
+                state->joint_bounds.is_valid();
             ASSERT_EQ(
                 expected.states[index].present,
                 actual_serialized)
@@ -193,20 +189,16 @@ namespace lfs::training::test {
                 << "Adam state index " << index;
             EXPECT_EQ(captured.size, state->size)
                 << "Adam state index " << index;
+            // Byte-compare the serialized moment tensors so a
+            // capture path that drops or aliases exp_avg /
+            // joint_bounds fails here (not only at CKPT memcmp).
             expect_tensor_bytes_equal(
                 captured.exp_avg, state->exp_avg,
                 "exp_avg");
             expect_tensor_bytes_equal(
-                captured.exp_avg_sq,
-                state->exp_avg_sq, "exp_avg_sq");
-            expect_tensor_bytes_equal(
-                captured.exp_avg_scale,
-                state->exp_avg_scale,
-                "exp_avg_scale");
-            expect_tensor_bytes_equal(
-                captured.exp_avg_sq_scale,
-                state->exp_avg_sq_scale,
-                "exp_avg_sq_scale");
+                captured.joint_bounds,
+                state->joint_bounds,
+                "joint_bounds");
         }
     }
 

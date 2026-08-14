@@ -8,6 +8,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
+#include "lfs/training/joint_adam_codec.hpp"
 #include "training/checkpoint.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/project_snapshot_chapters.hpp"
@@ -169,18 +170,29 @@ namespace {
             strategy.get_optimizer().get_state_mutable(
                 lfs::training::ParamType::Means);
         ASSERT_NE(source_moments, nullptr);
+        ASSERT_TRUE(source_moments->is_joint());
+        ASSERT_TRUE(source_moments->exp_avg.is_valid());
         ASSERT_TRUE(
-            source_moments->exp_avg_scale.is_valid());
+            source_moments->joint_bounds.is_valid());
+        // Joint codec (9169a2a00 / #1588) serializes exp_avg +
+        // joint_bounds only. Seed a unique fp32 pattern so a
+        // capture path that drops joint_bounds or aliases the
+        // live tensor (post-capture fill_ to 7.5f) fails the
+        // reload compare and the moment-byte helper.
+        const std::size_t expected_bounds =
+            lfs::training::joint_adam::n_bounds_for_prims(
+                GAUSSIAN_COUNT);
         ASSERT_EQ(
-            source_moments->exp_avg_scale.shape(),
-            lfs::core::TensorShape({GAUSSIAN_COUNT}));
-        source_moments->exp_avg_scale.fill_(3.5f);
+            source_moments->joint_bounds.shape(),
+            lfs::core::TensorShape(
+                {expected_bounds, std::size_t{4}}));
+        source_moments->joint_bounds.fill_(3.5f);
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
         const auto original_means =
             model->means().cpu().to_vector();
         const auto original_moment_scales =
-            source_moments->exp_avg_scale.cpu().to_vector();
+            source_moments->joint_bounds.cpu().to_vector();
         const auto original_optimizer_moments =
             lfs::training::test::
                 capture_optimizer_moment_bytes(
@@ -261,7 +273,7 @@ namespace {
         // parameters and optimizer moments must not affect the pending
         // pageable checkpoint bytes.
         model->means().fill_(42.0f);
-        source_moments->exp_avg_scale.fill_(7.5f);
+        source_moments->joint_bounds.fill_(7.5f);
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
         auto captured = pending->wait();
@@ -368,8 +380,11 @@ namespace {
             target_strategy.get_optimizer().get_state(
                 lfs::training::ParamType::Means);
         ASSERT_NE(loaded_moments, nullptr);
+        ASSERT_TRUE(loaded_moments->is_joint());
+        ASSERT_TRUE(
+            loaded_moments->joint_bounds.is_valid());
         EXPECT_EQ(
-            loaded_moments->exp_avg_scale
+            loaded_moments->joint_bounds
                 .cpu()
                 .to_vector(),
             original_moment_scales);
