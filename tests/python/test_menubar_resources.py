@@ -89,6 +89,8 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     assert rml.index('data-for="button : menu_render_buttons"') < rml.index(
         'data-for="button : menu_projection_buttons"'
     )
+    toolbar_button_rule = _rule_body(rcss, ".menu-toolbar-btn")
+    assert "transition: none;" in toolbar_button_rule
 
 
 def test_rml_tooltips_request_only_pending_animation_frames():

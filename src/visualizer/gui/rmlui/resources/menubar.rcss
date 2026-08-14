@@ -91,7 +91,10 @@ body {
     box-sizing: border-box;
     flex-shrink: 0;
     cursor: pointer;
-    transition: background-color border-color 0.12s quadratic-out;
+    /* These records are rebuilt when Preferences changes the active mode.
+     * RmlUi otherwise keeps the old transition track alive after the selected
+     * class moves, leaving the border one selection behind. */
+    transition: none;
 }
 
 .menu-toolbar-btn img {
