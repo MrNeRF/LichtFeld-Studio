@@ -3121,6 +3121,23 @@ namespace lfs::vis::project {
             document_->edit_scene_graph() =
                 std::move(*captured_scene);
         }
+        // Entering Edit Mode turns the live training model into an ordinary
+        // splat and clears its SCNG training binding.  A full sync must also
+        // retire the formerly resumable CKPT; otherwise validation correctly
+        // rejects the now-orphaned checkpoint.  Keep it during lightweight
+        // autosaves while a training session is still bound.
+        if (mode == DocumentSyncMode::Default &&
+            training_uuid.is_nil()) {
+            const auto checkpoint_uuids =
+                document_->checkpoint_uuids();
+            for (const auto& uuid : checkpoint_uuids) {
+                static_cast<void>(
+                    document_->remove_checkpoint(uuid));
+            }
+            if (!checkpoint_uuids.empty()) {
+                cached_bound_checkpoint_iteration_.reset();
+            }
+        }
         // Same bookkeeping as the trainer writer after a
         // wholesale SCNG install: drop SPLT/PCLD/MESH
         // payloads the captured scene no longer binds.

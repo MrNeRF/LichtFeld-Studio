@@ -95,6 +95,12 @@ position, size, maximized state, theme, language, and UI/DPI scale are
 user-global and never restored from a project. Fullscreen is not persistent.
 Window geometry is persisted only in `config/window.json`.
 
+Older GUIL v1 chapters may still contain a project-owned `window` member.
+Readers accept those projects but remove that legacy member before validation.
+The normalization does not make an otherwise clean project appear modified or
+show a save prompt; the next Save or Save As materializes the GUIL chapter
+without the obsolete window data instead of copying its original bytes.
+
 Creating a new project is intentionally different: it clears project-owned
 content without applying the default GUIL chapter, opening or closing panels,
 or changing the live desktop window geometry. It therefore preserves the

@@ -759,6 +759,11 @@ namespace lfs::io::project {
         std::set<ChunkKey, ChunkKeyLess> deferred_geometry_keys;
         std::map<ChunkKey, Hash128, ChunkKeyLess> content_hashes;
         std::set<ChunkKey, ChunkKeyLess> dirty;
+        // Chapters normalized while loading must be materialized on the next
+        // save instead of reusing their original clean byte spans. This is
+        // intentionally separate from user-visible dirty state: accepting a
+        // legacy document must not create a save prompt by itself.
+        std::set<ChunkKey, ChunkKeyLess> normalized_source_keys;
         std::uint64_t dirty_epoch = 0;
         bool missing_opaque_preservation_capability = false;
         bool missing_retained_json_capability = false;
@@ -784,6 +789,7 @@ namespace lfs::io::project {
 
         [[nodiscard]] bool dirty_or_new(const ChunkKey& chunk_key) const {
             return dirty.contains(chunk_key) ||
+                   normalized_source_keys.contains(chunk_key) ||
                    !source_rows.contains(chunk_key);
         }
 
@@ -1423,6 +1429,7 @@ namespace lfs::io::project {
                 }
             }
             source_rows = std::move(refreshed);
+            normalized_source_keys.clear();
             lazy_source_keys.clear();
             for (const auto& [uuid, ignored] :
                  refreshed_checkpoints) {
@@ -1775,11 +1782,18 @@ namespace lfs::io::project {
                         "The project contains duplicate GUIL chapters.",
                         "Only one GUIL instance is allowed", "GUIL");
                 }
+                auto source_dom = JsonChapterDom::from_bytes(*bytes);
+                if (!source_dom) {
+                    return std::move(source_dom).error();
+                }
                 auto chapter = GuiLayoutChapter::from_bytes(*bytes);
                 if (!chapter) {
                     return std::move(chapter).error();
                 }
                 impl->gui_layout = std::move(*chapter);
+                if (source_dom->dump() != impl->gui_layout.dom().dump()) {
+                    impl->normalized_source_keys.insert(row.key);
+                }
                 if (has_unknown_json_root(
                         FOURCC_GUIL, impl->gui_layout.dom()) &&
                     !shared_reader->commit()
@@ -3433,6 +3447,8 @@ namespace lfs::io::project {
 
         const auto original_path = *impl_->source_path;
         const auto original_dirty = impl_->dirty;
+        const auto original_normalized_source_keys =
+            impl_->normalized_source_keys;
         const auto temporary =
             normalized->parent_path() /
             std::format(".{}.saveas-{}.tmp",
@@ -3484,7 +3500,8 @@ namespace lfs::io::project {
         }
 
         const auto rebind_preserving_dirty_lazy =
-            [this, &original_dirty](
+            [this, &original_dirty,
+             &original_normalized_source_keys](
                 const std::filesystem::path& source)
             -> lfs::Result<void> {
             std::unordered_map<lfs::core::Uuid, LazyChunkValue>
@@ -3525,6 +3542,8 @@ namespace lfs::io::project {
                         uuid, std::move(payload));
                 }
                 impl_->dirty = original_dirty;
+                impl_->normalized_source_keys =
+                    original_normalized_source_keys;
                 return refreshed;
             }
             for (auto& [uuid, payload] : dirty_checkpoints) {
@@ -3536,6 +3555,8 @@ namespace lfs::io::project {
                     uuid, std::move(payload));
             }
             impl_->dirty = original_dirty;
+            impl_->normalized_source_keys =
+                original_normalized_source_keys;
             return {};
         };
 

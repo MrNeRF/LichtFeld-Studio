@@ -500,6 +500,11 @@ namespace lfs::io::project {
             strip_user_global_gui_keys(value);
             for_each_fixed_arrangement_payload(value, [](Json& payload) {
                 strip_user_global_gui_keys(payload);
+                // Main-window geometry was project-owned in the original
+                // GUIL v1 contract. It is user-global now: accept legacy
+                // projects, but discard the field before validation and
+                // before the retained DOM can participate in a later save.
+                payload.erase("window");
             });
         }
 

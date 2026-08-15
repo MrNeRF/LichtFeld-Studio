@@ -213,8 +213,15 @@ namespace {
         auto loaded_legacy_window =
             GuiLayoutChapter::parse(
                 legacy_window.dump());
-        ASSERT_FALSE(loaded_legacy_window);
-        EXPECT_EQ(loaded_legacy_window.error().code(), lfs::ErrorCode::DataLoss);
+        ASSERT_TRUE(loaded_legacy_window)
+            << lfs::format_for_developer(
+                   loaded_legacy_window.error());
+        const auto sanitized_legacy_window =
+            json_root(loaded_legacy_window->dom());
+        EXPECT_FALSE(
+            sanitized_legacy_window["layouts"][0]["areas"][0]
+                                   ["spaces"][0]["opaque_payload"]
+                                       .contains("window"));
     }
 
     TEST(P5SessionChapterTest,

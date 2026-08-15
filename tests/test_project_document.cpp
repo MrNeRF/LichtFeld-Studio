@@ -58,6 +58,7 @@ namespace {
     using lfs::core::Tensor;
     using lfs::core::Uuid;
     using namespace lfs::io::project;
+    using lfs::test::licht::json_root;
     using lfs::test::licht::make_empty_document;
     using lfs::test::licht::make_point_cloud;
     using lfs::test::licht::make_splat;
@@ -103,6 +104,67 @@ namespace {
         const std::uint64_t identity_tag, const std::uint64_t wallclock) {
         return lfs::test::licht::deterministic_document_save_options(
             0x70000000, identity_tag, wallclock);
+    }
+
+    void inject_legacy_gui_window(
+        const fs::path& path,
+        const std::uint64_t identity_tag,
+        const std::uint64_t wallclock) {
+        auto reader = require_result(ProjectReader::open(path));
+        const auto* gui_row = reader.find(
+            FOURCC_GUIL, reader.superblock().project_uuid);
+        if (!gui_row) {
+            throw std::runtime_error("missing GUIL chapter");
+        }
+        auto gui_bytes = require_result(reader.read_chunk(*gui_row));
+        auto gui_dom = require_result(lfs::io::JsonChapterDom::from_bytes(gui_bytes));
+        auto gui = json_root(gui_dom);
+        gui["layouts"][0]["areas"][0]["spaces"][0]
+           ["opaque_payload"]["window"] = {
+               {"x", 120},
+               {"y", 80},
+               {"width", 1920},
+               {"height", 1080},
+               {"maximized", false},
+               {"fullscreen", false},
+           };
+        auto legacy_dom = require_result(lfs::io::JsonChapterDom::parse(gui.dump(2)));
+        const auto legacy_bytes = legacy_dom.to_bytes();
+
+        auto writer = require_result(ProjectWriter::append(
+            path,
+            AppendOptions{
+                .compatibility = {},
+                .index_compression =
+                    IndexCompression::StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+                .boundary_observer = {},
+            }));
+        require_status(writer.plan_commit(CommitOptions{
+            .kind = CommitKind::Explicit,
+            .commit_uuid = fixed_uuid(identity_tag),
+            .snapshot_uuid = reader.commit().snapshot_uuid,
+            .wallclock_unix_ns = wallclock,
+        }));
+        require_status(writer.preflight(legacy_bytes.size()));
+        for (const auto& row : reader.chunks()) {
+            if (!row.is_live()) {
+                continue;
+            }
+            if (row.key == gui_row->key) {
+                require_status(writer.write_chunk(
+                    row.key, legacy_bytes,
+                    ChunkWriteOptions{
+                        .chunk_version = row.chunk_version,
+                        .compression = Compression::Stored,
+                    }));
+                continue;
+            }
+            auto proof = require_result(
+                reader.make_clean_proof(row, 1));
+            require_status(writer.reuse_if_clean(proof, 1));
+        }
+        require_status(writer.commit());
     }
 
     std::vector<std::byte> tensor_bytes(
@@ -565,6 +627,109 @@ namespace {
         EXPECT_EQ(
             document->source_reader()->commit().snapshot_uuid,
             report.snapshot_uuid);
+    }
+
+    TEST(ProjectDocumentTest,
+         LegacyGuiWindowIsDiscardedWithoutDirtyingAndRemovedOnSave) {
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "legacy-gui-window.licht";
+        auto document =
+            make_empty_document(fixed_uuid(912), 100);
+        require_status(document->edit_view().dom().set(
+            "tools.active_tool_id",
+            std::string{"builtin.select"}));
+        (void)require_result(
+            document->save(path, save_options(1912, 200)));
+        inject_legacy_gui_window(path, 1913, 300);
+
+        auto reopened = require_result_ptr(
+            ProjectDocument::open(path));
+        EXPECT_FALSE(reopened->dirty());
+        EXPECT_TRUE(reopened->dirty_chapters().empty());
+        const auto loaded_tool =
+            reopened->view().dom().get<std::string>(
+                "tools.active_tool_id");
+        ASSERT_TRUE(loaded_tool.has_value());
+        EXPECT_EQ(*loaded_tool, "builtin.select");
+        const auto sanitized_gui =
+            json_root(reopened->gui_layout().dom());
+        EXPECT_FALSE(
+            sanitized_gui["layouts"][0]["areas"][0]
+                         ["spaces"][0]["opaque_payload"]
+                             .contains("window"));
+
+        (void)require_result(
+            reopened->save(path, save_options(1914, 400)));
+        auto reader = require_result(
+            ProjectReader::open(path));
+        const auto* gui_row = reader.find(
+            FOURCC_GUIL, reader.superblock().project_uuid);
+        ASSERT_NE(gui_row, nullptr);
+        auto raw_gui = require_result(
+            reader.read_chunk(*gui_row));
+        auto raw_gui_dom = require_result(lfs::io::JsonChapterDom::from_bytes(raw_gui));
+        const auto persisted_gui = json_root(raw_gui_dom);
+        EXPECT_FALSE(
+            persisted_gui["layouts"][0]["areas"][0]
+                         ["spaces"][0]["opaque_payload"]
+                             .contains("window"));
+
+        auto saved_again = require_result_ptr(
+            ProjectDocument::open(path));
+        const auto saved_tool =
+            saved_again->view().dom().get<std::string>(
+                "tools.active_tool_id");
+        ASSERT_TRUE(saved_tool.has_value());
+        EXPECT_EQ(*saved_tool, "builtin.select");
+    }
+
+    TEST(ProjectDocumentTest,
+         LegacyGuiWindowNormalizationSurvivesSaveAsRebind) {
+        TemporaryDirectory temporary;
+        const auto source =
+            temporary.path / "legacy-gui-window-source.licht";
+        const auto destination =
+            temporary.path / "legacy-gui-window-save-as.licht";
+        auto document =
+            make_empty_document(fixed_uuid(913), 100);
+        require_status(document->edit_view().dom().set(
+            "tools.active_tool_id",
+            std::string{"builtin.select"}));
+        (void)require_result(
+            document->save(source, save_options(1915, 200)));
+        inject_legacy_gui_window(source, 1916, 300);
+
+        auto reopened = require_result_ptr(
+            ProjectDocument::open(source));
+        EXPECT_FALSE(reopened->dirty());
+        EXPECT_TRUE(reopened->dirty_chapters().empty());
+
+        auto saved = reopened->save_as(
+            destination, save_options(1917, 400));
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        ASSERT_TRUE(reopened->source_path().has_value());
+        EXPECT_EQ(
+            *reopened->source_path(),
+            std::filesystem::absolute(destination)
+                .lexically_normal());
+
+        auto saved_as = require_result_ptr(
+            ProjectDocument::open(destination));
+        EXPECT_FALSE(saved_as->dirty());
+        EXPECT_TRUE(saved_as->dirty_chapters().empty());
+        const auto saved_tool =
+            saved_as->view().dom().get<std::string>(
+                "tools.active_tool_id");
+        ASSERT_TRUE(saved_tool.has_value());
+        EXPECT_EQ(*saved_tool, "builtin.select");
+        const auto persisted_gui =
+            json_root(saved_as->gui_layout().dom());
+        EXPECT_FALSE(
+            persisted_gui["layouts"][0]["areas"][0]
+                         ["spaces"][0]["opaque_payload"]
+                             .contains("window"));
     }
 
     TEST(ProjectDocumentTest,
