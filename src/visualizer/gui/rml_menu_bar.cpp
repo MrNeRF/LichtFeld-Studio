@@ -15,6 +15,7 @@
 #include "internal/resource_paths.hpp"
 #include "ipc/view_context.hpp"
 #include "operator/operator_registry.hpp"
+#include "preferences.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"

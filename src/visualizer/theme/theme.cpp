@@ -2,12 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "theme.hpp"
-#include "core/config_paths.hpp"
-#include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "core/user_paths.hpp"
 #include "internal/resource_paths.hpp"
+#include "preferences.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -15,7 +13,6 @@
 #include <fstream>
 #include <future>
 #include <nlohmann/json.hpp>
-#include <optional>
 #include <set>
 #include <utility>
 #include <vector>
@@ -1052,244 +1049,25 @@ namespace lfs::vis {
         }
     }
 
-    namespace {
-        std::optional<std::filesystem::path> getThemePreferencesPath() {
-            const auto paths = lfs::core::UserPaths::resolve();
-            if (!paths) {
-                LOG_WARN("Unable to resolve user settings path: {}; theme preferences are disabled",
-                         lfs::format_for_developer(paths.error()));
-                return std::nullopt;
-            }
-            return paths->preferencesFile();
-        }
-
-        [[nodiscard]] bool preferencesDisabled() {
-            return lfs::core::environment::flag("LFS_SAFE_MODE", false);
-        }
-
-        [[nodiscard]] nlohmann::json loadPreferences() {
-            if (preferencesDisabled())
-                return nlohmann::json::object();
-            const auto path = getThemePreferencesPath();
-            if (!path)
-                return nlohmann::json::object();
-            std::ifstream file(*path);
-            nlohmann::json preferences;
-            if (file) {
-                file >> preferences;
-            }
-            return preferences.is_object() ? preferences : nlohmann::json::object();
-        }
-
-        void savePreferences(nlohmann::json preferences) {
-            if (preferencesDisabled())
-                return;
-            const auto paths = lfs::core::UserPaths::resolve();
-            if (!paths) {
-                LOG_WARN("Unable to resolve user settings path: {}; theme preferences are disabled",
-                         lfs::format_for_developer(paths.error()));
-                return;
-            }
-            preferences["schema_version"] = 1;
-            if (const auto result = paths->writePreferencesAtomically(preferences.dump(2) + '\n'); !result)
-                LOG_WARN("Unable to save theme preferences: {}",
-                         lfs::format_for_developer(result.error()));
-        }
-    } // namespace
-
     void saveThemePreferenceName(const std::string& theme_name) {
-        try {
-            auto preferences = loadPreferences();
-            const std::string normalized = normalizeThemeIdImpl(theme_name);
-            preferences["theme"] = isKnownThemePresetId(normalized) ? normalized : "dark";
-            savePreferences(std::move(preferences));
-        } catch (...) {
-            // Silently ignore - not critical
-        }
+        const std::string normalized = normalizeThemeIdImpl(theme_name);
+        UserPreferences::instance().setThemeName(
+            isKnownThemePresetId(normalized) ? normalized : "dark");
     }
 
     std::string loadThemePreferenceName() {
-        try {
-            if (preferencesDisabled())
-                return "dark";
-            const auto preferences = loadPreferences();
-            const std::string pref = preferences.value("theme", "");
-            const std::string normalized = normalizeThemeIdImpl(pref);
-            if (isKnownThemePresetId(normalized))
-                return normalized;
-        } catch (...) {
-            // Silently ignore - not critical
-        }
-        return "dark";
+        const std::string normalized =
+            normalizeThemeIdImpl(UserPreferences::instance().themeName());
+        return isKnownThemePresetId(normalized) ? normalized : "dark";
     }
 
-    void saveUiScalePreference(float scale) {
-        try {
-            auto preferences = loadPreferences();
-            // Keep the user's choice distinct from the scale currently reported by a monitor.
-            // A zero scale is the public API's automatic-mode sentinel.
-            preferences["ui_scale"] = scale <= 0.0f ? json("auto") : json(scale);
-            savePreferences(std::move(preferences));
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to save UI scale preference: {}", e.what());
-        }
+    void saveUiScalePreference(const float scale) {
+        UserPreferences::instance().setUiScale(scale);
     }
 
     float loadUiScalePreference() {
-        try {
-            if (preferencesDisabled())
-                return 0.0f;
-            const auto preferences = loadPreferences();
-            if (preferences.contains("ui_scale")) {
-                const auto& ui_scale = preferences["ui_scale"];
-                if (ui_scale.is_string() && ui_scale.get<std::string>() == "auto")
-                    return 0.0f;
-                // Compatibility with preferences.json written by earlier builds.
-                if (ui_scale.is_number()) {
-                    const float scale = ui_scale.get<float>();
-                    if (std::isfinite(scale) && scale >= 1.0f && scale <= 4.0f)
-                        return scale;
-                }
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to load UI scale preference: {}", e.what());
-        }
-        return 0.0f;
+        return UserPreferences::instance().uiScale();
     }
-
-    void saveLanguagePreference(const std::string& language_code) {
-        try {
-            if (language_code.empty())
-                return;
-            auto preferences = loadPreferences();
-            preferences["language"] = language_code;
-            savePreferences(std::move(preferences));
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to save language preference: {}", e.what());
-        }
-    }
-
-    std::string loadLanguagePreference() {
-        try {
-            if (preferencesDisabled())
-                return {};
-            const auto preferences = loadPreferences();
-            const auto it = preferences.find("language");
-            return it != preferences.end() && it->is_string() ? it->get<std::string>() : std::string{};
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to load language preference: {}", e.what());
-            return {};
-        }
-    }
-
-    void clearLanguagePreference() {
-        try {
-            auto preferences = loadPreferences();
-            preferences.erase("language");
-            savePreferences(std::move(preferences));
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to clear language preference: {}", e.what());
-        }
-    }
-
-    void saveCameraNavigationPreference(const std::string& mode) {
-        try {
-            if (!rememberCameraNavigationPreference())
-                return;
-            const bool known_mode = mode == "orbit" || mode == "trackball" ||
-                                    mode == "fpv" || mode == "drone";
-            auto preferences = loadPreferences();
-            preferences["camera_navigation_mode"] = known_mode ? mode : "orbit";
-            savePreferences(std::move(preferences));
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to save camera navigation preference: {}", e.what());
-        }
-    }
-
-    std::string loadCameraNavigationPreference() {
-        try {
-            if (preferencesDisabled() || !rememberCameraNavigationPreference())
-                return "orbit";
-            const auto preferences = loadPreferences();
-            const std::string mode = preferences.value("camera_navigation_mode", "orbit");
-            if (mode == "orbit" || mode == "trackball" || mode == "fpv" || mode == "drone")
-                return mode;
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to load camera navigation preference: {}", e.what());
-        }
-        return "orbit";
-    }
-
-    void setRememberCameraNavigationPreference(const bool enabled) {
-        try {
-            auto preferences = loadPreferences();
-            preferences["remember_camera_navigation"] = enabled;
-            if (!enabled)
-                preferences.erase("camera_navigation_mode");
-            savePreferences(std::move(preferences));
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to save camera navigation persistence preference: {}", e.what());
-        }
-    }
-
-    bool rememberCameraNavigationPreference() {
-        try {
-            if (preferencesDisabled())
-                return false;
-            return loadPreferences().value("remember_camera_navigation", false);
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to load camera navigation persistence preference: {}", e.what());
-            return false;
-        }
-    }
-
-    void saveCameraViewSnapPreference(const bool enabled) {
-        try {
-            if (!rememberCameraViewSnapPreference())
-                return;
-            auto preferences = loadPreferences();
-            preferences["camera_view_snap"] = enabled;
-            savePreferences(std::move(preferences));
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to save camera view snap preference: {}", e.what());
-        }
-    }
-
-    bool loadCameraViewSnapPreference() {
-        try {
-            if (preferencesDisabled() || !rememberCameraViewSnapPreference())
-                return false;
-            const auto preferences = loadPreferences();
-            return preferences.value("camera_view_snap", false);
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to load camera view snap preference: {}", e.what());
-            return false;
-        }
-    }
-
-    void setRememberCameraViewSnapPreference(const bool enabled) {
-        try {
-            auto preferences = loadPreferences();
-            preferences["remember_camera_view_snap"] = enabled;
-            if (!enabled)
-                preferences.erase("camera_view_snap");
-            savePreferences(std::move(preferences));
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to save camera view snap persistence preference: {}", e.what());
-        }
-    }
-
-    bool rememberCameraViewSnapPreference() {
-        try {
-            if (preferencesDisabled())
-                return false;
-            return loadPreferences().value("remember_camera_view_snap", false);
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to load camera view snap persistence preference: {}", e.what());
-            return false;
-        }
-    }
-
     void setThemeVignetteEnabled(bool enabled) {
         Theme t = theme();
         t.vignette.enabled = enabled;

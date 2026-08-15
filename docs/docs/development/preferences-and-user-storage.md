@@ -32,24 +32,24 @@ partially written destination.
 
 ## User storage roots
 
-The default root follows the platform policy implemented by `UserPaths`.
-Explicit application roots use one isolated unified storage tree. Portable
+The default root is the unified `~/.lichtfeld` tree on Windows and Linux.
+Explicit application roots use the same isolated storage layout. Portable
 builds use a `.lichtfeld` tree next to the executable. `LFS_HOME` remains an
 explicit override on every platform and in portable builds. The application
-does not scan or import old settings directories automatically. The Asset
-Manager is the exception: it can copy an existing legacy catalog into the
-resolved writable catalog directory without deleting the source.
+imports legacy keymaps, theme/language choices, UI preferences, and
+`layout.json` once when the unified tree is first used. Existing destination
+files are never overwritten and legacy sources are never deleted. The Asset
+Manager similarly copies an existing legacy catalog into the resolved writable
+catalog directory without deleting the source.
 
 | Mode | Config | Durable data | Cache | Logs |
 | --- | --- | --- | --- | --- |
 | Windows | `%USERPROFILE%/.lichtfeld/config` | `%USERPROFILE%/.lichtfeld/data` | `%USERPROFILE%/.lichtfeld/cache` | `%USERPROFILE%/.lichtfeld/logs` |
-| Linux | `${XDG_CONFIG_HOME:-~/.config}/lichtfeld-studio` | `${XDG_DATA_HOME:-~/.local/share}/lichtfeld-studio` | `${XDG_CACHE_HOME:-~/.cache}/lichtfeld-studio` | `${XDG_STATE_HOME:-~/.local/state}/lichtfeld-studio` |
+| Linux | `~/.lichtfeld/config` | `~/.lichtfeld/data` | `~/.lichtfeld/cache` | `~/.lichtfeld/logs` |
 | `LFS_HOME=<root>` | `<root>/config` | `<root>/data` | `<root>/cache` | `<root>/logs` |
 | Portable build | `<executable>/.lichtfeld/config` | `<executable>/.lichtfeld/data` | `<executable>/.lichtfeld/cache` | `<executable>/.lichtfeld/logs` |
 
-Plugins and their virtual environment remain under `~/.lichtfeld` on the
-default Linux layout for first-generation compatibility. They move under the
-unified root for Windows, `LFS_HOME`, and portable builds.
+Plugins and their virtual environment are also children of the unified root.
 
 The user tree contains, as applicable:
 
@@ -120,10 +120,11 @@ default layout replaces its GUIL layout the next time the project is saved.
 Reset operations retain backups in the user data tree and do not remove
 plugins, keymaps, caches, datasets, or project files.
 
-Full-window startup and modal backdrops are also input boundaries, not only
-visual dimming. While one is active or pending, pointer and keyboard input must
-not reach the application underneath, including native viewport overlays such
-as the axis selector.
+Modal backdrops are input boundaries, not only visual dimming. While one is
+active or pending, pointer and keyboard input must not reach the application
+underneath, including native viewport overlays such as the axis selector.
+The startup overlay remains viewport-centered and does not dim the entire
+application window; it stops blocking the viewport once plugin loading starts.
 
 ## Safe mode
 

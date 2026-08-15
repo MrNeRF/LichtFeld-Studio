@@ -144,10 +144,15 @@ namespace lfs::core {
                 previous_record->log_path.clear();
             }
 
+            const auto paths = UserPaths::resolve();
+            const auto live_log_path =
+                (paths ? paths->logDir()
+                       : lichtfeld_home_directory() / ".lichtfeld" / "logs") /
+                "lichtfeld.log";
             current_record = SessionBreadcrumb{
                 .pid = process_id(),
                 .started_at = utc_now(),
-                .log_path = Logger::default_log_file_path(),
+                .log_path = live_log_path.string(),
                 .clean_exit = false,
             };
             static_cast<void>(write_record(breadcrumb_path(), *current_record));

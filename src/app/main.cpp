@@ -57,6 +57,7 @@ namespace {
     }
 
     void publishResolvedUserPaths() {
+        // Publish canonical paths for Python plugins; native code calls UserPaths directly.
         const auto paths = lfs::core::UserPaths::resolve();
         if (!paths)
             return;

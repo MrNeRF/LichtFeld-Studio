@@ -126,13 +126,9 @@ TEST(LoggerTest, DefaultLogFilePathResolvesUnderPerUserDirectory) {
 
     EXPECT_EQ(resolved.filename(), "lichtfeld.log");
     ASSERT_TRUE(resolved.has_parent_path());
-#ifdef _WIN32
     EXPECT_EQ(resolved.parent_path().filename(), "logs");
     ASSERT_TRUE(resolved.parent_path().has_parent_path());
     EXPECT_EQ(resolved.parent_path().parent_path().filename(), ".lichtfeld");
-#else
-    EXPECT_EQ(resolved.parent_path().filename(), "lichtfeld-studio");
-#endif
 }
 
 TEST(LoggerTest, DefaultLogFilePathHonorsExplicitOverride) {

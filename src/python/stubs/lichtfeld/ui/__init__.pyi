@@ -377,10 +377,14 @@ def set_panel_enabled(panel_id: str, enabled: bool) -> None:
     """Enable or disable a panel by id"""
 
 def reset_layout() -> str:
-    """Reset the saved UI layout and apply the default dock arrangement immediately."""
+    """
+    Reset the saved UI layout and apply the default dock arrangement immediately.
+    """
 
 def reset_window_state() -> str:
-    """Reset persisted window geometry and apply the default geometry immediately."""
+    """
+    Reset persisted window geometry and apply the default geometry immediately.
+    """
 
 def is_panel_enabled(panel_id: str) -> bool:
     """Check if a panel is enabled"""

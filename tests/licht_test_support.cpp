@@ -59,8 +59,7 @@ namespace lfs::test::licht {
         spaces[0]["opaque_payload"] = Json::parse(R"({
         "right_panel_width":417.0,"scene_panel_ratio":0.61,"python_console_width":511.0,
         "bottom_dock_height":288.0,"left_dock_width":271.0,
-        "sequencer_visible":true,"python_console_visible":true,
-        "window":{}
+        "sequencer_visible":true,"python_console_visible":true
     })");
         spaces[1]["opaque_payload"] = Json::parse(R"({
         "panels":[{"id":"plugin.matrix","parent_id":"main","space":"floating",

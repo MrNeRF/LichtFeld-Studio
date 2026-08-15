@@ -14,6 +14,7 @@
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/image_loader.hpp"
+#include "core/legacy_settings_migration.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
@@ -1066,6 +1067,11 @@ namespace lfs::app {
             vis::gui::LayoutState::setPersistenceEnabled(!safe_mode);
             vis::input::InputBindings::setPersistenceEnabled(!safe_mode);
             if (const auto paths = lfs::core::UserPaths::resolve()) {
+                if (!safe_mode) {
+                    if (const auto migration = lfs::core::migrateLegacySettings(*paths); !migration)
+                        LOG_WARN("Unable to migrate legacy user settings: {}",
+                                 lfs::format_for_developer(migration.error()));
+                }
                 const auto reset_file = [&paths](const bool requested, const char* const label,
                                                  const auto& reset) {
                     if (!requested)

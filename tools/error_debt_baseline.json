@@ -1,11 +1,11 @@
 {
   "discarded-status-macro-free-cuda": {
     "app": [
-      "src/app/main.cpp:102",
-      "src/app/main.cpp:109",
-      "src/app/main.cpp:136",
+      "src/app/main.cpp:103",
+      "src/app/main.cpp:110",
       "src/app/main.cpp:137",
-      "src/app/main.cpp:138"
+      "src/app/main.cpp:138",
+      "src/app/main.cpp:139"
     ],
     "core": [
       "src/core/cuda/exportable_storage.cpp:407",
@@ -143,7 +143,7 @@
   },
   "empty-catch": {
     "app": [
-      "src/app/main.cpp:184",
+      "src/app/main.cpp:185",
       "src/app/mcp_gui_tools.cpp:5153"
     ],
     "core": [
@@ -155,9 +155,9 @@
       "src/core/crash_handler.cpp:335",
       "src/core/event_bridge/control_boundary.cpp:94",
       "src/core/host_metrics.cpp:48",
-      "src/core/logger.cpp:482",
-      "src/core/logger.cpp:733",
-      "src/core/logger.cpp:750",
+      "src/core/logger.cpp:456",
+      "src/core/logger.cpp:707",
+      "src/core/logger.cpp:724",
       "src/core/session_breadcrumb.cpp:75",
       "src/core/session_breadcrumb.cpp:140",
       "src/core/session_breadcrumb.cpp:154",
@@ -280,16 +280,14 @@
       "src/visualizer/selection/selection_service.cpp:1954",
       "src/visualizer/selection/selection_service.cpp:2091",
       "src/visualizer/sequencer/rml_sequencer_panel.cpp:1263",
-      "src/visualizer/theme/theme.cpp:629",
-      "src/visualizer/theme/theme.cpp:879",
-      "src/visualizer/theme/theme.cpp:1050",
-      "src/visualizer/theme/theme.cpp:1106",
-      "src/visualizer/theme/theme.cpp:1120"
+      "src/visualizer/theme/theme.cpp:626",
+      "src/visualizer/theme/theme.cpp:876",
+      "src/visualizer/theme/theme.cpp:1047"
     ]
   },
   "expected-string": {
     "app": [
-      "src/app/application.cpp:101",
+      "src/app/application.cpp:102",
       "src/app/include/app/mcp_app_utils.hpp:36",
       "src/app/include/app/mcp_app_utils.hpp:304",
       "src/app/include/app/mcp_app_utils.hpp:314",
@@ -422,12 +420,12 @@
     "core": [
       "src/core/argument_parser.cpp:240",
       "src/core/argument_parser.cpp:290",
-      "src/core/argument_parser.cpp:1249",
-      "src/core/argument_parser.cpp:1387",
-      "src/core/argument_parser.cpp:1417",
-      "src/core/argument_parser.cpp:1539",
-      "src/core/argument_parser.cpp:1626",
-      "src/core/argument_parser.cpp:1733",
+      "src/core/argument_parser.cpp:1241",
+      "src/core/argument_parser.cpp:1379",
+      "src/core/argument_parser.cpp:1409",
+      "src/core/argument_parser.cpp:1531",
+      "src/core/argument_parser.cpp:1618",
+      "src/core/argument_parser.cpp:1725",
       "src/core/bhatt_lod.cpp:621",
       "src/core/bhatt_lod.cpp:628",
       "src/core/checkpoint_format.cpp:16",
@@ -635,8 +633,8 @@
       "src/mcp/shared_scene_tools.hpp:32"
     ],
     "python": [
-      "src/python/lfs/module.cpp:154",
-      "src/python/lfs/module.cpp:290",
+      "src/python/lfs/module.cpp:155",
+      "src/python/lfs/module.cpp:291",
       "src/python/lfs/py_rendering.cpp:1161",
       "src/python/lfs/py_splat_simplify.cpp:209"
     ],
@@ -811,7 +809,7 @@
       "src/visualizer/gui/async_task_manager.cpp:2268",
       "src/visualizer/gui/async_task_manager.cpp:2594",
       "src/visualizer/gui/gui_manager.cpp:6939",
-      "src/visualizer/gui/gui_manager.cpp:6982",
+      "src/visualizer/gui/gui_manager.cpp:6977",
       "src/visualizer/gui/gui_manager.hpp:151",
       "src/visualizer/gui/gui_manager.hpp:152",
       "src/visualizer/gui/html_viewer_export.cpp:10",

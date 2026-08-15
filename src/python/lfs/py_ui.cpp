@@ -22,6 +22,7 @@
 #include "gui/vulkan_ui_texture.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
+#include "preferences.hpp"
 #include "py_command.hpp"
 #include "py_gizmo.hpp"
 #include "py_keymap.hpp"

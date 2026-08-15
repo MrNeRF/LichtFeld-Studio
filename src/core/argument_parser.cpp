@@ -581,15 +581,11 @@ namespace {
                     filter_pattern = ::args::get(log_filter);
                 }
 
-                if (const auto paths = lfs::core::UserPaths::resolve()) {
-                    const auto log_directory = lfs::core::path_to_utf8(paths->logDir());
-#ifdef _WIN32
-                    (void)_putenv_s("LFS_RESOLVED_LOG_DIR", log_directory.c_str());
-#else
-                    (void)setenv("LFS_RESOLVED_LOG_DIR", log_directory.c_str(), 1);
-#endif
-                }
-                lfs::core::Logger::get().init(level, log_file_path, filter_pattern);
+                std::string default_log_root;
+                if (const auto paths = lfs::core::UserPaths::resolve())
+                    default_log_root = lfs::core::path_to_utf8(paths->logDir().parent_path());
+                lfs::core::Logger::get().init(
+                    level, log_file_path, filter_pattern, false, default_log_root);
 
                 LOG_DEBUG("Logger initialized with level: {}", static_cast<int>(level));
                 if (!filter_pattern.empty()) {

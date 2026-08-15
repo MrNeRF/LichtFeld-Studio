@@ -4,6 +4,7 @@
 #include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
 #include "visualizer/internal/resource_paths.hpp"
+#include "visualizer/preferences.hpp"
 #include "visualizer/theme/theme.hpp"
 
 #include <gtest/gtest.h>
@@ -208,6 +209,23 @@ TEST(ThemePreferencesContract, MalformedJsonFallsBackToBuiltInDefaults) {
     EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "dark");
     EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
     EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
+    EXPECT_FALSE(std::filesystem::exists(paths->preferencesFile()));
+    std::size_t backup_count = 0;
+    std::filesystem::path backup_path;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(paths->backupDir())) {
+        if (entry.is_regular_file() && entry.path().filename() == "preferences.json") {
+            backup_path = entry.path();
+            ++backup_count;
+        }
+    }
+    EXPECT_EQ(backup_count, 1u);
+    ASSERT_FALSE(backup_path.empty());
+    std::ifstream backup(backup_path, std::ios::binary);
+    const std::string backup_contents((std::istreambuf_iterator<char>(backup)), {});
+    EXPECT_EQ(backup_contents, "{broken");
+    lfs::vis::saveLanguagePreference("de");
+    EXPECT_EQ(lfs::vis::loadLanguagePreference(), "de");
+    EXPECT_TRUE(std::filesystem::is_regular_file(paths->preferencesFile()));
     std::filesystem::remove_all(root, error);
 }
 

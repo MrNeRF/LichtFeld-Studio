@@ -70,10 +70,6 @@ def _storage_candidates() -> List[Path]:
 
     candidates.append(LEGACY_STORAGE_PATH)
 
-    xdg_data_home = environment_value("XDG_DATA_HOME")
-    if xdg_data_home:
-        candidates.append(Path(xdg_data_home) / "LichtFeldStudio" / "asset_manager")
-
     appdata = environment_value("APPDATA")
     if appdata:
         candidates.append(Path(appdata) / "LichtFeldStudio" / "asset_manager")
@@ -82,9 +78,6 @@ def _storage_candidates() -> List[Path]:
     if local_appdata:
         candidates.append(Path(local_appdata) / "LichtFeldStudio" / "asset_manager")
 
-    candidates.append(
-        Path.home() / ".local" / "share" / "LichtFeldStudio" / "asset_manager"
-    )
     candidates.append(Path(tempfile.gettempdir()) / "LichtFeldStudio" / "asset_manager")
     return _dedupe_paths(candidates)
 

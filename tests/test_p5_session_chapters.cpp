@@ -147,8 +147,6 @@ namespace {
                  "language",
                  "scale",
                  "ui_scale",
-                 "dpi",
-                 "dpi_scale",
                  "hud",
                  "vram_hud",
                  "vram_hud_visible",
@@ -171,6 +169,14 @@ namespace {
                          ["opaque_payload"]
                              .contains(key))
                 << key;
+        }
+
+        for (const auto key : {"dpi", "dpi_scale"}) {
+            Json invalid = root;
+            invalid["layouts"][0]["areas"][0]["spaces"][0]["opaque_payload"][key] = 2.0;
+            const auto loaded = GuiLayoutChapter::parse(invalid.dump());
+            ASSERT_FALSE(loaded) << key;
+            EXPECT_EQ(loaded.error().code(), lfs::ErrorCode::DataLoss) << key;
         }
 
         Json plugin_fields = root;
@@ -207,17 +213,8 @@ namespace {
         auto loaded_legacy_window =
             GuiLayoutChapter::parse(
                 legacy_window.dump());
-        ASSERT_TRUE(loaded_legacy_window);
-        const auto sanitized_legacy_window =
-            json_root(loaded_legacy_window->dom());
-        const auto& window =
-            sanitized_legacy_window["layouts"][0]
-                                   ["areas"][0]
-                                   ["spaces"][0]
-                                   ["opaque_payload"]
-                                   ["window"];
-        EXPECT_TRUE(window.is_object());
-        EXPECT_TRUE(window.empty());
+        ASSERT_FALSE(loaded_legacy_window);
+        EXPECT_EQ(loaded_legacy_window.error().code(), lfs::ErrorCode::DataLoss);
     }
 
     TEST(P5SessionChapterTest,
@@ -1968,8 +1965,7 @@ namespace {
         expect_json(panel, "/float_stack_order", 12);
         expect_json(panel, "/vendor_extension", "retained");
         prove("GUIL-169");
-        ASSERT_TRUE(fixed["window"].is_object());
-        EXPECT_TRUE(fixed["window"].empty());
+        EXPECT_FALSE(fixed.contains("window"));
         prove("GUIL-170");
         expect_json(console, "/active_tab", 1);
         expect_float(console, "/font_scale", 1.7f);

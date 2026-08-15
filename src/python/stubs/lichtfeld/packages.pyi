@@ -15,7 +15,7 @@ class PackageInfo:
     def __repr__(self) -> str: ...
 
 def init() -> str:
-    """Initialize venv at ~/.lichtfeld/venv"""
+    """Initialize the resolved per-user virtual environment"""
 
 def install(package: str) -> str:
     """Install package from PyPI"""

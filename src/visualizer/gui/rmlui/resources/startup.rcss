@@ -10,21 +10,9 @@ body {
     align-items: center;
     width: 100%;
     height: 100%;
-    position: relative;
-}
-
-#backdrop {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(10, 12, 16, 155);
-    pointer-events: none;
 }
 
 #overlay-box {
-    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;

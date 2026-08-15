@@ -14,6 +14,7 @@
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/string_keys.hpp"
 #include "internal/resource_paths.hpp"
+#include "preferences.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 
@@ -255,7 +256,10 @@ namespace lfs::vis::gui {
     }
 
     bool StartupOverlay::blocksUnderlayInput() const {
-        return visible_;
+        if (!visible_)
+            return false;
+        std::lock_guard lock(plugin_load_mutex_);
+        return !plugin_load_state_started_;
     }
 
     static std::string escapeRmlText(const std::string& input) {

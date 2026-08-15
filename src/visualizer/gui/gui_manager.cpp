@@ -14,6 +14,7 @@
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "preferences.hpp"
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include "core/tensor.hpp"
@@ -3004,6 +3005,16 @@ namespace lfs::vis::gui {
             }
         }
 
+        void applyDefaultWindowStates(std::unordered_map<std::string, bool>& states) {
+            states = {
+                {"scene_panel", true},
+                {"system_console", false},
+                {"training_tab", false},
+                {"export_dialog", false},
+                {"python_console", false},
+            };
+        }
+
         std::optional<WindowManager::PersistentWindowState> loadWindowState() {
             if (!automaticWindowStatePersistenceEnabled())
                 return std::nullopt;
@@ -3086,11 +3097,7 @@ namespace lfs::vis::gui {
         video_widget_ = lfs::gui::createVideoWidget();
 
         // Initialize window states
-        window_states_["scene_panel"] = true;
-        window_states_["system_console"] = false;
-        window_states_["training_tab"] = false;
-        window_states_["export_dialog"] = false;
-        window_states_["python_console"] = false;
+        applyDefaultWindowStates(window_states_);
 
         lfs::python::set_modal_enqueue_callback(
             [this](lfs::core::ModalRequest req) { enqueueModal(std::move(req)); });
@@ -4015,6 +4022,10 @@ namespace lfs::vis::gui {
         reg_panel("native.pie_menu", "Pie Menu",
                   make_panel(PieMenuPanel(&gizmo_manager_)),
                   PanelSpace::ViewportOverlay, 950);
+
+        reg_panel("native.startup_overlay", "Startup Overlay",
+                  make_panel(StartupOverlayPanel(&startup_overlay_, &drag_drop_hovering_)),
+                  PanelSpace::ViewportOverlay, 0);
     }
 
     VulkanViewportPassParams GuiManager::buildVulkanViewportParams(const VkExtent2D extent,
@@ -5705,17 +5716,6 @@ namespace lfs::vis::gui {
                                            static_cast<float>(panel_input.screen_w),
                                            static_cast<float>(panel_input.screen_h));
             }
-            if (startup_overlay_.isVisible()) {
-                LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.startup_overlay", 0.25);
-                startup_overlay_.render({
-                                            .pos = {0.0f, 0.0f},
-                                            .size = {
-                                                static_cast<float>(panel_input.screen_w),
-                                                static_cast<float>(panel_input.screen_h),
-                                            },
-                                        },
-                                        drag_drop_hovering_);
-            }
             if (rml_modal_overlay_->hasPendingRenderWork()) {
                 LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.modal_overlay", 0.25);
                 rml_modal_overlay_->render(panel_input.screen_w,
@@ -6952,12 +6952,7 @@ namespace lfs::vis::gui {
         setScenePanelActiveTab("scene");
         setTabStripScroll(0.0f);
 
-        window_states_.clear();
-        window_states_["scene_panel"] = true;
-        window_states_["system_console"] = false;
-        window_states_["training_tab"] = false;
-        window_states_["export_dialog"] = false;
-        window_states_["python_console"] = false;
+        applyDefaultWindowStates(window_states_);
         show_vram_hud_ = false;
         perf_hud_expanded_ = true;
         vram_hud_visible_published_ = false;

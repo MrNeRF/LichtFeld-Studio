@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "core/executable_path.hpp"
+#include "core/legacy_settings_migration.hpp"
 #include "core/user_paths.hpp"
 
 #include <array>
@@ -135,6 +136,48 @@ namespace {
         std::ifstream backup(**reset, std::ios::binary);
         const std::string backup_contents((std::istreambuf_iterator<char>(backup)), {});
         EXPECT_EQ(backup_contents, R"({"theme":"light","ui_scale":"150"})");
+    }
+
+    TEST_F(UserPathsContractTest, LegacySettingsMigrationIsOneShotAndNonDestructive) {
+        const ScopedEnvironmentVariable lfs_home("LFS_HOME", std::nullopt);
+        const ScopedEnvironmentVariable home(
+#ifdef _WIN32
+            "USERPROFILE",
+#else
+            "HOME",
+#endif
+            (root_ / "home").string());
+#ifdef _WIN32
+        const ScopedEnvironmentVariable legacy_base("APPDATA", (root_ / "legacy-base").string());
+        const fs::path legacy = root_ / "legacy-base" / "LichtFeldStudio";
+#else
+        const ScopedEnvironmentVariable legacy_base("XDG_CONFIG_HOME", (root_ / "legacy-base").string());
+        const fs::path legacy = root_ / "legacy-base" / "LichtFeldStudio";
+#endif
+        ASSERT_TRUE(fs::create_directories(legacy / "input_profiles"));
+        std::ofstream(legacy / "theme_preference") << "gruvbox";
+        std::ofstream(legacy / "language_preference") << "it";
+        std::ofstream(legacy / "ui_scale") << "1.5";
+        std::ofstream(legacy / "layout.json") << R"({"legacy":true})";
+        std::ofstream(legacy / "input_profiles" / "Custom.json") << R"({"name":"Custom"})";
+
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths.has_value()) << paths.error();
+        ASSERT_TRUE(lfs::core::migrateLegacySettings(*paths).has_value());
+        EXPECT_TRUE(fs::is_regular_file(paths->layoutFile()));
+        EXPECT_TRUE(fs::is_regular_file(paths->keymapDir() / "Custom.json"));
+        EXPECT_TRUE(fs::is_regular_file(legacy / "layout.json"));
+        std::ifstream preferences(paths->preferencesFile());
+        const auto values = nlohmann::json::parse(preferences);
+        EXPECT_EQ(values["theme"], "gruvbox");
+        EXPECT_EQ(values["language"], "it");
+        EXPECT_FLOAT_EQ(values["ui_scale"].get<float>(), 1.5f);
+
+        std::ofstream(paths->layoutFile(), std::ios::trunc) << R"({"current":true})";
+        ASSERT_TRUE(lfs::core::migrateLegacySettings(*paths).has_value());
+        std::ifstream layout(paths->layoutFile());
+        const std::string layout_contents((std::istreambuf_iterator<char>(layout)), {});
+        EXPECT_EQ(layout_contents, R"({"current":true})");
     }
 
     TEST_F(UserPathsContractTest, PortableRootUsesExecutableDirectory) {
@@ -401,7 +444,7 @@ namespace {
         EXPECT_EQ(resolved->configDir(), root_ / ".lichtfeld" / "config");
     }
 #else
-    TEST_F(UserPathsContractTest, LinuxDefaultHonorsEveryXdgDirectory) {
+    TEST_F(UserPathsContractTest, LinuxDefaultUsesHomeDotLichtfeldAndIgnoresXdg) {
         const ScopedEnvironmentVariable lfs_home("LFS_HOME", std::nullopt);
         const ScopedEnvironmentVariable home("HOME", (root_ / "home").string());
         const ScopedEnvironmentVariable config("XDG_CONFIG_HOME", (root_ / "xdg-config").string());
@@ -410,11 +453,12 @@ namespace {
         const ScopedEnvironmentVariable state("XDG_STATE_HOME", (root_ / "xdg-state").string());
         const auto resolved = lfs::core::UserPaths::resolve();
         ASSERT_TRUE(resolved.has_value()) << resolved.error();
-        EXPECT_EQ(resolved->configDir(), root_ / "xdg-config" / "lichtfeld-studio");
-        EXPECT_EQ(resolved->dataDir(), root_ / "xdg-data" / "lichtfeld-studio");
-        EXPECT_EQ(resolved->cacheDir(), root_ / "xdg-cache" / "lichtfeld-studio");
-        EXPECT_EQ(resolved->logDir(), root_ / "xdg-state" / "lichtfeld-studio");
+        EXPECT_EQ(resolved->configDir(), root_ / "home" / ".lichtfeld" / "config");
+        EXPECT_EQ(resolved->dataDir(), root_ / "home" / ".lichtfeld" / "data");
+        EXPECT_EQ(resolved->cacheDir(), root_ / "home" / ".lichtfeld" / "cache");
+        EXPECT_EQ(resolved->logDir(), root_ / "home" / ".lichtfeld" / "logs");
         EXPECT_EQ(resolved->pluginDir(), root_ / "home" / ".lichtfeld" / "plugins");
+        EXPECT_EQ(resolved->venvDir(), root_ / "home" / ".lichtfeld" / "venv");
     }
 
     TEST_F(UserPathsContractTest, LinuxDefaultFallsBackToHomeForEmptyXdgVariables) {
@@ -426,8 +470,8 @@ namespace {
         const ScopedEnvironmentVariable state("XDG_STATE_HOME", "");
         const auto resolved = lfs::core::UserPaths::resolve();
         ASSERT_TRUE(resolved.has_value()) << resolved.error();
-        EXPECT_EQ(resolved->configDir(), root_ / "home" / ".config" / "lichtfeld-studio");
-        EXPECT_EQ(resolved->logDir(), root_ / "home" / ".local/state" / "lichtfeld-studio");
+        EXPECT_EQ(resolved->configDir(), root_ / "home" / ".lichtfeld" / "config");
+        EXPECT_EQ(resolved->logDir(), root_ / "home" / ".lichtfeld" / "logs");
     }
 #endif
 #endif

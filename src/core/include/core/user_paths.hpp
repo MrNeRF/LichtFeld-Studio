@@ -38,8 +38,7 @@ namespace lfs::core {
      * cache. The default follows the platform policy:
      *
      * - Windows: `%USERPROFILE%/.lichtfeld/{config,data,cache,logs}`.
-     * - Linux: XDG config/data/cache/state locations, with plugins kept under
-     *   `~/.lichtfeld` for first-generation compatibility.
+     * - Linux: `~/.lichtfeld/{config,data,cache,logs,plugins,venv}`.
      * - Portable builds: `.lichtfeld` next to the executable.
      * - `LFS_HOME` and explicit roots use one unified root on every OS.
      */
@@ -53,6 +52,10 @@ namespace lfs::core {
         /** Back up preferences.json, if it exists, then write built-in defaults. */
         [[nodiscard]] lfs::Result<std::optional<std::filesystem::path>>
         resetPreferences() const;
+
+        /** Back up a corrupt preferences.json without writing replacement data. */
+        [[nodiscard]] lfs::Result<std::optional<std::filesystem::path>>
+        backupCorruptPreferences() const;
 
         /** Move layout.json to a timestamped backup, if it exists. */
         [[nodiscard]] lfs::Result<std::optional<std::filesystem::path>>

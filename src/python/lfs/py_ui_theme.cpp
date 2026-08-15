@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_ui.hpp"
+#include "visualizer/preferences.hpp"
 #include "visualizer/theme/theme.hpp"
 
 namespace lfs::python {

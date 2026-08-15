@@ -422,36 +422,7 @@ namespace lfs::core {
         fs::path resolve_default_log_directory(const std::string& user_dir_override) {
             if (!user_dir_override.empty())
                 return fs::path(user_dir_override) / "logs";
-            if (const char* resolved = std::getenv("LFS_RESOLVED_LOG_DIR");
-                resolved && resolved[0])
-                return fs::path(resolved);
-            if (const char* root = std::getenv("LFS_HOME"); root && root[0])
-                return fs::path(root) / "logs";
-#ifdef LFS_BUILD_PORTABLE
-#ifdef _WIN32
-            std::wstring executable(32768, L'\0');
-            const DWORD length = GetModuleFileNameW(nullptr, executable.data(),
-                                                    static_cast<DWORD>(executable.size()));
-            if (length > 0 && length < executable.size()) {
-                executable.resize(length);
-                return fs::path(executable).parent_path() / ".lichtfeld" / "logs";
-            }
-#else
-            std::array<char, 4096> executable{};
-            const auto length = ::readlink("/proc/self/exe", executable.data(), executable.size() - 1);
-            if (length > 0) {
-                executable[static_cast<std::size_t>(length)] = '\0';
-                return fs::path(executable.data()).parent_path() / ".lichtfeld" / "logs";
-            }
-#endif
-#endif
-#ifdef _WIN32
             return lichtfeld_home_directory() / ".lichtfeld" / "logs";
-#else
-            if (const char* state = std::getenv("XDG_STATE_HOME"); state && state[0])
-                return fs::path(state) / "lichtfeld-studio";
-            return lichtfeld_home_directory() / ".local" / "state" / "lichtfeld-studio";
-#endif
         }
 
         fs::path resolve_default_log_path(const std::string& user_dir_override) {

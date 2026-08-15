@@ -397,7 +397,6 @@ set(TEST_FILES
     test_scene_validity.cpp
     test_uuid.cpp
     test_render_settings_defaults.cpp
-    test_config_paths.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
     test_theme_registry.cpp

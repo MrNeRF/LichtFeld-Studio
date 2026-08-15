@@ -62,14 +62,6 @@ namespace lfs::core {
             return std::nullopt;
         }
 
-        [[nodiscard]] std::filesystem::path xdgOrHome(const char* const variable,
-                                                      const std::filesystem::path& home,
-                                                      const char* const fallback) {
-            if (const auto path = environmentPath(variable))
-                return *path;
-            return home / fallback;
-        }
-
         using json = nlohmann::json;
 
         [[nodiscard]] lfs::Error userPathError(
@@ -356,23 +348,7 @@ namespace lfs::core {
                 "The current user's home directory is unavailable.",
                 "Neither the platform home variable nor a user-path override is available");
 
-#ifdef _WIN32
         return fromUnifiedRoot(*home / ".lichtfeld");
-#else
-        const auto config_home = xdgOrHome("XDG_CONFIG_HOME", *home, ".config");
-        const auto data_home = xdgOrHome("XDG_DATA_HOME", *home, ".local/share");
-        const auto cache_home = xdgOrHome("XDG_CACHE_HOME", *home, ".cache");
-        const auto state_home = xdgOrHome("XDG_STATE_HOME", *home, ".local/state");
-        const auto plugin_home = *home / ".lichtfeld";
-        return UserPaths(
-            config_home / "lichtfeld-studio",
-            data_home / "lichtfeld-studio",
-            cache_home / "lichtfeld-studio",
-            state_home / "lichtfeld-studio",
-            plugin_home / "plugins",
-            plugin_home / "venv",
-            false);
-#endif
     }
 
     lfs::Status UserPaths::ensureDirectories() const {
@@ -400,6 +376,10 @@ namespace lfs::core {
         if (const auto defaults = writeDefaultPreferences(preferencesFile()); !defaults)
             return defaults.error();
         return *backup;
+    }
+
+    lfs::Result<std::optional<std::filesystem::path>> UserPaths::backupCorruptPreferences() const {
+        return backupAndRemoveFile(preferencesFile(), backupDir(), "corrupt-preferences");
     }
 
     lfs::Result<std::optional<std::filesystem::path>> UserPaths::resetLayout() const {

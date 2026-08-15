@@ -313,7 +313,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> required_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return {
                 .name = name,
                 .write = [member](const Owner& source) { return Json(source.*member); },
@@ -332,7 +332,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> optional_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return {
                 .name = name,
                 .write = [member](const Owner& source) { return Json(source.*member); },
@@ -350,7 +350,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> vec3_field(
             const std::string_view name,
-            glm::vec3 Owner::*member) {
+            glm::vec3 Owner::* member) {
             return {
                 .name = name,
                 .write = [member](const Owner& source) { return vec3_json(source.*member); },
@@ -374,7 +374,7 @@ namespace lfs::vis::project {
                   typename AfterAssign = std::nullptr_t>
         JsonField<Owner> enum_field(
             const std::string_view name,
-            Enum Owner::*member,
+            Enum Owner::* member,
             const int minimum,
             const int maximum,
             const std::string_view invalid_detail,
@@ -466,7 +466,7 @@ namespace lfs::vis::project {
         template <typename Owner, std::size_t Size>
         JsonField<Owner> array_field(
             const std::string_view name,
-            std::array<float, Size> Owner::*member) {
+            std::array<float, Size> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -502,7 +502,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> nullable_positive_float_field(
             const std::string_view name,
-            std::optional<float> Owner::*member) {
+            std::optional<float> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -1040,9 +1040,8 @@ namespace lfs::vis::project {
         bool object_contains_gui_global_field(const Json& value) {
             if (!value.is_object())
                 return false;
-            for (const auto& [key, child] : value.items()) {
-                (void)child;
-                auto normalized = key;
+            for (auto item = value.cbegin(); item != value.cend(); ++item) {
+                auto normalized = item.key();
                 std::ranges::transform(
                     normalized, normalized.begin(),
                     [](const unsigned char character) {
@@ -1065,33 +1064,12 @@ namespace lfs::vis::project {
         bool contains_gui_global_field(const Json& root) {
             if (object_contains_gui_global_field(root))
                 return true;
-            const auto layouts = root.find("layouts");
-            if (layouts == root.end() || !layouts->is_array())
-                return false;
-            for (const auto& layout : *layouts) {
-                if (!layout.is_object())
-                    continue;
-                const auto areas = layout.find("areas");
-                if (areas == layout.end() || !areas->is_array())
-                    continue;
-                for (const auto& area : *areas) {
-                    if (!area.is_object())
-                        continue;
-                    const auto spaces = area.find("spaces");
-                    if (spaces == area.end() || !spaces->is_array())
-                        continue;
-                    for (const auto& space : *spaces) {
-                        if (!space.is_object() ||
-                            space.value("type", std::string{}) != "fixed_arrangement")
-                            continue;
-                        const auto payload = space.find("opaque_payload");
-                        if (payload != space.end() &&
-                            object_contains_gui_global_field(*payload))
-                            return true;
-                    }
-                }
-            }
-            return false;
+            bool found = false;
+            lfs::io::project::for_each_fixed_arrangement_payload(
+                root, [&](const Json& payload) {
+                    found = found || object_contains_gui_global_field(payload);
+                });
+            return found;
         }
 
         lfs::Result<void> validate_gui_runtime(
@@ -1609,7 +1587,7 @@ namespace lfs::vis::project {
             using Panel = gui::PanelProjectState;
             const auto nullable_float = [](
                                             const std::string_view name,
-                                            float Panel::*member) {
+                                            float Panel::* member) {
                 return custom_field<Panel>(
                     name,
                     [member](const Panel& panel) {
@@ -1970,10 +1948,6 @@ namespace lfs::vis::project {
                 {"filter_text", tree.filter_text},
             };
         }
-        // GUIL v1 requires the object for compatibility, but main-window
-        // geometry and display state are user-global and live in window.json.
-        fixed_payload["window"] = Json::object();
-
         Json panels = Json::array();
         for (const auto& panel :
              gui::PanelRegistry::instance()
