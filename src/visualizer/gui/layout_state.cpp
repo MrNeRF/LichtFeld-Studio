@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/layout_state.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/user_paths.hpp"
 #include <atomic>
@@ -13,12 +14,25 @@ namespace lfs::vis::gui {
 
     namespace {
         std::atomic<bool> g_persistence_enabled{true};
-    }
+
+        [[nodiscard]] lfs::Error uiPreferencesError(std::string detail = {}) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .user_message = std::string(LOC("preferences.ui_preferences_save_failed")),
+                .detail = std::move(detail),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+    } // namespace
 
     std::filesystem::path LayoutState::getConfigDir() {
         const auto paths = lfs::core::UserPaths::resolve();
         if (!paths) {
-            LOG_WARN("Unable to resolve UI preference directory: {}", paths.error());
+            LOG_WARN("Unable to resolve UI preference directory: {}",
+                     lfs::format_for_developer(paths.error()));
             return {};
         }
         return paths->configDir();
@@ -34,7 +48,8 @@ namespace lfs::vis::gui {
     LayoutState::getUserPreferencesPath() {
         const auto paths = lfs::core::UserPaths::resolve();
         if (!paths) {
-            LOG_WARN("Unable to resolve UI preference path: {}", paths.error());
+            LOG_WARN("Unable to resolve UI preference path: {}",
+                     lfs::format_for_developer(paths.error()));
             return {};
         }
         return paths->uiPreferencesFile();
@@ -42,17 +57,18 @@ namespace lfs::vis::gui {
 
     void LayoutState::saveUserPreferences() const {
         if (const auto saved = saveUserPreferencesChecked(); !saved)
-            LOG_WARN("Failed to save user UI preferences: {}", saved.error());
+            LOG_WARN("Failed to save user UI preferences: {}",
+                     lfs::format_for_developer(saved.error()));
     }
 
-    std::expected<void, std::string> LayoutState::saveUserPreferencesChecked() const {
+    lfs::Status LayoutState::saveUserPreferencesChecked() const {
         if (!g_persistence_enabled.load(std::memory_order_acquire))
             return {};
 
         try {
             const auto paths = lfs::core::UserPaths::resolve();
             if (!paths)
-                return std::unexpected(paths.error());
+                return lfs::Status::failure(paths.error());
 
             nlohmann::json j;
             if (!file_association.empty())
@@ -74,9 +90,11 @@ namespace lfs::vis::gui {
 
             return paths->writeUiPreferencesAtomically(j.dump(2) + '\n');
         } catch (const std::exception& e) {
-            return std::unexpected(std::string(e.what()));
+            // LFS-CENSUS-OK(empty-catch): convert JSON serialization failures into a typed status.
+            return lfs::Status::failure(uiPreferencesError(e.what()));
         } catch (...) {
-            return std::unexpected(std::string("unknown error"));
+            // LFS-CENSUS-OK(empty-catch): contain non-standard serialization failures at the persistence boundary.
+            return lfs::Status::failure(uiPreferencesError());
         }
     }
 

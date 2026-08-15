@@ -228,7 +228,7 @@ namespace lfs::python {
             if (paths)
                 return paths->venvDir();
             LOG_WARN("Unable to resolve Python environment directory: {}; using temporary storage",
-                     paths.error());
+                     lfs::format_for_developer(paths.error()));
             return std::filesystem::temp_directory_path() / "lichtfeld" / "venv";
         }
 

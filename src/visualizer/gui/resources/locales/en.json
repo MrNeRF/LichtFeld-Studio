@@ -789,6 +789,7 @@
     "reset_section_confirmation": "Restore the settings in the current section to their defaults? This applies immediately to",
     "reset_section_success": "Section reset immediately.",
     "reset_section_failed": "Unable to reset settings.",
+    "ui_preferences_save_failed": "Unable to save interface preferences.",
     "reset_all_settings": "Reset all settings",
     "reset_all_settings_confirmation": "Restore language, theme, UI scale, input preferences, layout, and window state to their defaults? This applies immediately. If a .licht project is open, its stored layout will be replaced when next saved; project content, datasets, exports, plugins, and cache are not affected.",
     "reset_all_settings_success": "All preferences, layout, and window state reset immediately.",

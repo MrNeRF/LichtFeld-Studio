@@ -1059,7 +1059,7 @@ namespace lfs::vis::project {
                 return fail<void>(
                     lfs::ErrorCode::Unavailable,
                     "Project lifecycle settings could not be published.",
-                    written.error(), "settings.path");
+                    developerError(written.error()), "settings.path");
             }
             return {};
         } catch (const std::exception& exception) {
@@ -1170,7 +1170,8 @@ namespace lfs::vis::project {
                   return *settings_path;
               const auto paths = lfs::core::UserPaths::resolve();
               if (!paths) {
-                  LOG_WARN("Unable to resolve project lifecycle settings path: {}", paths.error());
+                  LOG_WARN("Unable to resolve project lifecycle settings path: {}",
+                           developerError(paths.error()));
                   return std::filesystem::path{};
               }
               return paths->projectLifecycleFile();

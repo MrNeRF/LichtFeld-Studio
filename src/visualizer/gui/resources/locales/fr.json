@@ -789,6 +789,7 @@
     "reset_section_confirmation": "Rétablir les paramètres de la section actuelle à leurs valeurs par défaut ? Cela s'applique immédiatement à",
     "reset_section_success": "Section réinitialisée immédiatement.",
     "reset_section_failed": "Impossible de réinitialiser les paramètres.",
+    "ui_preferences_save_failed": "Impossible d’enregistrer les préférences de l’interface.",
     "reset_all_settings": "Réinitialiser tous les paramètres",
     "reset_all_settings_confirmation": "Rétablir la langue, le thème, l'échelle de l'interface, les préférences de saisie, la disposition et l'état de la fenêtre à leurs valeurs par défaut ? Cela s'applique immédiatement. Si un projet .licht est ouvert, sa disposition enregistrée sera remplacée au prochain enregistrement ; le contenu du projet, les jeux de données, les exportations, les plugins et le cache ne sont pas affectés.",
     "reset_all_settings_success": "Toutes les préférences, la disposition et l'état de la fenêtre ont été réinitialisés immédiatement.",

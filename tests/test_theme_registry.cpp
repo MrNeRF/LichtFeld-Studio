@@ -184,7 +184,7 @@ TEST(ThemePreferencesContract, InvalidValuesFallBackToBuiltInDefaults) {
     std::filesystem::remove_all(root, error);
     const ScopedLfsHome home(root);
     const auto paths = lfs::core::UserPaths::resolve();
-    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
     ASSERT_TRUE(paths->ensureDirectories().has_value());
     std::ofstream(paths->preferencesFile())
         << R"({"theme":"not-a-theme","ui_scale":999,"language":42})";
@@ -201,7 +201,7 @@ TEST(ThemePreferencesContract, MalformedJsonFallsBackToBuiltInDefaults) {
     std::filesystem::remove_all(root, error);
     const ScopedLfsHome home(root);
     const auto paths = lfs::core::UserPaths::resolve();
-    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
     ASSERT_TRUE(paths->ensureDirectories().has_value());
     std::ofstream(paths->preferencesFile()) << "{broken";
 
@@ -217,7 +217,7 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
     std::filesystem::remove_all(root, error);
     const ScopedLfsHome home(root);
     const auto paths = lfs::core::UserPaths::resolve();
-    ASSERT_TRUE(paths.has_value()) << paths.error();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
     ASSERT_TRUE(paths->ensureDirectories().has_value());
     const std::string original = R"({"theme":"light","ui_scale":1.5,"language":"it"})";
     std::ofstream(paths->preferencesFile()) << original;

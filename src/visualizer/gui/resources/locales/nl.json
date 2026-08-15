@@ -789,6 +789,7 @@
     "reset_section_confirmation": "De instellingen in de huidige sectie naar de standaardwaarden herstellen? Dit wordt onmiddellijk toegepast op",
     "reset_section_success": "Sectie onmiddellijk gereset.",
     "reset_section_failed": "Instellingen kunnen niet worden gereset.",
+    "ui_preferences_save_failed": "De interfacevoorkeuren konden niet worden opgeslagen.",
     "reset_all_settings": "Alle instellingen resetten",
     "reset_all_settings_confirmation": "Taal, thema, UI-schaal, invoervoorkeuren, indeling en vensterstatus naar de standaardwaarden herstellen? Dit wordt onmiddellijk toegepast. Als een .licht-project open is, wordt de opgeslagen indeling bij de volgende opslag vervangen; projectinhoud, datasets, exports, plugins en cache blijven ongewijzigd.",
     "reset_all_settings_success": "Alle voorkeuren, de indeling en de vensterstatus zijn onmiddellijk gereset.",

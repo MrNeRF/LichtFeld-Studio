@@ -4,9 +4,9 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 
-#include <expected>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -15,7 +15,7 @@
 namespace lfs::core {
 
     /** Durably replace a user-owned text file without exposing a partial write. */
-    [[nodiscard]] LFS_CORE_API std::expected<void, std::string>
+    [[nodiscard]] LFS_CORE_API lfs::Status
     writeTextFileAtomically(const std::filesystem::path& destination,
                             const std::string& contents);
 
@@ -45,23 +45,23 @@ namespace lfs::core {
      */
     class LFS_CORE_API UserPaths {
     public:
-        [[nodiscard]] static std::expected<UserPaths, std::string> resolve(const UserPathOptions& options = {});
+        [[nodiscard]] static lfs::Result<UserPaths> resolve(const UserPathOptions& options = {});
 
         /** Create all primary directories. This never creates legacy paths. */
-        [[nodiscard]] std::expected<void, std::string> ensureDirectories() const;
+        [[nodiscard]] lfs::Status ensureDirectories() const;
 
         /** Back up preferences.json, if it exists, then write built-in defaults. */
-        [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
+        [[nodiscard]] lfs::Result<std::optional<std::filesystem::path>>
         resetPreferences() const;
 
         /** Move layout.json to a timestamped backup, if it exists. */
-        [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
+        [[nodiscard]] lfs::Result<std::optional<std::filesystem::path>>
         resetLayout() const;
-        [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
+        [[nodiscard]] lfs::Result<std::optional<std::filesystem::path>>
         resetUiPreferences() const;
-        [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
+        [[nodiscard]] lfs::Result<std::optional<std::filesystem::path>>
         resetWindowState() const;
-        [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
+        [[nodiscard]] lfs::Result<std::optional<std::filesystem::path>>
         resetProjectLifecycle() const;
 
         [[nodiscard]] const std::filesystem::path& configDir() const noexcept { return config_dir_; }
@@ -73,15 +73,15 @@ namespace lfs::core {
 
         [[nodiscard]] std::filesystem::path preferencesFile() const;
         /** Atomically replace preferences.json with already-serialized JSON. */
-        [[nodiscard]] std::expected<void, std::string>
+        [[nodiscard]] lfs::Status
         writePreferencesAtomically(const std::string& serialized_json) const;
         [[nodiscard]] std::filesystem::path layoutFile() const;
         [[nodiscard]] std::filesystem::path uiPreferencesFile() const;
-        [[nodiscard]] std::expected<void, std::string>
+        [[nodiscard]] lfs::Status
         writeUiPreferencesAtomically(const std::string& serialized_json) const;
         [[nodiscard]] std::filesystem::path projectLifecycleFile() const;
         [[nodiscard]] std::filesystem::path windowStateFile() const;
-        [[nodiscard]] std::expected<void, std::string>
+        [[nodiscard]] lfs::Status
         writeWindowStateAtomically(const std::string& serialized_json) const;
         [[nodiscard]] std::filesystem::path keymapDir() const;
         [[nodiscard]] std::filesystem::path presetDir() const;

@@ -3009,7 +3009,8 @@ namespace lfs::vis::gui {
                 return std::nullopt;
             const auto paths = lfs::core::UserPaths::resolve();
             if (!paths) {
-                LOG_WARN("Unable to resolve window state path: {}", paths.error());
+                LOG_WARN("Unable to resolve window state path: {}",
+                         lfs::format_for_developer(paths.error()));
                 return std::nullopt;
             }
             std::error_code filesystem_error;
@@ -3041,7 +3042,8 @@ namespace lfs::vis::gui {
                 return;
             const auto paths = lfs::core::UserPaths::resolve();
             if (!paths) {
-                LOG_WARN("Unable to resolve window state path: {}", paths.error());
+                LOG_WARN("Unable to resolve window state path: {}",
+                         lfs::format_for_developer(paths.error()));
                 return;
             }
             const nlohmann::json json = {
@@ -3052,7 +3054,8 @@ namespace lfs::vis::gui {
                 {"maximized", state.maximized},
             };
             if (const auto result = paths->writeWindowStateAtomically(json.dump(2) + '\n'); !result)
-                LOG_WARN("Unable to save window state: {}", result.error());
+                LOG_WARN("Unable to save window state: {}",
+                         lfs::format_for_developer(result.error()));
         }
     } // namespace
 
@@ -6936,9 +6939,9 @@ namespace lfs::vis::gui {
     std::expected<void, std::string> GuiManager::resetLayout() {
         const auto paths = lfs::core::UserPaths::resolve();
         if (!paths)
-            return std::unexpected(paths.error());
+            return std::unexpected(lfs::format_for_developer(paths.error()));
         if (const auto backup = paths->resetLayout(); !backup)
-            return std::unexpected(backup.error());
+            return std::unexpected(lfs::format_for_developer(backup.error()));
 
         panel_layout_.applyProjectState(PanelLayoutProjectState{});
         auto& registry = PanelRegistry::instance();
@@ -6972,16 +6975,16 @@ namespace lfs::vis::gui {
         user_preferences.perf_hud_visible = false;
         user_preferences.perf_hud_expanded = true;
         if (const auto saved = user_preferences.saveUserPreferencesChecked(); !saved)
-            return std::unexpected(saved.error());
+            return std::unexpected(lfs::format_for_developer(saved.error()));
         return {};
     }
 
     std::expected<void, std::string> GuiManager::resetWindowState() {
         const auto paths = lfs::core::UserPaths::resolve();
         if (!paths)
-            return std::unexpected(paths.error());
+            return std::unexpected(lfs::format_for_developer(paths.error()));
         if (const auto backup = paths->resetWindowState(); !backup)
-            return std::unexpected(backup.error());
+            return std::unexpected(lfs::format_for_developer(backup.error()));
 
         auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
         if (!window_manager)

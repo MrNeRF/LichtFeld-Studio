@@ -789,6 +789,7 @@
     "reset_section_confirmation": "Przywrócić ustawienia bieżącej sekcji do wartości domyślnych? Zostanie to natychmiast zastosowane do",
     "reset_section_success": "Sekcja została natychmiast zresetowana.",
     "reset_section_failed": "Nie można zresetować ustawień.",
+    "ui_preferences_save_failed": "Nie udało się zapisać preferencji interfejsu.",
     "reset_all_settings": "Resetuj wszystkie ustawienia",
     "reset_all_settings_confirmation": "Przywrócić język, motyw, skalę interfejsu, preferencje wejścia, układ i stan okna do wartości domyślnych? Zostanie to zastosowane natychmiast. Jeśli projekt .licht jest otwarty, jego zapisany układ zostanie zastąpiony przy następnym zapisie; zawartość projektu, zestawy danych, eksporty, wtyczki i pamięć podręczna nie zostaną zmienione.",
     "reset_all_settings_success": "Wszystkie preferencje, układ i stan okna zostały natychmiast zresetowane.",

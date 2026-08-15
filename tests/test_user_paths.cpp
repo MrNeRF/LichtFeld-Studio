@@ -10,14 +10,20 @@
 #include <array>
 #include <chrono>
 #include <cstdlib>
-#include <expected>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <thread>
 #include <vector>
+
+namespace lfs {
+    std::ostream& operator<<(std::ostream& stream, const Error& error) {
+        return stream << format_for_developer(error);
+    }
+} // namespace lfs
 
 namespace {
 
@@ -64,7 +70,7 @@ namespace {
             fs::remove_all(root_, error);
         }
 
-        std::expected<lfs::core::UserPaths, std::string> resolvePaths() const {
+        lfs::Result<lfs::core::UserPaths> resolvePaths() const {
             const lfs::core::UserPathOptions options{
                 .explicit_root = root_ / "current",
             };
@@ -147,7 +153,8 @@ namespace {
         const lfs::core::UserPathOptions options{.portable = true};
         const auto resolved = lfs::core::UserPaths::resolve(options);
         ASSERT_FALSE(resolved.has_value());
-        EXPECT_NE(resolved.error().find("executable directory"), std::string::npos);
+        EXPECT_NE(lfs::format_for_developer(resolved.error()).find("executable directory"),
+                  std::string::npos);
     }
 
     TEST_F(UserPathsContractTest, ExplicitRootTakesPrecedenceOverEnvironmentRoot) {
@@ -210,7 +217,8 @@ namespace {
                 const auto result = paths.writePreferencesAtomically(
                     nlohmann::json{{"writer", index}}.dump());
                 if (!result)
-                    errors[static_cast<std::size_t>(index)] = result.error();
+                    errors[static_cast<std::size_t>(index)] =
+                        lfs::format_for_developer(result.error());
             });
         }
         for (auto& writer : writers)

@@ -267,7 +267,8 @@ namespace lfs::vis::input {
         const auto paths = lfs::core::UserPaths::resolve();
         if (paths)
             return paths->keymapDir();
-        LOG_WARN("Unable to resolve input profile path: {}; persistence is disabled", paths.error());
+        LOG_WARN("Unable to resolve input profile path: {}; persistence is disabled",
+                 lfs::format_for_developer(paths.error()));
         return std::nullopt;
     }
 
@@ -326,7 +327,8 @@ namespace lfs::vis::input {
             const auto written = lfs::core::writeTextFileAtomically(path, j.dump(4) + '\n');
             if (!written) {
                 LOG_ERROR("Failed to save profile '{}': {}",
-                          lfs::core::path_to_utf8(path), written.error());
+                          lfs::core::path_to_utf8(path),
+                          lfs::format_for_developer(written.error()));
                 return false;
             }
             return true;

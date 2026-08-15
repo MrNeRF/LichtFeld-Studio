@@ -789,6 +789,7 @@
     "reset_section_confirmation": "現在のセクションの設定を既定値に戻しますか？次に直ちに適用されます：",
     "reset_section_success": "セクションを直ちにリセットしました。",
     "reset_section_failed": "設定をリセットできませんでした。",
+    "ui_preferences_save_failed": "インターフェース設定を保存できませんでした。",
     "reset_all_settings": "すべての設定をリセット",
     "reset_all_settings_confirmation": "言語、テーマ、UI スケール、入力設定、レイアウト、ウィンドウ状態を既定値に戻しますか？直ちに適用されます。.licht プロジェクトが開いている場合、次回保存時に保存済みレイアウトが置き換えられます。プロジェクト内容、データセット、エクスポート、プラグイン、キャッシュは影響を受けません。",
     "reset_all_settings_success": "すべての設定、レイアウト、ウィンドウ状態を直ちにリセットしました。",

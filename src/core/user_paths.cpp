@@ -72,7 +72,36 @@ namespace lfs::core {
 
         using json = nlohmann::json;
 
-        [[nodiscard]] std::expected<void, std::string> writeTextAtomicallyImpl(
+        [[nodiscard]] lfs::Error userPathError(
+            const lfs::ErrorCode code,
+            std::string user_message,
+            std::string detail,
+            const std::filesystem::path& path = {}) {
+            lfs::SmallFields fields;
+            if (!path.empty())
+                fields.add("path", path_to_utf8(path));
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .user_message = std::move(user_message),
+                .detail = std::move(detail),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = std::move(fields),
+            });
+        }
+
+        [[nodiscard]] lfs::Status failStatus(
+            const lfs::ErrorCode code,
+            std::string user_message,
+            std::string detail,
+            const std::filesystem::path& path = {}) {
+            return lfs::Status::failure(userPathError(
+                code, std::move(user_message), std::move(detail), path));
+        }
+
+        [[nodiscard]] lfs::Status writeTextAtomicallyImpl(
             const std::filesystem::path& destination, const std::string& contents) {
             const std::lock_guard write_lock(g_atomic_write_mutex);
             std::error_code error;
@@ -80,13 +109,20 @@ namespace lfs::core {
             if (directory.empty()) {
                 directory = std::filesystem::current_path(error);
                 if (error)
-                    return std::unexpected(std::format("Unable to resolve the current directory: {}",
-                                                       error.message()));
+                    return failStatus(
+                        lfs::ErrorCode::Unavailable,
+                        "The user settings location is unavailable.",
+                        std::format("Unable to resolve the current directory: {}", error.message()),
+                        destination);
             }
             std::filesystem::create_directories(directory, error);
             if (error)
-                return std::unexpected(std::format("Unable to create directory '{}': {}",
-                                                   path_to_utf8(directory), error.message()));
+                return failStatus(
+                    lfs::ErrorCode::PermissionDenied,
+                    "The user settings directory could not be created.",
+                    std::format("Unable to create directory '{}': {}",
+                                path_to_utf8(directory), error.message()),
+                    directory);
 
             const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
             const auto sequence = g_temporary_file_sequence.fetch_add(1, std::memory_order_relaxed);
@@ -99,12 +135,20 @@ namespace lfs::core {
                 // byte-oriented payloads such as captured log tails.
                 std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
                 if (!file)
-                    return std::unexpected(std::format("Unable to write temporary file '{}'", path_to_utf8(temporary)));
+                    return failStatus(
+                        lfs::ErrorCode::PermissionDenied,
+                        "The user settings file could not be saved.",
+                        std::format("Unable to write temporary file '{}'", path_to_utf8(temporary)),
+                        temporary);
                 file.write(contents.data(), static_cast<std::streamsize>(contents.size()));
                 file.close();
                 if (!file) {
                     std::filesystem::remove(temporary, error);
-                    return std::unexpected(std::format("Unable to finish temporary file '{}'", path_to_utf8(temporary)));
+                    return failStatus(
+                        lfs::ErrorCode::DataLoss,
+                        "The user settings file could not be saved.",
+                        std::format("Unable to finish temporary file '{}'", path_to_utf8(temporary)),
+                        temporary);
                 }
             }
 
@@ -112,8 +156,12 @@ namespace lfs::core {
             if (!MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
                 const auto message = std::system_category().message(static_cast<int>(GetLastError()));
                 std::filesystem::remove(temporary, error);
-                return std::unexpected(std::format("Unable to replace '{}' atomically: {}",
-                                                   path_to_utf8(destination), message));
+                return failStatus(
+                    lfs::ErrorCode::PermissionDenied,
+                    "The user settings file could not be replaced.",
+                    std::format("Unable to replace '{}' atomically: {}",
+                                path_to_utf8(destination), message),
+                    destination);
             }
 #else
             const int temporary_fd = ::open(temporary.c_str(), O_RDONLY);
@@ -122,17 +170,25 @@ namespace lfs::core {
                 if (temporary_fd >= 0)
                     ::close(temporary_fd);
                 std::filesystem::remove(temporary, error);
-                return std::unexpected(std::format("Unable to flush temporary file '{}': {}",
-                                                   path_to_utf8(temporary),
-                                                   std::system_category().message(sync_error)));
+                return failStatus(
+                    lfs::ErrorCode::DataLoss,
+                    "The user settings file could not be synchronized.",
+                    std::format("Unable to flush temporary file '{}': {}",
+                                path_to_utf8(temporary),
+                                std::system_category().message(sync_error)),
+                    temporary);
             }
             ::close(temporary_fd);
 
             std::filesystem::rename(temporary, destination, error);
             if (error) {
                 std::filesystem::remove(temporary, error);
-                return std::unexpected(std::format("Unable to replace '{}' atomically: {}",
-                                                   path_to_utf8(destination), error.message()));
+                return failStatus(
+                    lfs::ErrorCode::PermissionDenied,
+                    "The user settings file could not be replaced.",
+                    std::format("Unable to replace '{}' atomically: {}",
+                                path_to_utf8(destination), error.message()),
+                    destination);
             }
 
             const int directory_fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY);
@@ -140,34 +196,46 @@ namespace lfs::core {
                 const int sync_error = errno;
                 if (directory_fd >= 0)
                     ::close(directory_fd);
-                return std::unexpected(std::format("Unable to flush directory '{}': {}",
-                                                   path_to_utf8(directory),
-                                                   std::system_category().message(sync_error)));
+                return failStatus(
+                    lfs::ErrorCode::DataLoss,
+                    "The user settings directory could not be synchronized.",
+                    std::format("Unable to flush directory '{}': {}",
+                                path_to_utf8(directory),
+                                std::system_category().message(sync_error)),
+                    directory);
             }
             ::close(directory_fd);
 #endif
             return {};
         }
 
-        [[nodiscard]] std::expected<void, std::string> writeJsonAtomically(
+        [[nodiscard]] lfs::Status writeJsonAtomically(
             const std::filesystem::path& destination, const json& value) {
             return writeTextAtomicallyImpl(destination, value.dump(2) + '\n');
         }
 
-        [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
+        [[nodiscard]] lfs::Result<std::optional<std::filesystem::path>>
         backupAndRemoveFile(const std::filesystem::path& source,
                             const std::filesystem::path& backup_root,
                             const std::string_view category) {
             std::error_code error;
             if (!std::filesystem::exists(source, error)) {
                 if (error)
-                    return std::unexpected(std::format("Unable to inspect settings file '{}': {}",
-                                                       path_to_utf8(source), error.message()));
-                return std::nullopt;
+                    return userPathError(
+                        lfs::ErrorCode::Unavailable,
+                        "The user settings file could not be inspected.",
+                        std::format("Unable to inspect settings file '{}': {}",
+                                    path_to_utf8(source), error.message()),
+                        source);
+                return std::optional<std::filesystem::path>{};
             }
             if (!std::filesystem::is_regular_file(source, error) || error)
-                return std::unexpected(std::format("Settings reset requires a regular file '{}': {}",
-                                                   path_to_utf8(source), error.message()));
+                return userPathError(
+                    lfs::ErrorCode::InvalidArgument,
+                    "The user settings file cannot be reset.",
+                    std::format("Settings reset requires a regular file '{}': {}",
+                                path_to_utf8(source), error.message()),
+                    source);
 
             const auto now = std::chrono::system_clock::now().time_since_epoch();
             const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
@@ -178,21 +246,37 @@ namespace lfs::core {
                                      source.filename();
             std::filesystem::create_directories(destination.parent_path(), error);
             if (error)
-                return std::unexpected(std::format("Unable to create reset backup directory '{}': {}",
-                                                   path_to_utf8(destination.parent_path()), error.message()));
+                return userPathError(
+                    lfs::ErrorCode::PermissionDenied,
+                    "The settings backup directory could not be created.",
+                    std::format("Unable to create reset backup directory '{}': {}",
+                                path_to_utf8(destination.parent_path()), error.message()),
+                    destination.parent_path());
             if (!std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, error))
-                return std::unexpected(std::format("Unable to back up settings file '{}' to '{}': {}",
-                                                   path_to_utf8(source), path_to_utf8(destination), error.message()));
+                return userPathError(
+                    lfs::ErrorCode::DataLoss,
+                    "The user settings backup could not be created.",
+                    std::format("Unable to back up settings file '{}' to '{}': {}",
+                                path_to_utf8(source), path_to_utf8(destination), error.message()),
+                    source);
             if (!std::filesystem::exists(destination, error) || error)
-                return std::unexpected(std::format("Unable to verify reset backup '{}': {}",
-                                                   path_to_utf8(destination), error.message()));
+                return userPathError(
+                    lfs::ErrorCode::DataLoss,
+                    "The user settings backup could not be verified.",
+                    std::format("Unable to verify reset backup '{}': {}",
+                                path_to_utf8(destination), error.message()),
+                    destination);
             if (!std::filesystem::remove(source, error) || error)
-                return std::unexpected(std::format("Backed up '{}' but could not reset it: {}",
-                                                   path_to_utf8(source), error.message()));
-            return destination;
+                return userPathError(
+                    lfs::ErrorCode::PermissionDenied,
+                    "The user settings file was backed up but could not be reset.",
+                    std::format("Backed up '{}' but could not reset it: {}",
+                                path_to_utf8(source), error.message()),
+                    source);
+            return std::optional<std::filesystem::path>{destination};
         }
 
-        [[nodiscard]] std::expected<void, std::string>
+        [[nodiscard]] lfs::Status
         writeDefaultPreferences(const std::filesystem::path& destination) {
             return writeJsonAtomically(destination, {
                                                         {"schema_version", 1},
@@ -204,7 +288,7 @@ namespace lfs::core {
 
     } // namespace
 
-    std::expected<void, std::string> writeTextFileAtomically(
+    lfs::Status writeTextFileAtomically(
         const std::filesystem::path& destination, const std::string& contents) {
         return writeTextAtomicallyImpl(destination, contents);
     }
@@ -235,7 +319,7 @@ namespace lfs::core {
             true);
     }
 
-    std::expected<UserPaths, std::string> UserPaths::resolve(const UserPathOptions& options) {
+    lfs::Result<UserPaths> UserPaths::resolve(const UserPathOptions& options) {
         if (options.explicit_root && !options.explicit_root->empty())
             return fromUnifiedRoot(*options.explicit_root);
 
@@ -247,21 +331,30 @@ namespace lfs::core {
             try {
                 return fromUnifiedRoot(getExecutableDir() / ".lichtfeld");
             } catch (const std::exception& error) {
-                return std::unexpected(std::format(
-                    "Unable to resolve portable executable directory: {}", error.what()));
+                // LFS-CENSUS-OK(empty-catch): convert executable path failures into a typed result.
+                return userPathError(
+                    lfs::ErrorCode::Unavailable,
+                    "Portable user storage could not be resolved.",
+                    std::format("Unable to resolve portable executable directory: {}", error.what()));
             }
         }
 #endif
 
         if (options.portable) {
             if (!options.executable_dir || options.executable_dir->empty())
-                return std::unexpected("Portable user storage requires an executable directory");
+                return userPathError(
+                    lfs::ErrorCode::InvalidArgument,
+                    "Portable user storage requires an executable directory.",
+                    "UserPathOptions.portable was set without executable_dir");
             return fromUnifiedRoot(*options.executable_dir / ".lichtfeld");
         }
 
         const auto home = userHomeDirectory();
         if (!home)
-            return std::unexpected("Unable to resolve the current user's home directory");
+            return userPathError(
+                lfs::ErrorCode::Unavailable,
+                "The current user's home directory is unavailable.",
+                "Neither the platform home variable nor a user-path override is available");
 
 #ifdef _WIN32
         return fromUnifiedRoot(*home / ".lichtfeld");
@@ -282,7 +375,7 @@ namespace lfs::core {
 #endif
     }
 
-    std::expected<void, std::string> UserPaths::ensureDirectories() const {
+    lfs::Status UserPaths::ensureDirectories() const {
         const std::filesystem::path directories[] = {
             config_dir_, data_dir_, cache_dir_, log_dir_, plugin_dir_, venv_dir_,
             keymapDir(), presetDir(), assetLibraryDir(), backupDir()};
@@ -290,49 +383,53 @@ namespace lfs::core {
             std::error_code error;
             std::filesystem::create_directories(directory, error);
             if (error)
-                return std::unexpected(std::format("Unable to create user directory '{}': {}",
-                                                   path_to_utf8(directory), error.message()));
+                return failStatus(
+                    lfs::ErrorCode::PermissionDenied,
+                    "A required user directory could not be created.",
+                    std::format("Unable to create user directory '{}': {}",
+                                path_to_utf8(directory), error.message()),
+                    directory);
         }
         return {};
     }
 
-    std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetPreferences() const {
+    lfs::Result<std::optional<std::filesystem::path>> UserPaths::resetPreferences() const {
         auto backup = backupAndRemoveFile(preferencesFile(), backupDir(), "preferences");
         if (!backup)
-            return std::unexpected(backup.error());
+            return std::move(backup).error();
         if (const auto defaults = writeDefaultPreferences(preferencesFile()); !defaults)
-            return std::unexpected(defaults.error());
+            return defaults.error();
         return *backup;
     }
 
-    std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetLayout() const {
+    lfs::Result<std::optional<std::filesystem::path>> UserPaths::resetLayout() const {
         return backupAndRemoveFile(layoutFile(), backupDir(), "layout");
     }
 
-    std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetUiPreferences() const {
+    lfs::Result<std::optional<std::filesystem::path>> UserPaths::resetUiPreferences() const {
         return backupAndRemoveFile(uiPreferencesFile(), backupDir(), "ui-preferences");
     }
 
-    std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetWindowState() const {
+    lfs::Result<std::optional<std::filesystem::path>> UserPaths::resetWindowState() const {
         return backupAndRemoveFile(windowStateFile(), backupDir(), "window");
     }
 
-    std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetProjectLifecycle() const {
+    lfs::Result<std::optional<std::filesystem::path>> UserPaths::resetProjectLifecycle() const {
         return backupAndRemoveFile(projectLifecycleFile(), backupDir(), "project-lifecycle");
     }
 
     std::filesystem::path UserPaths::preferencesFile() const { return config_dir_ / "preferences.json"; }
-    std::expected<void, std::string>
+    lfs::Status
     UserPaths::writePreferencesAtomically(const std::string& serialized_json) const {
         return writeTextFileAtomically(preferencesFile(), serialized_json);
     }
-    std::expected<void, std::string>
+    lfs::Status
     UserPaths::writeWindowStateAtomically(const std::string& serialized_json) const {
         return writeTextFileAtomically(windowStateFile(), serialized_json);
     }
     std::filesystem::path UserPaths::layoutFile() const { return config_dir_ / "layout.json"; }
     std::filesystem::path UserPaths::uiPreferencesFile() const { return config_dir_ / "ui_preferences.json"; }
-    std::expected<void, std::string>
+    lfs::Status
     UserPaths::writeUiPreferencesAtomically(const std::string& serialized_json) const {
         return writeTextFileAtomically(uiPreferencesFile(), serialized_json);
     }

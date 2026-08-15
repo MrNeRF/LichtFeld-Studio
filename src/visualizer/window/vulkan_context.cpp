@@ -396,7 +396,8 @@ namespace lfs::vis {
 
             const auto paths = lfs::core::UserPaths::resolve();
             if (!paths) {
-                LOG_WARN("Unable to resolve Vulkan cache path: {}", paths.error());
+                LOG_WARN("Unable to resolve Vulkan cache path: {}",
+                         lfs::format_for_developer(paths.error()));
                 return std::nullopt;
             }
             return paths->cacheDir() / "pipeline_cache.bin";
@@ -3605,8 +3606,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;

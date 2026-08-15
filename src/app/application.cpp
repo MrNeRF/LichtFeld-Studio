@@ -1072,7 +1072,8 @@ namespace lfs::app {
                         return;
                     const auto result = reset();
                     if (!result) {
-                        LOG_ERROR("Unable to reset {}: {}", label, result.error());
+                        LOG_ERROR("Unable to reset {}: {}", label,
+                                  lfs::format_for_developer(result.error()));
                     } else if (*result) {
                         LOG_INFO("Reset {}. Backup saved to {}", label,
                                  lfs::core::path_to_utf8(**result));
@@ -1091,7 +1092,8 @@ namespace lfs::app {
                 });
 
             } else {
-                LOG_WARN("Unable to resolve user settings path: {}", paths.error());
+                LOG_WARN("Unable to resolve user settings path: {}",
+                         lfs::format_for_developer(paths.error()));
             }
 
             if (safe_mode) {

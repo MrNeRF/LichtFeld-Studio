@@ -1056,7 +1056,8 @@ namespace lfs::vis {
         std::optional<std::filesystem::path> getThemePreferencesPath() {
             const auto paths = lfs::core::UserPaths::resolve();
             if (!paths) {
-                LOG_WARN("Unable to resolve user settings path: {}; theme preferences are disabled", paths.error());
+                LOG_WARN("Unable to resolve user settings path: {}; theme preferences are disabled",
+                         lfs::format_for_developer(paths.error()));
                 return std::nullopt;
             }
             return paths->preferencesFile();
@@ -1085,12 +1086,14 @@ namespace lfs::vis {
                 return;
             const auto paths = lfs::core::UserPaths::resolve();
             if (!paths) {
-                LOG_WARN("Unable to resolve user settings path: {}; theme preferences are disabled", paths.error());
+                LOG_WARN("Unable to resolve user settings path: {}; theme preferences are disabled",
+                         lfs::format_for_developer(paths.error()));
                 return;
             }
             preferences["schema_version"] = 1;
             if (const auto result = paths->writePreferencesAtomically(preferences.dump(2) + '\n'); !result)
-                LOG_WARN("Unable to save theme preferences: {}", result.error());
+                LOG_WARN("Unable to save theme preferences: {}",
+                         lfs::format_for_developer(result.error()));
         }
     } // namespace
 

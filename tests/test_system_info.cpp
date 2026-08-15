@@ -108,7 +108,8 @@ TEST(SessionBreadcrumbTest, RecordsStartCleanExitAndPreviousSession) {
 
     lfs::core::record_session_start();
     const auto user_paths = lfs::core::UserPaths::resolve();
-    ASSERT_TRUE(user_paths.has_value()) << user_paths.error();
+    ASSERT_TRUE(user_paths.has_value())
+        << lfs::format_for_developer(user_paths.error());
     const fs::path breadcrumb = user_paths->logDir() / "last_session.json";
     ASSERT_TRUE(fs::exists(breadcrumb));
     const auto started = read_json(breadcrumb);

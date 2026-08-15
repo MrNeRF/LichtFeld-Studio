@@ -789,6 +789,7 @@
     "reset_section_confirmation": "Die Einstellungen des aktuellen Bereichs auf die Standardwerte zurücksetzen? Dies wird sofort angewendet auf",
     "reset_section_success": "Bereich sofort zurückgesetzt.",
     "reset_section_failed": "Einstellungen konnten nicht zurückgesetzt werden.",
+    "ui_preferences_save_failed": "Die Einstellungen der Benutzeroberfläche konnten nicht gespeichert werden.",
     "reset_all_settings": "Alle Einstellungen zurücksetzen",
     "reset_all_settings_confirmation": "Sprache, Theme, UI-Skalierung, Eingabeeinstellungen, Layout und Fensterstatus auf die Standardwerte zurücksetzen? Dies wird sofort angewendet. Ist ein .licht-Projekt geöffnet, wird dessen gespeichertes Layout beim nächsten Speichern ersetzt; Projektinhalte, Datensätze, Exporte, Plugins und Cache bleiben unverändert.",
     "reset_all_settings_success": "Alle Einstellungen, das Layout und der Fensterstatus wurden sofort zurückgesetzt.",
