@@ -94,10 +94,13 @@ namespace lfs::core {
                                    std::format("{}.tmp-{}-{}-{}", path_to_utf8(destination.filename()),
                                                currentProcessId(), ticks, sequence);
             {
-                std::ofstream file(temporary, std::ios::trunc);
+                // Atomic publication must preserve the caller's bytes exactly.
+                // Text mode rewrites LF to CRLF on Windows, which corrupts
+                // byte-oriented payloads such as captured log tails.
+                std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
                 if (!file)
                     return std::unexpected(std::format("Unable to write temporary file '{}'", path_to_utf8(temporary)));
-                file << contents;
+                file.write(contents.data(), static_cast<std::streamsize>(contents.size()));
                 file.close();
                 if (!file) {
                     std::filesystem::remove(temporary, error);
