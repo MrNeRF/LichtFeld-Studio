@@ -46,19 +46,6 @@ namespace lfs::vis {
             int h = 0;
         };
 
-        struct ProjectWindowState {
-            int x = 0;
-            int y = 0;
-            int width = 1280;
-            int height = 720;
-            bool fullscreen = false;
-            bool maximized = false;
-            int restore_x = 0;
-            int restore_y = 0;
-            int restore_width = 1280;
-            int restore_height = 720;
-        };
-
         WindowManager(const std::string& title, int width, int height,
                       int monitor_x = 0, int monitor_y = 0,
                       int monitor_width = 0, int monitor_height = 0,
@@ -100,9 +87,6 @@ namespace lfs::vis {
         [[nodiscard]] bool isTitlebarDragPoint(int x, int y) const;
         [[nodiscard]] bool usesEventDrivenTitlebarDrag() const { return native_titlebar_move_available_; }
         void setFullscreen(bool fullscreen);
-        [[nodiscard]] ProjectWindowState
-        captureProjectState() const;
-        void applyProjectState(const ProjectWindowState& state);
         GraphicsBackend graphicsBackend() const { return graphics_backend_; }
         bool isVulkan() const { return true; }
 

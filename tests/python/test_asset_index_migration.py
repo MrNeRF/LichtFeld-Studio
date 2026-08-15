@@ -3,8 +3,11 @@
 """Tests for legacy library.json schema migration (projects -> folders)."""
 
 import json
+import os
 import time
 from pathlib import Path
+
+import pytest
 
 from lfs_plugins.asset_index import (
     DEFAULT_FOLDER_ID,
@@ -218,6 +221,40 @@ def test_modern_file_untouched(tmp_path: Path):
     assert "folder-1" in index._folders
     assert index._scenes["scene-1"].folder_id == "folder-1"
     assert index._assets["asset-1"].folder_id == "folder-1"
+
+
+def test_failed_publish_preserves_existing_catalog(tmp_path: Path, monkeypatch):
+    library_path = tmp_path / "library.json"
+    original_text = _write_library(library_path, _modern_library())
+    index = AssetIndex(library_path=library_path)
+    assert index.load() is True
+
+    real_replace = os.replace
+
+    def fail_final_replace(source, destination):
+        if Path(destination) == library_path:
+            raise PermissionError("injected final replacement failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_final_replace)
+    assert index.save() is False
+    assert library_path.read_text(encoding="utf-8") == original_text
+
+
+def test_safe_mode_path_resolution_performs_no_write_probe(monkeypatch, tmp_path: Path):
+    from lfs_plugins import asset_index as asset_index_module
+
+    requested = tmp_path / "safe-mode-assets"
+    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(requested))
+    monkeypatch.setenv("LFS_SAFE_MODE", "1")
+    monkeypatch.setattr(
+        asset_index_module,
+        "_path_accepts_writes",
+        lambda _path: pytest.fail("safe mode must not probe storage"),
+    )
+
+    assert asset_index_module.resolve_asset_manager_storage_path() == requested
+    assert not requested.exists()
 
 
 def test_migrated_index_round_trips(tmp_path: Path):

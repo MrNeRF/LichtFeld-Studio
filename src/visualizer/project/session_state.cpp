@@ -28,7 +28,6 @@
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer_impl.hpp"
-#include "window/window_manager.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1038,17 +1037,11 @@ namespace lfs::vis::project {
             return false;
         }
 
-        bool contains_gui_global_field(
-            const Json& value) {
-            if (value.is_array()) {
-                return std::ranges::any_of(
-                    value,
-                    contains_gui_global_field);
-            }
+        bool object_contains_gui_global_field(const Json& value) {
             if (!value.is_object())
                 return false;
-            for (const auto& [key, child] :
-                 value.items()) {
+            for (const auto& [key, child] : value.items()) {
+                (void)child;
                 auto normalized = key;
                 std::ranges::transform(
                     normalized, normalized.begin(),
@@ -1060,11 +1053,42 @@ namespace lfs::vis::project {
                         lfs::io::project::
                             kUserGlobalGuiFieldKeys,
                         std::string_view(normalized)) !=
-                        lfs::io::project::
-                            kUserGlobalGuiFieldKeys
-                                .end() ||
-                    contains_gui_global_field(child)) {
+                    lfs::io::project::
+                        kUserGlobalGuiFieldKeys
+                            .end()) {
                     return true;
+                }
+            }
+            return false;
+        }
+
+        bool contains_gui_global_field(const Json& root) {
+            if (object_contains_gui_global_field(root))
+                return true;
+            const auto layouts = root.find("layouts");
+            if (layouts == root.end() || !layouts->is_array())
+                return false;
+            for (const auto& layout : *layouts) {
+                if (!layout.is_object())
+                    continue;
+                const auto areas = layout.find("areas");
+                if (areas == layout.end() || !areas->is_array())
+                    continue;
+                for (const auto& area : *areas) {
+                    if (!area.is_object())
+                        continue;
+                    const auto spaces = area.find("spaces");
+                    if (spaces == area.end() || !spaces->is_array())
+                        continue;
+                    for (const auto& space : *spaces) {
+                        if (!space.is_object() ||
+                            space.value("type", std::string{}) != "fixed_arrangement")
+                            continue;
+                        const auto payload = space.find("opaque_payload");
+                        if (payload != space.end() &&
+                            object_contains_gui_global_field(*payload))
+                            return true;
+                    }
                 }
             }
             return false;
@@ -1081,7 +1105,7 @@ namespace lfs::vis::project {
             if (contains_gui_global_field(root)) {
                 return fail<void>(
                     lfs::ErrorCode::DataLoss,
-                    "GUIL contains user-global theme, language, scale, or HUD state",
+                    "GUIL contains user-global theme, language, UI/DPI scale, or HUD state",
                     "GUIL");
             }
             const auto layouts =
@@ -1581,24 +1605,6 @@ namespace lfs::vis::project {
             return fields;
         }
 
-        const auto& window_fields() {
-            using WindowState =
-                WindowManager::ProjectWindowState;
-            static const std::vector<JsonField<WindowState>> fields{
-                optional_field("x", &WindowState::x),
-                optional_field("y", &WindowState::y),
-                optional_field("width", &WindowState::width),
-                optional_field("height", &WindowState::height),
-                optional_field("fullscreen", &WindowState::fullscreen),
-                optional_field("maximized", &WindowState::maximized),
-                optional_field("restore_x", &WindowState::restore_x),
-                optional_field("restore_y", &WindowState::restore_y),
-                optional_field("restore_width", &WindowState::restore_width),
-                optional_field("restore_height", &WindowState::restore_height),
-            };
-            return fields;
-        }
-
         const auto& panel_fields() {
             using Panel = gui::PanelProjectState;
             const auto nullable_float = [](
@@ -1919,14 +1925,11 @@ namespace lfs::vis::project {
         auto result = retained;
         const auto* gui_manager =
             viewer.getGuiManager();
-        const auto* window_manager =
-            viewer.getWindowManager();
         const auto* rendering_manager =
             viewer.getRenderingManager();
         const auto* input_controller =
             viewer.getInputController();
-        if (!gui_manager || !window_manager ||
-            !rendering_manager ||
+        if (!gui_manager || !rendering_manager ||
             !input_controller) {
             return fail<
                 lfs::io::project::
@@ -1939,8 +1942,6 @@ namespace lfs::vis::project {
         const auto layout =
             gui_manager->panelLayout()
                 .captureProjectState();
-        const auto window =
-            window_manager->captureProjectState();
         const auto& window_states =
             gui_manager->getWindowStates();
         const auto console_visible =
@@ -1969,8 +1970,9 @@ namespace lfs::vis::project {
                 {"filter_text", tree.filter_text},
             };
         }
-        fixed_payload["window"] =
-            fields_to_json(window, window_fields());
+        // GUIL v1 requires the object for compatibility, but main-window
+        // geometry and display state are user-global and live in window.json.
+        fixed_payload["window"] = Json::object();
 
         Json panels = Json::array();
         for (const auto& panel :
@@ -2824,9 +2826,7 @@ namespace lfs::vis::project {
             const Json& root) {
             auto* gui_manager =
                 viewer.getGuiManager();
-            auto* window_manager =
-                viewer.getWindowManager();
-            if (!gui_manager || !window_manager)
+            if (!gui_manager)
                 return;
 
             const Json fixed =
@@ -2842,22 +2842,6 @@ namespace lfs::vis::project {
                 fixed_layout_fields());
             if (!fixed.contains("tab_scroll_offset"))
                 layout.tab_scroll_offset = 0.0f;
-
-            if (const auto window_json =
-                    find_required_object(
-                        fixed, "window");
-                window_json != fixed.end()) {
-                auto state =
-                    window_manager
-                        ->captureProjectState();
-                (void)read_fields(
-                    *window_json,
-                    state,
-                    "GUIL.fixed_arrangement.window",
-                    window_fields());
-                window_manager->applyProjectState(
-                    state);
-            }
 
             const Json registry =
                 find_space_payload(

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/layout_state.hpp"
-#include "core/config_paths.hpp"
 #include "core/logger.hpp"
+#include "core/user_paths.hpp"
 #include <atomic>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -16,27 +16,43 @@ namespace lfs::vis::gui {
     }
 
     std::filesystem::path LayoutState::getConfigDir() {
-        return lfs::core::user_config_dir();
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (!paths) {
+            LOG_WARN("Unable to resolve UI preference directory: {}", paths.error());
+            return {};
+        }
+        return paths->configDir();
     }
 
     std::filesystem::path LayoutState::getLegacyConfigPath() {
-        return getConfigDir() / "layout.json";
+        const auto directory = getConfigDir();
+        return directory.empty() ? std::filesystem::path{}
+                                 : directory / "layout.json";
     }
 
     std::filesystem::path
     LayoutState::getUserPreferencesPath() {
-        return getConfigDir() /
-               "ui_preferences.json";
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (!paths) {
+            LOG_WARN("Unable to resolve UI preference path: {}", paths.error());
+            return {};
+        }
+        return paths->uiPreferencesFile();
     }
 
     void LayoutState::saveUserPreferences() const {
+        if (const auto saved = saveUserPreferencesChecked(); !saved)
+            LOG_WARN("Failed to save user UI preferences: {}", saved.error());
+    }
+
+    std::expected<void, std::string> LayoutState::saveUserPreferencesChecked() const {
         if (!g_persistence_enabled.load(std::memory_order_acquire))
-            return;
+            return {};
 
         try {
-            const auto path =
-                getUserPreferencesPath();
-            std::filesystem::create_directories(path.parent_path());
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths)
+                return std::unexpected(paths.error());
 
             nlohmann::json j;
             if (!file_association.empty())
@@ -56,14 +72,11 @@ namespace lfs::vis::gui {
             perf_hud["expanded"] = perf_hud_expanded;
             j["perf_hud"] = perf_hud;
 
-            std::ofstream file(path);
-            if (file) {
-                file << j.dump(2);
-            }
+            return paths->writeUiPreferencesAtomically(j.dump(2) + '\n');
         } catch (const std::exception& e) {
-            LOG_WARN("Failed to save user UI preferences: {}", e.what());
+            return std::unexpected(std::string(e.what()));
         } catch (...) {
-            LOG_WARN("Failed to save user UI preferences: unknown error");
+            return std::unexpected(std::string("unknown error"));
         }
     }
 
@@ -156,8 +169,12 @@ namespace lfs::vis::gui {
 
             // layout.json is import-only. New writes contain only user-global
             // fields and go to ui_preferences.json.
-            load_file(getLegacyConfigPath(), true);
-            load_file(getUserPreferencesPath(), false);
+            const auto legacy_path = getLegacyConfigPath();
+            const auto preferences_path = getUserPreferencesPath();
+            if (!legacy_path.empty())
+                load_file(legacy_path, true);
+            if (!preferences_path.empty())
+                load_file(preferences_path, false);
         } catch (const std::exception& e) {
             LOG_WARN("Failed to load UI state: {}", e.what());
         }

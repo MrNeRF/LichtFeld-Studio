@@ -6934,7 +6934,10 @@ namespace lfs::vis::gui {
         auto& registry = PanelRegistry::instance();
         registry.reset_project_state();
         registry.apply_panel_payloads({});
+        registry.set_panel_enabled("lfs.preferences", true);
         resetSceneTreeChrome();
+        setScenePanelActiveTab("scene");
+        setTabStripScroll(0.0f);
 
         window_states_.clear();
         window_states_["scene_panel"] = true;
@@ -6943,7 +6946,23 @@ namespace lfs::vis::gui {
         window_states_["export_dialog"] = false;
         window_states_["python_console"] = false;
         show_vram_hud_ = false;
-        perf_hud_expanded_ = false;
+        perf_hud_expanded_ = true;
+        vram_hud_visible_published_ = false;
+        next_vram_hud_publish_ = {};
+        app_store().vram_hud.set(AppStore::VramHud{});
+
+        LayoutState user_preferences;
+        user_preferences.load();
+        user_preferences.vram_hud_x = -1.0f;
+        user_preferences.vram_hud_y = -1.0f;
+        user_preferences.vram_hud_width = -1.0f;
+        user_preferences.vram_hud_height = -1.0f;
+        user_preferences.vram_hud_active_tab.clear();
+        user_preferences.vram_hud_collapsed_paths.clear();
+        user_preferences.perf_hud_visible = false;
+        user_preferences.perf_hud_expanded = true;
+        if (const auto saved = user_preferences.saveUserPreferencesChecked(); !saved)
+            return std::unexpected(saved.error());
         return {};
     }
 

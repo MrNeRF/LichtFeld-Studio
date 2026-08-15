@@ -10,7 +10,6 @@
 #include "core/main_loop.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
-#include "gui/panel_registry.hpp"
 #include "input/input_controller.hpp"
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
@@ -59,13 +58,6 @@ namespace {
             const override {
             return "test.noop";
         }
-    };
-
-    class NoopProjectPanel final
-        : public lfs::vis::gui::IPanel {
-    public:
-        void draw(
-            const lfs::vis::gui::PanelDrawContext&) override {}
     };
 
     lfs::Error posted_work_cancelled_error() {
@@ -835,85 +827,6 @@ namespace lfs::vis {
                        opened.error());
             EXPECT_EQ(*opened, ProjectOpenOutcome::Opened);
         }
-    }
-
-    TEST_F(VisualizerImplResetTest,
-           NewProjectPreservesLivePanelAndDockLayout) {
-        auto options = projectOptions();
-        VisualizerImpl viewer(options);
-        ASSERT_TRUE(
-            viewer.getParameterManager()
-                ->ensureLoaded());
-
-        auto* const gui = viewer.getGuiManager();
-        ASSERT_NE(gui, nullptr);
-        auto& registry = gui::PanelRegistry::instance();
-        constexpr std::string_view panel_id =
-            "test.new_project_preserves_workspace";
-        registry.unregister_panel(std::string(panel_id));
-        struct PanelCleanup {
-            std::string id;
-            ~PanelCleanup() {
-                gui::PanelRegistry::instance()
-                    .unregister_panel(id);
-            }
-        } cleanup{std::string(panel_id)};
-
-        gui::PanelInfo panel;
-        panel.panel =
-            std::make_shared<NoopProjectPanel>();
-        panel.label = "New Project workspace probe";
-        panel.id = std::string(panel_id);
-        panel.space = gui::PanelSpace::MainPanelTab;
-        panel.order = 901;
-        panel.enabled = false;
-        panel.is_native = false;
-        ASSERT_TRUE(registry.register_panel(std::move(panel)));
-        ASSERT_TRUE(registry.set_panel_space(
-            std::string(panel_id),
-            gui::PanelSpace::LeftDock));
-        ASSERT_TRUE(registry.set_panel_order(
-            std::string(panel_id), 37));
-        registry.set_panel_enabled(
-            std::string(panel_id), true);
-
-        auto layout = gui->panelLayout()
-                          .captureProjectState();
-        layout.right_panel_width = 493.0f;
-        layout.left_dock_width = 377.0f;
-        layout.bottom_dock_height = 281.0f;
-        layout.show_sequencer = true;
-        gui->panelLayout().applyProjectState(layout);
-
-        auto created =
-            viewer.project_lifecycle_->newProject(
-                ProjectSwitchDisposition::DiscardChanges);
-        ASSERT_TRUE(created)
-            << lfs::format_for_developer(
-                   created.error());
-
-        const auto preserved_panel =
-            registry.get_panel(std::string(panel_id));
-        ASSERT_TRUE(preserved_panel.has_value());
-        EXPECT_TRUE(preserved_panel->enabled);
-        EXPECT_EQ(preserved_panel->space,
-                  gui::PanelSpace::LeftDock);
-        EXPECT_EQ(preserved_panel->order, 37);
-
-        const auto preserved_layout =
-            gui->panelLayout()
-                .captureProjectState();
-        EXPECT_FLOAT_EQ(
-            preserved_layout.right_panel_width,
-            493.0f);
-        EXPECT_FLOAT_EQ(
-            preserved_layout.left_dock_width,
-            377.0f);
-        EXPECT_FLOAT_EQ(
-            preserved_layout.bottom_dock_height,
-            281.0f);
-        EXPECT_TRUE(
-            preserved_layout.show_sequencer);
     }
 
     TEST(MainLoopSignalTest, InstallInterruptHandlersRestoresStolenTermAndInt) {

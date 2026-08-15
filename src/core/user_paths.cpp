@@ -72,18 +72,25 @@ namespace lfs::core {
 
         using json = nlohmann::json;
 
-        [[nodiscard]] std::expected<void, std::string> writeTextAtomically(
+        [[nodiscard]] std::expected<void, std::string> writeTextAtomicallyImpl(
             const std::filesystem::path& destination, const std::string& contents) {
             const std::lock_guard write_lock(g_atomic_write_mutex);
             std::error_code error;
-            std::filesystem::create_directories(destination.parent_path(), error);
+            auto directory = destination.parent_path();
+            if (directory.empty()) {
+                directory = std::filesystem::current_path(error);
+                if (error)
+                    return std::unexpected(std::format("Unable to resolve the current directory: {}",
+                                                       error.message()));
+            }
+            std::filesystem::create_directories(directory, error);
             if (error)
                 return std::unexpected(std::format("Unable to create directory '{}': {}",
-                                                   path_to_utf8(destination.parent_path()), error.message()));
+                                                   path_to_utf8(directory), error.message()));
 
             const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
             const auto sequence = g_temporary_file_sequence.fetch_add(1, std::memory_order_relaxed);
-            const auto temporary = destination.parent_path() /
+            const auto temporary = directory /
                                    std::format("{}.tmp-{}-{}-{}", path_to_utf8(destination.filename()),
                                                currentProcessId(), ticks, sequence);
             {
@@ -125,13 +132,13 @@ namespace lfs::core {
                                                    path_to_utf8(destination), error.message()));
             }
 
-            const int directory_fd = ::open(destination.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
+            const int directory_fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY);
             if (directory_fd < 0 || ::fsync(directory_fd) != 0) {
                 const int sync_error = errno;
                 if (directory_fd >= 0)
                     ::close(directory_fd);
                 return std::unexpected(std::format("Unable to flush directory '{}': {}",
-                                                   path_to_utf8(destination.parent_path()),
+                                                   path_to_utf8(directory),
                                                    std::system_category().message(sync_error)));
             }
             ::close(directory_fd);
@@ -141,7 +148,7 @@ namespace lfs::core {
 
         [[nodiscard]] std::expected<void, std::string> writeJsonAtomically(
             const std::filesystem::path& destination, const json& value) {
-            return writeTextAtomically(destination, value.dump(2) + '\n');
+            return writeTextAtomicallyImpl(destination, value.dump(2) + '\n');
         }
 
         [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
@@ -193,6 +200,11 @@ namespace lfs::core {
         }
 
     } // namespace
+
+    std::expected<void, std::string> writeTextFileAtomically(
+        const std::filesystem::path& destination, const std::string& contents) {
+        return writeTextAtomicallyImpl(destination, contents);
+    }
 
     UserPaths::UserPaths(std::filesystem::path config_dir,
                          std::filesystem::path data_dir,
@@ -294,20 +306,36 @@ namespace lfs::core {
         return backupAndRemoveFile(layoutFile(), backupDir(), "layout");
     }
 
+    std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetUiPreferences() const {
+        return backupAndRemoveFile(uiPreferencesFile(), backupDir(), "ui-preferences");
+    }
+
     std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetWindowState() const {
         return backupAndRemoveFile(windowStateFile(), backupDir(), "window");
+    }
+
+    std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetProjectLifecycle() const {
+        return backupAndRemoveFile(projectLifecycleFile(), backupDir(), "project-lifecycle");
     }
 
     std::filesystem::path UserPaths::preferencesFile() const { return config_dir_ / "preferences.json"; }
     std::expected<void, std::string>
     UserPaths::writePreferencesAtomically(const std::string& serialized_json) const {
-        return writeTextAtomically(preferencesFile(), serialized_json);
+        return writeTextFileAtomically(preferencesFile(), serialized_json);
     }
     std::expected<void, std::string>
     UserPaths::writeWindowStateAtomically(const std::string& serialized_json) const {
-        return writeTextAtomically(windowStateFile(), serialized_json);
+        return writeTextFileAtomically(windowStateFile(), serialized_json);
     }
     std::filesystem::path UserPaths::layoutFile() const { return config_dir_ / "layout.json"; }
+    std::filesystem::path UserPaths::uiPreferencesFile() const { return config_dir_ / "ui_preferences.json"; }
+    std::expected<void, std::string>
+    UserPaths::writeUiPreferencesAtomically(const std::string& serialized_json) const {
+        return writeTextFileAtomically(uiPreferencesFile(), serialized_json);
+    }
+    std::filesystem::path UserPaths::projectLifecycleFile() const {
+        return config_dir_ / "project_lifecycle.json";
+    }
     std::filesystem::path UserPaths::windowStateFile() const { return config_dir_ / "window.json"; }
     std::filesystem::path UserPaths::keymapDir() const { return config_dir_ / "keymaps"; }
     std::filesystem::path UserPaths::presetDir() const { return data_dir_ / "presets"; }

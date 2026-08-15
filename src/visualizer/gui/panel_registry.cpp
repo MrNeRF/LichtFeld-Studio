@@ -233,8 +233,7 @@ namespace lfs::vis::gui {
             info.default_parent_id = info.parent_id;
             info.default_space = info.space;
             info.default_order = info.order;
-            if (info.has_option(PanelOption::DEFAULT_CLOSED) &&
-                info.space == PanelSpace::Floating) {
+            if (info.has_option(PanelOption::DEFAULT_CLOSED)) {
                 info.enabled = false;
             }
             info.default_enabled = info.enabled;

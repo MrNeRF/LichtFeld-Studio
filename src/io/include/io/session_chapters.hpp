@@ -22,13 +22,17 @@ namespace lfs::io::project {
 
     // User-global GUI fields that must never persist in project GUIL chapters.
     // Shared by sanitize/validate (session_chapters) and runtime capture checks
-    // (session_state). Keys are matched case-insensitively after lowercasing.
-    inline constexpr std::array<std::string_view, 7>
+    // (session_state). Keys are matched case-insensitively only at the GUIL root
+    // and in the known fixed-arrangement payload; opaque plugin payload fields
+    // with the same generic names remain extension-owned.
+    inline constexpr std::array<std::string_view, 9>
         kUserGlobalGuiFieldKeys = {
             "theme",
             "language",
             "scale",
             "ui_scale",
+            "dpi",
+            "dpi_scale",
             "hud",
             "vram_hud",
             "vram_hud_visible",

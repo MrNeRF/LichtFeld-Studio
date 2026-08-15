@@ -9,6 +9,7 @@
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
+#include "core/user_paths.hpp"
 #include "io/project_path.hpp"
 #include <algorithm>
 #include <any>
@@ -580,6 +581,14 @@ namespace {
                     filter_pattern = ::args::get(log_filter);
                 }
 
+                if (const auto paths = lfs::core::UserPaths::resolve()) {
+                    const auto log_directory = lfs::core::path_to_utf8(paths->logDir());
+#ifdef _WIN32
+                    (void)_putenv_s("LFS_RESOLVED_LOG_DIR", log_directory.c_str());
+#else
+                    (void)setenv("LFS_RESOLVED_LOG_DIR", log_directory.c_str(), 1);
+#endif
+                }
                 lfs::core::Logger::get().init(level, log_file_path, filter_pattern);
 
                 LOG_DEBUG("Logger initialized with level: {}", static_cast<int>(level));

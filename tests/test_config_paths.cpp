@@ -84,8 +84,9 @@ namespace {
         const auto root = makeTempConfigRoot("input_profiles");
         {
             const ScopedXdgConfigHome xdg(root);
-            EXPECT_EQ(lfs::vis::input::InputBindings::getConfigDir(),
-                      root / "LichtFeldStudio" / "input_profiles");
+            const auto config_dir = lfs::vis::input::InputBindings::getConfigDir();
+            ASSERT_TRUE(config_dir.has_value());
+            EXPECT_EQ(*config_dir, root / "lichtfeld-studio" / "keymaps");
         }
         std::error_code ec;
         fs::remove_all(root, ec);
@@ -97,7 +98,7 @@ namespace {
         {
             const ScopedXdgConfigHome xdg(root);
             const auto legacy =
-                root / "LichtFeldStudio" /
+                root / "lichtfeld-studio" /
                 "layout.json";
             fs::create_directories(
                 legacy.parent_path());
@@ -134,7 +135,7 @@ namespace {
             saved.saveUserPreferences();
 
             const auto config =
-                root / "LichtFeldStudio";
+                root / "lichtfeld-studio";
             EXPECT_FALSE(
                 fs::exists(
                     config / "layout.json"));

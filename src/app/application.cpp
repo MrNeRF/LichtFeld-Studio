@@ -1084,7 +1084,11 @@ namespace lfs::app {
                 const bool reset_layout = params->reset_layout || params->reset_all_settings;
                 reset_file(reset_preferences, "preferences", [&paths] { return paths->resetPreferences(); });
                 reset_file(reset_layout, "layout", [&paths] { return paths->resetLayout(); });
+                reset_file(reset_layout, "UI preferences", [&paths] { return paths->resetUiPreferences(); });
                 reset_file(params->reset_all_settings, "window", [&paths] { return paths->resetWindowState(); });
+                reset_file(params->reset_all_settings, "project lifecycle", [&paths] {
+                    return paths->resetProjectLifecycle();
+                });
 
             } else {
                 LOG_WARN("Unable to resolve user settings path: {}", paths.error());

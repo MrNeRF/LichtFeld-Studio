@@ -247,19 +247,9 @@ namespace lfs::io::project {
                 {"left_dock_width", 320.0},
                 {"sequencer_visible", false},
                 {"python_console_visible", false},
-                {"window",
-                 {
-                     {"x", 0},
-                     {"y", 0},
-                     {"width", 1280},
-                     {"height", 720},
-                     {"fullscreen", false},
-                     {"maximized", false},
-                     {"restore_x", 0},
-                     {"restore_y", 0},
-                     {"restore_width", 1280},
-                     {"restore_height", 720},
-                 }},
+                // Kept as an empty compatibility object for GUIL v1 readers.
+                // Main-window state is user-global and lives in window.json.
+                {"window", Json::object()},
             };
             return Json{
                 {"version", 1},
@@ -474,47 +464,95 @@ namespace lfs::io::project {
                    kUserGlobalGuiFieldKeys.end();
         }
 
-        bool contains_user_global_gui_state(
+        bool object_contains_user_global_gui_state(
             const Json& value) {
-            if (value.is_array()) {
-                return std::ranges::any_of(
-                    value,
-                    contains_user_global_gui_state);
-            }
             if (!value.is_object())
                 return false;
-            for (const auto& [key, child] :
-                 value.items()) {
-                if (is_user_global_gui_key(key) ||
-                    contains_user_global_gui_state(
-                        child)) {
+            for (const auto& item : value.items()) {
+                if (is_user_global_gui_key(item.key()))
                     return true;
-                }
             }
             return false;
         }
 
-        void strip_user_global_gui_state(
-            Json& value) {
-            if (value.is_array()) {
-                for (auto& child : value) {
-                    strip_user_global_gui_state(child);
+        void strip_user_global_gui_keys(Json& value) {
+            if (!value.is_object())
+                return;
+            for (auto item = value.begin(); item != value.end();) {
+                if (is_user_global_gui_key(item.key()))
+                    item = value.erase(item);
+                else
+                    ++item;
+            }
+        }
+
+        template <typename Function>
+        void for_each_fixed_arrangement_payload(Json& root, Function&& function) {
+            const auto layouts = root.find("layouts");
+            if (layouts == root.end() || !layouts->is_array())
+                return;
+            for (auto& layout : *layouts) {
+                if (!layout.is_object())
+                    continue;
+                const auto areas = layout.find("areas");
+                if (areas == layout.end() || !areas->is_array())
+                    continue;
+                for (auto& area : *areas) {
+                    if (!area.is_object())
+                        continue;
+                    const auto spaces = area.find("spaces");
+                    if (spaces == area.end() || !spaces->is_array())
+                        continue;
+                    for (auto& space : *spaces) {
+                        if (!space.is_object() ||
+                            space.value("type", std::string{}) != "fixed_arrangement")
+                            continue;
+                        auto payload = space.find("opaque_payload");
+                        if (payload != space.end() && payload->is_object())
+                            function(*payload);
+                    }
                 }
+            }
+        }
+
+        bool contains_user_global_gui_state(const Json& value) {
+            if (object_contains_user_global_gui_state(value))
+                return true;
+            auto copy = value;
+            bool found = false;
+            for_each_fixed_arrangement_payload(copy, [&](const Json& payload) {
+                found = found || object_contains_user_global_gui_state(payload);
+            });
+            return found;
+        }
+
+        void strip_user_global_gui_state(Json& value) {
+            strip_user_global_gui_keys(value);
+            for_each_fixed_arrangement_payload(value, [](Json& payload) {
+                strip_user_global_gui_keys(payload);
+            });
+        }
+
+        void strip_main_window_state(Json& value) {
+            if (value.is_array()) {
+                for (auto& child : value)
+                    strip_main_window_state(child);
                 return;
             }
             if (!value.is_object())
                 return;
-            for (auto item = value.begin();
-                 item != value.end();) {
-                if (is_user_global_gui_key(
-                        item.key())) {
-                    item = value.erase(item);
-                    continue;
-                }
-                strip_user_global_gui_state(
-                    item.value());
-                ++item;
+
+            const auto type = value.find("type");
+            auto payload = value.find("opaque_payload");
+            if (type != value.end() && type->is_string() &&
+                type->get<std::string>() == "fixed_arrangement" &&
+                payload != value.end() && payload->is_object() &&
+                payload->contains("window")) {
+                (*payload)["window"] = Json::object();
             }
+
+            for (auto& child : value)
+                strip_main_window_state(child);
         }
 
         lfs::Result<void> validate_known_gui_space(
@@ -543,6 +581,12 @@ namespace lfs::io::project {
                         lfs::ErrorCode::DataLoss,
                         "The fixed GUIL arrangement is missing window state",
                         "GUIL.layouts.areas.spaces.fixed_arrangement");
+                }
+                if (!payload["window"].empty()) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss,
+                        "The fixed GUIL arrangement contains user-global main-window state",
+                        "GUIL.layouts.areas.spaces.fixed_arrangement.window");
                 }
                 return {};
             }
@@ -705,7 +749,7 @@ namespace lfs::io::project {
                     root)) {
                 return fail<void>(
                     lfs::ErrorCode::DataLoss,
-                    "GUIL cannot contain user-global theme, language, scale, or HUD state",
+                    "GUIL cannot contain user-global theme, language, UI/DPI scale, or HUD state",
                     "GUIL");
             }
             const auto layouts =
@@ -1170,6 +1214,7 @@ namespace lfs::io::project {
                 std::move(root).error());
         }
         strip_user_global_gui_state(*root);
+        strip_main_window_state(*root);
         auto sanitized =
             JsonChapterDom::parse(root->dump(2));
         if (!sanitized) {

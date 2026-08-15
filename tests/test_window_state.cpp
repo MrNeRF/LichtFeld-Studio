@@ -47,6 +47,26 @@ namespace {
         EXPECT_EQ(recovered, (WindowRectangle{100, 200, 320, 240}));
     }
 
+    TEST(WindowStateContract, OversizedVisibleWindowIsClampedToSmallerDisplay) {
+        const std::vector<WindowRectangle> displays{{0, 0, 1280, 680}};
+        const auto recovered = lfs::vis::recoverWindowRectangle(
+            {20, 20, 2400, 1400}, displays, displays.front());
+        EXPECT_EQ(recovered, (WindowRectangle{0, 0, 1280, 680}));
+    }
+
+    TEST(WindowStateContract, OversizedWindowUsesDisplayWithLargestIntersection) {
+        const std::vector<WindowRectangle> displays{{0, 0, 1280, 720}, {1280, 0, 1920, 1040}};
+        const auto recovered = lfs::vis::recoverWindowRectangle(
+            {1400, 20, 2560, 1440}, displays, displays.front());
+        EXPECT_EQ(recovered, (WindowRectangle{1280, 0, 1920, 1040}));
+    }
+
+    TEST(WindowStateContract, VisibleWindowThatFitsItsDisplayIsPreserved) {
+        const std::vector<WindowRectangle> displays{{0, 0, 1280, 720}, {1280, 0, 1920, 1080}};
+        const WindowRectangle saved{1500, 100, 1200, 700};
+        EXPECT_EQ(lfs::vis::recoverWindowRectangle(saved, displays, displays.front()), saved);
+    }
+
     TEST(WindowStateContract, SafeModeDisablesAutomaticPersistence) {
         const char* previous_raw = std::getenv("LFS_SAFE_MODE");
         const std::optional<std::string> previous = previous_raw

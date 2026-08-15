@@ -89,6 +89,8 @@ namespace {
         EXPECT_TRUE(fs::is_directory(paths.logDir()));
         EXPECT_TRUE(fs::is_directory(paths.pluginDir()));
         EXPECT_TRUE(fs::is_directory(paths.venvDir()));
+        EXPECT_EQ(paths.uiPreferencesFile(), paths.configDir() / "ui_preferences.json");
+        EXPECT_EQ(paths.projectLifecycleFile(), paths.configDir() / "project_lifecycle.json");
         EXPECT_FALSE(fs::exists(root_ / "LichtFeldStudio"));
     }
 
@@ -245,6 +247,17 @@ namespace {
         EXPECT_TRUE(fs::is_regular_file(paths.windowStateFile()));
     }
 
+    TEST_F(UserPathsContractTest, AtomicUiPreferenceWriteUsesResolvedConfigTree) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        ASSERT_TRUE(resolved->writeUiPreferencesAtomically(
+                                R"({"perf_hud":{"visible":false}})")
+                        .has_value());
+        EXPECT_TRUE(fs::is_regular_file(resolved->uiPreferencesFile()));
+        std::ifstream file(resolved->uiPreferencesFile());
+        EXPECT_FALSE(nlohmann::json::parse(file)["perf_hud"]["visible"].get<bool>());
+    }
+
     TEST_F(UserPathsContractTest, ResetLayoutBacksUpExistingFile) {
         const auto resolved = resolvePaths();
         ASSERT_TRUE(resolved.has_value()) << resolved.error();
@@ -287,6 +300,25 @@ namespace {
                   R"({"x":10,"y":20,"width":1280,"height":720,"maximized":false})");
     }
 
+    TEST_F(UserPathsContractTest, ResetUiAndLifecycleSettingsBackUpResolvedFiles) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+        ASSERT_TRUE(paths.writeUiPreferencesAtomically(R"({"perf_hud":{}})").has_value());
+        ASSERT_TRUE(lfs::core::writeTextFileAtomically(
+                        paths.projectLifecycleFile(), R"({"version":2})")
+                        .has_value());
+
+        const auto ui_reset = paths.resetUiPreferences();
+        ASSERT_TRUE(ui_reset && ui_reset->has_value());
+        const auto lifecycle_reset = paths.resetProjectLifecycle();
+        ASSERT_TRUE(lifecycle_reset && lifecycle_reset->has_value());
+        EXPECT_FALSE(fs::exists(paths.uiPreferencesFile()));
+        EXPECT_FALSE(fs::exists(paths.projectLifecycleFile()));
+        EXPECT_TRUE(fs::is_regular_file(**ui_reset));
+        EXPECT_TRUE(fs::is_regular_file(**lifecycle_reset));
+    }
+
     TEST_F(UserPathsContractTest, ResetWithoutExistingFilesCreatesNoBackup) {
         const auto resolved = resolvePaths();
         ASSERT_TRUE(resolved.has_value()) << resolved.error();
@@ -304,6 +336,14 @@ namespace {
         const auto window_reset = paths.resetWindowState();
         ASSERT_TRUE(window_reset.has_value()) << window_reset.error();
         EXPECT_FALSE(window_reset->has_value());
+
+        const auto ui_reset = paths.resetUiPreferences();
+        ASSERT_TRUE(ui_reset.has_value()) << ui_reset.error();
+        EXPECT_FALSE(ui_reset->has_value());
+
+        const auto lifecycle_reset = paths.resetProjectLifecycle();
+        ASSERT_TRUE(lifecycle_reset.has_value()) << lifecycle_reset.error();
+        EXPECT_FALSE(lifecycle_reset->has_value());
     }
 
     TEST_F(UserPathsContractTest, ResetRejectsNonRegularSettingsPath) {

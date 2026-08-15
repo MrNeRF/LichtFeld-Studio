@@ -1599,7 +1599,11 @@ sys.stderr = _repl_out
 import lichtfeld as lf
 _repl_locals = {{"lf": lf, "__name__": "__console__", "__doc__": None}}
 
-_histfile = os.path.join(os.path.expanduser("~"), ".lichtfeld", "repl_history")
+_histroot = os.environ.get(
+    "LFS_RESOLVED_DATA_DIR",
+    os.path.join(os.path.expanduser("~"), ".lichtfeld"),
+)
+_histfile = os.path.join(_histroot, "repl_history")
 os.makedirs(os.path.dirname(_histfile), exist_ok=True)
 
 _used_ptpython = False

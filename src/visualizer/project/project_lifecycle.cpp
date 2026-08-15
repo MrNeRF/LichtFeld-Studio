@@ -7,8 +7,8 @@
 
 #include "core/assert.hpp"
 #include "core/checkpoint_format.hpp"
-#include "core/config_paths.hpp"
 #include "core/data_loading_service.hpp"
+#include "core/environment.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
@@ -16,6 +16,7 @@
 #include "core/modal_request.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/error_surface_types.hpp"
 #include "gui/gui_manager.hpp"
@@ -1025,15 +1026,6 @@ namespace lfs::vis::project {
         const std::filesystem::path& path,
         const ProjectLifecycleSettings& settings) {
         try {
-            std::error_code error;
-            std::filesystem::create_directories(
-                path.parent_path(), error);
-            if (error) {
-                return fail<void>(
-                    lfs::ErrorCode::PermissionDenied,
-                    "The project settings directory could not be created.",
-                    error.message(), "settings.path");
-            }
             Json entries = Json::array();
             for (const auto& entry : settings.mru) {
                 entries.push_back({
@@ -1061,47 +1053,13 @@ namespace lfs::vis::project {
                      .compaction_idle_seconds},
                 {"mru", std::move(entries)},
             };
-            const auto temporary =
-                path.parent_path() /
-                std::format(
-                    ".{}.{}.tmp",
-                    path.filename().string(),
-                    lfs::core::generate_uuid_v4()
-                        .to_string());
-            {
-                std::ofstream stream(
-                    temporary,
-                    std::ios::binary |
-                        std::ios::trunc);
-                if (!stream) {
-                    return fail<void>(
-                        lfs::ErrorCode::PermissionDenied,
-                        "Project lifecycle settings could not be written.",
-                        temporary.string(), "settings.path");
-                }
-                stream << json.dump(2) << '\n';
-                stream.flush();
-                if (!stream) {
-                    return fail<void>(
-                        lfs::ErrorCode::Unavailable,
-                        "Project lifecycle settings could not be flushed.",
-                        temporary.string(), "settings.path");
-                }
-            }
-#ifdef _WIN32
-            std::filesystem::remove(path, error);
-            error.clear();
-#endif
-            std::filesystem::rename(
-                temporary, path, error);
-            if (error) {
-                std::error_code ignored;
-                std::filesystem::remove(
-                    temporary, ignored);
+            if (const auto written = lfs::core::writeTextFileAtomically(
+                    path, json.dump(2) + '\n');
+                !written) {
                 return fail<void>(
                     lfs::ErrorCode::Unavailable,
                     "Project lifecycle settings could not be published.",
-                    error.message(), "settings.path");
+                    written.error(), "settings.path");
             }
             return {};
         } catch (const std::exception& exception) {
@@ -1207,20 +1165,31 @@ namespace lfs::vis::project {
         std::optional<std::filesystem::path>
             settings_path)
         : viewer_(viewer),
-          settings_path_(
-              settings_path.value_or(
-                  lfs::core::user_config_dir() /
-                  "project_lifecycle.json")) {
+          settings_path_([&settings_path] {
+              if (settings_path)
+                  return *settings_path;
+              const auto paths = lfs::core::UserPaths::resolve();
+              if (!paths) {
+                  LOG_WARN("Unable to resolve project lifecycle settings path: {}", paths.error());
+                  return std::filesystem::path{};
+              }
+              return paths->projectLifecycleFile();
+          }()),
+          settings_persistence_enabled_(
+              !lfs::core::environment::flag("LFS_SAFE_MODE", false) &&
+              !settings_path_.empty()) {
         resetMaintenanceClocks();
-        if (auto loaded =
-                loadProjectLifecycleSettings(
-                    settings_path_);
-            loaded) {
-            settings_ = std::move(*loaded);
-        } else {
-            LOG_WARN(
-                "Ignoring invalid project lifecycle settings: {}",
-                developerError(loaded.error()));
+        if (settings_persistence_enabled_) {
+            if (auto loaded =
+                    loadProjectLifecycleSettings(
+                        settings_path_);
+                loaded) {
+                settings_ = std::move(*loaded);
+            } else {
+                LOG_WARN(
+                    "Ignoring invalid project lifecycle settings: {}",
+                    developerError(loaded.error()));
+            }
         }
         auto created =
             ProjectDocument::create(
@@ -1294,6 +1263,8 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::persistSettings() {
+        if (!settings_persistence_enabled_)
+            return {};
         ProjectLifecycleSettings settings;
         {
             const std::lock_guard lock(
@@ -3584,27 +3555,13 @@ namespace lfs::vis::project {
                 "Preview capture must be requested on the viewer thread",
                 "THMB.thread");
         }
-        auto captured =
-            lfs::vis::capture_viewport_render();
+        auto captured = lfs::vis::capture_viewport_render();
         if (!captured || !captured->image) {
-            const auto hydration =
-                hydration_.load(
-                    std::memory_order_acquire);
-            if (hydration == Hydration::ShellReady ||
-                hydration == Hydration::Hydrating) {
-                // A Phase-A shell intentionally has no renderable payload.
-                // Preserve the prior THMB just like every other clean span;
-                // the explicit save must still be able to publish without
-                // turning an unloaded chapter into an empty one.
-                LOG_WARN(
-                    "Explicit save during partial hydration is carrying the previous THMB forward");
-                return std::vector<std::byte>{};
-            }
-            return fail<std::vector<std::byte>>(
-                lfs::ErrorCode::Unavailable,
-                "The viewport preview is not available yet.",
-                "Render at least one viewport frame before saving",
-                "THMB");
+            // THMB is optional.  A new or otherwise frame-less project must
+            // still be saveable; for an existing project, an empty span also
+            // carries the previous preview forward.
+            LOG_WARN("Viewport preview is unavailable; saving without regenerating THMB");
+            return std::vector<std::byte>{};
         }
         auto image =
             captured->image->clone()

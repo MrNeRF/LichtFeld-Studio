@@ -211,7 +211,10 @@ class PreferencesPanel(Panel):
         except (TypeError, ValueError):
             return
         if 0 <= index < len(self._language_catalog):
-            lf.ui.set_language(self._language_catalog[index][0])
+            language = self._language_catalog[index][0]
+            if language == lf.ui.get_current_language():
+                return
+            lf.ui.set_language(language)
             self._refresh_selection()
 
     def _navigation_index(self):
