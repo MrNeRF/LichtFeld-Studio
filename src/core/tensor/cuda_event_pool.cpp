@@ -15,10 +15,6 @@ namespace lfs::core {
     namespace {
         std::atomic<bool> g_force_event_acquire_failure_for_testing{false};
 
-        [[nodiscard]] bool is_cuda_shutdown(const cudaError_t status) noexcept {
-            return status == cudaErrorCudartUnloading || is_cuda_unavailable_error(status);
-        }
-
         void warn_bridge_skipped_once(cudaStream_t from, cudaStream_t to, const char* reason) {
             static std::atomic<bool> warned{false};
             if (!warned.exchange(true, std::memory_order_relaxed)) {
@@ -88,7 +84,7 @@ namespace lfs::core {
             }
         }
         const cudaError_t destroy_status = cudaEventDestroy(event);
-        if (destroy_status != cudaSuccess && !is_cuda_shutdown(destroy_status)) {
+        if (destroy_status != cudaSuccess) {
             ensure_cuda_success(
                 destroy_status, "cudaEventDestroy(tensor event pool release)", {},
                 LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
@@ -102,7 +98,11 @@ namespace lfs::core {
         std::lock_guard<std::mutex> lock(mutex_);
         for (cudaEvent_t event : pool_) {
             const cudaError_t destroy_status = cudaEventDestroy(event);
-            if (destroy_status != cudaSuccess && !is_cuda_shutdown(destroy_status)) {
+            // The runtime may already be unloading during process teardown.
+            // At that point the event is unusable and cleanup is effectively
+            // complete; keep reporting every other destruction failure.
+            if (destroy_status != cudaSuccess &&
+                destroy_status != cudaErrorCudartUnloading) {
                 ensure_cuda_success(
                     destroy_status, "cudaEventDestroy(tensor event pool shutdown)", {},
                     LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
