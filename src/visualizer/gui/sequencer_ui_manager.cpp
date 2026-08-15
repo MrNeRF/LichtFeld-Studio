@@ -22,6 +22,7 @@
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene/viewer_splat_quantize.hpp"
 #include "sequencer/interpolation.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/timeline_view_math.hpp"
@@ -820,10 +821,16 @@ namespace lfs::vis::gui {
                                   write_error);
                     }
                 }
+                // Cache deserialize always materializes fp32 swizzled shN; quantize
+                // after both hit and miss so resident frames (up to 64) stay q16.
+                quantizeViewerLoadedPlyShN(path, *completed.model);
             } catch (const lfs::io::LoadCancelledError& e) {
                 completed.cancelled = true;
                 completed.error = e.what();
             } catch (const std::exception& e) {
+                // Quantize can throw after the model is assigned. Drain installs
+                // any non-null model, so drop it rather than bind a broken q16 pair.
+                completed.model.reset();
                 completed.error = e.what();
             }
 

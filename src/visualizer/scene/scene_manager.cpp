@@ -18,13 +18,13 @@
 #include "io/cache_image_loader.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/loader.hpp"
-#include "lfs/training/sh_value_storage.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
 #include "training/components/ppisp.hpp"
@@ -57,66 +57,13 @@ namespace lfs::vis {
     namespace {
         constexpr float DEFAULT_VOXEL_SIZE = 0.01f;
 
-        [[nodiscard]] bool isPlyPath(const std::filesystem::path& path) {
-            std::string extension = path.extension().string();
-            std::ranges::transform(extension, extension.begin(), [](const unsigned char c) {
-                return static_cast<char>(std::tolower(c));
-            });
-            return extension == ".ply";
-        }
-
         void quantizeViewerLoadedPlyShN(const std::filesystem::path& path,
                                         lfs::io::LoadResult& load_result) {
-            if (!isPlyPath(path)) {
-                return;
-            }
-
             auto* loaded = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result.data);
             if (!loaded || !*loaded) {
                 return;
             }
-
-            auto& model = **loaded;
-            if (model.shN_value_quantized() ||
-                !model.shN_raw().is_valid() || model.shN_raw().numel() == 0) {
-                return;
-            }
-
-            // Static viewer PLYs are only rewritten when every live parameter already has
-            // the exact storage kind vksplat can bind. In degraded/non-interop mode, retain
-            // the loader's fp32 representation instead of creating an unbindable q16 pair.
-            if (!model.has_tensor_allocator() || !lfs::io::splatTensorsRendererReady(model)) {
-                LOG_WARN("Viewer PLY SH q16 skipped for '{}': Vulkan-external storage is unavailable or degraded",
-                         lfs::core::path_to_utf8(path));
-                return;
-            }
-
-            const std::size_t shN_before_bytes = model.shN_raw().bytes();
-            bool converted = false;
-            try {
-                converted = lfs::training::sh_value::apply_shN_value_quant(model);
-            } catch (const std::exception& e) {
-                // Allocation/codec failure leaves the source tensor live; preserve the
-                // established fp32 load path rather than turning an optimization into a
-                // viewer load failure.
-                LOG_WARN("Viewer PLY SH q16 failed for '{}'; retaining fp32 SH: {}",
-                         lfs::core::path_to_utf8(path), e.what());
-                return;
-            }
-            if (!converted) {
-                return;
-            }
-            if (!model.shN_value_quantized() || !lfs::io::splatTensorsRendererReady(model)) {
-                throw std::runtime_error(
-                    "Viewer PLY SH q16 produced a non-bindable codes/bounds pair");
-            }
-
-            const std::size_t shN_after_bytes =
-                model.shN_raw().bytes() + model.shN_value_bounds().bytes();
-            LOG_INFO(
-                "Viewer PLY SH q16: path='{}' gaussians={} before_bytes={} after_bytes={} saved_mib={:.3f}",
-                lfs::core::path_to_utf8(path), model.size(), shN_before_bytes, shN_after_bytes,
-                static_cast<double>(shN_before_bytes - shN_after_bytes) / (1024.0 * 1024.0));
+            lfs::vis::quantizeViewerLoadedPlyShN(path, **loaded);
         }
 
         void clearMeshCpuCache();

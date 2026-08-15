@@ -4829,15 +4829,29 @@ namespace lfs::app {
                             }
                             const auto rest_coefficients =
                                 static_cast<uint32_t>(node->model->max_sh_coeffs_rest());
-                            auto selected_sh = core::Tensor::empty(
-                                {resolved_indices.size(), static_cast<size_t>(rest_coefficients), size_t{3}},
-                                node->model->shN_raw().device());
-                            core::shN_swizzled_gather_to_linear(
-                                node->model->shN_raw().ptr<float>(),
-                                index_tensor.ptr<int>(),
-                                selected_sh.ptr<float>(),
-                                resolved_indices.size(),
-                                rest_coefficients);
+                            core::Tensor selected_sh;
+                            // q16 / IEEE-f16: dequant to [N,K,3] then index_select (no ptr<float> on codes).
+                            if (node->model->shN_raw().dtype() != core::DataType::Float32) {
+                                core::Tensor canon = node->model->shN_canonical();
+                                auto indices_for_select = index_tensor;
+                                if (indices_for_select.device() != canon.device())
+                                    indices_for_select = indices_for_select.to(canon.device());
+                                if (indices_for_select.dtype() != core::DataType::Int32 &&
+                                    indices_for_select.dtype() != core::DataType::Int64) {
+                                    indices_for_select = indices_for_select.to(core::DataType::Int32);
+                                }
+                                selected_sh = canon.index_select(0, indices_for_select).contiguous();
+                            } else {
+                                selected_sh = core::Tensor::empty(
+                                    {resolved_indices.size(), static_cast<size_t>(rest_coefficients), size_t{3}},
+                                    node->model->shN_raw().device());
+                                core::shN_swizzled_gather_to_linear(
+                                    node->model->shN_raw().ptr<float>(),
+                                    index_tensor.ptr<int>(),
+                                    selected_sh.ptr<float>(),
+                                    resolved_indices.size(),
+                                    rest_coefficients);
+                            }
                             field_payloads[field_name] = tensor_payload_json(selected_sh);
                             continue;
                         }

@@ -33,6 +33,9 @@ namespace lfs::vis {
     // Forward declarations
     class VisualizerImpl;
     class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
+    class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+    class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+    class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
 
     class LFS_VIS_API TrainerManager {
     public:
@@ -104,6 +107,9 @@ namespace lfs::vis {
         [[nodiscard]] bool canReset() const { return canPerform(TrainingAction::Reset); }
         [[nodiscard]] bool isCompletionPending() const {
             return completion_pending_.load(std::memory_order_acquire);
+        }
+        [[nodiscard]] bool isPublishingFinalSnapshot() const {
+            return isCompletionPending() && !isTrainingActive();
         }
         [[nodiscard]] bool isPausedAtCheckpointBaseline() const;
         [[nodiscard]] std::optional<int> checkpointBaselineIteration() const {
@@ -202,6 +208,9 @@ namespace lfs::vis {
         };
 
         friend class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
+        friend class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+        friend class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+        friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
 
         // Training thread function
         void trainingThreadFunc(std::stop_token stop_token);

@@ -35,8 +35,8 @@ namespace lfs::vis::project {
 }
 
 namespace lfs::core {
-    class MeshData;
-    class PointCloud;
+    struct MeshData;
+    struct PointCloud;
     class SplatData;
 } // namespace lfs::core
 

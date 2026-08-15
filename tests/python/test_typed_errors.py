@@ -203,7 +203,8 @@ class TestDlpackNarrowing:
                 raise RuntimeError("legacy-zero-arg-reached")
 
             def __dlpack_device__(self):
-                return (1, 0)
+                # kDLCUDA: stream handshake then TypeError retry.
+                return (2, 0)
 
         producer = TypeErrorProducer()
         with pytest.raises(RuntimeError, match="legacy-zero-arg-reached"):
@@ -222,9 +223,29 @@ class TestDlpackNarrowing:
                 raise ValueError("producer-bug")
 
             def __dlpack_device__(self):
+                # kDLCPU: single zero-arg call, no stream handshake.
                 return (1, 0)
 
         producer = ValueErrorProducer()
         with pytest.raises(ValueError, match="producer-bug"):
             lf.Tensor.from_dlpack(producer)
         assert len(producer.calls) == 1
+        assert producer.calls[0] is None
+
+    def test_cpu_producer_gets_no_stream(self, lf):
+        class CpuProducer:
+            def __init__(self):
+                self.calls = []
+
+            def __dlpack__(self, stream=None):
+                self.calls.append(stream)
+                raise RuntimeError("cpu-zero-arg-only")
+
+            def __dlpack_device__(self):
+                return (1, 0)
+
+        producer = CpuProducer()
+        with pytest.raises(RuntimeError, match="cpu-zero-arg-only"):
+            lf.Tensor.from_dlpack(producer)
+        assert len(producer.calls) == 1
+        assert producer.calls[0] is None
