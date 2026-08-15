@@ -63,7 +63,8 @@ namespace lfs::vis {
         LOG_INFO(
             "Viewer PLY SH q16: path='{}' gaussians={} before_bytes={} after_bytes={} saved_mib={:.3f}",
             lfs::core::path_to_utf8(path), model.size(), shN_before_bytes, shN_after_bytes,
-            static_cast<double>(shN_before_bytes - shN_after_bytes) / (1024.0 * 1024.0));
+            (static_cast<double>(shN_before_bytes) - static_cast<double>(shN_after_bytes)) /
+                (1024.0 * 1024.0));
     }
 
 } // namespace lfs::vis

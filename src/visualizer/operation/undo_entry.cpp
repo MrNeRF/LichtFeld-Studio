@@ -2306,13 +2306,13 @@ namespace lfs::vis::op {
     }
 
     void ShNCanonicalRowsUndoEntry::apply(const lfs::core::Tensor& rows) {
-        if (scene_ && expected_topology_) {
+        if (!scene_) {
+            throw std::runtime_error("Missing tensor target for undo entry '" + node_name_ + ".shN'");
+        }
+        if (expected_topology_) {
             requireTopologyProof(
                 scene_->getScene(),
                 *expected_topology_, name_);
-        }
-        if (!scene_) {
-            throw std::runtime_error("Missing tensor target for undo entry '" + node_name_ + ".shN'");
         }
         auto* node = scene_->getScene().getMutableNode(node_name_);
         if (!node || !node->model) {
@@ -2356,11 +2356,9 @@ namespace lfs::vis::op {
         }
         canon.index_copy_(0, idx, src);
         model.shN_set_from_canonical(canon, model.means().capacity());
-        if (scene_) {
-            expected_topology_ =
-                captureTopologyProof(
-                    scene_->getScene());
-        }
+        expected_topology_ =
+            captureTopologyProof(
+                scene_->getScene());
     }
 
     void ShNCanonicalRowsUndoEntry::undo() {

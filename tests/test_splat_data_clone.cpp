@@ -79,10 +79,18 @@ namespace {
         return std::memcmp(ac.data_ptr(), bc.data_ptr(), ac.bytes()) == 0;
     }
 
+    struct ShValueQuantGuard {
+        explicit ShValueQuantGuard(const bool enabled) {
+            sh_value::set_sh_value_quant_enabled_for_testing(enabled);
+        }
+        ~ShValueQuantGuard() {
+            sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+        }
+    };
 } // namespace
 
 TEST(SplatDataCloneTest, Q16CloneCarriesBounds) {
-    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    const ShValueQuantGuard quant_guard{true};
     auto model = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
     ASSERT_TRUE(model.shN_value_quantized());
@@ -106,12 +114,10 @@ TEST(SplatDataCloneTest, Q16CloneCarriesBounds) {
     EXPECT_NE(copy.means_raw().data_ptr(), src_means_ptr);
     copy.means_raw().fill_(123.0f);
     EXPECT_FLOAT_EQ(model.means_raw().cpu().ptr<float>()[0], src_mean0);
-
-    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
 TEST(SplatDataCloneTest, Fp32CloneUnchangedBehavior) {
-    sh_value::set_sh_value_quant_enabled_for_testing(false);
+    const ShValueQuantGuard quant_guard{false};
     auto model = make_random_sh3(kN);
     ASSERT_FALSE(model.shN_value_quantized());
 
@@ -123,8 +129,6 @@ TEST(SplatDataCloneTest, Fp32CloneUnchangedBehavior) {
     EXPECT_NO_THROW(copy.set_active_sh_degree(1));
     EXPECT_NO_THROW(copy.set_active_sh_degree(3));
     EXPECT_TRUE(tensors_equal(copy.shN_canonical(), canonical_before));
-
-    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
 TEST(SplatDataCloneTest, CloneCarriesDeletedMask) {
@@ -143,12 +147,10 @@ TEST(SplatDataCloneTest, CloneCarriesDeletedMask) {
     ASSERT_TRUE(copy.has_deleted_mask());
     EXPECT_EQ(copy.deleted_count(), model.deleted_count());
     EXPECT_EQ(copy.deleted().cpu().to_vector_bool(), model.deleted().cpu().to_vector_bool());
-
-    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
 TEST(SplatDataCloneTest, Q16CloneMigratesToExportableAllocator) {
-    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    const ShValueQuantGuard quant_guard{true};
     auto model = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
     ASSERT_TRUE(model.shN_value_quantized());
@@ -170,12 +172,10 @@ TEST(SplatDataCloneTest, Q16CloneMigratesToExportableAllocator) {
     ASSERT_TRUE(result.has_value()) << result.error();
     EXPECT_TRUE(copy.shN_value_quantized());
     EXPECT_TRUE(tensors_equal(copy.shN_canonical(), canonical_before));
-
-    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
 TEST(SplatDataCloneTest, WritebackClearsQ16Pair) {
-    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    const ShValueQuantGuard quant_guard{true};
 
     // Degree 2: q16 cell count equals ieee-f16 swizzle count. Degree 3 does not.
     for (const int sh_degree : {2, 3}) {
@@ -197,8 +197,6 @@ TEST(SplatDataCloneTest, WritebackClearsQ16Pair) {
         EXPECT_EQ(model.shN().dtype(), DataType::Float32) << "degree=" << sh_degree;
         EXPECT_TRUE(tensors_equal(model.shN_canonical(), captured)) << "degree=" << sh_degree;
     }
-
-    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
 TEST(SplatDataCloneTest, ReserveCapacityRebuildsCudaDirect) {
@@ -232,7 +230,7 @@ TEST(SplatDataCloneTest, ReserveCapacityRebuildsCudaDirect) {
 }
 
 TEST(SplatDataCloneTest, ReserveCapacitySkipsRendererStorage) {
-    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    const ShValueQuantGuard quant_guard{true};
     auto model = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
     ASSERT_TRUE(model.shN_value_quantized());
@@ -275,6 +273,4 @@ TEST(SplatDataCloneTest, ReserveCapacitySkipsRendererStorage) {
     EXPECT_TRUE(model.shN_value_quantized());
     EXPECT_TRUE(tensors_equal(model.means(), means_before));
     EXPECT_TRUE(tensors_equal(model.shN_canonical(), shN_before));
-
-    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }

@@ -316,6 +316,15 @@ namespace {
             EXPECT_NEAR(actual[i], expected[i], tol);
     }
 
+    struct ShValueQuantGuard {
+        explicit ShValueQuantGuard(const bool enabled) {
+            lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(enabled);
+        }
+        ~ShValueQuantGuard() {
+            lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+        }
+    };
+
 } // namespace
 
 TEST(SplatSimplify, TwoPointMergeMatchesReferenceMomentMatching) {
@@ -1129,9 +1138,8 @@ TEST(SplatSimplify, RealPlySimplifyDoesNotUndershootRequestedTarget) {
 
 TEST(SplatSimplify, Q16DeletedMaskPreservesCanonicalSH) {
     using lfs::training::sh_value::apply_shN_value_quant;
-    using lfs::training::sh_value::set_sh_value_quant_enabled_for_testing;
 
-    set_sh_value_quant_enabled_for_testing(true);
+    const ShValueQuantGuard quant_guard{true};
 
     constexpr size_t kN = 64;
     constexpr int kShDegree = 3;
@@ -1226,6 +1234,4 @@ TEST(SplatSimplify, Q16DeletedMaskPreservesCanonicalSH) {
     EXPECT_EQ(out, kN - 3);
     EXPECT_LT(max_abs, 0.05f);
     EXPECT_GT(max_mag, 0.01f);
-
-    set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
