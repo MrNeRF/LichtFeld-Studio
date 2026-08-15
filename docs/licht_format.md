@@ -60,10 +60,13 @@ scene splats do not retain optimizer or training-session state.
 Switching a completed or paused training session to Edit Mode is an explicit
 conversion: the current trained model becomes an editable splat, the training
 binding is removed from `SCNG`, and the formerly resumable `CKPT` is retired by
-the next full project synchronization. Manual saves and non-training autosaves
-therefore persist the editable scene without an orphan checkpoint. Lightweight
-autosaves made while training is still active preserve the binding and checkpoint
-so reopening the project can restore the paused resumable state.
+the next full project synchronization. Before releasing the trainer, the
+application adopts any completed final training generation; if its writer is
+still active, the Edit Mode transition is deferred instead of allowing stale
+append authority into the editable session. Manual saves and non-training
+autosaves therefore persist the editable scene without an orphan checkpoint.
+Lightweight autosaves made while training is still active preserve the binding
+and checkpoint so reopening the project can restore the paused resumable state.
 
 ## How it works
 

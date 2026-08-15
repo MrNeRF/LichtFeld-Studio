@@ -3000,6 +3000,39 @@ namespace lfs::vis::project {
     }
 
     lfs::Result<void>
+    ProjectLifecycle::prepareForEditModeTransition() {
+        auto* const trainer = viewer_.getTrainer();
+        if (!trainer) {
+            return {};
+        }
+        const auto before =
+            trainer->get_project_snapshot_metrics();
+        if (before.writer_in_flight) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Wait for the final training snapshot before entering Edit Mode.",
+                "Edit Mode cannot release the trainer while its project writer still owns the next durable generation",
+                "project.training_snapshot");
+        }
+        if (auto adopted =
+                adoptCompletedTrainingSnapshot();
+            !adopted) {
+            return adopted;
+        }
+        const auto after =
+            trainer->get_project_snapshot_metrics();
+        if (after.capture.completed_snapshots >
+            adopted_training_snapshot_count_) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The final training snapshot is not ready for Edit Mode.",
+                "A completed trainer generation remains unadopted; retaining the trainer prevents stale clean proofs",
+                "project.training_snapshot");
+        }
+        return {};
+    }
+
+    lfs::Result<void>
     ProjectLifecycle::synchronizeDocumentFromViewer() {
         return synchronizeDocumentFromViewer(
             DocumentSyncMode::Default);

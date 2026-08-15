@@ -5483,12 +5483,41 @@ namespace lfs::vis {
                            ->hasTrainer();
             }));
 
+        // The trainer writes the final generation outside ProjectDocument.
+        // Keep the viewer pinned to the previous commit while advancing the
+        // same master, then expose that completed generation through the
+        // trainer metrics. Edit Mode must adopt it before clearing Trainer.
+        {
+            auto advanced =
+                lfs::test::licht::require_result_ptr(
+                    lfs::io::project::ProjectDocument::open(
+                        project_path));
+            auto advanced_options =
+                lfs::test::licht::
+                    deterministic_document_save_options(
+                        0x76000020, 3, 4);
+            advanced_options.commit.snapshot_uuid = {};
+            (void)lfs::test::licht::require_result(
+                advanced->save(
+                    project_path,
+                    advanced_options));
+        }
+        auto* const trainer = viewer.getTrainer();
+        ASSERT_NE(trainer, nullptr);
+        trainer->last_project_snapshot_path_ =
+            project_path;
+        trainer->last_project_writer_error_.clear();
+        ASSERT_NE(trainer->project_snapshot_service_,
+                  nullptr);
+        trainer->project_snapshot_service_
+            ->testing_advance_completed_snapshots(1);
+
         // A restored checkpoint is project-backed in this synthetic fixture.
         // The real training workflow is still in Dataset mode when the user
         // chooses Edit Mode, so reproduce that precondition explicitly.
         viewer.getSceneManager()->changeContentType(
             SceneManager::ContentType::Dataset);
-        viewer.getSceneManager()->switchToEditMode();
+        lfs::core::events::cmd::SwitchToEditMode{}.emit();
         EXPECT_FALSE(
             viewer.getTrainerManager()->hasTrainer());
         EXPECT_TRUE(

@@ -1293,6 +1293,25 @@ namespace lfs::vis {
                 }
             };
 
+        cmd::SwitchToEditMode::when(
+            [this, publish_project_error](const auto&) {
+                if (project_lifecycle_) {
+                    if (auto prepared =
+                            project_lifecycle_
+                                ->prepareForEditModeTransition();
+                        !prepared) {
+                        publish_project_error(
+                            "Switch to Edit Mode",
+                            prepared.error(),
+                            gui::error_op::kProjectSettings);
+                        return;
+                    }
+                }
+                if (scene_manager_) {
+                    scene_manager_->switchToEditMode();
+                }
+            });
+
         cmd::ProjectSave::when(
             [this, publish_project_error](const auto&) {
                 auto has_path = projectHasPath();

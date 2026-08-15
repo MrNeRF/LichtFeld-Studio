@@ -178,6 +178,8 @@ namespace lfs::vis::project {
             std::optional<std::filesystem::path> destination =
                 std::nullopt,
             bool allow_existing_destination_replacement = false);
+        [[nodiscard]] lfs::Result<void>
+        prepareForEditModeTransition();
 
     private:
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
