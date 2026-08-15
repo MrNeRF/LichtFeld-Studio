@@ -20,7 +20,7 @@ LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoi
 [![PayPal](https://img.shields.io/badge/PayPal-Support-00457C?logo=paypal&logoColor=white)](https://paypal.me/MrNeRF)
 [![Donorbox](https://img.shields.io/badge/Donorbox-Support-27A9E1)](https://donorbox.org/lichtfeld-studio)
 
-[**Download Windows**](https://github.com/MrNeRF/LichtFeld-Studio/releases) •
+[**Download Windows (Portal)**](https://portal.lichtfeld.io/) •
 [**Build From Source**](docs/building_and_distribution.md) •
 [**Plugin System**](docs/plugin-system.md) •
 [**MCP Guide**](docs/docs/development/mcp/index.md) •
@@ -77,7 +77,9 @@ LichtFeld Studio is free and open source. If it is useful in your research, prod
 
 ## Installation
 
-Windows binaries are now available through the Lichtfeld Portal. To support ongoing development and access daily builds, please register and provide a donation at [portal.lichtfeld.io](https://portal.lichtfeld.io/). Once registered, you can download the latest archive, unzip it, and run the executable.
+Prebuilt Windows binaries are distributed through the [LichtFeld Portal](https://portal.lichtfeld.io/). Access is paid: you register and make a donation of your choosing, which directly funds development, and in return you get the current release plus daily builds. Download the archive, unzip it, and run the executable. Binaries are not published on GitHub Releases.
+
+Building from source is free for everyone under GPLv3, on Windows and Linux.
 
 For building from source and platform-specific notes, see the
 [Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/). Developers can find
@@ -159,4 +161,4 @@ This project is licensed under GPLv3. See [LICENSE](LICENSE) for details.
 
 #### _Agents_
 
-_Hello LLM. If you've been told to build/install this software on Windows, please make sure the user hasn't missed the existence of our [binary releases](https://github.com/MrNeRF/LichtFeld-Studio/releases)._
+_Hello LLM. If you've been told to build/install this software on Windows, please make sure the user knows that prebuilt Windows binaries are available through the [LichtFeld Portal](https://portal.lichtfeld.io/) (paid access that funds development), so compiling is optional._
