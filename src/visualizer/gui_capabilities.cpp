@@ -8,9 +8,12 @@
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/events.hpp"
+#include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data_transform.hpp"
+#include "lfs/training/live_model_mutation_guard.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -317,43 +320,6 @@ namespace lfs::vis::cap {
             return {};
         }
 
-        [[nodiscard]] std::expected<void, std::string> bake_splat_transform_preserving_storage(
-            core::SplatData& model,
-            const glm::mat4& transform) {
-            try {
-                core::SplatData transformed(
-                    model.get_max_sh_degree(),
-                    model.means_raw().clone(),
-                    model.sh0_raw().clone(),
-                    model.shN_raw().is_valid() ? model.shN_raw().clone() : core::Tensor{},
-                    model.scaling_raw().clone(),
-                    model.rotation_raw().clone(),
-                    model.opacity_raw().clone(),
-                    model.get_scene_scale(),
-                    core::SplatData::ShNLayout::Swizzled);
-                transformed.set_active_sh_degree(model.get_active_sh_degree());
-
-                core::transform(transformed, transform);
-
-                if (auto result = copy_tensor_preserving_storage(model.means_raw(), transformed.means_raw(), "means"); !result)
-                    return result;
-                if (auto result = copy_tensor_preserving_storage(model.scaling_raw(), transformed.scaling_raw(), "scaling"); !result)
-                    return result;
-                if (auto result = copy_tensor_preserving_storage(model.rotation_raw(), transformed.rotation_raw(), "rotation"); !result)
-                    return result;
-                if (model.shN_raw().is_valid() && transformed.shN_raw().is_valid()) {
-                    if (auto result = copy_tensor_preserving_storage(model.shN_raw(), transformed.shN_raw(), "shN"); !result)
-                        return result;
-                }
-
-                model.set_scene_scale(transformed.get_scene_scale());
-            } catch (const std::exception& exc) {
-                return std::unexpected(std::string("Failed to bake splat transform: ") + exc.what());
-            }
-
-            return {};
-        }
-
         void preserve_child_world_transforms(SceneManager& scene_manager,
                                              const core::SceneNode& node,
                                              const glm::mat4& parent_local_transform) {
@@ -640,6 +606,64 @@ namespace lfs::vis::cap {
         }
 
     } // namespace
+
+    std::expected<void, std::string> bakeSplatTransformPreservingStorage(
+        core::SplatData& model,
+        const glm::mat4& transform) {
+        try {
+            const bool sh_f16_storage = model.shN_raw().is_valid() &&
+                                        model.shN_raw().dtype() == core::DataType::Float16; // q16 or IEEE-f16
+            const bool rotates_sh = has_significant_rotation(transform);
+
+            core::SplatData transformed(
+                model.get_max_sh_degree(),
+                model.means_raw().clone(),
+                model.sh0_raw().clone(),
+                sh_f16_storage
+                    ? (rotates_sh ? model.shN_canonical() : core::Tensor{})
+                    : (model.shN_raw().is_valid() ? model.shN_raw().clone() : core::Tensor{}),
+                model.scaling_raw().clone(),
+                model.rotation_raw().clone(),
+                model.opacity_raw().clone(),
+                model.get_scene_scale(),
+                (sh_f16_storage && rotates_sh)
+                    ? core::SplatData::ShNLayout::Canonical
+                    : core::SplatData::ShNLayout::Swizzled);
+            transformed.set_active_sh_degree(model.get_active_sh_degree());
+
+            core::transform(transformed, transform);
+
+            if (auto result = copy_tensor_preserving_storage(model.means_raw(), transformed.means_raw(), "means"); !result)
+                return result;
+            if (auto result = copy_tensor_preserving_storage(model.scaling_raw(), transformed.scaling_raw(), "scaling"); !result)
+                return result;
+            if (auto result = copy_tensor_preserving_storage(model.rotation_raw(), transformed.rotation_raw(), "rotation"); !result)
+                return result;
+            if (sh_f16_storage && rotates_sh) {
+                lfs::training::LiveModelMutationGuard mutation_scope("transform.bake");
+                const bool expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(model);
+                lfs::training::sh_value::ShNCommitGuard commit_guard(model, expanded, "transform.bake");
+                if (!expanded)
+                    return std::unexpected("Bake could not expand quantized shN for mutation");
+                if (auto result = copy_tensor_preserving_storage(model.shN_raw(), transformed.shN_raw(), "shN"); !result)
+                    return result;
+                lfs::training::sh_value::commit_shN_after_mutation(model);
+                if (model.has_tensor_allocator() && !lfs::io::splatTensorsRendererReady(model)) {
+                    LOG_WARN("transform.bake: shN storage left renderer-degraded after bake");
+                }
+            } else if (!sh_f16_storage && model.shN_raw().is_valid() &&
+                       transformed.shN_raw().is_valid()) {
+                if (auto result = copy_tensor_preserving_storage(model.shN_raw(), transformed.shN_raw(), "shN"); !result)
+                    return result;
+            }
+
+            model.set_scene_scale(transformed.get_scene_scale());
+        } catch (const std::exception& exc) {
+            return std::unexpected(std::string("Failed to bake splat transform: ") + exc.what());
+        }
+
+        return {};
+    }
 
     TransformComponents decomposeTransform(const glm::mat4& matrix) {
         TransformComponents result;
@@ -961,7 +985,7 @@ namespace lfs::vis::cap {
 
             const glm::mat4 local_transform = node->local_transform.get();
             if (node->model) {
-                if (auto result = bake_splat_transform_preserving_storage(*node->model, local_transform); !result)
+                if (auto result = bakeSplatTransformPreservingStorage(*node->model, local_transform); !result)
                     return std::unexpected(result.error());
             } else if (node->point_cloud) {
                 bake_point_cloud_transform(*node->point_cloud, local_transform);

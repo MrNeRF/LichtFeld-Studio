@@ -131,6 +131,8 @@ namespace lfs::vis::cap {
         SceneManager& scene_manager,
         const std::vector<std::string>& targets,
         std::string_view undo_label = "transform.bake");
+    [[nodiscard]] LFS_VIS_API std::expected<void, std::string> bakeSplatTransformPreservingStorage(
+        core::SplatData& model, const glm::mat4& transform);
 
     [[nodiscard]] LFS_VIS_API std::expected<void, std::string> writeGaussianField(
         SceneManager& scene_manager,
