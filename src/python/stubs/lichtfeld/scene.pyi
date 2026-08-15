@@ -108,7 +108,9 @@ class SplatData:
         """Set maximum SH degree"""
 
     def reserve_capacity(self, capacity: int) -> None:
-        """Reserve capacity for Gaussians (for densification)"""
+        """
+        Reserve capacity for Gaussians (for densification). Raises if the model is renderer-backed.
+        """
 
 class NodeType(enum.Enum):
     SPLAT = 0

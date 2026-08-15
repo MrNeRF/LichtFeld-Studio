@@ -108,6 +108,27 @@ namespace lfs::python {
             }
         }
 
+        // nanobind ndarray::stride(i) is in ELEMENTS (not bytes), matching DLPack.
+        bool ndarray_is_c_contiguous(const nb::ndarray<>& arr) {
+            const size_t ndim = arr.ndim();
+            if (ndim == 0 || !arr.stride_ptr()) {
+                return true;
+            }
+            int64_t expected = 1;
+            for (size_t i = ndim; i-- > 0;) {
+                const int64_t extent = static_cast<int64_t>(arr.shape(i));
+                if (extent == 0) {
+                    return true;
+                }
+                // Extent-1 dims may carry arbitrary strides.
+                if (extent != 1 && arr.stride(i) != expected) {
+                    return false;
+                }
+                expected *= extent;
+            }
+            return true;
+        }
+
         template <typename Getter>
         nb::object build_nested_list(const std::vector<size_t>& dims, size_t dim, size_t& offset, const Getter& getter) {
             if (dims.empty()) {
@@ -502,7 +523,16 @@ namespace lfs::python {
         return tensor_.count_nonzero();
     }
 
-    PyTensor PyTensor::from_numpy(nb::ndarray<> arr, bool /*copy*/) {
+    PyTensor PyTensor::from_numpy(nb::ndarray<> arr, bool copy) {
+        if (!copy) {
+            throw std::runtime_error(
+                "from_numpy: zero-copy import is not supported; omit copy or pass copy=True");
+        }
+        if (!ndarray_is_c_contiguous(arr)) {
+            throw std::runtime_error(
+                "from_numpy: array must be C-contiguous; call np.ascontiguousarray() first");
+        }
+
         // Get shape
         std::vector<size_t> shape_vec;
         for (size_t i = 0; i < arr.ndim(); ++i) {
@@ -1340,6 +1370,43 @@ namespace lfs::python {
             const uintptr_t v = reinterpret_cast<uintptr_t>(s);
             return v == 0 ? kDLPackLegacyDefault : static_cast<int64_t>(v);
         }
+
+        // Query __dlpack_device__ so CPU producers (e.g. NumPy) are not
+        // given a CUDA stream. Matches from_dl_device for CUDA types.
+        bool dlpack_producer_is_cuda_ordered(const nb::object& obj) {
+            if (!nb::hasattr(obj, "__dlpack_device__")) {
+                return false;
+            }
+            try {
+                const nb::object dev = obj.attr("__dlpack_device__")();
+                const int32_t device_type = nb::cast<int32_t>(dev[0]);
+                return device_type == kDLCUDA || device_type == kDLCUDAManaged;
+            } catch (const nb::python_error&) {
+                return false;
+            } catch (const nb::cast_error&) {
+                return false;
+            }
+        }
+
+        // nullptr strides = compact row-major (DLPack). Extent-1 dims may carry
+        // arbitrary strides; every other dim must match the compact C layout.
+        bool dlpack_is_compact_row_major(const DLTensor& dl) {
+            if (dl.strides == nullptr) {
+                return true;
+            }
+            int64_t expected = 1;
+            for (int32_t i = dl.ndim - 1; i >= 0; --i) {
+                const int64_t extent = dl.shape[i];
+                if (extent == 0) {
+                    return true;
+                }
+                if (extent != 1 && dl.strides[i] != expected) {
+                    return false;
+                }
+                expected *= extent;
+            }
+            return true;
+        }
     } // namespace
 
     nb::capsule PyTensor::dlpack(nb::object stream) const {
@@ -1384,17 +1451,21 @@ namespace lfs::python {
 
         if (nb::hasattr(obj, "__dlpack__")) {
             nb::object dlpack_fn = obj.attr("__dlpack__");
-            const int64_t consumer = cuda_stream_to_dlpack(lfs::core::getCurrentCUDAStream());
-            try {
-                capsule = nb::cast<nb::capsule>(dlpack_fn(nb::arg("stream") = consumer));
-                stream_handshake = true;
-            } catch (const nb::python_error& e) {
-                // Only the capability-signaling TypeError ("__dlpack__ takes no
-                // stream argument") warrants the legacy zero-arg retry; any other
-                // producer error propagates so a real bug is not masked by a silent
-                // second producer execution (Phase 9 Section 1.5 / doc :202).
-                if (!e.matches(PyExc_TypeError))
-                    throw;
+            if (dlpack_producer_is_cuda_ordered(obj)) {
+                const int64_t consumer = cuda_stream_to_dlpack(lfs::core::getCurrentCUDAStream());
+                try {
+                    capsule = nb::cast<nb::capsule>(dlpack_fn(nb::arg("stream") = consumer));
+                    stream_handshake = true;
+                } catch (const nb::python_error& e) {
+                    // Only the capability-signaling TypeError ("__dlpack__ takes no
+                    // stream argument") warrants the legacy zero-arg retry; any other
+                    // producer error propagates so a real bug is not masked by a silent
+                    // second producer execution (Phase 9 Section 1.5 / doc :202).
+                    if (!e.matches(PyExc_TypeError))
+                        throw;
+                    capsule = nb::cast<nb::capsule>(dlpack_fn());
+                }
+            } else {
                 capsule = nb::cast<nb::capsule>(dlpack_fn());
             }
         } else if (nb::isinstance<nb::capsule>(obj)) {
@@ -1416,14 +1487,19 @@ namespace lfs::python {
             throw std::runtime_error("from_dlpack: null DLManagedTensor");
         }
 
+        const DLTensor& dl = managed->dl_tensor;
+        if (!dlpack_is_compact_row_major(dl)) {
+            throw std::runtime_error(
+                "from_dlpack: non-contiguous producer tensors are not supported; "
+                "call .contiguous() on the source first");
+        }
+
         // "Consume" the capsule per DLPack spec:
         // 1. Rename to "used_dltensor" so producer knows we took ownership
         // 2. Disable the capsule's destructor - we'll call the deleter ourselves
         PyObject* py_capsule = capsule.ptr();
         PyCapsule_SetName(py_capsule, "used_dltensor");
         PyCapsule_SetDestructor(py_capsule, nullptr);
-
-        const DLTensor& dl = managed->dl_tensor;
 
         std::vector<size_t> shape_vec;
         shape_vec.reserve(dl.ndim);

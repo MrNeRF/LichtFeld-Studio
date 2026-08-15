@@ -3717,7 +3717,7 @@ namespace lfs::vis::project {
             viewer_.getTrainerManager() &&
             (viewer_.getTrainerManager()->isTrainingActive() ||
              viewer_.getTrainerManager()->isCompletionPending())) {
-            if (viewer_.getTrainerManager()->isCompletionPending()) {
+            if (viewer_.getTrainerManager()->isPublishingFinalSnapshot()) {
                 return fail<void>(
                     lfs::ErrorCode::FailedPrecondition,
                     "Wait for training completion before saving.",
@@ -3851,7 +3851,7 @@ namespace lfs::vis::project {
             (viewer_.getTrainerManager()->isTrainingActive() ||
              viewer_.getTrainerManager()->isCompletionPending() ||
              canFlushFinishedTrainerSnapshot())) {
-            if (viewer_.getTrainerManager()->isCompletionPending()) {
+            if (viewer_.getTrainerManager()->isPublishingFinalSnapshot()) {
                 return fail<void>(
                     lfs::ErrorCode::FailedPrecondition,
                     "Wait for training completion before saving.",
@@ -4530,6 +4530,10 @@ namespace lfs::vis::project {
             std::memory_order_release);
         auto allocator =
             manager->makeExternalSplatAllocator();
+        if (allocator) {
+            manager->getScene().setCombinedModelAllocator(
+                allocator);
+        }
         std::lock_guard lock(thread_mutex_);
         try {
             hydration_threads_.emplace_back(

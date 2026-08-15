@@ -6,6 +6,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
+#include "core/splat_data.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
@@ -2246,6 +2247,129 @@ namespace lfs::vis::op {
     }
 
     DirtyMask TensorUndoEntry::dirtyFlags() const {
+        return DirtyFlag::SPLATS;
+    }
+
+    ShNCanonicalRowsUndoEntry::ShNCanonicalRowsUndoEntry(std::string name,
+                                                         UndoMetadata metadata,
+                                                         std::string node_name,
+                                                         lfs::core::Tensor indices,
+                                                         lfs::core::Tensor before_rows,
+                                                         lfs::core::Tensor after_rows,
+                                                         SceneManager* scene)
+        : name_(std::move(name)),
+          metadata_(std::move(metadata)),
+          node_name_(std::move(node_name)),
+          scene_(scene),
+          indices_(std::move(indices)),
+          before_rows_(std::move(before_rows)),
+          after_rows_(std::move(after_rows)) {
+        if (scene_) {
+            expected_topology_ =
+                captureTopologyProof(
+                    scene_->getScene());
+        }
+        if (!metadata_.label.size()) {
+            metadata_.label = name_;
+        }
+        if (before_rows_.is_valid()) {
+            preferred_device_ = before_rows_.device();
+        } else if (after_rows_.is_valid()) {
+            preferred_device_ = after_rows_.device();
+        } else if (indices_.is_valid()) {
+            preferred_device_ = indices_.device();
+        }
+    }
+
+    size_t ShNCanonicalRowsUndoEntry::estimatedBytes() const {
+        return tensorBytes(indices_) + tensorBytes(before_rows_) + tensorBytes(after_rows_);
+    }
+
+    UndoMemoryBreakdown ShNCanonicalRowsUndoEntry::memoryBreakdown() const {
+        UndoMemoryBreakdown total;
+        total += tensorMemory(indices_);
+        total += tensorMemory(before_rows_);
+        total += tensorMemory(after_rows_);
+        return total;
+    }
+
+    void ShNCanonicalRowsUndoEntry::offloadToCPU() {
+        offloadTensor(indices_);
+        offloadTensor(before_rows_);
+        offloadTensor(after_rows_);
+    }
+
+    void ShNCanonicalRowsUndoEntry::restoreToPreferredDevice() {
+        restoreTensorToDevice(indices_, preferred_device_);
+        restoreTensorToDevice(before_rows_, preferred_device_);
+        restoreTensorToDevice(after_rows_, preferred_device_);
+    }
+
+    void ShNCanonicalRowsUndoEntry::apply(const lfs::core::Tensor& rows) {
+        if (!scene_) {
+            throw std::runtime_error("Missing tensor target for undo entry '" + node_name_ + ".shN'");
+        }
+        if (expected_topology_) {
+            requireTopologyProof(
+                scene_->getScene(),
+                *expected_topology_, name_);
+        }
+        auto* node = scene_->getScene().getMutableNode(node_name_);
+        if (!node || !node->model) {
+            throw std::runtime_error("Missing tensor target for undo entry '" + node_name_ + ".shN'");
+        }
+        auto& model = *node->model;
+        if (!model.shN_raw().is_valid() || model.shN_raw().numel() == 0) {
+            throw std::runtime_error("Incompatible tensor target for undo entry '" + node_name_ + ".shN'");
+        }
+        if (!rows.is_valid() || rows.ndim() < 2) {
+            throw std::runtime_error("Incompatible tensor target for undo entry '" + node_name_ + ".shN'");
+        }
+        const size_t K = rows.size(1);
+        if (model.max_sh_coeffs_rest() != K) {
+            throw std::runtime_error("Incompatible tensor target for undo entry '" + node_name_ + ".shN'");
+        }
+        if (!indices_.is_valid()) {
+            throw std::runtime_error("Incompatible tensor target for undo entry '" + node_name_ + ".shN'");
+        }
+        const auto idx_cpu = indices_.cpu().contiguous();
+        const int* const idx_ptr = idx_cpu.ptr<int>();
+        const size_t n_idx = idx_cpu.numel();
+        const size_t model_size = model.size();
+        for (size_t i = 0; i < n_idx; ++i) {
+            if (static_cast<size_t>(idx_ptr[i]) >= model_size) {
+                throw std::runtime_error("Incompatible tensor target for undo entry '" + node_name_ + ".shN'");
+            }
+        }
+
+        lfs::core::Tensor canon = model.shN_canonical();
+        lfs::core::Tensor idx = indices_;
+        if (idx.device() != canon.device()) {
+            idx = idx.to(canon.device());
+        }
+        if (idx.dtype() != lfs::core::DataType::Int32) {
+            idx = idx.to(lfs::core::DataType::Int32);
+        }
+        lfs::core::Tensor src = rows;
+        if (src.device() != canon.device()) {
+            src = src.to(canon.device());
+        }
+        canon.index_copy_(0, idx, src);
+        model.shN_set_from_canonical(canon, model.means().capacity());
+        expected_topology_ =
+            captureTopologyProof(
+                scene_->getScene());
+    }
+
+    void ShNCanonicalRowsUndoEntry::undo() {
+        apply(before_rows_);
+    }
+
+    void ShNCanonicalRowsUndoEntry::redo() {
+        apply(after_rows_);
+    }
+
+    DirtyMask ShNCanonicalRowsUndoEntry::dirtyFlags() const {
         return DirtyFlag::SPLATS;
     }
 
