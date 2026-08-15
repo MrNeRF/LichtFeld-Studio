@@ -41,6 +41,12 @@ namespace {
         EXPECT_EQ(recovered.height, 900);
     }
 
+    TEST(WindowStateContract, FirstLaunchDefaultsCenterOnPrimaryUsableBounds) {
+        const auto centered = lfs::vis::centerWindowOnDisplay(
+            {0, 0, 1280, 720}, {0, 0, 1920, 1040});
+        EXPECT_EQ(centered, (WindowRectangle{320, 160, 1280, 720}));
+    }
+
     TEST(WindowStateContract, RecoverySupportsSmallDisplays) {
         const auto recovered = lfs::vis::centerWindowOnDisplay(
             {0, 0, 1, 1}, {100, 200, 320, 240});

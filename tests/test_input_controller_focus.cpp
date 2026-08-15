@@ -31,6 +31,7 @@ namespace lfs::vis {
         protected:
             void SetUp() override {
                 isolateInputProfileHome();
+                input::InputBindings::setPersistenceEnabled(false);
                 services().clear();
                 gui::guiFocusState().reset();
             }
@@ -38,6 +39,7 @@ namespace lfs::vis {
             void TearDown() override {
                 gui::guiFocusState().reset();
                 services().clear();
+                input::InputBindings::setPersistenceEnabled(true);
                 restoreHome();
             }
 

@@ -105,6 +105,11 @@
 
 namespace lfs::vis::gui {
 
+    GuiFocusState& guiFocusState() {
+        static GuiFocusState state;
+        return state;
+    }
+
     namespace {
         const FrameInputBuffer* s_frame_input = nullptr;
         constexpr auto kInteractiveTrainingPauseWait = std::chrono::milliseconds(300);
@@ -4617,6 +4622,11 @@ namespace lfs::vis::gui {
             modal_overlay_pending = rml_modal_overlay_->hasPendingRequest();
             context_menu_open = global_context_menu_ && global_context_menu_->isOpen();
             block_underlay_input = block_underlay_input || modal_overlay_open || modal_overlay_pending || context_menu_open;
+            if (block_underlay_input) {
+                auto& focus = guiFocusState();
+                focus.want_capture_mouse = true;
+                focus.want_capture_keyboard = true;
+            }
 
             if (std::find(sdl_input.keys_pressed.begin(), sdl_input.keys_pressed.end(), SDL_SCANCODE_ESCAPE) != sdl_input.keys_pressed.end()) {
                 auto* console_state = panels::PythonConsoleState::tryGetInstance();

@@ -64,6 +64,25 @@ namespace lfs::vis {
             return rectangles;
         }
 
+        WindowRectangle centeredWindowRectangleOnPrimaryDisplay(const int width,
+                                                                const int height) {
+            WindowRectangle target{0, 0, width, height};
+            SDL_Rect available{};
+            const SDL_DisplayID primary_display = SDL_GetPrimaryDisplay();
+            if (primary_display &&
+                (SDL_GetDisplayUsableBounds(primary_display, &available) ||
+                 SDL_GetDisplayBounds(primary_display, &available)) &&
+                available.w > 0 && available.h > 0) {
+                return centerWindowOnDisplay(
+                    target, {available.x, available.y, available.w, available.h},
+                    kMinWindowWidth, kMinWindowHeight);
+            }
+
+            target.x = SDL_WINDOWPOS_CENTERED;
+            target.y = SDL_WINDOWPOS_CENTERED;
+            return target;
+        }
+
         void sanitizeInitialWindowState(WindowManager::PersistentWindowState& state) {
             const WindowRectangle saved{state.x, state.y, state.width, state.height};
             SDL_Rect fallback{};
@@ -618,18 +637,7 @@ namespace lfs::vis {
             return false;
         }
 
-        WindowRectangle target{0, 0, 1280, 720};
-        SDL_Rect available{};
-        const SDL_DisplayID primary_display = SDL_GetPrimaryDisplay();
-        if (primary_display && SDL_GetDisplayUsableBounds(primary_display, &available) &&
-            available.w > 0 && available.h > 0) {
-            target = centerWindowOnDisplay(
-                target, {available.x, available.y, available.w, available.h},
-                kMinWindowWidth, kMinWindowHeight);
-        } else {
-            target.x = SDL_WINDOWPOS_CENTERED;
-            target.y = SDL_WINDOWPOS_CENTERED;
-        }
+        const WindowRectangle target = centeredWindowRectangleOnPrimaryDisplay(1280, 720);
 
         const bool size_set = SDL_SetWindowSize(window_, target.width, target.height);
         const bool position_set = SDL_SetWindowPosition(window_, target.x, target.y);
@@ -727,6 +735,17 @@ namespace lfs::vis {
             } else if (state.maximized) {
                 saveBorderlessRestoreGeometry();
                 maximizeBorderless("restore-saved-window-state", false);
+            }
+        } else if (monitor_size_.x <= 0 || monitor_size_.y <= 0) {
+            const auto target = centeredWindowRectangleOnPrimaryDisplay(
+                window_size_.x, window_size_.y);
+            const bool size_set = SDL_SetWindowSize(window_, target.width, target.height);
+            const bool position_set = SDL_SetWindowPosition(window_, target.x, target.y);
+            if (!size_set || !position_set) {
+                LOG_WARN("Failed to apply initial window geometry {}x{} at {},{}: {}",
+                         target.width, target.height, target.x, target.y, SDL_GetError());
+            } else {
+                window_size_ = {target.width, target.height};
             }
         }
 

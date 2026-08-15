@@ -84,6 +84,9 @@ centered on the primary display. A rectangle that still intersects a display
 but is larger than that display's usable area is clamped and centered on the
 display with the largest intersection. This covers reopening a layout saved on
 a large monitor after moving the application to a substantially smaller one.
+When no valid `config/window.json` exists, including the first launch or after
+a complete settings reset, the default 1280x720 window is centered in the
+primary display's usable area and clamped if that area is smaller.
 
 Panel visibility, dock dimensions, active tabs, the sequencer, and other
 project workspace state belong to the GUIL chapter of the `.licht` project.
@@ -116,6 +119,11 @@ keeping the Preferences panel open. If a `.licht` project is open, that live
 default layout replaces its GUIL layout the next time the project is saved.
 Reset operations retain backups in the user data tree and do not remove
 plugins, keymaps, caches, datasets, or project files.
+
+Full-window startup and modal backdrops are also input boundaries, not only
+visual dimming. While one is active or pending, pointer and keyboard input must
+not reach the application underneath, including native viewport overlays such
+as the axis selector.
 
 ## Safe mode
 
