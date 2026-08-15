@@ -9,6 +9,8 @@ import sys
 
 import pytest
 
+from locale_utils import missing_locale_keys
+
 
 class _BindingModelStub:
     def __init__(self):
@@ -129,11 +131,11 @@ def test_rendering_panel_section_headers_use_literals_without_missing_keys(rende
     assert model.func_bindings["label_simplify_output"]() == "Result:"
     assert model.func_bindings["label_simplify_apply"]() == "Run"
     assert model.func_bindings["label_simplify_cancel"]() == "Abort"
-    assert "rendering_panel.section_viewport" not in requested_keys
-    assert "rendering_panel.section_camera" not in requested_keys
-    assert "rendering_panel.section_simplify" in requested_keys
-    assert "rendering_panel.section_selection" not in requested_keys
-    assert "rendering_panel.section_post_process" not in requested_keys
+    # The panel resolves section headers through tr() with a literal fallback.
+    # Assert every requested key exists so a missing one cannot silently render
+    # the raw key in the UI.
+    missing = missing_locale_keys(requested_keys)
+    assert not missing, f"rendering panel requests locale keys absent from en.json: {missing}"
 
 
 def test_rendering_panel_binds_theme_vignette_controls(rendering_panel_module):

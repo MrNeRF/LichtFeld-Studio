@@ -352,9 +352,9 @@ on this corpus.
    packages. No application dependency was hidden behind an off-by-default
    feature.
 7. **Job control and presets.** vcpkg package builds auto-cap at six without
-   imposing global `MAKEFLAGS`. `dev-release` and `measure-release` presets
-   make the full-featured cached and compiler-cold loops explicit; both build
-   presets hard-code six jobs.
+   imposing global `MAKEFLAGS`. The `release` and `debug` presets make the two
+   standard build trees explicit; their build presets request sixteen jobs, so
+   lower `-j` on a memory-constrained machine.
 8. **Developer documentation.** `docs/docs/development/build.md` documents the
    full build, cache, concurrency and CUDA policy. The flags guide justifies
    every remaining runtime variable and distinguishes CMake choices from

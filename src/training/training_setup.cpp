@@ -15,8 +15,11 @@
 #include "core/splat_data_transform.hpp"
 #include "dataset.hpp"
 #include "io/loader.hpp"
+#include "io/project_document.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "trainer.hpp"
 #include <algorithm>
+#include <filesystem>
 #include <format>
 #include <memory>
 #include <numeric>
@@ -447,10 +450,11 @@ namespace lfs::training {
                                               std::move(opacity),
                                               scene_scale,
                                               lfs::core::SplatData::ShNLayout::Swizzled);
-                migrated.set_active_sh_degree(active_sh);
                 if (shN_bounds.is_valid()) {
+                    // Codes and bounds are one declared representation; install before degree validation.
                     migrated.shN_value_bounds() = std::move(shN_bounds);
                 }
+                migrated.set_active_sh_degree(active_sh);
                 if (deleted.is_valid()) {
                     migrated.deleted() = std::move(deleted);
                 }
@@ -538,8 +542,11 @@ namespace lfs::training {
             if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
                 auto model = std::make_unique<lfs::core::SplatData>(std::move(*data));
                 applyTrainingSHDegree(*model, params.optimization.sh_degree);
-                scene.addSplat("loaded_model", std::move(model));
-                scene.setTrainingModelNode("loaded_model");
+                const auto model_id = scene.addSplat("loaded_model", std::move(model));
+                if (model_id == lfs::core::NULL_NODE) {
+                    return std::unexpected("Failed to add loaded training model to scene");
+                }
+                scene.setTrainingModelNode(model_id);
                 LOG_INFO("Loaded PLY directly into scene");
                 return {};
 
@@ -580,8 +587,11 @@ namespace lfs::training {
                         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
                         LOG_INFO("Initialized {} Gaussians from {} (sh={})",
                                  model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                        scene.addSplat("Model", std::move(model), dataset_id);
-                        scene.setTrainingModelNode("Model");
+                        const auto model_id = scene.addSplat("Model", std::move(model), dataset_id);
+                        if (model_id == lfs::core::NULL_NODE) {
+                            return std::unexpected("Failed to add initialized training model to scene");
+                        }
+                        scene.setTrainingModelNode(model_id);
                     } else {
                         auto loader = lfs::io::Loader::create();
                         auto init_result = loader->load(init_file);
@@ -600,8 +610,11 @@ namespace lfs::training {
 
                             LOG_INFO("Loaded {} Gaussians from {} (sh={})",
                                      model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                            scene.addSplat("Model", std::move(model), dataset_id);
-                            scene.setTrainingModelNode("Model");
+                            const auto model_id = scene.addSplat("Model", std::move(model), dataset_id);
+                            if (model_id == lfs::core::NULL_NODE) {
+                                return std::unexpected("Failed to add loaded training model to scene");
+                            }
+                            scene.setTrainingModelNode(model_id);
                         } catch (const std::bad_variant_access&) {
                             return std::unexpected(std::format("'{}': invalid SplatData", lfs::core::path_to_utf8(init_file)));
                         }
@@ -872,15 +885,18 @@ namespace lfs::training {
         }
         LOG_INFO("Created training model with {} gaussians", model->size());
         const lfs::core::NodeId model_id = scene.addSplat("Model", std::move(model), parent_id);
-        if (node_transform != glm::mat4{1.0f}) {
-            scene.setNodeTransform("Model", node_transform);
+        if (model_id == lfs::core::NULL_NODE) {
+            return std::unexpected("Failed to add training model to scene");
         }
-        scene.setTrainingModelNode("Model");
+        if (node_transform != glm::mat4{1.0f}) {
+            scene.setNodeTransform(model_id, node_transform);
+        }
+        scene.setTrainingModelNode(model_id);
         if (has_preserved_cropbox && model_id != lfs::core::NULL_NODE) {
             const lfs::core::NodeId model_cropbox_id = scene.addCropBox("Model_cropbox", model_id);
             if (model_cropbox_id != lfs::core::NULL_NODE) {
                 scene.setCropBoxData(model_cropbox_id, preserved_cropbox_data);
-                scene.setNodeTransform("Model_cropbox", preserved_cropbox_transform);
+                scene.setNodeTransform(model_cropbox_id, preserved_cropbox_transform);
             }
         }
 
@@ -922,8 +938,11 @@ namespace lfs::training {
             if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
                 auto model = std::make_unique<lfs::core::SplatData>(std::move(*data));
                 applyTrainingSHDegree(*model, params.optimization.sh_degree);
-                scene.addSplat("loaded_model", std::move(model));
-                scene.setTrainingModelNode("loaded_model");
+                const auto model_id = scene.addSplat("loaded_model", std::move(model));
+                if (model_id == lfs::core::NULL_NODE) {
+                    return std::unexpected("Failed to add loaded training model to scene");
+                }
+                scene.setTrainingModelNode(model_id);
                 return {};
 
             } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
@@ -961,8 +980,11 @@ namespace lfs::training {
                         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
                         LOG_INFO("Init {} gaussians from {} (sh={})",
                                  model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                        scene.addSplat("Model", std::move(model), dataset_id);
-                        scene.setTrainingModelNode("Model");
+                        const auto model_id = scene.addSplat("Model", std::move(model), dataset_id);
+                        if (model_id == lfs::core::NULL_NODE) {
+                            return std::unexpected("Failed to add initialized training model to scene");
+                        }
+                        scene.setTrainingModelNode(model_id);
                     } else {
                         auto loader = lfs::io::Loader::create();
                         auto init_result = loader->load(init_file);
@@ -980,8 +1002,11 @@ namespace lfs::training {
 
                             LOG_INFO("Loaded {} gaussians from {} (sh={})",
                                      model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                            scene.addSplat("Model", std::move(model), dataset_id);
-                            scene.setTrainingModelNode("Model");
+                            const auto model_id = scene.addSplat("Model", std::move(model), dataset_id);
+                            if (model_id == lfs::core::NULL_NODE) {
+                                return std::unexpected("Failed to add loaded training model to scene");
+                            }
+                            scene.setTrainingModelNode(model_id);
                         } catch (const std::bad_variant_access&) {
                             return std::unexpected(std::format("'{}': invalid SplatData", lfs::core::path_to_utf8(init_file)));
                         }
@@ -1045,6 +1070,90 @@ namespace lfs::training {
             }
         },
                           load_result.data);
+    }
+
+    std::expected<ProjectCheckpointTrainer, std::string>
+    installTrainerFromProjectCheckpoint(
+        lfs::core::Scene& scene,
+        const lfs::io::project::ProjectDocument& document,
+        const lfs::core::Uuid& checkpoint_uuid,
+        const lfs::core::param::TrainingParameters& params,
+        const std::string_view source_name,
+        const int expected_iteration,
+        const std::optional<lfs::io::project::RecoverySession>&
+            recovery_session,
+        lfs::core::SplatTensorAllocator tensor_allocator) {
+        if (params.dataset.data_path.empty()) {
+            return std::unexpected(
+                "Project checkpoint has no dataset path");
+        }
+        if (!std::filesystem::exists(
+                params.dataset.data_path)) {
+            return std::unexpected(std::format(
+                "Dataset path does not exist: {}",
+                lfs::core::path_to_utf8(
+                    params.dataset.data_path)));
+        }
+
+        auto trainer = std::make_unique<Trainer>(scene);
+        if (recovery_session) {
+            trainer->set_recovery_session(*recovery_session);
+        }
+        if (!params.python_scripts.empty()) {
+            trainer->set_python_scripts(params.python_scripts);
+        }
+        if (tensor_allocator) {
+            trainer->setSplatTensorAllocator(
+                std::move(tensor_allocator));
+        }
+        if (const auto initialized =
+                trainer->initialize(params);
+            !initialized) {
+            return std::unexpected(std::format(
+                "Failed to initialize trainer from project: {}",
+                initialized.error()));
+        }
+        const auto* checkpoint =
+            document.find_checkpoint(checkpoint_uuid);
+        if (!checkpoint) {
+            return std::unexpected(
+                "Project CKPT handle disappeared");
+        }
+        std::optional<CheckpointLoadResult> restored;
+        auto visited = checkpoint->visit_stream(
+            [&](std::istream& source,
+                const std::uint64_t bytes)
+                -> lfs::Result<void> {
+                restored = trainer->load_checkpoint(
+                    source, bytes, source_name);
+                return {};
+            });
+        if (!visited) {
+            return std::unexpected(std::format(
+                "Failed to stream project CKPT: {}",
+                lfs::format_for_developer(visited.error())));
+        }
+        if (!restored || !*restored) {
+            return std::unexpected(std::format(
+                "Failed to restore project trainer state: {}",
+                restored ? restored->error()
+                         : "CKPT visitor did not run"));
+        }
+        const int restored_iteration = **restored;
+        if (restored_iteration != expected_iteration ||
+            trainer->get_current_iteration() !=
+                expected_iteration) {
+            return std::unexpected(std::format(
+                "Project resume iteration mismatch: "
+                "display={} trainer={} expected={}",
+                restored_iteration,
+                trainer->get_current_iteration(),
+                expected_iteration));
+        }
+        return ProjectCheckpointTrainer{
+            .trainer = std::move(trainer),
+            .iteration = restored_iteration,
+        };
     }
 
 } // namespace lfs::training

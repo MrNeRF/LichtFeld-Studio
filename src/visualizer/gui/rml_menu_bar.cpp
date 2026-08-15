@@ -24,6 +24,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <format>
@@ -32,9 +33,96 @@
 namespace lfs::vis::gui {
 
     namespace {
+        float untruncatedContentWidth(Rml::Element* element) {
+            assert(element);
+
+            float children_width = 0.0f;
+            for (int i = 0; i < element->GetNumChildren(); ++i) {
+                auto* const child = element->GetChild(i);
+                if (!child || child->GetDisplay() == Rml::Style::Display::None)
+                    continue;
+
+                const auto position = child->GetComputedValues().position();
+                if (position == Rml::Style::Position::Absolute ||
+                    position == Rml::Style::Position::Fixed) {
+                    continue;
+                }
+
+                const auto& child_box = child->GetBox();
+                const float outer_width = child_box.GetSize(Rml::BoxArea::Margin).x;
+                const float frame_width = outer_width - child_box.GetSize().x;
+                children_width +=
+                    std::max(outer_width, untruncatedContentWidth(child) + frame_width);
+            }
+
+            const bool clips =
+                element->GetComputedValues().overflow_x() != Rml::Style::Overflow::Visible;
+            const float overflow_width =
+                clips ? std::max(0.0f, element->GetScrollWidth() - element->GetClientWidth())
+                      : 0.0f;
+            const float own_width =
+                children_width > 0.0f ? children_width : element->GetBox().GetSize().x;
+            return own_width + overflow_width;
+        }
+
+        void collectDirectMenuRows(Rml::Element* element, Rml::ElementList& rows) {
+            assert(element);
+
+            for (int i = 0; i < element->GetNumChildren(); ++i) {
+                auto* const child = element->GetChild(i);
+                if (!child || child->GetDisplay() == Rml::Style::Display::None)
+                    continue;
+                if (child->IsClassSet("submenu-popup"))
+                    continue;
+                if (child->IsClassSet("menu-item")) {
+                    rows.push_back(child);
+                    continue;
+                }
+                collectDirectMenuRows(child, rows);
+            }
+        }
+
+        float menuRowContentWidth(Rml::Element* row) {
+            assert(row);
+
+            const auto& row_box = row->GetBox();
+            float width =
+                row_box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Left) +
+                row_box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Right) +
+                row_box.GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Left) +
+                row_box.GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Right);
+
+            for (int i = 0; i < row->GetNumChildren(); ++i) {
+                auto* const child = row->GetChild(i);
+                if (!child || child->GetDisplay() == Rml::Style::Display::None)
+                    continue;
+                if (!child->IsClassSet("label") && !child->IsClassSet("shortcut") &&
+                    !child->IsClassSet("checkmark") && !child->IsClassSet("submenu-arrow")) {
+                    continue;
+                }
+
+                const auto& child_box = child->GetBox();
+                const float frame_width = child_box.GetSize(Rml::BoxArea::Margin).x -
+                                          child_box.GetSize().x;
+                width += untruncatedContentWidth(child) + frame_width;
+            }
+            return width;
+        }
+
+        float popupContentWidth(Rml::Element* popup) {
+            Rml::ElementList rows;
+            collectDirectMenuRows(popup, rows);
+
+            float width = 0.0f;
+            for (auto* const row : rows)
+                width = std::max(width, menuRowContentWidth(row));
+            return width;
+        }
+
         MenuDropdownLeafView makeLeafItemView(const MenuItemDesc& item) {
             MenuDropdownLeafView view;
             view.label = item.label;
+            view.tooltip = item.tooltip;
             view.enabled = item.enabled;
             view.callback_index = item.callback_index;
 
@@ -42,6 +130,8 @@ namespace lfs::vis::gui {
             case MenuItemDesc::Type::Operator:
                 view.action = "operator";
                 view.operator_id = item.operator_id;
+                view.has_shortcut = !item.shortcut.empty();
+                view.shortcut = item.shortcut;
                 break;
             case MenuItemDesc::Type::Toggle:
                 view.action = "callback";
@@ -65,9 +155,10 @@ namespace lfs::vis::gui {
             return view;
         }
 
-        MenuDropdownLeafView makeSubmenuLabelView(const std::string& label) {
+        MenuDropdownLeafView makeSubmenuLabelView(const MenuItemDesc& item) {
             MenuDropdownLeafView view;
-            view.label = label;
+            view.label = item.label;
+            view.tooltip = item.tooltip;
             view.enabled = false;
             view.is_label = true;
             return view;
@@ -91,7 +182,7 @@ namespace lfs::vis::gui {
                         warned_nested_submenu = true;
                         LOG_WARN("RmlMenuBar: nested submenu depth > 1 is flattened in the retained Rml menu model.");
                     }
-                    MenuDropdownLeafView label_view = makeSubmenuLabelView(item.label);
+                    MenuDropdownLeafView label_view = makeSubmenuLabelView(item);
                     label_view.separator_before = separator_before;
                     separator_before = false;
                     result.push_back(std::move(label_view));
@@ -142,6 +233,7 @@ namespace lfs::vis::gui {
                     MenuDropdownRootView view;
                     view.index = static_cast<int>(result.size());
                     view.label = item.label;
+                    view.tooltip = item.tooltip;
                     view.has_children = true;
                     view.separator_before = separator_before;
                     separator_before = false;
@@ -162,6 +254,7 @@ namespace lfs::vis::gui {
                     view.operator_id = leaf.operator_id;
                     view.shortcut = leaf.shortcut;
                     view.checkmark = leaf.checkmark;
+                    view.tooltip = leaf.tooltip;
                     view.enabled = leaf.enabled;
                     view.separator_before = separator_before;
                     view.has_shortcut = leaf.has_shortcut;
@@ -208,6 +301,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("operator_id", &MenuDropdownLeafView::operator_id);
             handle.RegisterMember("shortcut", &MenuDropdownLeafView::shortcut);
             handle.RegisterMember("checkmark", &MenuDropdownLeafView::checkmark);
+            handle.RegisterMember("tooltip", &MenuDropdownLeafView::tooltip);
             handle.RegisterMember("enabled", &MenuDropdownLeafView::enabled);
             handle.RegisterMember("separator_before", &MenuDropdownLeafView::separator_before);
             handle.RegisterMember("has_shortcut", &MenuDropdownLeafView::has_shortcut);
@@ -224,6 +318,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("operator_id", &MenuDropdownRootView::operator_id);
             handle.RegisterMember("shortcut", &MenuDropdownRootView::shortcut);
             handle.RegisterMember("checkmark", &MenuDropdownRootView::checkmark);
+            handle.RegisterMember("tooltip", &MenuDropdownRootView::tooltip);
             handle.RegisterMember("enabled", &MenuDropdownRootView::enabled);
             handle.RegisterMember("separator_before", &MenuDropdownRootView::separator_before);
             handle.RegisterMember("has_shortcut", &MenuDropdownRootView::has_shortcut);
@@ -492,6 +587,8 @@ namespace lfs::vis::gui {
         int hovered_label = -1;
         for (int i = 0; i < count; ++i) {
             auto* child = menu_items_->GetChild(i);
+            if (!child)
+                continue;
             const auto box = child->GetAbsoluteOffset(Rml::BoxArea::Border);
             const auto size = child->GetBox().GetSize(Rml::BoxArea::Border);
             if (mx >= box.x && mx < box.x + size.x && my >= box.y && my < box.y + size.y) {
@@ -532,6 +629,7 @@ namespace lfs::vis::gui {
             Rml::Element* hit_element = nullptr;
             if (hovered_label < 0 && dropdown_container_)
                 hit_element = dropdownElementAtPoint(mx, my);
+            tooltip_.setHover(resolveRmlTooltip(hit_element), hit_element);
             setOpenSubmenu(submenuIndexForElement(hit_element));
 
             if (input.mouse_clicked[0]) {
@@ -618,6 +716,7 @@ namespace lfs::vis::gui {
                 item.label = info->label ? info->label : "";
                 item.operator_id = info->operator_id ? info->operator_id : "";
                 item.shortcut = info->shortcut ? info->shortcut : "";
+                item.tooltip = info->tooltip ? info->tooltip : "";
                 item.enabled = info->enabled;
                 item.selected = info->selected;
                 item.callback_index = info->callback_index;
@@ -636,6 +735,7 @@ namespace lfs::vis::gui {
         open_submenu_index_ = -1;
         open_menu_idname_.clear();
         dropdown_items_.clear();
+        tooltip_.setHover({}, nullptr);
         menu_model_.DirtyVariable("dropdown_items");
 
         if (dropdown_container_) {
@@ -888,7 +988,7 @@ namespace lfs::vis::gui {
                 return nullptr;
             for (int i = 0; i < root->GetNumChildren(); ++i) {
                 auto* child = root->GetChild(i);
-                if (!child->HasAttribute("data-action"))
+                if (!child || !child->HasAttribute("data-action"))
                     continue;
                 const auto box = child->GetAbsoluteOffset(Rml::BoxArea::Border);
                 const auto size = child->GetBox().GetSize(Rml::BoxArea::Border);
@@ -956,6 +1056,8 @@ namespace lfs::vis::gui {
             return;
 
         auto* label_el = menu_items_->GetChild(open_menu_index_);
+        if (!label_el)
+            return;
         const auto label_offset = label_el->GetAbsoluteOffset(Rml::BoxArea::Border);
         const auto label_size = label_el->GetBox().GetSize(Rml::BoxArea::Border);
 
@@ -967,6 +1069,59 @@ namespace lfs::vis::gui {
         dropdown_container_->SetClass("visible", true);
         dropdown_overlay_->SetClass("visible", true);
         render_needed_ = true;
+    }
+
+    void RmlMenuBar::sizeOpenDropdowns() {
+        if (!rml_context_ || !dropdown_popup_ || open_menu_index_ < 0)
+            return;
+
+        struct PopupLimits {
+            Rml::Element* element;
+            float min_width;
+            float max_width;
+        };
+
+        const float dp_ratio = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
+        std::vector<PopupLimits> popups{
+            {dropdown_popup_, 200.0f * dp_ratio, 360.0f * dp_ratio},
+        };
+        Rml::ElementList submenus;
+        dropdown_popup_->GetElementsByClassName(submenus, "submenu-popup");
+        for (auto* const submenu : submenus) {
+            if (submenu && submenu->GetDisplay() != Rml::Style::Display::None)
+                popups.push_back({submenu, 200.0f * dp_ratio, 420.0f * dp_ratio});
+        }
+
+        constexpr float tolerance_px = 0.5f;
+        // Measure from min-width. Flex labels grow to the popup width, and
+        // GetScrollWidth() is at least the allocated client width, so measuring
+        // at max-width would report max for every popup.
+        bool collapsed = false;
+        for (const auto& popup : popups) {
+            const float current_width =
+                popup.element->GetBox().GetSize(Rml::BoxArea::Content).x;
+            if (std::abs(current_width - popup.min_width) <= tolerance_px)
+                continue;
+            popup.element->SetProperty("width", std::format("{:.1f}px", popup.min_width));
+            collapsed = true;
+        }
+        if (collapsed)
+            rml_context_->Update();
+
+        bool fitted = false;
+        for (const auto& popup : popups) {
+            const float content_width = std::ceil(popupContentWidth(popup.element));
+            const float fitted_width =
+                std::clamp(content_width, popup.min_width, popup.max_width);
+            const float current_width =
+                popup.element->GetBox().GetSize(Rml::BoxArea::Content).x;
+            if (std::abs(current_width - fitted_width) <= tolerance_px)
+                continue;
+            popup.element->SetProperty("width", std::format("{:.1f}px", fitted_width));
+            fitted = true;
+        }
+        if (fitted)
+            rml_context_->Update();
     }
 
     bool RmlMenuBar::updateTheme() {
@@ -1112,6 +1267,8 @@ namespace lfs::vis::gui {
                 last_document_h_ = ctx_h;
             }
             rml_context_->Update();
+            if (open_menu_index_ >= 0)
+                sizeOpenDropdowns();
         }
         updateTitlebarDragRegion(bar_h);
 

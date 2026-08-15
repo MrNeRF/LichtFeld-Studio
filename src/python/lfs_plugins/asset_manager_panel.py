@@ -58,9 +58,6 @@ ASSET_MANAGER_PERF_LOG_THRESHOLD_MS = 50.0
 try:
     from .asset_index import (
         AssetIndex,
-        Folder,
-        Scene,
-        Asset,
         resolve_asset_manager_storage_path,
     )
     from .asset_scanner import AssetScanner
@@ -405,6 +402,39 @@ class AssetManagerPanel(Panel):
         # Dock state tracking (mirror histogram_panel pattern)
         self._panel_space = lf.ui.PanelSpace.LEFT_DOCK
         self._is_floating = False
+
+    def capture_chrome(self):
+        return {
+            "folders_collapsed": bool(self._folders_collapsed),
+            "filters_collapsed": bool(self._filters_collapsed),
+            "sidebar_height": float(self._sidebar_height),
+            "right_panel_width": float(self._right_panel_width),
+            "bottom_panel_height": float(self._bottom_panel_height),
+        }
+
+    def apply_chrome(self, payload):
+        self._folders_collapsed = True
+        self._filters_collapsed = True
+        self._sidebar_height = 176.0
+        self._right_panel_width = 300.0
+        self._bottom_panel_height = 220.0
+        if isinstance(payload, dict):
+            if "folders_collapsed" in payload:
+                self._folders_collapsed = bool(payload.get("folders_collapsed"))
+            if "filters_collapsed" in payload:
+                self._filters_collapsed = bool(payload.get("filters_collapsed"))
+
+            def _positive_float(key, current):
+                value = payload.get(key)
+                if isinstance(value, (int, float)) and value > 0:
+                    return float(value)
+                return current
+
+            self._sidebar_height = _positive_float("sidebar_height", self._sidebar_height)
+            self._right_panel_width = _positive_float("right_panel_width", self._right_panel_width)
+            self._bottom_panel_height = _positive_float("bottom_panel_height", self._bottom_panel_height)
+        if self._handle:
+            self._handle.dirty_all()
 
     # ── Initialization ────────────────────────────────────────
 
@@ -5366,48 +5396,6 @@ class AssetManagerPanel(Panel):
 
         except Exception as e:
             _logger.error(f"Failed to create training context: {e}")
-            return None
-
-    def on_checkpoint_saved(
-        self, scene_id: str, checkpoint_path: str, iteration: int
-    ) -> Optional[str]:
-        """Called when checkpoint is saved - add checkpoint asset.
-
-        Returns:
-            Asset ID if created, None otherwise.
-        """
-        if not self._asset_index:
-            return None
-
-        try:
-            scene = (
-                self._asset_index.scenes.get(scene_id)
-                if hasattr(self._asset_index, "scenes")
-                else None
-            )
-            if not scene:
-                return None
-
-            asset = self._scan_and_register_asset(
-                checkpoint_path,
-                folder_id=scene.get("folder_id"),
-                scene_id=scene_id,
-                fallback_role="training_checkpoint",
-                override_type="checkpoint",
-                override_role="training_checkpoint",
-            )
-
-            if asset:
-                self._asset_index.save()
-
-                # Refresh UI
-                self.refresh_catalog()
-
-                return asset.id
-            return None
-
-        except Exception as e:
-            _logger.error(f"Failed to register checkpoint: {e}")
             return None
 
     def on_training_completed(

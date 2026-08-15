@@ -84,11 +84,6 @@ namespace lfs::vis {
                 return "Cannot modify scene while training is stopping.";
             break;
 
-        case TrainingAction::SaveCheckpoint:
-            if (!isActive())
-                return "Can only save checkpoint during active training.";
-            break;
-
         default:
             break;
         }
@@ -201,7 +196,6 @@ namespace lfs::vis {
         case TrainingAction::Reset: return "Reset";
         case TrainingAction::ClearScene: return "ClearScene";
         case TrainingAction::DeleteTrainingNode: return "DeleteTrainingNode";
-        case TrainingAction::SaveCheckpoint: return "SaveCheckpoint";
         case TrainingAction::COUNT: return "Invalid";
         }
         return "Unknown";

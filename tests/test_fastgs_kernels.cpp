@@ -40,8 +40,8 @@ namespace {
     }
 
     // Recover gradients from the first Adam moment after one fused step from
-    // zero moments: m = (1-beta1)*g, so g ≈ m/(1-beta1). Joint moments have
-    // no exp_avg_scale and must be decoded through their codec.
+    // zero moments: m = (1-beta1)*g, so g ≈ m/(1-beta1). Joint moments must
+    // be decoded through their codec.
     Tensor adam_moment(const AdamOptimizer& opt, ParamType type) {
         const auto& state = adam_state(opt, type);
         if (state.exp_avg.dtype() == DataType::Float32) {
@@ -140,26 +140,7 @@ namespace {
                 .to(Device::CUDA);
         }
 
-        // --- Legacy uint8 m + per-primitive scale ---
-        if (!state.exp_avg_scale.is_valid()) {
-            throw std::runtime_error("Legacy Adam state missing exp_avg_scale");
-        }
-        auto q_cpu = state.exp_avg.to(Device::CPU);
-        auto scale_cpu = state.exp_avg_scale.to(Device::CPU);
-        const auto& shape = state.exp_avg.shape();
-        const size_t rows = shape[0];
-        const size_t row_size = rows == 0 ? 0 : state.exp_avg.numel() / rows;
-        const auto* q = q_cpu.ptr<std::uint8_t>();
-        const auto* scales = scale_cpu.ptr<float>();
-        std::vector<float> dequant(state.exp_avg.numel(), 0.0f);
-        for (size_t row = 0; row < rows; ++row) {
-            const float scale = scales[row];
-            for (size_t col = 0; col < row_size; ++col) {
-                const size_t idx = row * row_size + col;
-                dequant[idx] = scale == 0.0f ? 0.0f : (static_cast<int>(q[idx]) - 128) * scale;
-            }
-        }
-        return Tensor::from_blob(dequant.data(), shape, Device::CPU, DataType::Float32).clone().to(state.exp_avg.device());
+        throw std::runtime_error("Legacy Adam moment codec is unsupported");
     }
 
     void expect_adam_state_finite(const AdamOptimizer& opt, ParamType type) {
@@ -173,20 +154,6 @@ namespace {
             }
             // Packed uint8 codes are always finite by construction.
             return;
-        }
-        if (state.exp_avg_scale.is_valid()) {
-            auto scales = state.exp_avg_scale.to(Device::CPU);
-            auto* ptr = scales.ptr<float>();
-            for (size_t i = 0; i < scales.numel(); ++i) {
-                EXPECT_TRUE(std::isfinite(ptr[i]));
-            }
-        }
-        if (state.exp_avg_sq_scale.is_valid()) {
-            auto scales = state.exp_avg_sq_scale.to(Device::CPU);
-            auto* ptr = scales.ptr<float>();
-            for (size_t i = 0; i < scales.numel(); ++i) {
-                EXPECT_TRUE(std::isfinite(ptr[i]));
-            }
         }
     }
 
@@ -846,7 +813,7 @@ TEST(FastGSCropDampingTest, FusedBackwardZeroScaleSkipsContiguousAndSwizzledWrit
         result.opacity_delta =
             (splat.opacity_raw() - opacity_before).abs().sum().item<float>();
         result.shn_delta = (splat.shN() - shn_before).abs().sum().item<float>();
-        // Joint codec has no exp_avg_scale — use decoded |m| L1.
+        // Joint codec has no per-primitive moment scales — use decoded |m| L1.
         result.opacity_moment_scale = first_moment_l1(optimizer, ParamType::Opacity);
         result.shn_moment_scale = first_moment_l1(optimizer, ParamType::ShN);
         return result;

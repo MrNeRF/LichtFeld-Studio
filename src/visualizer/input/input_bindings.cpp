@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "input/input_bindings.hpp"
+#include "core/config_paths.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -14,13 +15,6 @@
 #include <optional>
 #include <ranges>
 #include <unordered_map>
-
-#ifdef _WIN32
-#include <shlobj.h>
-#else
-#include <pwd.h>
-#include <unistd.h>
-#endif
 
 namespace lfs::vis::input {
 
@@ -248,28 +242,7 @@ namespace lfs::vis::input {
     }
 
     std::filesystem::path InputBindings::getConfigDir() {
-        std::filesystem::path config_dir;
-#ifdef _WIN32
-        wchar_t path[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, path))) {
-            config_dir = std::filesystem::path(path) / "LichtFeldStudio" / "input_profiles";
-        } else {
-            config_dir = std::filesystem::current_path() / "config" / "input_profiles";
-        }
-#else
-        const char* home = getenv("HOME");
-        if (!home) {
-            struct passwd* pw = getpwuid(getuid());
-            if (pw)
-                home = pw->pw_dir;
-        }
-        if (home) {
-            config_dir = std::filesystem::path(home) / ".config" / "LichtFeldStudio" / "input_profiles";
-        } else {
-            config_dir = std::filesystem::current_path() / "config" / "input_profiles";
-        }
-#endif
-        return config_dir;
+        return lfs::core::user_config_dir() / "input_profiles";
     }
 
     bool InputBindings::saveProfileToFile(const std::filesystem::path& path) const {

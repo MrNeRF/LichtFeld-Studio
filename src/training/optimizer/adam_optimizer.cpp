@@ -253,7 +253,6 @@ namespace lfs::training {
                                              : alloc_cap;
             alloc_quantized_state(type, state, param, alloc_cap, prim_capacity);
             state.exp_avg.set_name("adam." + name + ".exp_avg");
-            state.exp_avg_sq.set_name("adam." + name + ".exp_avg_sq");
             state.grad = {};
             state.capacity = alloc_cap;
             state.size = logical_size;
@@ -365,9 +364,6 @@ namespace lfs::training {
         const int bits = (type == ParamType::ShN) ? 8 : 16;
         const int bpc = bytes_per_cell(bits);
         state.joint_bits = bits;
-        state.exp_avg_sq = {};
-        state.exp_avg_scale = {};
-        state.exp_avg_sq_scale = {};
 
         lfs::core::TensorShape packed_shape;
         size_t packed_cap_rows = 0;
@@ -540,12 +536,6 @@ namespace lfs::training {
         }
         lfs::core::waitForCUDAStream(execution_stream, param_live.stream());
         lfs::core::waitForCUDAStream(execution_stream, state.exp_avg.stream());
-        if (state.exp_avg_sq.is_valid())
-            lfs::core::waitForCUDAStream(execution_stream, state.exp_avg_sq.stream());
-        if (state.exp_avg_scale.is_valid())
-            lfs::core::waitForCUDAStream(execution_stream, state.exp_avg_scale.stream());
-        if (state.exp_avg_sq_scale.is_valid())
-            lfs::core::waitForCUDAStream(execution_stream, state.exp_avg_sq_scale.stream());
         if (state.joint_bounds.is_valid())
             lfs::core::waitForCUDAStream(execution_stream, state.joint_bounds.stream());
         lfs::core::waitForCUDAStream(execution_stream, state.grad.stream());
@@ -925,7 +915,7 @@ namespace lfs::training {
 
         if (type == ParamType::ShN &&
             (splat_data_.max_sh_coeffs_rest() == 0 ||
-             !state.exp_avg.is_valid() || !state.exp_avg_sq.is_valid())) {
+             !state.exp_avg.is_valid())) {
             return;
         }
 
@@ -1039,16 +1029,14 @@ namespace lfs::training {
         auto& param = get_param(type);
         auto& state = states_[name];
         if (type == ParamType::ShN &&
-            (splat_data_.max_sh_coeffs_rest() == 0 || !state.exp_avg.is_valid() ||
-             (!state.is_joint() && !state.exp_avg_sq.is_valid()))) {
+            (splat_data_.max_sh_coeffs_rest() == 0 || !state.exp_avg.is_valid())) {
             return;
         }
 
         // For swizzled shN, moment growth is measured in floats: (swizzled_floats(N+n_new) -
-        // swizzled_floats(N)). For everything else it is n_new rows. Scales always grow by
-        // n_new primitives. First-moment bytes must use the signed zero-point (128), not byte
-        // zero: inactive shN slots can share a nonzero per-primitive scale once lower SH bands
-        // start training.
+        // swizzled_floats(N)). For everything else it is n_new rows. First-moment bytes must
+        // use the signed zero-point (128), not byte zero: inactive shN slots can share a
+        // nonzero per-primitive scale once lower SH bands start training.
         const size_t growth = compute_state_growth(type, n_new);
         // Joint SH packed is 1D with bpc bytes per float — growth is in float cells * bpc
         // for append along the 1D dim when shape is [floats*bpc].
@@ -1057,9 +1045,6 @@ namespace lfs::training {
             packed_growth = growth * static_cast<size_t>(joint_adam::bytes_per_cell(state.joint_bits));
         }
         const size_t new_size = state.size + growth;
-        const size_t scale_cur = state.exp_avg_scale.is_valid() ? state.exp_avg_scale.shape()[0] : 0;
-        const size_t scale_new = scale_cur + n_new;
-        const size_t moment_row_size = tensor_row_size(state.exp_avg);
 
         if (!param.is_valid() || param.shape().rank() == 0) {
             throw std::runtime_error("extend_state: " + name + " invalid");
@@ -1379,8 +1364,7 @@ namespace lfs::training {
             if (states_.contains(name)) {
                 auto& state = states_[name];
 
-                // Joint states grow exp_avg directly because exp_avg_sq and
-                // per-tensor scales are absent.
+                // Joint states grow packed exp_avg directly.
                 if (state.is_joint() && state.exp_avg.is_valid()) {
                     const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
                     const size_t packed_growth = growth * static_cast<size_t>(bpc);
@@ -1764,9 +1748,6 @@ namespace lfs::training {
                 }
                 state.exp_avg = state.exp_avg.cuda();
                 state.joint_bounds = state.joint_bounds.cuda();
-                state.exp_avg_sq = {};
-                state.exp_avg_scale = {};
-                state.exp_avg_sq_scale = {};
             }
 
             // Serialized capacity is advisory and may be attacker-controlled.
@@ -1849,16 +1830,10 @@ namespace lfs::training {
                         grow_tensor(state.grad, target_capacity);
                     if (state.exp_avg.is_valid())
                         grow_tensor(state.exp_avg, target_capacity);
-                    if (state.exp_avg_sq.is_valid())
-                        grow_tensor(state.exp_avg_sq, target_capacity);
                 }
                 state.capacity = target_capacity;
             }
 
-            if (state.exp_avg_scale.is_valid() && capacity > state.exp_avg_scale.capacity()) {
-                grow_tensor(state.exp_avg_scale, capacity);
-                grow_tensor(state.exp_avg_sq_scale, capacity);
-            }
             if (state.is_joint() && state.joint_bounds.is_valid()) {
                 const size_t bounds_cap = n_bounds_for_prims(capacity);
                 if (bounds_cap > state.joint_bounds.capacity())

@@ -22,8 +22,13 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         core/frame_state_machine.cpp
         core/data_loading_service.cpp
         core/editor_context.cpp
+        core/job_registry.cpp
         core/parameter_manager.cpp
         core/services.cpp
+
+        # Project session chapters
+        project/session_state.cpp
+        project/project_lifecycle.cpp
 
         # Window management
         window/window_manager.cpp
@@ -120,6 +125,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Scene management
         scene/scene_manager.cpp
         scene/selection_state.cpp
+        scene/viewer_splat_quantize.cpp
 
         # Input handling
         input/input_controller.cpp

@@ -14,6 +14,7 @@
 #include "io/exporter.hpp"
 #include "io/formats/usd.hpp"
 #include "io/loaders/usd_loader.hpp"
+#include "io/project_document.hpp"
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usdGeom/boundable.h>
@@ -358,6 +359,99 @@ namespace {
         ASSERT_NE(splat_data, nullptr);
         EXPECT_EQ(*splat_data, nullptr);
         EXPECT_EQ(result->scene_center.numel(), 3);
+    }
+
+    TEST_F(
+        UsdFormatTest,
+        LoaderGeoreferenceCapturesIntoProjectAndSurvivesReload) {
+        const fs::path usd_path =
+            temp_dir / "georeference.usda";
+        auto splat = create_test_splat(2, 0);
+        ASSERT_TRUE(save_usd(
+                        splat,
+                        {.output_path = usd_path})
+                        .has_value());
+        auto stage = pxr::UsdStage::Open(usd_path.string());
+        ASSERT_TRUE(stage);
+        constexpr double METERS_PER_UNIT = 0.3048;
+        pxr::UsdGeomSetStageMetersPerUnit(
+            stage, METERS_PER_UNIT);
+        ASSERT_TRUE(stage->GetRootLayer()->Save());
+
+        USDLoader loader;
+        auto loaded = loader.load(usd_path);
+        ASSERT_TRUE(loaded.has_value())
+            << loaded.error().message;
+        ASSERT_TRUE(loaded->georeference);
+        EXPECT_DOUBLE_EQ(
+            loaded->georeference->world_unit_scale,
+            METERS_PER_UNIT);
+
+        const auto project_uuid =
+            Uuid::from_string(
+                "76000000-0000-4000-8000-000000000001");
+        ASSERT_TRUE(project_uuid);
+        auto document =
+            lfs::io::project::ProjectDocument::create(
+                *project_uuid, 100);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(
+                   document.error());
+        auto captured =
+            document->capture_georeference(*loaded);
+        ASSERT_TRUE(captured)
+            << lfs::format_for_developer(
+                   captured.error());
+
+        const fs::path project_path =
+            temp_dir / "georeference.licht";
+        auto saved = document->save(
+            project_path,
+            lfs::io::project::
+                ProjectDocumentSaveOptions{
+                    .commit =
+                        {
+                            .kind =
+                                lfs::io::project::
+                                    CommitKind::Explicit,
+                            .commit_uuid =
+                                *Uuid::from_string(
+                                    "76000000-0000-4000-8000-000000000002"),
+                            .snapshot_uuid =
+                                *Uuid::from_string(
+                                    "76000000-0000-4000-8000-000000000003"),
+                            .wallclock_unix_ns = 200,
+                        },
+                    .file_uuid =
+                        *Uuid::from_string(
+                            "76000000-0000-4000-8000-000000000004"),
+                    .index_compression =
+                        lfs::io::project::
+                            IndexCompression::
+                                StoredForDeterministicTests,
+                    .disk_reserve_bytes = 0,
+                });
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        auto reopened =
+            lfs::io::project::ProjectDocument::open(
+                project_path);
+        ASSERT_TRUE(reopened)
+            << lfs::format_for_developer(
+                   reopened.error());
+        auto georeference =
+            reopened->project().georeference();
+        ASSERT_TRUE(georeference);
+        EXPECT_DOUBLE_EQ(
+            georeference->world_unit_scale,
+            METERS_PER_UNIT);
+        EXPECT_EQ(
+            georeference->world_origin,
+            loaded->georeference->world_origin);
+        EXPECT_EQ(
+            georeference->world_origin_provenance,
+            lfs::io::project::
+                WorldOriginProvenance::Import);
     }
 
 } // namespace

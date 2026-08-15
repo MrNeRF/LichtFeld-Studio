@@ -9,6 +9,7 @@
 #include "core/export.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_exportable_storage.hpp"
+#include "io/session_chapters.hpp"
 #include "training/trainer.hpp"
 #include "training_state.hpp"
 #include <atomic>
@@ -21,6 +22,7 @@
 #include <optional>
 #include <stop_token>
 #include <thread>
+#include <vector>
 
 namespace lfs::core {
     class Scene;
@@ -30,6 +32,10 @@ namespace lfs::vis {
 
     // Forward declarations
     class VisualizerImpl;
+    class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
+    class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+    class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+    class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
 
     class LFS_VIS_API TrainerManager {
     public:
@@ -66,7 +72,10 @@ namespace lfs::vis {
         void pauseTraining();
         void resumeTraining();
         void stopTraining();
-        void requestSaveCheckpoint();
+        void requestSaveProject();
+        // Suppress the completion notification modal for the next TrainingCompleted
+        // dispatch (stop initiated by New Project / app close / reset, issue #1604).
+        void suppressCompletionNotification() { suppress_completion_notification_.store(true, std::memory_order_relaxed); }
 
         // Temporary pause for short synchronization-sensitive operations; does not change UI state.
         struct TemporaryPauseResult {
@@ -98,6 +107,13 @@ namespace lfs::vis {
         [[nodiscard]] bool canReset() const { return canPerform(TrainingAction::Reset); }
         [[nodiscard]] bool isCompletionPending() const {
             return completion_pending_.load(std::memory_order_acquire);
+        }
+        [[nodiscard]] bool isPublishingFinalSnapshot() const {
+            return isCompletionPending() && !isTrainingActive();
+        }
+        [[nodiscard]] bool isPausedAtCheckpointBaseline() const;
+        [[nodiscard]] std::optional<int> checkpointBaselineIteration() const {
+            return checkpoint_baseline_iteration_;
         }
 
         // Progress information - directly query trainer
@@ -132,6 +148,11 @@ namespace lfs::vis {
         void updateEvaluationMetrics(int iteration, float psnr, float ssim);
         std::optional<EvaluationMetricsSnapshot> getLastEvaluationMetrics() const;
         void clearEvaluationMetrics();
+        [[nodiscard]] lfs::io::project::MetricsChapter
+        captureProjectMetrics() const;
+        void restoreProjectMetrics(
+            const lfs::io::project::MetricsChapter& metrics);
+        void clearRestoredProjectMetrics();
 
         // Access to trainer (for rendering, etc.)
         lfs::training::Trainer* getTrainer() { return trainer_.get(); }
@@ -185,6 +206,11 @@ namespace lfs::vis {
             std::optional<std::string> error;
             std::optional<lfs::Error> typed_error;
         };
+
+        friend class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
+        friend class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+        friend class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+        friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
 
         // Training thread function
         void trainingThreadFunc(std::stop_token stop_token);
@@ -247,6 +273,7 @@ namespace lfs::vis {
         bool training_joined_ = true;
         std::optional<TrainingCompletionData> pending_completion_;
         std::atomic<bool> completion_pending_{false};
+        std::atomic<bool> suppress_completion_notification_{false};
 
         static constexpr int COMPLETION_TIMEOUT_SEC = 30;
         static constexpr int MAX_LOSS_POINTS = 200;
@@ -260,6 +287,8 @@ namespace lfs::vis {
         bool temporary_pause_initially_paused_ = false;
         bool temporary_pause_resume_in_flight_ = false;
         std::optional<EvaluationMetricsSnapshot> last_eval_metrics_;
+        std::vector<EvaluationMetricsSnapshot>
+            evaluation_history_;
         mutable std::mutex eval_metrics_mutex_;
 
         // Training time tracking
@@ -268,6 +297,16 @@ namespace lfs::vis {
 
         lfs::core::param::OptimizationParameters pending_opt_params_;
         lfs::core::param::DatasetConfig pending_dataset_params_;
+        std::optional<int> checkpoint_baseline_iteration_;
+        std::optional<std::chrono::steady_clock::duration>
+            restored_accumulated_training_time_;
+        std::optional<lfs::io::project::TrainingFinishReason>
+            restored_finish_reason_;
+        bool restored_finish_published_ = false;
+
+        [[nodiscard]] FinishReason resolvedRestoredFinishReason() const;
+        void applyRestoredCheckpointPresentation();
+        void publishRestoredTrainingStore();
     };
 
 } // namespace lfs::vis

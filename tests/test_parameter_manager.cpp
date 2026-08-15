@@ -5,6 +5,7 @@
 
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
+#include "io/project_chapters.hpp"
 
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -214,6 +215,39 @@ namespace {
 
         EXPECT_EQ(params.resolved_total_iterations(), 25'000);
         EXPECT_EQ(params.resolved_ppisp_controller_activation_step(params.resolved_total_iterations()), 20'000);
+    }
+
+    TEST(ParameterManagerTest,
+         PendingProjectRestoreChangesOnlyRoleQualifiedManagerState) {
+        lfs::vis::ParameterManager source;
+        ASSERT_TRUE(source.ensureLoaded());
+        auto captured = source.capturePendingProjectState();
+        ASSERT_TRUE(captured) << captured.error().user_message();
+        captured->active_strategy = "igs+";
+        captured->mcmc_current.iterations = 101;
+        captured->mrnf_current.iterations = 202;
+        captured->igs_current.iterations = 303;
+        captured->dataset.images = "images_project";
+        captured->dataset.centralize_dataset = "pointcloud";
+
+        lfs::vis::ParameterManager target;
+        ASSERT_TRUE(target.ensureLoaded());
+        target.markDirty();
+        auto restored = target.restorePendingProjectState(*captured);
+        ASSERT_TRUE(restored) << restored.error().user_message();
+        EXPECT_EQ(target.getActiveStrategy(), "igs+");
+        EXPECT_EQ(target.getCurrentParams("mcmc").iterations, 101u);
+        EXPECT_EQ(target.getCurrentParams("mrnf").iterations, 202u);
+        EXPECT_EQ(target.getCurrentParams("igs+").iterations, 303u);
+        EXPECT_EQ(target.getDatasetConfig().images, "images_project");
+        EXPECT_FALSE(target.consumeDirty());
+
+        auto invalid = *captured;
+        invalid.mcmc_current =
+            lfs::core::param::OptimizationParameters::mrnf_defaults();
+        auto rejected = target.restorePendingProjectState(invalid);
+        EXPECT_FALSE(rejected);
+        EXPECT_EQ(target.getCurrentParams("mcmc").iterations, 101u);
     }
 
     TEST(ParameterValidationTest, RejectsCrashProneIterationAndNumericValues) {

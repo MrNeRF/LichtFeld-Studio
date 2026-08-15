@@ -5,12 +5,14 @@
 #include "py_ui.hpp"
 #include "control/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
+#include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -48,6 +50,7 @@
 #include "visualizer/theme/theme.hpp"
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
+#include <typeinfo>
 
 #include "config.h"
 #include "git_version.h"
@@ -243,6 +246,9 @@ namespace lfs::python {
         nb::object g_show_dataset_popup_callback;
         nb::object g_show_resume_popup_callback;
         nb::object g_request_exit_callback;
+        lfs::event::HandlerId g_request_exit_handler_id = 0;
+        nb::object
+            g_project_switch_confirmation_callback;
         nb::object g_open_camera_preview_callback;
         nb::object g_save_asset_callback;
 
@@ -3615,19 +3621,73 @@ namespace lfs::python {
             "on_request_exit",
             [](nb::object callback) {
                 g_request_exit_callback = callback;
-                lfs::core::events::cmd::RequestExit::when([](const auto&) {
-                    if (g_request_exit_callback && !g_request_exit_callback.is_none()) {
-                        nb::gil_scoped_acquire guard;
-                        try {
-                            g_request_exit_callback();
-                        } catch (const std::exception& ex) {
-                            LOG_ERROR("RequestExit callback error: {}", ex.what());
-                        }
-                    }
-                });
+                if (g_request_exit_handler_id != 0) {
+                    lfs::event::EventBridge::instance()
+                        .unsubscribe(
+                            typeid(lfs::core::events::cmd::
+                                       ShowExitConfirmation),
+                            g_request_exit_handler_id);
+                    g_request_exit_handler_id = 0;
+                }
+                g_request_exit_handler_id =
+                    lfs::core::events::cmd::
+                        ShowExitConfirmation::when(
+                            [](const auto& event) {
+                                if (g_request_exit_callback &&
+                                    !g_request_exit_callback
+                                         .is_none()) {
+                                    nb::gil_scoped_acquire
+                                        guard;
+                                    try {
+                                        g_request_exit_callback(
+                                            event
+                                                .training_in_progress);
+                                    } catch (
+                                        const std::
+                                            exception&
+                                                ex) {
+                                        LOG_ERROR(
+                                            "RequestExit callback error: {}",
+                                            ex.what());
+                                    }
+                                }
+                            });
             },
             nb::arg("callback"),
-            "Register callback for RequestExit event");
+            "Register callback for the close-decision prompt "
+            "(receives training_in_progress: bool)");
+
+        m.def(
+            "on_project_switch_confirmation",
+            [](nb::object callback) {
+                g_project_switch_confirmation_callback =
+                    callback;
+                lfs::core::events::cmd::
+                    ShowProjectSwitchConfirmation::
+                        when([](const auto& event) {
+                            if (g_project_switch_confirmation_callback &&
+                                !g_project_switch_confirmation_callback
+                                     .is_none()) {
+                                nb::gil_scoped_acquire
+                                    guard;
+                                try {
+                                    g_project_switch_confirmation_callback(
+                                        event.new_project,
+                                        lfs::core::
+                                            path_to_utf8(
+                                                event.path));
+                                } catch (
+                                    const std::
+                                        exception& error) {
+                                    LOG_ERROR(
+                                        "Project switch confirmation callback error: {}",
+                                        error.what());
+                                }
+                            }
+                        });
+            },
+            nb::arg("callback"),
+            "Register callback for a dirty project-switch decision");
 
         m.def(
             "on_open_camera_preview",
@@ -3649,7 +3709,12 @@ namespace lfs::python {
 
         m.def(
             "set_exit_popup_open",
-            [](bool open) { set_exit_popup_open(open); },
+            [](bool open) {
+                set_exit_popup_open(open);
+                if (auto* gui = get_gui_manager()) {
+                    gui->noteExitPopupMirror(open);
+                }
+            },
             nb::arg("open"),
             "Set exit popup open state (for window close callback)");
 
@@ -3674,6 +3739,14 @@ namespace lfs::python {
                 }
             },
             "Get the currently active tool id from C++ EditorContext");
+
+        m.def(
+            "consume_tool_restore_guard", []() -> bool {
+                auto* editor = get_editor_context();
+                return editor &&
+                       editor->consumeToolRestoreGuard();
+            },
+            "Consume the one-shot native tool restore guard");
 
         m.def(
             "is_tool_available", [](const std::string& id) -> bool {
@@ -4152,7 +4225,8 @@ namespace lfs::python {
                 const lfs::io::PlySaveOptions options{
                     .output_path = path,
                     .binary = true,
-                    .async = false};
+                    .async = false,
+                    .provenance = lfs::core::make_provenance_stamp()};
 
                 lfs::io::Result<void> result = std::unexpected(
                     lfs::io::Error{lfs::io::ErrorCode::INTERNAL_ERROR, "uninitialized"});
@@ -4183,6 +4257,7 @@ namespace lfs::python {
                               node_name,
                               lfs::core::path_to_utf8(path),
                               result.error().message);
+                    lfs::core::events::state::ExportFailed{.error = result.error().message}.emit();
                 } else {
                     LOG_INFO("Saved '{}' to {}", node_name, lfs::core::path_to_utf8(path));
                 }
@@ -4474,19 +4549,23 @@ namespace lfs::python {
 
         m.def(
             "export_video",
-            [](int width, int height, int framerate, int crf, const std::string& path) {
+            [](int width, int height, int framerate, int crf, const std::string& path,
+               bool include_provenance) {
                 lfs::core::events::cmd::SequencerExportVideo{
                     .width = width,
                     .height = height,
                     .framerate = framerate,
                     .crf = crf,
-                    .path = path}
+                    .path = path,
+                    .include_provenance = include_provenance}
                     .emit();
             },
             nb::arg("width"), nb::arg("height"), nb::arg("framerate"), nb::arg("crf"),
             nb::arg("path") = std::string{},
+            nb::arg("include_provenance") = true,
             "Export video with specified settings. Without a path a save dialog opens, "
-            "which a script cannot answer; pass one to export directly.");
+            "which a script cannot answer; pass one to export directly. "
+            "include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "add_keyframe",
@@ -4852,6 +4931,7 @@ namespace lfs::python {
                 info.label = item.label.c_str();
                 info.operator_id = item.operator_id.c_str();
                 info.shortcut = item.shortcut.c_str();
+                info.tooltip = item.tooltip.c_str();
                 info.enabled = item.enabled;
                 info.selected = item.selected;
                 info.callback_index = item.callback_index;
@@ -4884,6 +4964,16 @@ namespace lfs::python {
             g_show_dataset_popup_callback = nb::object();
             g_show_resume_popup_callback = nb::object();
             g_request_exit_callback = nb::object();
+            if (g_request_exit_handler_id != 0) {
+                lfs::event::EventBridge::instance()
+                    .unsubscribe(
+                        typeid(lfs::core::events::cmd::
+                                   ShowExitConfirmation),
+                        g_request_exit_handler_id);
+                g_request_exit_handler_id = 0;
+            }
+            g_project_switch_confirmation_callback =
+                nb::object();
             g_open_camera_preview_callback = nb::object();
         };
         set_bridge(bridge);

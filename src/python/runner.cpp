@@ -97,6 +97,7 @@ namespace lfs::python {
     };
 
     static PluginAutoloadCoordinator g_plugin_preload;
+    static std::atomic<void (*)()> g_plugin_preload_completion_hook{nullptr};
 
     // Python C extension for capturing output
     static PyObject* capture_write(PyObject* self, PyObject* args) {
@@ -313,6 +314,9 @@ _add_dll_dirs()
             publish_plugin_preload_status();
         }
 
+        // SIGTERM/SIGINT are reasserted after preload becomes terminal:
+        // GUI via MainLoop::installInterruptHandlers; headless via
+        // set_plugin_preload_completion_hook (HeadlessRunCoordinator).
         void finish_plugin_preload(const PluginPreloadState terminal_state,
                                    std::string detail,
                                    const bool mark_loaded) {
@@ -330,6 +334,10 @@ _add_dll_dirs()
             }
             publish_plugin_preload_status();
             g_plugin_preload.cv.notify_all();
+            if (const auto hook = g_plugin_preload_completion_hook.load(
+                    std::memory_order_acquire)) {
+                hook();
+            }
         }
 
         bool prepend_sys_path_once(PyObject* const sys_path,
@@ -1308,6 +1316,10 @@ _add_dll_dirs()
             return;
         }
         ensure_builtin_ui_ready_locked();
+    }
+
+    void set_plugin_preload_completion_hook(void (*hook)()) {
+        g_plugin_preload_completion_hook.store(hook, std::memory_order_release);
     }
 
     bool ensure_plugins_loaded(const bool wait_for_completion) {

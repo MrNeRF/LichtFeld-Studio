@@ -9,9 +9,11 @@
 #include "core/point_cloud.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_serialization_sink.hpp"
 #include "nanoflann.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <expected>
@@ -670,6 +672,40 @@ namespace lfs::core {
 
     SplatData::~SplatData() = default;
 
+    SplatData SplatData::clone() const {
+        // Tensor::clone() copies neither the name nor the row capacity.
+        const auto cloned = [](const Tensor& src, const char* name = nullptr) {
+            if (!src.is_valid())
+                return Tensor{};
+            Tensor t = src.clone();
+            if (name)
+                t.set_name(name);
+            return t;
+        };
+
+        SplatData copy;
+        copy._max_sh_degree = _max_sh_degree;
+        copy._active_sh_degree = _active_sh_degree;
+        copy._scene_scale = _scene_scale;
+        copy._means = cloned(_means, "splat.positions");
+        copy._sh0 = cloned(_sh0, "splat.sh0");
+        copy._shN = cloned(_shN, "splat.shN");
+        copy._shN_value_bounds = cloned(_shN_value_bounds, "splat.shN_value_bounds");
+        copy._scaling = cloned(_scaling, "splat.scaling");
+        copy._rotation = cloned(_rotation, "splat.rotation");
+        copy._opacity = cloned(_opacity, "splat.opacity");
+        copy._densification_info = cloned(_densification_info, "splat.densification_info");
+        copy._deleted = cloned(_deleted, "splat.deleted_mask");
+        copy._deleted_count.store(_deleted_count.load(std::memory_order_relaxed),
+                                  std::memory_order_relaxed);
+        // q16 degree validation requires shN row capacity >= its reserved row count.
+        if (copy._shN.is_valid() && copy._shN.shape().rank() > 0 &&
+            copy._shN.capacity() < copy._shN.shape()[0]) {
+            copy._shN.reserve(copy._shN.shape()[0]);
+        }
+        return copy;
+    }
+
     // ========== MOVE SEMANTICS ==========
 
     SplatData::SplatData(SplatData&& other) noexcept
@@ -798,6 +834,34 @@ namespace lfs::core {
         return _sh0.cat(shN, 1);
     }
 
+    void SplatData::detach_from_streams() {
+        Tensor* const tensors[] = {
+            &_means,
+            &_sh0,
+            &_shN,
+            &_shN_value_bounds,
+            &_scaling,
+            &_rotation,
+            &_opacity,
+            &_deleted,
+            &_densification_info,
+        };
+        for (Tensor* tensor : tensors) {
+            if (!tensor->is_valid() || tensor->device() != Device::CUDA) {
+                continue;
+            }
+            if (const cudaStream_t stream = tensor->stream()) {
+                const cudaError_t sync_status = cudaStreamSynchronize(stream);
+                if (sync_status != cudaSuccess) {
+                    LOG_WARN("CUDA stream sync in detach_from_streams failed: {}",
+                             cudaGetErrorString(sync_status));
+                    (void)cudaGetLastError();
+                }
+            }
+            tensor->set_stream(nullptr);
+        }
+    }
+
     Tensor SplatData::shN_canonical() const {
         const size_t n = static_cast<size_t>(size());
         const size_t k = max_sh_coeffs_rest();
@@ -862,6 +926,17 @@ namespace lfs::core {
         return out;
     }
 
+    Tensor SplatData::clone_shN_storage() const {
+        if (!_shN.is_valid()) {
+            return {};
+        }
+        Tensor cloned = _shN.clone();
+        if (cloned.capacity() < _shN.capacity()) {
+            cloned.reserve(_shN.capacity());
+        }
+        return cloned;
+    }
+
     Tensor SplatData::shN_canonical_cpu() const {
         const size_t n = static_cast<size_t>(size());
         const size_t k = max_sh_coeffs_rest();
@@ -913,6 +988,21 @@ namespace lfs::core {
         const size_t needed_floats = sh_swizzled_float_count(n, layout_rest);
         const size_t needed_capacity = sh_swizzled_float_count(cap, layout_rest);
 
+        // SH degree 2: q16 cell count (rest*3=24/prim) equals ieee-f16 float4-swizzle
+        // count (slots*4=24/prim). Size/capacity reuse cannot distinguish the two,
+        // so a declared q16 pair must be dropped before any numel check — otherwise
+        // IEEE halfs land in the codes buffer while bounds stay attached.
+        const auto replace_shN_fp32 = [&]() {
+            const bool drop_bounds = _shN.is_valid() && _shN.dtype() == DataType::Float16;
+            _shN = allocate_swizzled_shN(n, cap, layout_rest);
+            if (drop_bounds) {
+                _shN_value_bounds = Tensor{};
+            }
+        };
+        if (shN_value_quantized()) {
+            replace_shN_fp32();
+        }
+
         // Adjust _shN's logical size to match the new N without losing reserved capacity
         // when possible. Reallocating drops the pre-alloc buffer and can break async
         // pointer aliasing for downstream kernels; we only do it when capacity is short.
@@ -923,11 +1013,11 @@ namespace lfs::core {
                 // N shrank (e.g. random_choose, crop, prune-then-compact). The Tensor lib
                 // doesn't have a "shrink logical size" op other than reassigning shape.
                 // Allocate a smaller buffer in this case — it's a one-shot edit operation.
-                _shN = allocate_swizzled_shN(n, cap, layout_rest);
+                replace_shN_fp32();
             }
             // else: numel() == needed_floats, nothing to do.
         } else {
-            _shN = allocate_swizzled_shN(n, cap, layout_rest);
+            replace_shN_fp32();
         }
 
         const auto src_rest = std::min(canonical_rest_coefficients(canonical), layout_rest);
@@ -1109,8 +1199,18 @@ namespace lfs::core {
                 return;
             if (t.capacity() >= cap_rows)
                 return;
-            if (!t.is_external_storage()) {
+            if (t.external_storage_kind().empty()) {
                 t.reserve(cap_rows);
+                return;
+            }
+            // Renderer-backed tensors grow with live N via capacity_ensure / migrate.
+            // Rebuilding them onto private zeros_direct detaches the zero-copy block.
+            // cuda.direct still rebuilds here (checkpoint resume).
+            const auto kind = t.external_storage_kind();
+            if (kind == "vulkan_external_buffer" || kind == "splat.exportable") {
+                LOG_DEBUG("reserve_capacity: skip grow of renderer-backed storage "
+                          "(kind={}); growth is owned by capacity_ensure/migrate",
+                          kind);
                 return;
             }
             auto grown = Tensor::zeros_direct(t.shape(), cap_rows, t.device(), t.dtype());
@@ -1132,9 +1232,9 @@ namespace lfs::core {
             grow_direct(_sh0, capacity);
         if (_shN.is_valid()) {
             const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
-            // q16 (Float16 bit-pattern): capacity is pad-dropped uint16 cells.
-            // fp32: capacity is float4-swizzled float count.
-            if (_shN.dtype() == DataType::Float16) {
+            // q16: capacity is pad-dropped uint16 cells.
+            // fp32 and ieee-f16: capacity is float4-swizzled element count.
+            if (shN_value_quantized()) {
                 const size_t need = sh_value_quant::sh_value_u16_count(capacity, layout_rest);
                 if (need > 0)
                     grow_direct(_shN, need);
@@ -1421,10 +1521,32 @@ namespace lfs::core {
 
     namespace {
         constexpr uint32_t SPLAT_DATA_MAGIC = 0x4C465350; // "LFSP"
-        constexpr uint32_t SPLAT_DATA_VERSION = 3;
+        constexpr uint32_t SPLAT_DATA_VERSION = 4;
+        constexpr uint32_t SPLAT_DATA_MIN_VERSION_FROZEN_RANGES = 4;
+
+        void validate_frozen_ranges(
+            const std::vector<SplatData::FrozenRange>& ranges,
+            const size_t gaussian_count) {
+            for (size_t i = 0; i < ranges.size(); ++i) {
+                const auto& range = ranges[i];
+                if (range.count == 0 || range.start >= gaussian_count ||
+                    range.count > gaussian_count - range.start) {
+                    throw std::runtime_error("Invalid SplatData: frozen range exceeds Gaussian count");
+                }
+                const size_t range_end = range.start + range.count;
+                for (size_t j = 0; j < i; ++j) {
+                    const auto& previous = ranges[j];
+                    const size_t previous_end = previous.start + previous.count;
+                    if (range.start < previous_end && previous.start < range_end) {
+                        throw std::runtime_error("Invalid SplatData: frozen ranges overlap");
+                    }
+                }
+            }
+        }
     } // namespace
 
     void SplatData::serialize(std::ostream& os) const {
+        validate_frozen_ranges(_frozen_ranges, size());
         os.write(reinterpret_cast<const char*>(&SPLAT_DATA_MAGIC), sizeof(SPLAT_DATA_MAGIC));
         os.write(reinterpret_cast<const char*>(&SPLAT_DATA_VERSION), sizeof(SPLAT_DATA_VERSION));
         os.write(reinterpret_cast<const char*>(&_active_sh_degree), sizeof(_active_sh_degree));
@@ -1439,8 +1561,44 @@ namespace lfs::core {
             }
             // On-disk format is canonical [N, K, 3]; deswizzle before writing for
             // forward compatibility and to keep the format identical to pre-swizzle builds.
-            Tensor shN_canon = shN_canonical_cpu();
-            os << shN_canon;
+            if (current_tensor_serialization_sink()) {
+                const auto primitives =
+                    static_cast<std::size_t>(size());
+                const auto coefficients =
+                    static_cast<std::uint32_t>(
+                        max_sh_coeffs_rest());
+                const auto quantized =
+                    shN_value_quantized();
+                serialize_tensor_with_descriptor(
+                    os, _shN,
+                    TensorSerializationDescriptor{
+                        .serialized_shape =
+                            TensorShape{
+                                primitives,
+                                coefficients,
+                                SH_CHANNELS,
+                            },
+                        .dtype = DataType::Float32,
+                        // Preserve the exact legacy LFKP header emitted by
+                        // shN_canonical_cpu().
+                        .serialized_device = Device::CPU,
+                        .encoding =
+                            quantized
+                                ? TensorPayloadEncoding::
+                                      QuantizedShToCanonical
+                                : TensorPayloadEncoding::
+                                      SwizzledShToCanonical,
+                        .sh_primitives = primitives,
+                        .sh_coefficients_rest = coefficients,
+                        .sh_layout_coefficients_rest =
+                            coefficients,
+                    },
+                    quantized ? &_shN_value_bounds
+                              : nullptr);
+            } else {
+                Tensor shN_canon = shN_canonical_cpu();
+                os << shN_canon;
+            }
         }
 
         const uint8_t has_deleted = _deleted.is_valid() ? 1 : 0;
@@ -1453,10 +1611,25 @@ namespace lfs::core {
         if (has_densification)
             os << _densification_info;
 
+        const uint8_t has_frozen_ranges = _frozen_ranges.empty() ? 0 : 1;
+        os.write(reinterpret_cast<const char*>(&has_frozen_ranges), sizeof(has_frozen_ranges));
+        if (has_frozen_ranges) {
+            const uint64_t range_count = _frozen_ranges.size();
+            os.write(reinterpret_cast<const char*>(&range_count), sizeof(range_count));
+            for (const auto& range : _frozen_ranges) {
+                const uint64_t start = range.start;
+                const uint64_t count = range.count;
+                os.write(reinterpret_cast<const char*>(&start), sizeof(start));
+                os.write(reinterpret_cast<const char*>(&count), sizeof(count));
+            }
+        }
+
         LOG_DEBUG("Serialized SplatData: {} Gaussians, SH {}/{}", size(), _active_sh_degree, _max_sh_degree);
     }
 
     void SplatData::deserialize(std::istream& is, SplatTensorAllocator tensor_allocator) {
+        const auto deserialize_started =
+            std::chrono::steady_clock::now();
         uint32_t magic = 0, version = 0;
         serialization_detail::read_exact(is, &magic, sizeof(magic), "SplatData magic");
         serialization_detail::read_exact(is, &version, sizeof(version), "SplatData version");
@@ -1464,7 +1637,7 @@ namespace lfs::core {
         if (magic != SPLAT_DATA_MAGIC) {
             throw std::runtime_error("Invalid SplatData: wrong magic");
         }
-        if (version != SPLAT_DATA_VERSION) {
+        if (version != 3 && version != SPLAT_DATA_VERSION) {
             throw std::runtime_error("Unsupported SplatData version: " + std::to_string(version));
         }
 
@@ -1504,6 +1677,34 @@ namespace lfs::core {
         Tensor densification;
         if (has_densification)
             is >> densification;
+
+        std::vector<FrozenRange> loaded_frozen_ranges;
+        if (version >= SPLAT_DATA_MIN_VERSION_FROZEN_RANGES) {
+            uint8_t has_frozen_ranges = 0;
+            serialization_detail::read_exact(
+                is, &has_frozen_ranges, sizeof(has_frozen_ranges), "SplatData frozen-ranges flag");
+            if (has_frozen_ranges > 1)
+                throw std::runtime_error("Invalid SplatData: frozen-ranges flag must be boolean");
+            if (has_frozen_ranges) {
+                uint64_t range_count = 0;
+                serialization_detail::read_exact(
+                    is, &range_count, sizeof(range_count), "SplatData frozen-range count");
+                if (range_count == 0)
+                    throw std::runtime_error("Invalid SplatData: frozen-range count must be positive");
+                if (range_count > std::numeric_limits<uint32_t>::max())
+                    throw std::runtime_error("Invalid SplatData: frozen-range count exceeds supported range");
+                serialization_detail::require_remaining_bytes(
+                    is, range_count * 2 * sizeof(uint64_t), "SplatData frozen ranges");
+                loaded_frozen_ranges.reserve(range_count);
+                for (uint64_t i = 0; i < range_count; ++i) {
+                    uint64_t start = 0, count = 0;
+                    serialization_detail::read_exact(is, &start, sizeof(start), "SplatData frozen-range start");
+                    serialization_detail::read_exact(is, &count, sizeof(count), "SplatData frozen-range count");
+                    loaded_frozen_ranges.push_back({static_cast<std::size_t>(start),
+                                                    static_cast<std::size_t>(count)});
+                }
+            }
+        }
 
         const auto require_shape = [](const Tensor& value,
                                       const DataType dtype,
@@ -1549,6 +1750,9 @@ namespace lfs::core {
             if (!valid_shape)
                 throw std::runtime_error("Invalid SplatData: densification state has incompatible schema");
         }
+        validate_frozen_ranges(loaded_frozen_ranges, n);
+        const auto gpu_upload_started =
+            std::chrono::steady_clock::now();
 
         const auto copy_param = [&](Tensor source, std::string_view name) {
             Tensor source_cuda = std::move(source).cuda();
@@ -1599,7 +1803,8 @@ namespace lfs::core {
 
         Tensor loaded_deleted;
         if (has_deleted) {
-            Tensor deleted_cuda = std::move(deleted).cuda();
+            Tensor deleted_cuda =
+                std::move(deleted).to(DataType::Bool).cuda();
             if (deleted_cuda.sum_scalar() != 0.0f)
                 loaded_deleted = std::move(deleted_cuda);
         }
@@ -1607,6 +1812,8 @@ namespace lfs::core {
         Tensor loaded_densification = has_densification && densification.numel() > 0
                                           ? std::move(densification).cuda()
                                           : Tensor{};
+        const auto gpu_upload_finished =
+            std::chrono::steady_clock::now();
 
         // Commit only after the complete serialized model has been read,
         // schema-checked, allocated, and uploaded successfully.
@@ -1619,11 +1826,157 @@ namespace lfs::core {
         _shN = std::move(loaded_shN);
         _deleted = std::move(loaded_deleted);
         _densification_info = std::move(loaded_densification);
+        _frozen_ranges = std::move(loaded_frozen_ranges);
         _max_sh_degree = max_sh;
         _active_sh_degree = active_sh;
         _scene_scale = scene_scale;
 
+        const auto milliseconds =
+            [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(
+                           end - begin)
+                    .count();
+            };
+        LOG_DEBUG(
+            "Splat deserialize stages: gaussians={} cpu_decode={:.3f} ms gpu_upload={:.3f} ms total={:.3f} ms",
+            n,
+            milliseconds(
+                deserialize_started,
+                gpu_upload_started),
+            milliseconds(
+                gpu_upload_started,
+                gpu_upload_finished),
+            milliseconds(
+                deserialize_started,
+                gpu_upload_finished));
+
         LOG_DEBUG("Deserialized SplatData: {} Gaussians, SH {}/{}", size(), active_sh, max_sh);
+    }
+
+    lfs::Result<std::unique_ptr<SplatData>> SplatData::from_raw_tensors(
+        const int active_sh_degree, const int max_sh_degree,
+        const float scene_scale, Tensor means, Tensor sh0, Tensor shN_canonical,
+        Tensor scaling, Tensor rotation, Tensor opacity, Tensor deleted,
+        Tensor densification, std::vector<FrozenRange> frozen_ranges,
+        SplatTensorAllocator tensor_allocator) {
+        try {
+            if (max_sh_degree < 0 || max_sh_degree > MAX_SUPPORTED_SH_DEGREE ||
+                active_sh_degree < 0 || active_sh_degree > max_sh_degree ||
+                !std::isfinite(scene_scale) || scene_scale <= 0.0f) {
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::DataLoss,
+                    .domain = lfs::ErrorDomain::IO,
+                    .detail = "invalid raw SPLT metadata",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+            if (!means.is_valid() || means.device() != Device::CPU ||
+                means.dtype() != DataType::Float32 || means.ndim() != 2 ||
+                means.size(1) != 3) {
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::DataLoss,
+                    .domain = lfs::ErrorDomain::IO,
+                    .detail = "raw SPLT means shape is invalid",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+            const auto n = static_cast<std::size_t>(means.size(0));
+            const auto require = [&](const Tensor& value, const DataType dtype,
+                                     const std::vector<std::size_t>& shape) {
+                return value.is_valid() && value.device() == Device::CPU &&
+                       value.dtype() == dtype && value.shape().dims() == shape;
+            };
+            if (!require(sh0, DataType::Float32, {n, 1, 3}) ||
+                !require(scaling, DataType::Float32, {n, 3}) ||
+                !require(rotation, DataType::Float32, {n, 4}) ||
+                !require(opacity, DataType::Float32, {n, 1}) ||
+                !require(shN_canonical, DataType::Float32,
+                         {n, static_cast<std::size_t>(sh_rest_coefficients_for_degree(max_sh_degree)),
+                          SH_CHANNELS})) {
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::DataLoss,
+                    .domain = lfs::ErrorDomain::IO,
+                    .detail = "raw SPLT tensor manifest does not match tensor shapes",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+            const auto is_bool_like = [](const DataType dtype) {
+                return dtype == DataType::Bool || dtype == DataType::UInt8;
+            };
+            if (deleted.is_valid() &&
+                (!is_bool_like(deleted.dtype()) || deleted.ndim() != 1 ||
+                 static_cast<std::size_t>(deleted.numel()) != n)) {
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::DataLoss,
+                    .domain = lfs::ErrorDomain::IO,
+                    .detail = "raw SPLT deleted mask must be bool/uint8 [N]",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+            if (densification.is_valid()) {
+                const bool valid_shape =
+                    densification.dtype() == DataType::Float32 &&
+                    ((densification.ndim() == 1 &&
+                      (densification.numel() == 0 ||
+                       static_cast<std::size_t>(densification.numel()) == n)) ||
+                     (densification.ndim() == 2 &&
+                      densification.size(0) >= 2 &&
+                      static_cast<std::size_t>(densification.size(1)) == n));
+                if (!valid_shape) {
+                    return lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::DataLoss,
+                        .domain = lfs::ErrorDomain::IO,
+                        .detail = "raw SPLT densification state has incompatible schema",
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    });
+                }
+            }
+            validate_frozen_ranges(frozen_ranges, n);
+            auto result = std::make_unique<SplatData>();
+            result->_tensor_allocator = std::move(tensor_allocator);
+            const auto copy_param = [&](Tensor source, const std::string_view name) {
+                Tensor source_cuda = std::move(source).cuda();
+                if (!result->_tensor_allocator) {
+                    source_cuda.set_name(std::string(name));
+                    return source_cuda;
+                }
+                Tensor destination = allocate_param_tensor(
+                    source_cuda.shape(), source_cuda.capacity(),
+                    result->_tensor_allocator, name);
+                destination.copy_from(source_cuda);
+                return destination;
+            };
+            result->_means = copy_param(std::move(means), "SplatData.means");
+            result->_sh0 = copy_param(std::move(sh0), "SplatData.sh0");
+            result->_scaling = copy_param(std::move(scaling), "SplatData.scaling");
+            result->_rotation = copy_param(std::move(rotation), "SplatData.rotation");
+            result->_opacity = copy_param(std::move(opacity), "SplatData.opacity");
+            result->_max_sh_degree = max_sh_degree;
+            result->_active_sh_degree = active_sh_degree;
+            result->_scene_scale = scene_scale;
+            result->_shN = allocate_swizzled_shN(
+                n, std::max<std::size_t>(result->_means.capacity(), n),
+                static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(max_sh_degree)),
+                result->_tensor_allocator, "SplatData.shN");
+            if (shN_canonical.numel() > 0)
+                reorder_canonical_into_swizzled(
+                    shN_canonical.cuda(), result->_shN, n,
+                    static_cast<std::size_t>(sh_rest_coefficients_for_degree(max_sh_degree)),
+                    static_cast<std::size_t>(sh_rest_coefficients_for_degree(max_sh_degree)));
+            if (deleted.is_valid())
+                result->_deleted = std::move(deleted).to(DataType::Bool).cuda();
+            if (densification.is_valid() && densification.numel() > 0)
+                result->_densification_info = std::move(densification).cuda();
+            result->_frozen_ranges = std::move(frozen_ranges);
+            return result;
+        } catch (const std::exception& error) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::IO,
+                .detail = std::format("raw SPLT hydration failed: {}", error.what()),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
     }
 
     // ========== FREE FUNCTION: FACTORY ==========

@@ -2,6 +2,7 @@
 #include "perf_timer.h"
 
 #include "core/error.hpp"
+#include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <cassert>
@@ -534,15 +535,11 @@ void VulkanGSPipeline::cleanup() {
     if (device != VK_NULL_HANDLE) {
         const VkResult idle_result = vkDeviceWaitIdle(device);
         if (idle_result != VK_SUCCESS) {
-            lfs::rendering::throw_vk_result(
-                idle_result,
-                "vkDeviceWaitIdle",
-                std::format(
-                    "VkSplat cleanup could not retire device work before destroying resources (device={:#x}, result={}({}))",
-                    lfs::rendering::vkHandleValue(device),
-                    lfs::rendering::vkResultToString(idle_result),
-                    static_cast<int>(idle_result)),
-                LFS_SOURCE_SITE_CURRENT());
+            LOG_ERROR("Vulkan: vkDeviceWaitIdle failed during VkSplat pipeline cleanup "
+                      "(device={:#x}, result={}({})); continuing resource destruction",
+                      lfs::rendering::vkHandleValue(device),
+                      lfs::rendering::vkResultToString(idle_result),
+                      static_cast<int>(idle_result));
         }
 
         drainRetiredBufferShells(/*force=*/true);

@@ -97,7 +97,8 @@ namespace lfs::io {
             .scene_center = Tensor::zeros({3}, Device::CPU),
             .loader_used = name(),
             .load_time = load_time,
-            .warnings = {std::format("Checkpoint from iteration {}", iteration)}};
+            .warnings = {std::format("Checkpoint from iteration {}", iteration)},
+            .georeference = std::nullopt};
 
         LOG_INFO("Checkpoint loaded successfully in {}ms ({} Gaussians from iteration {})",
                  load_time.count(), num_gaussians, iteration);

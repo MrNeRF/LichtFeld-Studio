@@ -92,7 +92,7 @@ namespace lfs::mcp {
                     .properties = json{
                         {"path", json{{"type", "string"}, {"description", "Path to COLMAP dataset directory"}}},
                         {"images_folder", json{{"type", "string"}, {"description", "Images subfolder (default: images)"}}},
-                        {"output_path", json{{"type", "string"}, {"description", "Optional output directory for checkpoints and exports (default: <dataset>/output)"}}},
+                        {"output_path", json{{"type", "string"}, {"description", "Optional output directory for project saves and exports (default: <dataset>/output)"}}},
                         {"min_track_length", json{{"type", "integer"}, {"minimum", 0}, {"description", "Minimum COLMAP track length for sparse point import; 0 disables filtering"}}},
                         {"max_iterations", json{{"type", "integer"}, {"description", "Maximum training iterations (default: 30000)"}}},
                         {"strategy", json{{"type", "string"}, {"enum", json::array({"default", "mcmc", "mrnf", "igs+"})}, {"description", "Training strategy or 'default' to keep the built-in default"}}}},
@@ -148,45 +148,19 @@ namespace lfs::mcp {
 
         registry.register_tool(
             McpTool{
-                .name = "scene.save_checkpoint",
-                .description = "Save current training state. The path is a base directory; checkpoints are saved as checkpoints/checkpoint.resume inside it. Omit path to use the current output path.",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Base output directory; checkpoint files are written to <path>/checkpoints/checkpoint.resume"}}}},
-                    .required = {}},
-                .metadata = command_metadata(backend, "scene", false, true)},
-            [backend](const json& args) -> json {
-                const std::optional<std::filesystem::path> requested_path =
-                    args.contains("path")
-                        ? std::optional<std::filesystem::path>(args["path"].get<std::string>())
-                        : std::nullopt;
-
-                auto result = backend.save_checkpoint(requested_path);
-                if (!result)
-                    return json{{"error", result.error()}};
-
-                return json{
-                    {"success", true},
-                    {"path", core::path_to_utf8(*result)},
-                    {"output_path", core::path_to_utf8(*result)},
-                    {"used_default_path", !requested_path.has_value()},
-                };
-            });
-
-        registry.register_tool(
-            McpTool{
                 .name = "scene.save_ply",
                 .description = "Save current model as a PLY file",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Path to save PLY file"}}}},
+                        {"path", json{{"type", "string"}, {"description", "Path to save PLY file"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", false, true)},
             [backend](const json& args) -> json {
                 std::filesystem::path path = args["path"].get<std::string>();
-                auto result = backend.save_ply(path);
+                const bool include_provenance = args.value("include_provenance", true);
+                auto result = backend.save_ply(path, include_provenance);
                 if (!result)
                     return json{{"error", result.error()}};
                 return json{{"success", true}, {"path", core::path_to_utf8(path)}};

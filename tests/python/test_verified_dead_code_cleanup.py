@@ -36,6 +36,12 @@ def test_verified_zero_reference_census_stays_removed() -> None:
         for token in ("exp_avg_q", "exp_avg_sq_q", "exp_avg_scale", "exp_avg_sq_scale"):
             assert token not in text
 
+    adam_param_state = source("src/training/optimizer/adam_optimizer.hpp").split(
+        "struct AdamParamState", 1
+    )[1].split("};", 1)[0]
+    for token in ("exp_avg_sq", "exp_avg_scale", "exp_avg_sq_scale"):
+        assert token not in adam_param_state
+
     ledger_header = source("src/diagnostics/include/diagnostics/vram_ledger_model.hpp")
     ledger_source = source("src/diagnostics/vram_ledger_model.cpp")
     for token in ("vram_row_kind_name", "include_vulkan_roots"):

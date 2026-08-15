@@ -23,23 +23,13 @@ if(BUILD_LOCALIZATION_TESTS)
         USES_TERMINAL
     )
     message(STATUS "Registered headless localization contract tests (no LibTorch)")
-    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY)
+    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_FORMAT_TESTS)
         return()
     endif()
 endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
-
-# Reuse nanobind headers for Python UI regression tests
-if(NOT DEFINED NB_DIR)
-    find_package(Python REQUIRED COMPONENTS Interpreter Development Development.Module Development.SABIModule)
-    find_package(nanobind CONFIG REQUIRED)
-endif()
-
-if(COMMAND nanobind_build_library AND NOT TARGET nanobind-static)
-    nanobind_build_library(nanobind-static)
-endif()
 
 # =============================================================================
 # Unicode Path Test Only (no CUDA dependencies)
@@ -88,6 +78,138 @@ if(BUILD_UNICODE_TEST_ONLY)
     endif()
 endif()
 
+# MSVC resolves every object reference before /OPT:REF, while GNU ld can discard
+# unreferenced function sections before resolution. Keep the dependency-heavy
+# chapter coverage in the non-Windows composition.
+set(LICHT_FORMAT_WINDOWS_FILES
+    test_json_chapter_dom.cpp
+    test_project_chapters.cpp
+    test_project_container.cpp
+    licht_format_test_runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/error.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/optimization_properties.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/parameters.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/property_registry.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/uuid.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/json_chapter_dom.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_chapters.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/crc32c.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_file.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_container.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_writer.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_recovery.cpp
+)
+
+set(LICHT_FORMAT_NON_WINDOWS_FILES
+    ${LICHT_FORMAT_WINDOWS_FILES}
+    test_selection_chapter.cpp
+    test_p8_compatibility.cpp
+    licht_format_tensor_runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/checkpoint_format.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/tensor/tensor_serialization.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/geometry_payload.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_document.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/selection_chapter.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/session_chapters.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/splat_chapter.cpp
+    ${CMAKE_SOURCE_DIR}/src/visualizer/gui/layout_state.cpp
+)
+# test_project_document.cpp is excluded: it links headless recovery, training strategies, and visualizer parameter state.
+# test_p5_session_chapters.cpp is excluded: it links the Python editor and TrainingManager runtime.
+
+if(WIN32)
+    set(LICHT_FORMAT_TARGET_FILES ${LICHT_FORMAT_WINDOWS_FILES})
+else()
+    set(LICHT_FORMAT_TARGET_FILES ${LICHT_FORMAT_NON_WINDOWS_FILES})
+endif()
+
+add_executable(lichtfeld_format_tests ${LICHT_FORMAT_TARGET_FILES})
+target_include_directories(lichtfeld_format_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/include
+    ${CMAKE_SOURCE_DIR}/src/io/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/tests
+    ${CMAKE_BINARY_DIR}/include
+)
+if(NOT WIN32)
+    target_include_directories(lichtfeld_format_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/diagnostics/include
+        ${CMAKE_SOURCE_DIR}/src/training
+        ${CMAKE_SOURCE_DIR}/src/training/include
+        ${CMAKE_SOURCE_DIR}/src/visualizer
+        ${CUDAToolkit_INCLUDE_DIRS}
+    )
+endif()
+target_compile_definitions(lichtfeld_format_tests PRIVATE
+    PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+)
+if(WIN32)
+    target_compile_definitions(lichtfeld_format_tests PRIVATE
+        LFS_CORE_EXPORTS
+        LFS_LOGGER_EXPORTS
+    )
+else()
+    target_compile_definitions(lichtfeld_format_tests PRIVATE
+        LFS_FORMAT_TEST_TARGET
+    )
+endif()
+target_link_libraries(lichtfeld_format_tests PRIVATE
+    GTest::gtest_main
+    nlohmann_json::nlohmann_json
+    xxHash::xxhash
+    zstd::libzstd
+    Threads::Threads
+)
+if(NOT WIN32)
+    target_link_libraries(lichtfeld_format_tests PRIVATE OpenSSL::Crypto)
+endif()
+if(MSVC)
+    target_compile_options(lichtfeld_format_tests PRIVATE /Gy)
+    target_link_options(lichtfeld_format_tests PRIVATE /OPT:REF)
+else()
+    target_compile_options(lichtfeld_format_tests PRIVATE
+        -ffunction-sections -fdata-sections
+    )
+    target_link_options(lichtfeld_format_tests PRIVATE
+        -Wl,--no-export-dynamic -Wl,--gc-sections
+    )
+endif()
+if(WIN32)
+    target_link_libraries(lichtfeld_format_tests PRIVATE bcrypt)
+endif()
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+   CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
+    target_link_libraries(lichtfeld_format_tests PRIVATE stdc++exp)
+endif()
+set_target_properties(lichtfeld_format_tests PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+add_test(NAME lichtfeld_format_tests
+    COMMAND $<TARGET_FILE:lichtfeld_format_tests> --gtest_color=no
+)
+set_tests_properties(lichtfeld_format_tests PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "fast;format"
+    TIMEOUT 300
+)
+
+if(NOT BUILD_TESTS)
+    message(STATUS "Building CPU-only format tests (no CUDA); full suite disabled")
+    return()  # lichtfeld_format_tests is defined above; the rest needs CUDA/Torch
+endif()
+
+# Reuse nanobind headers for Python UI regression tests
+if(NOT DEFINED NB_DIR)
+    find_package(Python REQUIRED COMPONENTS Interpreter Development Development.Module Development.SABIModule)
+    find_package(nanobind CONFIG REQUIRED)
+endif()
+
+if(COMMAND nanobind_build_library AND NOT TARGET nanobind-static)
+    nanobind_build_library(nanobind-static)
+endif()
+
 # Find LibTorch for tensor comparison tests
 # Set Torch_DIR based on platform
 get_filename_component(PROJ_ROOT_DIR "${CMAKE_SOURCE_DIR}" ABSOLUTE)
@@ -105,6 +227,7 @@ message(STATUS "Tests: LibTorch ${Torch_VERSION} found for tensor comparison tes
 
 # Regular test sources (unit tests, integration tests)
 set(TEST_FILES
+    licht_test_support.cpp
     test_assert_hardening.cpp
     test_cuda_error.cpp
     test_exportable_storage.cpp
@@ -124,6 +247,8 @@ set(TEST_FILES
     test_steady_alloc_invariant.cpp
     test_allocator_hygiene.cpp
     test_pinned_stream_teardown.cpp
+    test_cuda_pool_stream_teardown.cpp
+    test_stale_stream_teardown.cpp
     test_fastgs_sort_buffers.cpp
     test_warp_cull_blend.cpp
     test_warp_cull_bwd.cpp
@@ -140,6 +265,8 @@ set(TEST_FILES
     test_joint_adam_codec.cpp
     test_sh_value_codec.cpp
     test_sh_value_storage.cpp
+    test_transform_bake_q16.cpp
+    test_splat_data_clone.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
     test_tensor_views.cpp
@@ -188,6 +315,7 @@ set(TEST_FILES
     test_ply_io_throughput.cpp
     test_gsplat_rasterizer.cpp
     test_spz_format.cpp
+    test_provenance.cpp
     test_converter_usd.cpp
     test_usd_format.cpp
     test_nurec_usdz_format.cpp
@@ -200,7 +328,16 @@ set(TEST_FILES
     test_roi_weight_map.cpp
     test_roi_weighted_losses.cpp
     test_checkpoint_resume.cpp
+    test_component_config_serialization.cpp
+    test_training_snapshot_service.cpp
     test_atomic_output.cpp
+    test_geometry_payload.cpp
+    test_selection_chapter.cpp
+    test_project_document.cpp
+    test_project_lifecycle.cpp
+    test_p8_compatibility.cpp
+    test_job_registry.cpp
+    test_p5_session_chapters.cpp
     test_training_terminal_state.cpp
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp
@@ -222,6 +359,7 @@ set(TEST_FILES
     test_video_hdr_logic.cpp
     test_visualizer_post_work.cpp
     test_panel_registry_animation_demand.cpp
+    test_panel_registry_default_closed.cpp
     test_panel_layout_render_demand.cpp
     test_reactive_store.cpp
     test_video_color_convert.cpp
@@ -255,7 +393,9 @@ set(TEST_FILES
     test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
     test_scene_validity.cpp
+    test_uuid.cpp
     test_render_settings_defaults.cpp
+    test_config_paths.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
     test_theme_registry.cpp
@@ -306,6 +446,7 @@ set(TEST_FILES
     test_rml_im_mode_layout.cpp
     test_status_bar_fit.cpp
     test_rotated_sh_correctness.cpp
+    test_splat_raw_payload.cpp
     test_tensor_stream.cpp
     test_tensor_d4_from_blob_stream.cpp
     tensor_hardening_cuda_utils.cu
@@ -374,6 +515,15 @@ list(APPEND TEST_SOURCES
 
 # Create test executable
 add_executable(lichtfeld_tests ${TEST_SOURCES})
+
+# USD (pxr) headers from vcpkg pull in deprecated <ext/hash_set> and emit
+# #warning (-Wcpp). Third-party; suppress only for this translation unit.
+if(NOT MSVC)
+    set_source_files_properties(
+        test_usd_format.cpp
+        PROPERTIES COMPILE_OPTIONS "-Wno-cpp"
+    )
+endif()
 
 # Python integration tests import the in-tree extension at runtime.
 add_dependencies(lichtfeld_tests lfs_py)
@@ -496,9 +646,18 @@ target_link_libraries(lichtfeld_tests PRIVATE lfs_vulkan_rasterizer Vulkan::Vulk
 # Compiler options for CUDA debugging
 target_compile_options(lichtfeld_tests PRIVATE
     $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-lineinfo>
-    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
-    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
 )
+if(MSVC)
+    target_compile_options(lichtfeld_tests PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:/Od /Z7>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:/O2 /DNDEBUG>
+    )
+else()
+    target_compile_options(lichtfeld_tests PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
+    )
+endif()
 
 # Tensor-library hardening is intentionally isolated from the default test
 # tiers.  During the hardening phases these oracle tests are expected to expose
@@ -536,10 +695,17 @@ target_link_libraries(tensor_hardening_tests PRIVATE
     CUDA::curand
 )
 
-target_compile_options(tensor_hardening_tests PRIVATE
-    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
-    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
-)
+if(MSVC)
+    target_compile_options(tensor_hardening_tests PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:/Od /Z7>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:/O2 /DNDEBUG>
+    )
+else()
+    target_compile_options(tensor_hardening_tests PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
+    )
+endif()
 
 # =============================================================================
 # CTest registration
@@ -802,14 +968,14 @@ set_tests_properties(lichtfeld.python.gpu PROPERTIES
 # Custom targets for convenience
 add_custom_target(run_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -L fast
-    DEPENDS lichtfeld_tests
+    DEPENDS lichtfeld_tests lichtfeld_format_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running the fast developer test tier"
 )
 
 add_custom_target(run_full_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -LE nightly
-    DEPENDS lichtfeld_tests
+    DEPENDS lichtfeld_tests lichtfeld_format_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running fast and slow tests (excluding nightly)"
 )

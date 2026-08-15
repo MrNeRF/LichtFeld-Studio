@@ -200,9 +200,8 @@ namespace lfs::training {
         lfs::core::Device device,
         size_t reserve_capacity = 0);
 
-    /// Collect non-null Adam per-primitive scale pointers (exp_avg_scale +
-    /// exp_avg_sq_scale for each of Means/Sh0/ShN/Scaling/Rotation/Opacity).
-    /// Returns count written into out_ptrs (max 12).
+    /// Collect leftover per-primitive Adam scale pointers from the removed
+    /// legacy moment codec. Always returns 0 under joint-only Adam state.
     int collect_adam_scale_ptrs(
         AdamOptimizer& optimizer,
         float* out_ptrs[12]);

@@ -195,29 +195,7 @@ namespace lfs::training {
                     return;
                 }
                 // continue to grad zero for non-SH
-            } else {
-                // Legacy quantised moments: zeroing a primitive's per-primitive scales
-                // dequantises its moments to zero.
-                if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0) {
-                    return;
-                }
-                auto scale_zeros = lfs::core::Tensor::zeros(
-                    lfs::core::TensorShape({indices.numel()}), state->exp_avg_scale.device());
-                state->exp_avg_scale.index_put_(indices, scale_zeros);
-                state->exp_avg_sq_scale.index_put_(indices, scale_zeros);
-
-                if (param_type == ParamType::ShN) {
-                    const auto layout_rest = shN_layout_rest;
-                    if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
-                        auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
-                                           ? indices
-                                           : indices.to(lfs::core::DataType::Int32);
-                        lfs::core::shN_swizzled_zero_at_indices(
-                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
-                    }
-                    return;
-                }
-            } // !joint
+            }
 
             if (state->grad.is_valid() && state->grad.numel() > 0) {
                 const auto& shape = state->grad.shape();
@@ -1502,17 +1480,11 @@ namespace lfs::training {
                                              Device::CUDA, /*zero_all=*/true);
             } else if (pt == ParamType::ShN) {
                 compact_shN_swizzled(state->exp_avg, cap, 128);
-                compact_shN_swizzled(state->exp_avg_sq, cap);
-                compact(state->exp_avg_scale);
-                compact(state->exp_avg_sq_scale);
                 state->size = lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
                 state->capacity = cap > 0 ? lfs::core::sh_swizzled_float_count(cap, layout_rest_u32)
                                           : lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
             } else {
                 compact(state->exp_avg);
-                compact(state->exp_avg_sq);
-                compact(state->exp_avg_scale);
-                compact(state->exp_avg_sq_scale);
                 state->size = new_size;
                 state->capacity = cap;
             }

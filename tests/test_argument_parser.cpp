@@ -6,6 +6,7 @@
 
 #include "core/argument_parser.hpp"
 #include "core/optimization_properties.hpp"
+#include "core/parameters.hpp"
 #include "core/property_registry.hpp"
 
 #include <algorithm>
@@ -27,6 +28,166 @@ namespace {
     }
 
 } // namespace
+
+TEST(ArgumentParserTest,
+     GuiProjectAndResumeLichtSelectProjectOpenFlow) {
+    const auto directory =
+        make_test_path("lfs_arg_parser_project");
+    const auto project =
+        std::filesystem::path(directory) /
+        "session.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+
+    const char* project_argv[] = {
+        "LichtFeld-Studio",
+        "-v",
+        project_text.c_str(),
+    };
+    auto project_parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(
+                std::size(project_argv)),
+            project_argv);
+    ASSERT_TRUE(project_parsed)
+        << project_parsed.error();
+    EXPECT_EQ(
+        (*project_parsed)->project_path,
+        project);
+    EXPECT_FALSE(
+        (*project_parsed)->resume_project);
+
+    const char* resume_argv[] = {
+        "LichtFeld-Studio",
+        "--resume",
+        project_text.c_str(),
+    };
+    auto resume_parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(
+                std::size(resume_argv)),
+            resume_argv);
+    ASSERT_TRUE(resume_parsed)
+        << resume_parsed.error();
+    EXPECT_EQ(
+        (*resume_parsed)->resume_project,
+        project);
+    EXPECT_FALSE(
+        (*resume_parsed)->resume_checkpoint);
+}
+
+TEST(ArgumentParserTest, HeadlessResumeSelectsEmbeddedCheckpointFlow) {
+    const auto directory =
+        make_test_path(
+            "lfs_arg_parser_headless_project");
+    const auto project =
+        std::filesystem::path(directory) /
+        "session.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--resume",
+        project_text.c_str(),
+    };
+
+    auto parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(argv)),
+            argv);
+    ASSERT_TRUE(parsed)
+        << parsed.error();
+    EXPECT_EQ((*parsed)->resume_project, project);
+    EXPECT_FALSE((*parsed)->project_path);
+}
+
+TEST(ArgumentParserTest, RemovedProjectAndRecoverFlagsAreUnknown) {
+    const auto directory =
+        make_test_path(
+            "lfs_arg_parser_recover_project");
+    const auto project =
+        std::filesystem::path(directory) /
+        "session.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    const char* project_flag[] = {
+        "LichtFeld-Studio",
+        "--project",
+        project_text.c_str(),
+    };
+    auto project_parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(
+                std::size(project_flag)),
+            project_flag);
+    EXPECT_FALSE(project_parsed);
+
+    const char* recover_flag[] = {
+        "LichtFeld-Studio",
+        "--recover",
+    };
+    auto recover_parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(
+                std::size(recover_flag)),
+            recover_flag);
+    EXPECT_FALSE(recover_parsed);
+}
+
+TEST(ArgumentParserTest, GuiViewProjectExtensionIsCaseInsensitive) {
+    const auto directory = make_test_path("lfs_arg_parser_view_project");
+    const auto project = std::filesystem::path(directory) / "session.LICHT";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    const char* argv[] = {"LichtFeld-Studio", "-v", project_text.c_str()};
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ((*parsed)->project_path, project);
+    EXPECT_TRUE((*parsed)->view_paths.empty());
+}
+
+TEST(ArgumentParserTest,
+     ViewAndResumeRejectUnpublishedWriteTempLicht) {
+    // Would fail if -v / --resume still accepted
+    // *.project-write.*.tmp.licht as a published project.
+    const auto directory =
+        make_test_path("lfs_arg_parser_unpublished");
+    const auto temp_project =
+        std::filesystem::path(directory) /
+        "project.project-write.1.2.3.tmp.licht";
+    std::ofstream(temp_project).put('\n');
+    const auto temp_text = temp_project.string();
+
+    const char* view_argv[] = {
+        "LichtFeld-Studio",
+        "-v",
+        temp_text.c_str(),
+    };
+    auto view_parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(view_argv)),
+            view_argv);
+    ASSERT_FALSE(view_parsed);
+    EXPECT_NE(
+        view_parsed.error().find("project.licht"),
+        std::string::npos);
+
+    const char* resume_argv[] = {
+        "LichtFeld-Studio",
+        "--resume",
+        temp_text.c_str(),
+    };
+    auto resume_parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(resume_argv)),
+            resume_argv);
+    ASSERT_FALSE(resume_parsed);
+    EXPECT_NE(
+        resume_parsed.error().find("project.licht"),
+        std::string::npos);
+}
 
 TEST(ArgumentParserMetadataTest, OptimizationFlagBindingsResolveWithCompatibleTypes) {
     using lfs::core::args::OptimizationCliParseType;
@@ -240,6 +401,49 @@ TEST(ArgumentParserTest, Mesh2SplatParsesMultipleOutputFormats) {
     EXPECT_EQ(mode->params.formats[0], lfs::core::param::OutputFormat::PLY);
     EXPECT_EQ(mode->params.formats[1], lfs::core::param::OutputFormat::SPZ);
     EXPECT_EQ(mode->params.formats[2], lfs::core::param::OutputFormat::HTML);
+}
+
+TEST(ArgumentParserTest, ConvertDefaultsIncludeProvenance) {
+    const auto dir = make_test_path("lfs_convert_arg_parser_provenance_default");
+    const auto input = std::filesystem::path(dir) / "input.ply";
+    std::ofstream(input).put('\n');
+
+    const std::string input_str = input.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "convert",
+        input_str.c_str(),
+        "-f",
+        "ply"};
+
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_TRUE(mode->params.include_provenance);
+}
+
+TEST(ArgumentParserTest, ConvertNoProvenanceDisablesStamp) {
+    const auto dir = make_test_path("lfs_convert_arg_parser_no_provenance");
+    const auto input = std::filesystem::path(dir) / "input.ply";
+    std::ofstream(input).put('\n');
+
+    const std::string input_str = input.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "convert",
+        input_str.c_str(),
+        "-f",
+        "ply",
+        "--no-provenance"};
+
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_FALSE(mode->params.include_provenance);
 }
 
 TEST(ArgumentParserTest, TrainingParsesAddSplats) {

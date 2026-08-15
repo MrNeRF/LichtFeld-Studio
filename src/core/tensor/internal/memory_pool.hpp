@@ -13,6 +13,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "gpu_slab_allocator.hpp"
 #include "size_bucketed_pool.hpp"
+#include "stream_lifetime.hpp"
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <iomanip>
@@ -22,6 +23,7 @@
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::core {
@@ -112,12 +114,14 @@ namespace lfs::core {
         }
 
         void* allocate(size_t bytes, cudaStream_t stream = nullptr) {
+            unretire_stream(stream);
             return allocate_cuda_storage(bytes, stream);
         }
 
         void* try_allocate(size_t bytes,
                            cudaStream_t stream = nullptr,
                            cudaError_t* failure_status = nullptr) {
+            unretire_stream(stream);
             LFS_CUDA_BREADCRUMB_STREAM("tensor.pool.allocate", stream);
             if (failure_status) {
                 *failure_status = cudaSuccess;
@@ -229,6 +233,7 @@ namespace lfs::core {
         void* try_allocate_exact_async(size_t bytes,
                                        cudaStream_t stream = nullptr,
                                        cudaError_t* failure_status = nullptr) {
+            unretire_stream(stream);
             LFS_CUDA_BREADCRUMB_STREAM("tensor.pool.allocate_exact_async", stream);
             if (failure_status) {
                 *failure_status = cudaSuccess;
@@ -283,6 +288,7 @@ namespace lfs::core {
         // Marks `ptr` as used by `stream` beyond its home stream. The free will
         // bridge that use back into the home stream before the block is recycled.
         void record_stream(void* ptr, cudaStream_t stream) {
+            unretire_stream(stream);
             if (!ptr)
                 return;
             bool map_miss = false;
@@ -346,11 +352,16 @@ namespace lfs::core {
             GPUSlabAllocator::instance().merge_stream_into_virgin(stream);
             SizeBucketedPool::instance().retag_stream(stream, nullptr);
             PinnedMemoryAllocator::instance().release_stream(stream);
+            // The teardown calls above log-and-continue on CUDA errors; drop any
+            // latched error so LFS_CUDA_LAUNCH_CHECK does not blame a later launch.
+            (void)cudaGetLastError();
+            retire_stream(stream);
         }
 
         // Moves `ptr`'s home to `stream` (declarative re-homing for tensors whose
         // future writes happen there). The old home becomes a recorded use.
         void rehome_stream(void* ptr, cudaStream_t stream) {
+            unretire_stream(stream);
             if (!ptr)
                 return;
             bool map_miss = false;
@@ -668,7 +679,7 @@ namespace lfs::core {
                 // Skip null / home-equal extras. Bridging a destroyed capture stream
                 // can SIGSEGV inside the driver — callers should rehome first,
                 // but free must stay best-effort.
-                if (extra == nullptr || extra == info.home_stream)
+                if (extra == nullptr || extra == info.home_stream || is_stream_retired(extra))
                     continue;
                 bridgeStreams(extra, info.home_stream);
             }
@@ -808,7 +819,7 @@ namespace lfs::core {
 #endif
 
         std::unordered_map<void*, AllocationInfo> allocation_map_;
-        std::mutex map_mutex_;
+        mutable std::mutex map_mutex_;
         std::shared_mutex stream_routing_mutex_;
         std::atomic<size_t> direct_alloc_count_{0};
         bool slab_enabled_{false};

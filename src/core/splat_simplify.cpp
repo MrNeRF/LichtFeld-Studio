@@ -112,26 +112,38 @@ namespace lfs::core {
                         keep_indices = keep_indices.squeeze(1);
                     const size_t keep_count = static_cast<size_t>(keep_indices.numel());
                     const size_t layout_rest = input.max_sh_coeffs_rest();
-                    shN = Tensor::empty({keep_count, layout_rest, 3}, input.shN_raw().device());
-                    if (keep_indices.dtype() == DataType::Int64) {
-                        shN_swizzled_gather_to_linear_i64(
-                            input.shN_raw().ptr<float>(),
-                            keep_indices.ptr<int64_t>(),
-                            shN.ptr<float>(),
-                            keep_count,
-                            static_cast<uint32_t>(layout_rest),
-                            static_cast<uint32_t>(layout_rest));
+                    // q16 / IEEE-f16: dequant to [N,K,3] then index_select (no ptr<float> on codes).
+                    if (input.shN_raw().dtype() != DataType::Float32) {
+                        Tensor canon = input.shN_canonical();
+                        if (keep_indices.device() != canon.device())
+                            keep_indices = keep_indices.to(canon.device());
+                        if (keep_indices.dtype() != DataType::Int32 &&
+                            keep_indices.dtype() != DataType::Int64) {
+                            keep_indices = keep_indices.to(DataType::Int32);
+                        }
+                        shN = canon.index_select(0, keep_indices).contiguous();
                     } else {
-                        auto keep_i32 = keep_indices.dtype() == DataType::Int32
-                                            ? keep_indices
-                                            : keep_indices.to(DataType::Int32);
-                        shN_swizzled_gather_to_linear(
-                            input.shN_raw().ptr<float>(),
-                            keep_i32.ptr<int>(),
-                            shN.ptr<float>(),
-                            keep_count,
-                            static_cast<uint32_t>(layout_rest),
-                            static_cast<uint32_t>(layout_rest));
+                        shN = Tensor::empty({keep_count, layout_rest, 3}, input.shN_raw().device());
+                        if (keep_indices.dtype() == DataType::Int64) {
+                            shN_swizzled_gather_to_linear_i64(
+                                input.shN_raw().ptr<float>(),
+                                keep_indices.ptr<int64_t>(),
+                                shN.ptr<float>(),
+                                keep_count,
+                                static_cast<uint32_t>(layout_rest),
+                                static_cast<uint32_t>(layout_rest));
+                        } else {
+                            auto keep_i32 = keep_indices.dtype() == DataType::Int32
+                                                ? keep_indices
+                                                : keep_indices.to(DataType::Int32);
+                            shN_swizzled_gather_to_linear(
+                                input.shN_raw().ptr<float>(),
+                                keep_i32.ptr<int>(),
+                                shN.ptr<float>(),
+                                keep_count,
+                                static_cast<uint32_t>(layout_rest),
+                                static_cast<uint32_t>(layout_rest));
+                        }
                     }
                     shN = shN.to(device).contiguous();
                 } else {

@@ -1235,7 +1235,7 @@ namespace lfs::core {
                                 k == internal::LazyPointwiseOpKind::MulTensor ||
                                 k == internal::LazyPointwiseOpKind::DivTensor;
                             if (is_tensor_bin) {
-                                chain.ops[i].rhs = rhs_storage[rhs_i].ptr<float>();
+                                chain.ops[i].rhs = std::as_const(rhs_storage[rhs_i]).ptr<float>();
                                 ++rhs_i;
                             } else {
                                 chain.ops[i].rhs = nullptr;
@@ -1257,9 +1257,10 @@ namespace lfs::core {
                                                 ? std::vector<size_t>(shape_.rank(), 1)
                                                 : std::vector<size_t>{}),
                                 Device::CUDA, DataType::Float32);
+                            result.set_stream(execution_stream);
                             tensor_ops::launch_fused_transform_reduce(
-                                fused_source.ptr<float>(), result.ptr<float>(), n,
-                                chain, op, result.stream());
+                                std::as_const(fused_source).ptr<float>(), result.ptr<float>(), n,
+                                chain, op, execution_stream);
                         }
 
                         internal::lazy_executor_diagnostics_counters_increment_fused();
@@ -1336,7 +1337,7 @@ namespace lfs::core {
                                 k == internal::LazyPointwiseOpKind::MulTensor ||
                                 k == internal::LazyPointwiseOpKind::DivTensor;
                             if (is_tensor_bin) {
-                                chain.ops[i].rhs = rhs_storage[rhs_i].ptr<float>();
+                                chain.ops[i].rhs = std::as_const(rhs_storage[rhs_i]).ptr<float>();
                                 ++rhs_i;
                             } else {
                                 chain.ops[i].rhs = nullptr;
@@ -1391,9 +1392,10 @@ namespace lfs::core {
                             }
                             CUDAStreamGuard guard(execution_stream);
                             result = Tensor::empty(TensorShape(out_shape), Device::CUDA, DataType::Float32);
+                            result.set_stream(execution_stream);
                             tensor_ops::launch_fused_segmented_transform_reduce(
-                                fused_source.ptr<float>(), result.ptr<float>(),
-                                num_segments, segment_size, chain, op, result.stream());
+                                std::as_const(fused_source).ptr<float>(), result.ptr<float>(),
+                                num_segments, segment_size, chain, op, execution_stream);
                         }
 
                         internal::lazy_executor_diagnostics_counters_increment_fused();

@@ -13,6 +13,7 @@
 #include "core/error_reporter.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/tensor.hpp"
 #include "cuda/kmeans.hpp"
 #include "cuda/morton_encoding.hpp"
@@ -1512,7 +1513,12 @@ namespace lfs::io {
 
     } // anonymous namespace
 
-    Result<void> save_sog(const SplatData& splat_data, const SogSaveOptions& options) {
+    Result<void> save_sog(const SplatData& splat_data, const SogSaveOptions& options_in) {
+        SogSaveOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         try {
             LOG_INFO("SOG write: {}", lfs::core::path_to_utf8(options.output_path));
 
@@ -1870,6 +1876,10 @@ namespace lfs::io {
             nlohmann::json meta;
             meta["version"] = 2;
             meta["asset"]["generator"] = "LichtFeld Studio";
+            if (options.provenance) {
+                meta["asset"]["lichtfeld_provenance"] =
+                    nlohmann::json::parse(core::provenance_to_json(*options.provenance));
+            }
             meta["count"] = num_rows;
 
             meta["means"]["mins"] = {means_min_max[0][0], means_min_max[1][0], means_min_max[2][0]};

@@ -9,6 +9,7 @@
 #include "py_ui.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
+#include "python_panel_chrome.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -478,6 +479,48 @@ namespace lfs::vis::gui {
         ops.draw(host_, &ctx);
     }
 
+    PanelDirectRenderResult RmlPythonPanelAdapter::renderDirect(
+        const PanelDirectRenderRequest& request,
+        const PanelDrawContext& ctx) {
+        setPanelSpace(request.space);
+        if (request.mode == PanelDirectRenderMode::Measure)
+            return {.handled = true, .height = getDirectDrawHeight()};
+
+        setInputClipY(request.clip_y_min, request.clip_y_max);
+        setInput(request.input);
+        setForcedHeight(request.forced_height);
+
+        bool handled = true;
+        try {
+            switch (request.mode) {
+            case PanelDirectRenderMode::Measure:
+                break;
+            case PanelDirectRenderMode::Draw:
+                drawDirect(request.x, request.y, request.width, request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Cached:
+                handled = drawDirectCached(request.x, request.y, request.width,
+                                           request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Preload:
+                preloadDirect(request.width, request.height, ctx,
+                              request.clip_y_min, request.clip_y_max, request.input);
+                break;
+            }
+        } catch (...) {
+            setForcedHeight(0.0f);
+            setInput(nullptr);
+            setInputClipY(-1.0f, -1.0f);
+            throw;
+        }
+
+        const float height = getDirectDrawHeight();
+        setForcedHeight(0.0f);
+        setInput(nullptr);
+        setInputClipY(-1.0f, -1.0f);
+        return {.handled = handled, .height = height};
+    }
+
     void RmlPythonPanelAdapter::drawDirect(float x, float y, float w, float h,
                                            const PanelDrawContext& ctx) {
         const auto& ops = lfs::python::get_rml_panel_host_ops();
@@ -587,10 +630,6 @@ namespace lfs::vis::gui {
         }
     }
 
-    bool RmlPythonPanelAdapter::wantsKeyboard() const {
-        return false;
-    }
-
     bool RmlPythonPanelAdapter::needsAnimationFrame() const {
         if (content_dirty_)
             return true;
@@ -672,6 +711,14 @@ namespace lfs::vis::gui {
             if (ops.set_floating)
                 ops.set_floating(host_, floating_);
         }
+    }
+
+    std::string RmlPythonPanelAdapter::captureChromeJson() const {
+        return capture_python_panel_chrome(panel_instance_);
+    }
+
+    void RmlPythonPanelAdapter::applyChromeJson(const std::string_view json) {
+        apply_python_panel_chrome(panel_instance_, json);
     }
 
 } // namespace lfs::vis::gui

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "checkpoint_fixture.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
 #include "core/sh_value_quant.hpp"
@@ -162,14 +163,18 @@ TEST(DualRepOptimizer, CheckpointRoundtripAfterFusedPrepareWithQuantOn) {
     ASSERT_NE(shN_st, nullptr);
     EXPECT_EQ(shN_st->size, float_layout);
 
-    ASSERT_TRUE(save_checkpoint(temp_dir, past_warmup, strategy, params).has_value());
+    ASSERT_TRUE(lfs::test::write_checkpoint_fixture(
+                    temp_dir, past_warmup, strategy, params,
+                    nullptr, nullptr, nullptr, nullptr)
+                    .has_value());
 
     auto target_model = std::make_unique<SplatData>(make_sh_splat(1, sh_degree));
     MCMC target(*target_model);
     target.initialize(params.optimization);
     auto load_params = params;
-    const auto loaded = load_checkpoint(checkpoint_output_path(temp_dir), target,
-                                        load_params, nullptr, nullptr, nullptr);
+    const auto loaded = load_checkpoint(
+        lfs::test::checkpoint_fixture_path(temp_dir), target,
+        load_params, nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(loaded.has_value()) << loaded.error()
                                     << " — save→load after fused prepare must not throw "
                                        "'state size does not match model'";
@@ -509,14 +514,18 @@ TEST(DualRepOptimizer, MCMC_QuantOn_MidRunSaveLoadResume) {
     EXPECT_EQ(shN_st->step_count, mid_iter - 1000)
         << "shN step_count must not inflate during warmup";
 
-    ASSERT_TRUE(save_checkpoint(temp_dir, mid_iter, strategy, params).has_value());
+    ASSERT_TRUE(lfs::test::write_checkpoint_fixture(
+                    temp_dir, mid_iter, strategy, params,
+                    nullptr, nullptr, nullptr, nullptr)
+                    .has_value());
 
     auto target_model = std::make_unique<SplatData>(make_sh_splat(1, sh_degree));
     MCMC target(*target_model);
     target.initialize(params.optimization);
     auto load_params = params;
-    const auto loaded = load_checkpoint(checkpoint_output_path(temp_dir), target,
-                                        load_params, nullptr, nullptr, nullptr);
+    const auto loaded = load_checkpoint(
+        lfs::test::checkpoint_fixture_path(temp_dir), target,
+        load_params, nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(loaded.has_value()) << loaded.error()
                                     << " — quantized mid-run resume must load";
     EXPECT_EQ(*loaded, mid_iter);

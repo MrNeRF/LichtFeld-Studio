@@ -38,9 +38,6 @@ namespace {
             t = std::move(exact);
         };
         strip(state.exp_avg);
-        strip(state.exp_avg_sq);
-        strip(state.exp_avg_scale);
-        strip(state.exp_avg_sq_scale);
         strip(state.joint_bounds);
         if (state.grad.is_valid()) {
             strip(state.grad);

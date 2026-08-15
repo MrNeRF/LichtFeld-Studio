@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -13,23 +14,33 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/event_bridge/event_bridge.hpp"
+#include "core/event_bus.hpp"
 #include "core/parameters.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "io/exporter.hpp"
+#include "ppisp_fixture.hpp"
 #include "python/python_runtime.hpp"
 #include "training/components/bilateral_grid.hpp"
+#include "training/components/ppisp.hpp"
+#include "training/components/ppisp_file.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/services.hpp"
+#include "visualizer/operation/undo_history.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene/selection_state.hpp"
+#include "visualizer/sequencer/sequencer_controller.hpp"
 #include "visualizer/training/training_manager.hpp"
 
 namespace lfs::python {
@@ -44,6 +55,26 @@ namespace lfs::python {
                 "camera.png", std::filesystem::path{}, std::filesystem::path{},
                 64, 64, 0);
         }
+
+        class ScopedTestDirectory {
+        public:
+            explicit ScopedTestDirectory(const std::string_view name)
+                : path_(std::filesystem::temp_directory_path() / std::string(name)) {
+                std::error_code ec;
+                std::filesystem::remove_all(path_, ec);
+                std::filesystem::create_directories(path_);
+            }
+
+            ~ScopedTestDirectory() {
+                std::error_code ec;
+                std::filesystem::remove_all(path_, ec);
+            }
+
+            [[nodiscard]] const std::filesystem::path& path() const { return path_; }
+
+        private:
+            std::filesystem::path path_;
+        };
     } // namespace
 
     TEST(TrainingStateMachineTest, PublishesFinishReasonBeforeFinishedCallback) {
@@ -340,6 +371,19 @@ namespace lfs::python {
                 1.0f);
         }
 
+        core::Tensor make_test_selection_mask(const std::vector<uint8_t>& values) {
+            auto tensor = core::Tensor::empty(
+                {values.size()}, core::Device::CPU, core::DataType::UInt8);
+            std::copy(values.begin(), values.end(), tensor.ptr<uint8_t>());
+            return tensor;
+        }
+
+        std::vector<uint8_t> selection_mask_values(const core::Scene& scene) {
+            const auto mask = scene.getSelectionMask();
+            return mask && mask->is_valid() ? mask->cpu().to_vector_uint8()
+                                            : std::vector<uint8_t>{};
+        }
+
         std::shared_ptr<core::PointCloud> make_test_point_cloud(size_t count) {
             std::vector<float> means(count * 3, 0.0f);
             std::vector<float> colors(count * 3, 0.5f);
@@ -456,35 +500,219 @@ namespace lfs::python {
     class SceneValidityTest : public ::testing::Test {
     protected:
         void SetUp() override {
+            lfs::event::EventBridge::instance().clear_all();
+            core::event::bus().clear_all();
+            lfs::vis::services().clear();
+            lfs::vis::op::undoHistory().clear();
             set_application_scene(nullptr);
         }
 
         void TearDown() override {
             set_scene_generation_callback(nullptr);
             set_application_scene(nullptr);
+            lfs::vis::op::undoHistory().clear();
+            lfs::vis::services().clear();
+            core::event::bus().clear_all();
+            lfs::event::EventBridge::instance().clear_all();
         }
 
         core::Scene dummy_scene_;
     };
 
-    TEST_F(SceneValidityTest, GenerationNonNegative) {
-        auto gen = get_scene_generation();
-        EXPECT_GE(gen, 0u);
+    TEST_F(SceneValidityTest, AddedNodesMintUniqueNonNilUuids) {
+        std::unordered_set<core::Uuid> uuids;
+        for (int i = 0; i < 128; ++i) {
+            const auto id = dummy_scene_.addGroup("Node_" + std::to_string(i));
+            ASSERT_NE(id, core::NULL_NODE);
+            const auto uuid = dummy_scene_.getNodeUuid(id);
+            EXPECT_FALSE(uuid.is_nil());
+            EXPECT_TRUE(uuids.insert(uuid).second);
+            EXPECT_EQ(dummy_scene_.getNodeIdByUuid(uuid), id);
+            EXPECT_EQ(dummy_scene_.getNodeByUuid(uuid), dummy_scene_.getNodeById(id));
+        }
     }
 
-    TEST_F(SceneValidityTest, GenerationIncrementsOnSet) {
-        auto gen1 = get_scene_generation();
-        set_application_scene(&dummy_scene_);
-        auto gen2 = get_scene_generation();
-        EXPECT_GT(gen2, gen1);
+    TEST_F(SceneValidityTest, RenamePreservesNodeUuid) {
+        const auto id = dummy_scene_.addGroup("Before");
+        ASSERT_NE(id, core::NULL_NODE);
+        const auto uuid = dummy_scene_.getNodeUuid(id);
+
+        ASSERT_TRUE(dummy_scene_.renameNode(id, "After"));
+
+        EXPECT_EQ(dummy_scene_.getNodeUuid(id), uuid);
+        ASSERT_NE(dummy_scene_.getNodeByUuid(uuid), nullptr);
+        EXPECT_EQ(dummy_scene_.getNodeByUuid(uuid)->name, "After");
     }
 
-    TEST_F(SceneValidityTest, GenerationIncrementsOnClear) {
-        set_application_scene(&dummy_scene_);
-        auto gen1 = get_scene_generation();
-        set_application_scene(nullptr);
-        auto gen2 = get_scene_generation();
-        EXPECT_GT(gen2, gen1);
+    TEST_F(SceneValidityTest, SequencerUuidResolveWinsOverRenamedReusedDisplayName) {
+        const auto original_id = dummy_scene_.addGroup("SequenceFrame");
+        ASSERT_NE(original_id, core::NULL_NODE);
+        const core::Uuid original_uuid = dummy_scene_.getNodeUuid(original_id);
+
+        ASSERT_TRUE(dummy_scene_.renameNode(original_id, "RenamedFrame"));
+        const auto reused_name_id = dummy_scene_.addGroup("SequenceFrame");
+        ASSERT_NE(reused_name_id, core::NULL_NODE);
+
+        const auto resolved = lfs::vis::resolvePlySequenceNode(
+            dummy_scene_, original_uuid, "SequenceFrame");
+        ASSERT_TRUE(resolved.has_value());
+        EXPECT_EQ(*resolved, original_id);
+        EXPECT_NE(*resolved, reused_name_id);
+
+        core::Uuid missing_uuid;
+        do {
+            missing_uuid = core::generate_uuid_v4();
+        } while (dummy_scene_.getNodeByUuid(missing_uuid));
+        const auto missing = lfs::vis::resolvePlySequenceNode(
+            dummy_scene_, missing_uuid, "SequenceFrame");
+        EXPECT_FALSE(missing.has_value());
+        EXPECT_EQ(missing.error().code, lfs::vis::PlySequenceResolveErrorCode::UUID_NOT_FOUND);
+        EXPECT_NE(missing.error().message.find(missing_uuid.to_string()), std::string::npos);
+    }
+
+    TEST_F(SceneValidityTest, UuidKeyedPlyPathAndTrainingBindingSurviveRename) {
+        lfs::vis::SceneManager scene_manager;
+        auto& scene = scene_manager.getScene();
+        const auto model_id = scene.addSplat("Model", make_test_splat(2));
+        ASSERT_NE(model_id, core::NULL_NODE);
+        const core::Uuid model_uuid = scene.getNodeUuid(model_id);
+        const std::filesystem::path source_path = "uuid-keyed-model.ply";
+
+        scene_manager.setPlyPath(model_uuid, source_path);
+        scene.setTrainingModelNode(model_id);
+        ASSERT_TRUE(scene_manager.renamePLY("Model", "Renamed Model"));
+
+        EXPECT_EQ(scene.getTrainingModelNodeUuid(), model_uuid);
+        EXPECT_EQ(scene.getTrainingModelNodeId(), model_id);
+        EXPECT_EQ(scene.getTrainingModelNodeName(), "Renamed Model");
+        EXPECT_EQ(scene.getTrainingModel(), scene.getNodeByUuid(model_uuid)->model.get());
+        ASSERT_TRUE(scene_manager.getPlyPath(model_uuid).has_value());
+        EXPECT_EQ(*scene_manager.getPlyPath(model_uuid), source_path);
+        EXPECT_EQ(scene_manager.getPlyPath("Renamed Model"), source_path);
+    }
+
+    TEST_F(SceneValidityTest, PlyStateEventsCarryUuidWithoutChangingExistingFields) {
+        lfs::vis::SceneManager scene_manager;
+        std::optional<core::events::state::PLYAdded> added_event;
+        std::optional<core::events::state::PLYRemoved> removed_event;
+        auto added_handler = core::events::state::PLYAdded::when(
+            [&](const auto& event) { added_event = event; });
+        auto removed_handler = core::events::state::PLYRemoved::when(
+            [&](const auto& event) { removed_event = event; });
+
+        const std::string group_name = scene_manager.addGroupNode("Event Group");
+        ASSERT_FALSE(group_name.empty());
+        const auto* group = scene_manager.getScene().getNode(group_name);
+        ASSERT_NE(group, nullptr);
+        const core::Uuid group_uuid = group->uuid;
+
+        ASSERT_TRUE(added_event.has_value());
+        EXPECT_EQ(added_event->name, group_name);
+        EXPECT_EQ(added_event->uuid, group_uuid);
+        EXPECT_TRUE(added_event->is_group);
+        EXPECT_EQ(added_event->node_type, static_cast<int>(core::NodeType::GROUP));
+
+        scene_manager.removePLY(group_name);
+        ASSERT_TRUE(removed_event.has_value());
+        EXPECT_EQ(removed_event->name, group_name);
+        EXPECT_EQ(removed_event->uuid, group_uuid);
+        EXPECT_FALSE(removed_event->children_kept);
+
+        (void)added_handler;
+        (void)removed_handler;
+    }
+
+    TEST_F(SceneValidityTest, UuidIndexInvalidatesOnDeleteAndClear) {
+        const auto deleted_id = dummy_scene_.addGroup("Deleted");
+        const auto cleared_id = dummy_scene_.addGroup("Cleared");
+        ASSERT_NE(deleted_id, core::NULL_NODE);
+        ASSERT_NE(cleared_id, core::NULL_NODE);
+        const auto deleted_uuid = dummy_scene_.getNodeUuid(deleted_id);
+        const auto cleared_uuid = dummy_scene_.getNodeUuid(cleared_id);
+
+        dummy_scene_.removeNodeById(deleted_id);
+        EXPECT_EQ(dummy_scene_.getNodeIdByUuid(deleted_uuid), core::NULL_NODE);
+        EXPECT_EQ(dummy_scene_.getNodeByUuid(deleted_uuid), nullptr);
+
+        dummy_scene_.clear();
+        EXPECT_EQ(dummy_scene_.getNodeIdByUuid(cleared_uuid), core::NULL_NODE);
+        EXPECT_EQ(dummy_scene_.getNodeByUuid(cleared_uuid), nullptr);
+    }
+
+    TEST_F(SceneValidityTest, RestoreNodeWithUuidRejectsInvalidIdentityAndPreservesProvidedUuid) {
+        core::Scene::RestoreNodeDesc nil_desc;
+        nil_desc.type = core::NodeType::GROUP;
+        nil_desc.name = "Nil";
+        EXPECT_EQ(dummy_scene_.restoreNodeWithUuid(std::move(nil_desc)), core::NULL_NODE);
+
+        const auto original_id = dummy_scene_.addGroup("Original");
+        ASSERT_NE(original_id, core::NULL_NODE);
+        const auto original_uuid = dummy_scene_.getNodeUuid(original_id);
+
+        core::Scene::RestoreNodeDesc duplicate_desc;
+        duplicate_desc.uuid = original_uuid;
+        duplicate_desc.type = core::NodeType::GROUP;
+        duplicate_desc.name = "Duplicate";
+        EXPECT_EQ(dummy_scene_.restoreNodeWithUuid(std::move(duplicate_desc)), core::NULL_NODE);
+        EXPECT_EQ(dummy_scene_.getNodeIdByUuid(original_uuid), original_id);
+        EXPECT_EQ(dummy_scene_.getNode("Duplicate"), nullptr);
+
+        dummy_scene_.removeNodeById(original_id);
+        ASSERT_EQ(dummy_scene_.getNodeIdByUuid(original_uuid), core::NULL_NODE);
+
+        core::Scene::RestoreNodeDesc restore_desc;
+        restore_desc.uuid = original_uuid;
+        restore_desc.type = core::NodeType::GROUP;
+        restore_desc.name = "Restored";
+        const auto restored_id = dummy_scene_.restoreNodeWithUuid(std::move(restore_desc));
+        ASSERT_NE(restored_id, core::NULL_NODE);
+        EXPECT_EQ(dummy_scene_.getNodeIdByUuid(original_uuid), restored_id);
+        ASSERT_NE(dummy_scene_.getNodeByUuid(original_uuid), nullptr);
+        EXPECT_EQ(dummy_scene_.getNodeByUuid(original_uuid)->uuid, original_uuid);
+        EXPECT_EQ(dummy_scene_.getNodeByUuid(original_uuid)->name, "Restored");
+    }
+
+    TEST_F(SceneValidityTest, ApplyPerNodeSelectionSlicesWarnsAndFitsLengthMismatch) {
+        const auto id = dummy_scene_.addSplat("Model", make_test_splat(3));
+        ASSERT_NE(id, core::NULL_NODE);
+
+        core::Scene::PerNodeSelectionSlices slices;
+        slices.emplace(dummy_scene_.getNodeUuid(id),
+                       make_test_selection_mask({4, 7}));
+
+        EXPECT_NO_THROW(dummy_scene_.applyPerNodeSelectionSlices(slices));
+        EXPECT_EQ(selection_mask_values(dummy_scene_),
+                  (std::vector<uint8_t>{4, 7, 0}));
+    }
+
+    TEST_F(SceneValidityTest, CapturePerNodeSelectionSlicesRejectsOrderedConsolidationDisagreement) {
+        const auto first_id = dummy_scene_.addSplat("First", make_test_splat(2));
+        const auto second_id = dummy_scene_.addSplat("Second", make_test_splat(2));
+        ASSERT_NE(first_id, core::NULL_NODE);
+        ASSERT_NE(second_id, core::NULL_NODE);
+        dummy_scene_.setSelectionMask(std::make_shared<core::Tensor>(
+            make_test_selection_mask({1, 0, 0, 2})));
+
+        ASSERT_EQ(dummy_scene_.consolidateNodeModels(), 2u);
+        ASSERT_TRUE(dummy_scene_.isConsolidated());
+        EXPECT_EQ(dummy_scene_.capturePerNodeSelectionSlices().size(), 2u);
+
+        auto* first = dummy_scene_.getNodeById(first_id);
+        auto* second = dummy_scene_.getNodeById(second_id);
+        ASSERT_NE(first, nullptr);
+        ASSERT_NE(second, nullptr);
+        first->gaussian_count.store(3, std::memory_order_release);
+        second->gaussian_count.store(1, std::memory_order_release);
+
+        EXPECT_THROW(
+            {
+                const auto ignored = dummy_scene_.capturePerNodeSelectionSlices();
+                (void)ignored;
+            },
+            core::SelectionTopologyError);
+
+        first->gaussian_count.store(2, std::memory_order_release);
+        second->gaussian_count.store(2, std::memory_order_release);
     }
 
     TEST_F(SceneValidityTest, GetApplicationSceneReturnsCorrectPointer) {
@@ -598,8 +826,10 @@ namespace lfs::python {
         dummy_scene_.setInitialPointCloud(std::make_shared<core::PointCloud>(std::move(means), std::move(colors)));
         dummy_scene_.setSceneCenter(core::Tensor::from_vector({1.0f, 2.0f, 3.0f}, {size_t{3}}, core::Device::CPU));
         dummy_scene_.setImagesHaveAlpha(true);
-        dummy_scene_.setTrainingModelNode("Model");
         const auto dataset_id = dummy_scene_.addDataset("Dataset");
+        const auto model_id = dummy_scene_.addSplat("Model", make_test_splat(1), dataset_id);
+        ASSERT_NE(model_id, core::NULL_NODE);
+        dummy_scene_.setTrainingModelNode(model_id);
         const auto cameras_group_id = dummy_scene_.addGroup("Cameras", dataset_id);
         const auto train_group_id = dummy_scene_.addCameraGroup("Training (1)", cameras_group_id, 1);
         dummy_scene_.addCamera("cam_0001.png", train_group_id, make_test_camera());
@@ -955,6 +1185,52 @@ namespace lfs::python {
         EXPECT_EQ(get_application_scene(), &scene_manager.getScene());
         EXPECT_EQ(scene_manager.getContentType(), lfs::vis::SceneManager::ContentType::Empty);
         EXPECT_EQ(scene_manager.getScene().getNodeCount(), 0u);
+    }
+
+    TEST_F(SceneValidityTest, ColmapSparsePathTracksSuccessfulLoadAndClearsOnReset) {
+        const ScopedTestDirectory sparse_dir("lfs_scene_manager_colmap_path");
+        {
+            std::ofstream cameras(sparse_dir.path() / "cameras.txt");
+            cameras << "1 PINHOLE 64 64 50 50 32 32\n";
+            std::ofstream images(sparse_dir.path() / "images.txt");
+            images << "1 1 0 0 0 0 0 0 1 frame.png\n\n";
+        }
+
+        lfs::vis::SceneManager scene_manager;
+        scene_manager.loadColmapCamerasOnly(sparse_dir.path());
+
+        EXPECT_EQ(scene_manager.getColmapSparsePath(), sparse_dir.path());
+        ASSERT_TRUE(scene_manager.clear());
+        EXPECT_TRUE(scene_manager.getColmapSparsePath().empty());
+    }
+
+    TEST_F(SceneValidityTest, PPISPPathTracksSuccessfulLoadAndClearsOnReset) {
+        const ScopedTestDirectory temp_dir("lfs_scene_manager_ppisp_path");
+        const auto splat_path = temp_dir.path() / "appearance.ply";
+        const auto splat = make_test_splat(1);
+        const auto saved_splat = io::save_ply(*splat, {
+                                                          .output_path = splat_path,
+                                                          .binary = true,
+                                                          .async = false,
+                                                      });
+        ASSERT_TRUE(saved_splat.has_value());
+
+        const auto path = training::get_ppisp_companion_path(splat_path);
+
+        training::PPISP source(1);
+        source.register_frame(0, 0);
+        source.finalize();
+        const auto saved =
+            test::write_ppisp_fixture(
+                path, source);
+        ASSERT_TRUE(saved.has_value()) << saved.error();
+
+        lfs::vis::SceneManager scene_manager;
+        scene_manager.loadSplatFile(splat_path);
+
+        EXPECT_EQ(scene_manager.getPPISPPath(), path);
+        ASSERT_TRUE(scene_manager.clear());
+        EXPECT_TRUE(scene_manager.getPPISPPath().empty());
     }
 
     TEST_F(SceneValidityTest, SceneManagerClearReleasesMeshRayPickCpuCache) {

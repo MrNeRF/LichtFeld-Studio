@@ -57,7 +57,10 @@ def _install_stub_modules(monkeypatch):
 
     ui_pkg = ModuleType("lfs_plugins.ui")
     ui_pkg.__path__ = []
-    ui_pkg.RuntimeState = SimpleNamespace(trainer_state=SimpleNamespace(value="idle"))
+    ui_pkg.RuntimeState = SimpleNamespace(
+        trainer_state=SimpleNamespace(value="idle"),
+        language_generation=SimpleNamespace(value=0),
+    )
     ui_pkg.native_value = lambda _field, fallback: fallback
     monkeypatch.setitem(sys.modules, "lfs_plugins.ui", ui_pkg)
 
@@ -1235,10 +1238,8 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
         "transform_scale_axis",
         "transform_scale_uniform",
     )
-    transform_dynamic_tooltip_keys = (
-        "transform_space",
-        "transform_axis",
-    )
+    # Product uses toolbar.local_space / toolbar.world_space; no tooltip.transform_* keys.
+    transform_dynamic_tooltip_keys = ()
     transform_toolbar_tooltip_keys = (
         "local_space",
         "world_space",

@@ -12,6 +12,12 @@
 
 // Define a transform to JSON for each event structure
 #define ENABLE_TO_JSON(event, ...) NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_ONLY_SERIALIZE(event, __VA_ARGS__)
+namespace lfs::core {
+    void to_json(nlohmann::json& json, const Uuid& uuid) {
+        json = uuid.to_string();
+    }
+} // namespace lfs::core
+
 namespace lfs::core::events::state {
     ENABLE_TO_JSON(TrainingStarted, total_iterations);
     ENABLE_TO_JSON(TrainingProgress, iteration, loss, num_gaussians, is_refining);
@@ -21,8 +27,8 @@ namespace lfs::core::events::state {
     ENABLE_TO_JSON(TrainingStopped, iteration, user_requested);
 
     ENABLE_TO_JSON(ModelUpdated, iteration, num_gaussians);
-    ENABLE_TO_JSON(PLYAdded, name, node_gaussians, total_gaussians, is_visible, parent_name, is_group, node_type);
-    ENABLE_TO_JSON(PLYRemoved, name, children_kept, parent_of_removed);
+    ENABLE_TO_JSON(PLYAdded, name, uuid, node_gaussians, total_gaussians, is_visible, parent_name, is_group, node_type);
+    ENABLE_TO_JSON(PLYRemoved, name, uuid, children_kept, parent_of_removed);
     ENABLE_TO_JSON(NodeReparented, name, old_parent, new_parent);
 
     // Data loading
@@ -38,8 +44,7 @@ namespace lfs::core::events::state {
     ENABLE_TO_JSON(EvaluationCompleted, iteration, psnr, ssim, lpips, elapsed_time, num_gaussians);
 
     // System state
-    ENABLE_TO_JSON(CheckpointSaved, iteration, path);
-    ENABLE_TO_JSON(DiskSpaceSaveFailed, iteration, path, error, required_bytes, available_bytes, is_disk_space_error, is_checkpoint);
+    ENABLE_TO_JSON(DiskSpaceSaveFailed, iteration, path, error, required_bytes, available_bytes, is_disk_space_error);
     ENABLE_TO_JSON(MemoryUsage, gpu_used, gpu_total, gpu_percent, ram_used, ram_total, ram_percent);
     ENABLE_TO_JSON(FrameRendered, render_ms, fps, num_gaussians);
     ENABLE_TO_JSON(KeyframeListChanged, count);
@@ -169,7 +174,6 @@ namespace lfs::tcp {
             SUBSCRIBE_EVENT(EvaluationStarted);
             SUBSCRIBE_EVENT(EvaluationProgress);
             SUBSCRIBE_EVENT(EvaluationCompleted);
-            SUBSCRIBE_EVENT(CheckpointSaved);
             SUBSCRIBE_EVENT(DiskSpaceSaveFailed);
             SUBSCRIBE_EVENT(MemoryUsage);
             SUBSCRIBE_EVENT(FrameRendered);

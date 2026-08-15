@@ -7,11 +7,13 @@
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "io/error.hpp"
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -103,6 +105,22 @@ namespace lfs::io {
         std::shared_ptr<PointCloud> point_cloud;
     };
 
+    enum class ImportWorldOriginProvenance : std::uint8_t {
+        None,
+        CentralizeByPointCloud,
+        CentralizeByCameras,
+        User,
+        Import,
+    };
+
+    struct ImportGeoreference {
+        std::optional<std::string> crs;
+        std::array<double, 3> world_origin{};
+        double world_unit_scale = 1.0;
+        ImportWorldOriginProvenance world_origin_provenance =
+            ImportWorldOriginProvenance::None;
+    };
+
     struct LoadResult {
         std::variant<std::shared_ptr<SplatData>, LoadedScene, std::shared_ptr<MeshData>> data;
         Tensor scene_center;
@@ -110,6 +128,7 @@ namespace lfs::io {
         std::string loader_used;
         std::chrono::milliseconds load_time{0};
         std::vector<std::string> warnings;
+        std::optional<ImportGeoreference> georeference;
     };
 
     /**

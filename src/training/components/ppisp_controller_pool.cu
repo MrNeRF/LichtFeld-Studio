@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "config_serialization.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
@@ -10,14 +11,20 @@
 #include "ppisp_controller_pool.hpp"
 #include <cassert>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <stdexcept>
+#include <type_traits>
 
 namespace lfs::training {
 
     namespace {
         constexpr uint32_t CHECKPOINT_MAGIC = 0x4C465043;
-        constexpr uint32_t CHECKPOINT_VERSION = 1;
+        constexpr uint32_t CHECKPOINT_MIN_VERSION = 1;
+        constexpr uint32_t CHECKPOINT_VERSION = 2;
+        constexpr uint32_t CONFIG_SCHEMA_VERSION = 1;
+        constexpr uint32_t CONFIG_SCHEMA_V1_BYTES = 52;
         constexpr uint32_t INFERENCE_MAGIC = 0x4C464349;
         constexpr uint32_t INFERENCE_VERSION = 1;
 
@@ -33,6 +40,93 @@ namespace lfs::training {
         constexpr int POOL2_SIZE = 5;
         constexpr int POOL_STRIDE = 3;
         constexpr int MAX_CHECKPOINT_CAMERAS = 100'000;
+
+        struct LegacyConfigV1 {
+            double lr;
+            double beta1;
+            double beta2;
+            double eps;
+            int warmup_steps;
+            double warmup_start_factor;
+            double final_lr_factor;
+        };
+
+        void serialize_config(std::ostream& os, const PPISPControllerPool::Config& config) {
+            using config_serialization_detail::write_little_endian;
+
+            // Schema v1 is append-only. Bump the schema version and append fields;
+            // payload size lets older readers skip the suffix and retain defaults.
+            write_little_endian(os, CONFIG_SCHEMA_VERSION, "PPISP controller config schema");
+            write_little_endian(os, CONFIG_SCHEMA_V1_BYTES, "PPISP controller config size");
+            write_little_endian(os, config.lr, "PPISP controller config lr");
+            write_little_endian(os, config.beta1, "PPISP controller config beta1");
+            write_little_endian(os, config.beta2, "PPISP controller config beta2");
+            write_little_endian(os, config.eps, "PPISP controller config eps");
+            write_little_endian(
+                os, static_cast<int32_t>(config.warmup_steps), "PPISP controller config warmup_steps");
+            write_little_endian(
+                os, config.warmup_start_factor, "PPISP controller config warmup_start_factor");
+            write_little_endian(
+                os, config.final_lr_factor, "PPISP controller config final_lr_factor");
+        }
+
+        [[nodiscard]] PPISPControllerPool::Config deserialize_config(std::istream& is) {
+            using config_serialization_detail::read_little_endian;
+
+            const uint32_t schema_version =
+                read_little_endian<uint32_t>(is, "PPISP controller config schema");
+            const uint32_t payload_bytes =
+                read_little_endian<uint32_t>(is, "PPISP controller config size");
+            if (schema_version == 0) {
+                config_serialization_detail::throw_config_data_loss(
+                    "PPISP controller config schema", "version must be positive");
+            }
+            if (payload_bytes < CONFIG_SCHEMA_V1_BYTES ||
+                payload_bytes > config_serialization_detail::MAX_CONFIG_PAYLOAD_BYTES) {
+                config_serialization_detail::throw_config_data_loss(
+                    "PPISP controller config size", "payload size is out of bounds");
+            }
+
+            PPISPControllerPool::Config config{};
+            config.lr = read_little_endian<double>(is, "PPISP controller config lr");
+            config.beta1 = read_little_endian<double>(is, "PPISP controller config beta1");
+            config.beta2 = read_little_endian<double>(is, "PPISP controller config beta2");
+            config.eps = read_little_endian<double>(is, "PPISP controller config eps");
+            config.warmup_steps =
+                read_little_endian<int32_t>(is, "PPISP controller config warmup_steps");
+            config.warmup_start_factor =
+                read_little_endian<double>(is, "PPISP controller config warmup_start_factor");
+            config.final_lr_factor =
+                read_little_endian<double>(is, "PPISP controller config final_lr_factor");
+            config_serialization_detail::skip_bytes(
+                is, payload_bytes - CONFIG_SCHEMA_V1_BYTES, "PPISP controller config");
+            return config;
+        }
+
+        [[nodiscard]] PPISPControllerPool::Config deserialize_legacy_config(std::istream& is) {
+            static_assert(std::is_standard_layout_v<LegacyConfigV1>);
+            static_assert(sizeof(LegacyConfigV1) == 56);
+            static_assert(offsetof(LegacyConfigV1, lr) == 0);
+            static_assert(offsetof(LegacyConfigV1, beta1) == 8);
+            static_assert(offsetof(LegacyConfigV1, beta2) == 16);
+            static_assert(offsetof(LegacyConfigV1, eps) == 24);
+            static_assert(offsetof(LegacyConfigV1, warmup_steps) == 32);
+            static_assert(offsetof(LegacyConfigV1, warmup_start_factor) == 40);
+            static_assert(offsetof(LegacyConfigV1, final_lr_factor) == 48);
+
+            LegacyConfigV1 legacy{};
+            lfs::core::serialization_detail::read_exact(
+                is, &legacy, sizeof(legacy), "legacy PPISP controller configuration");
+            return {
+                .lr = legacy.lr,
+                .beta1 = legacy.beta1,
+                .beta2 = legacy.beta2,
+                .eps = legacy.eps,
+                .warmup_steps = legacy.warmup_steps,
+                .warmup_start_factor = legacy.warmup_start_factor,
+                .final_lr_factor = legacy.final_lr_factor,
+            };
+        }
 
         lfs::core::Tensor kaiming_uniform(const size_t fan_in, const size_t fan_out) {
             const float bound = std::sqrt(6.0f / static_cast<float>(fan_in));
@@ -364,7 +458,7 @@ namespace lfs::training {
 
         os.write(reinterpret_cast<const char*>(&num_cameras_), sizeof(num_cameras_));
         os.write(reinterpret_cast<const char*>(&total_iterations_), sizeof(total_iterations_));
-        os.write(reinterpret_cast<const char*>(&config_), sizeof(config_));
+        serialize_config(os, config_);
         os.write(reinterpret_cast<const char*>(&step_), sizeof(step_));
         os.write(reinterpret_cast<const char*>(&current_lr_), sizeof(current_lr_));
         os.write(reinterpret_cast<const char*>(&initial_lr_), sizeof(initial_lr_));
@@ -403,8 +497,10 @@ namespace lfs::training {
 
         if (magic != CHECKPOINT_MAGIC)
             throw std::runtime_error("Invalid PPISPControllerPool checkpoint");
-        if (version != CHECKPOINT_VERSION)
-            throw std::runtime_error("Unsupported PPISPControllerPool checkpoint version");
+        if (version < CHECKPOINT_MIN_VERSION || version > CHECKPOINT_VERSION) {
+            config_serialization_detail::throw_unsupported_component_version(
+                "PPISPControllerPool", version, CHECKPOINT_MIN_VERSION, CHECKPOINT_VERSION);
+        }
 
         int saved_num_cameras = 0;
         lfs::core::serialization_detail::read_exact(
@@ -421,7 +517,9 @@ namespace lfs::training {
         double initial_lr = 0.0;
         lfs::core::serialization_detail::read_exact(
             is, &total_iterations, sizeof(total_iterations), "PPISP controller iteration count");
-        lfs::core::serialization_detail::read_exact(is, &config, sizeof(config), "PPISP controller configuration");
+        config = version == CHECKPOINT_MIN_VERSION
+                     ? deserialize_legacy_config(is)
+                     : deserialize_config(is);
         lfs::core::serialization_detail::read_exact(is, &step, sizeof(step), "PPISP controller step");
         lfs::core::serialization_detail::read_exact(
             is, &current_lr, sizeof(current_lr), "PPISP controller learning rate");

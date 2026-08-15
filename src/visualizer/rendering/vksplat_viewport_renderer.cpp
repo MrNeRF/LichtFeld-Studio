@@ -786,6 +786,8 @@ namespace lfs::vis {
                 {"macro_raster", (root / "generated/macro_raster.spv").string()},
                 {"macro_raster_fp32", (root / "generated/macro_raster_fp32.spv").string()},
                 {"macro_raster_overlays", (root / "generated/macro_raster_overlays.spv").string()},
+                {"macro_raster_overlays_fp32",
+                 (root / "generated/macro_raster_overlays_fp32.spv").string()},
                 {"macro_compose", (root / "generated/macro_compose.spv").string()},
                 {"macro_compose_overlays", (root / "generated/macro_compose_overlays.spv").string()},
             };
@@ -1872,7 +1874,16 @@ namespace lfs::vis {
     }
 
     VksplatViewportRenderer::~VksplatViewportRenderer() {
-        reset();
+        try {
+            reset();
+        } catch (const lfs::Exception& e) {
+            LOG_ERROR("VkSplat viewport renderer reset failed during destruction: {}",
+                      lfs::format_for_developer(e.error()));
+        } catch (const std::exception& e) {
+            LOG_ERROR("VkSplat viewport renderer reset failed during destruction: {}", e.what());
+        } catch (...) {
+            LOG_ERROR("VkSplat viewport renderer reset failed during destruction with an unknown error");
+        }
     }
 
     void VksplatViewportRenderer::releaseOutputSlot(const OutputSlot output_slot, const bool evict) {
@@ -2080,8 +2091,17 @@ namespace lfs::vis {
         if (initialized_) {
             detachManagedBuffers();
             releaseGpuLodTreeStorage();
-            renderer_.cleanupBuffers(buffers_);
-            renderer_.cleanup();
+            try {
+                renderer_.cleanupBuffers(buffers_);
+                renderer_.cleanup();
+            } catch (const lfs::Exception& e) {
+                LOG_ERROR("VkSplat renderer cleanup during reset failed: {}",
+                          lfs::format_for_developer(e.error()));
+            } catch (const std::exception& e) {
+                LOG_ERROR("VkSplat renderer cleanup during reset failed: {}", e.what());
+            } catch (...) {
+                LOG_ERROR("VkSplat renderer cleanup during reset failed with an unknown error");
+            }
         }
         for (auto& slot : cuda_opacity_copies_) {
             slot.interop.reset();
@@ -4085,8 +4105,13 @@ namespace lfs::vis {
         // selection flicker seen with a detached upload stream.
         auto& slot = cuda_overlays_[ring_slot];
 
+        // Gate on both tensor presence and the host non-empty selection flag from
+        // the same request snapshot. A stale all-zero mask must not pin the slow
+        // overlay raster path; preview/cursor still engage via preview_enabled /
+        // cursor.enabled independently of has_selection.
         const bool selection_enabled =
             !request.overlay.cursor.saturation_preview &&
+            request.overlay.has_selection &&
             hasOverlayTensor(request.overlay.emphasis.mask, num_splats);
         const bool preview_enabled =
             !request.overlay.cursor.saturation_preview &&
@@ -6179,7 +6204,7 @@ namespace lfs::vis {
     }
 
     std::expected<std::uint64_t, std::string> VksplatViewportRenderer::submitReadbackTicket(
-        VulkanContext& context,
+        VulkanContext& /*context*/,
         const std::size_t cell,
         const VkCommandBuffer command_buffer,
         const VkQueue submit_queue,

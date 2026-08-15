@@ -27,4 +27,25 @@ namespace lfs::training::sh_value {
         std::uint32_t coeffs_rest,
         cudaStream_t stream = nullptr);
 
+    void decode_shN_u16_range_to_canonical(
+        const std::uint16_t* src_u16,
+        const float* bounds_float2,
+        float* dst_canonical,
+        std::uint64_t canonical_float_offset,
+        std::uint64_t float_count,
+        std::size_t n_primitives,
+        std::uint32_t dst_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream = nullptr);
+
+    void decode_shN_f16_range_to_canonical(
+        const std::uint16_t* src_f16,
+        float* dst_canonical,
+        std::uint64_t canonical_float_offset,
+        std::uint64_t float_count,
+        std::size_t n_primitives,
+        std::uint32_t dst_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream = nullptr);
+
 } // namespace lfs::training::sh_value

@@ -147,7 +147,7 @@ namespace lfs::core {
             int max_cap = 1000000;
 
             std::vector<size_t> eval_steps = {7'000, 30'000};  // Steps to evaluate the model
-            std::vector<size_t> save_steps = {7'000, 30'000};  // Steps to save the model
+            std::vector<size_t> save_steps = {7'000, 30'000};  // Steps at which to save the project (project.licht)
             bool bg_modulation = false;                        // Enable sinusoidal background modulation
             bool enable_eval = false;                          // Only evaluate when explicitly enabled
             bool enable_save_eval_images = true;               // Save during evaluation images
@@ -289,7 +289,8 @@ namespace lfs::core {
             bool invert_masks = false;
             float mask_threshold = 0.5f;
 
-            // Not serialized — UI-controlled per import.
+            // PRMS-authoritative pending import option (ownership matrix).
+            // DatasetConfig::to_json omits it; project PRMS round-trips it.
             std::string centralize_dataset = "off";
 
             nlohmann::json to_json() const;
@@ -315,6 +316,7 @@ namespace lfs::core {
             int height = 1080;
             int fps = 30;
             int crf = 18;
+            bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         };
 
         struct LFS_CORE_API TrainingParameters {
@@ -336,9 +338,24 @@ namespace lfs::core {
             std::vector<bool> add_splat_freeze;
             float freeze_lr_scale = 0.0f;
             bool exclude_frozen_add_splats_from_export = false;
+            bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
 
             // Checkpoint to resume training from
             std::optional<std::filesystem::path> resume_checkpoint = std::nullopt;
+
+            // Project to open as the GUI lifecycle document.
+            std::optional<std::filesystem::path> project_path = std::nullopt;
+
+            // Embedded CKPT project to resume training from. The display model
+            // is hydrated first; full trainer state must be loaded before
+            // train() is allowed to start.
+            std::optional<std::filesystem::path> resume_project = std::nullopt;
+
+            // Headless/integration-test trigger for the production training
+            // snapshot path. An empty path derives
+            // <output>/project.licht (Trainer::default_project_path).
+            std::optional<size_t> save_project_at_iteration = std::nullopt;
+            std::filesystem::path save_project_path;
 
             // Headless camera-path -> video render mode (see --render-camera-path)
             std::optional<RenderPathConfig> render_path = std::nullopt;
@@ -348,6 +365,9 @@ namespace lfs::core {
 
             // True when --bg-color was provided on the command line.
             bool cli_bg_color_set = false;
+            // True when -i/--iter was provided. Resume adapters use this to
+            // distinguish an explicit continuation target from the default.
+            bool cli_iterations_set = false;
 
             std::vector<int> disabled_camera_uids;
 
@@ -380,13 +400,15 @@ namespace lfs::core {
             OutputFormat format = OutputFormat::PLY;
             int sh_degree = 3; // 0-3, -1 = keep original
             int sog_iterations = 10;
+            int spz_version = 4; // SPZ container version: 4 (zstd) or 3 (legacy gzip)
             // PLY -> RAD only: replicate the source across an AxB ground-plane
             // grid instead of pre-tiling the input file.
             std::uint32_t tiles_x = 1;
             std::uint32_t tiles_y = 1;
             LodBuilder lod_builder = LodBuilder::BHATT;
             RadExportMode rad_export_mode = RadExportMode::Stream;
-            bool overwrite = false; // Skip overwrite prompts
+            bool overwrite = false;         // Skip overwrite prompts
+            bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         };
 
         // Parameters for the mesh2splat command
@@ -397,7 +419,9 @@ namespace lfs::core {
             std::vector<OutputFormat> formats{OutputFormat::PLY};
             Mesh2SplatOptions options;
             int sog_iterations = 10;
+            int spz_version = 4; // SPZ container version: 4 (zstd) or 3 (legacy gzip)
             bool overwrite = false;
+            bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         };
 
         enum class PreprocessOutputMode { Depth,

@@ -56,8 +56,10 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] const Rml::Element* viewportOverlayHoverRoot(
             const Rml::Element* const element) {
-            for (auto* node = element; isInteractiveViewportOverlayElement(node);
-                 node = node->GetParentNode()) {
+            // Walk parents with an explicit null stop (matches isElementOrDescendantOf).
+            for (auto* node = element; node; node = node->GetParentNode()) {
+                if (!isInteractiveViewportOverlayElement(node))
+                    break;
                 if (isViewportOverlayHoverRoot(node))
                     return node;
             }
@@ -928,6 +930,10 @@ namespace lfs::vis::gui {
         wrapper_ptr->SetProperty("width", "100%");
         wrapper_ptr->SetProperty("height", "100%");
         auto* wrapper = body->AppendChild(std::move(wrapper_ptr));
+        if (!wrapper) {
+            LOG_ERROR("RmlViewportOverlay: AppendChild failed for data-model wrapper");
+            return;
+        }
         markRenderNeeded(RenderReason::DataModelBinding);
 
         std::vector<Rml::Element*> children_to_move;

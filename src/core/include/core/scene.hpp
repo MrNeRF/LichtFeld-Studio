@@ -10,16 +10,18 @@
 #include "core/mesh_data.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/uuid.hpp"
 #include <array>
 #include <atomic>
-#include <cassert>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -29,6 +31,15 @@ namespace lfs::core {
 
     using NodeId = int32_t;
     constexpr NodeId NULL_NODE = -1;
+
+    [[nodiscard]] LFS_CORE_API std::string makeUniqueNodeName(
+        const std::unordered_set<std::string>& existing_names,
+        std::string_view base_name);
+
+    class LFS_CORE_API SelectionTopologyError final : public std::runtime_error {
+    public:
+        using std::runtime_error::runtime_error;
+    };
 
     enum class NodeType : uint8_t {
         SPLAT,          // Contains gaussian splat data
@@ -45,6 +56,11 @@ namespace lfs::core {
         KEYFRAME_GROUP, // Container for keyframe nodes (camera animation)
         KEYFRAME,       // Individual camera animation keyframe
         PLY_SEQUENCE    // Container for ordered PLY sequence frames
+    };
+
+    enum class SelectionDomain : uint8_t {
+        Splat = 1,
+        PointCloud = 2,
     };
 
     struct CropBoxData {
@@ -64,6 +80,14 @@ namespace lfs::core {
         glm::vec3 color{1.0f, 1.0f, 0.0f};
         float line_width = 2.0f;
         float flash_intensity = 0.0f;
+    };
+
+    struct GeoreferencePose {
+        glm::dquat rotation{1.0, 0.0, 0.0, 0.0};
+        glm::dvec3 translation{0.0};
+
+        friend bool operator==(const GeoreferencePose&,
+                               const GeoreferencePose&) = default;
     };
 
     inline constexpr float DEFAULT_KEYFRAME_FOCAL_MM = 35.0f;
@@ -87,6 +111,17 @@ namespace lfs::core {
 
     class Scene;
 
+    // Project payload hydration is tracked at the chapter/node boundary. A
+    // geometry node may exist in the interactive scene shell before its heavy
+    // payload has been decoded.
+    enum class PayloadHydrationState : std::uint8_t {
+        NotApplicable,
+        Unloaded,
+        Hydrating,
+        Loaded,
+        Failed,
+    };
+
     class LFS_CORE_API SceneNode {
     public:
         SceneNode() = default;
@@ -97,6 +132,7 @@ namespace lfs::core {
         NodeId id = NULL_NODE;
         NodeId parent_id = NULL_NODE;
         std::vector<NodeId> children;
+        Uuid uuid;
         NodeType type = NodeType::SPLAT;
         std::string name;
 
@@ -112,6 +148,12 @@ namespace lfs::core {
         std::shared_ptr<lfs::core::Camera> camera;
         int camera_uid = -1;
         bool training_enabled = true;
+        // In-memory payload no longer matches the source file (edited, generated,
+        // pasted, ...); drives the embed-vs-reference decision on project save.
+        bool payload_diverged = false;
+        PayloadHydrationState payload_hydration =
+            PayloadHydrationState::NotApplicable;
+        std::optional<GeoreferencePose> georef_pose;
 
         std::string image_path;
         std::string mask_path;
@@ -133,6 +175,7 @@ namespace lfs::core {
     class LFS_CORE_API Scene {
     public:
         using SelectionGroupCounts = std::array<size_t, 256>;
+        using PerNodeSelectionSlices = std::unordered_map<Uuid, lfs::core::Tensor>;
         using Node = SceneNode;
 
         struct SelectionStateSnapshot {
@@ -148,6 +191,46 @@ namespace lfs::core {
             uint8_t active_group_id = 0;
             uint8_t next_group_id = 1;
             bool has_selection = false;
+        };
+
+        struct RestoreNodeDesc {
+            Uuid uuid;
+            NodeType type = NodeType::GROUP;
+            std::string name;
+            NodeId parent = NULL_NODE;
+            size_t gaussian_count = 0;
+            glm::mat4 local_transform{1.0f};
+            bool visible = true;
+            bool locked = false;
+            bool training_enabled = true;
+            bool payload_diverged = false;
+            PayloadHydrationState payload_hydration =
+                PayloadHydrationState::NotApplicable;
+            std::optional<GeoreferencePose> georef_pose;
+
+            std::unique_ptr<lfs::core::SplatData> model;
+            std::shared_ptr<lfs::core::PointCloud> point_cloud;
+            std::shared_ptr<lfs::core::MeshData> mesh;
+            std::unique_ptr<CropBoxData> cropbox;
+            std::unique_ptr<EllipsoidData> ellipsoid;
+            std::shared_ptr<lfs::core::Camera> camera;
+            std::unique_ptr<KeyframeData> keyframe;
+        };
+
+        struct RestoreSelectionState {
+            std::shared_ptr<lfs::core::Tensor> splat_mask;
+            std::shared_ptr<lfs::core::Tensor> point_cloud_mask;
+            std::vector<SelectionGroup> groups;
+            uint8_t active_group_id = 0;
+            uint8_t next_group_id = 1;
+            bool has_splat_selection = false;
+            bool has_point_cloud_selection = false;
+        };
+
+        struct PayloadHydrationCommitReport {
+            std::size_t hydrated_units = 0;
+            std::size_t invalidated_units = 0;
+            bool selection_installed = false;
         };
 
         struct CameraTrainingCounts {
@@ -190,6 +273,7 @@ namespace lfs::core {
         Scene& operator=(Scene&&) = default;
 
         void removeNode(std::string name, bool keep_children = false);
+        void removeNodeById(NodeId id, bool keep_children = false);
         [[nodiscard]] std::vector<std::unique_ptr<lfs::core::SplatData>> detachSplatModelsForRemoval(
             std::string name,
             bool keep_children = false);
@@ -199,11 +283,15 @@ namespace lfs::core {
         // just a pointer swap + MODEL_CHANGED. Used by the PLY-sequence streaming player.
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData> swapNodeModel(
             const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
+        [[nodiscard]] bool setPayloadHydrationState(
+            const Uuid& uuid, PayloadHydrationState state);
         void setNodeVisibility(const std::string& name, bool visible);
         void setNodeVisibility(NodeId id, bool visible);
         void setNodeLocked(const std::string& name, bool locked);
         void setNodeTransform(const std::string& name, const glm::mat4& transform);
+        void setNodeTransform(NodeId id, const glm::mat4& transform);
         glm::mat4 getNodeTransform(const std::string& name) const;
+        glm::mat4 getNodeTransform(NodeId id) const;
         bool renameNode(NodeId id, const std::string& new_name);
         bool renameNode(std::string old_name, const std::string& new_name);
         void clear();
@@ -222,6 +310,26 @@ namespace lfs::core {
         NodeId addCamera(const std::string& name, NodeId parent, std::shared_ptr<lfs::core::Camera> camera);
         NodeId addKeyframeGroup(const std::string& name, NodeId parent = NULL_NODE);
         NodeId addKeyframe(const std::string& name, NodeId parent, std::unique_ptr<KeyframeData> data);
+        // Identity-preserving insert for history and future SCNG hydration only.
+        // Rejects nil/live-duplicate UUIDs and never mints a replacement UUID.
+        [[nodiscard]] NodeId restoreNodeWithUuid(RestoreNodeDesc desc);
+        // A restore stage owns a complete replacement scene but binds node
+        // observables to target. Building and populating it is fallible and
+        // must happen before commit. commitRestoreStage is a move-only,
+        // allocation-free state exchange and therefore cannot fail.
+        [[nodiscard]] static std::unique_ptr<Scene>
+        createRestoreStage(Scene& target);
+        void installRestoreSelectionState(
+            RestoreSelectionState state) noexcept;
+        void commitRestoreStage(std::unique_ptr<Scene> staged) noexcept;
+        // Attach staged heavy payloads by stable node UUID without replacing
+        // the live shell. Deleted/replaced/previously hydrated nodes are
+        // invalidated independently, so an edit to one unit cannot discard
+        // hydration for unrelated units.
+        [[nodiscard]] PayloadHydrationCommitReport
+        commitPayloadHydrationStage(
+            std::unique_ptr<Scene> staged,
+            bool install_selection) noexcept;
         void removeKeyframeNodes();
         [[nodiscard]] bool reparent(NodeId node, NodeId new_parent);
         [[nodiscard]] bool moveNode(NodeId node, NodeId new_parent, int index);
@@ -232,6 +340,11 @@ namespace lfs::core {
         [[nodiscard]] std::vector<NodeId> getRootNodes() const;
         [[nodiscard]] SceneNode* getNodeById(NodeId id);
         [[nodiscard]] const SceneNode* getNodeById(NodeId id) const;
+        [[nodiscard]] SceneNode* getNodeByUuid(const Uuid& uuid);
+        [[nodiscard]] const SceneNode* getNodeByUuid(const Uuid& uuid) const;
+        [[nodiscard]] NodeId getNodeIdByUuid(const Uuid& uuid) const;
+        [[nodiscard]] Uuid getNodeUuid(NodeId id) const;
+        void markPayloadDiverged(NodeId id);
 
         [[nodiscard]] bool isNodeEffectivelyVisible(NodeId id) const;
         [[nodiscard]] glm::vec3 getNodeBoundsCenter(NodeId id) const;
@@ -335,8 +448,22 @@ namespace lfs::core {
         [[nodiscard]] std::vector<bool> getSelectedNodeMask(const std::vector<std::string>& selected_node_names) const;
 
         std::shared_ptr<lfs::core::Tensor> getSelectionMask() const;
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor>
+        getSelectionMask(SelectionDomain domain) const;
+        [[nodiscard]] size_t
+        getSelectionCapacity(SelectionDomain domain) const;
+        [[nodiscard]] PerNodeSelectionSlices capturePerNodeSelectionSlices() const;
+        [[nodiscard]] PerNodeSelectionSlices
+        capturePerNodeSelectionSlices(SelectionDomain domain) const;
+        void applyPerNodeSelectionSlices(const PerNodeSelectionSlices& slices);
+        void applyPerNodeSelectionSlices(
+            SelectionDomain domain,
+            const PerNodeSelectionSlices& slices);
         void setSelection(const std::vector<size_t>& selected_indices);
         void setSelectionMask(std::shared_ptr<lfs::core::Tensor> mask);
+        void setSelectionMask(
+            SelectionDomain domain,
+            std::shared_ptr<lfs::core::Tensor> mask);
         void setSelectionMaskWithGroupCounts(std::shared_ptr<lfs::core::Tensor> mask,
                                              size_t selected_count,
                                              const SelectionGroupCounts& group_counts);
@@ -392,7 +519,11 @@ namespace lfs::core {
         [[nodiscard]] std::unordered_map<NodeId, size_t> getActiveGaussianCountsByNode() const;
 
         void setTrainingModelNode(const std::string& name);
+        void setTrainingModelNode(NodeId id);
+        void setTrainingModelNode(const Uuid& uuid);
         [[nodiscard]] const std::string& getTrainingModelNodeName() const { return training_model_node_; }
+        [[nodiscard]] const Uuid& getTrainingModelNodeUuid() const { return training_model_uuid_; }
+        [[nodiscard]] NodeId getTrainingModelNodeId() const;
 
         void setTrainingModel(std::unique_ptr<lfs::core::SplatData> splat_data, const std::string& name);
         void syncTrainingModelTopology(size_t gaussian_count);
@@ -457,9 +588,13 @@ namespace lfs::core {
         size_t applyDeleted();
 
     private:
+        struct RestoreStageTag {};
+        explicit Scene(RestoreStageTag, Scene& target) noexcept;
+
         std::vector<std::unique_ptr<SceneNode>> nodes_;
         std::unordered_map<NodeId, size_t> id_to_index_;
         std::unordered_map<std::string, NodeId> name_to_id_;
+        std::unordered_map<Uuid, NodeId> uuid_to_id_;
         NodeId next_node_id_ = 0;
 
         uint32_t pending_mutations_ = 0;
@@ -467,7 +602,9 @@ namespace lfs::core {
         void flushMutations();
         void removeConsolidatedNodeData(NodeId id);
         void rebuildConsolidatedTransformIndices() const;
-        [[nodiscard]] NodeId insertNode(std::unique_ptr<SceneNode> node);
+        [[nodiscard]] NodeId insertNode(
+            std::unique_ptr<SceneNode> node,
+            bool allow_duplicate_name = false);
         mutable std::shared_ptr<lfs::core::SplatData> cached_combined_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_transform_indices_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_visible_selection_indices_;
@@ -489,7 +626,10 @@ namespace lfs::core {
 
         mutable std::shared_mutex selection_mutex_;
         mutable std::shared_ptr<lfs::core::Tensor> selection_mask_;
+        mutable std::shared_ptr<lfs::core::Tensor>
+            point_cloud_selection_mask_;
         mutable bool has_selection_ = false;
+        mutable bool has_point_cloud_selection_ = false;
 
         std::vector<SelectionGroup> selection_groups_;
         uint8_t active_selection_group_ = 1;
@@ -501,8 +641,14 @@ namespace lfs::core {
         void rebuildModelCacheIfNeeded(bool include_hidden_splats) const;
         void rebuildTransformCacheIfNeeded() const;
         void updateWorldTransform(const SceneNode& node) const;
-        void removeNodeInternal(std::string name, bool keep_children);
+        void removeNodeInternal(NodeId id, bool keep_children);
+        void validateConsolidatedSelectionTopology() const;
         [[nodiscard]] size_t currentSelectionCapacity() const;
+        [[nodiscard]] size_t
+        currentSelectionCapacity(SelectionDomain domain) const;
+        [[nodiscard]] size_t
+        nodeSelectionCapacity(const SceneNode& node,
+                              SelectionDomain domain) const;
         [[nodiscard]] lfs::core::Tensor liveSelectionMask(size_t expected_size,
                                                           Device device,
                                                           DataType dtype) const;
@@ -511,6 +657,9 @@ namespace lfs::core {
             size_t expected_size,
             size_t* selected_count = nullptr) const;
         void resizeSelectionIfSizeMismatch(size_t expected_size);
+        void resizeSelectionIfSizeMismatch(
+            SelectionDomain domain,
+            size_t expected_size);
 
         SelectionGroup* findGroup(uint8_t id);
         const SelectionGroup* findGroup(uint8_t id) const;
@@ -521,7 +670,13 @@ namespace lfs::core {
         lfs::core::Tensor scene_center_;
         bool images_have_alpha_ = false;
         bool point_cloud_modified_ = false;
+        Uuid training_model_uuid_;
+        // Derived display label retained for additive name-based APIs. UUID is
+        // the sole authority for resolving the training node.
         std::string training_model_node_;
+
+        Scene* restore_target_ = nullptr;
+        bool restore_staging_ = false;
     };
 
 } // namespace lfs::core

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/mapped_file.hpp"
 #include "core/point_cloud.hpp"
@@ -224,6 +225,10 @@ namespace lfs::core {
                   float scene_scale,
                   ShNLayout shN_layout = ShNLayout::Canonical);
 
+        // Deep-copies scalars and tensors, including q16 bounds. Skips allocator,
+        // capacity hook, LOD tree, frozen ranges, and layout generation.
+        [[nodiscard]] SplatData clone() const;
+
         // ========== Computed getters ==========
         Tensor get_means() const;
         Tensor get_opacity() const;  // Returns sigmoid(opacity_raw)
@@ -302,6 +307,13 @@ namespace lfs::core {
         // Host-side variant for export/checkpoint paths. Copies the resident swizzled buffer
         // to CPU first and unpacks there, avoiding a full canonical SH allocation on CUDA.
         Tensor shN_canonical_cpu() const;
+
+        // Clone resident SH storage while retaining capacity headroom required by q16.
+        [[nodiscard]] Tensor clone_shN_storage() const;
+
+        // Synchronize every unique non-null CUDA home stream, then re-home all valid CUDA
+        // tensor members onto the default stream. Call before a trainer destroys its streams.
+        void detach_from_streams();
 
         // Replace _shN with the swizzled form of a canonical-layout source tensor.
         // `canonical` may be [N, K, 3] or [N, K*3]; K may be 0 for SH degree 0. The
@@ -383,6 +395,14 @@ namespace lfs::core {
         void serialize(std::ostream& os) const;
         void deserialize(std::istream& is, SplatTensorAllocator tensor_allocator = {});
 
+        [[nodiscard]] static lfs::Result<std::unique_ptr<SplatData>>
+        from_raw_tensors(int active_sh_degree, int max_sh_degree,
+                         float scene_scale, Tensor means, Tensor sh0,
+                         Tensor shN_canonical, Tensor scaling, Tensor rotation,
+                         Tensor opacity, Tensor deleted, Tensor densification,
+                         std::vector<FrozenRange> frozen_ranges,
+                         SplatTensorAllocator tensor_allocator = {});
+
         // Allocator used to back the parameter tensors (e.g. Vulkan-external interop
         // storage). Retained so edits that rebuild tensors (apply_deleted) can keep
         // them in the same storage the renderer requires, instead of falling back to
@@ -462,7 +482,7 @@ namespace lfs::core {
         int _max_sh_degree = 0;
         float _scene_scale = 0.f;
 
-        // Parameters
+        // Parameters — any new Tensor member must be added to detach_from_streams().
         Tensor _means;
         Tensor _sh0;
         // When sh_value quant is ON: Float16 bit-pattern u16 codes,

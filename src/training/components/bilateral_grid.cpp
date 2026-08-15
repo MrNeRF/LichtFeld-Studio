@@ -2,21 +2,114 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "bilateral_grid.hpp"
+#include "config_serialization.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 namespace lfs::training {
 
     namespace {
         constexpr uint32_t CHECKPOINT_MAGIC = 0x4C464247; // "LFBG"
-        constexpr uint32_t CHECKPOINT_VERSION = 1;
+        constexpr uint32_t CHECKPOINT_MIN_VERSION = 1;
+        constexpr uint32_t CHECKPOINT_VERSION = 2;
+        constexpr uint32_t CONFIG_SCHEMA_VERSION = 1;
+        constexpr uint32_t CONFIG_SCHEMA_V1_BYTES = 52;
         constexpr size_t GRID_CHANNELS = 12;
+
+        struct LegacyConfigV1 {
+            double lr;
+            double beta1;
+            double beta2;
+            double eps;
+            int warmup_steps;
+            double warmup_start_factor;
+            double final_lr_factor;
+        };
+
+        void serialize_config(std::ostream& os, const BilateralGrid::Config& config) {
+            using config_serialization_detail::write_little_endian;
+
+            // Schema v1 is append-only. Bump the schema version and append fields;
+            // payload size lets older readers skip the suffix and retain defaults.
+            write_little_endian(os, CONFIG_SCHEMA_VERSION, "bilateral-grid config schema");
+            write_little_endian(os, CONFIG_SCHEMA_V1_BYTES, "bilateral-grid config size");
+            write_little_endian(os, config.lr, "bilateral-grid config lr");
+            write_little_endian(os, config.beta1, "bilateral-grid config beta1");
+            write_little_endian(os, config.beta2, "bilateral-grid config beta2");
+            write_little_endian(os, config.eps, "bilateral-grid config eps");
+            write_little_endian(
+                os, static_cast<int32_t>(config.warmup_steps), "bilateral-grid config warmup_steps");
+            write_little_endian(
+                os, config.warmup_start_factor, "bilateral-grid config warmup_start_factor");
+            write_little_endian(os, config.final_lr_factor, "bilateral-grid config final_lr_factor");
+        }
+
+        [[nodiscard]] BilateralGrid::Config deserialize_config(std::istream& is) {
+            using config_serialization_detail::read_little_endian;
+
+            const uint32_t schema_version =
+                read_little_endian<uint32_t>(is, "bilateral-grid config schema");
+            const uint32_t payload_bytes =
+                read_little_endian<uint32_t>(is, "bilateral-grid config size");
+            if (schema_version == 0) {
+                config_serialization_detail::throw_config_data_loss(
+                    "bilateral-grid config schema", "version must be positive");
+            }
+            if (payload_bytes < CONFIG_SCHEMA_V1_BYTES ||
+                payload_bytes > config_serialization_detail::MAX_CONFIG_PAYLOAD_BYTES) {
+                config_serialization_detail::throw_config_data_loss(
+                    "bilateral-grid config size", "payload size is out of bounds");
+            }
+
+            BilateralGrid::Config config{};
+            config.lr = read_little_endian<double>(is, "bilateral-grid config lr");
+            config.beta1 = read_little_endian<double>(is, "bilateral-grid config beta1");
+            config.beta2 = read_little_endian<double>(is, "bilateral-grid config beta2");
+            config.eps = read_little_endian<double>(is, "bilateral-grid config eps");
+            config.warmup_steps =
+                read_little_endian<int32_t>(is, "bilateral-grid config warmup_steps");
+            config.warmup_start_factor =
+                read_little_endian<double>(is, "bilateral-grid config warmup_start_factor");
+            config.final_lr_factor =
+                read_little_endian<double>(is, "bilateral-grid config final_lr_factor");
+            config_serialization_detail::skip_bytes(
+                is, payload_bytes - CONFIG_SCHEMA_V1_BYTES, "bilateral-grid config");
+            return config;
+        }
+
+        [[nodiscard]] BilateralGrid::Config deserialize_legacy_config(std::istream& is) {
+            static_assert(std::is_standard_layout_v<LegacyConfigV1>);
+            static_assert(sizeof(LegacyConfigV1) == 56);
+            static_assert(offsetof(LegacyConfigV1, lr) == 0);
+            static_assert(offsetof(LegacyConfigV1, beta1) == 8);
+            static_assert(offsetof(LegacyConfigV1, beta2) == 16);
+            static_assert(offsetof(LegacyConfigV1, eps) == 24);
+            static_assert(offsetof(LegacyConfigV1, warmup_steps) == 32);
+            static_assert(offsetof(LegacyConfigV1, warmup_start_factor) == 40);
+            static_assert(offsetof(LegacyConfigV1, final_lr_factor) == 48);
+
+            LegacyConfigV1 legacy{};
+            lfs::core::serialization_detail::read_exact(
+                is, &legacy, sizeof(legacy), "legacy bilateral-grid configuration");
+            return {
+                .lr = legacy.lr,
+                .beta1 = legacy.beta1,
+                .beta2 = legacy.beta2,
+                .eps = legacy.eps,
+                .warmup_steps = legacy.warmup_steps,
+                .warmup_start_factor = legacy.warmup_start_factor,
+                .final_lr_factor = legacy.final_lr_factor,
+            };
+        }
 
         struct ImageLayout {
             bool chw = false;
@@ -256,7 +349,7 @@ namespace lfs::training {
         os.write(reinterpret_cast<const char*>(&grid_height_), sizeof(grid_height_));
         os.write(reinterpret_cast<const char*>(&grid_guidance_), sizeof(grid_guidance_));
 
-        os.write(reinterpret_cast<const char*>(&config_), sizeof(config_));
+        serialize_config(os, config_);
         os.write(reinterpret_cast<const char*>(&step_), sizeof(step_));
         os.write(reinterpret_cast<const char*>(&current_lr_), sizeof(current_lr_));
         os.write(reinterpret_cast<const char*>(&initial_lr_), sizeof(initial_lr_));
@@ -273,8 +366,9 @@ namespace lfs::training {
         if (magic != CHECKPOINT_MAGIC) {
             throw std::runtime_error("Invalid BilateralGrid checkpoint");
         }
-        if (version != CHECKPOINT_VERSION) {
-            throw std::runtime_error("Unsupported BilateralGrid checkpoint version");
+        if (version < CHECKPOINT_MIN_VERSION || version > CHECKPOINT_VERSION) {
+            config_serialization_detail::throw_unsupported_component_version(
+                "BilateralGrid", version, CHECKPOINT_MIN_VERSION, CHECKPOINT_VERSION);
         }
 
         int num_images = 0;
@@ -290,7 +384,9 @@ namespace lfs::training {
         lfs::core::serialization_detail::read_exact(is, &grid_width, sizeof(grid_width), "bilateral-grid width");
         lfs::core::serialization_detail::read_exact(is, &grid_height, sizeof(grid_height), "bilateral-grid height");
         lfs::core::serialization_detail::read_exact(is, &grid_guidance, sizeof(grid_guidance), "bilateral-grid guidance size");
-        lfs::core::serialization_detail::read_exact(is, &config, sizeof(config), "bilateral-grid configuration");
+        config = version == CHECKPOINT_MIN_VERSION
+                     ? deserialize_legacy_config(is)
+                     : deserialize_config(is);
         lfs::core::serialization_detail::read_exact(is, &step, sizeof(step), "bilateral-grid step");
         lfs::core::serialization_detail::read_exact(is, &current_lr, sizeof(current_lr), "bilateral-grid learning rate");
         lfs::core::serialization_detail::read_exact(is, &initial_lr, sizeof(initial_lr), "bilateral-grid initial learning rate");

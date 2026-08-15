@@ -12,12 +12,13 @@
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
+#include "core/parameters.hpp"
+#include "core/provenance.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
 #include "io/exporter.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/selection_ops.hpp"
-#include "training/checkpoint.hpp"
 #include "training/dataset.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
@@ -27,6 +28,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <optional>
 #include <sstream>
 
 namespace lfs::mcp {
@@ -181,32 +183,9 @@ namespace lfs::mcp {
         return {};
     }
 
-    std::expected<void, std::string> TrainingContext::save_checkpoint(
-        const std::filesystem::path& path) {
-
-        std::lock_guard lock(mutex_);
-
-        if (!trainer_) {
-            return std::unexpected("No training session to save");
-        }
-
-        auto result = training::save_checkpoint(
-            path,
-            trainer_->get_current_iteration(),
-            trainer_->get_strategy(),
-            params_,
-            nullptr);
-
-        if (!result) {
-            return std::unexpected(result.error());
-        }
-
-        LOG_INFO("MCP: Saved checkpoint to {}", core::path_to_utf8(path));
-        return {};
-    }
-
     std::expected<void, std::string> TrainingContext::save_ply(
-        const std::filesystem::path& path) {
+        const std::filesystem::path& path,
+        const bool include_provenance) {
 
         std::lock_guard lock(mutex_);
 
@@ -219,7 +198,19 @@ namespace lfs::mcp {
             return std::unexpected("No model to save");
         }
 
-        io::PlySaveOptions options{.output_path = path, .binary = true};
+        auto stamp = include_provenance ? core::make_provenance_stamp()
+                                        : core::make_minimal_provenance_stamp();
+        if (include_provenance && trainer_) {
+            const int iteration = trainer_->get_current_iteration();
+            if (iteration > 0)
+                stamp.iteration = iteration;
+            const auto strategy = core::param::canonical_strategy_name(
+                trainer_->getParams().optimization.strategy);
+            if (!strategy.empty())
+                stamp.strategy = std::string(strategy);
+        }
+
+        io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = std::move(stamp)};
         auto result = io::save_ply(*model, options);
         if (!result) {
             return std::unexpected(result.error().message);

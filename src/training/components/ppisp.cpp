@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "ppisp.hpp"
+#include "config_serialization.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
@@ -9,14 +10,130 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace lfs::training {
 
     namespace {
         constexpr uint32_t CHECKPOINT_MAGIC = 0x4C465050; // "LFPP"
-        constexpr uint32_t CHECKPOINT_VERSION = 2;
+        constexpr uint32_t CHECKPOINT_MIN_VERSION = 2;
+        constexpr uint32_t CHECKPOINT_VERSION = 3;
+        constexpr uint32_t CONFIG_SCHEMA_VERSION = 1;
+        constexpr uint32_t CONFIG_SCHEMA_V1_BYTES = 76;
+
+        struct LegacyConfigV2 {
+            double lr;
+            double beta1;
+            double beta2;
+            double eps;
+            int warmup_steps;
+            double warmup_start_factor;
+            double final_lr_factor;
+            float exposure_mean;
+            float vig_center;
+            float vig_channel;
+            float vig_non_pos;
+            float color_mean;
+            float crf_channel;
+        };
+
+        void serialize_config(std::ostream& os, const PPISP::Config& config) {
+            using config_serialization_detail::write_little_endian;
+
+            // Schema v1 is append-only. Bump the schema version and append fields;
+            // payload size lets older readers skip the suffix and retain defaults.
+            write_little_endian(os, CONFIG_SCHEMA_VERSION, "PPISP config schema");
+            write_little_endian(os, CONFIG_SCHEMA_V1_BYTES, "PPISP config size");
+            write_little_endian(os, config.lr, "PPISP config lr");
+            write_little_endian(os, config.beta1, "PPISP config beta1");
+            write_little_endian(os, config.beta2, "PPISP config beta2");
+            write_little_endian(os, config.eps, "PPISP config eps");
+            write_little_endian(os, static_cast<int32_t>(config.warmup_steps), "PPISP config warmup_steps");
+            write_little_endian(os, config.warmup_start_factor, "PPISP config warmup_start_factor");
+            write_little_endian(os, config.final_lr_factor, "PPISP config final_lr_factor");
+            write_little_endian(os, config.exposure_mean, "PPISP config exposure_mean");
+            write_little_endian(os, config.vig_center, "PPISP config vig_center");
+            write_little_endian(os, config.vig_channel, "PPISP config vig_channel");
+            write_little_endian(os, config.vig_non_pos, "PPISP config vig_non_pos");
+            write_little_endian(os, config.color_mean, "PPISP config color_mean");
+            write_little_endian(os, config.crf_channel, "PPISP config crf_channel");
+        }
+
+        [[nodiscard]] PPISP::Config deserialize_config(std::istream& is) {
+            using config_serialization_detail::read_little_endian;
+
+            const uint32_t schema_version = read_little_endian<uint32_t>(is, "PPISP config schema");
+            const uint32_t payload_bytes = read_little_endian<uint32_t>(is, "PPISP config size");
+            if (schema_version == 0) {
+                config_serialization_detail::throw_config_data_loss(
+                    "PPISP config schema", "version must be positive");
+            }
+            if (payload_bytes < CONFIG_SCHEMA_V1_BYTES ||
+                payload_bytes > config_serialization_detail::MAX_CONFIG_PAYLOAD_BYTES) {
+                config_serialization_detail::throw_config_data_loss(
+                    "PPISP config size", "payload size is out of bounds");
+            }
+
+            PPISP::Config config{};
+            config.lr = read_little_endian<double>(is, "PPISP config lr");
+            config.beta1 = read_little_endian<double>(is, "PPISP config beta1");
+            config.beta2 = read_little_endian<double>(is, "PPISP config beta2");
+            config.eps = read_little_endian<double>(is, "PPISP config eps");
+            config.warmup_steps = read_little_endian<int32_t>(is, "PPISP config warmup_steps");
+            config.warmup_start_factor =
+                read_little_endian<double>(is, "PPISP config warmup_start_factor");
+            config.final_lr_factor = read_little_endian<double>(is, "PPISP config final_lr_factor");
+            config.exposure_mean = read_little_endian<float>(is, "PPISP config exposure_mean");
+            config.vig_center = read_little_endian<float>(is, "PPISP config vig_center");
+            config.vig_channel = read_little_endian<float>(is, "PPISP config vig_channel");
+            config.vig_non_pos = read_little_endian<float>(is, "PPISP config vig_non_pos");
+            config.color_mean = read_little_endian<float>(is, "PPISP config color_mean");
+            config.crf_channel = read_little_endian<float>(is, "PPISP config crf_channel");
+            config_serialization_detail::skip_bytes(
+                is, payload_bytes - CONFIG_SCHEMA_V1_BYTES, "PPISP config");
+            return config;
+        }
+
+        [[nodiscard]] PPISP::Config deserialize_legacy_config(std::istream& is) {
+            static_assert(std::is_standard_layout_v<LegacyConfigV2>);
+            static_assert(sizeof(LegacyConfigV2) == 80);
+            static_assert(offsetof(LegacyConfigV2, lr) == 0);
+            static_assert(offsetof(LegacyConfigV2, beta1) == 8);
+            static_assert(offsetof(LegacyConfigV2, beta2) == 16);
+            static_assert(offsetof(LegacyConfigV2, eps) == 24);
+            static_assert(offsetof(LegacyConfigV2, warmup_steps) == 32);
+            static_assert(offsetof(LegacyConfigV2, warmup_start_factor) == 40);
+            static_assert(offsetof(LegacyConfigV2, final_lr_factor) == 48);
+            static_assert(offsetof(LegacyConfigV2, exposure_mean) == 56);
+            static_assert(offsetof(LegacyConfigV2, vig_center) == 60);
+            static_assert(offsetof(LegacyConfigV2, vig_channel) == 64);
+            static_assert(offsetof(LegacyConfigV2, vig_non_pos) == 68);
+            static_assert(offsetof(LegacyConfigV2, color_mean) == 72);
+            static_assert(offsetof(LegacyConfigV2, crf_channel) == 76);
+
+            LegacyConfigV2 legacy{};
+            lfs::core::serialization_detail::read_exact(
+                is, &legacy, sizeof(legacy), "legacy PPISP configuration");
+            return {
+                .lr = legacy.lr,
+                .beta1 = legacy.beta1,
+                .beta2 = legacy.beta2,
+                .eps = legacy.eps,
+                .warmup_steps = legacy.warmup_steps,
+                .warmup_start_factor = legacy.warmup_start_factor,
+                .final_lr_factor = legacy.final_lr_factor,
+                .exposure_mean = legacy.exposure_mean,
+                .vig_center = legacy.vig_center,
+                .vig_channel = legacy.vig_channel,
+                .vig_non_pos = legacy.vig_non_pos,
+                .color_mean = legacy.color_mean,
+                .crf_channel = legacy.crf_channel,
+            };
+        }
 
         void serialize_int_map(std::ostream& os, const std::unordered_map<int, int>& m) {
             const auto size = static_cast<uint32_t>(m.size());
@@ -956,7 +1073,7 @@ namespace lfs::training {
 
         os.write(reinterpret_cast<const char*>(&num_cameras_), sizeof(num_cameras_));
         os.write(reinterpret_cast<const char*>(&num_frames_), sizeof(num_frames_));
-        os.write(reinterpret_cast<const char*>(&config_), sizeof(config_));
+        serialize_config(os, config_);
         os.write(reinterpret_cast<const char*>(&step_), sizeof(step_));
         os.write(reinterpret_cast<const char*>(&current_lr_), sizeof(current_lr_));
         os.write(reinterpret_cast<const char*>(&initial_lr_), sizeof(initial_lr_));
@@ -980,8 +1097,9 @@ namespace lfs::training {
         if (magic != CHECKPOINT_MAGIC) {
             throw std::runtime_error("Invalid PPISP checkpoint");
         }
-        if (version != CHECKPOINT_VERSION) {
-            throw std::runtime_error("Unsupported PPISP checkpoint version");
+        if (version < CHECKPOINT_MIN_VERSION || version > CHECKPOINT_VERSION) {
+            config_serialization_detail::throw_unsupported_component_version(
+                "PPISP", version, CHECKPOINT_MIN_VERSION, CHECKPOINT_VERSION);
         }
 
         int num_cameras = 0;
@@ -993,7 +1111,9 @@ namespace lfs::training {
         int total_iterations = 0;
         lfs::core::serialization_detail::read_exact(is, &num_cameras, sizeof(num_cameras), "PPISP camera count");
         lfs::core::serialization_detail::read_exact(is, &num_frames, sizeof(num_frames), "PPISP frame count");
-        lfs::core::serialization_detail::read_exact(is, &config, sizeof(config), "PPISP configuration");
+        config = version == CHECKPOINT_MIN_VERSION
+                     ? deserialize_legacy_config(is)
+                     : deserialize_config(is);
         lfs::core::serialization_detail::read_exact(is, &step, sizeof(step), "PPISP step");
         lfs::core::serialization_detail::read_exact(is, &current_lr, sizeof(current_lr), "PPISP learning rate");
         lfs::core::serialization_detail::read_exact(is, &initial_lr, sizeof(initial_lr), "PPISP initial learning rate");

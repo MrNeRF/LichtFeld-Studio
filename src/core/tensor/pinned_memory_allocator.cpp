@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "internal/cuda_event_pool.hpp"
+#include "internal/stream_lifetime.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -437,6 +438,7 @@ namespace lfs::core {
     }
 
     void PinnedMemoryAllocator::deallocate(void* ptr, const cudaStream_t stream) {
+        unretire_stream(stream);
         if (!ptr) {
             return;
         }
@@ -522,6 +524,7 @@ namespace lfs::core {
     }
 
     void PinnedMemoryAllocator::record_stream(void* ptr, const cudaStream_t stream) {
+        unretire_stream(stream);
         if (!ptr) {
             return;
         }

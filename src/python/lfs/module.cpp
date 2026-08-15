@@ -64,6 +64,7 @@
 #include "internal/resource_paths.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
+#include "io/project_recovery.hpp"
 #include "py_rml.hpp"
 #include "python/python_runtime.hpp"
 
@@ -190,6 +191,99 @@ namespace {
                 error.user_message().empty() ? error.detail() : error.user_message()));
         }
         return {};
+    }
+
+    lfs::Result<lfs::vis::ProjectOpenOutcome>
+    post_project_open_to_viewer(
+        lfs::vis::Visualizer& viewer,
+        std::filesystem::path path,
+        const lfs::vis::ProjectSwitchDisposition
+            disposition) {
+        if (viewer.isOnViewerThread()) {
+            return viewer.projectOpen(
+                path, disposition);
+        }
+        const lfs::core::TaskContext context{
+            .name = "python.project_open",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id =
+                lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<
+            lfs::vis::ProjectOpenOutcome>(
+            viewer, context,
+            [&viewer,
+             path = std::move(path),
+             disposition]() {
+                return viewer.projectOpen(
+                    path, disposition);
+            },
+            lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Cancelled,
+                .domain = lfs::ErrorDomain::Python,
+                .severity = lfs::Severity::Warning,
+                .detail =
+                    "Viewer is shutting down",
+                .detection =
+                    LFS_SOURCE_SITE_CURRENT(),
+            }));
+    }
+
+    lfs::Error python_viewer_shutdown_error() {
+        return lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::Cancelled,
+            .domain = lfs::ErrorDomain::Python,
+            .severity = lfs::Severity::Warning,
+            .detail = "Viewer is shutting down",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
+    }
+
+    template <class EmitFn>
+    void post_project_cmd_to_viewer(
+        lfs::vis::Visualizer& viewer,
+        const char* task_name,
+        EmitFn&& emit_fn) {
+        if (viewer.isOnViewerThread()) {
+            std::forward<EmitFn>(emit_fn)();
+            return;
+        }
+        const lfs::core::TaskContext context{
+            .name = task_name,
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id =
+                lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        if (auto posted = lfs::vis::post_guarded_and_wait<void>(
+                viewer, context,
+                [emit = std::forward<EmitFn>(emit_fn)]() mutable
+                -> lfs::Result<void> {
+                    emit();
+                    return {};
+                },
+                python_viewer_shutdown_error());
+            !posted) {
+            throw std::runtime_error(
+                std::format("{} failed: {}", task_name,
+                            lfs::format_for_developer(
+                                posted.error())));
+        }
+    }
+
+    template <class EmitFn>
+    void emit_project_cmd_marshaled(
+        const char* task_name,
+        EmitFn&& emit_fn) {
+        if (auto* const viewer =
+                lfs::python::get_visualizer()) {
+            post_project_cmd_to_viewer(
+                *viewer, task_name,
+                std::forward<EmitFn>(emit_fn));
+            return;
+        }
+        std::forward<EmitFn>(emit_fn)();
     }
 
     std::expected<void, std::string> clear_scene_from_python() {
@@ -608,6 +702,15 @@ NB_MODULE(lichtfeld, m) {
         .value("CANCELLED", OperatorResult::Cancelled)
         .value("RUNNING", OperatorResult::Running);
 
+    nb::enum_<lfs::vis::ProjectOpenOutcome>(
+        m, "ProjectOpenOutcome")
+        .value("OPENED",
+               lfs::vis::ProjectOpenOutcome::Opened)
+        .value(
+            "RECOVERY_PROMPT_PENDING",
+            lfs::vis::ProjectOpenOutcome::
+                RecoveryPromptPending);
+
     // Add user site-packages to sys.path on module import
     {
         auto user_packages = lfs::python::get_user_packages_dir();
@@ -798,14 +901,300 @@ NB_MODULE(lichtfeld, m) {
         },
         "Reset training state to initial");
     m.def(
-        "save_checkpoint", []() { lfs::core::events::cmd::SaveCheckpoint{}.emit(); },
-        "Save a training checkpoint to disk");
-    m.def(
-        "new_project", []() {
+        "new_project", [](const bool discard_changes) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::NewProject{}.emit();
+            emit_project_cmd_marshaled(
+                "python.new_project",
+                [discard_changes] {
+                    lfs::core::events::cmd::NewProject{
+                        .discard_changes =
+                            discard_changes}
+                        .emit();
+                });
         },
-        "Clear all project state and start a new project");
+        nb::arg("discard_changes") = false, "Clear all project state and start a new project");
+    m.def(
+        "project_save", []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.project_save", [] {
+                    lfs::core::events::cmd::ProjectSave{}
+                        .emit();
+                });
+        },
+        "Save the active .licht project, prompting for a path when needed");
+    m.def(
+        "project_save_as", [](const std::string& path) {
+            nb::gil_scoped_release release;
+            const auto project_path =
+                python_utf8_path(path);
+            emit_project_cmd_marshaled(
+                "python.project_save_as",
+                [project_path] {
+                    lfs::core::events::cmd::ProjectSaveAs{
+                        .path = project_path}
+                        .emit();
+                });
+        },
+        nb::arg("path") = "", "Save the active project to a new .licht path");
+    m.def(
+        "project_open",
+        [](const std::string& path,
+           const bool discard_changes) {
+            const auto project_path =
+                python_utf8_path(path);
+            if (project_path.empty()) {
+                nb::gil_scoped_release release;
+                emit_project_cmd_marshaled(
+                    "python.project_open_dialog",
+                    [discard_changes] {
+                        lfs::core::events::cmd::
+                            ProjectOpen{
+                                .path = {},
+                                .discard_changes =
+                                    discard_changes}
+                                .emit();
+                    });
+                return lfs::vis::
+                    ProjectOpenOutcome::Opened;
+            }
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                throw std::runtime_error(
+                    "No visualizer is available");
+            }
+            auto opened = [&] {
+                nb::gil_scoped_release release;
+                return post_project_open_to_viewer(
+                    *viewer, project_path,
+                    discard_changes
+                        ? lfs::vis::
+                              ProjectSwitchDisposition::
+                                  DiscardChanges
+                        : lfs::vis::
+                              ProjectSwitchDisposition::
+                                  RequireClean);
+            }();
+            return lfs::python::unwrap(
+                std::move(opened));
+        },
+        nb::arg("path") = "",
+        nb::arg("discard_changes") = false,
+        "Open a .licht project");
+    m.def(
+        "project_compact", []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.project_compact", [] {
+                    lfs::core::events::cmd::
+                        ProjectCompact{}
+                            .emit();
+                });
+        },
+        "Compact the active .licht project in the background");
+    m.def(
+        "project_is_dirty", []() {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return false;
+            }
+            auto dirty = viewer->projectIsDirty();
+            if (!dirty) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_is_dirty failed: {}",
+                        lfs::format_for_developer(
+                            dirty.error())));
+            }
+            return *dirty;
+        },
+        "Return whether the active project has unsaved chapters");
+    m.def(
+        "project_has_path", []() {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return false;
+            }
+            auto has_path = viewer->projectHasPath();
+            if (!has_path) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_has_path failed: {}",
+                        lfs::format_for_developer(
+                            has_path.error())));
+            }
+            return *has_path;
+        },
+        "Return whether the active project has a bound .licht path");
+    m.def(
+        "project_recent_files", []() {
+            std::vector<std::string> paths;
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return paths;
+            }
+            auto info = viewer->projectGetMenuInfo();
+            if (!info) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_recent_files failed: {}",
+                        lfs::format_for_developer(
+                            info.error())));
+            }
+            paths.reserve(
+                info->recent_projects.size());
+            for (const auto& recent :
+                 info->recent_projects) {
+                paths.push_back(
+                    lfs::core::path_to_utf8(
+                        recent.last_known_path));
+            }
+            return paths;
+        },
+        "Return the most-recently-used .licht project paths");
+    m.def(
+        "project_clear_recent_files", []() {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return;
+            }
+            auto cleared =
+                viewer->projectClearRecentFiles();
+            if (!cleared) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_clear_recent_files failed: {}",
+                        lfs::format_for_developer(
+                            cleared.error())));
+            }
+        },
+        "Clear the most-recently-used .licht project list");
+    m.def(
+        "project_autosave_recovery_disposition",
+        [](const std::string& path) -> std::string {
+            const auto master_path =
+                python_utf8_path(path);
+            if (master_path.empty()) {
+                return "none";
+            }
+            auto inspection =
+                lfs::io::project::
+                    inspect_autosave_recovery(
+                        master_path);
+            if (!inspection) {
+                return inspection.error().code() ==
+                               lfs::ErrorCode::Unavailable
+                           ? "busy"
+                           : "unavailable";
+            }
+            using lfs::io::project::
+                RecoveryDisposition;
+            switch (inspection->disposition) {
+            case RecoveryDisposition::Offer:
+                return "offer";
+            case RecoveryDisposition::StaleDeleted:
+                return "stale_deleted";
+            case RecoveryDisposition::Invalid:
+                return "invalid";
+            case RecoveryDisposition::Ambiguous:
+                return "ambiguous";
+            case RecoveryDisposition::None:
+            default:
+                return "none";
+            }
+        },
+        nb::arg("path"),
+        "Return autosave recovery disposition for a .licht master path "
+        "(\"none\", \"offer\", \"stale_deleted\", \"invalid\", \"ambiguous\", "
+        "\"busy\", \"unavailable\")");
+    m.def(
+        "project_reopen_last_enabled", []() {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return true;
+            }
+            auto info = viewer->projectGetMenuInfo();
+            if (!info) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_reopen_last_enabled failed: {}",
+                        lfs::format_for_developer(
+                            info.error())));
+            }
+            return info->reopen_last_project;
+        },
+        "Return whether the last project is reopened at startup");
+    m.def(
+        "project_set_reopen_last",
+        [](const bool enabled) {
+            nb::gil_scoped_release release;
+            lfs::core::events::cmd::
+                SetReopenLastProject{
+                    .enabled = enabled}
+                    .emit();
+        },
+        nb::arg("enabled"),
+        "Enable or disable reopening the last project at startup");
+    m.def(
+        "project_auto_save_on_close_enabled", []() {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return true;
+            }
+            auto info = viewer->projectGetMenuInfo();
+            if (!info) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_auto_save_on_close_enabled failed: {}",
+                        lfs::format_for_developer(
+                            info.error())));
+            }
+            return info->auto_save_on_close;
+        },
+        "Return whether dirty projects are saved automatically on close");
+    m.def(
+        "project_set_auto_save_on_close",
+        [](const bool enabled) {
+            nb::gil_scoped_release release;
+            lfs::core::events::cmd::
+                SetAutoSaveOnClose{
+                    .enabled = enabled}
+                    .emit();
+        },
+        nb::arg("enabled"),
+        "Enable or disable automatic project save on close");
+    m.def(
+        "project_autosave_interval_seconds", []() -> std::uint64_t {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return 5 * 60;
+            }
+            auto info = viewer->projectGetMenuInfo();
+            return info
+                       ? info
+                             ->autosave_interval_seconds
+                       : 5 * 60;
+        },
+        "Return the timed project autosave interval in seconds");
+    m.def(
+        "project_set_autosave_interval_seconds",
+        [](const std::uint64_t seconds) {
+            nb::gil_scoped_release release;
+            lfs::core::events::cmd::
+                SetProjectAutosaveInterval{
+                    .seconds = seconds}
+                    .emit();
+        },
+        nb::arg("seconds"),
+        "Set the timed project autosave interval in seconds; zero disables the timer trigger");
     m.def(
         "clear_scene", []() {
             nb::gil_scoped_release release;
@@ -868,23 +1257,89 @@ NB_MODULE(lichtfeld, m) {
         "Load a checkpoint for training with specified dataset and output paths.");
 
     m.def(
-        "request_exit", []() { lfs::core::events::cmd::RequestExit{}.emit(); },
+        "request_exit", []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.request_exit", [] {
+                    lfs::core::events::cmd::RequestExit{}
+                        .emit();
+                });
+        },
         "Request application exit (shows confirmation if needed).");
 
     m.def(
-        "force_exit", []() { lfs::core::events::cmd::ForceExit{}.emit(); },
-        "Force immediate application exit (bypasses confirmation).");
+        "save_and_exit", []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.save_and_exit", [] {
+                    lfs::core::events::cmd::SaveAndExit{}
+                        .emit();
+                });
+        },
+        "Save the named project explicitly and exit after the save succeeds.");
+
+    m.def(
+        "save_as_and_exit", []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.save_as_and_exit", [] {
+                    lfs::core::events::cmd::SaveAsAndExit{}
+                        .emit();
+                });
+        },
+        "Choose a project path, save explicitly, and exit after the save succeeds.");
+
+    m.def(
+        "stop_save_and_exit",
+        []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.stop_save_and_exit", [] {
+                    lfs::core::events::cmd::
+                        StopSaveAndExit{}
+                            .emit();
+                });
+        },
+        "Stop training if needed, save the project explicitly, then exit.");
+
+    m.def(
+        "cancel_exit", []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.cancel_exit", [] {
+                    lfs::core::events::cmd::CancelExit{}
+                        .emit();
+                });
+        },
+        "Cancel the pending application exit.");
+
+    m.def(
+        "force_exit", []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.force_exit", [] {
+                    lfs::core::events::cmd::ForceExit{}
+                        .emit();
+                });
+        },
+        "Explicitly discard unsaved changes and exit.");
 
     m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
-           bool rad_flip_y, bool rad_streamable) {
-            lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable);
+           bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance) {
+            lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
+                                       spz_version, include_provenance);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
         nb::arg("rad_flip_y") = false,
         nb::arg("rad_streamable") = true,
-        "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP.");
+        nb::arg("spz_version") = 4,
+        nb::arg("include_provenance") = true,
+        "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. "
+        "spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. "
+        "include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. "
+        "Ignored for COLMAP and SPZ v3.");
 
     m.def(
         "save_config_file",

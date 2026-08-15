@@ -5,7 +5,6 @@
 import os
 import threading
 import time
-from typing import Any, Optional
 
 import lichtfeld as lf
 
@@ -15,18 +14,6 @@ from .property_view import parse_number as _parse_num
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .ui import RuntimeState, PanelStateBinding
-
-# Asset Manager integration (optional)
-try:
-    from .asset_index import AssetIndex
-    from .asset_manager_integration import (
-        derive_project_scene_names,
-        ensure_dataset_catalog_context,
-    )
-
-    ASSET_MANAGER_AVAILABLE = True
-except ImportError:
-    ASSET_MANAGER_AVAILABLE = False
 
 __lfs_panel_classes__ = ["TrainingPanel"]
 __lfs_panel_ids__ = ["lfs.training"]
@@ -180,7 +167,7 @@ class TrainingPanel(Panel):
         self._pv_publish_pending_ids = set()
         self._pv_publish_scheduled = False
         self._handle = None
-        self._checkpoint_saved_time = 0.0
+        self._project_saved_time = 0.0
         self._new_save_step = 7000
         self._auto_scaled_for_cameras = 0
         self._auto_scale_steps_locked = True
@@ -203,7 +190,7 @@ class TrainingPanel(Panel):
         self._step_repeat_start = 0.0
         self._step_repeat_last = 0.0
         self._text_bufs = {}
-        self._last_checkpoint_saved_visible = False
+        self._last_project_saved_visible = False
         self._last_loss_signature = None
         self._psnr_graph_el = None
         self._last_psnr_signature = None
@@ -228,10 +215,32 @@ class TrainingPanel(Panel):
             self._get_scrub_value,
             self._set_scrub_value,
         )
-        # Asset Manager integration
-        self._asset_index: Optional[Any] = None
-        if ASSET_MANAGER_AVAILABLE:
-            self._initialize_asset_manager()
+
+    def capture_chrome(self):
+        return {
+            "collapsed": sorted(self._collapsed),
+            "property_search": self._pv_search_query,
+            "steps_scaling_lock": bool(self._auto_scale_steps_locked),
+        }
+
+    def apply_chrome(self, payload):
+        self._collapsed = set(INITIALLY_COLLAPSED)
+        self._pv_search_query = ""
+        self._auto_scale_steps_locked = True
+        if not isinstance(payload, dict):
+            if self._handle:
+                self._handle.dirty_all()
+            return
+        collapsed = payload.get("collapsed")
+        if isinstance(collapsed, (list, tuple)):
+            self._collapsed = {str(name) for name in collapsed}
+        search = payload.get("property_search")
+        if isinstance(search, str):
+            self._pv_search_query = search
+        if "steps_scaling_lock" in payload:
+            self._auto_scale_steps_locked = bool(payload.get("steps_scaling_lock"))
+        if self._handle:
+            self._handle.dirty_all()
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("training")
@@ -308,10 +317,10 @@ class TrainingPanel(Panel):
         model.bind_func("label_status_error", lambda: tr("status.error"))
         model.bind_func("label_status_stopping", lambda: tr("status.stopping"))
         model.bind_func(
-            "label_save_checkpoint", lambda: tr("training_panel.save_checkpoint")
+            "label_save_project", lambda: tr("training_panel.save_project")
         )
         model.bind_func(
-            "label_checkpoint_saved", lambda: tr("training_panel.checkpoint_saved")
+            "label_project_saved", lambda: tr("training_panel.project_saved")
         )
         model.bind_func("label_strategy", lambda: tr("training_params.strategy"))
         model.bind_func(
@@ -393,9 +402,6 @@ class TrainingPanel(Panel):
         )
         model.bind_func("label_add", lambda: tr("common.add"))
         model.bind_func("label_remove", lambda: tr("common.remove"))
-        model.bind_func(
-            "steps_scaling_lock_label", self._step_scaling_lock_label
-        )
         model.bind_func(
             "steps_scaling_lock_tooltip", self._step_scaling_lock_tooltip
         )
@@ -491,12 +497,12 @@ class TrainingPanel(Panel):
         model.bind_func(
             "show_reset_ready", lambda: _state() == "ready" and _iteration() > 0
         )
-        model.bind_func("show_checkpoint", lambda: _state() in ("running", "paused"))
+        model.bind_func("show_project_save", lambda: _state() in ("running", "paused"))
         model.bind_func(
-            "show_checkpoint_saved",
+            "show_project_saved",
             lambda: (
                 _state() in ("running", "paused")
-                and time.time() - self._checkpoint_saved_time < 2.0
+                and time.time() - self._project_saved_time < 2.0
             ),
         )
 
@@ -579,9 +585,6 @@ class TrainingPanel(Panel):
         )
         model.bind_func(
             "dep_eval", lambda: p() is not None and p().has_params() and p().enable_eval
-        )
-        model.bind_func(
-            "dep_gut", lambda: p() is not None and p().has_params() and p().gut
         )
         model.bind_func(
             "show_progress",
@@ -1092,11 +1095,6 @@ class TrainingPanel(Panel):
             "toggle_step_scaling_lock", self._on_step_scaling_lock_toggle
         )
 
-    def _step_scaling_lock_label(self):
-        if self._auto_scale_steps_locked:
-            return tr_fallback("training.step_scaling.locked", "Auto")
-        return tr_fallback("training.step_scaling.unlocked", "Manual")
-
     def _step_scaling_lock_tooltip(self):
         if self._auto_scale_steps_locked:
             return tr_fallback(
@@ -1258,11 +1256,11 @@ class TrainingPanel(Panel):
         self._deferred_update_pending = False
         self._deferred_update_deadline = None
 
-    def _mark_checkpoint_saved(self):
-        self._checkpoint_saved_time = time.time()
-        self._last_checkpoint_saved_visible = True
+    def _mark_project_saved(self):
+        self._project_saved_time = time.time()
+        self._last_project_saved_visible = True
         if self._handle:
-            self._handle.dirty("show_checkpoint_saved")
+            self._handle.dirty("show_project_saved")
         self._schedule_deferred_update(2.05)
 
     def on_update(self, doc):
@@ -1305,13 +1303,13 @@ class TrainingPanel(Panel):
                 self._handle.dirty("status_gaussians")
                 dirty = True
 
-            checkpoint_visible = (
-                self._checkpoint_saved_time > 0.0
-                and time.time() - self._checkpoint_saved_time < 2.0
+            project_saved_visible = (
+                self._project_saved_time > 0.0
+                and time.time() - self._project_saved_time < 2.0
             )
-            if checkpoint_visible != self._last_checkpoint_saved_visible:
-                self._last_checkpoint_saved_visible = checkpoint_visible
-                self._handle.dirty("show_checkpoint_saved")
+            if project_saved_visible != self._last_project_saved_visible:
+                self._last_project_saved_visible = project_saved_visible
+                self._handle.dirty("show_project_saved")
                 dirty = True
 
         if state == "ready" and RuntimeState.iteration.value == 0:
@@ -2158,9 +2156,9 @@ class TrainingPanel(Panel):
             lf.new_project()
         elif action == "switch_edit":
             lf.switch_to_edit_mode()
-        elif action == "save_checkpoint":
-            lf.save_checkpoint()
-            self._mark_checkpoint_saved()
+        elif action == "save_project":
+            lf.project_save()
+            self._mark_project_saved()
         elif action == "browse_bg":
             selected = lf.ui.open_image_dialog("")
             if selected:
@@ -2282,38 +2280,6 @@ class TrainingPanel(Panel):
                     lf.log.info(f"Saved point cloud ({pc.size} points) to {save_path}")
                     scene.is_point_cloud_modified = False
                     return
-
-    # ── Asset Manager Integration ───────────────────────────
-
-    def _initialize_asset_manager(self):
-        """Initialize AssetIndex connection if available."""
-        if not ASSET_MANAGER_AVAILABLE:
-            return
-        try:
-            from .asset_index import resolve_asset_manager_storage_path
-
-            storage_path = resolve_asset_manager_storage_path()
-            storage_path.mkdir(parents=True, exist_ok=True)
-            self._asset_index = AssetIndex(library_path=storage_path / "library.json")
-            self._asset_index.load()
-        except Exception as e:
-            lf.log.warn(f"Failed to initialize Asset Manager in training panel: {e}")
-            self._asset_index = None
-
-    def _get_or_create_project_scene(self):
-        """Infer project/scene names from dataset path or current context.
-
-        Returns:
-            Tuple of (project_name, scene_name, dataset_path) or (None, None, None)
-        """
-        d = lf.dataset_params()
-        if not d or not d.has_params() or not d.data_path:
-            return None, None, None
-
-        dataset_path = d.data_path
-        project_name, scene_name = derive_project_scene_names(dataset_path)
-
-        return project_name, scene_name, dataset_path
 
     def _on_remove_step_event(self, handle, event, args):
         if not args:

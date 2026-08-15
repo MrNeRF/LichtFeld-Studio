@@ -15,7 +15,7 @@
 /**
  * LibTorch-free Adam Optimizer for Gaussian Splatting
  *
- * Owns all training state: gradients, exp_avg (momentum), exp_avg_sq (second moment).
+ * Owns all training state: gradients and joint packed Adam moments.
  * SplatData stores only model parameters; gradients are managed here.
  *
  * Usage:
@@ -45,13 +45,9 @@ namespace lfs::training {
 
     struct AdamParamState {
         lfs::core::Tensor grad; // Gradient (transient, fp32)
-        // Legacy codec: separate uint8 m / sqrt(v) + per-primitive fp32 scales.
         // Joint codec: exp_avg holds packed (u,log_s) bytes;
-        //   joint_bounds holds float4 per 256-splat block; exp_avg_sq/scales empty.
+        //   joint_bounds holds float4 per 256-splat block.
         lfs::core::Tensor exp_avg;
-        lfs::core::Tensor exp_avg_sq;
-        lfs::core::Tensor exp_avg_scale;
-        lfs::core::Tensor exp_avg_sq_scale;
         lfs::core::Tensor joint_bounds; // [n_bounds, 4] fp32; joint codec only
         int joint_bits = 0;             // 0=legacy, 8=SH, 16=non-SH
         int64_t step_count = 0;
@@ -130,6 +126,7 @@ namespace lfs::training {
         FastGSFusedAdamState prepare_fastgs_fused_adam(int iteration, cudaStream_t execution_stream = nullptr);
         void commit_fastgs_fused_adam(int iteration);
         void set_frozen_mask(lfs::core::Tensor mask);
+        [[nodiscard]] const lfs::core::Tensor& frozen_mask() const { return frozen_mask_; }
         void set_frozen_lr_scale(float scale);
         void set_crop_damping_mask(lfs::core::Tensor mask);
         void set_cropbox_lr_scale(float scale);

@@ -30,12 +30,15 @@ namespace lfs::vis::gui {
         bool perf_hud_visible = false;
         bool perf_hud_expanded = true;
 
-        void save() const;
+        // Writes user-global UI preferences only. Project layout is persisted
+        // exclusively in the .licht GUIL chapter.
+        void saveUserPreferences() const;
         void load();
         static std::filesystem::path getConfigDir();
 
     private:
-        static std::filesystem::path getConfigPath();
+        static std::filesystem::path getLegacyConfigPath();
+        static std::filesystem::path getUserPreferencesPath();
     };
 
 } // namespace lfs::vis::gui

@@ -86,7 +86,7 @@ def test_vulkan_preview_render_view_uses_native_device_limits_not_16k_policy():
     assert "renderPreviewImageTiledWithState" in source
     assert "request.frame_view.intrinsics_override" in source
     assert "copyPreviewTileToOutput" not in source
-    assert "readOutputImageIntoCpuHwc" in source
+    assert "submitReadOutputImageIntoCpuHwcTicket" in source
     assert "lfs::core::Tensor::empty" in source
 
 

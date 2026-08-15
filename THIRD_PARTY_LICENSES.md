@@ -16,7 +16,7 @@ This project builds upon and is inspired by the following:
 | [SuperSplat](https://github.com/playcanvas/supersplat) | PlayCanvas Gaussian Splat editor | MIT |
 | [SplatShop](https://github.com/m-schuetz/Splatshop) | Gaussian Splat editing tool | MIT |
 | [splat-transform](https://github.com/playcanvas/splat-transform) | Transformation utilities for splats | MIT |
-| [spz](https://github.com/nianticlabs/spz) | Niantic's compressed splat format | MIT |
+| [spz](https://github.com/nianticlabs/spz) | Niantic's compressed splat format (vendored at affd0ec) | MIT |
 
 ## Mesh-to-Splat Conversion
 | Project | Description | License |

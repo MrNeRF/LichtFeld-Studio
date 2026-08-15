@@ -7,12 +7,14 @@
 #include "core/error_reporter.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include <cuda_runtime.h>
 #include <format>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/dict.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_cuda.h>
 #include <libavutil/opt.h>
@@ -24,6 +26,15 @@ namespace lfs::io::video {
         constexpr int DEFAULT_FRAMERATE = 30;
         constexpr int NVENC_FRAME_POOL_SIZE = 4;
         constexpr int NVENC_QP_OFFSET = 3;
+
+        void applyProvenanceMetadata(AVFormatContext* fmt_ctx, const VideoExportOptions& opts) {
+            if (!fmt_ctx || !opts.provenance)
+                return;
+            if (av_dict_set(&fmt_ctx->metadata, "comment",
+                            core::provenance_to_json(*opts.provenance).c_str(), 0) < 0) {
+                LOG_WARN("Failed to set video provenance comment metadata");
+            }
+        }
     } // namespace
 
     class VideoEncoderImpl {
@@ -32,7 +43,12 @@ namespace lfs::io::video {
 
         std::expected<void, std::string> open(
             const std::filesystem::path& path,
-            const VideoExportOptions& opts) {
+            const VideoExportOptions& opts_in) {
+
+            VideoExportOptions opts = opts_in;
+            if (!opts.provenance) {
+                opts.provenance = core::make_minimal_provenance_stamp();
+            }
 
             if (is_open_)
                 return std::unexpected("Encoder is already open");
@@ -223,6 +239,8 @@ namespace lfs::io::video {
                 }
             }
 
+            applyProvenanceMetadata(fmt_ctx_, opts);
+
             ret = avformat_write_header(fmt_ctx_, nullptr);
             if (ret < 0) {
                 cleanupHwContexts();
@@ -311,6 +329,8 @@ namespace lfs::io::video {
                     return std::unexpected(std::string("File open failed: ") + err);
                 }
             }
+
+            applyProvenanceMetadata(fmt_ctx_, opts);
 
             ret = avformat_write_header(fmt_ctx_, nullptr);
             if (ret < 0) {

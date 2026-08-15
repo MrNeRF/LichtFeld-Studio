@@ -18,7 +18,9 @@
 #include "core/events.hpp"
 #include "core/json_utils.hpp"
 #include "core/logger.hpp"
+#include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
@@ -121,6 +123,139 @@ namespace lfs::app {
                 return std::unexpected("No model loaded");
 
             return total;
+        }
+
+        json project_info_json(
+            const vis::ProjectInfo& info) {
+            json payloads = json::array();
+            for (const auto& payload : info.payloads) {
+                payloads.push_back({
+                    {"chapter", payload.chapter},
+                    {"node_uuid", payload.node_uuid},
+                    {"hydration_state",
+                     payload.hydration_state},
+                });
+            }
+            json recent = json::array();
+            for (const auto& entry :
+                 info.recent_projects) {
+                recent.push_back({
+                    {"project_uuid",
+                     entry.project_uuid},
+                    {"last_known_path",
+                     core::path_to_utf8(
+                         entry.last_known_path)},
+                });
+            }
+            return json{
+                {"success", true},
+                {"path",
+                 info.path
+                     ? json(core::path_to_utf8(
+                           *info.path))
+                     : json(nullptr)},
+                {"project_uuid", info.project_uuid},
+                {"generation", info.generation},
+                {"dirty", info.dirty},
+                {"session_dirty",
+                 info.session_dirty},
+                {"dirty_chapters",
+                 info.dirty_chapters},
+                {"hydration_state",
+                 info.hydration_state},
+                {"payloads", std::move(payloads)},
+                {"contains_embedded_secrets",
+                 info.contains_embedded_secrets},
+                {"reopen_last_project",
+                 info.reopen_last_project},
+                {"auto_save_on_close",
+                 info.auto_save_on_close},
+                {"autosave_interval_seconds",
+                 info.autosave_interval_seconds},
+                {"autosave_dirty_epoch_threshold",
+                 info
+                     .autosave_dirty_epoch_threshold},
+                {"project_write_running",
+                 info.project_write_running},
+                {"project_write_stage",
+                 info.project_write_stage},
+                {"project_write_progress",
+                 info.project_write_progress},
+                {"project_write_error",
+                 info.project_write_error.empty()
+                     ? json(nullptr)
+                     : json(
+                           info
+                               .project_write_error)},
+                {"project_write_error_code",
+                 info.project_write_error_code
+                     ? json(lfs::to_string(
+                           *info.project_write_error_code))
+                     : json(nullptr)},
+                {"autosave_sequence",
+                 info.autosave_sequence},
+                {"recovery_session",
+                 info.recovery_session},
+                {"compaction_suggested",
+                 info.compaction_suggested},
+                {"physical_bytes",
+                 info.physical_bytes},
+                {"estimated_live_bytes",
+                 info.estimated_live_bytes},
+                {"dead_bytes",
+                 info.dead_bytes},
+                {"dead_ratio",
+                 info.dead_ratio},
+                {"hydration_error",
+                 info.hydration_error.empty()
+                     ? json(nullptr)
+                     : json(info.hydration_error)},
+                {"recent_projects",
+                 std::move(recent)},
+            };
+        }
+
+        json project_error_json(
+            const lfs::Error& error) {
+            return json{
+                {"error",
+                 {
+                     {"code",
+                      lfs::to_string(error.code())},
+                     {"user_message",
+                      std::string(
+                          error.user_message())},
+                     {"detail",
+                      std::string(error.detail())},
+                 }},
+            };
+        }
+
+        json project_error_json(
+            const lfs::ErrorCode code,
+            std::string user_message,
+            std::string detail) {
+            return project_error_json(
+                lfs::make_error(
+                    lfs::ErrorInit{
+                        .code = code,
+                        .domain =
+                            lfs::ErrorDomain::MCP,
+                        .severity =
+                            lfs::Severity::Error,
+                        .retryability =
+                            lfs::Retryability::
+                                NotRetryable,
+                        .operation_id = {},
+                        .user_message =
+                            std::move(user_message),
+                        .detail =
+                            std::move(detail),
+                        .detection =
+                            LFS_SOURCE_SITE_CURRENT(),
+                        .fields = {},
+                        .native = std::nullopt,
+                    }));
         }
 
         std::expected<std::string, std::string> render_scene_to_base64(
@@ -334,10 +469,6 @@ namespace lfs::app {
             return vis::cap::decomposeTransform(matrix);
         }
 
-        glm::mat4 compose_transform(const TransformComponents& components) {
-            return vis::cap::composeTransform(components);
-        }
-
         int64_t selected_gaussian_count(const core::Scene& scene) {
             const auto mask = scene.getSelectionMask();
             if (!mask || !mask->is_valid())
@@ -348,6 +479,7 @@ namespace lfs::app {
         json node_summary_json(const core::Scene& scene, const core::SceneNode& node) {
             json result{
                 {"name", node.name},
+                {"uuid", node.uuid.to_string()},
                 {"type", node_type_to_string(node.type)},
                 {"visible", static_cast<bool>(node.visible)},
                 {"locked", static_cast<bool>(node.locked)},
@@ -368,14 +500,71 @@ namespace lfs::app {
             return result;
         }
 
+        enum class NodeReferenceErrorCode : uint8_t {
+            INVALID_UUID,
+            UUID_NOT_FOUND,
+            NAME_NOT_FOUND,
+            MISSING_REFERENCE,
+        };
+
+        struct NodeReferenceError {
+            NodeReferenceErrorCode code = NodeReferenceErrorCode::MISSING_REFERENCE;
+            std::string message;
+        };
+
+        std::expected<const core::SceneNode*, NodeReferenceError> resolve_node_reference(
+            const core::Scene& scene,
+            const json& args,
+            const std::string_view name_key = "name",
+            const std::string_view uuid_key = "uuid") {
+            const std::string uuid_key_string(uuid_key);
+            if (args.contains(uuid_key_string) && !args[uuid_key_string].is_null()) {
+                if (!args[uuid_key_string].is_string())
+                    return std::unexpected(NodeReferenceError{
+                        .code = NodeReferenceErrorCode::INVALID_UUID,
+                        .message = "Field '" + uuid_key_string + "' must be a UUID string",
+                    });
+                const std::string uuid_text = args[uuid_key_string].get<std::string>();
+                const auto uuid = core::Uuid::from_string(uuid_text);
+                if (!uuid)
+                    return std::unexpected(NodeReferenceError{
+                        .code = NodeReferenceErrorCode::INVALID_UUID,
+                        .message = "Invalid node UUID: " + uuid_text,
+                    });
+                const auto* node = scene.getNodeByUuid(*uuid);
+                if (!node)
+                    return std::unexpected(NodeReferenceError{
+                        .code = NodeReferenceErrorCode::UUID_NOT_FOUND,
+                        .message = "Node UUID does not resolve: " + uuid_text,
+                    });
+                return node;
+            }
+
+            const std::string name_key_string(name_key);
+            if (!args.contains(name_key_string) || !args[name_key_string].is_string())
+                return std::unexpected(NodeReferenceError{
+                    .code = NodeReferenceErrorCode::MISSING_REFERENCE,
+                    .message = "Either '" + uuid_key_string + "' or '" + name_key_string + "' is required",
+                });
+            const std::string name = args[name_key_string].get<std::string>();
+            const auto* node = scene.getNode(name);
+            if (!node)
+                return std::unexpected(NodeReferenceError{
+                    .code = NodeReferenceErrorCode::NAME_NOT_FOUND,
+                    .message = "Node not found: " + name,
+                });
+            return node;
+        }
+
         json transform_info_json(const core::Scene& scene, const core::SceneNode& node) {
-            const glm::mat4 local = scene.getNodeTransform(node.name);
+            const glm::mat4 local = scene.getNodeTransform(node.id);
             const glm::mat4 world = vis::scene_coords::nodeVisualizerWorldTransform(scene, node.id);
             const auto local_components = decompose_transform(local);
             const auto world_components = decompose_transform(world);
 
             return json{
                 {"name", node.name},
+                {"uuid", node.uuid.to_string()},
                 {"type", node_type_to_string(node.type)},
                 {"local", json{
                               {"translation", vec3_to_json(local_components.translation)},
@@ -566,7 +755,6 @@ namespace lfs::app {
         }
 
         json crop_box_info_json(const vis::SceneManager& scene_manager,
-                                const vis::RenderingManager* rendering_manager,
                                 const core::NodeId cropbox_id) {
             const auto& scene = scene_manager.getScene();
             const auto* const node = scene.getNodeById(cropbox_id);
@@ -683,10 +871,12 @@ namespace lfs::app {
                                  {"show_pivot", settings.show_pivot},
                                  {"split_view_mode", settings.split_view_mode},
                                  {"split_position", settings.split_position},
+                                 {"split_view_offset", settings.split_view_offset},
                                  {"raster_backend", std::string(lfs::rendering::gaussianRasterBackendId(static_cast<lfs::rendering::GaussianRasterBackend>(settings.raster_backend)))},
                                  {"equirectangular", settings.equirectangular},
                                  {"orthographic", settings.orthographic},
                                  {"ortho_scale", settings.ortho_scale},
+                                 {"depth_view", settings.depth_view},
                                  {"depth_view_min", settings.depth_view_min},
                                  {"depth_view_max", settings.depth_view_max},
                                  {"depth_visualization_mode", static_cast<int>(settings.depth_visualization_mode)},
@@ -820,11 +1010,16 @@ namespace lfs::app {
             set_bool("show_pivot", settings.show_pivot);
             set_int("split_view_mode", settings.split_view_mode);
             set_float("split_position", settings.split_position);
+            if (args.contains("split_view_offset")) {
+                settings.split_view_offset = args["split_view_offset"].get<size_t>();
+                touched = true;
+            }
             if (auto result = set_raster_backend(settings); !result)
                 return std::unexpected(result.error());
             set_bool("equirectangular", settings.equirectangular);
             set_bool("orthographic", settings.orthographic);
             set_float("ortho_scale", settings.ortho_scale);
+            set_bool("depth_view", settings.depth_view);
             set_float("depth_view_min", settings.depth_view_min);
             set_float("depth_view_max", settings.depth_view_max);
             set_int("depth_visualization_mode", settings.depth_visualization_mode);
@@ -1074,6 +1269,7 @@ namespace lfs::app {
 
             json camera{
                 {"name", node.name},
+                {"uuid", node.uuid.to_string()},
                 {"uid", node.camera_uid},
                 {"camera_id", node.camera->camera_id()},
                 {"image_name", node.camera->image_name()},
@@ -1143,7 +1339,6 @@ namespace lfs::app {
         }
 
         json ellipsoid_info_json(const vis::SceneManager& scene_manager,
-                                 const vis::RenderingManager* rendering_manager,
                                  const core::NodeId ellipsoid_id) {
             const auto& scene = scene_manager.getScene();
             const auto* const node = scene.getNodeById(ellipsoid_id);
@@ -1256,7 +1451,29 @@ namespace lfs::app {
             const auto& scene = scene_manager.getScene();
 
             std::vector<std::string> requested;
-            if (args.contains("nodes")) {
+            if (args.contains("uuids")) {
+                const auto& uuids = args["uuids"];
+                if (!uuids.is_array())
+                    return std::unexpected("Field 'uuids' must be an array of UUID strings");
+                requested.reserve(uuids.size());
+                for (const auto& item : uuids) {
+                    if (!item.is_string())
+                        return std::unexpected("Field 'uuids' must contain only UUID strings");
+                    const std::string uuid_text = item.get<std::string>();
+                    const auto uuid = core::Uuid::from_string(uuid_text);
+                    if (!uuid)
+                        return std::unexpected("Invalid node UUID: " + uuid_text);
+                    const auto* node = scene.getNodeByUuid(*uuid);
+                    if (!node)
+                        return std::unexpected("Node UUID does not resolve: " + uuid_text);
+                    requested.push_back(node->name);
+                }
+            } else if (args.contains("uuid")) {
+                const auto node = resolve_node_reference(scene, args, "node", "uuid");
+                if (!node)
+                    return std::unexpected(node.error().message);
+                requested.push_back((*node)->name);
+            } else if (args.contains("nodes")) {
                 const auto& nodes = args["nodes"];
                 if (!nodes.is_array())
                     return std::unexpected("Field 'nodes' must be an array of node names");
@@ -1268,9 +1485,8 @@ namespace lfs::app {
             } else {
                 requested = scene_manager.getSelectedNodeNames();
                 if (requested.empty()) {
-                    const auto& training_name = scene.getTrainingModelNodeName();
-                    if (!training_name.empty())
-                        requested.push_back(training_name);
+                    if (const auto* training_node = scene.getNodeByUuid(scene.getTrainingModelNodeUuid()))
+                        requested.push_back(training_node->name);
                 }
                 if (requested.empty()) {
                     const auto* node = find_first_visible_splat_node(scene);
@@ -1308,6 +1524,25 @@ namespace lfs::app {
             std::optional<std::shared_lock<std::shared_mutex>> model_lock;
         };
 
+        [[nodiscard]] core::ProvenanceStamp make_gui_export_stamp(const vis::SceneManager& scene_manager) {
+            auto stamp = core::make_provenance_stamp();
+            const auto* const trainer_manager = scene_manager.getTrainerManager();
+            if (trainer_manager) {
+                const int iteration = trainer_manager->getCurrentIteration();
+                // iteration 0 means an untrained scene, deliberately not stamped.
+                if (iteration > 0)
+                    stamp.iteration = iteration;
+            }
+            const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
+            if (trainer) {
+                const auto strategy = core::param::canonical_strategy_name(
+                    trainer->getParams().optimization.strategy);
+                if (!strategy.empty())
+                    stamp.strategy = std::string(strategy);
+            }
+            return stamp;
+        }
+
         BorrowExportPlan make_borrow_single_identity_export_plan(const vis::SceneManager& scene_manager,
                                                                  const std::vector<std::string>& node_names) {
             BorrowExportPlan plan;
@@ -1322,7 +1557,7 @@ namespace lfs::app {
             if (node->model->has_deleted_mask())
                 return plan;
 
-            if (node->name == scene.getTrainingModelNodeName()) {
+            if (node->uuid == scene.getTrainingModelNodeUuid()) {
                 const auto* const trainer_manager = scene_manager.getTrainerManager();
                 const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
                 if (trainer && trainer->is_running() && !trainer->is_paused())
@@ -1339,7 +1574,8 @@ namespace lfs::app {
                                                             const std::vector<std::string>& node_names,
                                                             const core::ExportFormat format,
                                                             const std::filesystem::path& path,
-                                                            const int sh_degree) {
+                                                            const int sh_degree,
+                                                            const bool include_provenance = true) {
             const auto& scene = scene_manager.getScene();
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             splats.reserve(node_names.size());
@@ -1369,41 +1605,44 @@ namespace lfs::app {
             truncate_sh_degree(*merged, sh_degree);
             borrow_plan.model_lock.reset();
 
+            const auto stamp = include_provenance ? make_gui_export_stamp(scene_manager)
+                                                  : core::make_minimal_provenance_stamp();
+
             switch (format) {
             case core::ExportFormat::PLY: {
                 if (auto result = io::save_ply(
-                        *merged, io::PlySaveOptions{.output_path = path, .binary = true, .async = false, .extra_attributes = {}});
+                        *merged, io::PlySaveOptions{.output_path = path, .binary = true, .async = false, .extra_attributes = {}, .provenance = stamp});
                     !result)
                     return std::unexpected(result.error().message);
                 break;
             }
             case core::ExportFormat::SOG: {
-                if (auto result = io::save_sog(*merged, io::SogSaveOptions{.output_path = path, .kmeans_iterations = 10}); !result)
+                if (auto result = io::save_sog(*merged, io::SogSaveOptions{.output_path = path, .kmeans_iterations = 10, .provenance = stamp}); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
             case core::ExportFormat::SPZ: {
-                if (auto result = io::save_spz(*merged, io::SpzSaveOptions{.output_path = path}); !result)
+                if (auto result = io::save_spz(*merged, io::SpzSaveOptions{.output_path = path, .provenance = stamp}); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
             case core::ExportFormat::HTML_VIEWER: {
-                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{.output_path = path}); !result)
+                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{.output_path = path, .provenance = stamp}); !result)
                     return std::unexpected(result.error());
                 break;
             }
             case core::ExportFormat::USD: {
-                if (auto result = io::save_usd(*merged, io::UsdSaveOptions{.output_path = path}); !result)
+                if (auto result = io::save_usd(*merged, io::UsdSaveOptions{.output_path = path, .provenance = stamp}); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
             case core::ExportFormat::NUREC_USDZ: {
-                if (auto result = io::save_nurec_usdz(*merged, io::NurecUsdzSaveOptions{.output_path = path}); !result)
+                if (auto result = io::save_nurec_usdz(*merged, io::NurecUsdzSaveOptions{.output_path = path, .provenance = stamp}); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
             case core::ExportFormat::RAD: {
-                if (auto result = io::save_rad(*merged, io::RadSaveOptions{.output_path = path}); !result)
+                if (auto result = io::save_rad(*merged, io::RadSaveOptions{.output_path = path, .provenance = stamp}); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
@@ -1497,11 +1736,9 @@ namespace lfs::app {
                     return selected_name;
             }
 
-            const auto& training_name = scene.getTrainingModelNodeName();
-            if (!training_name.empty()) {
-                const auto* const node = scene.getNode(training_name);
-                if (node && node->model)
-                    return training_name;
+            if (const auto* node = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+                node && node->model) {
+                return node->name;
             }
 
             const auto* fallback = find_first_visible_splat_node(scene);
@@ -1525,10 +1762,6 @@ namespace lfs::app {
             if (field_name == "shN")
                 return &splat_data.shN_raw();
             return nullptr;
-        }
-
-        const core::Tensor* resolve_gaussian_field(const core::SplatData& splat_data, std::string_view field_name) {
-            return resolve_gaussian_field(const_cast<core::SplatData&>(splat_data), field_name);
         }
 
         json tensor_payload_json(const core::Tensor& tensor) {
@@ -1585,14 +1818,6 @@ namespace lfs::app {
                 result.push_back(static_cast<float>(parsed));
             }
             return result;
-        }
-
-        size_t product_of_tail_dims(const core::Tensor& tensor) {
-            size_t product = 1;
-            const auto& shape = tensor.shape();
-            for (size_t i = 1; i < shape.rank(); ++i)
-                product *= shape[i];
-            return product;
         }
 
         class EventSubscriptionRegistry {
@@ -1857,6 +2082,257 @@ namespace lfs::app {
                 return json{{"success", true}, {"path", core::path_to_utf8(path)}};
             });
 
+        registry.register_tool(
+            McpTool{
+                .name = "project_save",
+                .description = "Append one explicit generation to the active .licht project",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json::object(),
+                    .required = {}},
+                .metadata = {
+                    .category = "project",
+                    .kind = "mutation",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                    .long_running = true,
+                    .user_visible = true,
+                }},
+            [viewer, viewer_impl](const json&) -> json {
+                auto before = post_and_wait(
+                    viewer, [viewer] {
+                        return viewer->projectGetInfo();
+                    });
+                if (!before) {
+                    return project_error_json(
+                        before.error());
+                }
+                if (!before->path) {
+                    return project_error_json(
+                        lfs::ErrorCode::
+                            FailedPrecondition,
+                        "The active project has no path.",
+                        "Use project_save_as with a .licht destination.");
+                }
+                const auto expected_path =
+                    before->path->lexically_normal();
+                auto result = post_render_and_wait(
+                    viewer_impl, [viewer] {
+                        return viewer->projectSave(
+                            true);
+                    });
+                if (!result) {
+                    return project_error_json(
+                        result.error());
+                }
+                auto info =
+                    wait_for_project_generation(
+                        viewer,
+                        before->generation,
+                        expected_path, true);
+                return info
+                           ? project_info_json(*info)
+                           : project_error_json(
+                                 info.error());
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "project_save_as",
+                .description = "Save the active project to a new .licht path and bind that path as the master",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{
+                                     {"type", "string"},
+                                     {"description", "Destination .licht path"}}}},
+                    .required = {"path"}},
+                .metadata = {
+                    .category = "project",
+                    .kind = "mutation",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                    .long_running = true,
+                    .user_visible = true,
+                }},
+            [viewer, viewer_impl](const json& args) -> json {
+                const bool explicit_destination =
+                    !args.at("path").get<std::string>().empty();
+                const auto path =
+                    core::utf8_to_path(
+                        args.at("path")
+                            .get<std::string>());
+                auto before = post_and_wait(
+                    viewer, [viewer] {
+                        return viewer->projectGetInfo();
+                    });
+                if (!before) {
+                    return project_error_json(
+                        before.error());
+                }
+                std::error_code path_error;
+                const auto expected_path =
+                    std::filesystem::absolute(
+                        path, path_error)
+                        .lexically_normal();
+                if (path_error) {
+                    return project_error_json(
+                        lfs::ErrorCode::
+                            InvalidArgument,
+                        "The destination path could not be resolved.",
+                        path_error.message());
+                }
+                auto result = post_render_and_wait(
+                    viewer_impl, [viewer, viewer_impl, path,
+                                  explicit_destination] {
+                        return explicit_destination
+                                   ? viewer_impl->projectSaveAsExplicit(path, true)
+                                   : viewer->projectSaveAs(path, true);
+                    });
+                if (!result) {
+                    return project_error_json(
+                        result.error());
+                }
+                auto info =
+                    wait_for_project_generation(
+                        viewer,
+                        before->generation,
+                        expected_path,
+                        before->path &&
+                            before->path
+                                    ->lexically_normal() ==
+                                expected_path);
+                return info
+                           ? project_info_json(*info)
+                           : project_error_json(
+                                 info.error());
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "project_open",
+                .description = "Transactionally open a .licht project and return once its interactive shell is ready",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{
+                                     {"type", "string"},
+                                     {"description", "Existing .licht project path"}}},
+                        {"discard_changes", json{{"type", "boolean"}, {"default", false}, {"description", "Explicitly authorize discarding unsaved changes only after the candidate passes Phase A"}}}},
+                    .required = {"path"}},
+                .metadata = {
+                    .category = "project",
+                    .kind = "mutation",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                    .long_running = true,
+                    .user_visible = true,
+                }},
+            [viewer](const json& args) -> json {
+                const auto path =
+                    core::utf8_to_path(
+                        args.at("path")
+                            .get<std::string>());
+                const auto disposition =
+                    args.value(
+                        "discard_changes", false)
+                        ? vis::
+                              ProjectSwitchDisposition::
+                                  DiscardChanges
+                        : vis::
+                              ProjectSwitchDisposition::
+                                  RequireClean;
+                auto result = post_and_wait(
+                    viewer,
+                    [viewer, path, disposition] {
+                        return viewer->projectOpen(
+                            path, disposition);
+                    });
+                if (!result) {
+                    return project_error_json(
+                        result.error());
+                }
+                if (*result ==
+                    vis::ProjectOpenOutcome::
+                        RecoveryPromptPending) {
+                    return json{
+                        {"status",
+                         "recovery_decision_pending"},
+                        {"recovery_decision_pending",
+                         true},
+                    };
+                }
+                auto info = post_and_wait(
+                    viewer, [viewer] {
+                        return viewer->projectGetInfo();
+                    });
+                return info
+                           ? project_info_json(*info)
+                           : project_error_json(
+                                 info.error());
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "project_compact",
+                .description = "Verify, compact, and atomically replace the active .licht master",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json::object(),
+                    .required = {}},
+                .metadata = {
+                    .category = "project",
+                    .kind = "mutation",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                    .long_running = true,
+                    .user_visible = true,
+                }},
+            [viewer](const json&) -> json {
+                auto started = post_and_wait(
+                    viewer, [viewer] {
+                        return viewer
+                            ->projectCompact();
+                    });
+                if (!started) {
+                    return project_error_json(
+                        started.error());
+                }
+                auto info =
+                    wait_for_project_write(
+                        viewer,
+                        "Project compaction");
+                return info
+                           ? project_info_json(*info)
+                           : project_error_json(
+                                 info.error());
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "project_get_info",
+                .description = "Read the active project path, identity, generation, dirty chapters, and hydration state",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json::object(),
+                    .required = {}},
+                .metadata = {
+                    .category = "project",
+                    .kind = "query",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer](const json&) -> json {
+                auto info = post_and_wait(
+                    viewer, [viewer] {
+                        return viewer->projectGetInfo();
+                    });
+                return info
+                           ? project_info_json(*info)
+                           : project_error_json(
+                                 info.error());
+            });
+
         mcp::register_shared_scene_tools(mcp::SharedSceneToolBackend{
             .runtime = "gui",
             .thread_affinity = "gui_thread",
@@ -1876,22 +2352,21 @@ namespace lfs::app {
                         return viewer->loadCheckpointForTraining(path);
                     });
                 },
-            .save_checkpoint =
-                [viewer](const std::optional<std::filesystem::path>& path)
-                -> std::expected<std::filesystem::path, std::string> {
-                return post_and_wait(viewer, [viewer, path]() {
-                    return viewer->saveCheckpoint(path);
-                });
-            },
             .save_ply =
-                [viewer](const std::filesystem::path& path) {
-                    return post_and_wait(viewer, [viewer, path]() -> std::expected<void, std::string> {
+                [viewer](const std::filesystem::path& path, const bool include_provenance) {
+                    return post_and_wait(viewer, [viewer, path, include_provenance]() -> std::expected<void, std::string> {
                         auto& scene = viewer->getScene();
                         auto* model = scene.getTrainingModel();
                         if (!model)
                             return std::unexpected("No model to save");
 
-                        io::PlySaveOptions options{.output_path = path, .binary = true};
+                        const auto stamp = include_provenance
+                                               ? (viewer->getSceneManager()
+                                                      ? make_gui_export_stamp(*viewer->getSceneManager())
+                                                      : core::make_provenance_stamp())
+                                               : core::make_minimal_provenance_stamp();
+
+                        io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = stamp};
                         auto result = io::save_ply(*model, options);
                         if (!result)
                             return std::unexpected(result.error().message);
@@ -1925,6 +2400,91 @@ namespace lfs::app {
                 auto* trainer_manager = viewer_impl->getTrainerManager();
                 return trainer_manager ? trainer_manager->lastTrainingError() : std::nullopt;
             }});
+
+        // CommandCenter's generated session.resume only sets the trainer flag. A
+        // checkpoint-installed trainer has no worker yet, so route GUI MCP session
+        // controls through TrainerManager to keep the state machine and worker
+        // flags in sync.
+        registry.register_tool(
+            McpTool{
+                .name = "session.pause",
+                .description = "Pause training in the current runtime",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "training",
+                    .kind = "command",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer_impl](const json&) -> json {
+                auto result = post_and_wait(viewer_impl, [viewer_impl]() -> std::expected<void, std::string> {
+                    auto* const trainer_manager = viewer_impl->getTrainerManager();
+                    if (!trainer_manager)
+                        return std::unexpected("Trainer manager is not initialized");
+                    if (!trainer_manager->canPause())
+                        return std::unexpected(std::string(trainer_manager->getActionBlockedReason(
+                            vis::TrainingAction::Pause)));
+                    trainer_manager->pauseTraining();
+                    return {};
+                });
+                if (!result)
+                    return json{{"error", result.error()}};
+                return json{{"success", true}, {"operation", "session.pause"}};
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "session.resume",
+                .description = "Resume training in the current runtime",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "training",
+                    .kind = "command",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer_impl](const json&) -> json {
+                auto result = post_and_wait(viewer_impl, [viewer_impl]() -> std::expected<void, std::string> {
+                    auto* const trainer_manager = viewer_impl->getTrainerManager();
+                    if (!trainer_manager)
+                        return std::unexpected("Trainer manager is not initialized");
+                    if (!trainer_manager->canResume())
+                        return std::unexpected(std::string(trainer_manager->getActionBlockedReason(
+                            vis::TrainingAction::Resume)));
+                    trainer_manager->resumeTraining();
+                    return {};
+                });
+                if (!result)
+                    return json{{"error", result.error()}};
+                return json{{"success", true}, {"operation", "session.resume"}};
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "session.request_stop",
+                .description = "Stop training in the current runtime",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "training",
+                    .kind = "command",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer_impl](const json&) -> json {
+                auto result = post_and_wait(viewer_impl, [viewer_impl]() -> std::expected<void, std::string> {
+                    auto* const trainer_manager = viewer_impl->getTrainerManager();
+                    if (!trainer_manager)
+                        return std::unexpected("Trainer manager is not initialized");
+                    if (!trainer_manager->canStop())
+                        return std::unexpected(std::string(trainer_manager->getActionBlockedReason(
+                            vis::TrainingAction::Stop)));
+                    trainer_manager->stopTraining();
+                    return {};
+                });
+                if (!result)
+                    return json{{"error", result.error()}};
+                return json{{"success", true}, {"operation", "session.request_stop"}};
+            });
 
         registry.register_tool(
             McpTool{
@@ -2382,20 +2942,21 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"name", json{{"type", "string"}, {"description", "Node name"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable node UUID; wins over name"}}},
                         {"visible", json{{"type", "boolean"}, {"description", "Whether the node should be visible"}}}},
-                    .required = {"name", "visible"}}},
+                    .required = {"visible"}}},
             [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
                 const bool visible = args["visible"].get<bool>();
 
-                return post_and_wait(viewer_impl, [viewer_impl, name, visible]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, visible]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    const auto* const node = scene.getNode(name);
-                    if (!node)
-                        return json{{"error", "Node not found: " + name}};
+                    const auto resolved = resolve_node_reference(scene, args);
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const auto* const node = *resolved;
 
                     core::events::cmd::SetNodeVisibilityById{
                         .node_id = node->id,
@@ -2403,7 +2964,7 @@ namespace lfs::app {
                         .emit();
                     if (const auto* const updated = scene.getNodeById(node->id))
                         return json{{"success", true}, {"node", node_summary_json(scene, *updated)}};
-                    return json{{"success", true}, {"name", name}, {"visible", visible}};
+                    return json{{"success", true}, {"name", node->name}, {"visible", visible}};
                 });
             });
 
@@ -2415,19 +2976,21 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"name", json{{"type", "string"}, {"description", "Node name"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable node UUID; wins over name"}}},
                         {"locked", json{{"type", "boolean"}, {"description", "Whether the node should be locked"}}}},
-                    .required = {"name", "locked"}}},
+                    .required = {"locked"}}},
             [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
                 const bool locked = args["locked"].get<bool>();
 
-                return post_and_wait(viewer_impl, [viewer_impl, name, locked]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, locked]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    if (!scene.getNode(name))
-                        return json{{"error", "Node not found: " + name}};
+                    const auto resolved = resolve_node_reference(scene, args);
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const std::string name = (*resolved)->name;
 
                     core::events::cmd::SetNodeLocked{.name = name, .locked = locked}.emit();
                     if (const auto* const node = scene.getNode(name))
@@ -2444,20 +3007,21 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"old_name", json{{"type", "string"}, {"description", "Current node name"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable node UUID; wins over old_name"}}},
                         {"new_name", json{{"type", "string"}, {"description", "New node name"}}}},
-                    .required = {"old_name", "new_name"}}},
+                    .required = {"new_name"}}},
             [viewer_impl](const json& args) -> json {
-                const std::string old_name = args["old_name"].get<std::string>();
                 const std::string new_name = args["new_name"].get<std::string>();
 
-                return post_and_wait(viewer_impl, [viewer_impl, old_name, new_name]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, new_name]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    const auto* const node = scene.getNode(old_name);
-                    if (!node)
-                        return json{{"error", "Node not found: " + old_name}};
+                    const auto resolved = resolve_node_reference(scene, args, "old_name", "uuid");
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const auto* const node = *resolved;
 
                     core::events::cmd::RenameNodeById{.node_id = node->id, .new_name = new_name}.emit();
                     if (const auto* const updated = scene.getNodeById(node->id);
@@ -2475,26 +3039,28 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"name", json{{"type", "string"}, {"description", "Node to move"}}},
-                        {"parent", json{{"type", "string"}, {"description", "New parent node; omit or null for root"}}}},
-                    .required = {"name"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable node UUID; wins over name"}}},
+                        {"parent", json{{"type", "string"}, {"description", "New parent node; omit or null for root"}}},
+                        {"parent_uuid", json{{"type", "string"}, {"description", "Durable parent UUID; wins over parent"}}}},
+                    .required = {}}},
             [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
-                const auto parent = optional_string_arg(args, "parent");
-
-                return post_and_wait(viewer_impl, [viewer_impl, name, parent]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    const auto* const node = scene.getNode(name);
-                    if (!node)
-                        return json{{"error", "Node not found: " + name}};
+                    const auto resolved = resolve_node_reference(scene, args);
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const auto* const node = *resolved;
+                    const std::string name = node->name;
                     core::NodeId parent_id = core::NULL_NODE;
-                    if (parent) {
-                        const auto* const parent_node = scene.getNode(*parent);
-                        if (!parent_node)
-                            return json{{"error", "Parent node not found: " + *parent}};
-                        parent_id = parent_node->id;
+                    if ((args.contains("parent_uuid") && !args["parent_uuid"].is_null()) ||
+                        (args.contains("parent") && !args["parent"].is_null())) {
+                        const auto parent = resolve_node_reference(scene, args, "parent", "parent_uuid");
+                        if (!parent)
+                            return json{{"error", parent.error().message}};
+                        parent_id = (*parent)->id;
                     }
 
                     core::events::cmd::ReparentNodeById{
@@ -2518,23 +3084,24 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"name", json{{"type", "string"}, {"description", "Requested group name"}}},
-                        {"parent", json{{"type", "string"}, {"description", "Optional parent node name"}}}},
+                        {"parent", json{{"type", "string"}, {"description", "Optional parent node name"}}},
+                        {"parent_uuid", json{{"type", "string"}, {"description", "Optional durable parent UUID; wins over parent"}}}},
                     .required = {"name"}}},
             [viewer_impl](const json& args) -> json {
                 const std::string name = args["name"].get<std::string>();
-                const auto parent = optional_string_arg(args, "parent");
 
-                return post_and_wait(viewer_impl, [viewer_impl, name, parent]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, name]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
                     core::NodeId parent_id = core::NULL_NODE;
-                    if (parent) {
-                        const auto* const parent_node = scene.getNode(*parent);
-                        if (!parent_node)
-                            return json{{"error", "Parent node not found: " + *parent}};
-                        parent_id = parent_node->id;
+                    if ((args.contains("parent_uuid") && !args["parent_uuid"].is_null()) ||
+                        (args.contains("parent") && !args["parent"].is_null())) {
+                        const auto parent = resolve_node_reference(scene, args, "parent", "parent_uuid");
+                        if (!parent)
+                            return json{{"error", parent.error().message}};
+                        parent_id = (*parent)->id;
                     }
 
                     std::unordered_set<std::string> before;
@@ -2561,19 +3128,19 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"name", json{{"type", "string"}, {"description", "Node to duplicate"}}}},
-                    .required = {"name"}}},
+                        {"name", json{{"type", "string"}, {"description", "Node to duplicate"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable node UUID; wins over name"}}}},
+                    .required = {}}},
             [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
-
-                return post_and_wait(viewer_impl, [viewer_impl, name]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    const auto* const node = scene.getNode(name);
-                    if (!node)
-                        return json{{"error", "Node not found: " + name}};
+                    const auto resolved = resolve_node_reference(scene, args);
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const auto* const node = *resolved;
 
                     std::unordered_set<std::string> before;
                     for (const auto* const node : scene.getNodes()) {
@@ -2602,19 +3169,20 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"name", json{{"type", "string"}, {"description", "Group node to merge"}}}},
-                    .required = {"name"}}},
+                        {"name", json{{"type", "string"}, {"description", "Group node to merge"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable group UUID; wins over name"}}}},
+                    .required = {}}},
             [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
-
-                return post_and_wait(viewer_impl, [viewer_impl, name]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    const auto* const group = scene.getNode(name);
-                    if (!group)
-                        return json{{"error", "Node not found: " + name}};
+                    const auto resolved = resolve_node_reference(scene, args);
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const auto* const group = *resolved;
+                    const std::string name = group->name;
                     if (group->type != core::NodeType::GROUP)
                         return json{{"error", "Node is not a group: " + name}};
 
@@ -2650,13 +3218,17 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -2665,7 +3237,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::PLY, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::PLY, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -2689,13 +3261,17 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -2704,7 +3280,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SOG, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SOG, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -2728,13 +3304,17 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -2743,7 +3323,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SPZ, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SPZ, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -2767,13 +3347,17 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -2782,7 +3366,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::USD, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::USD, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -2806,13 +3390,17 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination .usdz file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -2821,7 +3409,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::NUREC_USDZ, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::NUREC_USDZ, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -2845,13 +3433,17 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -2860,7 +3452,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::HTML_VIEWER, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::HTML_VIEWER, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -2884,13 +3476,17 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
-                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -2899,7 +3495,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::RAD, path, sh_degree); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::RAD, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
                     return json{
@@ -3293,16 +3889,21 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"name", json{{"type", "string"}, {"description", "Node name to select"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable node UUID; wins over name"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add"})}, {"description", "Selection update mode (default: replace)"}}}},
-                    .required = {"name"}}},
+                    .required = {}}},
             [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
                 const std::string mode = args.value("mode", "replace");
 
-                return post_and_wait(viewer_impl, [viewer_impl, name, mode]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, mode]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
+
+                    const auto resolved = resolve_node_reference(scene_manager->getScene(), args);
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const std::string name = (*resolved)->name;
 
                     if (auto result = vis::cap::selectNode(*scene_manager, name, mode); !result)
                         return json{{"error", result.error()}};
@@ -3324,16 +3925,24 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"node", json{{"type", "string"}, {"description", "Optional node name; defaults to the current selected node(s)"}}}},
+                        {"node", json{{"type", "string"}, {"description", "Optional node name; defaults to the current selected node(s)"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}}},
                     .required = {}}},
             [viewer_impl](const json& args) -> json {
-                const auto requested_node = optional_string_arg(args, "node");
-
-                return post_and_wait(viewer_impl, [viewer_impl, requested_node]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
 
+                    std::optional<std::string> requested_node;
+                    if (args.contains("uuid")) {
+                        const auto resolved = resolve_node_reference(scene_manager->getScene(), args, "node", "uuid");
+                        if (!resolved)
+                            return json{{"error", resolved.error().message}};
+                        requested_node = (*resolved)->name;
+                    } else {
+                        requested_node = optional_string_arg(args, "node");
+                    }
                     auto targets = resolve_transform_targets(*scene_manager, requested_node);
                     if (!targets)
                         return json{{"error", targets.error()}};
@@ -3421,7 +4030,7 @@ namespace lfs::app {
                     if (!cropbox_id)
                         return json{{"error", cropbox_id.error()}};
 
-                    return crop_box_info_json(*scene_manager, rendering_manager, *cropbox_id);
+                    return crop_box_info_json(*scene_manager, *cropbox_id);
                 });
             });
 
@@ -3439,7 +4048,6 @@ namespace lfs::app {
 
                 return post_and_wait(viewer_impl, [viewer_impl, requested_node]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
-                    auto* const rendering_manager = viewer_impl->getRenderingManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
 
@@ -3447,7 +4055,7 @@ namespace lfs::app {
                     if (!cropbox_id)
                         return json{{"error", cropbox_id.error()}};
 
-                    return crop_box_info_json(*scene_manager, rendering_manager, *cropbox_id);
+                    return crop_box_info_json(*scene_manager, *cropbox_id);
                 });
             });
 
@@ -3534,7 +4142,7 @@ namespace lfs::app {
                         return json{{"error", result.error()}};
                     }
 
-                    return crop_box_info_json(*scene_manager, rendering_manager, *cropbox_id);
+                    return crop_box_info_json(*scene_manager, *cropbox_id);
                 });
             });
 
@@ -3566,7 +4174,7 @@ namespace lfs::app {
                     if (!result)
                         return json{{"error", result.error()}};
 
-                    return crop_box_info_json(*scene_manager, rendering_manager, *cropbox_id);
+                    return crop_box_info_json(*scene_manager, *cropbox_id);
                 });
             });
 
@@ -3596,7 +4204,7 @@ namespace lfs::app {
                     if (!result)
                         return json{{"error", result.error()}};
 
-                    return crop_box_info_json(*scene_manager, rendering_manager, *cropbox_id);
+                    return crop_box_info_json(*scene_manager, *cropbox_id);
                 });
             });
 
@@ -3626,7 +4234,7 @@ namespace lfs::app {
                     if (!ellipsoid_id)
                         return json{{"error", ellipsoid_id.error()}};
 
-                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                    return ellipsoid_info_json(*scene_manager, *ellipsoid_id);
                 });
             });
 
@@ -3644,7 +4252,6 @@ namespace lfs::app {
 
                 return post_and_wait(viewer_impl, [viewer_impl, requested_node]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
-                    auto* const rendering_manager = viewer_impl->getRenderingManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
 
@@ -3652,7 +4259,7 @@ namespace lfs::app {
                     if (!ellipsoid_id)
                         return json{{"error", ellipsoid_id.error()}};
 
-                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                    return ellipsoid_info_json(*scene_manager, *ellipsoid_id);
                 });
             });
 
@@ -3733,7 +4340,7 @@ namespace lfs::app {
                         return json{{"error", result.error()}};
                     }
 
-                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                    return ellipsoid_info_json(*scene_manager, *ellipsoid_id);
                 });
             });
 
@@ -3764,7 +4371,7 @@ namespace lfs::app {
                     if (auto result = fit_ellipsoid_to_parent(*scene_manager, rendering_manager, *ellipsoid_id, use_percentile); !result)
                         return json{{"error", result.error()}};
 
-                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                    return ellipsoid_info_json(*scene_manager, *ellipsoid_id);
                 });
             });
 
@@ -3793,7 +4400,7 @@ namespace lfs::app {
                     if (auto result = reset_ellipsoid(*scene_manager, rendering_manager, *ellipsoid_id); !result)
                         return json{{"error", result.error()}};
 
-                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                    return ellipsoid_info_json(*scene_manager, *ellipsoid_id);
                 });
             });
 
@@ -4222,15 +4829,29 @@ namespace lfs::app {
                             }
                             const auto rest_coefficients =
                                 static_cast<uint32_t>(node->model->max_sh_coeffs_rest());
-                            auto selected_sh = core::Tensor::empty(
-                                {resolved_indices.size(), static_cast<size_t>(rest_coefficients), size_t{3}},
-                                node->model->shN_raw().device());
-                            core::shN_swizzled_gather_to_linear(
-                                node->model->shN_raw().ptr<float>(),
-                                index_tensor.ptr<int>(),
-                                selected_sh.ptr<float>(),
-                                resolved_indices.size(),
-                                rest_coefficients);
+                            core::Tensor selected_sh;
+                            // q16 / IEEE-f16: dequant to [N,K,3] then index_select (no ptr<float> on codes).
+                            if (node->model->shN_raw().dtype() != core::DataType::Float32) {
+                                core::Tensor canon = node->model->shN_canonical();
+                                auto indices_for_select = index_tensor;
+                                if (indices_for_select.device() != canon.device())
+                                    indices_for_select = indices_for_select.to(canon.device());
+                                if (indices_for_select.dtype() != core::DataType::Int32 &&
+                                    indices_for_select.dtype() != core::DataType::Int64) {
+                                    indices_for_select = indices_for_select.to(core::DataType::Int32);
+                                }
+                                selected_sh = canon.index_select(0, indices_for_select).contiguous();
+                            } else {
+                                selected_sh = core::Tensor::empty(
+                                    {resolved_indices.size(), static_cast<size_t>(rest_coefficients), size_t{3}},
+                                    node->model->shN_raw().device());
+                                core::shN_swizzled_gather_to_linear(
+                                    node->model->shN_raw().ptr<float>(),
+                                    index_tensor.ptr<int>(),
+                                    selected_sh.ptr<float>(),
+                                    resolved_indices.size(),
+                                    rest_coefficients);
+                            }
                             field_payloads[field_name] = tensor_payload_json(selected_sh);
                             continue;
                         }

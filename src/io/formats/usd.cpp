@@ -5,6 +5,7 @@
 #include "usd.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
@@ -38,6 +39,7 @@
 #include <pxr/base/tf/diagnosticMgr.h>
 #include <pxr/base/tf/errorMark.h>
 #include <pxr/base/vt/array.h>
+#include <pxr/base/vt/dictionary.h>
 #include <pxr/base/vt/value.h>
 #include <pxr/usd/sdf/layer.h>
 #include <pxr/usd/sdf/path.h>
@@ -64,6 +66,21 @@ namespace lfs::io {
     using lfs::core::Tensor;
 
     namespace {
+        lfs::Error usd_project_error(std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .operation_id = {},
+                .user_message = message,
+                .detail = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = {},
+                .native = std::nullopt,
+            });
+        }
+
         constexpr int MAX_SUPPORTED_SH_DEGREE = 3;
         constexpr float SCENE_SCALE = 0.5f;
         constexpr float MIN_SCALE = 1e-12f;
@@ -438,7 +455,8 @@ namespace lfs::io {
             return extension;
         }
 
-        std::expected<SplatData, std::string> load_particlefield_prim(const pxr::UsdPrim& prim) {
+        std::expected<SplatData, std::string> load_particlefield_prim(
+            const pxr::UsdPrim& prim, const bool apply_stage_units) {
             std::optional<std::vector<float>> positions;
             std::optional<std::vector<float>> rotations;
             std::optional<std::vector<float>> scales;
@@ -609,7 +627,9 @@ namespace lfs::io {
                 SCENE_SCALE);
 
             maybe_apply_world_transform(prim, splat_data);
-            maybe_apply_stage_linear_units(prim.GetStage(), splat_data);
+            if (apply_stage_units) {
+                maybe_apply_stage_linear_units(prim.GetStage(), splat_data);
+            }
             return splat_data;
         }
 
@@ -714,7 +734,38 @@ namespace lfs::io {
                  particlefield_prim->GetPath().GetString(),
                  particlefield_prim->GetTypeName().GetString());
 
-        return load_particlefield_prim(*particlefield_prim);
+        return load_particlefield_prim(*particlefield_prim, true);
+    }
+
+    lfs::Result<UsdProjectUnitLoad> load_usd_project_units(
+        const std::filesystem::path& filepath) {
+        LOG_INFO("Loading USD file in authored project units: {}",
+                 lfs::core::path_to_utf8(filepath));
+        const auto stage = pxr::UsdStage::Open(lfs::core::path_to_utf8(filepath));
+        if (!stage) {
+            return usd_project_error(std::format(
+                "Failed to open USD stage: {}",
+                lfs::core::path_to_utf8(filepath)));
+        }
+        const auto particlefield_prim = find_particlefield_prim(stage);
+        if (!particlefield_prim) {
+            return usd_project_error(std::format(
+                "{}: {}", lfs::core::path_to_utf8(filepath),
+                particlefield_prim.error()));
+        }
+        auto data = load_particlefield_prim(*particlefield_prim, false);
+        if (!data) {
+            return usd_project_error(std::move(data).error());
+        }
+        const double meters_per_unit = pxr::UsdGeomGetStageMetersPerUnit(stage);
+        if (!std::isfinite(meters_per_unit) || meters_per_unit <= 0.0) {
+            return usd_project_error(std::format(
+                "USD stage has invalid metersPerUnit {}", meters_per_unit));
+        }
+        return UsdProjectUnitLoad{
+            .data = std::move(*data),
+            .meters_per_unit = meters_per_unit,
+        };
     }
 
     std::expected<void, std::string> validate_usd(const std::filesystem::path& filepath) {
@@ -738,7 +789,12 @@ namespace lfs::io {
         return validate_particlefield_prim(*particlefield_prim);
     }
 
-    Result<void> save_usd(const SplatData& splat_data, const UsdSaveOptions& options) {
+    Result<void> save_usd(const SplatData& splat_data, const UsdSaveOptions& options_in) {
+        UsdSaveOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         if (!report_export_progress(options.progress_callback, 0.0f, "Preparing USD")) {
             return make_error(ErrorCode::CANCELLED, "USD export cancelled", options.output_path);
         }
@@ -881,7 +937,18 @@ namespace lfs::io {
         }
 
         try {
-            if (const auto root_layer = stage->GetRootLayer(); !root_layer || !root_layer->Save()) {
+            const auto root_layer = stage->GetRootLayer();
+            if (!root_layer) {
+                return make_error(ErrorCode::WRITE_FAILURE,
+                                  "Failed to save USD stage",
+                                  options.output_path);
+            }
+            if (options.provenance) {
+                const std::string json = core::provenance_to_json(*options.provenance);
+                root_layer->SetCustomLayerData(
+                    pxr::VtDictionary{{"lichtfeld_provenance", pxr::VtValue(json)}});
+            }
+            if (!root_layer->Save()) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   "Failed to save USD stage",
                                   options.output_path);

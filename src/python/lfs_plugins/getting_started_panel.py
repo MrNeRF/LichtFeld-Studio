@@ -62,6 +62,7 @@ class GettingStartedPanel(Panel):
     label = "Getting Started"
     space = lf.ui.PanelSpace.FLOATING
     order = 99
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/getting_started.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (560, 0)

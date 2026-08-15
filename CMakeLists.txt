@@ -24,7 +24,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${LFS_VCPKG_OVERL
 # cache values are visible before project(), when the vcpkg toolchain resolves
 # manifest features.
 list(REMOVE_ITEM VCPKG_MANIFEST_FEATURES tests vulkan-validation)
-if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS)
     list(APPEND VCPKG_MANIFEST_FEATURES tests)
 endif()
 
@@ -192,6 +192,7 @@ configure_file(
 )
 
 option(BUILD_TESTS "Build tests" OFF)
+option(BUILD_FORMAT_TESTS "Build only the CPU-only .licht format tests (no CUDA)" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
 option(BUILD_LOCALIZATION_TESTS "Register headless localization contract tests without LibTorch" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
@@ -231,6 +232,7 @@ option(BUILD_PORTABLE "Build portable distribution" OFF)
 if(BUILD_PORTABLE)
     set(BUILD_CUDA_PTX_ONLY ON CACHE BOOL "" FORCE)
     set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(BUILD_FORMAT_TESTS OFF CACHE BOOL "" FORCE)
     add_compile_definitions(LFS_BUILD_PORTABLE=1)
     message(STATUS "Portable: PTX-only, tests disabled")
 endif()
@@ -272,6 +274,7 @@ if(ENABLE_COMPILER_CACHE)
            NOT MSVC AND
            CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$" AND
            COMPILER_CACHE_PATH_INDEPENDENT AND
+           CMAKE_GENERATOR MATCHES "^Ninja" AND
            NOT _IS_MULTI_CONFIG AND
            CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
             # Prefix maps normalize __FILE__, but older cache versions still
@@ -492,7 +495,10 @@ find_package(spdlog REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(WebP REQUIRED)
 find_package(LibArchive REQUIRED)
+find_package(zstd CONFIG REQUIRED)
 find_package(libdeflate CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)
+find_package(xxHash CONFIG REQUIRED)
 find_package(OpenImageIO REQUIRED)
 find_package(OpenSSL REQUIRED)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SetupShaderCompiler.cmake")
@@ -542,7 +548,9 @@ configure_file(
 )
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+    if(NOT MSVC)
+        set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+    endif()
     set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -O0")
 endif()
 
@@ -615,6 +623,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE LFS_MIN_SM=${LFS_RUNTIME_MIN_
 
 foreach(_lfs_git_version_consumer IN ITEMS
         ${PROJECT_NAME}
+        lfs_core
         lfs_visualizer
         lfs_py
         lfs_mcp)
@@ -1211,13 +1220,15 @@ endif()
 # =============================================================================
 # TESTING (Optional)
 # =============================================================================
-if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_LOCALIZATION_TESTS)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_LOCALIZATION_TESTS)
     enable_testing()
     add_subdirectory(tests)
     if(BUILD_UNICODE_TEST_ONLY)
         message(STATUS "Unicode path test enabled. Build with 'ninja unicode_path_test' and run with 'ctest -R UnicodePathTest'")
-    elseif(BUILD_LOCALIZATION_TESTS)
+    elseif(BUILD_LOCALIZATION_TESTS AND NOT BUILD_TESTS)
         message(STATUS "Headless localization tests enabled. Build with 'ninja test_localization_contracts' and run with 'ctest -R LocalizationContracts'")
+    elseif(NOT BUILD_TESTS)
+        message(STATUS "Format tests enabled. Build with 'ninja lichtfeld_format_tests' and run with 'ctest -L format'")
     else()
         message(STATUS "Tests enabled. Build with 'ninja lichtfeld_tests' and run with 'ninja run_tests' or 'ctest -L fast'")
     endif()

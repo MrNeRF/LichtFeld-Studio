@@ -17,12 +17,7 @@ namespace lfs::training {
 
     std::optional<TrainingCropBoxGeometry> resolve_training_cropbox_geom(
         const core::Scene& scene) {
-        const auto training_model_name = scene.getTrainingModelNodeName();
-        if (training_model_name.empty()) {
-            return std::nullopt;
-        }
-
-        const auto* training_node = scene.getNode(training_model_name);
+        const auto* training_node = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
         if (!training_node) {
             return std::nullopt;
         }

@@ -25,23 +25,6 @@
 
 namespace lfs::core {
 
-    const char* to_string(MemoryDomain domain) noexcept {
-        switch (domain) {
-        case MemoryDomain::CudaDevice: return "cuda-device";
-        case MemoryDomain::CudaVmm: return "cuda-vmm";
-        case MemoryDomain::VulkanDevice: return "vulkan-device";
-        case MemoryDomain::PinnedHost: return "pinned-host";
-        case MemoryDomain::PageableHost: return "pageable-host";
-        }
-        return "unknown";
-    }
-
-    bool is_device_heap(MemoryDomain domain) noexcept {
-        return domain == MemoryDomain::CudaDevice ||
-               domain == MemoryDomain::CudaVmm ||
-               domain == MemoryDomain::VulkanDevice;
-    }
-
     namespace {
 
         std::string format_bytes(size_t bytes) {
@@ -333,6 +316,9 @@ namespace lfs::core {
         if (coordinator.relieve_and_should_retry(failure)) {
             ptr = try_allocate(&failure_status);
         }
+        // A handled OOM and pressure-client reclaim can leave CUDA's last-error
+        // state sticky. Consume it before returning control to later CUDA work.
+        (void)cudaGetLastError();
         if (ptr == nullptr) {
             if (cuda_is_unavailable()) {
                 throw_cuda_unavailable_allocation(bytes, stream, label, operation);

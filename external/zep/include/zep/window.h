@@ -146,6 +146,8 @@ namespace Zep {
         NVec4f FilterActiveColor(const NVec4f& col, float atten = 1.0f);
 
         void DirtyLayout();
+        NVec2f GetScrollOffsetPx() const;
+        void SetScrollOffsetPx(const NVec2f& offset);
 
     private:
         void UpdateLayout(bool force = false);

@@ -4,14 +4,17 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace lfs::core {
     class Scene;
@@ -29,6 +32,74 @@ namespace lfs::vis {
         Vulkan,
     };
 
+    enum class ProjectSwitchDisposition {
+        RequireClean,
+        DiscardChanges,
+    };
+
+    enum class ProjectOpenOutcome {
+        Opened,
+        RecoveryPromptPending,
+    };
+
+    struct LFS_VIS_API ProjectPayloadInfo {
+        std::string chapter;
+        std::string node_uuid;
+        std::string hydration_state;
+    };
+
+    struct LFS_VIS_API ProjectRecentInfo {
+        std::string project_uuid;
+        std::filesystem::path last_known_path;
+    };
+
+    struct LFS_VIS_API ProjectMenuInfo {
+        bool reopen_last_project = true;
+        bool auto_save_on_close = false;
+        std::uint64_t autosave_interval_seconds = 5 * 60;
+        std::vector<ProjectRecentInfo> recent_projects;
+    };
+
+    struct LFS_VIS_API ProjectWritePoll {
+        bool running = false;
+        std::uint64_t generation = 0;
+        std::optional<std::filesystem::path> path;
+        std::string error;
+        std::optional<lfs::ErrorCode> error_code;
+    };
+
+    struct LFS_VIS_API ProjectInfo {
+        std::optional<std::filesystem::path> path;
+        std::string project_uuid;
+        std::uint64_t generation = 0;
+        bool dirty = false;
+        bool session_dirty = false;
+        std::vector<std::string> dirty_chapters;
+        std::string hydration_state = "empty";
+        std::vector<ProjectPayloadInfo> payloads;
+        bool contains_embedded_secrets = false;
+        bool reopen_last_project = true;
+        bool auto_save_on_close = false;
+        std::uint64_t autosave_interval_seconds =
+            5 * 60;
+        std::uint64_t autosave_dirty_epoch_threshold =
+            20;
+        bool project_write_running = false;
+        std::string project_write_stage;
+        float project_write_progress = 0.0F;
+        std::string project_write_error;
+        std::optional<lfs::ErrorCode> project_write_error_code;
+        std::uint64_t autosave_sequence = 0;
+        bool recovery_session = false;
+        bool compaction_suggested = false;
+        std::uint64_t physical_bytes = 0;
+        std::uint64_t estimated_live_bytes = 0;
+        std::uint64_t dead_bytes = 0;
+        double dead_ratio = 0.0;
+        std::string hydration_error;
+        std::vector<ProjectRecentInfo> recent_projects;
+    };
+
     struct LFS_VIS_API ViewerOptions {
         std::string title = "LichtFeld Studio";
         int width = 1280;
@@ -41,6 +112,11 @@ namespace lfs::vis {
         int monitor_y = 0;
         int monitor_width = 0;
         int monitor_height = 0;
+        std::optional<std::filesystem::path> startup_project;
+        // Embedders and tests may isolate lifecycle settings from the
+        // platform user-config directory.
+        std::optional<std::filesystem::path>
+            project_lifecycle_settings_path;
     };
 
     class LFS_VIS_API Visualizer {
@@ -69,8 +145,50 @@ namespace lfs::vis {
         [[nodiscard]] virtual bool acceptsPostedWork() const { return true; }
         virtual void setShutdownRequestedCallback(std::function<void()> callback) = 0;
         virtual std::expected<void, std::string> startTraining() = 0;
-        virtual std::expected<std::filesystem::path, std::string> saveCheckpoint(
-            const std::optional<std::filesystem::path>& path = std::nullopt) = 0;
+        virtual lfs::Result<void>
+        projectSave(bool regenerate_preview = true) = 0;
+        virtual lfs::Result<void>
+        projectSaveAs(const std::filesystem::path& path,
+                      bool regenerate_preview = true) = 0;
+        virtual lfs::Result<ProjectOpenOutcome>
+        projectOpen(
+            const std::filesystem::path& path,
+            ProjectSwitchDisposition disposition =
+                ProjectSwitchDisposition::RequireClean) = 0;
+        virtual lfs::Result<void>
+        projectCompact() = 0;
+        virtual lfs::Result<bool>
+        projectIsDirty() = 0;
+        virtual lfs::Result<bool>
+        projectHasPath() = 0;
+        virtual lfs::Result<ProjectInfo>
+        projectGetInfo() = 0;
+        virtual lfs::Result<ProjectWritePoll>
+        projectPollWrite() {
+            return ProjectWritePoll{};
+        }
+        virtual lfs::Result<ProjectMenuInfo>
+        projectGetMenuInfo() {
+            auto info = projectGetInfo();
+            if (!info) {
+                return std::move(info).error();
+            }
+            return ProjectMenuInfo{
+                .reopen_last_project =
+                    info->reopen_last_project,
+                .auto_save_on_close =
+                    info->auto_save_on_close,
+                .autosave_interval_seconds =
+                    info->autosave_interval_seconds,
+                .recent_projects =
+                    std::move(
+                        info->recent_projects),
+            };
+        }
+        virtual lfs::Result<void>
+        projectClearRecentFiles() {
+            return {};
+        }
 
         virtual ~Visualizer() = default;
     };

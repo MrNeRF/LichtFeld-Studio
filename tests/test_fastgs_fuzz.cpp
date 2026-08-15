@@ -74,7 +74,7 @@ namespace {
 
     void expect_adam_state_finite(const AdamOptimizer& opt, ParamType type) {
         const auto& state = adam_state(opt, type);
-        // Joint codec: exp_avg is uint8 packed, exp_avg_sq/scales empty; check bounds.
+        // Joint codec: exp_avg is uint8 packed; check bounds.
         if (state.is_joint()) {
             ASSERT_TRUE(state.joint_bounds.is_valid());
             EXPECT_FALSE(has_nan(state.joint_bounds));
@@ -83,18 +83,6 @@ namespace {
         }
         EXPECT_FALSE(has_nan(state.exp_avg));
         EXPECT_FALSE(has_inf(state.exp_avg));
-        if (state.exp_avg_sq.is_valid()) {
-            EXPECT_FALSE(has_nan(state.exp_avg_sq));
-            EXPECT_FALSE(has_inf(state.exp_avg_sq));
-        }
-        if (state.exp_avg_scale.is_valid()) {
-            EXPECT_FALSE(has_nan(state.exp_avg_scale));
-            EXPECT_FALSE(has_inf(state.exp_avg_scale));
-        }
-        if (state.exp_avg_sq_scale.is_valid()) {
-            EXPECT_FALSE(has_nan(state.exp_avg_sq_scale));
-            EXPECT_FALSE(has_inf(state.exp_avg_sq_scale));
-        }
     }
 
     // |m| proxy: joint has no scales; zero-grad should leave moments near zero.
@@ -105,8 +93,6 @@ namespace {
                 return 0.0f;
             return state.joint_bounds.abs().sum().item<float>();
         }
-        if (state.exp_avg_scale.is_valid())
-            return state.exp_avg_scale.abs().sum().item<float>();
         return 0.0f;
     }
 
@@ -115,8 +101,6 @@ namespace {
             // Joint packs (u,log_s) together; reuse bounds energy as v proxy.
             return first_moment_scale_proxy(state);
         }
-        if (state.exp_avg_sq_scale.is_valid())
-            return state.exp_avg_sq_scale.abs().sum().item<float>();
         return 0.0f;
     }
 

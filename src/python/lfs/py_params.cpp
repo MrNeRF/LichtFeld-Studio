@@ -1089,7 +1089,7 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) -> std::vector<size_t> {
                     return self.params().save_steps;
                 },
-                "List of iterations at which to save checkpoints")
+                "List of iterations at which to save the project (project.licht)")
             .def(
                 "add_save_step",
                 [](PyOptimizationParams&, size_t step) {

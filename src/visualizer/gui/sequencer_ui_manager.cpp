@@ -22,6 +22,7 @@
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene/viewer_splat_quantize.hpp"
 #include "sequencer/interpolation.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/timeline_view_math.hpp"
@@ -255,6 +256,19 @@ namespace lfs::vis::gui {
 
     SequencerUIManager::~SequencerUIManager() {
         stopPlySequenceStreaming();
+    }
+
+    float SequencerUIManager::timelineZoom() const {
+        return panel_ ? panel_->zoomLevel() : 1.0f;
+    }
+
+    float SequencerUIManager::timelinePan() const {
+        return panel_ ? panel_->panOffset() : 0.0f;
+    }
+
+    void SequencerUIManager::setTimelineView(const float zoom, const float pan) {
+        if (panel_)
+            panel_->setTimelineView(zoom, pan);
     }
 
     void SequencerUIManager::destroyGraphicsResources() {
@@ -807,10 +821,16 @@ namespace lfs::vis::gui {
                                   write_error);
                     }
                 }
+                // Cache deserialize always materializes fp32 swizzled shN; quantize
+                // after both hit and miss so resident frames (up to 64) stay q16.
+                quantizeViewerLoadedPlyShN(path, *completed.model);
             } catch (const lfs::io::LoadCancelledError& e) {
                 completed.cancelled = true;
                 completed.error = e.what();
             } catch (const std::exception& e) {
+                // Quantize can throw after the model is assigned. Drain installs
+                // any non-null model, so drop it rather than bind a broken q16 pair.
+                completed.model.reset();
                 completed.error = e.what();
             }
 
@@ -921,7 +941,21 @@ namespace lfs::vis::gui {
                 continue;
             }
 
-            const std::string& node_name = sequence->frames[result.frame_index].node_name;
+            const auto& frame = sequence->frames[result.frame_index];
+            const auto resolved_node = resolvePlySequenceNode(scene, frame.node_uuid, frame.node_name);
+            if (!resolved_node) {
+                LOG_ERROR("Cannot stream PLY sequence frame {}: {}",
+                          result.frame_index,
+                          resolved_node.error().message);
+                std::lock_guard lock(ply_stream_mutex_);
+                if (result.frame_index < ply_stream_states_.size())
+                    ply_stream_states_[result.frame_index] = PlyStreamFrameState::Failed;
+                ++ply_stream_failed_count_;
+                continue;
+            }
+            const auto* frame_node = scene.getNodeById(*resolved_node);
+            assert(frame_node);
+            const std::string node_name = frame_node->name;
             if (!result.model) {
                 if (result.cancelled) {
                     std::lock_guard lock(ply_stream_mutex_);
@@ -945,8 +979,8 @@ namespace lfs::vis::gui {
             const size_t gaussian_count = result.model->size();
             auto old_model = scene.swapNodeModel(node_name, std::move(result.model));
             old_model.reset();
-            scene.setNodeVisibility(node_name, false);
-            scene_manager->setPlyPath(node_name, sequence->frames[result.frame_index].path);
+            scene.setNodeVisibility(*resolved_node, false);
+            scene_manager->setPlyPath(frame_node->uuid, frame.path);
 
             {
                 std::lock_guard lock(ply_stream_mutex_);
@@ -1023,10 +1057,18 @@ namespace lfs::vis::gui {
             if (victim >= frame_count)
                 continue;
 
-            const std::string& victim_name = sequence->frames[victim].node_name;
-            auto old_model = scene.swapNodeModel(victim_name, nullptr);
+            const auto& victim_frame = sequence->frames[victim];
+            const auto resolved_node = resolvePlySequenceNode(
+                scene, victim_frame.node_uuid, victim_frame.node_name);
+            if (!resolved_node) {
+                LOG_ERROR("Cannot evict PLY sequence frame {}: {}", victim, resolved_node.error().message);
+                continue;
+            }
+            const auto* victim_node = scene.getNodeById(*resolved_node);
+            assert(victim_node);
+            auto old_model = scene.swapNodeModel(victim_node->name, nullptr);
             old_model.reset();
-            scene.setNodeVisibility(victim_name, false);
+            scene.setNodeVisibility(*resolved_node, false);
             std::lock_guard lock(ply_stream_mutex_);
             if (victim < ply_stream_states_.size())
                 ply_stream_states_[victim] = PlyStreamFrameState::Empty;
@@ -2018,16 +2060,20 @@ namespace lfs::vis::gui {
 
         std::vector<std::filesystem::path> loaded_paths;
         std::vector<std::string> node_names;
+        std::vector<core::Uuid> node_uuids;
         loaded_paths.reserve(paths.size());
         node_names.reserve(paths.size());
+        node_uuids.reserve(paths.size());
         auto splat_allocator = scene_manager->makeExternalSplatAllocator();
         auto& scene = scene_manager->getScene();
         scene.setCombinedModelAllocator(splat_allocator);
-        const core::NodeId sequence_id = scene.getNodeIdByName(sequence_node);
-        if (sequence_id == core::NULL_NODE) {
+        const auto* sequence_scene_node = scene.getNode(sequence_node);
+        if (!sequence_scene_node) {
             LOG_ERROR("Failed to resolve PLY sequence node '{}'", sequence_node);
             return;
         }
+        const core::NodeId sequence_id = sequence_scene_node->id;
+        const core::Uuid sequence_uuid = sequence_scene_node->uuid;
 
         for (size_t i = 0; i < paths.size(); ++i) {
             const std::string stem = lfs::core::path_to_utf8(paths[i].stem());
@@ -2036,28 +2082,43 @@ namespace lfs::vis::gui {
             for (int suffix = 1; scene.getNode(node_name); ++suffix)
                 node_name = std::format("{}_{}", base_name, suffix);
 
-            if (scene.addSplatPlaceholder(node_name, sequence_id) == core::NULL_NODE) {
+            const core::NodeId frame_id = scene.addSplatPlaceholder(node_name, sequence_id);
+            if (frame_id == core::NULL_NODE) {
                 LOG_ERROR("Failed to create PLY sequence frame placeholder '{}'", node_name);
                 if (!scene_manager->clear())
                     LOG_WARN("Failed to clear partial PLY sequence after placeholder failure");
                 return;
             }
-            scene.setNodeVisibility(node_name, false);
-            scene_manager->setPlyPath(node_name, paths[i]);
+            const auto* frame_node = scene.getNodeById(frame_id);
+            assert(frame_node);
+            scene.setNodeVisibility(frame_id, false);
+            scene_manager->setPlyPath(frame_node->uuid, paths[i]);
             loaded_paths.push_back(paths[i]);
             node_names.push_back(node_name);
+            node_uuids.push_back(frame_node->uuid);
             LOG_DEBUG("Added PLY sequence placeholder '{}'", node_name);
         }
 
         ui_state_.sequence_fps = std::clamp(ui_state_.sequence_fps, MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
-        controller_.setPlySequence(directory, sequence_node, std::move(loaded_paths), std::move(node_names), ui_state_.sequence_fps);
+        controller_.setPlySequence(directory,
+                                   sequence_node,
+                                   std::move(loaded_paths),
+                                   std::move(node_names),
+                                   ui_state_.sequence_fps,
+                                   sequence_uuid,
+                                   std::move(node_uuids));
         ui_state_.sequence_fps = controller_.plySequenceFps();
         last_ply_sequence_frame_ = std::nullopt;
         startPlySequenceStreaming(paths, std::move(splat_allocator));
         applyPlySequenceFrame();
 
         if (const auto* sequence = controller_.plySequence()) {
-            scene_manager->selectNode(sequence->node_name);
+            const auto resolved_node = resolvePlySequenceNode(scene, sequence->node_uuid, sequence->node_name);
+            if (!resolved_node) {
+                LOG_ERROR("Cannot select PLY sequence container: {}", resolved_node.error().message);
+                return;
+            }
+            scene_manager->selectNode(*resolved_node);
             LOG_INFO("Registered PLY sequence '{}' with {} frames at {} fps",
                      lfs::core::path_to_utf8(directory),
                      sequence->frames.size(),
@@ -2098,24 +2159,30 @@ namespace lfs::vis::gui {
             return;
 
         auto& scene = scene_manager->getScene();
+        const auto set_frame_visibility = [&](const size_t index, const bool visible) {
+            const auto& frame = sequence->frames[index];
+            const auto resolved_node = resolvePlySequenceNode(scene, frame.node_uuid, frame.node_name);
+            if (!resolved_node) {
+                LOG_ERROR("Cannot resolve PLY sequence frame {}: {}", index, resolved_node.error().message);
+                return false;
+            }
+            scene.setNodeVisibility(*resolved_node, visible);
+            return true;
+        };
         if (last_ply_sequence_frame_.has_value() &&
             *last_ply_sequence_frame_ < sequence->frames.size()) {
-            const std::string& previous = sequence->frames[*last_ply_sequence_frame_].node_name;
-            if (scene.getNode(previous))
-                scene.setNodeVisibility(previous, false);
+            (void)set_frame_visibility(*last_ply_sequence_frame_, false);
         } else {
             for (const size_t loaded_frame : loaded_ply_sequence_frames_) {
                 if (loaded_frame == *display_frame || loaded_frame >= sequence->frames.size())
                     continue;
-                const std::string& loaded_name = sequence->frames[loaded_frame].node_name;
-                if (scene.getNode(loaded_name))
-                    scene.setNodeVisibility(loaded_name, false);
+                (void)set_frame_visibility(loaded_frame, false);
             }
         }
 
-        const std::string& active = sequence->frames[*display_frame].node_name;
-        if (scene.getNode(active))
-            scene.setNodeVisibility(active, true);
+        if (!set_frame_visibility(*display_frame, true)) {
+            return;
+        }
         last_ply_sequence_frame_ = display_frame;
         if (auto* const rm = viewer_->getRenderingManager())
             rm->markDirty(DirtyFlag::SPLATS);

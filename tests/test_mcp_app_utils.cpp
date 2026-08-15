@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/include/app/mcp_app_utils.hpp"
+#include "core/error.hpp"
 #include "core/scene.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "visualizer/visualizer.hpp"
@@ -9,6 +10,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <filesystem>
 #include <future>
 #include <gtest/gtest.h>
 #include <mutex>
@@ -76,9 +78,70 @@ namespace {
         std::expected<void, std::string> startTraining() override {
             return std::unexpected("not implemented");
         }
-        std::expected<std::filesystem::path, std::string> saveCheckpoint(
-            const std::optional<std::filesystem::path>&) override {
-            return std::unexpected("not implemented");
+        lfs::Result<void> projectSave(bool) override {
+            return {};
+        }
+        lfs::Result<void> projectSaveAs(
+            const std::filesystem::path&, bool) override {
+            return {};
+        }
+        lfs::Result<lfs::vis::ProjectOpenOutcome> projectOpen(
+            const std::filesystem::path&,
+            lfs::vis::ProjectSwitchDisposition) override {
+            return lfs::vis::ProjectOpenOutcome::Opened;
+        }
+        lfs::Result<void> projectCompact() override {
+            return {};
+        }
+        lfs::Result<bool> projectIsDirty() override {
+            return false;
+        }
+        lfs::Result<bool> projectHasPath() override {
+            return false;
+        }
+        lfs::Result<lfs::vis::ProjectInfo>
+        projectGetInfo() override {
+            ++info_calls_;
+            lfs::vis::ProjectInfo info;
+            info.path = path_;
+            info.generation = published_generation_;
+            info.project_write_running = false;
+            return info;
+        }
+
+        lfs::Result<lfs::vis::ProjectWritePoll>
+        projectPollWrite() override {
+            ++poll_calls_;
+            lfs::vis::ProjectWritePoll poll;
+            poll.running = remaining_running_ > 0;
+            if (remaining_running_ > 0) {
+                --remaining_running_;
+            }
+            poll.generation = poll.running
+                                  ? previous_generation_
+                                  : published_generation_;
+            poll.path = path_;
+            return poll;
+        }
+
+        void setWaitState(
+            std::filesystem::path path,
+            const std::uint64_t previous_generation,
+            const std::uint64_t published_generation,
+            const int remaining_running) {
+            path_ = std::move(path);
+            previous_generation_ = previous_generation;
+            published_generation_ = published_generation;
+            remaining_running_ = remaining_running;
+            info_calls_ = 0;
+            poll_calls_ = 0;
+        }
+
+        [[nodiscard]] int infoCalls() const {
+            return info_calls_;
+        }
+        [[nodiscard]] int pollCalls() const {
+            return poll_calls_;
         }
 
         [[nodiscard]] int postCount() const {
@@ -121,6 +184,12 @@ namespace {
         std::deque<WorkItem> work_queue_;
         int post_count_ = 0;
         bool accept_work_ = true;
+        std::filesystem::path path_;
+        std::uint64_t previous_generation_ = 0;
+        std::uint64_t published_generation_ = 0;
+        int remaining_running_ = 0;
+        int info_calls_ = 0;
+        int poll_calls_ = 0;
     };
 
 } // namespace
@@ -222,4 +291,34 @@ TEST(McpAppUtilsTest, PostAndWaitReturnsShutdownErrorOnViewerThreadWhenWorkRejec
 
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), "Viewer is shutting down");
+}
+
+TEST(McpAppUtilsTest, WaitForProjectGenerationPollsUntilTerminalThenInfosOnce) {
+    FakeVisualizer viewer;
+    const std::filesystem::path path{"/tmp/wait-generation.licht"};
+    viewer.setWaitState(path, 4, 5, 3);
+
+    const auto info = lfs::app::wait_for_project_generation(
+        &viewer, 4, path, true);
+
+    ASSERT_TRUE(info) << lfs::format_for_developer(info.error());
+    EXPECT_EQ(info->generation, 5u);
+    ASSERT_TRUE(info->path.has_value());
+    EXPECT_EQ(*info->path, path);
+    EXPECT_EQ(viewer.infoCalls(), 1);
+    EXPECT_GE(viewer.pollCalls(), 4);
+}
+
+TEST(McpAppUtilsTest, WaitForProjectWritePollsUntilTerminalThenInfosOnce) {
+    FakeVisualizer viewer;
+    const std::filesystem::path path{"/tmp/wait-write.licht"};
+    viewer.setWaitState(path, 2, 2, 2);
+
+    const auto info = lfs::app::wait_for_project_write(
+        &viewer, "Project compaction");
+
+    ASSERT_TRUE(info) << lfs::format_for_developer(info.error());
+    EXPECT_EQ(info->generation, 2u);
+    EXPECT_EQ(viewer.infoCalls(), 1);
+    EXPECT_GE(viewer.pollCalls(), 3);
 }

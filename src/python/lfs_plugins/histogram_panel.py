@@ -137,6 +137,77 @@ class HistogramPanel(Panel):
         self._compare_y_custom_range_max_str = ""
 
         self._selection_bin_indices: lf.Tensor | None = None
+        self._finish_histogram_init()
+
+    def capture_chrome(self):
+        return {
+            "metric_id": self._metric_id,
+            "compare_metric_id": self._compare_metric_id,
+            "log_scale": bool(self._log_scale_enabled),
+            "bin_count": int(self._histogram_bin_count),
+            "compare_x_bin_count": int(self._compare_x_bin_count),
+            "compare_y_bin_count": int(self._compare_y_bin_count),
+            "custom_range_min": self._custom_range_min_value,
+            "custom_range_max": self._custom_range_max_value,
+            "compare_y_custom_range_min": self._compare_y_custom_range_min_value,
+            "compare_y_custom_range_max": self._compare_y_custom_range_max_value,
+        }
+
+    def apply_chrome(self, payload):
+        self._metric_id = METRICS[0].id
+        self._compare_metric_id = ""
+        self._log_scale_enabled = False
+        self._histogram_bin_count = DEFAULT_HISTOGRAM_BIN_COUNT
+        self._compare_x_bin_count = DEFAULT_COMPARE_X_BIN_COUNT
+        self._compare_y_bin_count = DEFAULT_COMPARE_Y_BIN_COUNT
+        self._reset_custom_range()
+        self._reset_compare_y_custom_range()
+        if isinstance(payload, dict):
+            metric = payload.get("metric_id")
+            if isinstance(metric, str) and metric in METRIC_BY_ID:
+                self._metric_id = metric
+            compare = payload.get("compare_metric_id")
+            if isinstance(compare, str) and compare in METRIC_BY_ID and compare != self._metric_id:
+                self._compare_metric_id = compare
+            if "log_scale" in payload:
+                self._log_scale_enabled = bool(payload.get("log_scale"))
+            bins = payload.get("bin_count")
+            if isinstance(bins, (int, float)):
+                self._histogram_bin_count = int(
+                    max(MIN_HISTOGRAM_BIN_COUNT, min(MAX_HISTOGRAM_BIN_COUNT, bins))
+                )
+            x_bins = payload.get("compare_x_bin_count")
+            if isinstance(x_bins, (int, float)):
+                self._compare_x_bin_count = int(
+                    max(MIN_COMPARE_BIN_COUNT, min(MAX_COMPARE_BIN_COUNT, x_bins))
+                )
+            y_bins = payload.get("compare_y_bin_count")
+            if isinstance(y_bins, (int, float)):
+                self._compare_y_bin_count = int(
+                    max(MIN_COMPARE_BIN_COUNT, min(MAX_COMPARE_BIN_COUNT, y_bins))
+                )
+
+            def _optional_float(key):
+                value = payload.get(key)
+                if value is None:
+                    return None
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    return None
+                return number if math.isfinite(number) else None
+
+            self._custom_range_min_value = _optional_float("custom_range_min")
+            self._custom_range_max_value = _optional_float("custom_range_max")
+            self._compare_y_custom_range_min_value = _optional_float("compare_y_custom_range_min")
+            self._compare_y_custom_range_max_value = _optional_float("compare_y_custom_range_max")
+        self._scene_generation = -1
+        if hasattr(self, "_refresh"):
+            self._refresh()
+        if self._handle:
+            self._handle.dirty_all()
+
+    def _finish_histogram_init(self):
         self._hist_counts: list[int] | None = None
         self._hist_prefix_counts: list[int] | None = None
         self._hist_edges: list[float] | None = None

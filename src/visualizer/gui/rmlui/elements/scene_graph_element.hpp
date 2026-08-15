@@ -39,6 +39,16 @@ namespace lfs::vis::gui {
         [[nodiscard]] size_t selectedCount() const { return selected_ids_.size(); }
         [[nodiscard]] const std::string& filterText() const { return filter_text_; }
         [[nodiscard]] bool hasNodes() const { return scene_has_nodes_; }
+        [[nodiscard]] bool modelsCollapsed() const { return models_collapsed_; }
+        void setModelsCollapsed(bool collapsed);
+        [[nodiscard]] const std::unordered_set<core::NodeId>& collapsedIds() const {
+            return collapsed_ids_;
+        }
+        void applySessionCollapseUuids(const std::vector<std::string>& uuids);
+        void clearSessionCollapseUuids();
+        [[nodiscard]] bool hasSessionCollapseUuids() const {
+            return session_collapse_pending_;
+        }
 
         [[nodiscard]] static bool ownsContextMenuAction(std::string_view action);
 
@@ -208,6 +218,8 @@ namespace lfs::vis::gui {
         Rml::Element* insertion_line_ = nullptr;
         Rml::Element* drag_ghost_ = nullptr;
         bool models_collapsed_ = false;
+        bool session_collapse_pending_ = false;
+        std::unordered_set<std::string> session_collapsed_uuids_;
         bool scene_has_nodes_ = false;
         size_t root_count_ = 0;
         bool invert_masks_ = false;

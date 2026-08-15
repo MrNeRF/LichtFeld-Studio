@@ -221,7 +221,7 @@ namespace lfs::training {
         CUevent_st* depth_ready_event = nullptr;
         CUevent_st* normal_ready_event = nullptr;
         // Ring-backed tensors must never outlive this keepalive handle.
-        std::shared_ptr<void> decoded_frame_keepalive;
+        std::shared_ptr<void> decoded_frame_keepalive = {};
     };
 
     /// Camera dataset configuration

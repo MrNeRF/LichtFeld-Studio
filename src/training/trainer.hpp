@@ -14,6 +14,7 @@
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "dataset.hpp"
+#include "io/project_recovery.hpp"
 #include "kernels/depth_loss.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "losses/mask_loss.hpp"
@@ -21,22 +22,47 @@
 #include "metrics/metrics.hpp"
 #include "optimizer/scheduler.hpp"
 #include "progress.hpp"
+#include "project_snapshot_chapters.hpp"
 #include "strategies/istrategy.hpp"
+#include "training_snapshot_service.hpp"
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <functional>
+#include <istream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <stop_token>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
 namespace lfs::core {
     class Scene;
+}
+
+namespace lfs::vis {
+    class VisualizerImplResetTest_TrainingSnapshotCleanupTerminalizesProjectWrite_Test;
+    class VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
+    class VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
+    class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
+    class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+    class VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
+    class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+    class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+    class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+    class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
+    class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
+    class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
+} // namespace lfs::vis
+
+namespace lfs::vis::project {
+    class ProjectLifecycle;
 }
 
 namespace lfs::training {
@@ -100,6 +126,37 @@ namespace lfs::training {
             bool used_mask = false;
         };
 
+        struct ProjectSnapshotRuntimeMetrics {
+            TrainingSnapshotServiceMetrics capture;
+            std::filesystem::path last_path;
+            std::string last_writer_error;
+            double pre_snapshot_step_mean_ms = 0.0;
+            double post_resume_step_mean_ms = 0.0;
+            double post_resume_step_regression_percent = 0.0;
+            int pre_snapshot_step_first_iteration = 0;
+            int pre_snapshot_step_last_iteration = 0;
+            std::size_t pre_snapshot_step_samples = 0;
+            int post_resume_step_first_iteration = 0;
+            int post_resume_step_last_iteration = 0;
+            std::size_t post_resume_step_samples = 0;
+            bool step_regression_gate_evaluated = false;
+            bool step_regression_within_gate = false;
+            bool writer_in_flight = false;
+            bool request_pending = false;
+            std::uint64_t
+                last_completed_request_id = 0;
+            std::uint64_t
+                last_failed_request_id = 0;
+            std::uint64_t
+                last_autosave_sequence = 0;
+            bool last_completed_was_autosave =
+                false;
+        };
+
+        enum class ProjectSnapshotWriteKind {
+            Explicit,
+            Autosave,
+        };
         /**
          * @brief Constructor - takes Scene reference (Scene owns all data)
          *
@@ -133,7 +190,33 @@ namespace lfs::training {
         // Control methods for GUI interaction
         void request_pause() { pause_requested_ = true; }
         void request_resume() { pause_requested_ = false; }
-        void request_save() { save_requested_ = true; }
+        [[nodiscard]] std::uint64_t
+        request_project_save(
+            std::filesystem::path path = {},
+            std::vector<std::byte> preview_png = {},
+            std::optional<ProjectSnapshotDocumentContext>
+                document_context = std::nullopt);
+        // Queue helper used by request-machinery tests. Production training
+        // autosave is light-only (ProjectLifecycle::startAutosave) and must
+        // never reach GPU checkpoint capture; consume/prepare fail closed.
+        [[nodiscard]] std::uint64_t
+        request_project_autosave(
+            std::filesystem::path master_path,
+            lfs::core::Uuid
+                base_explicit_commit_uuid,
+            std::uint64_t autosave_sequence,
+            std::optional<
+                ProjectSnapshotDocumentContext>
+                document_context =
+                    std::nullopt);
+        void cancel_project_snapshot_request(
+            std::uint64_t request_id,
+            const lfs::Error& reason);
+        void set_recovery_session(
+            lfs::io::project::RecoverySession session) {
+            recovery_session_.emplace(
+                std::move(session));
+        }
         void request_stop() { stop_requested_ = true; }
 
         bool is_paused() const { return is_paused_.load(); }
@@ -260,16 +343,61 @@ namespace lfs::training {
         std::unique_ptr<PPISP> takePPISP() { return std::move(ppisp_); }
         std::unique_ptr<PPISPControllerPool> takePPISPControllerPool() { return std::move(ppisp_controller_pool_); }
 
-        // Checkpoint methods
-        std::expected<void, std::string> save_checkpoint(int iteration);
-        std::expected<void, std::string> save_checkpoint_to(const std::filesystem::path& output_path, int iteration);
+        // Project persistence. Standalone LFKP files are import-only; saves
+        // always publish a .licht generation.
+        [[nodiscard]] std::filesystem::path default_project_path() const;
+        [[nodiscard]] std::filesystem::path
+        live_or_default_project_path() const;
+        void set_live_project_snapshot(
+            std::optional<std::filesystem::path> path,
+            std::function<std::optional<
+                ProjectSnapshotDocumentContext>()>
+                context_provider = {});
+        [[nodiscard]] bool has_active_train_loop() const {
+            return is_running_.load() || is_paused_.load();
+        }
+        [[nodiscard]] bool can_flush_project_snapshot() const {
+            return project_snapshot_service_ && strategy_ &&
+                   scene_;
+        }
+        void restore_current_loss(const float loss) {
+            current_loss_.store(loss);
+        }
+        void set_pending_snapshot_finish_reason(
+            lfs::io::project::TrainingFinishReason reason) {
+            pending_snapshot_finish_reason_ = reason;
+        }
+        std::expected<std::filesystem::path, std::string>
+        save_project_to(
+            const std::filesystem::path& path,
+            int iteration,
+            std::optional<ProjectSnapshotDocumentContext>
+                document_context = std::nullopt);
         std::expected<int, std::string> load_checkpoint(const std::filesystem::path& checkpoint_path);
-        void save_final_ply_and_checkpoint(int iteration);
+        CheckpointLoadResult load_checkpoint(
+            std::istream& source,
+            std::uint64_t source_bytes,
+            std::string_view source_name = "embedded CKPT");
+        [[nodiscard]] ProjectSnapshotRuntimeMetrics
+        get_project_snapshot_metrics() const;
 
         // Orderly shutdown - GPU sync, wait for async saves, release resources. Idempotent.
         void shutdown();
 
     private:
+        friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotCleanupTerminalizesProjectWrite_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
+        friend class lfs::vis::VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
+        friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
+        friend class lfs::vis::project::ProjectLifecycle;
         friend struct TrainerRetryTestAccess;
         friend struct TrainerCropboxMaskTestAccess;
 
@@ -329,7 +457,6 @@ namespace lfs::training {
             int iter,
             lfs::core::Camera* cam,
             lfs::core::Tensor gt_image,
-            RenderMode render_mode,
             std::stop_token stop_token = {});
 
         [[nodiscard]] static RetryDecision classify_forward_retry(
@@ -431,27 +558,55 @@ namespace lfs::training {
             return params.optimization.use_ppisp &&
                    params.optimization.ppisp_freeze_from_sidecar &&
                    !params.resume_checkpoint.has_value() &&
+                   !params.resume_project.has_value() &&
                    !params.optimization.ppisp_sidecar_path.empty();
         }
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
-        [[nodiscard]] lfs::core::param::TrainingParameters params_for_checkpoint_save() const;
+        [[nodiscard]] lfs::core::param::TrainingParameters params_for_project_snapshot() const;
         [[nodiscard]] TrainingProgress::Phase get_progress_phase(
             int iter,
             bool in_controller_phase = false) const;
 
         // Handle control requests
         void handle_control_requests(int iter, std::stop_token stop_token = {});
+        void prepare_project_snapshot_at_safe_point(
+            int capture_iteration,
+            const std::filesystem::path& path,
+            std::vector<std::byte> preview_png = {},
+            std::uint64_t request_id = 0,
+            ProjectSnapshotWriteKind write_kind =
+                ProjectSnapshotWriteKind::Explicit,
+            lfs::core::Uuid
+                base_explicit_commit_uuid = {},
+            std::uint64_t autosave_sequence = 0);
+        [[nodiscard]] lfs::Result<
+            std::shared_ptr<ProjectSnapshotChapters>>
+        reserve_project_snapshot_chapters() const;
+        [[nodiscard]] lfs::Result<void>
+        initialize_project_snapshot_service();
+        void capture_project_snapshot_at_safe_point(int iteration);
+        void consume_requested_project_snapshot(int iteration);
+        [[nodiscard]] int project_snapshot_iteration() const;
+        void attach_live_document_context(
+            std::optional<ProjectSnapshotDocumentContext>&
+                document_context) const;
+        void observe_training_step_duration(
+            int iteration,
+            double elapsed_ms,
+            bool topology_changed);
+        void join_finished_project_writer();
+        void finish_project_writer();
+        void fail_project_request_locked(
+            std::uint64_t request_id,
+            std::string_view message);
+        void abandon_pending_project_requests(
+            std::string_view reason);
+        void clear_prepared_project_request();
         void apply_pending_params_at_safe_point();
         void apply_param_side_effects(
             const lfs::core::param::TrainingParameters& params,
             bool background_image_path_changed);
 
-        std::expected<void, std::string> save_ply(const std::filesystem::path& save_path,
-                                                  const std::string& filename,
-                                                  int iter_num,
-                                                  bool join_threads = true,
-                                                  bool save_checkpoint = true,
-                                                  bool durable_checkpoint = true);
         void updateGTLoadConfigSnapshot();
         void clearActiveImageLoader();
 
@@ -531,6 +686,75 @@ namespace lfs::training {
 
         std::unique_ptr<ISparsityOptimizer> sparsity_optimizer_;
 
+        std::unique_ptr<TrainingSnapshotService>
+            project_snapshot_service_;
+        std::optional<PreparedTrainingSnapshot>
+            prepared_project_snapshot_;
+        std::shared_ptr<ProjectSnapshotChapters>
+            prestaged_project_chapters_;
+        std::uint64_t
+            prestaged_project_request_id_ = 0;
+        std::filesystem::path prepared_project_path_;
+        std::vector<std::byte>
+            prepared_project_preview_png_;
+        int prepared_project_iteration_ = 0;
+        std::uint64_t
+            prepared_project_request_id_ = 0;
+        ProjectSnapshotWriteKind
+            prepared_project_write_kind_ =
+                ProjectSnapshotWriteKind::
+                    Explicit;
+        lfs::core::Uuid
+            prepared_project_base_commit_uuid_;
+        std::uint64_t
+            prepared_project_autosave_sequence_ = 0;
+        lfs::core::Uuid project_uuid_;
+        std::jthread project_writer_thread_;
+        std::atomic<bool> project_writer_done_{true};
+        std::atomic<bool> project_writer_in_flight_{false};
+        mutable std::mutex project_snapshot_mutex_;
+        std::optional<std::filesystem::path>
+            requested_project_path_;
+        std::vector<std::byte>
+            requested_project_preview_png_;
+        std::optional<std::uint64_t>
+            requested_project_request_id_;
+        ProjectSnapshotWriteKind
+            requested_project_write_kind_ =
+                ProjectSnapshotWriteKind::
+                    Explicit;
+        lfs::core::Uuid
+            requested_project_base_commit_uuid_;
+        std::uint64_t
+            requested_project_autosave_sequence_ = 0;
+        std::uint64_t
+            next_project_snapshot_request_id_ = 1;
+        std::uint64_t
+            last_completed_project_request_id_ =
+                0;
+        std::uint64_t
+            last_failed_project_request_id_ = 0;
+        std::uint64_t
+            last_completed_autosave_sequence_ = 0;
+        std::optional<
+            lfs::io::project::RecoverySession>
+            recovery_session_;
+        bool last_completed_was_autosave_ =
+            false;
+        TrainingStepRegressionTracker
+            project_step_regression_;
+        std::filesystem::path last_project_snapshot_path_;
+        std::string last_project_writer_error_;
+        std::optional<std::filesystem::path>
+            live_project_path_;
+        std::function<std::optional<
+            ProjectSnapshotDocumentContext>()>
+            live_document_context_provider_;
+        lfs::io::project::TrainingFinishReason
+            pending_snapshot_finish_reason_ =
+                lfs::io::project::
+                    TrainingFinishReason::None;
+
         // Persistent photometric loss (workspace reuse across iterations)
         lfs::training::losses::PhotometricLoss photometric_loss_;
 
@@ -600,7 +824,6 @@ namespace lfs::training {
 
         // Control flags for thread communication
         std::atomic<bool> pause_requested_{false};
-        std::atomic<bool> save_requested_{false};
         std::atomic<bool> stop_requested_{false};
         std::atomic<bool> is_paused_{false};
         std::atomic<bool> is_running_{false};
@@ -697,6 +920,32 @@ namespace lfs::training {
         int exportable_densify_barrier_depth_ = 0;
         GTLoadConfigSnapshot gt_load_config_snapshot_;
     };
+
+    enum class StaleTrainerDefaultRecovery : std::uint8_t {
+        FailLoudly,
+        RelocateAndFirstSave,
+    };
+
+    [[nodiscard]] constexpr StaleTrainerDefaultRecovery
+    stale_trainer_default_recovery(
+        const bool adopt_container_identity,
+        const bool open_failed,
+        const std::optional<lfs::ErrorCode> save_error) noexcept {
+        if (!adopt_container_identity) {
+            return StaleTrainerDefaultRecovery::FailLoudly;
+        }
+        if (open_failed ||
+            save_error == lfs::ErrorCode::Unsupported) {
+            return StaleTrainerDefaultRecovery::
+                RelocateAndFirstSave;
+        }
+        return StaleTrainerDefaultRecovery::FailLoudly;
+    }
+
+    [[nodiscard]] lfs::Result<std::filesystem::path>
+    relocate_unreadable_trainer_default_project(
+        const std::filesystem::path& destination,
+        const lfs::Error& cause);
 
     // test hook for cropbox damping mask cache.
     struct TrainerCropboxMaskTestAccess {

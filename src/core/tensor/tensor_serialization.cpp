@@ -4,6 +4,7 @@
 #include "internal/tensor_serialization.hpp"
 
 #include "core/path_utils.hpp"
+#include "core/tensor_serialization_sink.hpp"
 
 #include <fstream>
 #include <limits>
@@ -11,6 +12,41 @@
 #include <vector>
 
 namespace lfs::core {
+
+    namespace {
+        thread_local TensorSerializationSink*
+            active_tensor_serialization_sink = nullptr;
+    }
+
+    std::uint64_t
+    TensorSerializationDescriptor::payload_bytes() const {
+        const auto elements = serialized_shape.elements();
+        const auto element_bytes = dtype_size(dtype);
+        if (element_bytes == 0 ||
+            elements >
+                std::numeric_limits<std::uint64_t>::max() /
+                    element_bytes) {
+            throw std::overflow_error(
+                "Serialized tensor payload size overflows");
+        }
+        return static_cast<std::uint64_t>(elements) *
+               element_bytes;
+    }
+
+    TensorSerializationSinkScope::TensorSerializationSinkScope(
+        TensorSerializationSink& sink) noexcept
+        : previous_(active_tensor_serialization_sink) {
+        active_tensor_serialization_sink = &sink;
+    }
+
+    TensorSerializationSinkScope::~TensorSerializationSinkScope() {
+        active_tensor_serialization_sink = previous_;
+    }
+
+    TensorSerializationSink*
+    current_tensor_serialization_sink() noexcept {
+        return active_tensor_serialization_sink;
+    }
 
     namespace serialization_detail {
         void read_exact(std::istream& is,
@@ -47,7 +83,11 @@ namespace lfs::core {
         }
     } // namespace serialization_detail
 
-    std::ostream& operator<<(std::ostream& os, const Tensor& tensor) {
+    void serialize_tensor_with_descriptor(
+        std::ostream& os,
+        const Tensor& tensor,
+        const TensorSerializationDescriptor& descriptor,
+        const Tensor* auxiliary_source) {
         if (!tensor.is_valid()) {
             throw std::runtime_error("Cannot serialize invalid tensor");
         }
@@ -55,24 +95,58 @@ namespace lfs::core {
         const TensorFileHeader header{
             TENSOR_FILE_MAGIC,
             TENSOR_FILE_VERSION,
-            static_cast<uint8_t>(tensor.dtype()),
-            static_cast<uint8_t>(tensor.device()),
-            static_cast<uint16_t>(tensor.ndim()),
-            tensor.numel()};
+            static_cast<uint8_t>(descriptor.dtype),
+            static_cast<uint8_t>(descriptor.serialized_device),
+            static_cast<uint16_t>(
+                descriptor.serialized_shape.rank()),
+            descriptor.serialized_shape.elements()};
         os.write(reinterpret_cast<const char*>(&header), sizeof(header));
 
-        for (const size_t dim : tensor.shape().dims()) {
+        for (const size_t dim :
+             descriptor.serialized_shape.dims()) {
             const uint64_t d = dim;
             os.write(reinterpret_cast<const char*>(&d), sizeof(d));
         }
 
+        if (auto* sink = current_tensor_serialization_sink()) {
+            sink->write_tensor_payload(
+                os, tensor, auxiliary_source, descriptor);
+            if (!os) {
+                throw std::runtime_error(
+                    "Failed to write tensor through snapshot sink");
+            }
+            return;
+        }
+        if (descriptor.encoding !=
+                TensorPayloadEncoding::NativeContiguous ||
+            auxiliary_source) {
+            throw std::runtime_error(
+                "Alternate tensor encoding requires a serialization sink");
+        }
         const Tensor host = tensor.device() == Device::CUDA ? tensor.cpu() : tensor;
         const Tensor src = host.is_contiguous() ? host : host.contiguous();
+        if (src.dtype() != descriptor.dtype ||
+            src.shape() != descriptor.serialized_shape) {
+            throw std::runtime_error(
+                "Serialized tensor descriptor does not match source");
+        }
         os.write(reinterpret_cast<const char*>(src.data_ptr()), src.bytes());
 
         if (!os) {
             throw std::runtime_error("Failed to write tensor");
         }
+    }
+
+    std::ostream& operator<<(std::ostream& os, const Tensor& tensor) {
+        serialize_tensor_with_descriptor(
+            os, tensor,
+            TensorSerializationDescriptor{
+                .serialized_shape = tensor.shape(),
+                .dtype = tensor.dtype(),
+                .serialized_device = tensor.device(),
+                .encoding =
+                    TensorPayloadEncoding::NativeContiguous,
+            });
         return os;
     }
 

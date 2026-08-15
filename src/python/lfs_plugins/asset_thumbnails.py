@@ -478,7 +478,7 @@ class AssetThumbnails:
 
         thumb_path = self._get_timestamped_rendered_thumbnail_path(asset_id)
         try:
-            await asyncio.to_thread(save_image, str(thumb_path), image)
+            await asyncio.to_thread(save_image, str(thumb_path), image, include_provenance=False)
         except Exception as exc:
             self._warn_once(
                 asset_id, "error",

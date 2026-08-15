@@ -8,11 +8,13 @@
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
+#include "gui/scene_tree_session.hpp"
 
 #include <RmlUi/Core/EventListener.h>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace Rml {
     class Element;
@@ -31,27 +33,23 @@ namespace lfs::vis::gui {
 
         void draw(const PanelDrawContext& ctx) override;
         void preload(const PanelDrawContext& ctx) override;
-        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
-                           float clip_y_min, float clip_y_max,
-                           const PanelInputState* input) override;
-        bool supportsDirectDraw() const override { return true; }
-        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) override;
-        bool drawDirectCached(float x, float y, float w, float h,
-                              const PanelDrawContext& ctx) override;
-        float getDirectDrawHeight() const override { return host_.getContentHeight(); }
-        void setInputClipY(float y_min, float y_max) override { host_.setInputClipY(y_min, y_max); }
-        void setInput(const PanelInputState* input) override { host_.setInput(input); }
-        void setForcedHeight(float h) override { host_.setForcedHeight(h); }
-        void setPanelSpace(PanelSpace space) override {
-            host_.setFloating(space == PanelSpace::Floating);
+        PanelRenderCapabilities renderCapabilities() const override {
+            return {.direct = true};
         }
-        bool wantsKeyboard() const override { return host_.wantsKeyboard(); }
+        PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
+                                             const PanelDrawContext& ctx) override;
         bool needsAnimationFrame() const override { return host_.needsAnimationFrame(); }
         std::optional<double> nextScheduledAnimationDelay() const override {
             return host_.nextScheduledUpdateDelay();
         }
         void reloadRmlResources() override;
         void releaseRendererResources() override { host_.releaseRendererResources(); }
+        [[nodiscard]] std::string projectActiveTab() const;
+        void setProjectActiveTab(std::string_view tab);
+        [[nodiscard]] SceneTreeSessionChrome captureTreeChrome(
+            const core::Scene& scene) const;
+        void applyTreeChrome(const SceneTreeSessionChrome& chrome);
+        void resetTreeChrome();
 
     private:
         struct EventListener : Rml::EventListener {
@@ -92,6 +90,12 @@ namespace lfs::vis::gui {
         };
 
         bool ensureInitialized();
+        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
+                           float clip_y_min, float clip_y_max,
+                           const PanelInputState* input);
+        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx);
+        bool drawDirectCached(float x, float y, float w, float h,
+                              const PanelDrawContext& ctx);
         void clearElementCache();
         void cacheElements();
         void syncPanel(const PanelDrawContext& ctx);
@@ -106,6 +110,7 @@ namespace lfs::vis::gui {
         bool syncSceneVisibility();
         bool handleEvent(Rml::Event& event);
         void applyFilterInputValue();
+        void applyPendingTreeChrome();
         void applyLogLevelSelection();
         void copyBufferedLogsToClipboard();
         void exportBufferedLogsToTextFile();
@@ -163,6 +168,7 @@ namespace lfs::vis::gui {
         Rml::Element* logging_empty_el_ = nullptr;
 
         Tab active_tab_ = Tab::Scene;
+        std::optional<SceneTreeSessionChrome> pending_tree_chrome_;
         std::string last_language_;
         uint64_t last_history_generation_ = 0;
         uint64_t last_log_generation_ = 0;

@@ -24,6 +24,13 @@ MODULE_PATH = BUILD_DIR / "src" / "python"
 if MODULE_PATH.exists():
     sys.path.insert(1 if SOURCE_MODULE_PATH.exists() else 0, str(MODULE_PATH))
 
+# Ensure the C++ extension is loaded before numpy/torch so exception unwind
+# is not poisoned by their bundled native libs (see lane G nightly abort).
+try:
+    import lichtfeld  # noqa: F401
+except Exception:
+    pass
+
 
 # The real, user-facing Asset Manager catalog. No test may ever write here.
 PRODUCTION_ASSET_CATALOG_DIR = Path.home() / ".lichtfeld" / "asset_manager"

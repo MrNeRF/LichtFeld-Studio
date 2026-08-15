@@ -885,8 +885,8 @@ namespace lfs::vis {
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             si.commandBufferCount = 1;
             si.pCommandBuffers = &transfer_cmd;
-            if (si.commandBufferCount != 1 || si.pCommandBuffers == nullptr ||
-                si.pCommandBuffers[0] == VK_NULL_HANDLE || transfer_fence == VK_NULL_HANDLE ||
+            // transfer_cmd address is never null; validate the handles themselves.
+            if (transfer_cmd == VK_NULL_HANDLE || transfer_fence == VK_NULL_HANDLE ||
                 graphics_queue == VK_NULL_HANDLE) {
                 return replaceTransferFenceSignaled("Depth-blit submit integrity check",
                                                     VK_ERROR_INITIALIZATION_FAILED);

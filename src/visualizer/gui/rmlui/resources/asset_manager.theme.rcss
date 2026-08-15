@@ -236,4 +236,3 @@
     background-color: @{blend(surface,background,0.5)};
     border-top-color: @{border};
 }
-

@@ -24,6 +24,7 @@ tests/data/param_json_golden/*
 *.pt
 *.py
 !scripts/lichtfeld_mcp_bridge.py
+!tools/gdb/lfs_pretty_printers.py
 !src/python/_lfs_panel_contract.py
 !src/python/lfs_splat_lod_hierarchy.py
 !src/python/lfs_plugins/**/*.py

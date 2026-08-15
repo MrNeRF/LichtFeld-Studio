@@ -8,7 +8,6 @@
 #include "core/export.hpp"
 #include "core/services.hpp"
 #include "input/input_bindings.hpp"
-#include "input/input_types.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
 #include <array>
@@ -101,6 +100,17 @@ namespace lfs::vis {
         void setCameraNavigationMode(CameraNavigationMode mode);
         [[nodiscard]] bool cameraViewSnapEnabled() const { return camera_view_snap_enabled_; }
         void setCameraViewSnapEnabled(bool enabled) { camera_view_snap_enabled_ = enabled; }
+        void restoreProjectNavigation(
+            CameraNavigationMode mode,
+            bool view_snap_enabled) {
+            setCameraNavigationMode(mode);
+            camera_view_snap_enabled_ =
+                view_snap_enabled;
+            viewport_.camera.clearTransientMotion();
+            clearViewportDragState();
+            clearWasdMomentumViewport();
+            depth_range_initialized_ = true;
+        }
         [[nodiscard]] static InputController* instance() { return instance_; }
 
         // Update function for continuous input (WASD movement and inertia)

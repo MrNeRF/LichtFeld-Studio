@@ -10,7 +10,6 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
-#include <cmath>
 #include <concepts>
 #include <cstring>
 #include <cuda_runtime.h>
@@ -181,14 +180,12 @@ namespace lfs::core {
         Permute = 1,
         Expand = 2,
         Pad = 3,
-        Shrink = 4,
         Flip = 5,
         Transpose = 6,
         Squeeze = 7,
         Unsqueeze = 8,
         Flatten = 9,
         Cat = 10,
-        Stack = 11,
         Slice = 12
     };
 
@@ -1783,7 +1780,9 @@ namespace lfs::core {
         DataType dtype() const { return dtype_; }
         bool owns_memory() const { return static_cast<bool>(data_owner_) && !is_view_; }
         bool is_view() const { return is_view_; }
-        bool is_external_storage() const { return has_external_storage(); }
+        bool is_external_storage() const {
+            return storage_meta_ && static_cast<bool>(storage_meta_->external_owner);
+        }
         bool is_empty() const { return !is_valid() || numel() == 0; }
         // Local deferred flag only — never takes the global IR mutex. Eager IR
         // nodes (debug map) are NOT reported here; use lazy_expr_id() / IR APIs.

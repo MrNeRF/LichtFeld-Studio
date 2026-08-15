@@ -478,11 +478,6 @@ namespace lfs::python {
         info.initial_width = initial_width;
         info.initial_height = initial_height;
 
-        const bool default_closed =
-            (options & static_cast<uint32_t>(gui::PanelOption::DEFAULT_CLOSED)) &&
-            (info.space == gui::PanelSpace::Floating);
-        info.enabled = !default_closed;
-
         if (!gui::PanelRegistry::instance().register_panel(std::move(info))) {
             throw_value_error(
                 std::string("register_panel: runtime rejected panel '") + panel_id + "'");

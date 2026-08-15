@@ -25,6 +25,7 @@ target_link_libraries(lfs_event_bridge
         CUDA::cudart
     PRIVATE
         lfs_logger
+        lfs_geometry
         spdlog::spdlog
         nlohmann_json::nlohmann_json
 )

@@ -1902,6 +1902,8 @@ namespace lfs::python {
         while (table_->current_row->GetNumChildren() > keep_cells) {
             const int cell_index = table_->current_row->GetNumChildren() - 1;
             auto* const cell = table_->current_row->GetChild(cell_index);
+            if (!cell)
+                break;
             const auto cell_key = cell->GetAttribute<Rml::String>("data-im-cell", "");
             if (!cell_key.empty())
                 child_slots_.erase(cell_key);
@@ -1919,9 +1921,13 @@ namespace lfs::python {
         while (table_->table_element->GetNumChildren() > keep_rows) {
             const int row_index = table_->table_element->GetNumChildren() - 1;
             auto* row = table_->table_element->GetChild(row_index);
+            if (!row)
+                break;
             for (int cell_index = 0; cell_index < row->GetNumChildren(); ++cell_index) {
-                const auto cell_key = row->GetChild(cell_index)
-                                          ->GetAttribute<Rml::String>("data-im-cell", "");
+                auto* const cell = row->GetChild(cell_index);
+                if (!cell)
+                    continue;
+                const auto cell_key = cell->GetAttribute<Rml::String>("data-im-cell", "");
                 if (!cell_key.empty())
                     child_slots_.erase(cell_key);
             }
@@ -1955,6 +1961,8 @@ namespace lfs::python {
         for (int i = table_->current_row_index;
              i < table_->table_element->GetNumChildren(); ++i) {
             auto* const candidate = table_->table_element->GetChild(i);
+            if (!candidate)
+                continue;
             if (candidate->GetAttribute<Rml::String>("data-im-row", "") ==
                 table_->current_row_key) {
                 matching_row = candidate;
@@ -3230,6 +3238,8 @@ namespace lfs::python {
             }
             for (int i = 0; i < child_count; ++i) {
                 auto* const child = container_element_->GetChild(i);
+                if (!child)
+                    continue;
                 if (i < 2) {
                     if (child->HasAttribute("data-im-split-overflow")) {
                         child->RemoveAttribute("data-im-split-overflow");

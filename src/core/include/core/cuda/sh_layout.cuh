@@ -196,6 +196,19 @@ namespace lfs::core {
         std::uint32_t layout_coeffs_rest,
         cudaStream_t stream = nullptr);
 
+    // Bounded snapshot variant. Writes canonical floats in
+    // [canonical_float_offset, canonical_float_offset + float_count) to a
+    // zero-based scratch destination, avoiding a checkpoint-sized D2D buffer.
+    void undo_reorder_sh_range_from_swizzled(
+        const float* src_swizzled,
+        float* dst_canonical_scratch,
+        std::uint64_t canonical_float_offset,
+        std::uint64_t float_count,
+        std::size_t n_primitives,
+        std::uint32_t dst_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream = nullptr);
+
     // Zero entire primitive rows in the swizzled buffer (all active float4 slots).
     // Used by densification prune paths.
     void shN_swizzled_zero_at_indices(

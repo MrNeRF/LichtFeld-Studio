@@ -68,6 +68,8 @@ namespace lfs::training {
         /// Get number of cameras.
         [[nodiscard]] int num_cameras() const { return num_cameras_; }
 
+        [[nodiscard]] const Config& get_config() const { return config_; }
+
         /// Serialize all controller states.
         void serialize(std::ostream& os) const;
 

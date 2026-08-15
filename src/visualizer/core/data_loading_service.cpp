@@ -4,6 +4,7 @@
 
 #include "core/data_loading_service.hpp"
 #include "core/checkpoint_format.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
@@ -65,6 +66,10 @@ namespace lfs::vis {
 
         if (scene_manager_->getContentType() == SceneManager::ContentType::Dataset) {
             if (!scene_manager_->clear()) {
+                lfs::core::events::state::FileDropFailed{
+                    .files = {lfs::core::path_to_utf8(path)},
+                    .error = LOC("file_drop.blocked_during_training")}
+                    .emit();
                 return;
             }
         }

@@ -9,6 +9,8 @@ import sys
 
 import pytest
 
+from locale_utils import locale_key_exists
+
 
 def _install_lf_stub(monkeypatch, tmp_path):
     panel_space = SimpleNamespace(
@@ -571,7 +573,11 @@ def test_watch_dialog_done_state_closes_instead_of_rescanning(import_dialog_modu
     assert panel._get_scan_status_visible() is True
     assert panel._get_scan_progress_pct() == "100%"
     assert panel._get_scan_save_enabled() is True
-    assert panel._get_scan_save_label() == "Done"
+    # tr() is stubbed as identity, so the label is the key. Assert the panel
+    # selects the done-state key and that the key actually resolves.
+    done_label = panel._get_scan_save_label()
+    assert done_label == "watch_dirs.done"
+    assert locale_key_exists(done_label)
 
     panel._on_save()
 
@@ -595,7 +601,9 @@ def test_watch_dialog_edit_resets_done_state(import_dialog_module):
     assert panel._get_scan_status_visible() is False
     assert panel._get_scan_progress_pct() == "0%"
     assert panel._get_scan_save_enabled() is True
-    assert panel._get_scan_save_label() == "Save & Scan"
+    save_label = panel._get_scan_save_label()
+    assert save_label == "watch_dirs.save_scan"
+    assert locale_key_exists(save_label)
 
 
 def test_asset_scanner_rejects_html_assets(import_dialog_module):

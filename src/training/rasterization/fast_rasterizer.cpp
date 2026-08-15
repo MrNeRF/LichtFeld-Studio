@@ -14,6 +14,7 @@
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include <cassert>
 #include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -171,13 +172,19 @@ namespace lfs::training {
         // Create crash dump directory with timestamp in CURRENT WORKING DIRECTORY
         // Example: ./crash_dump_20251211_143052_847/
         auto now = std::chrono::system_clock::now();
-        auto time_t = std::chrono::system_clock::to_time_t(now);
+        auto time_t_val = std::chrono::system_clock::to_time_t(now);
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                       now.time_since_epoch()) %
                   1000;
 
+        std::tm tm{};
+#ifdef _WIN32
+        localtime_s(&tm, &time_t_val);
+#else
+        localtime_r(&time_t_val, &tm);
+#endif
         char time_buf[64];
-        std::strftime(time_buf, sizeof(time_buf), "%Y%m%d_%H%M%S", std::localtime(&time_t));
+        std::strftime(time_buf, sizeof(time_buf), "%Y%m%d_%H%M%S", &tm);
 
         // Directory path is relative to cwd, e.g. "./crash_dump_20251211_143052_847"
         std::string dump_dir = std::string("crash_dump_") + time_buf + "_" + std::to_string(ms.count());

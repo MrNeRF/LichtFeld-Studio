@@ -1584,11 +1584,12 @@ namespace lfs::vis {
                 active_image_index_,
                 frame_submit_serials_[current_frame]));
         }
+        // commandBufferCount / pCommandBuffers were just set from a validated local
+        // command_buffer; only check wait/signal array consistency here.
         if (wait_semaphores.size() != wait_stages.size() ||
             wait_semaphores.size() != wait_values.size() ||
             timeline_submit_info.waitSemaphoreValueCount != submit_info.waitSemaphoreCount ||
-            timeline_submit_info.signalSemaphoreValueCount != submit_info.signalSemaphoreCount ||
-            submit_info.commandBufferCount != 1 || submit_info.pCommandBuffers == nullptr) {
+            timeline_submit_info.signalSemaphoreValueCount != submit_info.signalSemaphoreCount) {
             frame_active_ = false;
             framebuffer_resized_ = true;
             return fail(std::format(

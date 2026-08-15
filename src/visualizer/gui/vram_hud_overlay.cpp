@@ -310,7 +310,7 @@ namespace lfs::vis::gui {
         ls.vram_hud_height = size_h_;
         ls.vram_hud_active_tab = active_tab_;
         ls.vram_hud_collapsed_paths.assign(collapsed_paths_.begin(), collapsed_paths_.end());
-        ls.save();
+        ls.saveUserPreferences();
         persistence_dirty_ = false;
     }
 

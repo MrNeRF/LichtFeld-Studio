@@ -6,6 +6,7 @@
 #include "components/ppisp_file.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
+#include "ppisp_fixture.hpp"
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -140,7 +141,10 @@ namespace {
         metadata.camera_ids = {20, 10};
 
         const auto path = make_temp_path("ppisp_sidecar_metadata");
-        auto save_result = lfs::training::save_ppisp_file(path, source, &source_controller, &metadata);
+        auto save_result =
+            lfs::test::write_ppisp_fixture(
+                path, source, &source_controller,
+                &metadata);
         ASSERT_TRUE(save_result) << save_result.error();
         const std::string temp_prefix = path.filename().string() + ".";
         for (const auto& entry : std::filesystem::directory_iterator(path.parent_path())) {
@@ -228,7 +232,9 @@ namespace {
         update_ppisp(source, 5, 12, 0.50f, 0.06f, 2);
 
         const auto path = make_temp_path("ppisp_sidecar_identity");
-        auto save_result = lfs::training::save_ppisp_file(path, source);
+        auto save_result =
+            lfs::test::write_ppisp_fixture(
+                path, source);
         ASSERT_TRUE(save_result) << save_result.error();
 
         PPISP loaded(1);

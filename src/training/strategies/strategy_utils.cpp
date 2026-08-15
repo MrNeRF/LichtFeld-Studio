@@ -581,25 +581,8 @@ namespace lfs::training {
         }
     }
 
-    int collect_adam_scale_ptrs(AdamOptimizer& optimizer, float* out_ptrs[12]) {
-        int n = 0;
-        const ParamType types[] = {
-            ParamType::Means, ParamType::Sh0, ParamType::ShN,
-            ParamType::Scaling, ParamType::Rotation, ParamType::Opacity};
-        for (ParamType pt : types) {
-            auto* state = optimizer.get_state_mutable(pt);
-            if (!state)
-                continue;
-            if (state->exp_avg_scale.is_valid() && state->exp_avg_scale.numel() > 0 &&
-                state->exp_avg_scale.ptr<float>() != nullptr) {
-                out_ptrs[n++] = state->exp_avg_scale.ptr<float>();
-            }
-            if (state->exp_avg_sq_scale.is_valid() && state->exp_avg_sq_scale.numel() > 0 &&
-                state->exp_avg_sq_scale.ptr<float>() != nullptr) {
-                out_ptrs[n++] = state->exp_avg_sq_scale.ptr<float>();
-            }
-        }
-        return n;
+    int collect_adam_scale_ptrs(AdamOptimizer& /*optimizer*/, float* /*out_ptrs*/[12]) {
+        return 0;
     }
 
     void zero_adam_grads_at_indices(

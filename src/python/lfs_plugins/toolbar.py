@@ -284,13 +284,20 @@ class _GizmoToolbarController:
         import lichtfeld as lf
         from .op_context import get_context
 
+        restore_guard_getter = getattr(
+            lf.ui, "consume_tool_restore_guard", None
+        )
+        restore_guard = (
+            restore_guard_getter() if callable(restore_guard_getter) else False
+        )
+        ToolRegistry.sync_native_active()
         crop_enable_buttons = self._build_crop_enable_records()
         crop_settings_buttons = self._build_crop_settings_records(
             crop_roi_settings_open
         )
         hidden = RuntimeState.trainer_state.value in _TOOLBAR_HIDDEN_STATES
         if hidden:
-            if not self._was_hidden:
+            if not self._was_hidden and not restore_guard:
                 ToolRegistry.clear_active()
             self._was_hidden = True
             return {
@@ -326,7 +333,7 @@ class _GizmoToolbarController:
         # actually be used on an empty scene.
         get_content_type = getattr(lf.ui, "get_content_type", None)
         if callable(get_content_type) and get_content_type() == "empty":
-            if not self._was_empty:
+            if not self._was_empty and not restore_guard:
                 ToolRegistry.clear_active()
             self._was_empty = True
         else:

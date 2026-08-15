@@ -66,12 +66,24 @@ namespace lfs::vis::gui {
         bool active_tab_live = true;
     };
 
+    struct PanelLayoutProjectState {
+        float right_panel_width = 360.0f;
+        float scene_panel_ratio = 0.4f;
+        float python_console_width = -1.0f;
+        float bottom_dock_height = 320.0f;
+        float left_dock_width = 320.0f;
+        bool show_sequencer = false;
+        std::string active_tab_id;
+        float tab_scroll_offset = 0.0f;
+    };
+
     class LFS_VIS_API PanelLayoutManager {
     public:
         PanelLayoutManager();
 
         void loadState();
-        void saveState() const;
+        [[nodiscard]] PanelLayoutProjectState captureProjectState() const;
+        void applyProjectState(const PanelLayoutProjectState& state);
 
         void renderRightPanel(const UIContext& ctx, const PanelDrawContext& draw_ctx,
                               bool show_main_panel, bool ui_hidden,

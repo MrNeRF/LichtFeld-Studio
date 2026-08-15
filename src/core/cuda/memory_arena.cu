@@ -929,6 +929,10 @@ namespace lfs::core {
             return active_frames_ == 0 && pending_render_frames_ == 0;
         });
 
+        // No drain_external_release here (#1621): a submitted Vulkan batch may
+        // still read the backing, but the caller contract is to retire its import
+        // timeline-deferred (vksplat retired_scratch_buffers_), and that import
+        // reference keeps the physical pages alive after the owner drops CUDA's.
         LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
                            "clearing external RasterizerMemoryArena backing");
 
@@ -1003,6 +1007,8 @@ namespace lfs::core {
 
         // commit() performs the in-place physical grow + Vulkan re-import while the
         // device is drained and no frame is active. device_ptr must stay constant.
+        // The last submitted batch may still be in flight (#1621): commit must
+        // retire the old import timeline-deferred, never destroy it inline.
         if (!commit(new_size)) {
             sync_lock.unlock();
             sync_cv_.notify_all();
@@ -1587,8 +1593,14 @@ namespace lfs::core {
             }
 
             // The grow callback changes CUDA physical mappings and invalidates the
-            // old Vulkan import. Drain all CUDA work while the frame gate excludes
-            // render entry, matching grow_external_backing's render-side contract.
+            // old Vulkan import. The frame gate only blocks NEW render entry; it
+            // cannot see the last submitted Vulkan batch. That batch is still
+            // covered twice over (#1621): this frame's begin consumed the batch's
+            // release semaphore (wait_for_previous_frame enqueued a GPU-side wait),
+            // so the device sync below transitively drains it; and the grow
+            // callback retires the old import timeline-deferred (vksplat
+            // retired_scratch_buffers_), whose import reference keeps the old
+            // physical pages alive past cuMemRelease until the batch completes.
             const cudaError_t sync_status = cudaDeviceSynchronize();
             if (sync_status != cudaSuccess) {
                 ensure_cuda_success(
