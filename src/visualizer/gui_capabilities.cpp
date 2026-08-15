@@ -309,11 +309,26 @@ namespace lfs::vis::cap {
             mesh.mark_dirty();
         }
 
-        [[nodiscard]] std::expected<void, std::string> copy_tensor_preserving_storage(core::Tensor& dst,
-                                                                                      const core::Tensor& src,
-                                                                                      const std::string_view name) {
+        lfs::Error bake_error(const lfs::ErrorCode code, std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::App,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .operation_id = {},
+                .user_message = message,
+                .detail = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = {},
+                .native = std::nullopt,
+            });
+        }
+
+        [[nodiscard]] lfs::Result<void> copy_tensor_preserving_storage(core::Tensor& dst,
+                                                                       const core::Tensor& src,
+                                                                       const std::string_view name) {
             if (dst.shape() != src.shape()) {
-                return std::unexpected("Bake produced incompatible " + std::string(name) + " tensor shape");
+                return lfs::Result<void>::failure(bake_error(lfs::ErrorCode::Internal, "Bake produced incompatible " + std::string(name) + " tensor shape"));
             }
 
             dst.copy_from(src);
@@ -607,7 +622,7 @@ namespace lfs::vis::cap {
 
     } // namespace
 
-    std::expected<void, std::string> bakeSplatTransformPreservingStorage(
+    lfs::Result<void> bakeSplatTransformPreservingStorage(
         core::SplatData& model,
         const glm::mat4& transform) {
         try {
@@ -644,7 +659,7 @@ namespace lfs::vis::cap {
                 const bool expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(model);
                 lfs::training::sh_value::ShNCommitGuard commit_guard(model, expanded, "transform.bake");
                 if (!expanded)
-                    return std::unexpected("Bake could not expand quantized shN for mutation");
+                    return lfs::Result<void>::failure(bake_error(lfs::ErrorCode::FailedPrecondition, "Bake could not expand quantized shN for mutation"));
                 if (auto result = copy_tensor_preserving_storage(model.shN_raw(), transformed.shN_raw(), "shN"); !result)
                     return result;
                 lfs::training::sh_value::commit_shN_after_mutation(model);
@@ -659,7 +674,8 @@ namespace lfs::vis::cap {
 
             model.set_scene_scale(transformed.get_scene_scale());
         } catch (const std::exception& exc) {
-            return std::unexpected(std::string("Failed to bake splat transform: ") + exc.what());
+            // LFS-CENSUS-OK(empty-catch): bake exceptions are converted to a typed error.
+            return lfs::Result<void>::failure(bake_error(lfs::ErrorCode::Internal, std::string("Failed to bake splat transform: ") + exc.what()));
         }
 
         return {};
@@ -986,7 +1002,7 @@ namespace lfs::vis::cap {
             const glm::mat4 local_transform = node->local_transform.get();
             if (node->model) {
                 if (auto result = bakeSplatTransformPreservingStorage(*node->model, local_transform); !result)
-                    return std::unexpected(result.error());
+                    return std::unexpected(std::string(result.error().user_message()));
             } else if (node->point_cloud) {
                 bake_point_cloud_transform(*node->point_cloud, local_transform);
             } else if (node->mesh) {

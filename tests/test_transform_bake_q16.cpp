@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/error.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "lfs/training/sh_value_codec.hpp"
@@ -114,9 +115,9 @@ TEST(TransformBakeQ16, RotationBakeRoundTripsQ16) {
 
     const glm::mat4 transform = rotation_and_translation();
     const auto ref_result = lfs::vis::cap::bakeSplatTransformPreservingStorage(reference, transform);
-    ASSERT_TRUE(ref_result.has_value()) << ref_result.error();
+    ASSERT_TRUE(ref_result.has_value()) << lfs::format_for_developer(ref_result.error());
     const auto q16_result = lfs::vis::cap::bakeSplatTransformPreservingStorage(quantized, transform);
-    ASSERT_TRUE(q16_result.has_value()) << q16_result.error();
+    ASSERT_TRUE(q16_result.has_value()) << lfs::format_for_developer(q16_result.error());
 
     EXPECT_LE(max_abs_diff(quantized.shN_canonical(), reference.shN_canonical()), 1e-2f);
     EXPECT_LE(max_abs_diff(quantized.means_raw(), reference.means_raw()), 1e-5f);
@@ -139,7 +140,7 @@ TEST(TransformBakeQ16, TranslationOnlyBakeKeepsQ16CodesBitExact) {
     const auto codes_before = model.shN_raw().cpu().contiguous();
     const auto result =
         lfs::vis::cap::bakeSplatTransformPreservingStorage(model, translation_only());
-    ASSERT_TRUE(result.has_value()) << result.error();
+    ASSERT_TRUE(result.has_value()) << lfs::format_for_developer(result.error());
 
     ASSERT_TRUE(model.shN_value_quantized());
     const auto codes_after = model.shN_raw().cpu().contiguous();
@@ -157,7 +158,7 @@ TEST(TransformBakeQ16, Fp32BakeUnchanged) {
 
     const auto result =
         lfs::vis::cap::bakeSplatTransformPreservingStorage(model, rotation_and_translation());
-    ASSERT_TRUE(result.has_value()) << result.error();
+    ASSERT_TRUE(result.has_value()) << lfs::format_for_developer(result.error());
     EXPECT_EQ(model.shN_raw().dtype(), DataType::Float32);
     EXPECT_FALSE(model.shN_value_quantized());
 }
