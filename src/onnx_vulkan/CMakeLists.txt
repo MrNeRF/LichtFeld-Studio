@@ -63,10 +63,6 @@ target_compile_features(lfs_onnx_inspect PRIVATE cxx_std_23)
 target_include_directories(lfs_onnx_inspect PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(lfs_onnx_inspect PRIVATE lfs_onnx_vulkan)
 
-add_executable(lfs_onnx_smoke EXCLUDE_FROM_ALL tools/onnx_smoke.cpp)
-target_compile_features(lfs_onnx_smoke PRIVATE cxx_std_23)
-target_link_libraries(lfs_onnx_smoke PRIVATE lfs_onnx_vulkan)
-
 add_executable(lfs_onnx_tests EXCLUDE_FROM_ALL tests/onnx_tests.cpp)
 target_compile_features(lfs_onnx_tests PRIVATE cxx_std_23)
 target_include_directories(lfs_onnx_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
