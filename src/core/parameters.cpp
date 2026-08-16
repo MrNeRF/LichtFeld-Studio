@@ -99,7 +99,8 @@ namespace lfs::core {
 
                 for (const auto& meta : group.properties) {
                     const std::string key(optimization_json_key(meta));
-                    if (!meta.json_required && !json.contains(key))
+                    // Missing keys keep strategy defaults (partial config overlays).
+                    if (!json.contains(key))
                         continue;
 
                     const auto& value = json.at(key);
