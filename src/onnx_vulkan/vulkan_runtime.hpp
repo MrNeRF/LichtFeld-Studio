@@ -15,9 +15,11 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 namespace lfs::onnx_vulkan::detail {
 
@@ -27,11 +29,17 @@ namespace lfs::onnx_vulkan::detail {
         MatMul,
         MatMulTiled,
         MatMulSmallK,
+        MatMulLargeN,
+        MatMulPackedB,
         Conv,
         Conv1x1,
         ConvTiled,
+        Conv3x3Edge,
         ConvTranspose,
         ConvTransposeTiled,
+        ConvTranspose2x2,
+        QkvPack,
+        Attention,
         Reduce,
         ReduceSerial,
         Softmax,
@@ -58,6 +66,11 @@ namespace lfs::onnx_vulkan::detail {
         VkBuffer buffer = VK_NULL_HANDLE;
         VkDeviceSize offset = 0;
         VkDeviceSize range = 0;
+    };
+
+    struct MatMulTuningChoice {
+        Kernel kernel = Kernel::MatMulTiled;
+        bool packed = false;
     };
 
     class VulkanRuntime final {
@@ -108,6 +121,10 @@ namespace lfs::onnx_vulkan::detail {
         [[nodiscard]] std::uint32_t maximum_group_count_z() const noexcept { return maximum_group_count_z_; }
         [[nodiscard]] std::string_view device_name() const noexcept { return device_name_; }
 
+        [[nodiscard]] std::optional<MatMulTuningChoice>
+        matmul_tuning_choice(std::string_view key) const;
+        void cache_matmul_tuning_choice(std::string key, MatMulTuningChoice choice);
+
     private:
         VulkanRuntime() = default;
         [[nodiscard]] std::expected<void, Error> initialize(const SessionOptions& options);
@@ -136,6 +153,7 @@ namespace lfs::onnx_vulkan::detail {
         std::uint32_t maximum_group_count_z_ = 1;
         std::string device_name_;
         std::filesystem::path pipeline_cache_path_;
+        std::unordered_map<std::string, MatMulTuningChoice> matmul_tuning_choices_;
     };
 
 } // namespace lfs::onnx_vulkan::detail

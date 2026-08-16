@@ -1,0 +1,184 @@
+#version 450
+
+// Portable FP32 MatMul for large, wide linear layers. A 32x8 workgroup
+// computes a 64x128 output tile. Each invocation owns eight rows and four
+// columns; the four columns are 32 elements apart so every load/store pass is
+// coalesced across local_size_x. The vec4 accumulators keep those four column
+// panels together without requiring subgroup operations or extensions.
+//
+// Descriptor/metadata ABI matches matmul_tiled.comp. p[96] must be zero so a
+// packed-B descriptor cannot accidentally be interpreted as an ordinary
+// strided tensor. Inputs may be transposed, broadcast, or otherwise strided;
+// contiguous A[..., M, K] and B[..., K, N] are only a selection preference.
+layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint b[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint c[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+shared float tile_a[64][16];
+shared float tile_b[16][128];
+
+void main() {
+    const uint output_rank = p[2];
+    const uint a_rank = p[3];
+    const uint b_rank = p[4];
+    const uint n_size = p[80];
+    const uint m_size = p[81];
+    const uint k_size = p[82];
+
+    // These checks are uniform for the whole workgroup and precede barriers.
+    // They protect all rank-derived metadata indexing and distinguish ordinary
+    // B from the packed layout consumed by matmul_packed_b.comp. Descriptor
+    // buffer ranges remain the dispatch owner's responsibility, as in the
+    // existing MatMul shaders.
+    if (p[96] != 0u || output_rank < 2u || output_rank > 8u ||
+        a_rank < 2u || a_rank > output_rank ||
+        b_rank < 2u || b_rank > output_rank ||
+        m_size == 0u || n_size == 0u)
+        return;
+
+    const uint batch_rank = output_rank - 2u;
+    if (p[16u + batch_rank] != m_size || p[17u + batch_rank] != n_size)
+        return;
+
+    const bool trans_a = p[85] != 0u;
+    const bool trans_b = p[86] != 0u;
+    const uint a_m_axis = a_rank - (trans_a ? 1u : 2u);
+    const uint a_k_axis = a_rank - (trans_a ? 2u : 1u);
+    const uint b_k_axis = b_rank - (trans_b ? 1u : 2u);
+    const uint b_n_axis = b_rank - (trans_b ? 2u : 1u);
+    if (p[24u + a_m_axis] != m_size || p[24u + a_k_axis] != k_size ||
+        p[40u + b_k_axis] != k_size || p[40u + b_n_axis] != n_size)
+        return;
+
+    uint batch_count = 1u;
+    for (uint axis = 0u; axis < batch_rank; ++axis) {
+        const uint extent = p[16u + axis];
+        if (extent == 0u)
+            return;
+        batch_count *= extent;
+    }
+    if (gl_WorkGroupID.z >= batch_count ||
+        gl_WorkGroupID.x > (n_size - 1u) / 128u ||
+        gl_WorkGroupID.y > (m_size - 1u) / 64u)
+        return;
+
+    // Validate ONNX batch broadcasting before deriving per-batch bases.
+    for (uint axis = 0u; axis + 2u < a_rank; ++axis) {
+        const uint out_axis = batch_rank - (a_rank - 2u) + axis;
+        const uint extent = p[24u + axis];
+        if (extent != 1u && extent != p[16u + out_axis])
+            return;
+    }
+    for (uint axis = 0u; axis + 2u < b_rank; ++axis) {
+        const uint out_axis = batch_rank - (b_rank - 2u) + axis;
+        const uint extent = p[40u + axis];
+        if (extent != 1u && extent != p[16u + out_axis])
+            return;
+    }
+
+    const uint batch_index = gl_WorkGroupID.z;
+    uint batch = batch_index;
+    uint batch_coord[8];
+    for (int axis = int(batch_rank) - 1; axis >= 0; --axis) {
+        const uint extent = p[16u + uint(axis)];
+        batch_coord[axis] = batch % extent;
+        batch /= extent;
+    }
+
+    uint a_base = p[83];
+    uint b_base = p[84];
+    for (uint axis = 0u; axis + 2u < a_rank; ++axis) {
+        const uint out_axis = batch_rank - (a_rank - 2u) + axis;
+        const uint coord = p[24u + axis] == 1u ? 0u : batch_coord[out_axis];
+        a_base += coord * p[32u + axis];
+    }
+    for (uint axis = 0u; axis + 2u < b_rank; ++axis) {
+        const uint out_axis = batch_rank - (b_rank - 2u) + axis;
+        const uint coord = p[40u + axis] == 1u ? 0u : batch_coord[out_axis];
+        b_base += coord * p[48u + axis];
+    }
+
+    const uint a_m_stride = p[32u + a_m_axis];
+    const uint a_k_stride = p[32u + a_k_axis];
+    const uint b_k_stride = p[48u + b_k_axis];
+    const uint b_n_stride = p[48u + b_n_axis];
+    const uint lx = gl_LocalInvocationID.x;
+    const uint ly = gl_LocalInvocationID.y;
+    const uint local_linear = ly * 32u + lx;
+    const uint n_origin = gl_WorkGroupID.x * 128u;
+    const uint m_origin = gl_WorkGroupID.y * 64u;
+
+    vec4 accum0 = vec4(0.0);
+    vec4 accum1 = vec4(0.0);
+    vec4 accum2 = vec4(0.0);
+    vec4 accum3 = vec4(0.0);
+    vec4 accum4 = vec4(0.0);
+    vec4 accum5 = vec4(0.0);
+    vec4 accum6 = vec4(0.0);
+    vec4 accum7 = vec4(0.0);
+
+    const uint k_tile_count = k_size / 16u + (k_size % 16u == 0u ? 0u : 1u);
+    for (uint k_tile = 0u; k_tile < k_tile_count; ++k_tile) {
+        const uint k_origin = k_tile * 16u;
+        for (uint index = local_linear; index < 1024u; index += 256u) {
+            const uint row = index >> 4u;
+            const uint inner = index & 15u;
+            const uint m = m_origin + row;
+            const uint k = k_origin + inner;
+            tile_a[row][inner] = m < m_size && k < k_size
+                ? uintBitsToFloat(a[a_base + m * a_m_stride + k * a_k_stride])
+                : 0.0;
+        }
+        for (uint index = local_linear; index < 2048u; index += 256u) {
+            const uint inner = index >> 7u;
+            const uint col = index & 127u;
+            const uint k = k_origin + inner;
+            const uint n = n_origin + col;
+            tile_b[inner][col] = k < k_size && n < n_size
+                ? uintBitsToFloat(b[b_base + k * b_k_stride + n * b_n_stride])
+                : 0.0;
+        }
+        barrier();
+
+        for (uint inner = 0u; inner < 16u; ++inner) {
+            const vec4 weights = vec4(tile_b[inner][lx],
+                                      tile_b[inner][lx + 32u],
+                                      tile_b[inner][lx + 64u],
+                                      tile_b[inner][lx + 96u]);
+            accum0 += tile_a[ly][inner] * weights;
+            accum1 += tile_a[ly + 8u][inner] * weights;
+            accum2 += tile_a[ly + 16u][inner] * weights;
+            accum3 += tile_a[ly + 24u][inner] * weights;
+            accum4 += tile_a[ly + 32u][inner] * weights;
+            accum5 += tile_a[ly + 40u][inner] * weights;
+            accum6 += tile_a[ly + 48u][inner] * weights;
+            accum7 += tile_a[ly + 56u][inner] * weights;
+        }
+        barrier();
+    }
+
+    const vec4 sums[8] = vec4[8](accum0, accum1, accum2, accum3,
+                                 accum4, accum5, accum6, accum7);
+    const float alpha = uintBitsToFloat(p[87]);
+    const float beta = uintBitsToFloat(p[88]);
+    for (uint row = 0u; row < 8u; ++row) {
+        const uint m = m_origin + ly + row * 8u;
+        if (m >= m_size)
+            continue;
+        for (uint panel = 0u; panel < 4u; ++panel) {
+            const uint n = n_origin + lx + panel * 32u;
+            if (n >= n_size)
+                continue;
+            float value = alpha * sums[row][panel];
+            if (p[89] != 0u) {
+                const uint c_index = p[90] +
+                    (p[91] == 1u ? n * p[92] : m * p[92] + n * p[93]);
+                value += beta * uintBitsToFloat(c[c_index]);
+            }
+            o[batch_index * m_size * n_size + m * n_size + n] = floatBitsToUint(value);
+        }
+    }
+}

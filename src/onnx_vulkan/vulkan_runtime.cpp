@@ -6,14 +6,20 @@
 
 #include "conv.comp.spv.h"
 #include "conv_1x1.comp.spv.h"
+#include "conv_3x3_edge.comp.spv.h"
 #include "conv_transpose.comp.spv.h"
+#include "conv_transpose_2x2.comp.spv.h"
 #include "conv_transpose_tiled.comp.spv.h"
 #include "conv_tiled.comp.spv.h"
 #include "elementwise.comp.spv.h"
+#include "attention.comp.spv.h"
 #include "layer_norm.comp.spv.h"
 #include "matmul.comp.spv.h"
+#include "matmul_large_n.comp.spv.h"
+#include "matmul_packed_b.comp.spv.h"
 #include "matmul_small_k.comp.spv.h"
 #include "matmul_tiled.comp.spv.h"
+#include "qkv_pack.comp.spv.h"
 #include "reduce.comp.spv.h"
 #include "reduce_serial.comp.spv.h"
 #include "softmax.comp.spv.h"
@@ -293,9 +299,12 @@ namespace lfs::onnx_vulkan::detail {
         const std::array<std::span<const std::uint32_t>, static_cast<std::size_t>(Kernel::Count)> code{
             words(shaders::kElementwiseSpv), words(shaders::kTransformSpv), words(shaders::kMatMulSpv),
             words(shaders::kMatMulTiledSpv), words(shaders::kMatMulSmallKSpv),
+            words(shaders::kMatMulLargeNSpv), words(shaders::kMatMulPackedBSpv),
             words(shaders::kConvSpv), words(shaders::kConv1x1Spv),
-            words(shaders::kConvTiledSpv), words(shaders::kConvTransposeSpv),
-            words(shaders::kConvTransposeTiledSpv), words(shaders::kReduceSpv),
+            words(shaders::kConvTiledSpv), words(shaders::kConv3x3EdgeSpv),
+            words(shaders::kConvTransposeSpv), words(shaders::kConvTransposeTiledSpv),
+            words(shaders::kConvTranspose2x2Spv), words(shaders::kQkvPackSpv),
+            words(shaders::kAttentionSpv), words(shaders::kReduceSpv),
             words(shaders::kReduceSerialSpv), words(shaders::kSoftmaxSpv),
             words(shaders::kLayerNormSpv),
         };
@@ -326,6 +335,18 @@ namespace lfs::onnx_vulkan::detail {
                 return std::unexpected(vk_error("vkCreateComputePipelines", result));
         }
         return {};
+    }
+
+    std::optional<MatMulTuningChoice>
+    VulkanRuntime::matmul_tuning_choice(const std::string_view key) const {
+        const auto found = matmul_tuning_choices_.find(std::string(key));
+        return found == matmul_tuning_choices_.end() ? std::nullopt
+                                                      : std::optional(found->second);
+    }
+
+    void VulkanRuntime::cache_matmul_tuning_choice(std::string key,
+                                                   const MatMulTuningChoice choice) {
+        matmul_tuning_choices_.insert_or_assign(std::move(key), choice);
     }
 
     std::expected<std::uint32_t, Error>
@@ -518,7 +539,8 @@ namespace lfs::onnx_vulkan::detail {
             vkCmdDispatch(command, workgroups[0], workgroups[1], workgroups[2]);
             return;
         }
-        const std::uint32_t local_size = kernel == Kernel::Elementwise || kernel == Kernel::Transform
+        const std::uint32_t local_size = kernel == Kernel::Elementwise || kernel == Kernel::Transform ||
+                                                 kernel == Kernel::QkvPack
                                              ? 256
                                              : 64;
         const auto group_count = (invocation_count + local_size - 1) / local_size;

@@ -1,0 +1,106 @@
+#version 450
+
+// Portable FP32 fused self-attention for logical [B,H,T,D] inputs.
+// One workgroup owns one (batch, head, query) row. The exact graph matcher
+// must keep D in [1, 64] and dispatch p[1] workgroups, flattened over X/Y.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer QBuffer { uint q[]; };
+layout(std430, set = 0, binding = 1) readonly buffer KBuffer { uint k[]; };
+layout(std430, set = 0, binding = 2) readonly buffer VBuffer { uint v[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+shared float dot_partial[64];
+shared float accumulator_rescale;
+shared float value_weight;
+shared float row_normalizer;
+
+void main() {
+    const uint lane = gl_LocalInvocationID.x;
+    const uint row = gl_WorkGroupID.x + gl_WorkGroupID.y * gl_NumWorkGroups.x;
+
+    const uint batch_size = p[80];
+    const uint head_count = p[81];
+    const uint token_count = p[82];
+    const uint head_dimension = p[83];
+
+    // These conditions are uniform across the workgroup, so returning before
+    // any barrier is safe. A non-matching graph must use the unfused path.
+    if (row >= p[1] || batch_size == 0u || head_count == 0u ||
+        token_count == 0u || head_dimension == 0u || head_dimension > 64u)
+        return;
+
+    const uint query_token = row % token_count;
+    const uint row_cursor = row / token_count;
+    const uint head = row_cursor % head_count;
+    const uint batch = row_cursor / head_count;
+    if (batch >= batch_size)
+        return;
+
+    const uint q_base = p[85] + batch * p[89] + head * p[90] +
+                        query_token * p[91];
+    const uint k_base = p[86] + batch * p[93] + head * p[94];
+    const uint v_base = p[87] + batch * p[97] + head * p[98];
+    const uint o_base = p[88] + batch * p[101] + head * p[102] +
+                        query_token * p[103];
+    const float scale = uintBitsToFloat(p[84]);
+
+    float output_accumulator = 0.0;
+    float maximum = 0.0;
+    float normalizer = 0.0;
+    float query_value = 0.0;
+    if (lane < head_dimension)
+        query_value = uintBitsToFloat(q[q_base + lane * p[92]]);
+
+    for (uint key_token = 0u; key_token < token_count; ++key_token) {
+        float product = 0.0;
+        if (lane < head_dimension) {
+            const float k_value = uintBitsToFloat(
+                k[k_base + key_token * p[95] + lane * p[96]]);
+            product = query_value * k_value;
+        }
+
+        dot_partial[lane] = product;
+        barrier();
+        for (uint stride = 32u; stride != 0u; stride >>= 1u) {
+            if (lane < stride)
+                dot_partial[lane] += dot_partial[lane + stride];
+            barrier();
+        }
+
+        if (lane == 0u) {
+            const float score = dot_partial[0] * scale;
+            if (key_token == 0u) {
+                maximum = score;
+                normalizer = 1.0;
+                accumulator_rescale = 0.0;
+                value_weight = 1.0;
+            } else {
+                const float next_maximum = max(maximum, score);
+                accumulator_rescale = exp(maximum - next_maximum);
+                value_weight = exp(score - next_maximum);
+                normalizer = normalizer * accumulator_rescale + value_weight;
+                maximum = next_maximum;
+            }
+        }
+        barrier();
+
+        if (lane < head_dimension) {
+            const float value = uintBitsToFloat(
+                v[v_base + key_token * p[99] + lane * p[100]]);
+            output_accumulator = output_accumulator * accumulator_rescale +
+                                 value_weight * value;
+        }
+        // Keep the shared online-softmax factors live until every output lane
+        // has consumed them before lane zero advances to the next key.
+        barrier();
+    }
+
+    if (lane == 0u)
+        row_normalizer = normalizer;
+    barrier();
+    if (lane < head_dimension) {
+        const uint output_index = o_base + lane * p[104];
+        o[output_index] = floatBitsToUint(output_accumulator / row_normalizer);
+    }
+}

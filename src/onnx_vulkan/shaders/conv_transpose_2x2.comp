@@ -1,0 +1,110 @@
+#version 450
+
+// Group-one FP32 ConvTranspose specialized for kernel=2x2, stride=2,
+// dilation=1, and zero pads. Each z slice computes one output parity as a
+// dense channel product, avoiding the generic gather kernel's modulo tests and
+// three rejected taps per input channel.
+//
+// Dispatch as:
+//   x = ceil((p[93] * p[94]) / 64)
+//   y = ceil(p[82] / 64)
+//   z = batch count * 4
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint w[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint bias[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+shared float tile_w[64][16];
+shared float tile_x[16][64];
+shared float tile_bias[64];
+
+void main() {
+    const uint lx = gl_LocalInvocationID.x;
+    const uint ly = gl_LocalInvocationID.y;
+    const uint local_linear = ly * 16u + lx;
+    const uint output_width = p[80];
+    const uint output_spatial = output_width * p[81];
+    const uint output_channels = p[82];
+    const uint input_channels = p[84];
+    const uint input_width = p[94];
+    const uint input_spatial = p[93] * input_width;
+    const uint spatial_origin = gl_WorkGroupID.x * 64u;
+    const uint channel_origin = gl_WorkGroupID.y * 64u;
+    const uint parity = gl_WorkGroupID.z & 3u;
+    const uint n = gl_WorkGroupID.z >> 2u;
+    const uint kh = parity >> 1u;
+    const uint kw = parity & 1u;
+
+    if (local_linear < 64u) {
+        const uint oc = channel_origin + local_linear;
+        tile_bias[local_linear] = p[95] != 0u && oc < output_channels
+            ? uintBitsToFloat(bias[p[96] + oc * p[97]]) : 0.0;
+    }
+    barrier();
+
+    float accum[4][4];
+    for (uint row = 0u; row < 4u; ++row)
+        for (uint col = 0u; col < 4u; ++col)
+            accum[row][col] = 0.0;
+
+    for (uint channel_base = 0u; channel_base < input_channels; channel_base += 16u) {
+        for (uint index = local_linear; index < 1024u; index += 256u) {
+            const uint row = index / 16u;
+            const uint inner = index - row * 16u;
+            const uint oc = channel_origin + row;
+            const uint ic = channel_base + inner;
+            if (oc < output_channels && ic < input_channels) {
+                const uint weight_index = p[99] + ic * p[48] + oc * p[49] +
+                                          kh * p[50] + kw * p[51];
+                tile_w[row][inner] = uintBitsToFloat(w[weight_index]);
+            } else {
+                tile_w[row][inner] = 0.0;
+            }
+        }
+
+        for (uint index = local_linear; index < 1024u; index += 256u) {
+            const uint inner = index / 64u;
+            const uint col = index - inner * 64u;
+            const uint ic = channel_base + inner;
+            const uint spatial = spatial_origin + col;
+            if (ic < input_channels && spatial < input_spatial) {
+                const uint ih = spatial / input_width;
+                const uint iw = spatial - ih * input_width;
+                const uint input_index = p[98] + n * p[32] + ic * p[33] +
+                                         ih * p[34] + iw * p[35];
+                tile_x[inner][col] = uintBitsToFloat(a[input_index]);
+            } else {
+                tile_x[inner][col] = 0.0;
+            }
+        }
+        barrier();
+
+        for (uint inner = 0u; inner < 16u; ++inner) {
+            for (uint row = 0u; row < 4u; ++row) {
+                const float weight = tile_w[ly + row * 16u][inner];
+                for (uint col = 0u; col < 4u; ++col)
+                    accum[row][col] += weight * tile_x[inner][lx + col * 16u];
+            }
+        }
+        barrier();
+    }
+
+    for (uint row = 0u; row < 4u; ++row) {
+        const uint oc = channel_origin + ly + row * 16u;
+        if (oc >= output_channels)
+            continue;
+        const float bias_value = tile_bias[ly + row * 16u];
+        for (uint col = 0u; col < 4u; ++col) {
+            const uint spatial = spatial_origin + lx + col * 16u;
+            if (spatial >= input_spatial)
+                continue;
+            const uint ih = spatial / input_width;
+            const uint iw = spatial - ih * input_width;
+            const uint output_index = (ih * 2u + kh) * output_width + iw * 2u + kw;
+            o[(n * output_channels + oc) * output_spatial + output_index] =
+                floatBitsToUint(accum[row][col] + bias_value);
+        }
+    }
+}

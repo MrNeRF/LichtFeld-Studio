@@ -162,6 +162,15 @@ namespace {
             return result;
         }
 
+        [[nodiscard]] Bytes string_attribute(const std::string_view name,
+                                             const std::string_view value) {
+            Bytes result;
+            string(result, 1, name);
+            string(result, 4, value);
+            integer(result, 20, 3);
+            return result;
+        }
+
         [[nodiscard]] Bytes ints_attribute(const std::string_view name,
                                            const std::span<const std::int64_t> values) {
             Bytes result;
@@ -566,6 +575,170 @@ namespace {
         return proto::model(proto::graph(nodes, initializers, inputs, outputs));
     }
 
+    [[nodiscard]] Bytes wide_matmul_model() {
+        constexpr std::int64_t rows = 64;
+        constexpr std::int64_t inner = 256;
+        constexpr std::int64_t columns = 256;
+        const std::array<std::int64_t, 2> x_shape{rows, inner};
+        const std::array<std::int64_t, 2> weight_shape{inner, columns};
+        const std::array<std::int64_t, 2> y_shape{rows, columns};
+        const std::vector<float> first_weights(static_cast<std::size_t>(inner * columns), 1.0f);
+        const std::vector<float> second_weights(static_cast<std::size_t>(inner * columns), 2.0f);
+        const auto input = proto::value_info("x", 1, x_shape);
+        const auto output = proto::value_info("y", 1, y_shape);
+        const std::array initializers{
+            proto::raw_tensor("first_weights", 1, weight_shape, std::span<const float>(first_weights)),
+            proto::raw_tensor("second_weights", 1, weight_shape, std::span<const float>(second_weights)),
+        };
+        const std::array<std::string_view, 2> first_inputs{"x", "first_weights"};
+        const std::array<std::string_view, 2> second_inputs{"x", "second_weights"};
+        const std::array<std::string_view, 2> add_inputs{"first", "second"};
+        const std::array<std::string_view, 1> first_output{"first"};
+        const std::array<std::string_view, 1> second_output{"second"};
+        const std::array<std::string_view, 1> add_output{"y"};
+        const std::array nodes{
+            proto::node("first_wide_product", "MatMul", first_inputs, first_output),
+            proto::node("second_wide_product", "MatMul", second_inputs, second_output),
+            proto::node("combine_products", "Add", add_inputs, add_output),
+        };
+        const std::array inputs{input};
+        const std::array outputs{output};
+        return proto::model(proto::graph(nodes, initializers, inputs, outputs));
+    }
+
+    [[nodiscard]] Bytes edge_conv_model() {
+        const std::array<std::int64_t, 4> x_shape{1, 2, 3, 4};
+        const std::array<std::int64_t, 4> weight_shape{3, 2, 3, 3};
+        const std::array<std::int64_t, 1> bias_shape{3};
+        const std::array<std::int64_t, 4> y_shape{1, 3, 3, 4};
+        const std::array<std::int64_t, 1> pads_shape{8};
+        const std::array<std::int64_t, 8> pads{0, 0, 1, 1, 0, 0, 1, 1};
+        std::vector<float> weights(3 * 2 * 3 * 3);
+        for (std::size_t index = 0; index < weights.size(); ++index)
+            weights[index] = static_cast<float>(static_cast<int>(index % 7) - 3) * 0.125f;
+        const std::array<float, 3> bias{0.25f, -0.5f, 0.75f};
+        const auto input = proto::value_info("x", 1, x_shape);
+        const auto output = proto::value_info("y", 1, y_shape);
+        const std::array initializers{
+            proto::raw_tensor("pads", 7, pads_shape, std::span<const std::int64_t>(pads)),
+            proto::raw_tensor("weights", 1, weight_shape, std::span<const float>(weights)),
+            proto::raw_tensor("bias", 1, bias_shape, std::span<const float>(bias)),
+        };
+        const auto mode = proto::string_attribute("mode", "edge");
+        const std::array pad_attributes{mode};
+        const std::array<std::string_view, 1> relu_inputs{"x"};
+        const std::array<std::string_view, 1> relu_outputs{"positive"};
+        const std::array<std::string_view, 2> pad_inputs{"positive", "pads"};
+        const std::array<std::string_view, 1> pad_outputs{"padded"};
+        const std::array<std::string_view, 3> conv_inputs{"padded", "weights", "bias"};
+        const std::array<std::string_view, 1> conv_outputs{"y"};
+        const std::array nodes{
+            proto::node("relu", "Relu", relu_inputs, relu_outputs),
+            proto::node("edge_pad", "Pad", pad_inputs, pad_outputs, pad_attributes),
+            proto::node("edge_convolution", "Conv", conv_inputs, conv_outputs),
+        };
+        const std::array inputs{input};
+        const std::array outputs{output};
+        return proto::model(proto::graph(nodes, initializers, inputs, outputs));
+    }
+
+    [[nodiscard]] Bytes transpose_conv_model() {
+        const std::array<std::int64_t, 4> x_shape{1, 2, 2, 3};
+        const std::array<std::int64_t, 4> weight_shape{2, 3, 2, 2};
+        const std::array<std::int64_t, 1> bias_shape{3};
+        const std::array<std::int64_t, 4> y_shape{1, 3, 4, 6};
+        std::vector<float> weights(2 * 3 * 2 * 2);
+        for (std::size_t index = 0; index < weights.size(); ++index)
+            weights[index] = static_cast<float>(static_cast<int>(index % 5) - 2) * 0.25f;
+        const std::array<float, 3> bias{0.125f, -0.25f, 0.5f};
+        const auto input = proto::value_info("x", 1, x_shape);
+        const auto output = proto::value_info("y", 1, y_shape);
+        const std::array initializers{
+            proto::raw_tensor("weights", 1, weight_shape, std::span<const float>(weights)),
+            proto::raw_tensor("bias", 1, bias_shape, std::span<const float>(bias)),
+        };
+        const std::array<std::int64_t, 2> stride_values{2, 2};
+        const auto strides = proto::ints_attribute("strides", stride_values);
+        const std::array attributes{strides};
+        const std::array<std::string_view, 3> node_inputs{"x", "weights", "bias"};
+        const std::array<std::string_view, 1> node_outputs{"y"};
+        const std::array nodes{
+            proto::node("upsample", "ConvTranspose", node_inputs, node_outputs, attributes),
+        };
+        const std::array inputs{input};
+        const std::array outputs{output};
+        return proto::model(proto::graph(nodes, initializers, inputs, outputs));
+    }
+
+    [[nodiscard]] Bytes fused_attention_model() {
+        constexpr std::int64_t token_count = 64;
+        constexpr std::int64_t head_dimension = 64;
+        const std::array<std::int64_t, 5> x_shape{1, token_count, 3, 2, head_dimension};
+        const std::array<std::int64_t, 4> y_shape{1, 2, token_count, head_dimension};
+        const std::array<std::int64_t, 1> axes_shape{1};
+        const std::array<std::int64_t, 1> squeeze_axes{0};
+        const std::array<std::int64_t, 0> scalar_shape{};
+        const std::array<float, 1> q_scale{0.5f};
+        const std::array<float, 1> k_scale{0.25f};
+        const auto input = proto::value_info("x", 1, x_shape);
+        const auto output = proto::value_info("y", 1, y_shape);
+        const std::array initializers{
+            proto::raw_tensor("squeeze_axes", 7, axes_shape,
+                              std::span<const std::int64_t>(squeeze_axes)),
+            proto::raw_tensor("q_scale", 1, scalar_shape, std::span<const float>(q_scale)),
+            proto::raw_tensor("k_scale", 1, scalar_shape, std::span<const float>(k_scale)),
+        };
+        const std::array<std::int64_t, 5> qkv_perm_values{2, 0, 3, 1, 4};
+        const std::array<std::int64_t, 4> key_perm_values{0, 1, 3, 2};
+        const auto qkv_perm = proto::ints_attribute("perm", qkv_perm_values);
+        const auto key_perm = proto::ints_attribute("perm", key_perm_values);
+        const auto split_axis = proto::int_attribute("axis", 0);
+        const auto softmax_axis = proto::int_attribute("axis", -1);
+        const std::array qkv_attributes{qkv_perm};
+        const std::array key_attributes{key_perm};
+        const std::array split_attributes{split_axis};
+        const std::array softmax_attributes{softmax_axis};
+        const std::array<std::string_view, 1> qkv_inputs{"x"};
+        const std::array<std::string_view, 1> qkv_outputs{"qkv"};
+        const std::array<std::string_view, 1> split_inputs{"qkv"};
+        const std::array<std::string_view, 3> split_outputs{"q5", "k5", "v5"};
+        const std::array<std::string_view, 2> q_squeeze_inputs{"q5", "squeeze_axes"};
+        const std::array<std::string_view, 2> k_squeeze_inputs{"k5", "squeeze_axes"};
+        const std::array<std::string_view, 2> v_squeeze_inputs{"v5", "squeeze_axes"};
+        const std::array<std::string_view, 1> q_outputs{"q"};
+        const std::array<std::string_view, 1> k_outputs{"k"};
+        const std::array<std::string_view, 1> v_outputs{"v"};
+        const std::array<std::string_view, 2> q_mul_inputs{"q", "q_scale"};
+        const std::array<std::string_view, 1> q_mul_outputs{"scaled_q"};
+        const std::array<std::string_view, 1> key_inputs{"k"};
+        const std::array<std::string_view, 1> key_outputs{"transposed_k"};
+        const std::array<std::string_view, 2> k_mul_inputs{"transposed_k", "k_scale"};
+        const std::array<std::string_view, 1> k_mul_outputs{"scaled_k"};
+        const std::array<std::string_view, 2> score_inputs{"scaled_q", "scaled_k"};
+        const std::array<std::string_view, 1> score_outputs{"scores"};
+        const std::array<std::string_view, 1> softmax_inputs{"scores"};
+        const std::array<std::string_view, 1> softmax_outputs{"probabilities"};
+        const std::array<std::string_view, 2> attention_inputs{"probabilities", "v"};
+        const std::array<std::string_view, 1> attention_outputs{"y"};
+        const std::array nodes{
+            proto::node("qkv_transpose", "Transpose", qkv_inputs, qkv_outputs, qkv_attributes),
+            proto::node("qkv_split", "Split", split_inputs, split_outputs, split_attributes),
+            proto::node("q_squeeze", "Squeeze", q_squeeze_inputs, q_outputs),
+            proto::node("k_squeeze", "Squeeze", k_squeeze_inputs, k_outputs),
+            proto::node("v_squeeze", "Squeeze", v_squeeze_inputs, v_outputs),
+            proto::node("q_scale", "Mul", q_mul_inputs, q_mul_outputs),
+            proto::node("key_transpose", "Transpose", key_inputs, key_outputs, key_attributes),
+            proto::node("k_scale", "Mul", k_mul_inputs, k_mul_outputs),
+            proto::node("scores", "MatMul", score_inputs, score_outputs),
+            proto::node("probabilities", "Softmax", softmax_inputs, softmax_outputs,
+                        softmax_attributes),
+            proto::node("attention", "MatMul", attention_inputs, attention_outputs),
+        };
+        const std::array inputs{input};
+        const std::array outputs{output};
+        return proto::model(proto::graph(nodes, initializers, inputs, outputs));
+    }
+
     [[nodiscard]] Bytes grouped_conv_model() {
         const std::array<std::int64_t, 4> x_shape{1, 2, 3, 3};
         const std::array<std::int64_t, 4> weight_shape{2, 1, 2, 2};
@@ -825,6 +998,118 @@ namespace {
         const std::vector<float> tiled_input(16 * 256, 1.0f);
         const std::vector<float> tiled_expected(16 * 128, 256.0f);
         run_model(tiled_path, tiled_shape, tiled_input, tiled_expected);
+
+        const auto wide_path = temporary.path() / "wide_matmul.onnx";
+        write_file(wide_path, wide_matmul_model());
+        const std::array<std::int64_t, 2> wide_shape{64, 256};
+        const std::vector<float> wide_input(64 * 256, 1.0f);
+        const std::vector<float> wide_expected(64 * 256, 768.0f);
+        run_model(wide_path, wide_shape, wide_input, wide_expected);
+    }
+
+    void test_vulkan_specialized_conv(const TemporaryDirectory& temporary) {
+        const auto edge_path = temporary.path() / "edge_conv.onnx";
+        write_file(edge_path, edge_conv_model());
+        const std::array<std::int64_t, 4> edge_shape{1, 2, 3, 4};
+        std::vector<float> edge_input(2 * 3 * 4);
+        for (std::size_t index = 0; index < edge_input.size(); ++index)
+            edge_input[index] = static_cast<float>(static_cast<int>(index % 11) - 5) * 0.2f;
+        std::vector<float> edge_expected(3 * 3 * 4);
+        constexpr std::array<float, 3> edge_bias{0.25f, -0.5f, 0.75f};
+        for (std::size_t oc = 0; oc < 3; ++oc) {
+            for (std::size_t oh = 0; oh < 3; ++oh) {
+                for (std::size_t ow = 0; ow < 4; ++ow) {
+                    float sum = edge_bias[oc];
+                    for (std::size_t ic = 0; ic < 2; ++ic) {
+                        for (std::size_t kh = 0; kh < 3; ++kh) {
+                            for (std::size_t kw = 0; kw < 3; ++kw) {
+                                const auto ih = static_cast<std::size_t>(std::clamp<int>(
+                                    static_cast<int>(oh + kh) - 1, 0, 2));
+                                const auto iw = static_cast<std::size_t>(std::clamp<int>(
+                                    static_cast<int>(ow + kw) - 1, 0, 3));
+                                const float source = std::max(edge_input[(ic * 3 + ih) * 4 + iw], 0.0f);
+                                const auto weight_index = ((oc * 2 + ic) * 3 + kh) * 3 + kw;
+                                const float weight =
+                                    static_cast<float>(static_cast<int>(weight_index % 7) - 3) * 0.125f;
+                                sum += source * weight;
+                            }
+                        }
+                    }
+                    edge_expected[(oc * 3 + oh) * 4 + ow] = sum;
+                }
+            }
+        }
+        run_model(edge_path, edge_shape, edge_input, edge_expected);
+
+        const auto transpose_path = temporary.path() / "transpose_conv.onnx";
+        write_file(transpose_path, transpose_conv_model());
+        const std::array<std::int64_t, 4> transpose_shape{1, 2, 2, 3};
+        std::vector<float> transpose_input(2 * 2 * 3);
+        for (std::size_t index = 0; index < transpose_input.size(); ++index)
+            transpose_input[index] = static_cast<float>(static_cast<int>(index % 7) - 3) * 0.3f;
+        std::vector<float> transpose_expected(3 * 4 * 6);
+        constexpr std::array<float, 3> transpose_bias{0.125f, -0.25f, 0.5f};
+        for (std::size_t oc = 0; oc < 3; ++oc) {
+            for (std::size_t oh = 0; oh < 4; ++oh) {
+                for (std::size_t ow = 0; ow < 6; ++ow) {
+                    const auto ih = oh / 2;
+                    const auto iw = ow / 2;
+                    const auto kh = oh % 2;
+                    const auto kw = ow % 2;
+                    float sum = transpose_bias[oc];
+                    for (std::size_t ic = 0; ic < 2; ++ic) {
+                        const auto weight_index = ((ic * 3 + oc) * 2 + kh) * 2 + kw;
+                        const float weight =
+                            static_cast<float>(static_cast<int>(weight_index % 5) - 2) * 0.25f;
+                        sum += transpose_input[(ic * 2 + ih) * 3 + iw] * weight;
+                    }
+                    transpose_expected[(oc * 4 + oh) * 6 + ow] = sum;
+                }
+            }
+        }
+        run_model(transpose_path, transpose_shape, transpose_input, transpose_expected);
+    }
+
+    void test_vulkan_fused_attention(const TemporaryDirectory& temporary) {
+        const auto path = temporary.path() / "fused_attention.onnx";
+        write_file(path, fused_attention_model());
+        constexpr std::size_t token_count = 64;
+        constexpr std::size_t dimension = 64;
+        const std::array<std::int64_t, 5> shape{1, token_count, 3, 2, dimension};
+        std::vector<float> input(1 * token_count * 3 * 2 * dimension);
+        for (std::size_t index = 0; index < input.size(); ++index)
+            input[index] = static_cast<float>(static_cast<int>(index % 17) - 8) * 0.1f;
+        constexpr std::size_t head_count = 2;
+        const auto source = [&](const std::size_t token, const std::size_t qkv,
+                                const std::size_t head, const std::size_t d) {
+            return input[((token * 3 + qkv) * head_count + head) * dimension + d];
+        };
+        std::vector<float> expected(head_count * token_count * dimension);
+        for (std::size_t head = 0; head < head_count; ++head) {
+            for (std::size_t query = 0; query < token_count; ++query) {
+                std::array<float, token_count> scores{};
+                float maximum = -std::numeric_limits<float>::infinity();
+                for (std::size_t key = 0; key < token_count; ++key) {
+                    float score = 0.0f;
+                    for (std::size_t d = 0; d < dimension; ++d)
+                        score += source(query, 0, head, d) * source(key, 1, head, d) * 0.125f;
+                    scores[key] = score;
+                    maximum = std::max(maximum, score);
+                }
+                float denominator = 0.0f;
+                for (auto& score : scores) {
+                    score = std::exp(score - maximum);
+                    denominator += score;
+                }
+                for (std::size_t d = 0; d < dimension; ++d) {
+                    float value = 0.0f;
+                    for (std::size_t key = 0; key < token_count; ++key)
+                        value += scores[key] / denominator * source(key, 2, head, d);
+                    expected[(head * token_count + query) * dimension + d] = value;
+                }
+            }
+        }
+        run_model(path, shape, input, expected);
     }
 
     void test_vulkan_grouped_conv(const TemporaryDirectory& temporary) {
@@ -877,6 +1162,8 @@ int main() {
     run("vulkan_basics", [&] { test_vulkan_basics(temporary); });
     run("vulkan_elementwise", [&] { test_vulkan_elementwise(temporary); });
     run("vulkan_matmul", [&] { test_vulkan_matmul(temporary); });
+    run("vulkan_specialized_conv", [&] { test_vulkan_specialized_conv(temporary); });
+    run("vulkan_fused_attention", [&] { test_vulkan_fused_attention(temporary); });
     run("vulkan_grouped_conv", [&] { test_vulkan_grouped_conv(temporary); });
     run("vulkan_softmax", [&] { test_vulkan_softmax(temporary); });
     if (failures != 0)

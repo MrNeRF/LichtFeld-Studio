@@ -1,0 +1,42 @@
+#version 450
+
+// Materialize three logical [B,H,T,D] views of one interleaved allocation.
+// The views share strides but have independent source element offsets. The
+// three destinations are contiguous and may have independent element offsets.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer SourceBuffer { uint source[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer QBuffer { uint q[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer KBuffer { uint k[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer VBuffer { uint v[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+void main() {
+    const uint id = gl_GlobalInvocationID.x +
+                    gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    if (id >= p[1])
+        return;
+
+    const uint batch_size = p[80];
+    const uint head_count = p[81];
+    const uint token_count = p[82];
+    const uint head_dimension = p[83];
+    if (batch_size == 0u || head_count == 0u ||
+        token_count == 0u || head_dimension == 0u)
+        return;
+
+    uint cursor = id;
+    const uint dimension = cursor % head_dimension;
+    cursor /= head_dimension;
+    const uint token = cursor % token_count;
+    cursor /= token_count;
+    const uint head = cursor % head_count;
+    const uint batch = cursor / head_count;
+    if (batch >= batch_size)
+        return;
+
+    const uint source_index = batch * p[87] + head * p[88] +
+                              token * p[89] + dimension * p[90];
+    q[p[91] + id] = source[p[84] + source_index];
+    k[p[92] + id] = source[p[85] + source_index];
+    v[p[93] + id] = source[p[86] + source_index];
+}

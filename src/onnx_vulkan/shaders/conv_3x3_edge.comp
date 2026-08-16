@@ -1,0 +1,122 @@
+#version 450
+
+// Group-one, stride-one 3x3 convolution over an unpadded NCHW source. The
+// implicit one-pixel edge pad is folded into the input loads, and p[100] can
+// additionally fold the Relu that immediately precedes the Pad in MoGe.
+//
+// Dispatch as:
+//   x = ceil((p[80] * p[81]) / 64)
+//   y = ceil(p[82] / 64)
+//   z = batch count
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint w[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint bias[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+shared float tile_w[64][16];
+shared float tile_x[16][64];
+shared float tile_bias[64];
+
+void main() {
+    const uint lx = gl_LocalInvocationID.x;
+    const uint ly = gl_LocalInvocationID.y;
+    const uint local_linear = ly * 16u + lx;
+    const uint output_width = p[80];
+    const uint output_spatial = output_width * p[81];
+    const uint output_channels = p[82];
+    const uint input_channels = p[84];
+    const uint input_height = p[93];
+    const uint input_width = p[94];
+    const uint k_size = input_channels * 9u;
+    const uint spatial_origin = gl_WorkGroupID.x * 64u;
+    const uint channel_origin = gl_WorkGroupID.y * 64u;
+    const uint n = gl_WorkGroupID.z;
+    const bool fuse_relu = p[100] != 0u;
+
+    if (local_linear < 64u) {
+        const uint oc = channel_origin + local_linear;
+        tile_bias[local_linear] = p[95] != 0u && oc < output_channels
+            ? uintBitsToFloat(bias[p[96] + oc * p[97]]) : 0.0;
+    }
+    barrier();
+
+    float accum[4][4];
+    for (uint row = 0u; row < 4u; ++row)
+        for (uint col = 0u; col < 4u; ++col)
+            accum[row][col] = 0.0;
+
+    for (uint k_origin = 0u; k_origin < k_size; k_origin += 16u) {
+        for (uint index = local_linear; index < 1024u; index += 256u) {
+            const uint row = index / 16u;
+            const uint inner = index - row * 16u;
+            const uint oc = channel_origin + row;
+            const uint k = k_origin + inner;
+            if (oc < output_channels && k < k_size) {
+                const uint ic = k / 9u;
+                const uint kernel_index = k - ic * 9u;
+                const uint kh = kernel_index / 3u;
+                const uint kw = kernel_index - kh * 3u;
+                const uint weight_index = p[99] + oc * p[48] + ic * p[49] +
+                                          kh * p[50] + kw * p[51];
+                tile_w[row][inner] = uintBitsToFloat(w[weight_index]);
+            } else {
+                tile_w[row][inner] = 0.0;
+            }
+        }
+
+        for (uint index = local_linear; index < 1024u; index += 256u) {
+            const uint inner = index / 64u;
+            const uint col = index - inner * 64u;
+            const uint k = k_origin + inner;
+            const uint spatial = spatial_origin + col;
+            float value = 0.0;
+            if (k < k_size && spatial < output_spatial) {
+                const uint ic = k / 9u;
+                const uint kernel_index = k - ic * 9u;
+                const uint kh = kernel_index / 3u;
+                const uint kw = kernel_index - kh * 3u;
+                const uint oh = spatial / output_width;
+                const uint ow = spatial - oh * output_width;
+
+                // Coordinates are in the explicitly padded domain. Subtract
+                // the implicit leading pad and clamp to ONNX edge semantics.
+                const uint padded_h = oh + kh;
+                const uint padded_w = ow + kw;
+                const uint ih = padded_h == 0u ? 0u : min(padded_h - 1u, input_height - 1u);
+                const uint iw = padded_w == 0u ? 0u : min(padded_w - 1u, input_width - 1u);
+                const uint input_index = p[98] + n * p[32] + ic * p[33] +
+                                         ih * p[34] + iw * p[35];
+                value = uintBitsToFloat(a[input_index]);
+                if (fuse_relu)
+                    value = max(value, 0.0);
+            }
+            tile_x[inner][col] = value;
+        }
+        barrier();
+
+        for (uint inner = 0u; inner < 16u; ++inner) {
+            for (uint row = 0u; row < 4u; ++row) {
+                const float weight = tile_w[ly + row * 16u][inner];
+                for (uint col = 0u; col < 4u; ++col)
+                    accum[row][col] += weight * tile_x[inner][lx + col * 16u];
+            }
+        }
+        barrier();
+    }
+
+    for (uint row = 0u; row < 4u; ++row) {
+        const uint oc = channel_origin + ly + row * 16u;
+        if (oc >= output_channels)
+            continue;
+        const float bias_value = tile_bias[ly + row * 16u];
+        for (uint col = 0u; col < 4u; ++col) {
+            const uint spatial = spatial_origin + lx + col * 16u;
+            if (spatial >= output_spatial)
+                continue;
+            o[(n * output_channels + oc) * output_spatial + spatial] =
+                floatBitsToUint(accum[row][col] + bias_value);
+        }
+    }
+}
