@@ -239,13 +239,110 @@ namespace lfs::vis::project {
             if (!report.trainer_state_pending ||
                 !report.checkpoint_uuid ||
                 !report.checkpoint_header) {
-                if (const auto training =
-                        document.scene_graph()
-                            .training_model_uuid();
-                    training && *training) {
-                    notifyTrainerRestoreFailure(
-                        viewer,
-                        "Project has a training model but no checkpoint to resume");
+                const auto dataset =
+                    document.project().dataset_reference();
+                const auto project_root =
+                    projectRootFor(document);
+                const bool has_explicit_dataset_source =
+                    (dataset && *dataset) ||
+                    !report.pending_parameters.dataset
+                         .data_path.empty();
+                if (has_explicit_dataset_source ||
+                    !project_root.empty()) {
+                    auto* const parameter_manager =
+                        viewer.getParameterManager();
+                    auto* const trainer_manager =
+                        viewer.getTrainerManager();
+                    if (!parameter_manager ||
+                        !trainer_manager) {
+                        notifyTrainerRestoreFailure(
+                            viewer,
+                            "Project has no trainer manager or parameter manager");
+                        return;
+                    }
+
+                    std::optional<std::filesystem::path>
+                        dataset_root;
+                    if (const auto dataset_ref =
+                            document.project()
+                                .dataset_reference();
+                        dataset_ref && *dataset_ref) {
+                        if (auto resolved =
+                                lfs::io::project::
+                                    resolve_path_reference(
+                                        document.references(),
+                                        project_root,
+                                        **dataset_ref,
+                                        report.pending_parameters
+                                            .dataset.data_path)) {
+                            dataset_root = *resolved;
+                        }
+                    }
+                    if (!dataset_root &&
+                        !report.pending_parameters.dataset
+                                 .data_path.empty()) {
+                        dataset_root = report.pending_parameters
+                                           .dataset.data_path;
+                    }
+                    // Projects saved before dataset references were captured
+                    // may still live directly inside the dataset root. Recover
+                    // that layout only when the loader validates it.
+                    if (!dataset_root && !project_root.empty()) {
+                        auto candidate =
+                            parameter_manager->createForDataset(
+                                project_root,
+                                report.pending_parameters.dataset
+                                    .output_path);
+                        if (lfs::training::validateDatasetPath(
+                                candidate)) {
+                            dataset_root = project_root;
+                            LOG_INFO(
+                                "Recovered project dataset from its containing directory ({})",
+                                lfs::core::path_to_utf8(
+                                    project_root));
+                        }
+                    }
+                    if (!dataset_root ||
+                        dataset_root->empty() ||
+                        !std::filesystem::exists(*dataset_root)) {
+                        if (has_explicit_dataset_source) {
+                            notifyTrainerRestoreFailure(
+                                viewer,
+                                dataset_root &&
+                                        !dataset_root->empty()
+                                    ? std::format(
+                                          "Dataset path does not exist: {}",
+                                          lfs::core::path_to_utf8(
+                                              *dataset_root))
+                                    : "Project has no resolvable dataset root");
+                        }
+                        return;
+                    }
+
+                    auto* const data_loader =
+                        viewer.getDataLoader();
+                    if (!data_loader) {
+                        notifyTrainerRestoreFailure(
+                            viewer,
+                            "Project dataset loader is unavailable");
+                        return;
+                    }
+                    auto params =
+                        parameter_manager->createForDataset(
+                            *dataset_root,
+                            report.pending_parameters.dataset
+                                .output_path);
+                    data_loader->setParameters(params);
+                    scene_manager.setDatasetPath(*dataset_root);
+                    lfs::core::events::cmd::LoadFile{
+                        .path = *dataset_root,
+                        .is_dataset = true,
+                        .output_path = params.dataset
+                                           .output_path,
+                    }.emit();
+                    LOG_INFO(
+                        "Queued project dataset reload for trainer restoration (dataset={})",
+                        lfs::core::path_to_utf8(*dataset_root));
                 }
                 return;
             }
@@ -3484,6 +3581,62 @@ namespace lfs::vis::project {
                 return lfs::Status::failure(
                     std::move(snapshot).error());
             }
+            std::filesystem::path dataset_path =
+                manager->getDatasetPath();
+            if (dataset_path.empty()) {
+                if (const auto* trainer =
+                        viewer_.getTrainer()) {
+                    dataset_path = trainer->getParams()
+                                       .dataset.data_path;
+                }
+            }
+            if (dataset_path.empty()) {
+                dataset_path =
+                    snapshot->dataset.data_path;
+            }
+            lfs::training::absolutize_dataset_path_for_snapshot(
+                dataset_path);
+            if (!dataset_path.empty()) {
+                snapshot->dataset.data_path =
+                    dataset_path;
+
+                auto staged_project =
+                    document_->project();
+                std::optional<lfs::core::Uuid>
+                    existing;
+                if (const auto current =
+                        staged_project
+                            .dataset_reference();
+                    current && *current) {
+                    existing = **current;
+                }
+                auto minted =
+                    lfs::io::project::
+                        upsert_path_reference(
+                            staged_references,
+                            project_root,
+                            dataset_path,
+                            "dataset", "dataset",
+                            existing);
+                if (!minted) {
+                    return lfs::Status::failure(
+                        std::move(minted).error());
+                }
+                if (auto set =
+                        staged_project
+                            .set_dataset_reference(
+                                *minted);
+                    !set) {
+                    return set;
+                }
+                if (!sameBytes(
+                        document_->project()
+                            .to_bytes(),
+                        staged_project.to_bytes())) {
+                    document_->edit_project() =
+                        std::move(staged_project);
+                }
+            }
             mintParameterPathReferences(
                 staged_references, project_root,
                 *snapshot);
@@ -4784,9 +4937,7 @@ namespace lfs::vis::project {
                                             now();
                                     // Trainer restore is soft: display
                                     // hydration already succeeded.
-                                    if (report
-                                            .trainer_state_pending &&
-                                        epoch_.load(
+                                    if (epoch_.load(
                                             std::memory_order_acquire) ==
                                             epoch &&
                                         document_ == document) {
