@@ -56,6 +56,9 @@ if(BUILD_UNICODE_TEST_ONLY)
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
     )
+    if(COMMAND lfs_enable_fast_cxx_compile)
+        lfs_enable_fast_cxx_compile(unicode_path_test)
+    endif()
 
     # Enable Windows long path support (paths > MAX_PATH/260 chars)
     if(WIN32 AND MSVC)
@@ -186,6 +189,9 @@ set_target_properties(lichtfeld_format_tests PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
 )
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(lichtfeld_format_tests)
+endif()
 add_test(NAME lichtfeld_format_tests
     COMMAND $<TARGET_FILE:lichtfeld_format_tests> --gtest_color=no
 )
@@ -659,6 +665,9 @@ else()
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
     )
 endif()
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(lichtfeld_tests)
+endif()
 
 # Tensor-library hardening is intentionally isolated from the default test
 # tiers.  During the hardening phases these oracle tests are expected to expose
@@ -706,6 +715,9 @@ else()
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
     )
+endif()
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(tensor_hardening_tests)
 endif()
 
 # =============================================================================
