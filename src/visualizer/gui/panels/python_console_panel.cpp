@@ -772,6 +772,12 @@ namespace {
             close_popover();
         } else if (action == "packages-refresh") {
             request_packages_refresh(pane);
+        } else if (action == "close-panel") {
+            auto close_event = lfs::core::events::cmd::ShowWindow{
+                .window_name = "python_console",
+                .show = false,
+            };
+            close_event.emit();
         }
 
         mark_dirty(pane);

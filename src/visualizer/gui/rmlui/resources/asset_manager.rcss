@@ -46,6 +46,39 @@
     min-width: 64dp;
 }
 
+.asset-panel-close {
+    flex-shrink: 0;
+    width: 28dp;
+    min-width: 28dp;
+    max-width: 28dp;
+    height: 28dp;
+    min-height: 28dp;
+    padding: 0;
+    margin-left: auto;
+    border-width: 1dp;
+    border-color: #514a42;
+    border-radius: 4dp;
+    background-color: #302d29;
+    color: #d8d0c3;
+    font-size: 18dp;
+    line-height: 26dp;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.asset-panel-close:hover {
+    background-color: #454038;
+    border-color: #7fb9a5;
+    color: #f0ebe2;
+}
+
+.asset-panel-close:active {
+    background-color: #36564b;
+    border-color: #7fb9a5;
+}
+
 /* ── Shell wrapper ─────────────────────────────────────── */
 
 #asset-shell {

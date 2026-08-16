@@ -32,6 +32,7 @@
               <div class="asset-import-menu-item" data-event-click="on_import_from_url">{{import_from_url_label}}</div>
             </div>
           </div>
+          <button class="asset-panel-close" type="button" data-event-click="close_panel" data-tooltip="common.close">&#215;</button>
         </div>
 
         <div class="toolbar-row toolbar-row-secondary">
