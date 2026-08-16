@@ -553,6 +553,41 @@ namespace {
         return proto::model(proto::graph(nodes, initializers, inputs, outputs));
     }
 
+    [[nodiscard]] Bytes transposed_gemm_model(const bool transpose_a) {
+        const std::array<std::int64_t, 2> x_shape = transpose_a
+            ? std::array<std::int64_t, 2>{3, 2}
+            : std::array<std::int64_t, 2>{2, 3};
+        const std::array<std::int64_t, 2> weight_shape = transpose_a
+            ? std::array<std::int64_t, 2>{3, 4}
+            : std::array<std::int64_t, 2>{4, 3};
+        const std::array<std::int64_t, 1> bias_shape{4};
+        const std::array<std::int64_t, 2> y_shape{2, 4};
+        const std::array<float, 12> weights = transpose_a
+            ? std::array<float, 12>{1.0f, 4.0f, -1.0f, 0.5f,
+                                    2.0f, 5.0f, 0.0f, -0.5f,
+                                    3.0f, 6.0f, 1.0f, 2.0f}
+            : std::array<float, 12>{1.0f, 2.0f, 3.0f,
+                                    4.0f, 5.0f, 6.0f,
+                                    -1.0f, 0.0f, 1.0f,
+                                    0.5f, -0.5f, 2.0f};
+        const std::array<float, 4> bias{0.25f, -1.0f, 0.5f, 2.0f};
+        const auto input = proto::value_info("x", 1, x_shape);
+        const auto output = proto::value_info("y", 1, y_shape);
+        const std::array initializers{
+            proto::raw_tensor("weights", 1, weight_shape, std::span<const float>(weights)),
+            proto::raw_tensor("bias", 1, bias_shape, std::span<const float>(bias)),
+        };
+        const auto transpose = proto::int_attribute(transpose_a ? "transA" : "transB", 1);
+        const std::array attributes{transpose};
+        const std::array<std::string_view, 3> node_inputs{"x", "weights", "bias"};
+        const std::array<std::string_view, 1> node_outputs{"y"};
+        const auto gemm = proto::node("transposed_gemm", "Gemm", node_inputs, node_outputs, attributes);
+        const std::array nodes{gemm};
+        const std::array inputs{input};
+        const std::array outputs{output};
+        return proto::model(proto::graph(nodes, initializers, inputs, outputs));
+    }
+
     [[nodiscard]] Bytes tiled_matmul_model() {
         constexpr std::int64_t rows = 16;
         constexpr std::int64_t inner = 256;
@@ -634,6 +669,51 @@ namespace {
         const std::array<std::string_view, 1> conv_outputs{"y"};
         const std::array nodes{
             proto::node("relu", "Relu", relu_inputs, relu_outputs),
+            proto::node("edge_pad", "Pad", pad_inputs, pad_outputs, pad_attributes),
+            proto::node("edge_convolution", "Conv", conv_inputs, conv_outputs),
+        };
+        const std::array inputs{input};
+        const std::array outputs{output};
+        return proto::model(proto::graph(nodes, initializers, inputs, outputs));
+    }
+
+    [[nodiscard]] Bytes dynamic_edge_conv_model() {
+        constexpr std::int64_t input_channels = 66;
+        constexpr std::int64_t output_channels = 65;
+        constexpr std::int64_t height = 9;
+        constexpr std::int64_t width = 10;
+        const std::array<std::int64_t, 4> x_shape{1, input_channels, height, width};
+        const std::array<std::int64_t, 4> weight_shape{output_channels, input_channels, 3, 3};
+        const std::array<std::int64_t, 1> bias_shape{output_channels};
+        const std::array<std::int64_t, 4> y_shape{1, output_channels, height, width};
+        const std::array<std::int64_t, 1> pads_shape{8};
+        const std::array<std::int64_t, 8> pads{0, 0, 1, 1, 0, 0, 1, 1};
+        const std::array<std::int64_t, 0> scalar_shape{};
+        const std::array<float, 1> zero{0.0f};
+        std::vector<float> weights(static_cast<std::size_t>(output_channels * input_channels * 9));
+        std::vector<float> bias(static_cast<std::size_t>(output_channels));
+        for (std::size_t index = 0; index < weights.size(); ++index)
+            weights[index] = static_cast<float>(static_cast<int>(index % 11) - 5) * 0.0078125f;
+        for (std::size_t oc = 0; oc < bias.size(); ++oc)
+            bias[oc] = static_cast<float>(static_cast<int>(oc % 5) - 2) * 0.03125f;
+        const auto input = proto::value_info("x", 1, x_shape);
+        const auto output = proto::value_info("y", 1, y_shape);
+        const std::array initializers{
+            proto::raw_tensor("zero", 1, scalar_shape, std::span<const float>(zero)),
+            proto::raw_tensor("pads", 7, pads_shape, std::span<const std::int64_t>(pads)),
+            proto::raw_tensor("weights", 1, weight_shape, std::span<const float>(weights)),
+            proto::raw_tensor("bias", 1, bias_shape, std::span<const float>(bias)),
+        };
+        const auto mode = proto::string_attribute("mode", "edge");
+        const std::array pad_attributes{mode};
+        const std::array<std::string_view, 2> add_inputs{"x", "zero"};
+        const std::array<std::string_view, 1> add_outputs{"dynamic"};
+        const std::array<std::string_view, 2> pad_inputs{"dynamic", "pads"};
+        const std::array<std::string_view, 1> pad_outputs{"padded"};
+        const std::array<std::string_view, 3> conv_inputs{"padded", "weights", "bias"};
+        const std::array<std::string_view, 1> conv_outputs{"y"};
+        const std::array nodes{
+            proto::node("dynamic_source", "Add", add_inputs, add_outputs),
             proto::node("edge_pad", "Pad", pad_inputs, pad_outputs, pad_attributes),
             proto::node("edge_convolution", "Conv", conv_inputs, conv_outputs),
         };
@@ -992,6 +1072,20 @@ namespace {
         const std::array<float, 4> expected{22.0f, 28.0f, 49.0f, 64.0f};
         run_model(path, shape, input, expected);
 
+        const std::array<float, 8> gemm_expected{
+            14.25f, 31.0f, 2.5f, 7.5f,
+            32.25f, 76.0f, 2.5f, 13.5f,
+        };
+        const auto transposed_b_path = temporary.path() / "gemm_transposed_b.onnx";
+        write_file(transposed_b_path, transposed_gemm_model(false));
+        run_model(transposed_b_path, shape, input, gemm_expected);
+
+        const auto transposed_a_path = temporary.path() / "gemm_transposed_a.onnx";
+        write_file(transposed_a_path, transposed_gemm_model(true));
+        const std::array<std::int64_t, 2> transposed_a_shape{3, 2};
+        const std::array<float, 6> transposed_a_input{1.0f, 4.0f, 2.0f, 5.0f, 3.0f, 6.0f};
+        run_model(transposed_a_path, transposed_a_shape, transposed_a_input, gemm_expected);
+
         const auto tiled_path = temporary.path() / "tiled_matmul.onnx";
         write_file(tiled_path, tiled_matmul_model());
         const std::array<std::int64_t, 2> tiled_shape{16, 256};
@@ -1040,6 +1134,45 @@ namespace {
             }
         }
         run_model(edge_path, edge_shape, edge_input, edge_expected);
+
+        constexpr std::size_t dynamic_input_channels = 66;
+        constexpr std::size_t dynamic_output_channels = 65;
+        constexpr std::size_t dynamic_height = 9;
+        constexpr std::size_t dynamic_width = 10;
+        const auto dynamic_edge_path = temporary.path() / "dynamic_edge_conv.onnx";
+        write_file(dynamic_edge_path, dynamic_edge_conv_model());
+        const std::array<std::int64_t, 4> dynamic_shape{
+            1, dynamic_input_channels, dynamic_height, dynamic_width};
+        std::vector<float> dynamic_input(dynamic_input_channels * dynamic_height * dynamic_width);
+        for (std::size_t index = 0; index < dynamic_input.size(); ++index)
+            dynamic_input[index] = static_cast<float>(static_cast<int>(index % 17) - 8) * 0.025f;
+        std::vector<float> dynamic_expected(dynamic_output_channels * dynamic_height * dynamic_width);
+        for (std::size_t oc = 0; oc < dynamic_output_channels; ++oc) {
+            for (std::size_t oh = 0; oh < dynamic_height; ++oh) {
+                for (std::size_t ow = 0; ow < dynamic_width; ++ow) {
+                    float sum = 0.0f;
+                    for (std::size_t ic = 0; ic < dynamic_input_channels; ++ic) {
+                        for (std::size_t kh = 0; kh < 3; ++kh) {
+                            for (std::size_t kw = 0; kw < 3; ++kw) {
+                                const auto ih = static_cast<std::size_t>(std::clamp<int>(
+                                    static_cast<int>(oh + kh) - 1, 0,
+                                    static_cast<int>(dynamic_height) - 1));
+                                const auto iw = static_cast<std::size_t>(std::clamp<int>(
+                                    static_cast<int>(ow + kw) - 1, 0,
+                                    static_cast<int>(dynamic_width) - 1));
+                                const auto weight_index = ((oc * dynamic_input_channels + ic) * 3 + kh) * 3 + kw;
+                                const float weight =
+                                    static_cast<float>(static_cast<int>(weight_index % 11) - 5) * 0.0078125f;
+                                sum += dynamic_input[(ic * dynamic_height + ih) * dynamic_width + iw] * weight;
+                            }
+                        }
+                    }
+                    const float bias = static_cast<float>(static_cast<int>(oc % 5) - 2) * 0.03125f;
+                    dynamic_expected[(oc * dynamic_height + oh) * dynamic_width + ow] = sum + bias;
+                }
+            }
+        }
+        run_model(dynamic_edge_path, dynamic_shape, dynamic_input, dynamic_expected);
 
         const auto transpose_path = temporary.path() / "transpose_conv.onnx";
         write_file(transpose_path, transpose_conv_model());

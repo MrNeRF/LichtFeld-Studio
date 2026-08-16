@@ -743,6 +743,12 @@ namespace lfs::onnx_vulkan::detail {
                conv&&conv->op_type=="Conv"&&int_attribute(*conv,"group").value_or(1)==1)
                 extend_lifetime(input_values[0]->device,node_step(conv));
         }
+        if(node.op_type=="Pad"&&node.outputs.size()==1&&!input_values.empty()&&input_values[0]){
+            const auto* conv=sole_consumer_of(node.outputs[0]);
+            if(string_attribute(node,"mode","constant")=="edge"&&conv&&conv->op_type=="Conv"&&
+               int_attribute(*conv,"group").value_or(1)==1)
+                extend_lifetime(input_values[0]->device,node_step(conv));
+        }
         if(node.op_type=="Mul"&&node.outputs.size()==1){
             const auto* qk=sole_consumer_of(node.outputs[0]);
             const auto* softmax=qk&&qk->outputs.size()==1?sole_consumer_of(qk->outputs[0]):nullptr;
@@ -940,6 +946,7 @@ namespace lfs::onnx_vulkan::detail {
                 auto& producer=dispatches[*dynamic->producer_dispatch];
                 if((producer.kernel!=Kernel::MatMul&&producer.kernel!=Kernel::MatMulTiled&&
                     producer.kernel!=Kernel::MatMulSmallK&&producer.kernel!=Kernel::MatMulLargeN&&
+                    producer.kernel!=Kernel::MatMul128&&
                     producer.kernel!=Kernel::MatMulPackedB)||producer.parameters[89]!=0)continue;
                 producer.values[2]=ensure_device(*bias);producer.parameters[88]=f32(1.0f);producer.parameters[89]=1;
                 producer.parameters[90]=u32(bias->element_offset);producer.parameters[91]=1;
@@ -1040,7 +1047,7 @@ namespace lfs::onnx_vulkan::detail {
                                     attention.parameters[97+axis]=u32(v_source->second.strides[axis]);
                                     attention.parameters[101+axis]=u32(outputs[0].strides[axis]);
                                 }
-                                attention.values={q_scaled->first->device,k_source->second.device,
+                                attention.values={ensure_device(*q_scaled->first),ensure_device(k_source->second),
                                                   ensure_device(v_source->second),{}};
                                 finish(std::move(attention));return {};
                             }
@@ -1057,8 +1064,8 @@ namespace lfs::onnx_vulkan::detail {
             auto ashape=a->shape,bshape=b->shape;
             if(ashape.size()==1)ashape.insert(ashape.begin(),1);
             if(bshape.size()==1)bshape.push_back(1);
-            const auto n_size=u32(bshape.back());
-            const auto m_size=u32(ashape[ashape.size()-2]);
+            const auto n_size=u32(tb?bshape[bshape.size()-2]:bshape.back());
+            const auto m_size=u32(ta?ashape.back():ashape[ashape.size()-2]);
             dispatch.parameters[80]=n_size;dispatch.parameters[81]=m_size;
             const auto k_size=u32(ta?ashape[ashape.size()-2]:ashape.back());
             dispatch.parameters[82]=k_size;
@@ -1101,6 +1108,7 @@ namespace lfs::onnx_vulkan::detail {
             auto pads=ints_attribute(node,"pads");if(pads.empty())pads={0,0,0,0};
             const auto groups=u32(int_attribute(node,"group").value_or(1));
             Value* convolution_input=input_values[0];
+            bool fused_edge_pad=false;
             bool fused_edge_relu=false;
             if(node.op_type=="Conv"&&groups==1&&input_values[1]->shape.size()==4&&
                input_values[1]->shape[2]==3&&input_values[1]->shape[3]==3&&
@@ -1108,34 +1116,45 @@ namespace lfs::onnx_vulkan::detail {
                std::ranges::all_of(pads,[](const auto value){return value==0;})){
                 const auto* pad_node=producer_of(node.inputs[0]);
                 const auto* relu_node=pad_node&&!pad_node->inputs.empty()?producer_of(pad_node->inputs[0]):nullptr;
-                auto source=relu_node&&!relu_node->inputs.empty()?values.find(relu_node->inputs[0]):values.end();
+                auto source=pad_node&&!pad_node->inputs.empty()?values.find(pad_node->inputs[0]):values.end();
                 auto pad_control=pad_node&&pad_node->inputs.size()>1?values.find(pad_node->inputs[1]):values.end();
                 if(pad_node&&pad_node->op_type=="Pad"&&string_attribute(*pad_node,"mode","constant")=="edge"&&
                    pad_node->outputs.size()==1&&sole_consumer_of(pad_node->outputs[0])==&node&&
-                   relu_node&&relu_node->op_type=="Relu"&&relu_node->outputs.size()==1&&
-                   sole_consumer_of(relu_node->outputs[0])==pad_node&&source!=values.end()&&
+                   source!=values.end()&&
                    source->second.type==ElementType::Float32&&source->second.shape.size()==4&&
                    pad_control!=values.end()&&pad_control->second.host){
                     auto edge_pads=integer_values(*pad_control->second.host,&node);
                     const std::vector<int64_t> expected_pads{0,0,1,1,0,0,1,1};
-                    const auto relu_value=values.find(relu_node->outputs[0]);
                     const auto pad_value=values.find(pad_node->outputs[0]);
                     if(edge_pads&&*edge_pads==expected_pads&&
                        source->second.shape[0]==outputs[0].shape[0]&&
                        source->second.shape[1]==input_values[1]->shape[1]&&
                        source->second.shape[2]==outputs[0].shape[2]&&
                        source->second.shape[3]==outputs[0].shape[3]&&
-                       last_use[relu_node->outputs[0]]==node_step(pad_node)&&
                        last_use[pad_node->outputs[0]]==node_step(&node)&&
-                       !nested_captures.contains(relu_node->outputs[0])&&
                        !nested_captures.contains(pad_node->outputs[0])&&
-                       relu_value!=values.end()&&pad_value!=values.end()&&
-                       relu_value->second.producer_dispatch&&pad_value->second.producer_dispatch&&
-                       dispatches.size()>=2&&*relu_value->second.producer_dispatch==dispatches.size()-2&&
+                       pad_value!=values.end()&&pad_value->second.producer_dispatch&&
+                       !dispatches.empty()&&
                        *pad_value->second.producer_dispatch==dispatches.size()-1){
-                        dispatches.resize(dispatches.size()-2);
+                        dispatches.resize(dispatches.size()-1);
+                        fused_edge_pad=true;
                         convolution_input=&source->second;
-                        fused_edge_relu=true;
+
+                        if(relu_node&&relu_node->op_type=="Relu"&&relu_node->inputs.size()==1&&
+                           relu_node->outputs.size()==1&&sole_consumer_of(relu_node->outputs[0])==pad_node&&
+                           last_use[relu_node->outputs[0]]==node_step(pad_node)&&
+                           !nested_captures.contains(relu_node->outputs[0])){
+                            const auto relu_source=values.find(relu_node->inputs[0]);
+                            const auto relu_value=values.find(relu_node->outputs[0]);
+                            if(relu_source!=values.end()&&relu_source->second.type==ElementType::Float32&&
+                               relu_source->second.shape==source->second.shape&&relu_value!=values.end()&&
+                               relu_value->second.producer_dispatch&&!dispatches.empty()&&
+                               *relu_value->second.producer_dispatch==dispatches.size()-1){
+                                dispatches.resize(dispatches.size()-1);
+                                convolution_input=&relu_source->second;
+                                fused_edge_relu=true;
+                            }
+                        }
                     }
                 }
             }
@@ -1166,8 +1185,9 @@ namespace lfs::onnx_vulkan::detail {
                 (output_padding.empty()||std::ranges::all_of(output_padding,[](const auto value){return value==0;}))&&
                 outputs[0].shape[2]==convolution_input->shape[2]*2&&
                 outputs[0].shape[3]==convolution_input->shape[3]*2;
-            if(fused_edge_relu){
-                dispatch.kernel=Kernel::Conv3x3Edge;dispatch.parameters[100]=1;
+            if(fused_edge_pad){
+                dispatch.kernel=oc<=32u?Kernel::Conv3x3Edge32:Kernel::Conv3x3Edge;
+                dispatch.parameters[100]=fused_edge_relu;
             }else if(transpose2x2){
                 dispatch.kernel=Kernel::ConvTranspose2x2;
             }else if(node.op_type=="ConvTranspose"){
@@ -1180,9 +1200,15 @@ namespace lfs::onnx_vulkan::detail {
                 dispatch.kernel=Kernel::Conv;
             }
             if(tiled){
-                const auto spatial=transpose2x2?u32(convolution_input->shape[2]*convolution_input->shape[3]):ow*oh;
-                dispatch.workgroups={(spatial+63u)/64u,(oc+63u)/64u,
-                                     u32(outputs[0].shape[0])*(transpose2x2?4u:1u)};
+                if(fused_edge_pad){
+                    const auto channel_tile=oc<=32u?32u:64u;
+                    dispatch.workgroups={(ow+7u)/8u,((oh+7u)/8u)*((oc+channel_tile-1u)/channel_tile),
+                                         u32(outputs[0].shape[0])};
+                }else{
+                    const auto spatial=transpose2x2?u32(convolution_input->shape[2]*convolution_input->shape[3]):ow*oh;
+                    dispatch.workgroups={(spatial+63u)/64u,(oc+63u)/64u,
+                                         u32(outputs[0].shape[0])*(transpose2x2?4u:1u)};
+                }
             }
             dispatch.values={ensure_device(*convolution_input),ref(1),ref(2),{}};
             finish(std::move(dispatch));return {};
@@ -1219,7 +1245,13 @@ namespace lfs::onnx_vulkan::detail {
                 (dispatch.parameters[89]==0u||dispatch.parameters[91]==1u);
             if(!contiguous_linear)continue;
             const auto batches=dispatch.workgroups[2];
-            const auto key=std::to_string(n)+":"+std::to_string(k)+":"+
+            const auto groups_for=[&](const Kernel kernel){
+                if(kernel==Kernel::MatMul128)
+                    return std::array<uint32_t,3>{(n+63u)/64u,(m+127u)/128u,batches};
+                const auto tile_x=kernel==Kernel::MatMulTiled?64u:128u;
+                return std::array<uint32_t,3>{(n+tile_x-1u)/tile_x,(m+63u)/64u,batches};
+            };
+            const auto key=std::to_string(m)+":"+std::to_string(n)+":"+std::to_string(k)+":"+
                 std::to_string(dispatch.parameters[89])+":"+
                 std::to_string(dispatch.parameters[92])+":"+
                 (dispatch.packed_b?"p":"r");
@@ -1227,16 +1259,16 @@ namespace lfs::onnx_vulkan::detail {
                 const bool packed=cached->packed&&dispatch.packed_b.has_value();
                 dispatch.kernel=packed?Kernel::MatMulPackedB:cached->kernel;
                 if(packed)dispatch.values[1]=*dispatch.packed_b;
-                const auto tile_x=dispatch.kernel==Kernel::MatMulTiled?64u:128u;
-                dispatch.workgroups={(n+tile_x-1u)/tile_x,(m+63u)/64u,batches};
+                dispatch.workgroups=groups_for(dispatch.kernel);
                 dispatch.parameters[96]=packed;continue;
             }
             std::vector<Choice> choices{
-                {Kernel::MatMulTiled,dispatch.values[1],{(n+63u)/64u,(m+63u)/64u,batches},0},
-                {Kernel::MatMulLargeN,dispatch.values[1],{(n+127u)/128u,(m+63u)/64u,batches},0},
+                {Kernel::MatMulTiled,dispatch.values[1],groups_for(Kernel::MatMulTiled),0},
+                {Kernel::MatMulLargeN,dispatch.values[1],groups_for(Kernel::MatMulLargeN),0},
+                {Kernel::MatMul128,dispatch.values[1],groups_for(Kernel::MatMul128),0},
             };
             if(dispatch.packed_b)choices.push_back({Kernel::MatMulPackedB,*dispatch.packed_b,
-                {(n+127u)/128u,(m+63u)/64u,batches},1});
+                groups_for(Kernel::MatMulPackedB),1});
             Choice best=choices.front();auto best_time=std::chrono::nanoseconds::max();
             for(const auto& choice:choices){
                 if(choice.groups[0]>runtime.maximum_group_count_x()||choice.groups[1]>runtime.maximum_group_count_y()||

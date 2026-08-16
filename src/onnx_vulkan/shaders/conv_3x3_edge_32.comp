@@ -1,7 +1,7 @@
 #version 450
 
 // Portable FP32 group-one 3x3 convolution over an unpadded NCHW source.
-// A 16x16 workgroup computes 64 output channels across an 8x8 spatial tile.
+// A 16x16 workgroup computes 32 output channels across an 8x8 spatial tile.
 // Loading the 10x10 source footprint once per four input channels reuses each
 // source value across neighbouring output pixels instead of reloading it for
 // every kernel position. The implicit one-pixel pad uses ONNX edge semantics;
@@ -9,7 +9,7 @@
 //
 // Dispatch as:
 //   x = ceil(p[80] / 8)
-//   y = ceil(p[81] / 8) * ceil(p[82] / 64)
+//   y = ceil(p[81] / 8) * ceil(p[82] / 32)
 //   z = batch count
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
@@ -20,8 +20,8 @@ layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
 
 const uint INPUT_CHANNEL_TILE = 4u;
 shared float tile_x[INPUT_CHANNEL_TILE][10][10];
-shared float tile_w[64][INPUT_CHANNEL_TILE][3][3];
-shared float tile_bias[64];
+shared float tile_w[32][INPUT_CHANNEL_TILE][3][3];
+shared float tile_bias[32];
 
 void main() {
     const uint lx = gl_LocalInvocationID.x;
@@ -38,19 +38,19 @@ void main() {
     const uint spatial_tile_y = gl_WorkGroupID.y - channel_block * spatial_tiles_y;
     const uint output_x_origin = gl_WorkGroupID.x * 8u;
     const uint output_y_origin = spatial_tile_y * 8u;
-    const uint channel_origin = channel_block * 64u;
+    const uint channel_origin = channel_block * 32u;
     const uint n = gl_WorkGroupID.z;
     const bool fuse_relu = p[100] != 0u;
 
-    if (local_linear < 64u) {
+    if (local_linear < 32u) {
         const uint oc = channel_origin + local_linear;
         tile_bias[local_linear] = p[95] != 0u && oc < output_channels
             ? uintBitsToFloat(bias[p[96] + oc * p[97]]) : 0.0;
     }
     barrier();
 
-    float accum[4][4];
-    for (uint row = 0u; row < 4u; ++row)
+    float accum[2][4];
+    for (uint row = 0u; row < 2u; ++row)
         for (uint col = 0u; col < 4u; ++col)
             accum[row][col] = 0.0;
 
@@ -77,7 +77,7 @@ void main() {
             tile_x[inner][patch_y][patch_x] = value;
         }
 
-        for (uint index = local_linear; index < 2304u; index += 256u) {
+        for (uint index = local_linear; index < 1152u; index += 256u) {
             const uint oc_inner = index / 36u;
             const uint remainder = index - oc_inner * 36u;
             const uint inner = remainder / 9u;
@@ -96,7 +96,7 @@ void main() {
         for (uint inner = 0u; inner < INPUT_CHANNEL_TILE; ++inner) {
             for (uint kh = 0u; kh < 3u; ++kh) {
                 for (uint kw = 0u; kw < 3u; ++kw) {
-                    for (uint row = 0u; row < 4u; ++row) {
+                    for (uint row = 0u; row < 2u; ++row) {
                         const float weight = tile_w[ly + row * 16u][inner][kh][kw];
                         for (uint col = 0u; col < 4u; ++col) {
                             const uint spatial = lx + col * 16u;
@@ -112,7 +112,7 @@ void main() {
         barrier();
     }
 
-    for (uint row = 0u; row < 4u; ++row) {
+    for (uint row = 0u; row < 2u; ++row) {
         const uint oc = channel_origin + ly + row * 16u;
         if (oc >= output_channels)
             continue;

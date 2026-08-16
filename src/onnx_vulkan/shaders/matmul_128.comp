@@ -1,0 +1,132 @@
+#version 450
+
+// Portable FP32 MatMul for contiguous linear layers. A 16x16 workgroup
+// computes a 128x64 output tile. Each invocation owns eight rows and four
+// columns. The K tile is 16 elements wide and uses 12 KiB of shared memory.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BBuffer { uint b[]; };
+layout(std430, set = 0, binding = 2) readonly buffer CBuffer { uint c[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer OBuffer { uint o[]; };
+layout(std430, set = 0, binding = 4) readonly buffer PBuffer { uint p[]; };
+
+shared float tile_a[128][16];
+shared float tile_b[16][64];
+
+void main() {
+    const uint output_rank = p[2];
+    const uint a_rank = p[3];
+    const uint b_rank = p[4];
+    const uint n_size = p[80];
+    const uint m_size = p[81];
+    const uint k_size = p[82];
+    if (p[96] != 0u || output_rank < 2u || output_rank > 8u ||
+        a_rank != output_rank || b_rank != 2u ||
+        p[85] != 0u || p[86] != 0u || p[89] > 1u ||
+        (p[89] != 0u && p[91] != 1u) ||
+        m_size == 0u || n_size == 0u)
+        return;
+
+    const uint batch_rank = output_rank - 2u;
+    if (p[16u + batch_rank] != m_size ||
+        p[17u + batch_rank] != n_size ||
+        p[24u + batch_rank] != m_size ||
+        p[25u + batch_rank] != k_size ||
+        p[40] != k_size || p[41] != n_size ||
+        p[32u + batch_rank] != k_size ||
+        p[33u + batch_rank] != 1u ||
+        p[48] != n_size || p[49] != 1u)
+        return;
+
+    uint batch_count = 1u;
+    uint expected_a_stride = m_size * k_size;
+    for (int axis = int(batch_rank) - 1; axis >= 0; --axis) {
+        const uint uaxis = uint(axis);
+        const uint extent = p[16u + uaxis];
+        if (extent == 0u || p[24u + uaxis] != extent ||
+            p[32u + uaxis] != expected_a_stride)
+            return;
+        batch_count *= extent;
+        expected_a_stride *= extent;
+    }
+    if (gl_WorkGroupID.z >= batch_count ||
+        gl_WorkGroupID.x > (n_size - 1u) / 64u ||
+        gl_WorkGroupID.y > (m_size - 1u) / 128u)
+        return;
+
+    const uint lx = gl_LocalInvocationID.x;
+    const uint ly = gl_LocalInvocationID.y;
+    const uint local_linear = ly * 16u + lx;
+    const uint n_origin = gl_WorkGroupID.x * 64u;
+    const uint m_origin = gl_WorkGroupID.y * 128u;
+    const uint a_base = p[83] + gl_WorkGroupID.z * m_size * k_size;
+    const uint b_base = p[84];
+
+    vec4 accum0 = vec4(0.0);
+    vec4 accum1 = vec4(0.0);
+    vec4 accum2 = vec4(0.0);
+    vec4 accum3 = vec4(0.0);
+    vec4 accum4 = vec4(0.0);
+    vec4 accum5 = vec4(0.0);
+    vec4 accum6 = vec4(0.0);
+    vec4 accum7 = vec4(0.0);
+
+    for (uint k_origin = 0u; k_origin < k_size; k_origin += 16u) {
+        for (uint index = local_linear; index < 2048u; index += 256u) {
+            const uint row = index >> 4u;
+            const uint inner = index & 15u;
+            const uint m = m_origin + row;
+            const uint k = k_origin + inner;
+            tile_a[row][inner] = m < m_size && k < k_size
+                ? uintBitsToFloat(a[a_base + m * k_size + k]) : 0.0;
+        }
+        for (uint index = local_linear; index < 1024u; index += 256u) {
+            const uint inner = index >> 6u;
+            const uint col = index & 63u;
+            const uint k = k_origin + inner;
+            const uint n = n_origin + col;
+            tile_b[inner][col] = k < k_size && n < n_size
+                ? uintBitsToFloat(b[b_base + k * n_size + n]) : 0.0;
+        }
+        barrier();
+
+        for (uint inner = 0u; inner < 16u; ++inner) {
+            const vec4 weights = vec4(tile_b[inner][lx],
+                                      tile_b[inner][lx + 16u],
+                                      tile_b[inner][lx + 32u],
+                                      tile_b[inner][lx + 48u]);
+            accum0 += tile_a[ly][inner] * weights;
+            accum1 += tile_a[ly + 16u][inner] * weights;
+            accum2 += tile_a[ly + 32u][inner] * weights;
+            accum3 += tile_a[ly + 48u][inner] * weights;
+            accum4 += tile_a[ly + 64u][inner] * weights;
+            accum5 += tile_a[ly + 80u][inner] * weights;
+            accum6 += tile_a[ly + 96u][inner] * weights;
+            accum7 += tile_a[ly + 112u][inner] * weights;
+        }
+        barrier();
+    }
+
+    const vec4 sums[8] = vec4[8](accum0, accum1, accum2, accum3,
+                                 accum4, accum5, accum6, accum7);
+    const float alpha = uintBitsToFloat(p[87]);
+    const float beta = uintBitsToFloat(p[88]);
+    for (uint row = 0u; row < 8u; ++row) {
+        const uint m = m_origin + ly + row * 16u;
+        if (m >= m_size)
+            continue;
+        for (uint panel = 0u; panel < 4u; ++panel) {
+            const uint n = n_origin + lx + panel * 16u;
+            if (n >= n_size)
+                continue;
+            float value = alpha * sums[row][panel];
+            if (p[89] != 0u) {
+                const uint c_index = p[90] +
+                    (p[91] == 1u ? n * p[92] : m * p[92] + n * p[93]);
+                value += beta * uintBitsToFloat(c[c_index]);
+            }
+            o[gl_WorkGroupID.z * m_size * n_size + m * n_size + n] =
+                floatBitsToUint(value);
+        }
+    }
+}

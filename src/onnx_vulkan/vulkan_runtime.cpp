@@ -7,6 +7,7 @@
 #include "conv.comp.spv.h"
 #include "conv_1x1.comp.spv.h"
 #include "conv_3x3_edge.comp.spv.h"
+#include "conv_3x3_edge_32.comp.spv.h"
 #include "conv_transpose.comp.spv.h"
 #include "conv_transpose_2x2.comp.spv.h"
 #include "conv_transpose_tiled.comp.spv.h"
@@ -15,6 +16,7 @@
 #include "attention.comp.spv.h"
 #include "layer_norm.comp.spv.h"
 #include "matmul.comp.spv.h"
+#include "matmul_128.comp.spv.h"
 #include "matmul_large_n.comp.spv.h"
 #include "matmul_packed_b.comp.spv.h"
 #include "matmul_small_k.comp.spv.h"
@@ -299,9 +301,11 @@ namespace lfs::onnx_vulkan::detail {
         const std::array<std::span<const std::uint32_t>, static_cast<std::size_t>(Kernel::Count)> code{
             words(shaders::kElementwiseSpv), words(shaders::kTransformSpv), words(shaders::kMatMulSpv),
             words(shaders::kMatMulTiledSpv), words(shaders::kMatMulSmallKSpv),
-            words(shaders::kMatMulLargeNSpv), words(shaders::kMatMulPackedBSpv),
+            words(shaders::kMatMulLargeNSpv), words(shaders::kMatMul128Spv),
+            words(shaders::kMatMulPackedBSpv),
             words(shaders::kConvSpv), words(shaders::kConv1x1Spv),
             words(shaders::kConvTiledSpv), words(shaders::kConv3x3EdgeSpv),
+            words(shaders::kConv3x3Edge32Spv),
             words(shaders::kConvTransposeSpv), words(shaders::kConvTransposeTiledSpv),
             words(shaders::kConvTranspose2x2Spv), words(shaders::kQkvPackSpv),
             words(shaders::kAttentionSpv), words(shaders::kReduceSpv),
