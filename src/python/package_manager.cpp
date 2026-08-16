@@ -12,10 +12,12 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <regex>
 #include <sstream>
 #include <vector>
+#include <string>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -268,10 +270,46 @@ namespace lfs::python {
             bundled = true;
         }
 
-        if (cached.empty())
-            LOG_WARN("Bundled uv not found");
-        else if (bundled)
+        if (cached.empty()) {
+            // Fall back to PATH when FetchUV did not bundle uv next to the binary.
+#ifdef _WIN32
+            wchar_t found[MAX_PATH];
+            if (SearchPathW(nullptr, L"uv.exe", nullptr, MAX_PATH, found, nullptr) > 0) {
+                cached = found;
+            }
+#else
+            if (const char* path_env = std::getenv("PATH")) {
+                std::string paths = path_env;
+                size_t start = 0;
+                while (start <= paths.size()) {
+                    const size_t end = paths.find(':', start);
+                    const auto dir = paths.substr(start, end == std::string::npos ? std::string::npos : end - start);
+                    if (!dir.empty()) {
+                        const auto candidate = std::filesystem::path(dir) / UV_BINARY;
+                        std::error_code ec;
+                        if (std::filesystem::exists(candidate, ec) && !ec) {
+                            cached = candidate;
+                            break;
+                        }
+                    }
+                    if (end == std::string::npos)
+                        break;
+                    start = end + 1;
+                }
+            }
+#endif
+        }
+
+        if (cached.empty()) {
+            LOG_WARN(
+                "uv not found beside the executable or on PATH. "
+                "Download uv from https://github.com/astral-sh/uv/releases and place it next to the binary, "
+                "or install uv so it is available on PATH.");
+        } else if (bundled) {
             LOG_INFO("Using bundled uv: {}", lfs::core::path_to_utf8(cached));
+        } else {
+            LOG_INFO("Using PATH uv (unpinned): {}", lfs::core::path_to_utf8(cached));
+        }
 
         return cached;
     }
