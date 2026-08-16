@@ -27,15 +27,24 @@ namespace lfs::vis::gui {
         float vram_hud_height = -1.0f;
         std::string vram_hud_active_tab;
         std::vector<std::string> vram_hud_collapsed_paths;
+        bool perf_hud_visible = false;
+        bool perf_hud_expanded = true;
 
-        void save() const;
+        // Writes user-global UI preferences only. Project layout is persisted
+        // exclusively in the .licht GUIL chapter.
+        bool saveUserPreferences() const;
         bool load();
-        bool saveTo(const std::filesystem::path& path) const;
-        bool loadFrom(const std::filesystem::path& path);
+
+        // Explicit paths keep persistence behavior testable without changing
+        // the process-wide user configuration directory.
+        bool saveUserPreferencesTo(const std::filesystem::path& path) const;
+        bool loadFrom(const std::filesystem::path& legacy_path,
+                      const std::filesystem::path& user_preferences_path);
         static std::filesystem::path getConfigDir();
 
     private:
-        static std::filesystem::path getConfigPath();
+        static std::filesystem::path getLegacyConfigPath();
+        static std::filesystem::path getUserPreferencesPath();
     };
 
 } // namespace lfs::vis::gui

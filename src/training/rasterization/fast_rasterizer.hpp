@@ -137,6 +137,10 @@ namespace lfs::training {
         float scale_reg_weight = 0.0f;
         float flatten_reg_weight = 0.0f;
         float opacity_reg_weight = 0.0f;
+        // Optional persistent device scalars (caller zeros each step). Accumulated in
+        // preprocess_backward so loss-only reg kernels can be skipped on the FastGS path.
+        float* scale_reg_loss_out = nullptr;
+        float* opacity_reg_loss_out = nullptr;
         const float* sparsity_opa_sigmoid = nullptr;
         const float* sparsity_z = nullptr;
         const float* sparsity_u = nullptr;
@@ -176,6 +180,10 @@ namespace lfs::training {
 
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_fast_rasterizer_thread_local_caches() noexcept;
+
+    // Release FastGS sort high-water workspaces on the calling thread.
+    // Invoked from training-thread shutdown alongside other TLS CUDA caches.
+    void release_fastgs_sort_workspace_buffers() noexcept;
 
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput fast_rasterize(

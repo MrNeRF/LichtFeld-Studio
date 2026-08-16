@@ -46,8 +46,10 @@ foreach(_lfs_argument_index RANGE ${_lfs_first_compiler_argument} ${_lfs_last_ar
     list(APPEND _lfs_compiler_command "${_lfs_argument}")
 endforeach()
 
+# Checkout-normalized paths can otherwise let sccache's direct mode reuse a
+# dependency manifest from another worktree whose headers have different content.
 execute_process(
-    COMMAND ${_lfs_compiler_command}
+    COMMAND ${CMAKE_COMMAND} -E env SCCACHE_DIRECT=false ${_lfs_compiler_command}
     WORKING_DIRECTORY "${LFS_COMPILER_CACHE_BINARY_ROOT}"
     RESULT_VARIABLE _lfs_compiler_result)
 

@@ -84,9 +84,30 @@ namespace {
         std::expected<void, std::string> startTraining() override {
             return std::unexpected("not implemented");
         }
-        std::expected<std::filesystem::path, std::string> saveCheckpoint(
-            const std::optional<std::filesystem::path>&) override {
-            return std::unexpected("not implemented");
+        lfs::Result<void> projectSave(bool) override {
+            return {};
+        }
+        lfs::Result<void> projectSaveAs(
+            const std::filesystem::path&, bool) override {
+            return {};
+        }
+        lfs::Result<lfs::vis::ProjectOpenOutcome> projectOpen(
+            const std::filesystem::path&,
+            lfs::vis::ProjectSwitchDisposition) override {
+            return lfs::vis::ProjectOpenOutcome::Opened;
+        }
+        lfs::Result<void> projectCompact() override {
+            return {};
+        }
+        lfs::Result<bool> projectIsDirty() override {
+            return false;
+        }
+        lfs::Result<bool> projectHasPath() override {
+            return false;
+        }
+        lfs::Result<lfs::vis::ProjectInfo>
+        projectGetInfo() override {
+            return lfs::vis::ProjectInfo{};
         }
 
     private:

@@ -1152,7 +1152,7 @@ namespace lfs::vis::editor {
                             const int delta_start = data[index + 1].get<int>();
                             const int length = data[index + 2].get<int>();
                             const int token_type_index = data[index + 3].get<int>();
-                            const uint32_t token_modifiers = data[index + 4].get<uint32_t>();
+                            const std::uint32_t token_modifiers = data[index + 4].get<std::uint32_t>();
 
                             line += delta_line;
                             start_character =

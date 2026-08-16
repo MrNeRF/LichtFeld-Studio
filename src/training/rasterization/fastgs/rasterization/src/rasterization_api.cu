@@ -13,6 +13,7 @@
 #include "rasterization_api.h"
 #include "rasterization_config.h"
 #include "utils.h"
+#include <atomic>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <functional>
@@ -27,27 +28,16 @@ namespace fast_lfs::rasterization {
         thread_local std::string last_forward_error;
         thread_local std::string last_backward_error;
 
+        // count cudaPointerGetAttributes preflight calls (test/telemetry).
+        std::atomic<std::uint64_t> g_preflight_pointer_attr_calls{0};
+
         void free_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept {
-            if (!ptr) {
-                return;
-            }
-            lfs::diagnostics::VramProfiler::instance().recordDeallocation(ptr);
-#if CUDART_VERSION >= 11020
-            const cudaError_t status = cudaFreeAsync(ptr, stream);
-#else
-            (void)stream;
-            const cudaError_t status = cudaFree(ptr);
-#endif
-            if (status != cudaSuccess) {
-                lfs::core::ensure_cuda_success(
-                    status, "FastGS sorted-index buffer free",
-                    lfs::core::detail::format_cuda_safe(
-                        "ptr={}, stream={}", ptr, static_cast<void*>(stream)),
-                    LFS_SOURCE_SITE_CURRENT(),
-                    lfs::core::CudaFailureDisposition::LogOnlyNoLatch);
-            }
+            // persistent retained sort buffers — no cudaFree.
+            release_sorted_primitive_indices(ptr, stream);
         }
 
+#ifndef NDEBUG
+        // Debug-only preflight helpers (skipped entirely in Release).
         const char* cuda_memory_type_name(cudaMemoryType type) {
             switch (type) {
             case cudaMemoryTypeHost: return "host";
@@ -103,6 +93,7 @@ namespace fast_lfs::rasterization {
                            lfs::core::detail::format_cuda_safe(
                                "FastGS forward preflight: {} is null", name));
 
+            g_preflight_pointer_attr_calls.fetch_add(1, std::memory_order_relaxed);
             cudaPointerAttributes attrs{};
             const cudaError_t attr_err = cudaPointerGetAttributes(&attrs, ptr);
             if (attr_err != cudaSuccess) {
@@ -121,6 +112,7 @@ namespace fast_lfs::rasterization {
                     "but the current CUDA device is {}",
                     name, attrs.device, current_device));
         }
+#endif // !NDEBUG
 
         void validate_fastgs_forward_cuda_preflight(
             const float* means_ptr,
@@ -140,9 +132,7 @@ namespace fast_lfs::rasterization {
             int width,
             int height,
             int n_tiles) {
-            const int current_device = checked_current_cuda_device("FastGS forward preflight");
-            checked_no_pending_cuda_error("FastGS forward preflight");
-
+            // Cheap dimension checks always run (not host driver calls).
             if (n_primitives <= 0 || active_sh_bases <= 0 || active_sh_bases > 16 ||
                 sh_layout_bases <= 0 || sh_layout_bases > 16 ||
                 width <= 0 || height <= 0 || n_tiles <= 0) {
@@ -164,6 +154,11 @@ namespace fast_lfs::rasterization {
                     ", sh_layout_bases=" + std::to_string(sh_layout_bases) + ")");
             }
 
+#ifndef NDEBUG
+            // Full CUDA pointer attribute validation — debug builds only.
+            const int current_device = checked_current_cuda_device("FastGS forward preflight");
+            checked_no_pending_cuda_error("FastGS forward preflight");
+
             checked_device_pointer_on_current_device(means_ptr, "means_ptr", current_device);
             checked_device_pointer_on_current_device(scales_raw_ptr, "scales_raw_ptr", current_device);
             checked_device_pointer_on_current_device(rotations_raw_ptr, "rotations_raw_ptr", current_device);
@@ -177,8 +172,29 @@ namespace fast_lfs::rasterization {
             checked_device_pointer_on_current_device(image_ptr, "image_ptr", current_device);
             checked_device_pointer_on_current_device(alpha_ptr, "alpha_ptr", current_device);
             checked_device_pointer_on_current_device(depth_ptr, "depth_ptr", current_device);
+#else
+            (void)means_ptr;
+            (void)scales_raw_ptr;
+            (void)rotations_raw_ptr;
+            (void)opacities_raw_ptr;
+            (void)sh_coefficients_0_ptr;
+            (void)sh_coefficients_rest_ptr;
+            (void)w2c_ptr;
+            (void)cam_position_ptr;
+            (void)image_ptr;
+            (void)alpha_ptr;
+            (void)depth_ptr;
+#endif
         }
     } // namespace
+
+    std::uint64_t preflight_pointer_attr_call_count() noexcept {
+        return g_preflight_pointer_attr_calls.load(std::memory_order_relaxed);
+    }
+
+    void reset_preflight_pointer_attr_call_count() noexcept {
+        g_preflight_pointer_attr_calls.store(0, std::memory_order_relaxed);
+    }
 
     ForwardContext forward_raw(
         const float* means_ptr,
@@ -193,6 +209,8 @@ namespace fast_lfs::rasterization {
         float* alpha_ptr,
         float* depth_ptr,
         float* normal_ptr,
+        const float* bg_color_ptr,
+        const float* bg_image_ptr,
         int n_primitives,
         int active_sh_bases,
         int sh_layout_bases,
@@ -205,7 +223,10 @@ namespace fast_lfs::rasterization {
         float near_plane,
         float far_plane,
         bool mip_filter,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const float* sh_value_bounds_ptr,
+        unsigned int sh_value_n_cells,
+        unsigned int sh_value_bits) {
 
         if (stream == nullptr) {
             stream = lfs::core::getCurrentCUDAStream();
@@ -298,8 +319,10 @@ namespace fast_lfs::rasterization {
 
             float3* primitive_normals = nullptr;
             if (normal_ptr != nullptr) {
+#ifndef NDEBUG
                 checked_device_pointer_on_current_device(normal_ptr, "normal_ptr",
                                                          checked_current_cuda_device("FastGS forward preflight"));
+#endif
                 primitive_normals = reinterpret_cast<float3*>(
                     arena_allocator(static_cast<size_t>(n_primitives) * sizeof(float3)));
                 if (!primitive_normals) {
@@ -328,6 +351,9 @@ namespace fast_lfs::rasterization {
                                                    opacities_raw_ptr,
                                                    reinterpret_cast<const float3*>(sh_coefficients_0_ptr),
                                                    reinterpret_cast<const float4*>(sh_coefficients_rest_ptr),
+                                                   reinterpret_cast<const float2*>(sh_value_bounds_ptr),
+                                                   sh_value_n_cells,
+                                                   sh_value_bits,
                                                    reinterpret_cast<const float4*>(w2c_ptr),
                                                    reinterpret_cast<const float3*>(cam_position_ptr),
                                                    image_ptr,
@@ -335,6 +361,8 @@ namespace fast_lfs::rasterization {
                                                    depth_ptr,
                                                    normal_ptr,
                                                    primitive_normals,
+                                                   bg_color_ptr,
+                                                   bg_image_ptr,
                                                    n_primitives,
                                                    active_sh_bases,
                                                    sh_layout_bases,
@@ -352,7 +380,7 @@ namespace fast_lfs::rasterization {
             // Verify allocations happened
             if (forward_result.n_instances > 0 && !forward_result.sorted_primitive_indices) {
                 // Internal invariant guard, not one of the three OOM-class causes:
-                // StreamOrderedDeviceBuffer::allocate throws on real exhaustion, so
+                // ExactAsync workspace allocation throws on real exhaustion, so
                 // this firing means broken bookkeeping — must not classify retryable.
                 return fail("OUT_OF_MEMORY: Sorted primitive indices were not allocated despite n_instances > 0", false);
             }
@@ -381,6 +409,21 @@ namespace fast_lfs::rasterization {
 
             return ctx;
 
+        } catch (const std::overflow_error& e) {
+            // pathological instance counts (garbage scale/rot after
+            // post-grow corruption, etc.). Soft-fail the frame; trainer skips
+            // the step instead of killing the run.
+            if (frame_started && arena) {
+                arena->end_frame(frame_id);
+                frame_started = false;
+            }
+            last_forward_error = e.what();
+            ForwardContext error_ctx = {};
+            error_ctx.success = false;
+            error_ctx.instance_count_overflow = true;
+            error_ctx.error_message = last_forward_error.c_str();
+            error_ctx.frame_id = frame_id;
+            return error_ctx;
         } catch (const std::exception& e) {
             // Clean up frame on error and return error context instead of throwing
             if (frame_started && arena) {
@@ -436,7 +479,10 @@ namespace fast_lfs::rasterization {
         float center_y,
         bool mip_filter,
         DensificationType densification_type,
-        const FusedAdamSettings* fused_adam) {
+        const FusedAdamSettings* fused_adam,
+        const float* shN_value_bounds_ptr,
+        unsigned shN_value_n_cells,
+        unsigned shN_value_bits) {
 
         // The forward chose the stream and chained the arena frame on it; the
         // backward shares the same context/arena frame and must match.
@@ -613,6 +659,9 @@ namespace fast_lfs::rasterization {
                 mip_filter,
                 densification_type,
                 *fused_adam,
+                reinterpret_cast<const float2*>(shN_value_bounds_ptr),
+                shN_value_n_cells,
+                shN_value_bits,
                 stream);
 
             // Mark frame as complete
@@ -694,50 +743,33 @@ namespace fast_lfs::rasterization {
         const auto ctx = forward_raw(
             means, scales, rotations, opacities, sh0, nullptr,
             w2c, cam_pos, image, alpha, depth, nullptr,
+            /*bg_color_ptr=*/nullptr, /*bg_image_ptr=*/nullptr,
             NUM_GAUSSIANS, 1, 1,
             IMG_WIDTH, IMG_HEIGHT,
             FOCAL, FOCAL, CENTER_X, CENTER_Y,
             0.01f, 100.0f);
 
         if (ctx.success) {
-            // Allocate image/alpha gradients plus quantised Adam moments (uint8 m/v + per-primitive
-            // fp32 scales). Gaussian gradients are fused.
-            constexpr int PARAM_ELEMENTS = NUM_GAUSSIANS * (3 + 3 + 4 + 1 + 3);
-            constexpr int PARAM_ROWS = NUM_GAUSSIANS * 5; // means,scaling,rotation,opacity,sh0
+            // Allocate image/alpha gradients. Gaussian gradients are fused.
             constexpr size_t GRAD_SIZE = IMG_WIDTH * IMG_HEIGHT * 4 * sizeof(float);
-            constexpr size_t MOMENT_Q_SIZE = PARAM_ELEMENTS * 2 * sizeof(std::uint8_t);
-            constexpr size_t SCALE_SIZE = PARAM_ROWS * 2 * sizeof(float);
-            constexpr size_t GRAD_BUFFER_SIZE = GRAD_SIZE + MOMENT_Q_SIZE + SCALE_SIZE;
             lfs::training::cuda_scratch::DeviceBuffer gradient_buffer(
-                GRAD_BUFFER_SIZE, stream, "fastgs.warmup.gradients");
+                GRAD_SIZE, stream, "fastgs.warmup.gradients");
             char* const grad_buffer = gradient_buffer.as<char>();
             LFS_CUDA_CHECK_MSG(
-                cudaMemsetAsync(grad_buffer, 0, GRAD_BUFFER_SIZE, stream),
+                cudaMemsetAsync(grad_buffer, 0, GRAD_SIZE, stream),
                 "FastGS warmup gradient initialization");
 
             float* const grad_image = reinterpret_cast<float*>(grad_buffer);
             float* const grad_alpha = grad_image + IMG_WIDTH * IMG_HEIGHT * 3;
-            std::uint8_t* const exp_avg_q = reinterpret_cast<std::uint8_t*>(grad_buffer + GRAD_SIZE);
-            std::uint8_t* const exp_avg_sq_q = exp_avg_q + PARAM_ELEMENTS;
-            float* const exp_avg_scale = reinterpret_cast<float*>(grad_buffer + GRAD_SIZE + MOMENT_Q_SIZE);
-            float* const exp_avg_sq_scale = exp_avg_scale + PARAM_ROWS;
 
-            int moment_offset = 0;
-            int scale_offset = 0;
-            auto make_param = [&](float* param, const int n_elements, const int n_attributes) {
+            auto make_param = [](float* param, const int n_elements, const int n_attributes) {
                 FusedAdamParam adam_param;
                 adam_param.param = param;
-                adam_param.exp_avg_q = exp_avg_q + moment_offset;
-                adam_param.exp_avg_sq_q = exp_avg_sq_q + moment_offset;
-                adam_param.exp_avg_scale = exp_avg_scale + scale_offset;
-                adam_param.exp_avg_sq_scale = exp_avg_sq_scale + scale_offset;
                 adam_param.n_elements = n_elements;
                 adam_param.n_attributes = n_attributes;
                 adam_param.step_size = 0.0f;
                 adam_param.bias_correction2_sqrt_rcp = 1.0f;
                 adam_param.enabled = true;
-                moment_offset += n_elements;
-                scale_offset += n_elements / n_attributes;
                 return adam_param;
             };
 

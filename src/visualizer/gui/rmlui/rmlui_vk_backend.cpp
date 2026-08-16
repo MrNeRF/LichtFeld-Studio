@@ -16,6 +16,7 @@
 #include <RmlUi/Core/Math.h>
 #include <RmlUi/Core/Profiling.h>
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -325,6 +326,25 @@ void RenderInterface_VK::SetTextureDebugName(const Rml::TextureHandle texture_ha
                                   view_name.c_str());
 }
 
+RenderInterface_VK::VmaStatistics RenderInterface_VK::QueryVmaStatistics() const {
+    VmaStatistics result{};
+    if (m_p_allocator == VK_NULL_HANDLE || m_p_physical_device == VK_NULL_HANDLE)
+        return result;
+
+    VkPhysicalDeviceMemoryProperties memory_properties{};
+    vkGetPhysicalDeviceMemoryProperties(m_p_physical_device, &memory_properties);
+
+    std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+    vmaGetHeapBudgets(m_p_allocator, budgets.data());
+    for (std::uint32_t i = 0; i < memory_properties.memoryHeapCount; ++i) {
+        if ((memory_properties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0)
+            continue;
+        result.block_bytes += budgets[i].statistics.blockBytes;
+        result.allocation_bytes += budgets[i].statistics.allocationBytes;
+    }
+    return result;
+}
+
 Rml::CompiledGeometryHandle RenderInterface_VK::CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) {
     RMLUI_ZoneScopedN("Vulkan - CompileGeometry");
 
@@ -482,7 +502,7 @@ void RenderInterface_VK::EnableScissorRegion(bool enable) {
     if (m_is_use_scissor_specified == false) {
         m_is_transformed_scissor_enabled = false;
         m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled;
-        m_scissor = ContextClipScissor();
+        m_scissor = ClampToCacheCaptureArea(ContextClipScissor());
         vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
     }
 }
@@ -500,7 +520,7 @@ void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
             int indices[6] = {0, 2, 1, 0, 3, 2};
 
             m_is_use_stencil_pipeline = true;
-            m_scissor = ContextClipScissor();
+            m_scissor = ClampToCacheCaptureArea(ContextClipScissor());
             vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
 
 #ifdef RMLUI_VK_DEBUG
@@ -527,8 +547,10 @@ void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
 
             VkClearRect clear_rect = {};
             clear_rect.layerCount = 1;
-            clear_rect.rect.extent.width = m_width;
-            clear_rect.rect.extent.height = m_height;
+            clear_rect.rect = ClampToCacheCaptureArea(VkRect2D{
+                {0, 0},
+                {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height)},
+            });
 
             vkCmdClearAttachments(m_p_current_command_buffer, 1, &clear_attachment, 1, &clear_rect);
 
@@ -541,7 +563,7 @@ void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
 
             m_is_transformed_scissor_enabled = true;
             m_is_apply_to_regular_geometry_stencil = true;
-            m_scissor = ContextClipScissor();
+            m_scissor = ClampToCacheCaptureArea(ContextClipScissor());
             vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
         } else {
             m_is_transformed_scissor_enabled = false;
@@ -559,7 +581,7 @@ void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
             m_scissor.offset.y = top;
             m_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
             m_scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
-            m_scissor = IntersectContextClip(m_scissor);
+            m_scissor = ClampToCacheCaptureArea(IntersectContextClip(m_scissor));
 
 #ifdef RMLUI_VK_DEBUG
             VkDebugUtilsLabelEXT info{};
@@ -598,8 +620,10 @@ void RenderInterface_VK::RenderToClipMask(Rml::ClipMaskOperation operation, Rml:
 
     VkClearRect clear_rect = {};
     clear_rect.layerCount = 1;
-    clear_rect.rect.extent.width = m_width;
-    clear_rect.rect.extent.height = m_height;
+    clear_rect.rect = ClampToCacheCaptureArea(VkRect2D{
+        {0, 0},
+        {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height)},
+    });
 
     // Match RmlUi's legacy compatibility behavior for intersect until the Vulkan renderer has
     // stencil increment/decrement pipelines for true nested clip-mask intersections.
@@ -702,6 +726,10 @@ void RenderInterface_VK::PopLayer() {
 }
 
 Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
+    return SaveLayerAsTexture({});
+}
+
+Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture(Rml::TextureHandle reuse_texture) {
     if (m_p_current_command_buffer == nullptr || m_render_layer_stack_size <= 0)
         return {};
 
@@ -713,6 +741,7 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
 
     VkRect2D bounds = m_is_use_scissor_specified ? m_scissor : ContextClipScissor();
     bounds = IntersectContextClip(bounds);
+    bounds = ClampToCacheCaptureArea(bounds);
     bounds.offset.x = Rml::Math::Clamp(bounds.offset.x, 0, source_layer->width);
     bounds.offset.y = Rml::Math::Clamp(bounds.offset.y, 0, source_layer->height);
     if (bounds.offset.x + static_cast<int>(bounds.extent.width) > source_layer->width)
@@ -724,79 +753,105 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
 
     EndActiveRendering();
 
-    auto* texture = new texture_data_t{};
-    const VkFormat format = m_swapchain_format.format;
+    const int capture_w = static_cast<int>(bounds.extent.width);
+    const int capture_h = static_cast<int>(bounds.extent.height);
     const VkExtent3D extent{bounds.extent.width, bounds.extent.height, 1};
 
-    VkImageCreateInfo image_info{};
-    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    image_info.imageType = VK_IMAGE_TYPE_2D;
-    image_info.format = format;
-    image_info.extent = extent;
-    image_info.mipLevels = 1;
-    image_info.arrayLayers = 1;
-    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VmaAllocationCreateInfo allocation_info{};
-    allocation_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-    VmaAllocationInfo allocation_stats{};
-    VkResult status = vmaCreateImage(m_p_allocator,
-                                     &image_info,
-                                     &allocation_info,
-                                     &texture->m_p_vk_image,
-                                     &texture->m_p_vma_allocation,
-                                     &allocation_stats);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create saved RmlUi layer texture");
-    if (status != VK_SUCCESS) {
-        delete texture;
-        return {};
+    texture_data_t* texture = nullptr;
+    bool reusing = false;
+    if (reuse_texture != 0) {
+        auto* candidate = reinterpret_cast<texture_data_t*>(reuse_texture);
+        if (candidate && candidate->m_p_vk_image != VK_NULL_HANDLE && candidate->m_p_vk_image_view != VK_NULL_HANDLE &&
+            candidate->m_width == capture_w && candidate->m_height == capture_h) {
+            texture = candidate;
+            reusing = true;
+        }
     }
-    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
-                                  (uint64_t)texture->m_p_vk_image,
-                                  "rmlui.saved-layer.image");
-    texture->m_barrier_generation = ++m_image_barrier_generation;
-    texture->m_vram_scope = "vulkan.rmlui.saved_layer_texture";
-    texture->m_vram_label = TextureVramLabel("saved_layer",
-                                             "clip",
-                                             static_cast<int>(bounds.extent.width),
-                                             static_cast<int>(bounds.extent.height),
-                                             texture);
-    texture->m_vram_allocation_size = allocation_stats.size;
-    RecordRmlUiVram(texture->m_vram_scope, texture->m_vram_label, texture->m_vram_allocation_size);
 
-    VkImageViewCreateInfo view_info{};
-    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    view_info.image = texture->m_p_vk_image;
-    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    view_info.format = format;
-    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    view_info.subresourceRange.baseMipLevel = 0;
-    view_info.subresourceRange.levelCount = 1;
-    view_info.subresourceRange.baseArrayLayer = 0;
-    view_info.subresourceRange.layerCount = 1;
-    status = vkCreateImageView(m_p_device, &view_info, nullptr, &texture->m_p_vk_image_view);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create saved RmlUi layer texture view");
-    if (status != VK_SUCCESS) {
-        if (!texture->m_vram_scope.empty() && !texture->m_vram_label.empty())
-            RecordRmlUiVram(texture->m_vram_scope, texture->m_vram_label, 0);
-        vmaDestroyImage(m_p_allocator, texture->m_p_vk_image, texture->m_p_vma_allocation);
-        delete texture;
-        return {};
+    if (!reusing) {
+        texture = new texture_data_t{};
+        const VkFormat format = m_swapchain_format.format;
+
+        VkImageCreateInfo image_info{};
+        image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        image_info.imageType = VK_IMAGE_TYPE_2D;
+        image_info.format = format;
+        image_info.extent = extent;
+        image_info.mipLevels = 1;
+        image_info.arrayLayers = 1;
+        image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VmaAllocationCreateInfo allocation_info{};
+        allocation_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        VmaAllocationInfo allocation_stats{};
+        VkResult status = vmaCreateImage(m_p_allocator,
+                                         &image_info,
+                                         &allocation_info,
+                                         &texture->m_p_vk_image,
+                                         &texture->m_p_vma_allocation,
+                                         &allocation_stats);
+        RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create saved RmlUi layer texture");
+        if (status != VK_SUCCESS) {
+            delete texture;
+            return {};
+        }
+        (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                      (uint64_t)texture->m_p_vk_image,
+                                      "rmlui.saved-layer.image");
+        vmaSetAllocationName(m_p_allocator,
+                             texture->m_p_vma_allocation,
+                             "RmlUi saved layer texture");
+        texture->m_barrier_generation = ++m_image_barrier_generation;
+        texture->m_width = capture_w;
+        texture->m_height = capture_h;
+        texture->m_vram_scope = "vulkan.rmlui.saved_layer_texture";
+        texture->m_vram_label = TextureVramLabel("saved_layer",
+                                                 "clip",
+                                                 capture_w,
+                                                 capture_h,
+                                                 texture);
+        texture->m_vram_allocation_size = allocation_stats.size;
+        RecordRmlUiVram(texture->m_vram_scope, texture->m_vram_label, texture->m_vram_allocation_size);
+
+        VkImageViewCreateInfo view_info{};
+        view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view_info.image = texture->m_p_vk_image;
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = format;
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        view_info.subresourceRange.baseMipLevel = 0;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.baseArrayLayer = 0;
+        view_info.subresourceRange.layerCount = 1;
+        status = vkCreateImageView(m_p_device, &view_info, nullptr, &texture->m_p_vk_image_view);
+        RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create saved RmlUi layer texture view");
+        if (status != VK_SUCCESS) {
+            if (!texture->m_vram_scope.empty() && !texture->m_vram_label.empty())
+                RecordRmlUiVram(texture->m_vram_scope, texture->m_vram_label, 0);
+            vmaDestroyImage(m_p_allocator, texture->m_p_vk_image, texture->m_p_vma_allocation);
+            delete texture;
+            return {};
+        }
+        (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                      (uint64_t)texture->m_p_vk_image_view,
+                                      "rmlui.saved-layer.view");
+        texture->m_p_vk_sampler = m_p_sampler_linear;
     }
-    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
-                                  (uint64_t)texture->m_p_vk_image_view,
-                                  "rmlui.saved-layer.view");
-    texture->m_p_vk_sampler = m_p_sampler_linear;
 
     TransitionImageLayout(source_layer->m_color.m_p_vk_image, source_layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     source_layer->m_color_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 
-    TransitionImageLayout(texture->m_p_vk_image, texture->m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    // Fresh images: UNDEFINED → TRANSFER_DST (discard). Reused cache textures were last in
+    // SHADER_READ_ONLY after composite sampling; WAR against those fragment reads on this queue.
+    const VkImageLayout dst_old_layout =
+        reusing ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    TransitionImageLayout(texture->m_p_vk_image, texture->m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, dst_old_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
     VkImageCopy copy_region{};
     copy_region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -819,7 +874,8 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
 
     BeginLayerRendering(static_cast<Rml::LayerHandle>(m_render_layer_stack_size), false);
 
-    RegisterLiveTexture(texture);
+    if (!reusing)
+        RegisterLiveTexture(texture);
     return reinterpret_cast<Rml::TextureHandle>(texture);
 }
 
@@ -1291,9 +1347,7 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
         return {};
     };
 
-#ifdef RMLUI_VK_DEBUG
     vmaSetAllocationName(m_p_allocator, p_allocation, name.c_str());
-#endif
 
     if (use_host_image_copy) {
         VkHostImageLayoutTransitionInfoEXT to_sampled{};
@@ -1429,12 +1483,41 @@ void RenderInterface_VK::SetContextOffset(float offset_x, float offset_y) {
     ApplyTransformState();
 }
 
+void RenderInterface_VK::BeginCacheCapture(const int x, const int y, const int width, const int height) {
+    if (width <= 0 || height <= 0) {
+        EndCacheCapture();
+        return;
+    }
+
+    const int left = Rml::Math::Clamp(x, 0, m_width);
+    const int top = Rml::Math::Clamp(y, 0, m_height);
+    const int right = Rml::Math::Clamp(x + width, 0, m_width);
+    const int bottom = Rml::Math::Clamp(y + height, 0, m_height);
+    if (right <= left || bottom <= top) {
+        EndCacheCapture();
+        return;
+    }
+
+    m_cache_capture_active = true;
+    m_cache_capture_render_area.offset.x = left;
+    m_cache_capture_render_area.offset.y = top;
+    m_cache_capture_render_area.extent.width = static_cast<uint32_t>(right - left);
+    m_cache_capture_render_area.extent.height = static_cast<uint32_t>(bottom - top);
+}
+
+void RenderInterface_VK::EndCacheCapture() {
+    m_cache_capture_active = false;
+    m_cache_capture_render_area = {};
+}
+
 void RenderInterface_VK::SetContextClipRect(float x1, float y1, float x2, float y2) {
     if (x2 <= x1 || y2 <= y1) {
         m_context_clip_enabled = true;
         m_context_clip_scissor = {};
-        if (m_p_current_command_buffer)
-            vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_context_clip_scissor);
+        if (m_p_current_command_buffer) {
+            VkRect2D empty = ClampToCacheCaptureArea(m_context_clip_scissor);
+            vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &empty);
+        }
         return;
     }
 
@@ -1448,8 +1531,10 @@ void RenderInterface_VK::SetContextClipRect(float x1, float y1, float x2, float 
     m_context_clip_scissor.offset.y = top;
     m_context_clip_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
     m_context_clip_scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
-    if (m_p_current_command_buffer)
-        vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_context_clip_scissor);
+    if (m_p_current_command_buffer) {
+        VkRect2D scissor = ClampToCacheCaptureArea(m_context_clip_scissor);
+        vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &scissor);
+    }
 }
 
 void RenderInterface_VK::ApplyTransformState() {
@@ -1525,6 +1610,26 @@ VkRect2D RenderInterface_VK::IntersectContextClip(VkRect2D scissor) const noexce
     scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
     scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
     return scissor;
+}
+
+VkRect2D RenderInterface_VK::ClampToCacheCaptureArea(VkRect2D rect) const noexcept {
+    if (!m_cache_capture_active)
+        return rect;
+
+    const int left = std::max(rect.offset.x, m_cache_capture_render_area.offset.x);
+    const int top = std::max(rect.offset.y, m_cache_capture_render_area.offset.y);
+    const int right = std::min(rect.offset.x + static_cast<int>(rect.extent.width),
+                               m_cache_capture_render_area.offset.x +
+                                   static_cast<int>(m_cache_capture_render_area.extent.width));
+    const int bottom = std::min(rect.offset.y + static_cast<int>(rect.extent.height),
+                                m_cache_capture_render_area.offset.y +
+                                    static_cast<int>(m_cache_capture_render_area.extent.height));
+
+    rect.offset.x = left;
+    rect.offset.y = top;
+    rect.extent.width = static_cast<uint32_t>(std::max(0, right - left));
+    rect.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
+    return rect;
 }
 
 bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
@@ -1651,6 +1756,7 @@ void RenderInterface_VK::BeginExternalFrame(const VkCommandBuffer command_buffer
     SetContextOffset(0.0f, 0.0f);
     SetTransform(nullptr);
     m_context_clip_enabled = false;
+    EndCacheCapture();
 }
 
 void RenderInterface_VK::EndExternalFrame() {
@@ -1666,6 +1772,7 @@ void RenderInterface_VK::EndExternalFrame() {
     m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     m_active_render_target = active_render_target_t::None;
     m_p_current_command_buffer = nullptr;
+    EndCacheCapture();
 }
 
 void RenderInterface_VK::ResetContextRenderState() {
@@ -1680,8 +1787,11 @@ void RenderInterface_VK::ResetContextRenderState() {
     SetContextOffset(0.0f, 0.0f);
     SetTransform(nullptr);
     m_context_clip_enabled = false;
+    // Do not clear cache-capture mode here: manager may call Reset between
+    // BeginCacheCapture and PushLayer/Render.
     vkCmdSetViewport(m_p_current_command_buffer, 0, 1, &m_viewport);
-    vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor_original);
+    VkRect2D scissor = ClampToCacheCaptureArea(m_scissor_original);
+    vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &scissor);
     vkCmdSetStencilReference(m_p_current_command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
 }
 
@@ -2144,6 +2254,9 @@ RenderInterface_VK::buffer_data_t RenderInterface_VK::CreateResource_StagingBuff
 
     VkResult status = vmaCreateBuffer(m_p_allocator, &info, &info_allocation, &p_buffer, &p_allocation, &info_stats);
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateBuffer");
+    if (status == VkResult::VK_SUCCESS && p_allocation != VK_NULL_HANDLE) {
+        vmaSetAllocationName(m_p_allocator, p_allocation, "RmlUi staging buffer");
+    }
 
 #ifdef RMLUI_VK_DEBUG
     Rml::Log::Message(Rml::Log::LT_DEBUG, "Allocated buffer [%s]", FormatByteSize(info_stats.size).c_str());
@@ -2320,6 +2433,9 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
                                   (uint64_t)layer.m_color.m_p_vk_image,
                                   color_image_name.c_str());
+    vmaSetAllocationName(m_p_allocator,
+                         layer.m_color.m_p_vma_allocation,
+                         color_image_name.c_str());
     layer.m_color.m_vram_scope = "vulkan.rmlui.render_layer";
     layer.m_color.m_vram_label = TextureVramLabel("layer_color", "rmlui", m_width, m_height, &layer.m_color);
     layer.m_color.m_vram_allocation_size = color_allocation_stats.size;
@@ -2367,6 +2483,9 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
                                   (uint64_t)layer.m_depth_stencil.m_p_vk_image,
                                   depth_image_name.c_str());
+    vmaSetAllocationName(m_p_allocator,
+                         layer.m_depth_stencil.m_p_vma_allocation,
+                         depth_image_name.c_str());
     layer.m_depth_stencil.m_vram_scope = "vulkan.rmlui.render_layer";
     layer.m_depth_stencil.m_vram_label = TextureVramLabel("layer_depth", "rmlui", m_width, m_height, &layer.m_depth_stencil);
     layer.m_depth_stencil.m_vram_allocation_size = depth_allocation_stats.size;
@@ -2423,7 +2542,7 @@ void RenderInterface_VK::ResetDynamicRenderState() {
         return;
     vkCmdSetViewport(m_p_current_command_buffer, 0, 1, &m_viewport);
     VkRect2D scissor = (m_is_use_scissor_specified && !m_is_transformed_scissor_enabled) ? m_scissor : ContextClipScissor();
-    scissor = IntersectContextClip(scissor);
+    scissor = ClampToCacheCaptureArea(IntersectContextClip(scissor));
     vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &scissor);
     vkCmdSetStencilReference(m_p_current_command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
 }
@@ -2465,11 +2584,24 @@ void RenderInterface_VK::BeginLayerRendering(Rml::LayerHandle layer_handle, bool
     depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depth_attachment.clearValue = depth_clear;
 
+    // Full-layer default; during cache capture, restrict renderArea so loadOp CLEAR
+    // only touches the panel region (scissors are clamped to the same rect).
+    VkRect2D render_area{};
+    render_area.offset = {0, 0};
+    render_area.extent = {static_cast<uint32_t>(layer->width), static_cast<uint32_t>(layer->height)};
+    if (m_cache_capture_active) {
+        render_area = ClampToCacheCaptureArea(render_area);
+        // Empty capture area would make begin-rendering illegal; fall back to full layer.
+        if (render_area.extent.width == 0 || render_area.extent.height == 0) {
+            render_area.offset = {0, 0};
+            render_area.extent = {static_cast<uint32_t>(layer->width),
+                                  static_cast<uint32_t>(layer->height)};
+        }
+    }
+
     VkRenderingInfo rendering_info{};
     rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    rendering_info.renderArea.offset = {0, 0};
-    rendering_info.renderArea.extent = {static_cast<uint32_t>(layer->width),
-                                        static_cast<uint32_t>(layer->height)};
+    rendering_info.renderArea = render_area;
     rendering_info.layerCount = 1;
     rendering_info.colorAttachmentCount = 1;
     rendering_info.pColorAttachments = &color_attachment;
@@ -2705,6 +2837,14 @@ void RenderInterface_VK::MemoryPool::Initialize(VkDeviceSize byte_size, VkDevice
     auto status = vmaCreateBuffer(m_p_vk_allocator, &info, &info_alloc, &m_p_buffer, &m_p_buffer_alloc, &info_stats);
 
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateBuffer");
+    if (status == VkResult::VK_SUCCESS && m_p_buffer_alloc != VK_NULL_HANDLE) {
+        vmaSetAllocationName(m_p_vk_allocator,
+                             m_p_buffer_alloc,
+                             "RmlUi geometry memory pool");
+        RecordRmlUiVram("vulkan.rmlui.geometry_pool",
+                        "vertex_index_uniform",
+                        info_stats.size);
+    }
 
     VmaVirtualBlockCreateInfo info_virtual_block = {};
     info_virtual_block.size = m_memory_total_size;
@@ -2733,6 +2873,7 @@ void RenderInterface_VK::MemoryPool::Shutdown() noexcept {
 
     vmaUnmapMemory(m_p_vk_allocator, m_p_buffer_alloc);
     vmaDestroyVirtualBlock(m_p_block);
+    RecordRmlUiVram("vulkan.rmlui.geometry_pool", "vertex_index_uniform", 0);
     vmaDestroyBuffer(m_p_vk_allocator, m_p_buffer, m_p_buffer_alloc);
 }
 

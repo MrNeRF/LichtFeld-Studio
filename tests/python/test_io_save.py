@@ -169,6 +169,25 @@ class TestSavePLY:
                 },
             )
 
+    def test_save_ply_default_writes_provenance(self, lf, benchmark_ply, tmp_output):
+        result = lf.io.load(str(benchmark_ply))
+        output_path = tmp_output / "default_provenance.ply"
+
+        lf.io.save_ply(result.splat_data, str(output_path))
+
+        assert b"lichtfeld_provenance" in output_path.read_bytes()
+
+    def test_save_ply_strip_writes_minimal_stamp(self, lf, benchmark_ply, tmp_output):
+        result = lf.io.load(str(benchmark_ply))
+        output_path = tmp_output / "no_provenance.ply"
+
+        lf.io.save_ply(result.splat_data, str(output_path), include_provenance=False)
+
+        data = output_path.read_bytes()
+        assert b"lichtfeld_provenance" in data
+        assert b"build_commit" in data
+        assert b"export_id" not in data
+
     @pytest.mark.slow
     def test_save_point_cloud_ply_with_extra_attribute(self, lf, tmp_output, numpy):
         """Test save_point_cloud_ply forwards extra per-vertex properties."""
@@ -231,6 +250,70 @@ class TestSaveSPZ:
 
         # SPZ should be smaller than binary PLY
         assert spz_path.stat().st_size < ply_path.stat().st_size
+
+    def test_save_spz_default_writes_v4(self, lf, benchmark_ply, tmp_output):
+        """Default save_spz writes SPZ v4 (NGSP/zstd container)."""
+        result = lf.io.load(str(benchmark_ply))
+        output_path = tmp_output / "default_v4.spz"
+
+        lf.io.save_spz(result.splat_data, str(output_path))
+
+        with open(output_path, "rb") as f:
+            assert f.read(4) == b"NGSP"
+
+    def test_save_spz_version3_writes_gzip(self, lf, benchmark_ply, tmp_output):
+        """save_spz(version=3) writes legacy gzip container."""
+        result = lf.io.load(str(benchmark_ply))
+        output_path = tmp_output / "escape_v3.spz"
+
+        lf.io.save_spz(result.splat_data, str(output_path), version=3)
+
+        with open(output_path, "rb") as f:
+            assert f.read(2) == b"\x1f\x8b"
+
+    def test_save_spz_default_writes_provenance(self, lf, benchmark_ply, tmp_output):
+        result = lf.io.load(str(benchmark_ply))
+        output_path = tmp_output / "default_provenance.spz"
+
+        lf.io.save_spz(result.splat_data, str(output_path))
+
+        assert b"lichtfeld_provenance" in output_path.read_bytes()
+
+    def test_save_spz_strip_writes_minimal_stamp(self, lf, benchmark_ply, tmp_output):
+        result = lf.io.load(str(benchmark_ply))
+        output_path = tmp_output / "no_provenance.spz"
+
+        lf.io.save_spz(result.splat_data, str(output_path), include_provenance=False)
+
+        data = output_path.read_bytes()
+        assert b"lichtfeld_provenance" in data
+        assert b"build_commit" in data
+        assert b"export_id" not in data
+
+
+class TestAssetScannerSpzHeader:
+    """asset_scanner._parse_spz_header coverage for generated v3/v4 files."""
+
+    def test_parse_spz_header_v3_and_v4(self, lf, benchmark_ply, tmp_output):
+        from lfs_plugins.asset_scanner import AssetScanner
+
+        result = lf.io.load(str(benchmark_ply))
+        v3_path = tmp_output / "header_v3.spz"
+        v4_path = tmp_output / "header_v4.spz"
+        lf.io.save_spz(result.splat_data, str(v3_path), version=3)
+        lf.io.save_spz(result.splat_data, str(v4_path), version=4)
+
+        scanner = AssetScanner()
+        v3 = scanner._parse_spz_header(str(v3_path))
+        v4 = scanner._parse_spz_header(str(v4_path))
+
+        assert v3 is not None
+        assert v3["version"] == 3
+        assert v3["vertex_count"] == result.splat_data.num_points
+
+        assert v4 is not None
+        assert v4["version"] == 4
+        assert v4["vertex_count"] == result.splat_data.num_points
 
 
 class TestSaveSOG:

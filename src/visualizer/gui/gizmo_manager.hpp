@@ -67,6 +67,13 @@ namespace lfs::vis {
 
             [[nodiscard]] TransformSpace getTransformSpace() const { return transform_space_; }
             void setTransformSpace(TransformSpace space);
+            [[nodiscard]] GizmoOperation getOperation() const {
+                return current_operation_;
+            }
+            void setOperation(GizmoOperation operation) {
+                current_operation_ = operation;
+                node_gizmo_operation_ = operation;
+            }
             [[nodiscard]] PivotMode getPivotMode() const { return pivot_mode_; }
             void setPivotMode(PivotMode mode);
             [[nodiscard]] MultiTransformMode getMultiTransformMode() const { return multi_transform_mode_; }
@@ -78,6 +85,9 @@ namespace lfs::vis {
             LFS_VIS_API void setCropToolShape(const std::string& shape);
             [[nodiscard]] LFS_VIS_API std::string cropToolShape() const;
             LFS_VIS_API void setCropToolOperation(const std::string& operation);
+            [[nodiscard]] bool ensureCropToolStateForRestore() {
+                return ensureCropToolState();
+            }
             [[nodiscard]] LFS_VIS_API std::string cropToolOperation() const;
             LFS_VIS_API void applyActiveCropTool();
             LFS_VIS_API void deleteActiveCropToolVolume();

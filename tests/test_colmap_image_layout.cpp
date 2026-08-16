@@ -5,13 +5,17 @@
 #include "io/formats/colmap.hpp"
 #include "io/loaders/colmap_loader.hpp"
 
+#include <OpenImageIO/imageio.h>
+
 #include <atomic>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <system_error>
 #include <vector>
 
@@ -167,6 +171,85 @@ namespace {
         return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
     }
 
+    struct BicyclePixels {
+        int width = 0;
+        int height = 0;
+        std::vector<unsigned char> rgb;
+    };
+
+    BicyclePixels read_bicycle_pixels() {
+        const fs::path source = fs::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8679.JPG";
+        std::unique_ptr<OIIO::ImageInput> input(OIIO::ImageInput::open(source.string()));
+        if (!input) {
+            throw std::runtime_error("Failed to open bicycle source image");
+        }
+        const OIIO::ImageSpec spec = input->spec();
+        BicyclePixels pixels{spec.width, spec.height,
+                             std::vector<unsigned char>(static_cast<size_t>(spec.width) * spec.height * 3)};
+        if (!input->read_image(0, 0, 0, 3, OIIO::TypeDesc::UINT8, pixels.rgb.data())) {
+            throw std::runtime_error("Failed to read bicycle source image");
+        }
+        return pixels;
+    }
+
+    void write_derived_image(const fs::path& path,
+                             const BicyclePixels& source,
+                             const int width,
+                             const int height) {
+        fs::create_directories(path.parent_path());
+        std::vector<unsigned char> pixels(static_cast<size_t>(width) * height * 3);
+        for (int y = 0; y < height; ++y) {
+            const int source_y = std::min(source.height - 1, y * source.height / height);
+            for (int x = 0; x < width; ++x) {
+                const int source_x = std::min(source.width - 1, x * source.width / width);
+                const size_t dst = (static_cast<size_t>(y) * width + x) * 3;
+                const size_t src = (static_cast<size_t>(source_y) * source.width + source_x) * 3;
+                pixels[dst + 0] = source.rgb[src + 0];
+                pixels[dst + 1] = source.rgb[src + 1];
+                pixels[dst + 2] = source.rgb[src + 2];
+            }
+        }
+        std::unique_ptr<OIIO::ImageOutput> output(OIIO::ImageOutput::create(path.string()));
+        if (!output) {
+            throw std::runtime_error("Failed to create derived image");
+        }
+        OIIO::ImageSpec spec(width, height, 3, OIIO::TypeDesc::UINT8);
+        if (!output->open(path.string(), spec) ||
+            !output->write_image(OIIO::TypeDesc::UINT8, pixels.data())) {
+            throw std::runtime_error("Failed to write derived image");
+        }
+        output->close();
+    }
+
+    void write_derived_depth(const fs::path& path,
+                             const BicyclePixels& source,
+                             const int width,
+                             const int height) {
+        fs::create_directories(path.parent_path());
+        std::vector<uint16_t> depth(static_cast<size_t>(width) * height);
+        for (int y = 0; y < height; ++y) {
+            const int source_y = std::min(source.height - 1, y * source.height / height);
+            for (int x = 0; x < width; ++x) {
+                const int source_x = std::min(source.width - 1, x * source.width / width);
+                const size_t src = (static_cast<size_t>(source_y) * source.width + source_x) * 3;
+                const uint32_t luma = static_cast<uint32_t>(source.rgb[src + 0]) * 77u +
+                                      static_cast<uint32_t>(source.rgb[src + 1]) * 150u +
+                                      static_cast<uint32_t>(source.rgb[src + 2]) * 29u;
+                depth[static_cast<size_t>(y) * width + x] = static_cast<uint16_t>((luma >> 8u) * 257u);
+            }
+        }
+        std::unique_ptr<OIIO::ImageOutput> output(OIIO::ImageOutput::create(path.string()));
+        if (!output) {
+            throw std::runtime_error("Failed to create derived depth");
+        }
+        OIIO::ImageSpec spec(width, height, 1, OIIO::TypeDesc::UINT16);
+        if (!output->open(path.string(), spec) ||
+            !output->write_image(OIIO::TypeDesc::UINT16, depth.data())) {
+            throw std::runtime_error("Failed to write derived depth");
+        }
+        output->close();
+    }
+
 } // namespace
 
 TEST_F(ColmapImageLayoutTest, ResolvesNestedImagesByBasename) {
@@ -181,7 +264,7 @@ TEST_F(ColmapImageLayoutTest, ResolvesNestedImagesByBasename) {
     write_png(nested_mask);
 
     auto result =
-        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_masks = true});
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
     const auto& cameras = std::get<0>(result->value);
@@ -190,6 +273,51 @@ TEST_F(ColmapImageLayoutTest, ResolvesNestedImagesByBasename) {
     EXPECT_EQ(cameras[0]->image_name(), "frame_0001.png");
     EXPECT_TRUE(fs::equivalent(cameras[0]->image_path(), nested_image));
     EXPECT_TRUE(fs::equivalent(cameras[0]->mask_path(), nested_mask));
+}
+
+TEST_F(ColmapImageLayoutTest, AssociatesMaskPathWhenMaskLoadingDisabled) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path image_path = dataset_dir / "images" / "frame_0001.png";
+    const fs::path mask_path = dataset_dir / "masks" / "frame_0001.png";
+
+    write_minimal_colmap_text_dataset(dataset_dir, "frame_0001.png");
+    write_png(image_path);
+    write_png(mask_path);
+
+    auto result = lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    const auto& cameras = std::get<0>(result->value);
+
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_TRUE(cameras[0]->has_mask());
+    EXPECT_TRUE(fs::equivalent(cameras[0]->mask_path(), mask_path));
+}
+
+TEST_F(ColmapImageLayoutTest, LoadsDatasetWithPartialMaskCoverage) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path image_1 = dataset_dir / "images" / "frame_0001.png";
+    const fs::path image_2 = dataset_dir / "images" / "frame_0002.png";
+    const fs::path mask_1 = dataset_dir / "masks" / "frame_0001.png";
+
+    write_minimal_colmap_text_dataset(
+        dataset_dir,
+        std::vector<std::string>{"frame_0001.png", "frame_0002.png"});
+    write_png(image_1);
+    write_png(image_2);
+    write_png(mask_1);
+
+    auto result =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_masks = true});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    const auto& cameras = std::get<0>(result->value);
+
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_TRUE(cameras[0]->has_mask());
+    EXPECT_TRUE(fs::equivalent(cameras[0]->mask_path(), mask_1));
+    EXPECT_FALSE(cameras[1]->has_mask());
+    EXPECT_TRUE(cameras[1]->mask_path().empty());
 }
 
 TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedColmapIds) {
@@ -261,7 +389,7 @@ TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
     write_png(depth_path);
 
     auto result =
-        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_depths = true});
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
     const auto& cameras = std::get<0>(result->value);
@@ -269,6 +397,118 @@ TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
     ASSERT_EQ(cameras.size(), 1u);
     EXPECT_TRUE(cameras[0]->has_depth());
     EXPECT_TRUE(fs::equivalent(cameras[0]->depth_path(), depth_path));
+}
+
+TEST_F(ColmapImageLayoutTest, BrokenDepthIsIgnoredUnlessDepthLoadingIsEnabled) {
+    const fs::path dataset_dir = temp_dir_ / "broken_depth_dataset";
+    write_minimal_colmap_text_dataset(dataset_dir, "frame_0000.png");
+    write_png(dataset_dir / "images" / "frame_0000.png");
+    write_text_file(dataset_dir / "depth" / "frame_0000.png", "not an image");
+
+    const auto without_depth =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+    ASSERT_TRUE(without_depth.has_value()) << without_depth.error().format();
+    ASSERT_EQ(std::get<0>(without_depth->value).size(), 1u);
+    EXPECT_TRUE(std::get<0>(without_depth->value)[0]->has_depth()); // associated, unvalidated
+
+    const auto with_depth =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_depths = true});
+    ASSERT_FALSE(with_depth.has_value());
+}
+
+TEST_F(ColmapImageLayoutTest, AmbiguousMaskOnlyFailsWhenMaskLoadingEnabled) {
+    const fs::path dataset_dir = temp_dir_ / "ambiguous_mask_dataset";
+    const fs::path image_path = dataset_dir / "images" / "frame_0001.png";
+    const fs::path mask_a = dataset_dir / "masks" / "Frame_0001.png";
+    const fs::path mask_b = dataset_dir / "masks" / "FRAME_0001.PNG";
+
+    write_minimal_colmap_text_dataset(dataset_dir, "frame_0001.png");
+    write_png(image_path);
+    write_png(mask_a);
+    write_png(mask_b);
+    if (fs::equivalent(mask_a, mask_b)) {
+        GTEST_SKIP() << "case-insensitive filesystem";
+    }
+
+    const auto without_masks =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+    ASSERT_TRUE(without_masks.has_value()) << without_masks.error().format();
+    ASSERT_EQ(std::get<0>(without_masks->value).size(), 1u);
+    EXPECT_TRUE(std::get<0>(without_masks->value)[0]->mask_path().empty());
+
+    const auto with_masks =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_masks = true});
+    ASSERT_FALSE(with_masks.has_value());
+}
+
+TEST_F(ColmapImageLayoutTest, CaseVariantMaskResolvedByExactPathMatch) {
+    const fs::path dataset_dir = temp_dir_ / "exact_mask_dataset";
+    const fs::path image_path = dataset_dir / "images" / "frame_0001.png";
+    const fs::path mask_a = dataset_dir / "masks" / "frame_0001.png";
+    const fs::path mask_b = dataset_dir / "masks" / "FRAME_0001.PNG";
+
+    write_minimal_colmap_text_dataset(dataset_dir, "frame_0001.png");
+    write_png(image_path);
+    write_png(mask_a);
+    write_png(mask_b);
+    if (fs::equivalent(mask_a, mask_b)) {
+        GTEST_SKIP() << "case-insensitive filesystem";
+    }
+
+    const auto with_masks =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_masks = true});
+    ASSERT_TRUE(with_masks.has_value()) << with_masks.error().format();
+    ASSERT_EQ(std::get<0>(with_masks->value).size(), 1u);
+    EXPECT_TRUE(fs::equivalent(std::get<0>(with_masks->value)[0]->mask_path(), mask_a));
+}
+
+TEST_F(ColmapImageLayoutTest, AcceptsIntegerRatioDepthForScaledImages) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for COLMAP camera load";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "scaled_dataset";
+    const fs::path image_path = dataset_dir / "images_2" / "frame.png";
+    const fs::path depth_path = dataset_dir / "depth" / "frame.png";
+    const BicyclePixels source = read_bicycle_pixels();
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "1 PINHOLE " + std::to_string(source.width) + " " + std::to_string(source.height) +
+                        " 1000 1000 618.5 411\n");
+    write_text_file(dataset_dir / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n");
+    write_derived_image(image_path, source, source.width / 2, source.height / 2);
+    // The source is 1237x822; use 1236x822 so this is not the original size,
+    // but is exactly 2x the requested 618x411 image dimensions.
+    write_derived_depth(depth_path, source, source.width - 1, source.height);
+
+    const auto result =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images_2", {.load_depths = true});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_EQ(std::get<0>(result->value).size(), 1u);
+    EXPECT_TRUE(std::get<0>(result->value)[0]->has_depth());
+}
+
+TEST_F(ColmapImageLayoutTest, RejectsNonIntegerRatioDepthForScaledImages) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for COLMAP camera load";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "mismatched_scaled_dataset";
+    const fs::path image_path = dataset_dir / "images_2" / "frame.png";
+    const fs::path depth_path = dataset_dir / "depth" / "frame.png";
+    const BicyclePixels source = read_bicycle_pixels();
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "1 PINHOLE " + std::to_string(source.width) + " " + std::to_string(source.height) +
+                        " 1000 1000 618.5 411\n");
+    write_text_file(dataset_dir / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n");
+    write_derived_image(image_path, source, source.width / 2, source.height / 2);
+    write_derived_depth(depth_path, source, source.width, source.height - 1);
+
+    const auto result =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images_2", {.load_depths = true});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::DEPTH_SIZE_MISMATCH);
 }
 
 TEST_F(ColmapImageLayoutTest, DepthDirCacheResolvesDepthsFolderAndDepthExtension) {
@@ -325,7 +565,7 @@ TEST_F(ColmapImageLayoutTest, ResolvesDuplicateNestedImagesAndMasksByRelativePat
     write_png(mask_b);
 
     auto result =
-        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_masks = true});
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
     auto& [cameras, scene_center] = result->value;
@@ -382,7 +622,7 @@ TEST_F(ColmapImageLayoutTest, ValidationFailsWhenMasksDoNotMirrorRelativeImageLa
     write_png(dataset_dir / "masks" / "cam_a" / "frame_0001.png");
     write_png(dataset_dir / "masks" / "cam_b" / "frame_0001.png");
 
-    auto result = lfs::io::validate_colmap_dataset_layout(dataset_dir, "images");
+    auto result = lfs::io::validate_colmap_dataset_layout(dataset_dir, "images", {.load_masks = true});
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
     EXPECT_NE(result.error().message.find("mask"), std::string::npos);

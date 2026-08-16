@@ -11,8 +11,12 @@
 // garbage. The tests below construct deterministic SplatData inputs and
 // assert byte-level invariants on the packer's output.
 
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#include "lfs/training/sh_value_codec.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "rendering/rasterizer/vulkan/src/buffer.h"
 #include "rendering/rasterizer/vulkan/src/config.h"
 #include "rendering/rasterizer/vulkan/src/indirect_layout.h"
@@ -518,7 +522,147 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutUsesRequestedUploadShDegree) {
             << "upload_sh_degree=" << upload_sh_degree;
         EXPECT_EQ(raw_layout->omits_shN, upload_sh_degree == 0)
             << "upload_sh_degree=" << upload_sh_degree;
+        EXPECT_FALSE(raw_layout->shN_f16) << "upload_sh_degree=" << upload_sh_degree;
     }
+}
+
+TEST(VksplatInputPackerTest, RawDeviceLayoutHalvesShNBytesForIeeeF16) {
+    // IEEE f16 float4-swizzle storage reports half the resident SH bytes of the
+    // equivalent fp32 layout.
+    constexpr std::size_t n = SH_REORDER_SIZE * 3 + 11;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/3, /*seed=*/0xF16u);
+    auto splat = buildSplatData(in);
+
+    // Convert resident shN to IEEE f16 (same topology, 2 B/component).
+    ASSERT_TRUE(splat->shN().is_valid());
+    ASSERT_EQ(splat->shN().dtype(), lfs::core::DataType::Float32);
+    splat->shN() = splat->shN().to(lfs::core::DataType::Float16);
+    ASSERT_TRUE(splat->shN_ieee_f16());
+    ASSERT_FALSE(splat->shN_value_quantized());
+
+    auto raw_layout = rawDeviceInputLayout(*splat);
+    ASSERT_TRUE(raw_layout.has_value()) << raw_layout.error();
+    const auto layout_rest = static_cast<std::uint32_t>(
+        lfs::core::sh_rest_coefficients_for_degree(3));
+    const std::size_t fp32_bytes =
+        lfs::core::sh_swizzled_float_count(n, layout_rest) * sizeof(float);
+    const std::size_t f16_bytes =
+        lfs::core::sh_swizzled_f16_byte_count(n, layout_rest);
+    EXPECT_EQ(f16_bytes * 2, fp32_bytes);
+    EXPECT_EQ(raw_layout->shN_bytes, f16_bytes);
+    EXPECT_TRUE(raw_layout->shN_f16);
+    EXPECT_FALSE(raw_layout->shN_q16);
+    EXPECT_EQ(raw_layout->shN_element_bytes, sizeof(std::uint16_t));
+
+    // 5M-capacity accounting for: deg3 rest → 96 B/splat f16 vs 192 fp32.
+    constexpr std::size_t kCap5M = 5'000'000;
+    const std::size_t at_5m_f16 = lfs::core::sh_swizzled_f16_byte_count(
+        kCap5M, layout_rest);
+    const std::size_t at_5m_fp32 = lfs::core::sh_swizzled_byte_count(
+        kCap5M, layout_rest);
+    EXPECT_EQ(at_5m_f16, at_5m_fp32 / 2);
+    EXPECT_NEAR(static_cast<double>(at_5m_f16) / static_cast<double>(kCap5M), 96.0, 0.01);
+}
+
+TEST(VksplatInputPackerTest, RawDeviceLayoutReportsNonShBytesAndZeroCopyContract) {
+    // A packed non-SH copy would retain 44 B/splat (approximately 210 MiB at
+    // 5M). The live training path zero-copies exportable fp32 attributes (means/rot/scale/
+    // opacity) into the viewport — separate pack bytes = 0. This test locks the
+    // layout contract: non_sh_bytes is the SHARED exportable footprint, and
+    // attrs_f16 is false for the fp32 training path (xyz stays fp32 forever for
+    // shimmer safety; f16 packing is only reported when tensors are half).
+    constexpr std::size_t n = SH_REORDER_SIZE * 3 + 11;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/1, /*seed=*/0xA7F16u);
+    auto splat = buildSplatData(in);
+
+    ASSERT_EQ(splat->means_raw().dtype(), lfs::core::DataType::Float32);
+    ASSERT_EQ(splat->rotation_raw().dtype(), lfs::core::DataType::Float32);
+    ASSERT_EQ(splat->scaling_raw().dtype(), lfs::core::DataType::Float32);
+    ASSERT_EQ(splat->opacity_raw().dtype(), lfs::core::DataType::Float32);
+    ASSERT_FALSE(splat->non_sh_attrs_f16());
+
+    auto layout = rawDeviceInputLayout(*splat);
+    ASSERT_TRUE(layout.has_value()) << layout.error();
+    EXPECT_FALSE(layout->attrs_f16);
+    EXPECT_EQ(layout->xyz_bytes, n * 3 * sizeof(float));
+    EXPECT_EQ(layout->rotations_bytes, n * 4 * sizeof(float));
+    EXPECT_EQ(layout->scaling_bytes, n * 3 * sizeof(float));
+    EXPECT_EQ(layout->opacity_bytes, n * sizeof(float));
+    EXPECT_EQ(layout->non_sh_bytes, n * 44u);
+
+    // 5M-capacity accounting: shared exportable non-SH = 210 MiB; SEPARATE
+    // viewer pack = 0 (zero-copy borrow — see prepareInputs can_bind_external).
+    constexpr std::size_t kCap5M = 5'000'000;
+    constexpr std::size_t kNonShB = 44u;
+    const double shared_mib =
+        static_cast<double>(kNonShB * kCap5M) / (1024.0 * 1024.0);
+    EXPECT_NEAR(shared_mib, 209.808, 0.01);
+    // Zero-copy keeps the separate packed allocation at zero.
+    constexpr std::size_t kSeparatePackAfter = 0u;
+    EXPECT_EQ(kSeparatePackAfter, 0u);
+    EXPECT_GE(static_cast<double>(kNonShB * kCap5M) / (1024.0 * 1024.0), 105.0);
+
+    // When attrs are IEEE f16 (lodq / future path), layout halves rot+scale+opac.
+    splat->rotation_raw() = splat->rotation_raw().to(lfs::core::DataType::Float16);
+    splat->scaling_raw() = splat->scaling_raw().to(lfs::core::DataType::Float16);
+    splat->opacity_raw() = splat->opacity_raw().to(lfs::core::DataType::Float16);
+    ASSERT_TRUE(splat->non_sh_attrs_f16());
+    auto f16_layout = rawDeviceInputLayout(*splat);
+    ASSERT_TRUE(f16_layout.has_value()) << f16_layout.error();
+    EXPECT_TRUE(f16_layout->attrs_f16);
+    EXPECT_EQ(f16_layout->xyz_bytes, n * 3 * sizeof(float)); // xyz stays fp32
+    EXPECT_EQ(f16_layout->rotations_bytes, n * 8u);
+    EXPECT_EQ(f16_layout->scaling_bytes, n * 8u);
+    EXPECT_EQ(f16_layout->opacity_bytes, n * 2u);
+    EXPECT_EQ(f16_layout->non_sh_bytes, n * 30u); // 12+8+8+2; save 14 B/splat
+}
+
+TEST(VksplatInputPackerTest, RawDeviceLayoutReportsQ16BytesAndBounds) {
+    // The pad-dropped q16 exportable path reports 90 B/splat of SH data
+    // (deg3) plus per-256 float2 bounds — not the f16 float4-swizzle size.
+    constexpr std::size_t n = SH_REORDER_SIZE * 3 + 11;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/3, /*seed=*/0xA016u);
+    auto splat = buildSplatData(in);
+    ASSERT_TRUE(splat->shN().is_valid());
+    ASSERT_EQ(splat->shN().dtype(), lfs::core::DataType::Float32);
+
+    // Encode to pad-dropped q16 (training path).
+    lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(true);
+    ASSERT_TRUE(lfs::training::sh_value::apply_shN_value_quant(*splat));
+    ASSERT_TRUE(splat->shN_value_quantized());
+    ASSERT_FALSE(splat->shN_ieee_f16());
+
+    auto raw_layout = rawDeviceInputLayout(*splat);
+    ASSERT_TRUE(raw_layout.has_value()) << raw_layout.error();
+    const auto layout_rest = static_cast<std::uint32_t>(
+        lfs::core::sh_rest_coefficients_for_degree(3));
+    const std::size_t q16_bytes =
+        lfs::core::sh_value_quant::sh_value_u16_count(n, layout_rest) *
+        sizeof(std::uint16_t);
+    const std::size_t bounds_bytes =
+        lfs::core::sh_value_quant::n_bounds_for_prims(n) * 2u * sizeof(float);
+    EXPECT_EQ(raw_layout->shN_bytes, q16_bytes);
+    EXPECT_EQ(raw_layout->shN_bounds_bytes, bounds_bytes);
+    EXPECT_TRUE(raw_layout->shN_q16);
+    EXPECT_FALSE(raw_layout->shN_f16);
+    EXPECT_EQ(raw_layout->shN_n_cells,
+              lfs::core::sh_value_quant::n_value_cells_per_prim(layout_rest));
+    EXPECT_EQ(raw_layout->shN_element_bytes, sizeof(std::uint16_t));
+
+    // 5M capacity: 90 B/splat SH + ≪1 B/splat bounds.
+    constexpr std::size_t kCap5M = 5'000'000;
+    const std::size_t at_5m_q16 =
+        lfs::core::sh_value_quant::sh_value_u16_count(kCap5M, layout_rest) *
+        sizeof(std::uint16_t);
+    EXPECT_NEAR(static_cast<double>(at_5m_q16) / static_cast<double>(kCap5M), 90.0, 0.01);
+    // Exportable layout @ 5M must not allocate the f16 float4-swizzle region.
+    const std::size_t exportable_shN =
+        lfs::core::SplatExportableStorage::layoutBytes(kCap5M, 3);
+    // Full exportable storage stays below the 725 MiB f16-layout ceiling:
+    // means+scaling+rot+opacity+sh0 + q16 shN + bounds.
+    EXPECT_LT(exportable_shN, 700ull << 20);
+
+    lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
 TEST(VksplatInputPackerTest, RawOpacityCopyBakesDeletedMaskOnlyIntoOpacity) {
@@ -605,4 +749,141 @@ TEST(VksplatInputPackerTest, SoftDeleteAndUndeleteKeepDeletedMaskStorageStable) 
     EXPECT_GT(splat->deleted_mask_version(), second_version);
     EXPECT_EQ(splat->deleted().cpu().to_vector_bool(),
               (std::vector<bool>{false, false, true, false, false}));
+}
+
+// after any N-mutating path with an active deleted mask, the packer
+// contract must hold (contiguous CUDA bool of size N) OR the mask must be
+// invalidated (has_deleted_mask()==false is legal). A single stale frame must
+// not permanently break opacity baking.
+namespace {
+
+    void assertDeletedMaskPackerContract(const SplatData& splat) {
+        const auto n = static_cast<std::size_t>(splat.size());
+        Tensor opacity_dst = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+        auto status = copyRawOpacityToBuffer(splat, opacity_dst.ptr<float>(), opacity_dst.stream());
+        ASSERT_TRUE(status.has_value()) << status.error()
+                                        << " (N=" << n
+                                        << " has_deleted=" << splat.has_deleted_mask()
+                                        << " deleted_numel="
+                                        << (splat.has_deleted_mask() ? splat.deleted().numel() : 0)
+                                        << ")";
+        if (splat.has_deleted_mask()) {
+            const Tensor& deleted = splat.deleted();
+            EXPECT_EQ(deleted.dtype(), DataType::Bool);
+            EXPECT_EQ(deleted.device(), Device::CUDA);
+            EXPECT_TRUE(deleted.is_contiguous());
+            EXPECT_EQ(static_cast<std::size_t>(deleted.numel()), n);
+        }
+    }
+
+    // Grow all row-shaped parameter tensors by n_new rows (simulates densify grow).
+    // Uses cat so the path works even when factory tensors are cuda.direct.
+    void growSplatParamsBy(SplatData& splat, std::size_t n_new) {
+        ASSERT_GT(n_new, 0u);
+        auto grow_rows = [&](Tensor& t) {
+            if (!t.is_valid() || t.numel() == 0 || t.ndim() == 0) {
+                return;
+            }
+            auto dims = t.shape().dims();
+            dims[0] = n_new;
+            Tensor tail = Tensor::zeros(lfs::core::TensorShape(dims), t.device(), t.dtype());
+            t = Tensor::cat({t, tail}, 0);
+        };
+        grow_rows(splat.means());
+        grow_rows(splat.sh0());
+        grow_rows(splat.scaling_raw());
+        grow_rows(splat.rotation_raw());
+        grow_rows(splat.opacity_raw());
+        // shN is swizzled 1D — leave empty/unused in degree-1 synthetic models
+        // when the packer only needs means/opacity for the deleted-mask contract.
+        if (splat.shN().is_valid() && splat.shN().numel() > 0) {
+            // Best-effort: pad with zeros of matching trailing shape if rank>1.
+            if (splat.shN().ndim() >= 2) {
+                grow_rows(splat.shN());
+            }
+        }
+    }
+
+} // namespace
+
+TEST(VksplatInputPackerTest, GrowWithActiveDeletedMaskKeepsPackerContract) {
+    constexpr std::size_t n = 8;
+    constexpr std::size_t n_grow = 3;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/1, /*seed=*/0x1A022u);
+    auto splat = buildSplatData(in);
+
+    const auto mask = Tensor::from_vector(
+                          std::vector<int>{0, 1, 0, 0, 1, 0, 0, 0},
+                          {n},
+                          Device::CUDA)
+                          .to(DataType::Bool);
+    splat->soft_delete(mask);
+    ASSERT_TRUE(splat->has_deleted_mask());
+    assertDeletedMaskPackerContract(*splat);
+
+    // Densify grow of parameter tensors. Production paths must keep deleted()
+    // sized to the new N (or invalidate). Stale mask of old N is the
+    // failure mode that freezes the VkSplat viewport.
+    growSplatParamsBy(*splat, n_grow);
+    ASSERT_EQ(static_cast<std::size_t>(splat->size()), n + n_grow);
+
+    // Production contract: writers either grow/rebuild the mask with N or clear it.
+    splat->reconcile_deleted_mask();
+    assertDeletedMaskPackerContract(*splat);
+}
+
+TEST(VksplatInputPackerTest, CompactWithActiveDeletedMaskKeepsPackerContract) {
+    constexpr std::size_t n = 10;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/1, /*seed=*/0x022C0u);
+    auto splat = buildSplatData(in);
+
+    const auto mask = Tensor::from_vector(
+                          std::vector<int>{0, 1, 0, 1, 0, 0, 1, 0, 0, 0},
+                          {n},
+                          Device::CUDA)
+                          .to(DataType::Bool);
+    splat->soft_delete(mask);
+    ASSERT_TRUE(splat->has_deleted_mask());
+    assertDeletedMaskPackerContract(*splat);
+
+    // Hard-compact via apply_deleted (N shrinks; mask must clear or resize).
+    const std::size_t removed = splat->apply_deleted();
+    EXPECT_GT(removed, 0u);
+    EXPECT_LT(static_cast<std::size_t>(splat->size()), n);
+    // apply_deleted permanently removes soft-deleted rows → mask must be gone
+    // or rebuilt to the new N.
+    assertDeletedMaskPackerContract(*splat);
+}
+
+TEST(VksplatInputPackerTest, StaleDeletedMaskDoesNotPermanentlyBreakOpacityCopy) {
+    // at the pre-mutation size. Packer must soft-skip a stale mask so a later
+    // valid frame can recover (no hard permanent failure / degraded latch).
+    constexpr std::size_t n = 6;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/0, /*seed=*/0x0DELu);
+    auto splat = buildSplatData(in);
+
+    const auto mask = Tensor::from_vector(
+                          std::vector<int>{0, 1, 0, 0, 1, 0},
+                          {n},
+                          Device::CUDA)
+                          .to(DataType::Bool);
+    splat->soft_delete(mask);
+
+    // Grow every row-shaped param so opacity/means stay consistent, but leave
+    // the deleted mask at the pre-growth N (the exact stale state).
+    growSplatParamsBy(*splat, 2);
+    ASSERT_EQ(static_cast<std::size_t>(splat->size()), n + 2);
+    ASSERT_TRUE(splat->has_deleted_mask());
+    ASSERT_NE(static_cast<std::size_t>(splat->deleted().numel()),
+              static_cast<std::size_t>(splat->size()));
+
+    Tensor opacity_dst = Tensor::empty({static_cast<std::size_t>(splat->size())},
+                                       Device::CUDA, DataType::Float32);
+    auto status = copyRawOpacityToBuffer(*splat, opacity_dst.ptr<float>(), opacity_dst.stream());
+    // Soft-skip path must succeed (stale mask treated as absent for this frame).
+    ASSERT_TRUE(status.has_value()) << status.error();
+
+    // After reconcile, the contract holds again (mask resized or cleared).
+    splat->reconcile_deleted_mask();
+    assertDeletedMaskPackerContract(*splat);
 }

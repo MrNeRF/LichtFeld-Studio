@@ -8,7 +8,6 @@
 #include "core/export.hpp"
 #include "core/services.hpp"
 #include "input/input_bindings.hpp"
-#include "input/input_types.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
 #include <array>
@@ -101,6 +100,17 @@ namespace lfs::vis {
         void setCameraNavigationMode(CameraNavigationMode mode);
         [[nodiscard]] bool cameraViewSnapEnabled() const { return camera_view_snap_enabled_; }
         void setCameraViewSnapEnabled(bool enabled) { camera_view_snap_enabled_ = enabled; }
+        void restoreProjectNavigation(
+            CameraNavigationMode mode,
+            bool view_snap_enabled) {
+            setCameraNavigationMode(mode);
+            camera_view_snap_enabled_ =
+                view_snap_enabled;
+            viewport_.camera.clearTransientMotion();
+            clearViewportDragState();
+            clearWasdMomentumViewport();
+            depth_range_initialized_ = true;
+        }
         [[nodiscard]] static InputController* instance() { return instance_; }
 
         // Update function for continuous input (WASD movement and inertia)
@@ -199,7 +209,7 @@ namespace lfs::vis {
         void applyCameraTrainingStateToSelection(const std::vector<std::string>& selected_names, bool enabled);
         bool snapViewportToNearestAxis(Viewport& target_viewport, SplitViewPanelId panel);
 
-        // Training pause/resume helpers
+        // Camera motion tracking (flag + idle timeout; does not pause training)
         void onCameraMovementStart();
         void onCameraMovementEnd();
         void checkCameraMovementTimeout();
@@ -302,9 +312,8 @@ namespace lfs::vis {
         std::chrono::steady_clock::time_point last_camera_publish_;
         static constexpr auto camera_publish_interval_ = std::chrono::milliseconds(100);
 
-        // Camera movement tracking for training pause/resume
+        // Camera movement tracking (motion flag + idle timeout; does not pause training)
         bool camera_is_moving_ = false;
-        bool training_was_paused_by_camera_ = false;
         std::chrono::steady_clock::time_point last_camera_movement_time_;
         static constexpr auto camera_movement_timeout_ = std::chrono::milliseconds(500);
 

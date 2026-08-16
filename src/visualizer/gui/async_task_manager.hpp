@@ -6,6 +6,7 @@
 
 #include "core/events.hpp"
 #include "core/export.hpp"
+#include "core/job_registry.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
@@ -31,6 +32,7 @@ namespace lfs::core {
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class VisualizerImplResetTest_ImportWorkerFailureSettlesFailed_Test;
 
     namespace gui {
 
@@ -52,20 +54,23 @@ namespace lfs::vis {
             void performExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
                                const std::vector<std::string>& node_names, int sh_degree,
                                bool rad_flip_y = false,
-                               bool rad_streamable = true);
-            [[nodiscard]] bool isExporting() const { return export_state_.active.load(); }
-            [[nodiscard]] float getExportProgress() const { return export_state_.progress.load(); }
+                               bool rad_streamable = true,
+                               int spz_version = 4,
+                               bool include_provenance = true);
+            [[nodiscard]] bool isExporting() const {
+                return jobs_.anyRunning(JobType::Export);
+            }
+            [[nodiscard]] float getExportProgress() const {
+                return jobProgress(export_state_.job);
+            }
             [[nodiscard]] std::string getExportStage() const {
-                std::lock_guard lock(export_state_.mutex);
-                return export_state_.stage;
+                return jobStage(export_state_.job);
             }
             [[nodiscard]] std::string getExportOutcome() const {
-                std::lock_guard lock(export_state_.mutex);
-                return export_state_.outcome;
+                return jobOutcome(export_state_.job);
             }
             [[nodiscard]] std::string getExportError() const {
-                std::lock_guard lock(export_state_.mutex);
-                return export_state_.error;
+                return jobError(export_state_.job);
             }
             [[nodiscard]] std::filesystem::path getExportPath() const {
                 std::lock_guard lock(export_state_.mutex);
@@ -78,16 +83,18 @@ namespace lfs::vis {
             void cancelExport();
 
             // Import
-            [[nodiscard]] bool isImporting() const { return import_state_.active.load(); }
+            [[nodiscard]] bool isImporting() const {
+                return jobs_.anyRunning(JobType::Import);
+            }
             [[nodiscard]] bool isImportCompletionShowing() const { return import_state_.show_completion.load(); }
-            [[nodiscard]] float getImportProgress() const { return import_state_.progress.load(); }
+            [[nodiscard]] float getImportProgress() const {
+                return jobProgress(import_state_.job);
+            }
             [[nodiscard]] std::string getImportStage() const {
-                std::lock_guard lock(import_state_.mutex);
-                return import_state_.stage;
+                return jobStage(import_state_.job);
             }
             [[nodiscard]] std::string getImportOutcome() const {
-                std::lock_guard lock(import_state_.mutex);
-                return import_state_.outcome;
+                return jobOutcome(import_state_.job);
             }
             [[nodiscard]] std::string getImportDatasetType() const {
                 std::lock_guard lock(import_state_.mutex);
@@ -102,8 +109,7 @@ namespace lfs::vis {
                 return import_state_.success;
             }
             [[nodiscard]] std::string getImportError() const {
-                std::lock_guard lock(import_state_.mutex);
-                return import_state_.error;
+                return jobError(import_state_.job);
             }
             [[nodiscard]] size_t getImportNumImages() const {
                 std::lock_guard lock(import_state_.mutex);
@@ -125,21 +131,22 @@ namespace lfs::vis {
             void cancelImport();
 
             // Video export
-            [[nodiscard]] bool isExportingVideo() const { return video_export_state_.active.load(); }
-            [[nodiscard]] float getVideoExportProgress() const { return video_export_state_.progress.load(); }
+            [[nodiscard]] bool isExportingVideo() const {
+                return jobs_.anyRunning(JobType::VideoExport);
+            }
+            [[nodiscard]] float getVideoExportProgress() const {
+                return jobProgress(video_export_state_.job);
+            }
             [[nodiscard]] int getVideoExportCurrentFrame() const { return video_export_state_.current_frame.load(); }
             [[nodiscard]] int getVideoExportTotalFrames() const { return video_export_state_.total_frames.load(); }
             [[nodiscard]] std::string getVideoExportStage() const {
-                std::lock_guard lock(video_export_state_.mutex);
-                return video_export_state_.stage;
+                return jobStage(video_export_state_.job);
             }
             [[nodiscard]] std::string getVideoExportOutcome() const {
-                std::lock_guard lock(video_export_state_.mutex);
-                return video_export_state_.outcome;
+                return jobOutcome(video_export_state_.job);
             }
             [[nodiscard]] std::string getVideoExportError() const {
-                std::lock_guard lock(video_export_state_.mutex);
-                return video_export_state_.error;
+                return jobError(video_export_state_.job);
             }
             [[nodiscard]] std::filesystem::path getVideoExportPath() const {
                 std::lock_guard lock(video_export_state_.mutex);
@@ -152,19 +159,20 @@ namespace lfs::vis {
                                  const std::string& source_name,
                                  const lfs::core::Mesh2SplatOptions& options);
             void pollMesh2SplatCompletion();
-            [[nodiscard]] bool isMesh2SplatActive() const { return mesh2splat_state_.active.load(); }
-            [[nodiscard]] float getMesh2SplatProgress() const { return mesh2splat_state_.progress.load(); }
+            [[nodiscard]] bool isMesh2SplatActive() const {
+                return jobs_.anyRunning(JobType::Mesh2Splat);
+            }
+            [[nodiscard]] float getMesh2SplatProgress() const {
+                return jobProgress(mesh2splat_state_.job);
+            }
             [[nodiscard]] std::string getMesh2SplatStage() const {
-                std::lock_guard lock(mesh2splat_state_.mutex);
-                return mesh2splat_state_.stage;
+                return jobStage(mesh2splat_state_.job);
             }
             [[nodiscard]] std::string getMesh2SplatOutcome() const {
-                std::lock_guard lock(mesh2splat_state_.mutex);
-                return mesh2splat_state_.outcome;
+                return jobOutcome(mesh2splat_state_.job);
             }
             [[nodiscard]] std::string getMesh2SplatError() const {
-                std::lock_guard lock(mesh2splat_state_.mutex);
-                return mesh2splat_state_.error;
+                return jobError(mesh2splat_state_.job);
             }
             [[nodiscard]] std::string getMesh2SplatSourceName() const {
                 std::lock_guard lock(mesh2splat_state_.mutex);
@@ -175,19 +183,22 @@ namespace lfs::vis {
             void startSplatSimplify(const std::string& source_name,
                                     const lfs::core::SplatSimplifyOptions& options);
             void pollSplatSimplifyCompletion();
-            [[nodiscard]] bool isSplatSimplifyActive() const { return splat_simplify_state_.active.load(); }
-            [[nodiscard]] float getSplatSimplifyProgress() const { return splat_simplify_state_.progress.load(); }
+            [[nodiscard]] bool isSplatSimplifyActive() const {
+                return jobs_.anyRunning(JobType::SplatSimplify);
+            }
+            [[nodiscard]] float getSplatSimplifyProgress() const {
+                return jobProgress(splat_simplify_state_.job);
+            }
             [[nodiscard]] std::string getSplatSimplifyStage() const {
-                std::lock_guard lock(splat_simplify_state_.mutex);
-                return splat_simplify_state_.stage;
+                return jobStage(splat_simplify_state_.job);
             }
             [[nodiscard]] std::string getSplatSimplifyError() const {
-                std::lock_guard lock(splat_simplify_state_.mutex);
-                return splat_simplify_state_.error;
+                return jobError(splat_simplify_state_.job);
             }
             void cancelSplatSimplify();
 
         private:
+            friend class lfs::vis::VisualizerImplResetTest_ImportWorkerFailureSettlesFailed_Test;
             struct ExportSplatSource {
                 const lfs::core::SplatData* data = nullptr;
                 glm::mat4 transform{1.0f};
@@ -199,7 +210,9 @@ namespace lfs::vis {
                                   bool borrow_single_identity,
                                   std::shared_mutex* model_mutex,
                                   bool rad_flip_y,
-                                  bool rad_streamable);
+                                  bool rad_streamable,
+                                  int spz_version,
+                                  lfs::core::ProvenanceStamp provenance);
             void startColmapExport(const std::filesystem::path& path);
             void startAsyncImport(const std::filesystem::path& path,
                                   const lfs::core::param::TrainingParameters& params);
@@ -220,33 +233,35 @@ namespace lfs::vis {
             void publishVideoExportOverlayState();
             void publishMesh2SplatState();
             void publishSplatSimplifyState();
+            [[nodiscard]] float
+            jobProgress(JobHandle handle) const;
+            [[nodiscard]] std::string
+            jobStage(JobHandle handle) const;
+            [[nodiscard]] std::string
+            jobError(JobHandle handle) const;
+            [[nodiscard]] std::string
+            jobOutcome(JobHandle handle) const;
+            [[nodiscard]] bool
+            beginJob(JobHandle& handle, JobType type,
+                     std::string stage);
+            void settlePendingJobs();
 
             VisualizerImpl* viewer_;
+            JobRegistry& jobs_;
 
             struct ExportState {
-                std::atomic<bool> active{false};
-                std::atomic<bool> cancel_requested{false};
-                std::atomic<float> progress{0.0f};
+                JobHandle job;
                 lfs::core::ExportFormat format{lfs::core::ExportFormat::PLY};
-                std::string stage;
-                std::string outcome{"idle"};
-                std::string error;
                 std::filesystem::path path;
-                bool rad_flip_y = false; // Y-flip for RAD export (off by default)
                 mutable std::mutex mutex;
                 std::optional<std::jthread> thread;
             };
             ExportState export_state_;
 
             struct VideoExportState {
-                std::atomic<bool> active{false};
-                std::atomic<bool> cancel_requested{false};
-                std::atomic<float> progress{0.0f};
+                JobHandle job;
                 std::atomic<int> current_frame{0};
                 std::atomic<int> total_frames{0};
-                std::string stage;
-                std::string outcome{"idle"};
-                std::string error;
                 std::filesystem::path path;
                 mutable std::mutex mutex;
                 std::optional<std::jthread> thread;
@@ -256,16 +271,12 @@ namespace lfs::vis {
             std::unique_ptr<VideoExportMeshRendererState> video_export_mesh_renderer_state_;
 
             struct ImportState {
-                std::atomic<bool> active{false};
+                JobHandle job;
                 std::atomic<bool> show_completion{false};
                 std::atomic<bool> load_complete{false};
-                std::atomic<float> progress{0.0f};
                 mutable std::mutex mutex;
                 std::filesystem::path path;
-                std::string stage;
-                std::string outcome{"idle"};
                 std::string dataset_type;
-                std::string error;
                 size_t num_images{0};
                 size_t num_points{0};
                 bool success{false};
@@ -281,13 +292,9 @@ namespace lfs::vis {
             ImportState import_state_;
 
             struct Mesh2SplatState {
-                std::atomic<bool> active{false};
+                JobHandle job;
                 std::atomic<bool> pending{false};
-                std::atomic<float> progress{0.0f};
                 mutable std::mutex mutex;
-                std::string stage;
-                std::string outcome{"idle"};
-                std::string error;
                 std::string source_name;
                 std::shared_ptr<lfs::core::MeshData> pending_mesh;
                 lfs::core::Mesh2SplatOptions pending_options;
@@ -299,14 +306,10 @@ namespace lfs::vis {
             void applyMesh2SplatResult();
 
             struct SplatSimplifyState {
-                std::atomic<bool> active{false};
-                std::atomic<bool> cancel_requested{false};
+                JobHandle job;
                 std::atomic<bool> completed{false};
                 std::atomic<bool> apply_pending{false};
-                std::atomic<float> progress{0.0f};
                 mutable std::mutex mutex;
-                std::string stage;
-                std::string error;
                 std::string source_name;
                 std::string output_name;
                 std::unique_ptr<lfs::core::SplatData> result;

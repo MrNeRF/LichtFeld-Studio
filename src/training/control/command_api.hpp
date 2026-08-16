@@ -4,6 +4,7 @@
 
 #include "control_boundary.hpp"
 #include "core/tensor.hpp"
+#include "training/training_snapshot_service.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -95,6 +96,21 @@ namespace lfs::training {
         bool stop_requested = false;
         TrainingPhase phase = TrainingPhase::Idle;
         Trainer* trainer = nullptr; // non-owning
+        TrainingSnapshotServiceMetrics project_snapshot;
+        std::string project_snapshot_path;
+        std::string project_snapshot_writer_error;
+        double project_snapshot_pre_step_mean_ms = 0.0;
+        double project_snapshot_post_step_mean_ms = 0.0;
+        double project_snapshot_step_regression_percent = 0.0;
+        int project_snapshot_pre_step_first_iteration = 0;
+        int project_snapshot_pre_step_last_iteration = 0;
+        std::size_t project_snapshot_pre_step_samples = 0;
+        int project_snapshot_post_step_first_iteration = 0;
+        int project_snapshot_post_step_last_iteration = 0;
+        std::size_t project_snapshot_post_step_samples = 0;
+        bool project_snapshot_step_regression_gate_evaluated = false;
+        bool project_snapshot_step_regression_within_gate = false;
+        bool project_snapshot_writer_in_flight = false;
     };
 
     struct LossHistoryPoint {
@@ -109,11 +125,15 @@ namespace lfs::training {
         void set_phase(TrainingPhase phase);
 
         void update_snapshot(const HookContext& ctx, int max_iterations, bool is_paused, bool is_running, bool stop_requested, TrainingPhase phase);
+        void apply_training_paused(int iteration);
+        LFS_BRIDGE_API void bind_state_events();
         void clear_snapshot(const Trainer* trainer);
 
         [[nodiscard]] TrainingSnapshot snapshot() const;
         [[nodiscard]] std::vector<LossHistoryPoint> loss_history() const;
         void clear_loss_history();
+        void replace_loss_history(
+            std::vector<LossHistoryPoint> history);
 
         std::expected<void, std::string> execute(const Command& cmd);
 
@@ -148,6 +168,7 @@ namespace lfs::training {
         std::atomic<TrainingPhase> phase_{TrainingPhase::Idle};
         std::vector<LossHistoryPoint> loss_history_;
         int last_recorded_iteration_ = -1;
+        std::optional<std::size_t> training_paused_handler_id_;
     };
 
 } // namespace lfs::training

@@ -3,11 +3,14 @@
 
 #pragma once
 
+#include "core/provenance.hpp"
+
 #include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <limits>
+#include <optional>
 #include <string>
 
 namespace lfs::io::video {
@@ -64,6 +67,7 @@ namespace lfs::io::video {
         int height = 1080;
         int framerate = 30;
         int crf = 18;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(

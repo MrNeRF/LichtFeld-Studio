@@ -30,6 +30,17 @@ namespace lfs::app {
             monitor_ = std::jthread([this](const std::stop_token token) { monitor_signals(token); });
         }
 
+        // Re-install after a later import (pycolmap/glog) steals SIGTERM/SIGINT.
+        // Does not replace the previous handlers captured at construction.
+        static void install_signal_handlers() {
+            std::signal(SIGINT, &HeadlessRunCoordinator::signal_handler);
+            std::signal(SIGTERM, &HeadlessRunCoordinator::signal_handler);
+        }
+
+        [[nodiscard]] static void (*signal_handler_for_test())(int) {
+            return &signal_handler;
+        }
+
         ~HeadlessRunCoordinator() {
             monitor_.request_stop();
             if (monitor_.joinable()) {

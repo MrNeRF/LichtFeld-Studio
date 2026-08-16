@@ -818,6 +818,9 @@ namespace lfs::vis {
                                          side,
                                          w,
                                          h);
+            vmaSetAllocationName(allocator, p.alloc,
+                                 side[0] == 'l' ? "Split-view left panel image"
+                                                : "Split-view right panel image");
             p.image_vram_label = std::format("{}:{}x{}", side, w, h);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.split_view.panel_image",
@@ -1021,8 +1024,8 @@ namespace lfs::vis {
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             si.commandBufferCount = 1;
             si.pCommandBuffers = &panel.cmd;
-            if (si.commandBufferCount != 1 || si.pCommandBuffers == nullptr ||
-                si.pCommandBuffers[0] == VK_NULL_HANDLE || panel.fence == VK_NULL_HANDLE ||
+            // panel.cmd address is never null; validate the handles themselves.
+            if (panel.cmd == VK_NULL_HANDLE || panel.fence == VK_NULL_HANDLE ||
                 graphics_queue == VK_NULL_HANDLE) {
                 return logVkFailure(std::format(
                     "Split-view panel submit requires a non-null queue, one command buffer, and a non-null fence (side={}, queue={:#x}, command_buffer_count={}, command_buffer_array={:#x}, command_buffer={:#x}, fence={:#x}) ({}:{})",
@@ -1030,7 +1033,7 @@ namespace lfs::vis {
                     vkHandleValue(graphics_queue),
                     si.commandBufferCount,
                     reinterpret_cast<std::uintptr_t>(si.pCommandBuffers),
-                    si.pCommandBuffers != nullptr ? vkHandleValue(si.pCommandBuffers[0]) : 0,
+                    vkHandleValue(panel.cmd),
                     vkHandleValue(panel.fence),
                     __FILE__,
                     __LINE__));

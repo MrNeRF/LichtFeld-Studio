@@ -15,7 +15,8 @@ namespace lfs::core::param {
     using namespace lfs::core::prop;
 
     void register_optimization_properties() {
-        const OptimizationParameters d{};
+        // Registry defaults match the default strategy (MRNF), not bare struct {}.
+        const OptimizationParameters d = OptimizationParameters::mrnf_defaults();
         PropertyGroupBuilder<OptimizationParameters>("optimization", "Optimization")
             // Training control
             .size_prop(&OptimizationParameters::iterations,

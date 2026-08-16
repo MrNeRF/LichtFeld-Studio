@@ -21,6 +21,7 @@ add_subdirectory(logger)
 set(TENSOR_SOURCES
         tensor/cuda_event_pool.cpp
         tensor/cuda_stream_context.cpp
+        tensor/stream_lifetime.cpp
         tensor/gpu_slab_allocator.cpp
         tensor/size_bucketed_pool.cpp
         tensor/lazy_config.cpp
@@ -47,6 +48,7 @@ set(TENSOR_SOURCES
 # Core module sources
 set(CORE_SOURCES
         abi.cpp
+        alloc_counter.cpp
         crash_handler.cpp
         cuda_error.cpp
         cuda_error_typed.cpp
@@ -57,9 +59,11 @@ set(CORE_SOURCES
         error_latch.cpp
         error_reporter.cpp
         guarded_task.cpp
+        host_metrics.cpp
         failure_report.cpp
         cuda/memory_arena_owner.cpp
         memory_pressure.cpp
+        memory_domain.cpp
         operator_callbacks.cpp
         animatable_property.cpp
         argument_parser.cpp
@@ -72,9 +76,11 @@ set(CORE_SOURCES
         optimization_properties.cpp
         parameters.cpp
         property_registry.cpp
+        provenance.cpp
         reactive_store.cpp
         scene.cpp
         session_breadcrumb.cpp
+        uuid.cpp
         splat_simplify.cpp
         bhatt_lod.cpp
         octree_lod.cpp
@@ -99,6 +105,7 @@ target_include_directories(lfs_core
         ${CUDAToolkit_INCLUDE_DIRS}
     PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/io/include
         ${CMAKE_CURRENT_SOURCE_DIR}/tensor  # For internal/ headers
 )
 target_include_directories(lfs_core SYSTEM PRIVATE
@@ -138,6 +145,10 @@ endif()
 # Platform-specific settings
 if(UNIX)
     target_link_libraries(lfs_core PUBLIC dl)
+endif()
+
+if(WIN32)
+    target_link_libraries(lfs_core PRIVATE bcrypt)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)

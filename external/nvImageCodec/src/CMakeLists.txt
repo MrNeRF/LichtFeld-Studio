@@ -119,6 +119,8 @@ message(STATUS "props ProductVersionFiles ${ProductVersionFiles}")
 add_library(${NVIMGCODEC_LIBRARY_NAME}_obj OBJECT ${NVIMGCODEC_SRCS} ${NVIMGCODEC_HEADERS} ${ProductVersionFiles})
 add_library(${NVIMGCODEC_LIBRARY_NAME} SHARED $<TARGET_OBJECTS:${NVIMGCODEC_LIBRARY_NAME}_obj> $<TARGET_OBJECTS:nvimgcodec_imgproc_static>)
 add_library(${NVIMGCODEC_LIBRARY_NAME}_static STATIC $<TARGET_OBJECTS:${NVIMGCODEC_LIBRARY_NAME}_obj> $<TARGET_OBJECTS:nvimgcodec_imgproc_static>)
+target_compile_definitions(${NVIMGCODEC_LIBRARY_NAME}_obj PRIVATE
+    "NVIMGCODEC_DEFAULT_EXTENSIONS_PATH=\"${NVIMGCODEC_DEFAULT_EXTENSIONS_PATH}\"")
 
 set(LIBTOPACK ${NVIMGCODEC_LIBRARY_NAME} ${NVIMGCODEC_LIBRARY_NAME}_static)
 
@@ -132,16 +134,12 @@ else()
     set(CUDA_DRIVER_LIB CUDA::cuda_driver)
 endif()
 
-target_link_libraries(${NVIMGCODEC_LIBRARY_NAME} PRIVATE CUDA::cudart_static ${CUDA_DRIVER_LIB})
+target_link_libraries(${NVIMGCODEC_LIBRARY_NAME} PRIVATE ${CUDA_CUDART_LIB} ${CUDA_DRIVER_LIB})
 
 if(UNIX)
     # CXX flags
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -fPIC -fvisibility=hidden")
     target_link_libraries(${NVIMGCODEC_LIBRARY_NAME} PRIVATE "${NVIMGCODEC_COMMON_DEPENDENCIES}")
     target_link_libraries(${NVIMGCODEC_LIBRARY_NAME}_static PRIVATE "${NVIMGCODEC_COMMON_DEPENDENCIES}")
-elseif(MSVC)
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
-      message(STATUS "Added parallel build arguments to CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
 endif()
 
 
@@ -182,10 +180,10 @@ endif()
 # Installation (https://github.com/forexample/package-example) {
 
 # Layout. This works for all platforms:
-#   * <prefix>/cmake/
-#   * <prefix>/lib*/
-#   * <prefix>/include/
-set(config_install_dir "${CMAKE_INSTALL_PREFIX}/cmake")
+#   * <prefix>/${NVIMGCODEC_INSTALL_CMAKEDIR}/
+#   * <prefix>/${NVIMGCODEC_INSTALL_LIBDIR}/
+#   * <prefix>/${NVIMGCODEC_INSTALL_INCLUDEDIR}/
+set(config_install_dir "${NVIMGCODEC_INSTALL_CMAKEDIR}")
 
 set(generated_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
@@ -209,20 +207,27 @@ write_basic_package_version_file(
 # Use variables:
 #   * TARGETS_EXPORT_NAME
 #   * PROJECT_NAME
+# PATH_VARS below generate the PACKAGE_<var> placeholders used by Config.cmake.in.
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/template/Config.cmake.in"
     "${project_config}"
     INSTALL_DESTINATION "${config_install_dir}"
+    PATH_VARS
+        NVIMGCODEC_INSTALL_INCLUDEDIR
+        NVIMGCODEC_INSTALL_LIBDIR
+        NVIMGCODEC_INSTALL_BINDIR
+        NVIMGCODEC_INSTALL_EXTENSIONS_DIR
+        NVIMGCODEC_INSTALL_EXTENSION_LIBDIR
 )
 
 # Targets:
 install(
     TARGETS ${LIBTOPACK}
     EXPORT "${TARGETS_EXPORT_NAME}"
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT lib
-    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT lib
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT lib
-    PUBLIC_HEADER DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT lib
+    LIBRARY DESTINATION "${NVIMGCODEC_INSTALL_LIBDIR}" COMPONENT lib
+    ARCHIVE DESTINATION "${NVIMGCODEC_INSTALL_LIBDIR}" COMPONENT lib
+    RUNTIME DESTINATION "${NVIMGCODEC_INSTALL_BINDIR}" COMPONENT lib
+    PUBLIC_HEADER DESTINATION "${NVIMGCODEC_INSTALL_INCLUDEDIR}" COMPONENT lib
 )
 
 # License file - install to nvImageCodec-specific directory (not root)
@@ -237,21 +242,71 @@ if(EXISTS "${NVIMGCODEC_ROOT}/LICENSE.txt")
 endif()
 
 # Config
-#   * <prefix>/cmake/nvimgcodec/nvimgcodecConfig.cmake
-#   * <prefix>/cmake/nvimgcodec/nvimgcodecConfigVersion.cmake
+#   * <prefix>/${NVIMGCODEC_INSTALL_CMAKEDIR}/nvimgcodecConfig.cmake
+#   * <prefix>/${NVIMGCODEC_INSTALL_CMAKEDIR}/nvimgcodecConfigVersion.cmake
 install(
     FILES "${project_config}" "${version_config}"
-    DESTINATION "cmake/nvimgcodec"
+    DESTINATION "${config_install_dir}"
     COMPONENT lib
 )
 
 # Config
-# * <prefix>/cmake/nvimgcodec/nvimgcodecTargets.cmake
+# * <prefix>/${NVIMGCODEC_INSTALL_CMAKEDIR}/nvimgcodecTargets.cmake
 install(
     EXPORT "${TARGETS_EXPORT_NAME}"
     NAMESPACE "${namespace}"
-    DESTINATION "cmake/nvimgcodec"
+    DESTINATION "${config_install_dir}"
     COMPONENT lib
 )
+
+# Rewrite the just-installed *Targets*.cmake files so imported-target locations
+# are resolved relative to the find_package-discovered directories
+# (nvimgcodec_LIB_DIR / nvimgcodec_INCLUDE_DIR / nvimgcodec_BIN_DIR, defined by
+# nvimgcodecConfig.cmake) instead of the build-time
+# "${_IMPORT_PREFIX}/<fixed-subdir>".
+#
+# install(EXPORT ...) bakes each imported location as
+# "${_IMPORT_PREFIX}/<subdir>", where _IMPORT_PREFIX is derived by climbing a
+# fixed number of directories up from the targets file. Distro (DEB/RPM) and the
+# Windows installer repackage the tree into a different layout (e.g.
+# .../v0.9/lib/13/... on Windows), invalidating both the climbed prefix and the
+# baked subdir, so find_package() fails with "references the file ... but this
+# file does not exist". Expressing the locations relative to the discovered
+# directories decouples the imported targets from the on-disk layout.
+#
+# This runs *after* the install(EXPORT ...) above so the files already exist.
+# In the CODE string, @CONFIGURE-TIME@ CMake variables are expanded now, while
+# \${...} are kept literal for install time (or written verbatim into the
+# targets files as the replacement text). The more specific extension libdir is
+# replaced before the plain libdir so the longer prefix wins.
+install(CODE "
+    # Honour DESTDIR: staged packaging installs (e.g. DESTDIR=<stage> cmake
+    # --install) land the files at \$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}, while
+    # a plain --prefix install leaves DESTDIR empty. Concatenating both (no
+    # separator, as the prefix is absolute) works for either case.
+    set(_nvimgcodec_install_root \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}\")
+    file(GLOB _nvimgcodec_tgt_files
+        \"\${_nvimgcodec_install_root}/${config_install_dir}/${TARGETS_EXPORT_NAME}*.cmake\")
+    if(NOT _nvimgcodec_tgt_files)
+        message(WARNING \"nvimgcodec: no exported targets files found to patch under \${_nvimgcodec_install_root}/${config_install_dir}\")
+    endif()
+    foreach(_f IN LISTS _nvimgcodec_tgt_files)
+        file(READ \"\${_f}\" _c)
+        string(REPLACE \"\\\${_IMPORT_PREFIX}/${NVIMGCODEC_INSTALL_EXTENSION_LIBDIR}\" \"\\\${nvimgcodec_EXTENSION_LIB_DIR}\" _c \"\${_c}\")
+        string(REPLACE \"\\\${_IMPORT_PREFIX}/${NVIMGCODEC_INSTALL_LIBDIR}\" \"\\\${nvimgcodec_LIB_DIR}\" _c \"\${_c}\")
+        string(REPLACE \"\\\${_IMPORT_PREFIX}/${NVIMGCODEC_INSTALL_INCLUDEDIR}\" \"\\\${nvimgcodec_INCLUDE_DIR}\" _c \"\${_c}\")
+        string(REPLACE \"\\\${_IMPORT_PREFIX}/${NVIMGCODEC_INSTALL_BINDIR}\" \"\\\${nvimgcodec_BIN_DIR}\" _c \"\${_c}\")
+        string(REGEX REPLACE \"libnvimgcodec\\\\.so\\\\.[0-9]+\\\\.[0-9]+\\\\.[0-9]+\" \"libnvimgcodec.so\" _c \"\${_c}\")
+        # The static archive is an optional artifact: some redistributable
+        # packages (e.g. the runtime/dev split) ship the shared library plus the
+        # CMake package but omit libnvimgcodec_static.a. Drop the static target
+        # from the generated existence-check so find_package() does not hard-fail
+        # when the archive is absent. The nvimgcodec::nvimgcodec_static target is
+        # still declared, so linking against it (when it is shipped) keeps working.
+        string(REGEX REPLACE \"list\\\\(APPEND _cmake_import_check_files_for_nvimgcodec::nvimgcodec_static [^)]*\\\\)\" \"\" _c \"\${_c}\")
+        file(WRITE \"\${_f}\" \"\${_c}\")
+        message(STATUS \"nvimgcodec: patched imported-target paths in \${_f}\")
+    endforeach()
+" COMPONENT lib)
 
 # }

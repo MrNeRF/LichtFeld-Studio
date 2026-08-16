@@ -8,6 +8,11 @@
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/zep/CMakeLists.txt")
     message(STATUS "Adding Zep from external/zep")
     add_subdirectory(zep EXCLUDE_FROM_ALL)
+    if(TARGET Zep)
+        # Treat vendored headers as system so -Wreorder / -Wdeprecated from
+        # zep/include do not fire in our translation units that include them.
+        set_target_properties(Zep PROPERTIES SYSTEM TRUE)
+    endif()
 else()
     message(WARNING "Zep not found at external/zep")
 endif()
@@ -95,6 +100,15 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/OpenMesh/CMakeLists.txt")
     set(OPENMESH_BUILD_UNIT_TESTS OFF CACHE BOOL "" FORCE)
     set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
     add_subdirectory(OpenMesh EXCLUDE_FROM_ALL)
+    # Silence warnings from vendored OpenMesh TUs; treat headers as SYSTEM so
+    # deprecated-enum-float and similar do not leak into our translation units.
+    foreach(_lfs_openmesh_tgt OpenMeshCore OpenMeshTools OpenMeshCoreStatic OpenMeshToolsStatic)
+        if(TARGET ${_lfs_openmesh_tgt})
+            target_compile_options(${_lfs_openmesh_tgt} PRIVATE -w)
+            set_target_properties(${_lfs_openmesh_tgt} PROPERTIES SYSTEM TRUE)
+        endif()
+    endforeach()
+    unset(_lfs_openmesh_tgt)
 else()
     message(WARNING "OpenMesh not found at external/OpenMesh")
 endif()
@@ -114,6 +128,23 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/nvImageCodec/CMakeLists.txt")
     set(WITH_DYNAMIC_NVJPEG OFF CACHE BOOL "" FORCE)
     set(WITH_DYNAMIC_NVJPEG2K ON CACHE BOOL "" FORCE)
     add_subdirectory(nvImageCodec EXCLUDE_FROM_ALL)
+    # Suppress all warnings in vendored nvImageCodec object/static targets.
+    foreach(_lfs_nvimg_tgt
+            nvimgcodec_obj
+            nvimgcodec
+            nvimgcodec_static
+            nvimgcodec_imgproc_static
+            nvjpeg_ext_obj
+            nvjpeg_ext
+            nvjpeg_ext_static
+            nvjpeg2k_ext_obj
+            nvjpeg2k_ext
+            nvjpeg2k_ext_static)
+        if(TARGET ${_lfs_nvimg_tgt})
+            target_compile_options(${_lfs_nvimg_tgt} PRIVATE -w)
+        endif()
+    endforeach()
+    unset(_lfs_nvimg_tgt)
 else()
     message(WARNING "nvImageCodec not found - GPU image loading unavailable")
 endif()

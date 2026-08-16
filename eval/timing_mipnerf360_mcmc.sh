@@ -1,5 +1,25 @@
 #!/bin/bash
 
+child_pid=
+abort_script() {
+    trap - INT TERM
+    if [[ -n "${child_pid}" ]]; then
+        kill -TERM "${child_pid}" 2>/dev/null || true
+        wait "${child_pid}" 2>/dev/null || true
+    fi
+    exit 130
+}
+trap abort_script INT TERM
+
+run_child() {
+    "$@" &
+    child_pid=$!
+    wait "${child_pid}"
+    local status=$?
+    child_pid=
+    return "${status}"
+}
+
 SCENE_DIR="data"
 RESULT_DIR="results/benchmark"
 SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
@@ -27,13 +47,13 @@ do
     scene_start=$(date +%s)
     
     # Run training with evaluation
-    ./build/LichtFeld-Studio \
+    run_child ./build/LichtFeld-Studio \
         -d $SCENE_DIR/$SCENE/ \
         -o $RESULT_DIR/$SCENE/ \
         --images images_${DATA_FACTOR} \
         --iter 30000 \
         --headless \
-		--config eval/mcmc_optimization_params.json
+		--config eval/mcmc_optimization_params.json || exit $?
 
     # End timer for this scene
     scene_end=$(date +%s)

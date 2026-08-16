@@ -37,7 +37,6 @@ namespace lfs::vis {
         Reset,
         ClearScene,
         DeleteTrainingNode,
-        SaveCheckpoint,
         COUNT
     };
 
@@ -96,10 +95,10 @@ namespace lfs::vis {
         static constexpr size_t STATE_COUNT = 6;
         static constexpr std::array<std::array<bool, STATE_COUNT>, STATE_COUNT> TRANSITIONS = {{
             // To:    Idle   Ready  Running Paused Stopping Finished
-            /* Idle */ {false, true, false, true, false, false}, // Paused: checkpoint load
+            /* Idle */ {false, true, false, true, false, true}, // Paused/Finished: project CKPT
             /* Ready */ {true, false, true, false, false, false},
             /* Running */ {false, false, false, true, true, false},
-            /* Paused */ {false, true, true, false, true, false},
+            /* Paused */ {false, true, true, false, true, true}, // Finished: completed restore
             /* Stopping */ {true, false, false, false, false, true},
             /* Finished */ {true, true, false, false, false, false},
         }};
@@ -107,13 +106,13 @@ namespace lfs::vis {
         // Action permission table: [state][action] = allowed
         static constexpr size_t ACTION_COUNT = static_cast<size_t>(TrainingAction::COUNT);
         static constexpr std::array<std::array<bool, ACTION_COUNT>, STATE_COUNT> PERMISSIONS = {{
-            //              Load   LoadCk Start  Pause  Resume Stop   Reset  Clear  DelNode SaveCk
-            /* Idle */ {true, true, false, false, false, false, false, true, true, false},
-            /* Ready */ {true, true, true, false, false, false, true, true, true, false},
-            /* Running */ {false, false, false, true, false, true, false, false, false, true},
-            /* Paused */ {true, true, false, false, true, true, true, true, false, true},
-            /* Stopping */ {false, false, false, false, false, false, false, false, false, false},
-            /* Finished */ {true, true, false, false, false, false, true, true, false, false},
+            //              Load   LoadCk Start  Pause  Resume Stop   Reset  Clear  DelNode
+            /* Idle */ {true, true, false, false, false, false, false, true, true},
+            /* Ready */ {true, true, true, false, false, false, true, true, true},
+            /* Running */ {false, false, false, true, false, true, false, false, false},
+            /* Paused */ {true, true, false, false, true, true, true, true, false},
+            /* Stopping */ {false, false, false, false, false, false, false, false, false},
+            /* Finished */ {true, true, false, false, false, false, true, true, false},
         }};
     };
 

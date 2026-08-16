@@ -209,6 +209,12 @@ _vulkan_add_slang_shader(projection_forward_3dgut  vertex_shader.slang EXPORT_MO
 # Canonical quantized LOD pool variants (lod_pool_quant.hpp)
 _vulkan_add_slang_shader(projection_forward_quant       vertex_shader.slang EXPORT_MODE=0 LFS_QUANT_POOL=1)
 _vulkan_add_slang_shader(projection_forward_quant_3dgut vertex_shader.slang EXPORT_MODE=0 LFS_3DGUT_PROJECTION=1 LFS_QUANT_POOL=1)
+# Standalone PLY/SOG IEEE f16 SH rest
+_vulkan_add_slang_shader(projection_forward_shn_f16       vertex_shader.slang EXPORT_MODE=0 LFS_SHN_F16=1)
+_vulkan_add_slang_shader(projection_forward_shn_f16_3dgut vertex_shader.slang EXPORT_MODE=0 LFS_3DGUT_PROJECTION=1 LFS_SHN_F16=1)
+# Training-viewport exportable pad-dropped q16 SH rest (zero-copy dequant)
+_vulkan_add_slang_shader(projection_forward_shn_q16       vertex_shader.slang EXPORT_MODE=0 LFS_SHN_Q16=1)
+_vulkan_add_slang_shader(projection_forward_shn_q16_3dgut vertex_shader.slang EXPORT_MODE=0 LFS_3DGUT_PROJECTION=1 LFS_SHN_Q16=1)
 
 # selection_mask.slang → compact 1-byte-per-splat brush/rectangle/polygon masks
 _vulkan_add_slang_shader(selection_mask            selection_mask.slang)
@@ -239,6 +245,8 @@ _vulkan_add_slang_shader(cull_splats                  cull_splats.slang EXPORT_M
 _vulkan_add_slang_shader(cull_prepare                 cull_splats.slang EXPORT_MODE=0 CULL_ENTRY=2)
 _vulkan_add_slang_shader(projection_forward_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1)
 _vulkan_add_slang_shader(projection_forward_quant_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_QUANT_POOL=1)
+_vulkan_add_slang_shader(projection_forward_shn_f16_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_SHN_F16=1)
+_vulkan_add_slang_shader(projection_forward_shn_q16_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_SHN_Q16=1)
 _vulkan_add_slang_shader(prepare_visible_chain        prepare_visible_chain.slang)
 _vulkan_add_slang_shader(copy_visible_indices         copy_visible_indices.slang)
 _vulkan_add_slang_shader(cumsum_block_scan_indirect        cumsum.slang CUMSUM_PHASE=1 CUMSUM_INDIRECT=1)
@@ -246,17 +254,18 @@ _vulkan_add_slang_shader(cumsum_scan_block_sums_indirect   cumsum.slang CUMSUM_P
 _vulkan_add_slang_shader(cumsum_add_block_offsets_indirect cumsum.slang CUMSUM_PHASE=3 CUMSUM_INDIRECT=1)
 _vulkan_add_slang_shader(prepare_tile_sort_visible    prepare_tile_sort.slang LFS_VISIBLE_BOUNDED=1)
 
-# HiGS macro-tile binning + raster/compose. The plain raster ships fp16
-# staging; the fp32 variant doubles as validation reference and overlay path.
+# HiGS macro-tile binning + raster/compose. Plain and overlay rasters each ship
+# an fp16 (default) and fp32 staging variant — overlays no longer force fp32.
 _vulkan_add_slang_shader(macro_coverage         macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=1)
 _vulkan_add_slang_shader(generate_macro_keys_wave macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=2)
 _vulkan_add_slang_shader(compute_macro_ranges   macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=3)
 _vulkan_add_slang_shader(macro_batch_prepare    macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=5)
 _vulkan_add_slang_shader(wave_partition         macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=6)
 _vulkan_add_slang_shader(wave_partition_visible macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=6 LFS_VISIBLE_BOUNDED=1)
-_vulkan_add_slang_shader(macro_raster           macro_raster.slang EXPORT_MODE=0)
-_vulkan_add_slang_shader(macro_raster_fp32      macro_raster.slang EXPORT_MODE=0 LFS_HIGS_FP32=1)
-_vulkan_add_slang_shader(macro_raster_overlays  macro_raster.slang EXPORT_MODE=0 LFS_HIGS_FP32=1 LFS_RASTER_OVERLAYS=1)
+_vulkan_add_slang_shader(macro_raster                  macro_raster.slang EXPORT_MODE=0)
+_vulkan_add_slang_shader(macro_raster_fp32             macro_raster.slang EXPORT_MODE=0 LFS_HIGS_FP32=1)
+_vulkan_add_slang_shader(macro_raster_overlays         macro_raster.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=1)
+_vulkan_add_slang_shader(macro_raster_overlays_fp32    macro_raster.slang EXPORT_MODE=0 LFS_HIGS_FP32=1 LFS_RASTER_OVERLAYS=1)
 _vulkan_add_slang_shader(macro_compose          macro_compose.slang EXPORT_MODE=0)
 _vulkan_add_slang_shader(macro_compose_overlays macro_compose.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=1)
 

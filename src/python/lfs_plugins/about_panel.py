@@ -16,6 +16,7 @@ class AboutPanel(Panel):
     label = "About"
     space = lf.ui.PanelSpace.FLOATING
     order = 100
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/about.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (400, 0)

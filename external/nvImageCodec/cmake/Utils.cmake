@@ -48,12 +48,66 @@ function(FindPython PYVER)
   # Construct the version range string for find_package
   set(version_range "${lower_range_string}...<${upper_range_string}")
   message(STATUS "Looking for python in range ${version_range}")
+
+  if(WIN32)
+    string(REPLACE "." "" PYVER_NODOT "${PYVER}")
+    set(_pyroot "")
+    set(_pyroot_hint "Python${PYVER_NODOT}_ROOT_DIR")
+    set(_pyroot_env_hint "PYTHON${PYVER_NODOT}_ROOT_DIR")
+
+    if(DEFINED ${_pyroot_hint})
+      set(_pyroot "${${_pyroot_hint}}")
+    elseif(DEFINED ENV{${_pyroot_env_hint}})
+      set(_pyroot "$ENV{${_pyroot_env_hint}}")
+    endif()
+
+    if(NOT _pyroot)
+      find_program(_py_launcher py)
+      if(_py_launcher)
+        execute_process(
+          COMMAND "${_py_launcher}" "-${PYVER}" -c "import pathlib, sys; print(pathlib.Path(sys.executable).parent.as_posix())"
+          RESULT_VARIABLE _py_launcher_result
+          OUTPUT_VARIABLE _pyroot
+          ERROR_QUIET
+          OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(NOT _py_launcher_result STREQUAL "0")
+          set(_pyroot "")
+        endif()
+      endif()
+    endif()
+
+    # Avoid FindPython on Windows CI. Even with Python_EXECUTABLE pinned,
+    # CMake can still stall in its artifact probing on the QEMU build VMs.
+    if(NOT _pyroot)
+      set(_pyroot "C:/Program Files/Python${PYVER_NODOT}")
+    endif()
+    string(REPLACE "\\" "/" _pyroot "${_pyroot}")
+    set(_pyexe "${_pyroot}/python.exe")
+    set(_pyinclude "${_pyroot}/include")
+    set(_pylibdir "${_pyroot}/libs")
+    set(_pylib "${_pylibdir}/python${PYVER_NODOT}.lib")
+
+    if(EXISTS "${_pyexe}" AND EXISTS "${_pyinclude}" AND EXISTS "${_pylib}")
+      message(STATUS "Python version ${PYVER} found at ${_pyroot}")
+      set(PYTHON_VERSION_FOUND TRUE PARENT_SCOPE)
+      set(Python_FOUND TRUE PARENT_SCOPE)
+      set(Python_EXECUTABLE "${_pyexe}" PARENT_SCOPE)
+      set(Python_LIBRARIES "${_pylib}" PARENT_SCOPE)
+      set(Python_INCLUDE_DIRS "${_pyinclude}" PARENT_SCOPE)
+      set(Python_LIBRARY_DIRS "${_pylibdir}" PARENT_SCOPE)
+    else()
+      message("Python version ${PYVER} not found from explicit Windows candidates.")
+      set(PYTHON_VERSION_FOUND FALSE PARENT_SCOPE)
+    endif()
+    return()
+  endif()
+
   find_package(Python ${version_range} COMPONENTS Interpreter Development.Module)
 
   # Check if Python is found
   if(Python_FOUND)
       message(STATUS "Python version ${PYVER} found")
-      set(PYTHON_EXISTS 0 PARENT_SCOPE)
+      set(PYTHON_VERSION_FOUND TRUE PARENT_SCOPE)
       set(Python_FOUND ${Python_FOUND} PARENT_SCOPE)
       set(Python_EXECUTABLE ${Python_EXECUTABLE} PARENT_SCOPE)
       set(Python_LIBRARIES ${Python_LIBRARIES} PARENT_SCOPE)
@@ -63,7 +117,7 @@ function(FindPython PYVER)
       message(STATUS "Python executable path: ${Python_EXECUTABLE}")
   else()
       message("Python version ${PYVER} not found.")
-      set(PYTHON_EXISTS 1 PARENT_SCOPE)
+      set(PYTHON_VERSION_FOUND FALSE PARENT_SCOPE)
   endif()
 endfunction()     
 
@@ -109,9 +163,9 @@ function(build_per_python_lib)
 
     if(NOT DEFINED PYTHON_VERSIONS)
       if (UNIX)
-          set (PYTHON_VERSIONS "3.8;3.9;3.10;3.11;3.12;3.13;3.13t")
+          set (PYTHON_VERSIONS "3.9;3.10;3.11;3.12;3.13;3.13t;3.14;3.14t")
       else()
-          set (PYTHON_VERSIONS "3.8;3.9;3.10;3.11;3.12;3.13")
+          set (PYTHON_VERSIONS "3.9;3.10;3.11;3.12;3.13;3.14")
       endif()
     endif(NOT DEFINED PYTHON_VERSIONS)
 
@@ -122,12 +176,17 @@ function(build_per_python_lib)
         if (UNIX)
           execute_process(
             COMMAND python${PYVER}-config --help
-            RESULT_VARIABLE PYTHON_EXISTS OUTPUT_QUIET)
+            RESULT_VARIABLE _python_config_result OUTPUT_QUIET)
+          if (_python_config_result EQUAL 0)
+            set(PYTHON_VERSION_FOUND TRUE)
+          else()
+            set(PYTHON_VERSION_FOUND FALSE)
+          endif()
         else()
           FindPython("${PYVER}")
         endif()
 
-        if (${PYTHON_EXISTS} EQUAL 0)
+        if (PYTHON_VERSION_FOUND)
             if (UNIX)
               execute_process(
                 COMMAND python${PYVER}-config --extension-suffix
@@ -297,3 +356,13 @@ function(log_option_value BUILD_OPTION_NAME)
     message(STATUS "${BUILD_OPTION_NAME} -- OFF")
   endif()
 endfunction(log_option_value)
+
+# Propagate a CMake option as a same-named compile definition when enabled.
+# Use this for option names that test/source files guard with
+# `#if defined(<OPTION>)` (e.g. `BUILD_NVJPEG_EXT`). For numeric `<X>_ENABLED`
+# defines, use expose_via_preprocessor_macro above instead.
+function(propagate_option_as_definition BUILD_OPTION_NAME)
+  if (${BUILD_OPTION_NAME})
+    add_compile_definitions(${BUILD_OPTION_NAME})
+  endif()
+endfunction(propagate_option_as_definition)

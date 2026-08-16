@@ -61,7 +61,7 @@ void replay_batch(uint range_start,
                   float2 center_pix_coord,
                   bool spark_rad_opacity_path,
 #if LFS_RASTER_OVERLAYS
-                  bool markers_enabled,
+                  OverlayUniformState overlay_state,
 #endif
                   inout float4 curr_pixel_state,
                   inout float median_depth,
@@ -82,28 +82,36 @@ void replay_batch(uint range_start,
         const float splat_depth = read_t1_float(slot, depths);
 
       #if LFS_RASTER_OVERLAYS
+        // Replay streams from global (no cooperative stage). Hoisted uniforms
+        // still remove overlay_params traffic from the per-splat path.
+        // Flags are keyed by macro-sorted slot; selection masks by original id.
         const uint flags = gaussian_overlay_flags[slot];
         const uint sel_splat_id = uint(orig_ids[slot]);
+        const uint selection_byte = overlay_state.selection_mask_enabled
+            ? read_byte(selection_mask, sel_splat_id) : 0u;
+        const uint preview_byte = overlay_state.preview_mask_enabled
+            ? read_byte(preview_mask, sel_splat_id) : 0u;
         const uint sel_status = selection_status(g.xy_vs,
                                                  sel_splat_id,
                                                  flags,
-                                                 selection_mask,
-                                                 preview_mask,
-                                                 overlay_params);
+                                                 selection_byte,
+                                                 preview_byte,
+                                                 overlay_state);
         const bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
         gauss_rgba = apply_projection_overlay_color(gauss_rgba,
                                                     g.xy_vs,
                                                     flags,
-                                                    overlay_params);
+                                                    overlay_state);
         gauss_rgba = apply_ring_overlay(gauss_rgba,
                                         g,
                                         center_pix_coord,
                                         sel_status,
                                         flags,
-                                        overlay_params,
+                                        overlay_state.show_rings,
+                                        overlay_state.ring_width,
                                         selection_colors);
 
-        if (markers_enabled && selectable) {
+        if (overlay_state.show_center_markers && selectable) {
             const float INNER_RADIUS_SQ = 2.25f;
             const float OUTER_RADIUS_SQ = 6.25f;
             const float OUTLINE_DARKEN = 0.4f;
@@ -125,7 +133,7 @@ void replay_batch(uint range_start,
         }
 
         gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-        gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_params);
+        gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
       #endif
 
         const float3 color = curr_pixel_state.rgb + gauss_rgba.rgb * curr_pixel_state.a;
@@ -170,7 +178,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
     const float2 center_pix_coord = float2(pix_coord);
     const bool spark_rad_opacity_path = (uniforms.lod_enabled & 4u) != 0u;
   #if LFS_RASTER_OVERLAYS
-    const bool markers_enabled = overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].y);
+    const OverlayUniformState overlay_state = load_overlay_uniform_state(overlay_params);
   #endif
 
     // The per-pixel blend state persists in the output buffers between waves;
@@ -221,7 +229,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                              center_pix_coord,
                              spark_rad_opacity_path,
                           #if LFS_RASTER_OVERLAYS
-                             markers_enabled,
+                             overlay_state,
                           #endif
                              replay_state,
                              replay_median_depth,

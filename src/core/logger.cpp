@@ -398,30 +398,6 @@ namespace lfs::core {
             std::optional<std::regex> filter_regex_;
         };
 
-        LogModule detect_module(const std::string_view path) {
-            if (path.find("rendering") != std::string_view::npos || path.find("Rendering") != std::string_view::npos)
-                return LogModule::Rendering;
-            if (path.find("visualizer") != std::string_view::npos || path.find("Visualizer") != std::string_view::npos)
-                return LogModule::Visualizer;
-            if (path.find("loader") != std::string_view::npos || path.find("Loader") != std::string_view::npos)
-                return LogModule::Loader;
-            if (path.find("scene") != std::string_view::npos || path.find("Scene") != std::string_view::npos)
-                return LogModule::Scene;
-            if (path.find("training") != std::string_view::npos || path.find("Training") != std::string_view::npos)
-                return LogModule::Training;
-            if (path.find("input") != std::string_view::npos || path.find("Input") != std::string_view::npos)
-                return LogModule::Input;
-            if (path.find("gui") != std::string_view::npos || path.find("GUI") != std::string_view::npos)
-                return LogModule::GUI;
-            if (path.find("window") != std::string_view::npos || path.find("Window") != std::string_view::npos)
-                return LogModule::Window;
-            if (path.find("memory") != std::string_view::npos || path.find("Memory") != std::string_view::npos)
-                return LogModule::Memory;
-            if (path.find("core") != std::string_view::npos || path.find("Core") != std::string_view::npos)
-                return LogModule::Core;
-            return LogModule::Unknown;
-        }
-
         constexpr spdlog::level::level_enum to_spdlog_level(const LogLevel level) {
             switch (level) {
             case LogLevel::Trace: return spdlog::level::trace;
@@ -508,12 +484,7 @@ namespace lfs::core {
         }
     }
 
-    Logger::Logger() : impl_(std::make_unique<Impl>()) {
-        for (size_t i = 0; i < static_cast<size_t>(LogModule::Count); ++i) {
-            module_enabled_[i] = true;
-            module_level_[i] = static_cast<uint8_t>(LogLevel::Trace);
-        }
-    }
+    Logger::Logger() : impl_(std::make_unique<Impl>()) {}
 
     Logger::~Logger() = default;
 
@@ -623,13 +594,6 @@ namespace lfs::core {
     void Logger::log(const LogLevel level, const SourceSite& loc, const std::string_view msg) {
         if (!impl_->logger)
             return;
-
-        const auto module = detect_module(loc.file_name());
-        const auto module_idx = static_cast<size_t>(module);
-
-        if (!module_enabled_[module_idx] || static_cast<uint8_t>(level) < module_level_[module_idx]) {
-            return;
-        }
 
         if (!capture_all_to_file_.load(std::memory_order_relaxed)) {
             const auto global_lvl = static_cast<LogLevel>(global_level_.load(std::memory_order_relaxed));

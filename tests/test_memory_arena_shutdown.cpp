@@ -83,3 +83,30 @@ TEST_F(GlobalArenaShutdownTest, ShutdownLatchesUntilTestingReconfigure) {
     arena.end_frame(frame);
     arena.full_reset();
 }
+
+// full_reset must remain noexcept with a sticky CUDA error. Trigger a non-success
+// last-error without mapping invalid device memory, then verify teardown completes.
+TEST(MemoryArenaShutdownTest, FullResetToleratesPoisonedCudaContext) {
+    ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
+    lfs::core::RasterizerMemoryArena arena(test_config());
+
+    cudaStream_t stream = nullptr;
+    ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
+    const uint64_t frame = arena.begin_frame(stream);
+    arena.end_frame(frame, stream);
+
+    // Some drivers only set last-error here; full_reset must not throw even if the
+    // context becomes unusable.
+    void* garbage = reinterpret_cast<void*>(static_cast<uintptr_t>(0xDEADBEEF0));
+    (void)cudaFree(garbage);
+    const cudaError_t sticky = cudaGetLastError();
+    ASSERT_NE(sticky, cudaSuccess) << "expected sticky CUDA error for teardown test";
+
+    EXPECT_NO_THROW(arena.full_reset());
+    // Drain sticky error if still present so later tests start clean.
+    (void)cudaGetLastError();
+    (void)cudaDeviceSynchronize();
+    (void)cudaGetLastError();
+
+    EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+}

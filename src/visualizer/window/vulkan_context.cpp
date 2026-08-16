@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,7 @@
 #include <limits>
 #include <set>
 #include <stop_token>
+#include <string_view>
 #include <utility>
 
 #include <SDL3/SDL_vulkan.h>
@@ -30,7 +32,13 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <cerrno>
+#include <sys/stat.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <linux/kcmp.h>
+#include <sys/syscall.h>
+#endif
 #endif
 
 #ifndef LFS_VULKAN_VALIDATION_DEFAULT
@@ -273,6 +281,63 @@ namespace lfs::vis {
 #endif
         }
 
+        // CUDA-exported OPAQUE_FD payloads are foreign to Vulkan.
+        // The validation layer keys its "created by Vulkan" OPAQUE_FD map by fd
+        // *number*. After we close a Vulkan-exported or previously-imported fd,
+        // the kernel reuses that number for the next CUDA export (or our dup of
+        // it). VVL then applies VUID-VkMemoryAllocateInfo-allocationSize-01742
+        // against a stale record (often size=0 / type=0) while the driver import
+        // of the real CUDA payload succeeds. Scope-guarded: only suppress this
+        // exact VUID while importExternalBuffer is mid-vkAllocateMemory for a
+        // CUDA foreign import. Every other validation message still surfaces.
+        thread_local bool g_cuda_opaque_fd_import_active = false;
+        thread_local const char* g_cuda_opaque_fd_import_label = "";
+
+        struct CudaOpaqueFdImportScopeGuard {
+            explicit CudaOpaqueFdImportScopeGuard(const char* label) noexcept {
+                g_cuda_opaque_fd_import_active = true;
+                g_cuda_opaque_fd_import_label = label != nullptr ? label : "";
+            }
+            ~CudaOpaqueFdImportScopeGuard() noexcept {
+                g_cuda_opaque_fd_import_active = false;
+                g_cuda_opaque_fd_import_label = "";
+            }
+            CudaOpaqueFdImportScopeGuard(const CudaOpaqueFdImportScopeGuard&) = delete;
+            CudaOpaqueFdImportScopeGuard& operator=(const CudaOpaqueFdImportScopeGuard&) = delete;
+        };
+
+        [[nodiscard]] bool isExpectedCudaOpaqueFdImportVuid01742(
+            const VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
+            const VkDebugUtilsMessengerCallbackDataEXT* const callback_data) {
+            if (!g_cuda_opaque_fd_import_active) {
+                return false;
+            }
+            if ((message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) == 0) {
+                return false;
+            }
+            if (callback_data == nullptr) {
+                return false;
+            }
+            // VUID string appears in pMessageIdName and/or the message body.
+            constexpr std::string_view kVuid = "VUID-VkMemoryAllocateInfo-allocationSize-01742";
+            constexpr std::string_view kVuidTail = "allocationSize-01742";
+            if (callback_data->pMessageIdName != nullptr) {
+                const std::string_view id = callback_data->pMessageIdName;
+                if (id == kVuid || id.find(kVuidTail) != std::string_view::npos ||
+                    id.find("01742") != std::string_view::npos) {
+                    return true;
+                }
+            }
+            if (callback_data->pMessage != nullptr) {
+                const std::string_view msg = callback_data->pMessage;
+                if (msg.find(kVuid) != std::string_view::npos ||
+                    msg.find("allocationSize-01742") != std::string_view::npos) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(
             VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
             VkDebugUtilsMessageTypeFlagsEXT message_type,
@@ -281,6 +346,17 @@ namespace lfs::vis {
             const char* const message = callback_data != nullptr && callback_data->pMessage != nullptr
                                             ? callback_data->pMessage
                                             : "<missing validation message>";
+
+            // targeted suppress of VUID-01742 only inside our CUDA
+            // OPAQUE_FD import scope (see CudaOpaqueFdImportScopeGuard). Not a
+            // blanket severity filter — label is the import diagnostic scope.
+            if (isExpectedCudaOpaqueFdImportVuid01742(message_severity, callback_data)) {
+                LOG_DEBUG(
+                    "Vulkan validation (suppressed CUDA OPAQUE_FD import, label={}): {}",
+                    g_cuda_opaque_fd_import_label != nullptr ? g_cuda_opaque_fd_import_label : "",
+                    message);
+                return VK_FALSE;
+            }
 
             if ((message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {
                 LOG_ERROR("Vulkan validation: {}", message);
@@ -1305,6 +1381,48 @@ namespace lfs::vis {
         return true;
     }
 
+    bool VulkanContext::restartActiveRendering(const VkCommandBuffer command_buffer,
+                                               const Frame& frame) {
+        if (!frame_active_)
+            return fail("Cannot restart Vulkan rendering without an active frame");
+        if (frame_rendering_active_)
+            return fail("Cannot restart Vulkan rendering while rendering is already active");
+        if (command_buffer == VK_NULL_HANDLE || command_buffer != frame.command_buffer)
+            return fail("Cannot restart Vulkan rendering with a different command buffer");
+        if (frame.depth_stencil_image_view == VK_NULL_HANDLE ||
+            frame.swapchain_image_view == VK_NULL_HANDLE ||
+            frame.extent.width == 0 || frame.extent.height == 0) {
+            return fail("Cannot restart Vulkan rendering with incomplete frame attachments");
+        }
+
+        VkRenderingAttachmentInfo color_attachment{};
+        color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        color_attachment.imageView = frame.swapchain_image_view;
+        color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingAttachmentInfo depth_attachment{};
+        depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depth_attachment.imageView = frame.depth_stencil_image_view;
+        depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingInfo rendering_info{};
+        rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        rendering_info.renderArea.offset = {0, 0};
+        rendering_info.renderArea.extent = frame.extent;
+        rendering_info.layerCount = 1;
+        rendering_info.colorAttachmentCount = 1;
+        rendering_info.pColorAttachments = &color_attachment;
+        rendering_info.pDepthAttachment = &depth_attachment;
+        rendering_info.pStencilAttachment = &depth_attachment;
+        vkCmdBeginRendering(command_buffer, &rendering_info);
+        frame_rendering_active_ = true;
+        return true;
+    }
+
     bool VulkanContext::endFrame() {
         if (!frame_active_) {
             return fail(std::format(
@@ -1466,11 +1584,12 @@ namespace lfs::vis {
                 active_image_index_,
                 frame_submit_serials_[current_frame]));
         }
+        // commandBufferCount / pCommandBuffers were just set from a validated local
+        // command_buffer; only check wait/signal array consistency here.
         if (wait_semaphores.size() != wait_stages.size() ||
             wait_semaphores.size() != wait_values.size() ||
             timeline_submit_info.waitSemaphoreValueCount != submit_info.waitSemaphoreCount ||
-            timeline_submit_info.signalSemaphoreValueCount != submit_info.signalSemaphoreCount ||
-            submit_info.commandBufferCount != 1 || submit_info.pCommandBuffers == nullptr) {
+            timeline_submit_info.signalSemaphoreValueCount != submit_info.signalSemaphoreCount) {
             frame_active_ = false;
             framebuffer_resized_ = true;
             return fail(std::format(
@@ -2772,7 +2891,9 @@ namespace lfs::vis {
         return true;
     }
 
-    std::size_t VulkanContext::queryVmaUsedBytes() const {
+    std::size_t VulkanContext::queryVmaUsedBytes(
+        const std::size_t additional_block_bytes,
+        const std::size_t additional_allocation_bytes) const {
         if (allocator_ == VK_NULL_HANDLE)
             return 0;
         // VK_EXT_memory_budget reports the *full* per-heap memory the driver attributes
@@ -2795,6 +2916,8 @@ namespace lfs::vis {
                 total_allocation_bytes += budgets[i].statistics.allocationBytes;
             }
         }
+        total_block_bytes += additional_block_bytes;
+        total_allocation_bytes += additional_allocation_bytes;
         auto& profiler = lfs::diagnostics::VramProfiler::instance();
         profiler.setGauge("vulkan.vma.budget_usage", static_cast<double>(total_usage));
         profiler.setGauge("vulkan.vma.block_bytes", static_cast<double>(total_block_bytes));
@@ -3473,11 +3596,50 @@ namespace lfs::vis {
         // NVIDIA's driver takes ownership of the fd we pass to vkAllocateMemory and
         // will close it on vkFreeMemory. Dup so the original exporter (CUDA) can
         // still own its copy; both close their fd independently on teardown.
+        // Ownership: we never close `handle` here — ExportableBlock owns it
+        // (see ExportHandle contract in exportable_storage.hpp).
         const int dup_fd = ::dup(handle);
         if (dup_fd < 0) {
             destroyExternalBuffer(out);
             return fail("dup() of external memory fd failed for Vulkan import");
         }
+#ifndef NDEBUG
+        // Debug builds verify that the importer's fd is live and aliases the
+        // exporter's handle. A stale handle must assert instead of being hidden
+        // by the VUID-01742 suppression below.
+        {
+            struct stat st_src {};
+            struct stat st_dup {};
+            const int st_src_rc = ::fstat(handle, &st_src);
+            const int st_dup_rc = ::fstat(dup_fd, &st_dup);
+            int kcmp_rc = 0;
+#if defined(__linux__)
+            kcmp_rc = static_cast<int>(::syscall(
+                SYS_kcmp, ::getpid(), ::getpid(), KCMP_FILE, handle, dup_fd));
+#endif
+            if (st_src_rc != 0 || st_dup_rc != 0 || kcmp_rc != 0 ||
+                st_src.st_dev != st_dup.st_dev || st_src.st_ino != st_dup.st_ino) {
+                LOG_ERROR(
+                    "External-memory import self-check failed (possible stale fd): "
+                    "src_fd={} dup_fd={} src_fstat={} dup_fstat={} kcmp={} "
+                    "src_dev={} src_ino={} dup_dev={} dup_ino={} errno={} size={}",
+                    handle,
+                    dup_fd,
+                    st_src_rc,
+                    st_dup_rc,
+                    kcmp_rc,
+                    st_src_rc == 0 ? static_cast<unsigned long long>(st_src.st_dev) : 0ull,
+                    st_src_rc == 0 ? static_cast<unsigned long long>(st_src.st_ino) : 0ull,
+                    st_dup_rc == 0 ? static_cast<unsigned long long>(st_dup.st_dev) : 0ull,
+                    st_dup_rc == 0 ? static_cast<unsigned long long>(st_dup.st_ino) : 0ull,
+                    errno,
+                    exported_allocation_size);
+                assert(st_src_rc == 0 && st_dup_rc == 0 && kcmp_rc == 0 &&
+                       st_src.st_dev == st_dup.st_dev && st_src.st_ino == st_dup.st_ino &&
+                       "CUDA export fd identity check failed at Vulkan import");
+            }
+        }
+#endif
         VkImportMemoryFdInfoKHR import_info{};
         import_info.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
         import_info.handleType = kExternalMemoryHandleType;
@@ -3503,7 +3665,18 @@ namespace lfs::vis {
                 compatible_memory_type_bits));
         }
 
-        result = vkAllocateMemory(device_, &allocate_info, nullptr, &out.memory);
+        // mark the CUDA-foreign import scope so the debug callback can
+        // suppress exactly VUID-01742 (layer fd-number aliasing). Label is the
+        // diagnostic scope for audit; not a blanket severity filter.
+        {
+#ifndef _WIN32
+            const std::string scope_label =
+                diagnostic_scope.empty() ? std::string("cuda_opaque_fd_import")
+                                         : std::string(diagnostic_scope);
+            const CudaOpaqueFdImportScopeGuard import_scope(scope_label.c_str());
+#endif
+            result = vkAllocateMemory(device_, &allocate_info, nullptr, &out.memory);
+        }
         if (result != VK_SUCCESS) {
 #ifndef _WIN32
             // On failure the driver did NOT take the fd; close it ourselves.
@@ -4217,7 +4390,7 @@ namespace lfs::vis {
         swapchain_estimated_bytes_ = bytes_per_pixel > 0
                                          ? pixel_count * image_count * bytes_per_pixel
                                          : 0;
-        recordCurrentVulkanBytes("vulkan.swapchain", "driver_owned_images_estimate", swapchain_estimated_bytes_);
+        recordCurrentVulkanBytes("vulkan.external.swapchain", "driver_owned_images_estimate", swapchain_estimated_bytes_);
         swapchain_images_in_flight_.assign(image_count, VK_NULL_HANDLE);
         swapchain_format_ = surface_format.format;
         swapchain_extent_fixed_to_surface_ = extent_fixed_to_surface;
@@ -4731,7 +4904,7 @@ namespace lfs::vis {
         }
         swapchain_image_usage_ = 0;
         if (swapchain_estimated_bytes_ > 0) {
-            recordCurrentVulkanBytes("vulkan.swapchain", "driver_owned_images_estimate", 0);
+            recordCurrentVulkanBytes("vulkan.external.swapchain", "driver_owned_images_estimate", 0);
             swapchain_estimated_bytes_ = 0;
         }
     }

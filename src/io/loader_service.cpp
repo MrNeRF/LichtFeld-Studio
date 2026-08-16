@@ -57,6 +57,19 @@ namespace lfs::io {
         }
     } // namespace
 
+    bool splatTensorsRendererReady(const lfs::core::SplatData& model) {
+        const bool base_ready =
+            splat_tensor_renderer_ready(model.means_raw()) &&
+            splat_tensor_renderer_ready(model.sh0_raw()) &&
+            splat_tensor_renderer_ready(model.scaling_raw()) &&
+            splat_tensor_renderer_ready(model.rotation_raw()) &&
+            splat_tensor_renderer_ready(model.opacity_raw()) &&
+            splat_tensor_renderer_ready(model.shN_raw());
+        return base_ready &&
+               (!model.shN_value_quantized() ||
+                splat_tensor_renderer_ready(model.shN_value_bounds()));
+    }
+
     Result<void> migrateSplatTensorsToAllocator(lfs::core::SplatData& model,
                                                 const SplatTensorAllocator& allocator) {
         if (!allocator) {
@@ -68,12 +81,7 @@ namespace lfs::io {
                      model.lod_tree->chunk_count());
             return {};
         }
-        if (splat_tensor_renderer_ready(model.means_raw()) &&
-            splat_tensor_renderer_ready(model.sh0_raw()) &&
-            splat_tensor_renderer_ready(model.scaling_raw()) &&
-            splat_tensor_renderer_ready(model.rotation_raw()) &&
-            splat_tensor_renderer_ready(model.opacity_raw()) &&
-            splat_tensor_renderer_ready(model.shN_raw())) {
+        if (splatTensorsRendererReady(model)) {
             model.set_tensor_allocator(allocator);
             return {};
         }
@@ -103,11 +111,17 @@ namespace lfs::io {
             const int max_sh = model.get_max_sh_degree();
             const int active_sh = model.get_active_sh_degree();
             const float scene_scale = model.get_scene_scale();
+            const bool shN_q16 = model.shN_value_quantized();
             lfs::core::Tensor deleted = model.has_deleted_mask() ? model.deleted() : lfs::core::Tensor{};
 
             lfs::core::Tensor shN;
+            lfs::core::Tensor shN_bounds;
             if (model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
                 shN = copy_to_allocator(model.shN_raw(), "SplatData.shN");
+            }
+            if (shN_q16) {
+                shN_bounds = copy_to_allocator(
+                    model.shN_value_bounds(), "SplatData.shN_value_bounds");
             }
             lfs::core::SplatData migrated(max_sh,
                                           copy_to_allocator(model.means_raw(), "SplatData.means"),
@@ -118,6 +132,12 @@ namespace lfs::io {
                                           copy_to_allocator(model.opacity_raw(), "SplatData.opacity"),
                                           scene_scale,
                                           lfs::core::SplatData::ShNLayout::Swizzled);
+            if (shN_q16) {
+                // Codes and bounds are one declared representation. Install the
+                // bounds before active-degree validation so pad-dropped codes are
+                // never reinterpreted as IEEE f16 during a degraded re-home.
+                migrated.shN_value_bounds() = std::move(shN_bounds);
+            }
             migrated.set_active_sh_degree(active_sh);
             if (deleted.is_valid()) {
                 migrated.deleted() = std::move(deleted);

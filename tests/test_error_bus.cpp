@@ -271,7 +271,6 @@ TEST(ErrorEventBridgeTest, DiskSpaceCaseIsLeftToNativeHandler) {
 
     lfs::core::events::state::DiskSpaceSaveFailed other{};
     other.is_disk_space_error = false;
-    other.is_checkpoint = true;
     other.error = "write failed";
     const auto notification = lfs::vis::gui::translateDiskSpaceSaveFailed(other);
     ASSERT_TRUE(notification.has_value());
@@ -664,6 +663,83 @@ TEST(GuiErrorConsumerTest, RenderFrameOomMapsToGpuMemoryTitle) {
         lfs::ErrorDeliveryInfo{});
     ASSERT_TRUE(modal.has_value());
     EXPECT_EQ(modal->title, std::string(lichtfeld::Strings::ErrorModal::OUT_OF_GPU_MEMORY));
+}
+
+namespace {
+
+    std::string consumerTitle(const lfs::Error& error,
+                              const lfs::ErrorSurface surface = lfs::ErrorSurface::Modal) {
+        std::optional<lfs::core::ModalRequest> modal;
+        std::optional<lfs::vis::gui::ToastRequest> toast;
+        lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
+            .modal = [&](lfs::core::ModalRequest r) { modal = std::move(r); },
+            .toast = [&](lfs::vis::gui::ToastRequest r) { toast = std::move(r); },
+            .status = {}});
+        consumer.on_error(consumerNotification(error, surface), lfs::ErrorDeliveryInfo{});
+        if (surface == lfs::ErrorSurface::Toast) {
+            return toast ? toast->title : std::string{};
+        }
+        return modal ? modal->title : std::string{};
+    }
+
+} // namespace
+
+TEST(GuiErrorConsumerTest, AppSaveMapsToSaveFailedTitle) {
+    EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::Unavailable, lfs::ErrorDomain::App, "save",
+                                      lfs::vis::gui::error_op::kSave)),
+              std::string(lichtfeld::Strings::ErrorModal::SAVE_FAILED));
+}
+
+TEST(GuiErrorConsumerTest, AppOpenProjectMapsToFileOpenFailedTitle) {
+    EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::NotFound, lfs::ErrorDomain::App, "open",
+                                      lfs::vis::gui::error_op::kOpenProject)),
+              std::string(lichtfeld::Strings::ErrorModal::FILE_OPEN_FAILED));
+}
+
+TEST(GuiErrorConsumerTest, AppLoadConfigStillInvalidConfig) {
+    EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::InvalidArgument, lfs::ErrorDomain::App,
+                                      "config", lfs::vis::gui::error_op::kLoadConfig)),
+              std::string(lichtfeld::Strings::ErrorModal::CONFIG_INVALID));
+}
+
+TEST(GuiErrorConsumerTest, IoSaveMapsToSaveFailedTitle) {
+    EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::Unavailable, lfs::ErrorDomain::IO, "save",
+                                      lfs::vis::gui::error_op::kSave)),
+              std::string(lichtfeld::Strings::ErrorModal::SAVE_FAILED));
+}
+
+TEST(GuiErrorConsumerTest, IoOpenProjectMapsToFileOpenFailedTitle) {
+    EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::NotFound, lfs::ErrorDomain::IO, "open",
+                                      lfs::vis::gui::error_op::kOpenProject)),
+              std::string(lichtfeld::Strings::ErrorModal::FILE_OPEN_FAILED));
+}
+
+TEST(GuiErrorConsumerTest, IoResourceExhaustedSaveIsNotGpuOom) {
+    EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::ResourceExhausted, lfs::ErrorDomain::IO,
+                                      "disk full", lfs::vis::gui::error_op::kSave)),
+              std::string(lichtfeld::Strings::ErrorModal::SAVE_FAILED));
+    EXPECT_NE(consumerTitle(makeError(lfs::ErrorCode::ResourceExhausted, lfs::ErrorDomain::IO,
+                                      "disk full", lfs::vis::gui::error_op::kSave)),
+              std::string(lichtfeld::Strings::ErrorModal::OUT_OF_GPU_MEMORY));
+}
+
+TEST(GuiErrorConsumerTest, TrainingResourceExhaustedStillGpuOom) {
+    EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::ResourceExhausted, lfs::ErrorDomain::Training,
+                                      "vram")),
+              std::string(lichtfeld::Strings::ErrorModal::OUT_OF_GPU_MEMORY));
+}
+
+TEST(GuiErrorConsumerTest, AsyncAndSyncSaveShareSaveFailedTitle) {
+    const auto sync_preflight =
+        makeError(lfs::ErrorCode::FailedPrecondition, lfs::ErrorDomain::App, "no path",
+                  lfs::vis::gui::error_op::kSave);
+    const auto async_worker =
+        makeError(lfs::ErrorCode::ResourceExhausted, lfs::ErrorDomain::IO, "ENOSPC",
+                  lfs::vis::gui::error_op::kSave);
+    const std::string sync_title = consumerTitle(sync_preflight, lfs::ErrorSurface::Toast);
+    const std::string async_title = consumerTitle(async_worker, lfs::ErrorSurface::Toast);
+    EXPECT_EQ(sync_title, async_title);
+    EXPECT_EQ(sync_title, std::string(lichtfeld::Strings::ErrorModal::SAVE_FAILED));
 }
 
 using lfs::vis::FrameFault;

@@ -41,17 +41,18 @@ namespace lfs::training::losses {
             const lfs::core::Tensor& gt_image,
             const Params& params);
 
-        const kernels::FusedL1SSIMWorkspace& fused_workspace() const { return fused_workspace_; }
-        const kernels::SSIMWorkspace& ssim_workspace() const { return ssim_workspace_; }
+        // fused / pure-SSIM / decoupled / masked variants share one arena.
+        [[nodiscard]] kernels::LossWorkspaceArena& arena() { return arena_; }
+        [[nodiscard]] const kernels::LossWorkspaceArena& arena() const { return arena_; }
+
+        const kernels::FusedL1SSIMWorkspace& fused_workspace() const { return arena_.fused(); }
+        const kernels::SSIMWorkspace& ssim_workspace() const { return arena_.pure_ssim(); }
 
     private:
-        // Pre-allocated SSIM workspace
-        lfs::training::kernels::SSIMWorkspace ssim_workspace_;
+        // Shared grow-only storage for mutually-exclusive L1+SSIM workspaces.
+        lfs::training::kernels::LossWorkspaceArena arena_;
 
-        // Pre-allocated fused L1+SSIM workspace
-        lfs::training::kernels::FusedL1SSIMWorkspace fused_workspace_;
-
-        // Pre-allocated buffers for loss computation (eliminates ~35GB allocation churn)
+        // Pre-allocated buffers for pure-L1 path (lambda_dssim == 0)
         lfs::core::Tensor grad_buffer_;         // Reusable gradient buffer [N, C, H, W]
         lfs::core::Tensor loss_scalar_;         // Reusable scalar loss [1]
         lfs::core::Tensor l1_reduction_buffer_; // Reusable L1 reduction buffer [num_blocks]

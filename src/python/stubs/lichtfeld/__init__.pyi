@@ -64,6 +64,11 @@ class OperatorResult(enum.Enum):
 
     RUNNING = 2
 
+class ProjectOpenOutcome(enum.Enum):
+    OPENED = 0
+
+    RECOVERY_PROMPT_PENDING = 1
+
 class Hook(enum.Enum):
     training_start = 0
 
@@ -228,6 +233,9 @@ def session() -> Session:
 def trainer_state() -> str:
     """Get trainer state"""
 
+def trainer_saving_model() -> bool:
+    """Whether the terminal stop/completion model save is in progress"""
+
 def finish_reason() -> str | None:
     """Get finish reason if training finished"""
 
@@ -252,11 +260,57 @@ def stop_training() -> None:
 def reset_training() -> None:
     """Reset training state to initial"""
 
-def save_checkpoint() -> None:
-    """Save a training checkpoint to disk"""
-
-def new_project() -> None:
+def new_project(discard_changes: bool = False) -> None:
     """Clear all project state and start a new project"""
+
+def project_save() -> None:
+    """Save the active .licht project, prompting for a path when needed"""
+
+def project_save_as(path: str = '') -> None:
+    """Save the active project to a new .licht path"""
+
+def project_open(path: str = '', discard_changes: bool = False) -> ProjectOpenOutcome:
+    """Open a .licht project"""
+
+def project_compact() -> None:
+    """Compact the active .licht project in the background"""
+
+def project_is_dirty() -> bool:
+    """Return whether the active project has unsaved chapters"""
+
+def project_has_path() -> bool:
+    """Return whether the active project has a bound .licht path"""
+
+def project_recent_files() -> list[str]:
+    """Return the most-recently-used .licht project paths"""
+
+def project_clear_recent_files() -> None:
+    """Clear the most-recently-used .licht project list"""
+
+def project_autosave_recovery_disposition(path: str) -> str:
+    """
+    Return autosave recovery disposition for a .licht master path ("none", "offer", "stale_deleted", "invalid", "ambiguous", "busy", "unavailable")
+    """
+
+def project_reopen_last_enabled() -> bool:
+    """Return whether the last project is reopened at startup"""
+
+def project_set_reopen_last(enabled: bool) -> None:
+    """Enable or disable reopening the last project at startup"""
+
+def project_auto_save_on_close_enabled() -> bool:
+    """Return whether dirty projects are saved automatically on close"""
+
+def project_set_auto_save_on_close(enabled: bool) -> None:
+    """Enable or disable automatic project save on close"""
+
+def project_autosave_interval_seconds() -> int:
+    """Return the timed project autosave interval in seconds"""
+
+def project_set_autosave_interval_seconds(seconds: int) -> None:
+    """
+    Set the timed project autosave interval in seconds; zero disables the timer trigger
+    """
 
 def clear_scene() -> None:
     """Remove all nodes from the scene"""
@@ -278,12 +332,26 @@ def load_checkpoint_for_training(checkpoint_path: str, dataset_path: str, output
 def request_exit() -> None:
     """Request application exit (shows confirmation if needed)."""
 
-def force_exit() -> None:
-    """Force immediate application exit (bypasses confirmation)."""
+def save_and_exit() -> None:
+    """Save the named project explicitly and exit after the save succeeds."""
 
-def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True) -> None:
+def save_as_and_exit() -> None:
     """
-    Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP.
+    Choose a project path, save explicitly, and exit after the save succeeds.
+    """
+
+def stop_save_and_exit() -> None:
+    """Stop training if needed, save the project explicitly, then exit."""
+
+def cancel_exit() -> None:
+    """Cancel the pending application exit."""
+
+def force_exit() -> None:
+    """Explicitly discard unsaved changes and exit."""
+
+def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True) -> None:
+    """
+    Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
     """
 
 def save_config_file(path: str) -> None:
@@ -482,6 +550,9 @@ def toggle_vram_hud() -> None:
     """
     Toggle the VRAM diagnostics HUD overlay (requires vram profiler enabled)
     """
+
+def is_perf_hud_visible() -> bool:
+    """True when the performance HUD is currently shown"""
 
 def toggle_independent_split_view() -> None:
     """Toggle independent split view"""
@@ -1262,7 +1333,7 @@ def capture_viewport() -> ViewportRender | None:
     Capture viewport render explicitly (may read back from GPU; clones data, safe to use from background threads)
     """
 
-def export_viewport_image(path: str, format: str = '', width: int = 0, height: int = 0, transparent: bool = False, jpeg_quality: int = 95) -> dict:
+def export_viewport_image(path: str, format: str = '', width: int = 0, height: int = 0, transparent: bool = False, jpeg_quality: int = 95, include_provenance: bool = True) -> dict:
     """
     Export the active viewport image to PNG or JPEG.
 
@@ -1273,6 +1344,7 @@ def export_viewport_image(path: str, format: str = '', width: int = 0, height: i
         height: Target height in pixels. If both dimensions are zero, captures the current viewport.
         transparent: For PNG only, export straight RGBA from the preview renderer.
         jpeg_quality: JPEG compression quality in [1, 100].
+        include_provenance: When true, writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.
 
     Returns:
         Dict with path, width, height, channels, format, and transparent.
@@ -2173,7 +2245,7 @@ class OptimizationParams:
 
     @property
     def save_steps(self) -> list[int]:
-        """List of iterations at which to save checkpoints"""
+        """List of iterations at which to save the project (project.licht)"""
 
     def add_save_step(self, step: int) -> None:
         """Add a save step (ignored if duplicate)"""
@@ -2274,13 +2346,6 @@ class DatasetParams:
 
     @use_cpu_cache.setter
     def use_cpu_cache(self, arg: bool, /) -> None: ...
-
-    @property
-    def use_fs_cache(self) -> bool:
-        """Use filesystem cache for images"""
-
-    @use_fs_cache.setter
-    def use_fs_cache(self, arg: bool, /) -> None: ...
 
     @property
     def use_16bit_color(self) -> bool:

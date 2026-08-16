@@ -5,6 +5,7 @@
 #pragma once
 #include "core/error_envelope.hpp"
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/uuid.hpp"
 #include "geometry/bounding_box.hpp"
 #include <cstdint>
 #include <filesystem>
@@ -57,16 +58,29 @@ namespace lfs::core {
             EVENT(ResumeTraining, );
             EVENT(StopTraining, );
             EVENT(ResetTraining, );
-            EVENT(SaveCheckpoint, std::optional<int> iteration;);
-            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path; std::filesystem::path init_path; std::string centralize_dataset; std::optional<int> max_width; std::optional<int> min_track_length; bool apply_auto_crop = false;);
+            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false;);
             EVENT(LoadCheckpointForTraining, std::filesystem::path checkpoint_path; std::filesystem::path dataset_path; std::filesystem::path output_path;);
             EVENT(ImportColmapCameras, std::filesystem::path sparse_path;);
             EVENT(LoadConfigFile, std::filesystem::path path;);
             EVENT(ShowDatasetLoadPopup, std::filesystem::path dataset_path;);
             EVENT(ShowVideoExtractor, std::filesystem::path video_path;);
             EVENT(ShowResumeCheckpointPopup, std::filesystem::path checkpoint_path;);
-            EVENT(NewProject, );
+            EVENT(NewProject, bool discard_changes = false;);
+            EVENT(ProjectSave, );
+            EVENT(ProjectSaveAs, std::filesystem::path path;);
+            EVENT(ProjectOpen, std::filesystem::path path; bool discard_changes = false;);
+            EVENT(ProjectCompact, );
+            EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path;);
+            EVENT(SetReopenLastProject, bool enabled;);
+            EVENT(SetAutoSaveOnClose, bool enabled;);
+            EVENT(SetProjectAutosaveInterval, std::uint64_t seconds;);
             EVENT(RequestExit, );
+            EVENT(ShowExitConfirmation,
+                  bool training_in_progress = false;);
+            EVENT(SaveAndExit, );
+            EVENT(SaveAsAndExit, );
+            EVENT(StopSaveAndExit, );
+            EVENT(CancelExit, );
             EVENT(ForceExit, );
             EVENT(SwitchToEditMode, );
             EVENT(ResetCamera, );
@@ -82,8 +96,6 @@ namespace lfs::core {
             EVENT(RemoveNodeById, int32_t node_id; bool keep_children = false;);
             EVENT(RenameNodeById, int32_t node_id; std::string new_name;);
             EVENT(SetNodeVisibilityById, int32_t node_id; bool visible;);
-            EVENT(ExportNodeAs, std::string name; ExportFormat format;);
-            EVENT(ExportAllMergedAs, ExportFormat format;);
             EVENT(ReparentNode, std::string node_name; std::string new_parent_name;);    // Empty parent = root
             EVENT(ReparentNodeById, int32_t node_id; int32_t new_parent_id;);            // -1 parent = root
             EVENT(MoveNodeById, int32_t node_id; int32_t new_parent_id; int32_t index;); // -1 parent = root, -1 index = append
@@ -135,7 +147,7 @@ namespace lfs::core {
             EVENT(SequencerPlayPause, );
             // Empty path opens the save dialog; a path set by a script exports straight
             // to it, since a modal dialog cannot be answered from an automation client.
-            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf; std::string path;);
+            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf; std::string path = {}; bool include_provenance = true;);
             EVENT(SequencerGoToKeyframe, size_t keyframe_index;);
             EVENT(SequencerSelectKeyframe, size_t keyframe_index;);
             EVENT(SequencerDeleteKeyframe, size_t keyframe_index;);
@@ -170,7 +182,7 @@ namespace lfs::core {
             EVENT(TrainingProgress, int iteration; float loss; int num_gaussians; bool is_refining = false;);
             EVENT(TrainingPaused, int iteration;);
             EVENT(TrainingResumed, int iteration;);
-            EVENT(TrainingCompleted, int iteration; float final_loss; float elapsed_seconds; bool success; bool user_stopped; std::optional<std::string> error; bool resource_exhausted = false; std::optional<core::WireError> error_info;);
+            EVENT(TrainingCompleted, int iteration; float final_loss; float elapsed_seconds; bool success; bool user_stopped; std::optional<std::string> error; bool resource_exhausted = false; std::optional<core::WireError> error_info; bool suppress_notification = false;);
             EVENT(TrainingStopped, int iteration; bool user_requested;);
 
             // Scene state
@@ -185,8 +197,8 @@ namespace lfs::core {
             EVENT(SceneChanged, uint32_t mutation_flags = 0;);
             EVENT(SelectionChanged, bool has_selection; int count;);
             // node_type stores core::NodeType as int.
-            EVENT(PLYAdded, std::string name; size_t node_gaussians; size_t total_gaussians; bool is_visible; std::string parent_name; bool is_group; int node_type; bool from_history = false;);
-            EVENT(PLYRemoved, std::string name; bool children_kept = false; std::string parent_of_removed; bool from_history = false;);
+            EVENT(PLYAdded, std::string name; Uuid uuid; size_t node_gaussians; size_t total_gaussians; bool is_visible; std::string parent_name; bool is_group; int node_type; bool from_history = false;);
+            EVENT(PLYRemoved, std::string name; Uuid uuid; bool children_kept = false; std::string parent_of_removed; bool from_history = false;);
             EVENT(NodeReparented, std::string name; std::string old_parent; std::string new_parent; bool from_history = false;);
 
             // Data loading
@@ -221,7 +233,6 @@ namespace lfs::core {
                   size_t output_chars;
                   bool success;
                   bool interrupted;);
-            EVENT(CheckpointSaved, int iteration; std::filesystem::path path;);
             EVENT(ExportCompleted, std::filesystem::path path; ExportFormat format;);
             EVENT(DiskSpaceSaveFailed,
                   int iteration;
@@ -229,8 +240,7 @@ namespace lfs::core {
                   std::string error;
                   size_t required_bytes;
                   size_t available_bytes;
-                  bool is_disk_space_error;
-                  bool is_checkpoint = true;);
+                  bool is_disk_space_error;);
             EVENT(MemoryUsage,
                   size_t gpu_used;
                   size_t gpu_total;
@@ -246,7 +256,7 @@ namespace lfs::core {
                   size_t freed_bytes;
                   bool recovered;);
 
-            EVENT(ExportFailed, std::string error; bool cancelled = false; std::optional<core::WireError> error_info;);
+            EVENT(ExportFailed, std::string error; bool cancelled = false; std::optional<core::WireError> error_info = {};);
             EVENT(VideoExportCompleted, std::filesystem::path path; int total_frames;);
             EVENT(VideoExportFailed, std::string error;);
             EVENT(Mesh2SplatCompleted, std::string source_name; std::string node_name; size_t num_gaussians;);
@@ -301,6 +311,8 @@ namespace lfs::core {
             EVENT(ToggleUI, );
             EVENT(ToggleFullscreen, );
             EVENT(ToggleVramHud, );
+            EVENT(TogglePerfHudExpanded, );
+            EVENT(OpenPerfHudLedger, );
         } // namespace ui
 
         // ============================================================================
@@ -309,6 +321,9 @@ namespace lfs::core {
         namespace internal {
             EVENT(TrainerReady, );
             EVENT(TrainingReadyToStart, );
+            // Startup plugin registration is terminal. Project GUIL state
+            // must not touch PanelRegistry before this concrete boundary.
+            EVENT(GuiPanelsReady, std::uint64_t registration_revision;);
             EVENT(WindowFocusLost, );
             EVENT(DisplayScaleChanged, float scale;);
             EVENT(UiScaleChangeRequested, float scale;); // 0 = auto (from OS)

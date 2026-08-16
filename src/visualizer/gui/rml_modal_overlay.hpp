@@ -23,8 +23,13 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis {
-    struct Theme;
-}
+    class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
+    class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
+    class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
+    class VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
+    class VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
+    class VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
+} // namespace lfs::vis
 namespace lfs::vis::gui {
 
     class RmlUIManager;
@@ -53,6 +58,12 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool needsAnimationFrame() const;
 
     private:
+        friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
+        friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
+        friend class lfs::vis::VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
         void initContext();
         bool syncTheme();
         void cacheElements();

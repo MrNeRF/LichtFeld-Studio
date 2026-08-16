@@ -189,12 +189,12 @@ namespace lfs {
         ErrorDomain domain;
         Severity severity = Severity::Error;
         Retryability retryability = Retryability::NotRetryable;
-        OperationId operation_id;
-        std::string user_message;
-        std::string detail;
+        OperationId operation_id = {};
+        std::string user_message = {};
+        std::string detail = {};
         core::SourceSite detection;
-        SmallFields fields;
-        std::optional<NativeError> native;
+        SmallFields fields = {};
+        std::optional<NativeError> native = {};
     };
 
     class Error;

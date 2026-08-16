@@ -180,7 +180,7 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake -B %BUILD_DIR% -S . -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DLFS_FAST_COMPILE=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF -DLFS_ENABLE_CUDA_DEVICE_DEBUG=OFF
+          cmake -B %BUILD_DIR% -S . -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DLFS_FAST_COMPILE=ON -DBUILD_FORMAT_TESTS=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF -DLFS_ENABLE_CUDA_DEVICE_DEBUG=OFF
 
       - name: Build
         shell: cmd
@@ -188,6 +188,13 @@ jobs:
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           set PATH=%CD%\%BUILD_DIR%;%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\bin;%PATH%
           cmake --build %BUILD_DIR% -j %NUMBER_OF_PROCESSORS%
+
+      - name: Build and run CPU-only format tests
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build %BUILD_DIR% --target lichtfeld_format_tests -j %NUMBER_OF_PROCESSORS%
+          ctest --test-dir %BUILD_DIR% --output-on-failure -R "^lichtfeld_format_tests$"
 
       - name: Verify nvJPEG2000 runtime bundle
         shell: pwsh

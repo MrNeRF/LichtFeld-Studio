@@ -4,10 +4,34 @@
 
 #include "py_splat_data.hpp"
 #include <nanobind/stl/optional.h>
+#include <stdexcept>
+#include <string_view>
 
 namespace {
     constexpr float SH_C0 = 0.28209479177387814f;
     constexpr float SH_DC_OFFSET = 0.5f;
+
+    [[nodiscard]] bool is_renderer_backed_kind(const std::string_view kind) {
+        return kind == "vulkan_external_buffer" || kind == "splat.exportable";
+    }
+
+    [[nodiscard]] bool splat_is_renderer_backed(const lfs::core::SplatData& data) {
+        const lfs::core::Tensor* const tensors[] = {
+            &data.means_raw(),
+            &data.sh0_raw(),
+            &data.shN_raw(),
+            &data.scaling_raw(),
+            &data.rotation_raw(),
+            &data.opacity_raw(),
+            &data.shN_value_bounds(),
+        };
+        for (const auto* tensor : tensors) {
+            if (tensor->is_valid() && is_renderer_backed_kind(tensor->external_storage_kind())) {
+                return true;
+            }
+        }
+        return false;
+    }
 } // namespace
 
 namespace lfs::python {
@@ -96,6 +120,15 @@ namespace lfs::python {
         data_->undelete(mask.tensor());
     }
 
+    void PySplatData::reserve_capacity(const size_t capacity) {
+        if (splat_is_renderer_backed(*data_)) {
+            throw std::runtime_error(
+                "Capacity of renderer-backed models is managed by the application "
+                "and cannot be reserved from Python");
+        }
+        data_->reserve_capacity(capacity);
+    }
+
     void register_splat_data(nb::module_& m) {
         nb::class_<PySplatData>(m, "SplatData")
             // Raw tensor access (views)
@@ -168,7 +201,8 @@ namespace lfs::python {
 
             // Capacity
             .def("reserve_capacity", &PySplatData::reserve_capacity, nb::arg("capacity"),
-                 "Reserve capacity for Gaussians (for densification)");
+                 "Reserve capacity for Gaussians (for densification). "
+                 "Raises if the model is renderer-backed.");
     }
 
 } // namespace lfs::python

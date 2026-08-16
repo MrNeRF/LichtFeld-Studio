@@ -202,8 +202,12 @@ namespace lfs::app {
                 return std::string(value);
             }
 
-            const std::string key(value);
-            return LOC(key.c_str());
+            auto& localization =
+                lfs::event::LocalizationManager::getInstance();
+            if (!localization.hasKey(value)) {
+                return std::string(value);
+            }
+            return localization.get(value);
         }
 
         const char* menu_item_type_to_string(const int type) {

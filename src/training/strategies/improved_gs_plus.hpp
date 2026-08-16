@@ -8,6 +8,7 @@
 
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
+#include "strategy_utils.hpp"
 #include "trainer.hpp"
 
 #include <cassert>
@@ -82,6 +83,11 @@ namespace lfs::training {
 
         // Get indices of active (non-free) Gaussians for export
         lfs::core::Tensor get_active_indices() const;
+
+        // Test hook for densification with quantization.
+        void densify_for_test(const lfs::core::Tensor& scores, const int64_t allocation_budget) {
+            LAS_densify(scores, allocation_budget);
+        }
 
     private:
         friend class ::CropDampingStrategyTest_IgsPlusRejectedRowsAreNeverSampledAtZeroScale_Test;
@@ -159,5 +165,7 @@ namespace lfs::training {
         // Free slot tracking - bool tensor [capacity], true = slot is free for reuse
         lfs::core::Tensor _free_mask;
         PendingFailureSnapshot _pending_failure_snapshot;
+
+        DensifyChildWorkspace _densify_ws;
     };
 } // namespace lfs::training

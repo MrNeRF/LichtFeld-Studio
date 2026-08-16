@@ -15,9 +15,11 @@
 
 add_library(nvimgcodec_imgproc_static OBJECT 
     convert_kernel_gpu.cu
+    pageable_host_buffer.cpp
     pinned_buffer.cpp
     device_buffer.cpp
     exception.cpp
+    out_of_bound_roi_fill.cpp
     stream_device.cpp
     color_space_conversion_impl.h
     convert.h
@@ -29,9 +31,13 @@ add_library(nvimgcodec_imgproc_static OBJECT
     exception.h
     force_inline.h
     host_dev.h
+    image_info_checks.h
     int_literals.h
     math_util.h
+    out_of_bound_roi_fill.h
+    pageable_host_buffer.h
     pinned_buffer.h
+    region_orientation.h
     roi.h
     sample_format_utils.h
     static_switch.h

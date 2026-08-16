@@ -255,7 +255,8 @@ body {
     display: flex;
     flex-direction: column;
     padding: 4dp 0;
-    min-width: 140dp;
+    min-width: 200dp;
+    max-width: 360dp;
     border-width: 1dp;
     border-radius: 4dp;
     overflow: visible;
@@ -270,6 +271,8 @@ body {
     flex-direction: row;
     align-items: center;
     padding: 4dp 12dp;
+    flex-shrink: 0;
+    white-space: nowrap;
     cursor: pointer;
 }
 
@@ -292,20 +295,30 @@ body {
 .menu-item .checkmark {
     width: 16dp;
     margin-left: 4dp;
+    flex-shrink: 0;
+    white-space: nowrap;
     text-align: center;
 }
 
 .menu-item .label {
-    flex: 1;
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .menu-item .shortcut {
     margin-left: 24dp;
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .menu-item .submenu-arrow {
     margin-left: 12dp;
     width: 10dp;
+    flex-shrink: 0;
+    white-space: nowrap;
     text-align: right;
 }
 
@@ -326,9 +339,11 @@ body {
     left: 100%;
     flex-direction: column;
     padding: 4dp 0;
-    min-width: 120dp;
+    min-width: 200dp;
+    max-width: 420dp;
     border-width: 1dp;
     border-radius: 4dp;
+    overflow: hidden;
     z-index: 3;
     pointer-events: auto;
 }

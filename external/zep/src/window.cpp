@@ -1034,6 +1034,9 @@ namespace Zep {
                 std::string strNum;
 
                 auto mode = m_pBuffer->GetMode();
+                if (!mode) {
+                    return;
+                }
 
                 // In Vim mode show relative lines, unless in Ex mode (with hidden cursor)
                 if (mode->UsesRelativeLines() && mode->GetCursorType() != CursorType::None) {
@@ -1313,6 +1316,19 @@ namespace Zep {
     long ZepWindow::GetNumDisplayedLines() {
         UpdateLayout();
         return std::min((long)m_windowLines.size(), GetMaxDisplayLines());
+    }
+
+    NVec2f ZepWindow::GetScrollOffsetPx() const {
+        return {m_textOffsetXPx, m_textOffsetPx};
+    }
+
+    void ZepWindow::SetScrollOffsetPx(const NVec2f& offset) {
+        m_textOffsetXPx = std::max(0.0f, offset.x);
+        m_textOffsetPx = std::max(0.0f, offset.y);
+        // A cursor move normally recentres the viewport on the next layout.
+        // Restoring a session supplies both values, so the saved scroll wins.
+        m_cursorMoved = false;
+        GetEditor().RequestRefresh();
     }
 
     void ZepWindow::SetBufferCursor(GlyphIterator location) {
@@ -1724,6 +1740,9 @@ namespace Zep {
         TIME_SCOPE(Display);
 
         auto pMode = GetBuffer().GetMode();
+        if (!pMode) {
+            return;
+        }
         pMode->PreDisplay(*this);
 
         // Ensure line spans are valid; updated if the text is changed or the window dimensions change

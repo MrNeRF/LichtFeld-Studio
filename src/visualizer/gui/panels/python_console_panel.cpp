@@ -517,8 +517,10 @@ namespace {
     }
 
     void new_script(lfs::vis::gui::panels::PythonConsoleState& state) {
-        if (auto* editor = state.getEditor())
+        if (auto* editor = state.getEditor()) {
             editor->clear();
+            editor->clearActiveSessionLocator();
+        }
         state.setScriptPath({});
         state.setModified(false);
     }
@@ -1268,8 +1270,6 @@ namespace {
             new_script(state);
         } else if (has_key(*input, SDL_SCANCODE_O)) {
             open_script_dialog(state);
-        } else if (has_key(*input, SDL_SCANCODE_S)) {
-            save_current_script(state);
         } else if (input->key_shift && has_key(*input, SDL_SCANCODE_F)) {
             format_editor_script(state);
         } else if (input->key_shift && has_key(*input, SDL_SCANCODE_I)) {
@@ -1387,6 +1387,8 @@ namespace {
 
         if (auto* editor = state.getEditor()) {
             editor->setText(content);
+            editor->setActiveSessionLocator(
+                lfs::core::path_to_utf8(path));
         }
 
         state.setScriptPath(path);
@@ -1411,6 +1413,8 @@ namespace {
         file.close();
 
         state.setScriptPath(path);
+        editor->setActiveSessionLocator(
+            lfs::core::path_to_utf8(path));
         state.setModified(false);
         state.addInfo("Saved: " + lfs::core::path_to_utf8(path.filename()));
         return true;
@@ -1588,6 +1592,27 @@ namespace lfs::vis::gui::panels {
         }
     }
 
+    void PythonConsoleState::setFontScale(const float scale) {
+        const auto nearest = std::min_element(
+            std::begin(FONT_STEPS), std::end(FONT_STEPS),
+            [scale](const float lhs, const float rhs) {
+                return std::abs(lhs - scale) <
+                       std::abs(rhs - scale);
+            });
+        font_scale_ =
+            nearest == std::end(FONT_STEPS)
+                ? 1.0f
+                : *nearest;
+    }
+
+    float PythonConsoleState::splitterRatio() {
+        return g_splitter_ratio;
+    }
+
+    void PythonConsoleState::setSplitterRatio(const float ratio) {
+        g_splitter_ratio = std::clamp(ratio, 0.2f, 0.8f);
+    }
+
     void PythonConsoleState::addToHistory(const std::string& cmd) {
         std::lock_guard lock(mutex_);
         if (!cmd.empty() && (command_history_.empty() || command_history_.back() != cmd)) {
@@ -1605,6 +1630,11 @@ namespace lfs::vis::gui::panels {
     }
 
     editor::PythonEditor* PythonConsoleState::getEditor() {
+        return editor_.get();
+    }
+
+    const editor::PythonEditor*
+    PythonConsoleState::getEditor() const {
         return editor_.get();
     }
 

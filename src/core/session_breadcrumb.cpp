@@ -5,18 +5,15 @@
 #include "core/session_breadcrumb.hpp"
 
 #include "core/logger.hpp"
+#include "core/utc_time.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
-#include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <mutex>
-#include <sstream>
 #include <string_view>
 
 #ifdef _WIN32
@@ -50,20 +47,6 @@ namespace lfs::core {
 #else
             return static_cast<std::uint64_t>(getpid());
 #endif
-        }
-
-        std::string utc_now() {
-            const auto now = std::chrono::system_clock::now();
-            const std::time_t timestamp = std::chrono::system_clock::to_time_t(now);
-            std::tm utc{};
-#ifdef _WIN32
-            gmtime_s(&utc, &timestamp);
-#else
-            gmtime_r(&timestamp, &utc);
-#endif
-            std::ostringstream output;
-            output << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
-            return output.str();
         }
 
         std::optional<SessionBreadcrumb> decode_record(const fs::path& path) {

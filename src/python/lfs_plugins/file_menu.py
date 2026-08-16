@@ -2,13 +2,59 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """File menu implementation using Blender-style operators."""
 
+from pathlib import Path, PureWindowsPath
+
 import lichtfeld as lf
 from .asset_manager_integration import register_catalog_asset_path
 from .types import Operator
-from .layouts.menus import register_menu, menu_operator, menu_separator
+from .layouts.menus import (
+    menu_action,
+    menu_operator,
+    menu_separator,
+    menu_submenu,
+    menu_toggle,
+    register_menu,
+)
 from .import_panels import open_dataset_import_panel, open_resume_checkpoint_panel
 
 __lfs_menu_classes__ = ["FileMenu"]
+
+
+def _confirm_discard_then(title: str, callback) -> None:
+    if not lf.project_is_dirty():
+        callback()
+        return
+
+    tr = lf.ui.tr
+    continue_label = title
+
+    def _on_result(button):
+        if button == continue_label:
+            callback()
+
+    lf.ui.confirm_dialog(
+        title,
+        tr("exit_popup.unsaved_warning"),
+        [continue_label, tr("common.cancel")],
+        _on_result,
+    )
+
+
+def format_recent_project_entry(path: str, tr) -> tuple[str, str]:
+    """Return the compact recent-project label and full-path tooltip."""
+    windows_path = PureWindowsPath(path)
+    display_path = windows_path if windows_path.drive or "\\" in path else Path(path)
+    name = display_path.name or path
+    anchor = display_path.anchor
+    parent_parts = [
+        part
+        for part in display_path.parent.parts
+        if part and part not in {anchor, "/", "\\"}
+    ]
+    parent = "/".join(parent_parts[-2:])
+    if not parent:
+        return name, path
+    return tr("menu.file.recent_entry").format(name=name, parent=parent), path
 
 
 class NewProjectOperator(Operator):
@@ -16,23 +62,49 @@ class NewProjectOperator(Operator):
     description = "Clear the scene to start a new project"
 
     def execute(self, context) -> set:
-        if lf.ui.get_content_type() != "empty":
-            tr = lf.ui.tr
-            new_project_label = tr("menu.file.new_project")
+        _confirm_discard_then(
+            lf.ui.tr("menu.file.new_project"),
+            lambda: lf.new_project(True),
+        )
+        return {"FINISHED"}
 
-            def _on_result(button):
-                if button == new_project_label:
-                    lf.new_project()
 
-            lf.ui.confirm_dialog(
-                new_project_label,
-                tr("exit_popup.unsaved_warning"),
-                [tr("common.cancel"), new_project_label],
-                _on_result,
-            )
-            return {"FINISHED"}
+class OpenProjectOperator(Operator):
+    label = "menu.file.open_project"
+    description = "Open a LichtFeld project"
 
-        lf.new_project()
+    def execute(self, context) -> set:
+        _confirm_discard_then(
+            lf.ui.tr("menu.file.open_project"),
+            lambda: lf.project_open("", True),
+        )
+        return {"FINISHED"}
+
+
+class SaveProjectOperator(Operator):
+    label = "menu.file.save_project"
+    description = "Save the active LichtFeld project"
+
+    def execute(self, context) -> set:
+        lf.project_save()
+        return {"FINISHED"}
+
+
+class SaveProjectAsOperator(Operator):
+    label = "menu.file.save_project_as"
+    description = "Save the active project to a new path"
+
+    def execute(self, context) -> set:
+        lf.project_save_as("")
+        return {"FINISHED"}
+
+
+class CompactProjectOperator(Operator):
+    label = "menu.file.compact_project"
+    description = "Reclaim dead bytes in the active LichtFeld project"
+
+    def execute(self, context) -> set:
+        lf.project_compact()
         return {"FINISHED"}
 
 
@@ -141,21 +213,74 @@ class ExitOperator(Operator):
     description = "Exit the application"
 
     def execute(self, context) -> set:
-        tr = lf.ui.tr
-        lf.ui.set_exit_popup_open(True)
+        lf.request_exit()
+        return {"FINISHED"}
 
-        def _on_result(button):
+
+def _show_exit_confirmation(training_in_progress: bool = False) -> None:
+    tr = lf.ui.tr
+    cancel_label = tr("common.cancel")
+    lf.ui.set_exit_popup_open(True)
+
+    if training_in_progress:
+        stop_save_label = tr("exit_popup.stop_and_save")
+        discard_label = tr("exit_popup.discard_and_exit")
+
+        def _on_training_result(button):
             lf.ui.set_exit_popup_open(False)
-            if button == tr("exit_popup.exit"):
+            if button == stop_save_label:
+                lf.stop_save_and_exit()
+            elif button == discard_label:
                 lf.force_exit()
+            else:
+                lf.cancel_exit()
 
         lf.ui.confirm_dialog(
-            tr("exit_popup.title"),
-            tr("exit_popup.message") + "\n" + tr("exit_popup.unsaved_warning"),
-            [tr("common.cancel"), tr("exit_popup.exit")],
-            _on_result,
+            tr("exit_popup.training_title"),
+            tr("exit_popup.training_message"),
+            [stop_save_label, discard_label, cancel_label],
+            _on_training_result,
         )
-        return {"FINISHED"}
+        return
+
+    has_path = lf.project_has_path()
+    save_label = (
+        tr("common.save")
+        if has_path
+        else tr("menu.file.save_project_as")
+    )
+    discard_label = tr("exit_popup.discard")
+
+    def _on_result(button):
+        lf.ui.set_exit_popup_open(False)
+        if button == save_label:
+            if has_path:
+                lf.save_and_exit()
+            else:
+                lf.save_as_and_exit()
+        elif button == discard_label:
+            lf.force_exit()
+        else:
+            lf.cancel_exit()
+
+    lf.ui.confirm_dialog(
+        tr("exit_popup.title"),
+        tr("exit_popup.message") + "\n" + tr("exit_popup.unsaved_warning"),
+        [save_label, discard_label, cancel_label],
+        _on_result,
+    )
+
+
+def _show_project_switch_confirmation(
+    new_project: bool, path: str
+) -> None:
+    if new_project:
+        title = lf.ui.tr("menu.file.new_project")
+        callback = lambda: lf.new_project(True)
+    else:
+        title = lf.ui.tr("menu.file.open_project")
+        callback = lambda: lf.project_open(path, True)
+    _confirm_discard_then(title, callback)
 
 
 def _on_show_dataset_load_popup(path: str):
@@ -175,8 +300,58 @@ class FileMenu:
     order = 10
 
     def menu_items(self):
+        recent_items = []
+        for recent_path in lf.project_recent_files():
+            path = str(recent_path)
+            label, tooltip = format_recent_project_entry(path, lf.ui.tr)
+            recent_items.append(
+                menu_action(
+                    label,
+                    lambda selected=path: _confirm_discard_then(
+                        lf.ui.tr("menu.file.open_project"),
+                        lambda: lf.project_open(selected, True),
+                    ),
+                    tooltip=tooltip,
+                )
+            )
+        if not recent_items:
+            recent_items.append(
+                {
+                    "type": "item",
+                    "label": lf.ui.tr("menu.file.no_recent_projects"),
+                    "callback": lambda: None,
+                    "enabled": False,
+                }
+            )
+        else:
+            recent_items.append(menu_separator())
+            recent_items.append(
+                menu_action(
+                    lf.ui.tr("menu.file.clear_recent_projects"),
+                    lf.project_clear_recent_files,
+                )
+            )
+
         return [
             menu_operator(NewProjectOperator),
+            menu_operator(OpenProjectOperator),
+            menu_submenu(
+                lf.ui.tr("menu.file.open_recent"),
+                recent_items,
+            ),
+            menu_operator(
+                SaveProjectOperator,
+                shortcut="Ctrl+S",
+            ),
+            menu_operator(SaveProjectAsOperator),
+            menu_operator(CompactProjectOperator),
+            menu_toggle(
+                lf.ui.tr("menu.file.auto_save_on_close"),
+                lambda: lf.project_set_auto_save_on_close(
+                    not lf.project_auto_save_on_close_enabled()
+                ),
+                lf.project_auto_save_on_close_enabled(),
+            ),
             menu_separator(),
             menu_operator(ImportDatasetOperator),
             menu_operator(ImportPlyOperator),
@@ -196,6 +371,10 @@ class FileMenu:
 
 _operator_classes = [
     NewProjectOperator,
+    OpenProjectOperator,
+    SaveProjectOperator,
+    SaveProjectAsOperator,
+    CompactProjectOperator,
     ImportDatasetOperator,
     ImportPlyOperator,
     ImportMeshOperator,
@@ -215,7 +394,10 @@ def register():
 
     lf.ui.on_show_dataset_load_popup(_on_show_dataset_load_popup)
     lf.ui.on_show_resume_checkpoint_popup(_on_show_resume_checkpoint_popup)
-    lf.ui.on_request_exit(lambda: lf.ui.execute_operator(ExitOperator._class_id()))
+    lf.ui.on_request_exit(_show_exit_confirmation)
+    lf.ui.on_project_switch_confirmation(
+        _show_project_switch_confirmation
+    )
 
 
 def unregister():

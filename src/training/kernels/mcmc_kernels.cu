@@ -158,6 +158,45 @@ namespace lfs::training::mcmc {
         );
     }
 
+    __device__ __forceinline__ void apply_noise_to_mean(
+        const float* raw_opacities,
+        const float* raw_scales,
+        const float* raw_quats,
+        float* means,
+        size_t idx,
+        float current_lr,
+        float noise_x,
+        float noise_y,
+        float noise_z) {
+        size_t idx_3d = 3 * idx;
+
+        // Compute S^2 (diagonal matrix from exp(2 * raw_scale))
+        const vec3 raw_scale = glm::make_vec3(raw_scales + idx_3d);
+        mat3 S2 = mat3(__expf(2.f * raw_scale[0]), 0.f, 0.f,
+                       0.f, __expf(2.f * raw_scale[1]), 0.f,
+                       0.f, 0.f, __expf(2.f * raw_scale[2]));
+
+        // Get rotation matrix R from quaternion
+        vec4 raw_quat = glm::make_vec4(raw_quats + 4 * idx);
+        mat3 R = raw_quat_to_rotmat(raw_quat);
+
+        // Compute covariance = R * S^2 * R^T
+        mat3 covariance = R * S2 * glm::transpose(R);
+
+        // Transform noise: transformed_noise = covariance * noise
+        vec3 transformed_noise = covariance * vec3(noise_x, noise_y, noise_z);
+
+        // Compute opacity-based scaling factor
+        float opacity = __frcp_rn(1.f + __expf(-raw_opacities[idx]));
+        float op_sigmoid = __frcp_rn(1.f + __expf(100.f * opacity - 0.5f));
+        float noise_factor = current_lr * op_sigmoid;
+
+        // Add scaled noise to means
+        means[idx_3d] += noise_factor * transformed_noise.x;
+        means[idx_3d + 1] += noise_factor * transformed_noise.y;
+        means[idx_3d + 2] += noise_factor * transformed_noise.z;
+    }
+
     __global__ void add_noise_kernel(
         const float* raw_opacities,
         const float* raw_scales,
@@ -176,32 +215,36 @@ namespace lfs::training::mcmc {
             return;
 
         size_t idx_3d = 3 * idx;
+        apply_noise_to_mean(
+            raw_opacities, raw_scales, raw_quats, means, idx, current_lr,
+            noise[idx_3d], noise[idx_3d + 1], noise[idx_3d + 2]);
+    }
 
-        // Compute S^2 (diagonal matrix from exp(2 * raw_scale))
-        const vec3 raw_scale = glm::make_vec3(raw_scales + idx_3d);
-        mat3 S2 = mat3(__expf(2.f * raw_scale[0]), 0.f, 0.f,
-                       0.f, __expf(2.f * raw_scale[1]), 0.f,
-                       0.f, 0.f, __expf(2.f * raw_scale[2]));
+    __global__ void inject_noise_kernel(
+        const float* raw_opacities,
+        const float* raw_scales,
+        const float* raw_quats,
+        float* means,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
+        float current_lr,
+        size_t N,
+        uint64_t seed) {
 
-        // Get rotation matrix R from quaternion
-        vec4 raw_quat = glm::make_vec4(raw_quats + 4 * idx);
-        mat3 R = raw_quat_to_rotmat(raw_quat);
+        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx >= N)
+            return;
+        if (frozen_mask != nullptr && idx < frozen_mask_size && frozen_mask[idx])
+            return;
 
-        // Compute covariance = R * S^2 * R^T
-        mat3 covariance = R * S2 * glm::transpose(R);
+        // Philox: free counter init vs XORWOW skip-ahead (1149→6.5µs).
+        curandStatePhilox4_32_10_t rng;
+        curand_init(seed, idx, 0, &rng);
+        const float4 n = curand_normal4(&rng);
 
-        // Transform noise: transformed_noise = covariance * noise
-        vec3 transformed_noise = covariance * glm::make_vec3(noise + idx_3d);
-
-        // Compute opacity-based scaling factor
-        float opacity = __frcp_rn(1.f + __expf(-raw_opacities[idx]));
-        float op_sigmoid = __frcp_rn(1.f + __expf(100.f * opacity - 0.5f));
-        float noise_factor = current_lr * op_sigmoid;
-
-        // Add scaled noise to means
-        means[idx_3d] += noise_factor * transformed_noise.x;
-        means[idx_3d + 1] += noise_factor * transformed_noise.y;
-        means[idx_3d + 2] += noise_factor * transformed_noise.z;
+        apply_noise_to_mean(
+            raw_opacities, raw_scales, raw_quats, means, idx, current_lr,
+            n.x, n.y, n.z);
     }
 
     void launch_add_noise_kernel(
@@ -236,6 +279,39 @@ namespace lfs::training::mcmc {
             current_lr,
             N);
         LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.add_noise");
+    }
+
+    void launch_inject_noise_kernel(
+        const float* raw_opacities,
+        const float* raw_scales,
+        const float* raw_quats,
+        float* means,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
+        float current_lr,
+        size_t N,
+        uint64_t seed,
+        void* stream) {
+
+        if (N == 0) {
+            return;
+        }
+
+        dim3 threads(256);
+        dim3 grid((N + threads.x - 1) / threads.x);
+        cudaStream_t cuda_stream = resolve_stream(stream);
+
+        inject_noise_kernel<<<grid, threads, 0, cuda_stream>>>(
+            raw_opacities,
+            raw_scales,
+            raw_quats,
+            means,
+            frozen_mask,
+            frozen_mask_size,
+            current_lr,
+            N,
+            seed);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.inject_noise");
     }
 
     // Kernel to update scaling and opacity at specific indices (avoids index_put_ which loses capacity)
@@ -448,7 +524,7 @@ namespace lfs::training::mcmc {
             return;
         }
 
-        curandState state;
+        curandStatePhilox4_32_10_t state;
         curand_init(seed, idx, 0, &state);
 
         const float u = curand_uniform(&state) * prob_sum;
@@ -567,7 +643,7 @@ namespace lfs::training::mcmc {
             return;
         }
 
-        curandState state;
+        curandStatePhilox4_32_10_t state;
         curand_init(seed, idx, 0, &state);
 
         const float u = curand_uniform(&state) * prob_sum;
@@ -674,6 +750,39 @@ namespace lfs::training::mcmc {
 
         elementwise_max_inplace_kernel<<<grid, threads, 0, cuda_stream>>>(a, b, N);
         LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.elementwise_max");
+    }
+
+    __global__ void max_error_and_zero_densification_kernel(
+        float* __restrict__ error_max,
+        float* __restrict__ densification_info,
+        size_t N) {
+
+        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx >= N)
+            return;
+
+        const float err = densification_info[N + idx];
+        error_max[idx] = fmaxf(error_max[idx], err);
+        densification_info[idx] = 0.f;
+        densification_info[N + idx] = 0.f;
+    }
+
+    void launch_max_error_and_zero_densification(
+        float* error_max,
+        float* densification_info,
+        size_t N,
+        void* stream) {
+
+        if (N == 0)
+            return;
+
+        dim3 threads(256);
+        dim3 grid((N + threads.x - 1) / threads.x);
+        cudaStream_t cuda_stream = resolve_stream(stream);
+
+        max_error_and_zero_densification_kernel<<<grid, threads, 0, cuda_stream>>>(
+            error_max, densification_info, N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.max_error_and_zero_densif");
     }
 
 } // namespace lfs::training::mcmc

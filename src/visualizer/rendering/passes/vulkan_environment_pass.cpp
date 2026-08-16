@@ -762,6 +762,7 @@ namespace lfs::vis {
                                          "environment.image[{}x{}]",
                                          w,
                                          h);
+            vmaSetAllocationName(allocator, image_alloc, "Environment image");
             image_vram_label = std::format("env:{}:{}x{}",
                                            lfs::core::path_to_utf8(path),
                                            w,

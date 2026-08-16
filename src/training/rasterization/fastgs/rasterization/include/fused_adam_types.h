@@ -8,14 +8,21 @@
 
 namespace fast_lfs::rasterization {
 
-    // Optimizer moments are quantised: m (first) as signed int8 around zero-point 128,
-    // v (second) as quantised sqrt(v); both with per-primitive fp32 scales. param stays fp32.
+    // Optimizer moments use joint (u, log_s) packing plus float4 bounds per
+    // 256-splat block. joint_bits == 0 disables updates; 8 or 16 selects the codec.
+    // SH value quant: when sh_value_bits==16, `param` is uint16 codes
+    // (pad-dropped cell-linear swizzle) and sh_value_bounds is float2 per 256-prim block.
     struct FusedAdamParam {
-        float* param = nullptr;
-        std::uint8_t* exp_avg_q = nullptr;
-        std::uint8_t* exp_avg_sq_q = nullptr;
-        float* exp_avg_scale = nullptr;
-        float* exp_avg_sq_scale = nullptr;
+        float* param = nullptr; // float params OR bitcast uint16* when sh_value_bits==16
+        // Joint codec: packed (u,log_s) bytes + float4 bounds[n_bounds]
+        std::uint8_t* joint_packed = nullptr;
+        float* joint_bounds = nullptr; // float4 as 4 floats per bound
+        int joint_bits = 0;            // 0=disabled, 8=SH, 16=non-SH
+        // SH value quant — only meaningful on fused.shN
+        float* sh_value_bounds = nullptr; // float2 as 2 floats per 256-prim block
+        int sh_value_bits = 0;            // 0=fp32 param, 16=uint16 codes
+        int sh_value_n_cells = 0;         // cells per prim (45 for SH3 pad-dropped)
+        int n_primitives = 0;             // live splat count (bounds index = prim/256)
         const bool* frozen_mask = nullptr;
         int frozen_mask_size = 0;
         float frozen_lr_scale = 0.0f;
@@ -37,6 +44,10 @@ namespace fast_lfs::rasterization {
         float scale_reg_weight = 0.0f;
         float flatten_reg_weight = 0.0f;
         float opacity_reg_weight = 0.0f;
+        // Optional persistent device scalars (caller zeros). Filled by preprocess_backward
+        // via block-reduce + atomicAdd so the trainer can skip loss-only reg kernels.
+        float* scale_reg_loss_out = nullptr;
+        float* opacity_reg_loss_out = nullptr;
         const float* sparsity_opa_sigmoid = nullptr;
         const float* sparsity_z = nullptr;
         const float* sparsity_u = nullptr;

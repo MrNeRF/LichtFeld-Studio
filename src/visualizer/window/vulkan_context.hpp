@@ -190,7 +190,9 @@ namespace lfs::vis {
         [[nodiscard]] VkQueue graphicsQueue() const { return graphics_queue_; }
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
         [[nodiscard]] VmaAllocator allocator() const { return allocator_; }
-        [[nodiscard]] std::size_t queryVmaUsedBytes() const;
+        [[nodiscard]] std::size_t queryVmaUsedBytes(
+            std::size_t additional_block_bytes = 0,
+            std::size_t additional_allocation_bytes = 0) const;
         [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }
@@ -253,6 +255,11 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
+        // Dynamic rendering must be closed while external-image layout barriers
+        // are recorded. These helpers bracket that interop window.
+        [[nodiscard]] bool finishActiveRendering(VkCommandBuffer command_buffer);
+        [[nodiscard]] bool restartActiveRendering(VkCommandBuffer command_buffer,
+                                                  const Frame& frame);
         [[nodiscard]] bool endFrame();
         [[nodiscard]] bool hasActiveFrame() const noexcept { return frame_active_; }
         [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba();
@@ -267,9 +274,6 @@ namespace lfs::vis {
         // Immediate vkQueueSubmit count for the current GUI frame (proof counter for #1575).
         // Accounting starts at resetImmediateSubmitsThisFrame (prepareFrame) and is logged
         // at endFrame; beginFrame must not clear it because prepare runs first.
-        [[nodiscard]] std::uint32_t immediateSubmitsThisFrame() const noexcept {
-            return immediate_submits_this_frame_;
-        }
         void resetImmediateSubmitsThisFrame() noexcept { immediate_submits_this_frame_ = 0; }
         // Highest serial S such that every graphics submit with serial <= S has
         // retired. Non-blocking (vkGetFenceStatus); serial-0 slots ignored.
@@ -291,7 +295,7 @@ namespace lfs::vis {
         [[nodiscard]] bool deviceWaitIdle();
         // Returns false if the wait was rejected (frame inactive / mono violation);
         // endFrame will refuse submit when any wait fails. Callers that commit
-        // layout optimistically must not do so on false (F2-2).
+        // layout optimistically must not do so on false.
         [[nodiscard]] bool addFrameTimelineWait(
             VkSemaphore semaphore,
             std::uint64_t value,
@@ -405,7 +409,6 @@ namespace lfs::vis {
         bool createDebugMessenger();
         bool createPipelineCache();
         bool recreateSwapchain();
-        bool finishActiveRendering(VkCommandBuffer command_buffer);
         void deferSwapchainResizeRecreate(bool requires_recreate = true,
                                           std::optional<bool> allow_headroom = std::nullopt);
         void requireSwapchainRecreateAfterOutOfDate();

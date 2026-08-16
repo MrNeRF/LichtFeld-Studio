@@ -42,8 +42,6 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <tuple>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -266,6 +264,10 @@ namespace lfs::vis {
         [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
         [[nodiscard]] bool isIndependentSplitViewActive() const;
+        // Project restore may only enter/leave split modes through the service
+        // transition path; it must never assign RenderSettings::split_view_mode.
+        void restoreSplitViewMode(SplitViewMode mode,
+                                  Viewport& primary_viewport);
         [[nodiscard]] float getSplitPosition() const;
         [[nodiscard]] std::optional<float> getSplitDividerScreenX(const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const;
@@ -277,6 +279,14 @@ namespace lfs::vis {
                                                      SplitViewPanelId panel = SplitViewPanelId::Left);
         [[nodiscard]] const Viewport& resolvePanelViewport(const Viewport& primary_viewport,
                                                            SplitViewPanelId panel = SplitViewPanelId::Left) const;
+        // Project VIEW owns both panel cameras even while split view is
+        // disabled; unlike resolvePanelViewport this never aliases primary.
+        [[nodiscard]] Viewport& projectSecondaryViewport() {
+            return split_view_service_.secondaryViewport();
+        }
+        [[nodiscard]] const Viewport& projectSecondaryViewport() const {
+            return split_view_service_.secondaryViewport();
+        }
         [[nodiscard]] Viewport& resolveFocusedViewport(Viewport& primary_viewport);
         [[nodiscard]] const Viewport& resolveFocusedViewport(const Viewport& primary_viewport) const;
 
@@ -357,8 +367,13 @@ namespace lfs::vis {
 
         void clearLatestCameraMetrics();
 
-        // FPS monitoring
+        // FPS monitoring (scene renders vs. swapchain-presented GUI frames)
         float getAverageFPS() const { return framerate_controller_.getAverageFPS(); }
+        float getPresentedAverageFPS() const {
+            return presented_framerate_controller_.getAverageFPS();
+        }
+        // Measurement only — does not affect scene render pacing/limiting.
+        void notePresentedFrame() { presented_framerate_controller_.beginFrame(); }
 
         // Access to the auxiliary rendering engine used by point-cloud, mesh, and readback paths.
         lfs::rendering::RenderingEngine* getRenderingEngine();
@@ -738,6 +753,9 @@ namespace lfs::vis {
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
         lfs::rendering::ScreenOverlayRenderer screen_overlay_renderer_;
         mutable FramerateController framerate_controller_;
+        // Parallel presented-frame counter (GUI-only frames included). Does not
+        // drive pacing — scene path still uses framerate_controller_ alone.
+        mutable FramerateController presented_framerate_controller_;
 
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;

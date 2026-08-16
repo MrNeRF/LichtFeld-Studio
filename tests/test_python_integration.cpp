@@ -155,9 +155,30 @@ namespace {
         std::expected<void, std::string> startTraining() override {
             return std::unexpected("not implemented");
         }
-        std::expected<std::filesystem::path, std::string> saveCheckpoint(
-            const std::optional<std::filesystem::path>&) override {
-            return std::unexpected("not implemented");
+        lfs::Result<void> projectSave(bool) override {
+            return {};
+        }
+        lfs::Result<void> projectSaveAs(
+            const std::filesystem::path&, bool) override {
+            return {};
+        }
+        lfs::Result<lfs::vis::ProjectOpenOutcome> projectOpen(
+            const std::filesystem::path&,
+            lfs::vis::ProjectSwitchDisposition) override {
+            return project_open_outcome;
+        }
+        lfs::Result<void> projectCompact() override {
+            return {};
+        }
+        lfs::Result<bool> projectIsDirty() override {
+            return false;
+        }
+        lfs::Result<bool> projectHasPath() override {
+            return false;
+        }
+        lfs::Result<lfs::vis::ProjectInfo>
+        projectGetInfo() override {
+            return lfs::vis::ProjectInfo{};
         }
 
         [[nodiscard]] bool waitForQueuedWork(const std::chrono::milliseconds timeout) {
@@ -185,6 +206,9 @@ namespace {
         bool accepts_posted_work = true;
         bool queue_posted_work = false;
         int post_work_calls = 0;
+        lfs::vis::ProjectOpenOutcome
+            project_open_outcome =
+                lfs::vis::ProjectOpenOutcome::Opened;
 
     private:
         lfs::core::Scene scene_;
@@ -882,6 +906,26 @@ result_values = [float(viewport.image.cpu().sum().item())]
     EXPECT_EQ(viewer.post_work_calls, 1);
 }
 
+TEST_F(PythonIntegrationTest,
+       ProjectOpenSurfacesRecoveryPromptPendingOutcome) {
+    TestVisualizer viewer;
+    viewer.project_open_outcome =
+        lfs::vis::ProjectOpenOutcome::
+            RecoveryPromptPending;
+    const ScopedVisualizer scoped_viewer(&viewer);
+
+    const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+outcome = lf.project_open("pending.licht", discard_changes=True)
+result_shape = (1,)
+result_values = [1.0 if outcome is lf.ProjectOpenOutcome.RECOVERY_PROMPT_PENDING else 0.0]
+)PY");
+
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_EQ(viewer.post_work_calls, 1);
+}
+
 TEST_F(PythonIntegrationTest, CaptureViewportReleasesGilWhileWaitingForViewerThread) {
     using namespace std::chrono_literals;
 
@@ -980,7 +1024,7 @@ TEST_F(PythonIntegrationTest, SceneCameraExposesVisualizerRenderContract) {
 import lichtfeld as lf
 import warnings
 result = lf.io.load(r")PY") +
-                        dataset_dir.string() + R"PY(", resize_factor=8, images_folder="images_8")
+                        dataset_dir.string() + R"PY(", resize_factor=4, images_folder="images_4")
 camera = result.cameras[0]
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always", DeprecationWarning)

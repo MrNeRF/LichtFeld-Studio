@@ -226,7 +226,6 @@ namespace {
 
 } // namespace
 
-// (a) Mid-batch growth splits without a fence wait; old shell queues until timeline completes.
 TEST(VkSplatBufferRetire, MidBatchGrowthSplitsWithoutFenceAndRetires) {
     DispatchScript script;
     BindScript bind(script);
@@ -276,7 +275,6 @@ TEST(VkSplatBufferRetire, MidBatchGrowthSplitsWithoutFenceAndRetires) {
     pipeline.destroyBufferRetired(buf);
 }
 
-// (b) Growth with nothing in flight frees the old allocation immediately.
 TEST(VkSplatBufferRetire, GrowthWithNothingInFlightFreesImmediately) {
     DispatchScript script;
     BindScript bind(script);
@@ -331,7 +329,6 @@ TEST(VkSplatBufferRetire, TwoGrowthsQueueTwoShellsThenDrain) {
     EXPECT_EQ(pipeline.getCurrentAllocSize(), 0u);
 }
 
-// (d) Force-drain empties a non-empty retire queue (cleanupBuffers path shape).
 TEST(VkSplatBufferRetire, ForceDrainEmptiesRetireQueue) {
     DispatchScript script;
     BindScript bind(script);

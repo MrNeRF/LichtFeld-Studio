@@ -1149,33 +1149,137 @@ body {
     display: none;
 }
 
-.vram-hud-counters-header,
-.vram-hud-breakdown-header {
+.vram-hud-counters-header {
     font-size: 11dp;
     font-weight: bold;
     padding-top: 4dp;
 }
 
-.vram-hud-breakdown {
+.perf-hud-tracking-off {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12dp;
+    padding: 10dp;
+    border-width: 1dp;
+    border-radius: 5dp;
+    font-size: 11dp;
+}
+
+.perf-hud-tracking-off.hidden {
+    display: none;
+}
+
+.perf-hud-enable-tracking {
+    height: 24dp;
+    padding: 2dp 9dp;
+    border-width: 1dp;
+    border-radius: 4dp;
+    font-size: 11dp;
+    cursor: pointer;
+}
+
+.perf-hud-ledger-header {
+    display: flex;
+    flex-direction: column;
+    gap: 3dp;
+    padding: 5dp 7dp;
+    border-width: 1dp;
+    border-radius: 5dp;
+}
+
+.perf-hud-ledger-header-line {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8dp;
+}
+
+.perf-hud-ledger-header-detail {
+    justify-content: flex-start;
+    gap: 14dp;
+}
+
+.perf-hud-ledger-process {
+    font-size: 12dp;
+    font-weight: bold;
+}
+
+.perf-hud-ledger-header-detail span {
+    font-size: 10dp;
+}
+
+.perf-hud-ledger-closure {
+    padding: 1dp 5dp;
+    border-width: 1dp;
+    border-radius: 8dp;
+    font-size: 10dp;
+}
+
+.perf-hud-ledger-over-banner {
+    padding: 5dp 8dp;
+    border-width: 1dp;
+    border-radius: 4dp;
+    font-size: 11dp;
+    font-weight: bold;
+    text-align: center;
+}
+
+.perf-hud-ledger-over-banner.hidden {
+    display: none;
+}
+
+.perf-hud-ledger-rows {
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 1dp;
+    overflow-y: auto;
 }
 
-.vram-hud-breakdown-row {
+.perf-hud-ledger-row {
     display: flex;
-    gap: 8dp;
-    align-items: baseline;
-    padding: 1dp 3dp;
+    align-items: center;
+    gap: 6dp;
+    min-height: 30dp;
+    padding: 2dp 3dp;
+    border-radius: 3dp;
 }
 
-.vram-hud-breakdown-row.total {
-    padding-top: 4dp;
+.perf-hud-ledger-row.root {
+    margin-top: 2dp;
     border-top-width: 1dp;
 }
 
-.vram-hud-breakdown-name {
+.perf-hud-ledger-row.has-children {
+    cursor: pointer;
+}
+
+.perf-hud-ledger-row-header {
+    min-height: 18dp;
+    max-height: 18dp;
+    font-size: 9dp;
+    font-weight: bold;
+}
+
+.perf-hud-ledger-name-cell {
     flex: 1;
+    min-width: 80dp;
+    display: flex;
+    align-items: baseline;
+    gap: 4dp;
+    overflow: hidden;
+}
+
+.perf-hud-ledger-toggle {
+    width: 11dp;
+    min-width: 11dp;
+    text-align: center;
+    font-size: 10dp;
+}
+
+.perf-hud-ledger-name {
     font-size: 11dp;
     min-width: 0;
     overflow: hidden;
@@ -1183,17 +1287,57 @@ body {
     white-space: nowrap;
 }
 
-.vram-hud-breakdown-bytes {
-    font-size: 11dp;
-    font-weight: bold;
-    width: 90dp;
+.perf-hud-ledger-note {
+    flex: 1;
+    min-width: 0;
+    font-size: 9dp;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.perf-hud-ledger-share {
+    width: 64dp;
+    min-width: 64dp;
+    height: 5dp;
+    border-radius: 3dp;
+    overflow: hidden;
+}
+
+.perf-hud-ledger-share-fill {
+    display: block;
+    height: 5dp;
+    border-radius: 3dp;
+}
+
+.perf-hud-ledger-disclosure {
+    width: 100dp;
+    min-width: 100dp;
+    flex-shrink: 1;
+    font-size: 9dp;
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.perf-hud-ledger-allocated {
+    width: 76dp;
+    min-width: 76dp;
+    flex-shrink: 0;
+    font-size: 10dp;
     text-align: right;
 }
 
-.vram-hud-breakdown-pct {
-    font-size: 11dp;
-    width: 52dp;
-    text-align: right;
+.perf-hud-ledger-badge {
+    width: 28dp;
+    min-width: 28dp;
+    flex-shrink: 0;
+    padding: 1dp 2dp;
+    border-width: 1dp;
+    border-radius: 7dp;
+    font-size: 9dp;
+    text-align: center;
 }
 
 .vram-hud-counters-empty {
@@ -1458,6 +1602,15 @@ body {
     align-items: baseline;
 }
 
+.perf-hud-card-chevron {
+    width: 14dp;
+    min-width: 14dp;
+    font-size: 12dp;
+    text-align: center;
+    cursor: pointer;
+    drag: none;
+}
+
 .vram-hud-throughput {
     font-size: 11dp;
 }
@@ -1585,4 +1738,100 @@ body {
 
 .hidden {
     display: none;
+}
+
+.perf-hud-strip {
+    position: absolute;
+    right: 18dp;
+    top: 18dp;
+    width: 300dp;
+    min-height: 142dp;
+    padding: 10dp 12dp;
+    display: flex;
+    flex-direction: column;
+    gap: 5dp;
+    border-width: 1dp;
+    border-radius: 7dp;
+    z-index: 30;
+}
+
+.perf-hud-strip-header {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    height: 18dp;
+    cursor: pointer;
+}
+
+.perf-hud-strip-title { flex-grow: 1; }
+.perf-hud-strip-rate, .perf-hud-strip-value, .perf-hud-strip-badge { font-family: "JetBrains Mono"; font-weight: normal; }
+.perf-hud-strip-meter { display: flex; align-items: center; gap: 5dp; height: 18dp; cursor: pointer; }
+.perf-hud-strip-label { width: 34dp; }
+.perf-hud-meter-track { flex-grow: 1; display: flex; height: 7dp; overflow: hidden; border-radius: 3dp; }
+.perf-hud-meter-fill { display: block; height: 100%; width: 0%; }
+/* Fits "23.51 GiB / 23.51 GiB" on one line (mono 10dp). */
+.perf-hud-strip-value { width: 128dp; min-width: 128dp; text-align: right; font-size: 10dp; white-space: nowrap; }
+.perf-hud-strip-badge { width: 12dp; font-size: 10dp; }
+.perf-hud-core-strip { display: flex; align-items: flex-end; gap: 1dp; height: 13dp; margin-left: 39dp; overflow: hidden; }
+.perf-hud-core-strip .perf-hud-core-bar { flex: 1 1 0; min-width: 1dp; max-width: 4dp; height: 100%; }
+.perf-hud-strip-header, .perf-hud-strip-meter, .perf-hud-core-strip { box-sizing: border-box; }
+.vram-hud-overlay.perf-hud-compact .vram-hud-card { display: none; }
+.vram-hud-overlay.perf-hud-compact .perf-hud-strip { display: flex; }
+.vram-hud-overlay:not(.perf-hud-compact) .perf-hud-strip { display: none; }
+.perf-hud-strip.hidden { display: none; }
+
+.perf-hud-overview-meters {
+    display: flex;
+    flex-direction: column;
+    gap: 6dp;
+    margin-top: 8dp;
+}
+
+.perf-hud-sparkline-row {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    height: 28dp;
+}
+
+.perf-hud-sparkline-label {
+    width: 34dp;
+    font-size: 10dp;
+}
+
+.perf-hud-sparkline {
+    flex-grow: 1;
+    height: 24dp;
+    display: flex;
+    align-items: flex-end;
+    gap: 1dp;
+    overflow: hidden;
+}
+
+.perf-hud-sparkline .histogram-bar-fill {
+    flex: 1 1 0;
+    min-width: 1dp;
+    max-width: 4dp;
+    height: 0%;
+}
+
+.perf-hud-ledger-allocated,
+.perf-hud-ledger-disclosure,
+.perf-hud-ledger-badge,
+.vram-hud-summary-value,
+.vram-hud-col-live,
+.vram-hud-col-peak,
+.vram-hud-col-delta,
+.vram-hud-col-time,
+.vram-hud-col-gpu,
+.vram-hud-anno-bytes,
+.vram-hud-anno-peak,
+.vram-hud-anno-wall,
+.vram-hud-anno-gpu,
+.vram-hud-anno-calls,
+.vram-hud-allocs-summary-value,
+.vram-hud-breakdown-bytes,
+.vram-hud-breakdown-pct {
+    font-family: "JetBrains Mono";
+    font-weight: normal;
 }

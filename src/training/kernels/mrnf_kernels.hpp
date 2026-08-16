@@ -120,4 +120,16 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         void* stream = nullptr);
 
+    /**
+     * fold densification_info into vis_count (add row0) and
+     * refine_weight_max (max row1), then zero the [2,N] buffer — one kernel
+     * replaces add + max + full memset.
+     */
+    void launch_fold_densification_and_zero(
+        float* vis_count,
+        float* refine_weight_max,
+        float* densification_info,
+        size_t N,
+        void* stream = nullptr);
+
 } // namespace lfs::training::mrnf_strategy

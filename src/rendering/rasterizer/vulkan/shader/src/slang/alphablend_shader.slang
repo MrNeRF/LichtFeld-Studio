@@ -121,6 +121,11 @@ groupshared float4 collected_inv_cov_vs_opacity[TILE_SIZE];
 
 groupshared uint32_t active_subgroups[TILE_SIZE / SUBGROUP_SIZE];
 groupshared uint32_t collected_gauss_idx[TILE_SIZE];
+#if LFS_RASTER_OVERLAYS
+// Packed flags | selection_byte | preview_byte — one global load set per splat
+// per workgroup instead of per pixel.
+groupshared uint32_t collected_overlay[TILE_SIZE];
+#endif
 
 #if SUBTILE_SIZE > 0
 groupshared uint32_t subtile_overlap_bitmasks[TILE_SIZE];
@@ -313,6 +318,12 @@ void main(
 
     const int shared_memory_rounds = ((tile_idx_end - tile_idx_start + TILE_SIZE - 1) / TILE_SIZE);
 
+  #if LFS_RASTER_OVERLAYS
+    // Hoist uniform overlay scalars once per thread; hot loop never reloads
+    // overlay_params.
+    const OverlayUniformState overlay_state = load_overlay_uniform_state(overlay_params);
+  #endif
+
     int32_t num_cull = 0;  // for visualization
     int splats_left_to_process = tile_idx_end - tile_idx_start;
     for (int i = 0; i < shared_memory_rounds; i++)
@@ -351,6 +362,10 @@ void main(
             collected_xy_vs[thread_rank] = read_t2_float2(coll_id, xy_vs);
             collected_inv_cov_vs_opacity[thread_rank] = read_t4_float4(coll_id, inv_cov_vs_opacity);
             collected_gauss_idx[thread_rank] = coll_id;
+            #endif
+            #if LFS_RASTER_OVERLAYS
+            collected_overlay[thread_rank] = load_overlay_per_splat_pack(
+                coll_id, gaussian_overlay_flags, selection_mask, preview_mask, overlay_state);
             #endif
         }
         GroupMemoryBarrierWithGroupSync();
@@ -392,7 +407,8 @@ void main(
             #if SHARED_STRUCT
                 uint32_t splat_id = collected_gauss_idx[j];
               #if LFS_RASTER_OVERLAYS
-                uint flags = gaussian_overlay_flags[splat_id];
+                const uint overlay_pack = collected_overlay[j];
+                const uint flags = unpack_overlay_flags(overlay_pack);
               #endif
                 float splat_depth = read_t1_float(splat_id, depths);
                 float4 gauss_rgba;
@@ -436,7 +452,8 @@ void main(
 
                 uint32_t splat_id = collected_gauss_idx[j];
               #if LFS_RASTER_OVERLAYS
-                uint flags = gaussian_overlay_flags[splat_id];
+                const uint overlay_pack = collected_overlay[j];
+                const uint flags = unpack_overlay_flags(overlay_pack);
               #endif
                 float splat_depth = read_t1_float(splat_id, depths);
                 float3 splat_rgb = read_t3_float3(splat_id, rgb);
@@ -449,26 +466,28 @@ void main(
             #endif
 
             #if LFS_RASTER_OVERLAYS
-                uint sel_status = selection_status(overlay_splat.xy_vs,
-                                                   splat_id,
-                                                   flags,
-                                                   selection_mask,
-                                                   preview_mask,
-                                                   overlay_params);
+                const uint sel_status = selection_status(
+                    overlay_splat.xy_vs,
+                    splat_id,
+                    flags,
+                    unpack_overlay_selection_byte(overlay_pack),
+                    unpack_overlay_preview_byte(overlay_pack),
+                    overlay_state);
                 bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
                 gauss_rgba = apply_projection_overlay_color(gauss_rgba,
                                                             overlay_splat.xy_vs,
                                                             flags,
-                                                            overlay_params);
+                                                            overlay_state);
                 gauss_rgba = apply_ring_overlay(gauss_rgba,
                                                 overlay_splat,
                                                 center_pix_coord,
                                                 sel_status,
                                                 flags,
-                                                overlay_params,
+                                                overlay_state.show_rings,
+                                                overlay_state.ring_width,
                                                 selection_colors);
 
-                if (overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].y) && selectable) {
+                if (overlay_state.show_center_markers && selectable) {
                     const float INNER_RADIUS_SQ = 2.25f;
                     const float OUTER_RADIUS_SQ = 6.25f;
                     const float OUTLINE_DARKEN = 0.4f;
@@ -490,7 +509,7 @@ void main(
                 }
 
                 gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-                gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_params);
+                gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
             #endif
 
                 float4 new_pixel_state = update_pixel_state(curr_pixel_state, gauss_rgba);

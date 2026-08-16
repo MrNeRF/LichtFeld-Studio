@@ -25,6 +25,14 @@ namespace lfs::diagnostics {
         External,
     };
 
+    /// Distinguishes real hooked allocations from disclosure re-descriptions.
+    /// Only Hooked rows may contribute to a ledger root's attributed total (HUD_DESIGN §3.3).
+    enum class VramRowKind : std::uint8_t {
+        Hooked = 0,
+        Sampled = 1,
+        Static = 2,
+    };
+
     struct VramMetricSnapshot {
         std::string scope;
         std::string label;
@@ -35,6 +43,7 @@ namespace lfs::diagnostics {
         std::uint64_t allocation_count = 0;
         std::uint64_t free_count = 0;
         VramAllocationMethod method = VramAllocationMethod::Unknown;
+        VramRowKind kind = VramRowKind::Hooked;
     };
 
     struct VramTreeNodeSnapshot {
@@ -98,6 +107,92 @@ namespace lfs::diagnostics {
         std::size_t live_bytes = 0;
     };
 
+    // Persistent training-state ledger.
+    // Buckets: parameters, optimizer state, gradients, and densification data.
+    // bytes_per_splat = total_bytes / live_splats (0 when N==0).
+    struct TrainingStateLedger {
+        std::size_t params_bytes = 0;
+        std::size_t optimizer_bytes = 0;
+        std::size_t gradients_or_helpers_bytes = 0;
+        std::size_t densify_aux_bytes = 0;
+        std::size_t total_bytes = 0;
+        std::size_t live_splats = 0;
+        double bytes_per_splat = 0.0;
+    };
+
+    /// Process-peak attribution. Every residual above the 938 MiB ex-cache
+    /// baseline must be eliminated or listed with an owner; justified entries
+    /// are budget-gated or required by design.
+    enum class AttributionState : std::uint8_t {
+        Unjustified = 0,
+        Justified = 1,
+        Nested = 2,
+    };
+
+    struct PeakSubsystemLine {
+        std::string name;
+        std::string owner;
+        std::size_t bytes = 0;
+        AttributionState state = AttributionState::Unjustified;
+        std::string note;
+    };
+
+    struct PeakExCacheLedger {
+        // Device-wide cudaMemGetInfo sample at the Bonsai quiet-GPU peak with
+        // no GT cache. ex_cache must remain within 5%, unless every excess line
+        // is justified.
+        static constexpr std::size_t kExCacheBaselineBytes =
+            static_cast<std::size_t>(938.3 * 1024.0 * 1024.0);
+        // Logical training inventory already represented by the canonical
+        // 1.5M benchmark inside kExCacheBaselineBytes.
+        static constexpr std::size_t kTrainingStateBaselineBytes = 396404224;
+
+        std::size_t peak_cuda_used_bytes = 0;     // device-wide free (legacy metric)
+        std::size_t baseline_cuda_used_bytes = 0; // device-wide at train start
+        std::size_t peak_pool_reserved_bytes = 0; // process-local pool HWM
+        std::size_t peak_pool_used_bytes = 0;
+        std::size_t pool_reserved_at_peak_bytes = 0;
+        std::size_t pool_used_at_peak_bytes = 0;
+        std::size_t ex_cache_net_bytes = 0;
+        std::size_t training_state_bytes = 0;          // params+optim+densify (logical)
+        std::size_t training_state_reserved_bytes = 0; // capacity-backed
+        std::size_t training_state_baseline_bytes = kTrainingStateBaselineBytes;
+        std::size_t training_state_growth_bytes = 0;
+        std::size_t loss_workspace_required_bytes = 0;
+        std::size_t loss_workspace_allocated_bytes = 0;
+        std::size_t densify_workspace_bytes = 0;
+        std::size_t mrnf_strategy_required_bytes = 0;
+        std::size_t mrnf_strategy_allocated_bytes = 0;
+        std::size_t mrnf_densify_n_required_bytes = 0;
+        std::size_t mrnf_densify_n_allocated_bytes = 0;
+        std::size_t mrnf_densify_child_required_bytes = 0;
+        std::size_t mrnf_densify_child_allocated_bytes = 0;
+        std::size_t mrnf_refine_peak_required_bytes = 0;
+        std::size_t mrnf_refine_peak_allocated_bytes = 0;
+        std::size_t mrnf_grow_peak_required_bytes = 0;
+        std::size_t mrnf_grow_peak_allocated_bytes = 0;
+        std::size_t pool_bucket_cache_bytes = 0; // at peak moment when possible
+        std::size_t pool_bucket_live_rounding_waste_bytes = 0;
+        std::size_t exportable_splat_bytes = 0;
+        std::size_t fastgs_sort_required_bytes = 0;
+        std::size_t fastgs_sort_allocated_bytes = 0;
+        std::size_t fastgs_raster_live_bytes = 0; // per_prim+tile+sorted at peak
+        std::size_t fastgs_raster_arena_live_bytes = 0;
+        std::size_t fastgs_raster_sort_live_bytes = 0;
+        std::size_t arena_required_bytes = 0;
+        std::size_t arena_capacity_bytes = 0;
+        std::size_t ex_cache_bytes = 0;
+        std::size_t baseline_ex_cache_bytes = kExCacheBaselineBytes;
+        std::size_t excess_over_baseline_bytes = 0;
+        std::size_t justified_excess_bytes = 0;
+        std::int64_t signed_residual_bytes = 0; // justified - excess, no clamp
+        std::size_t unjustified_excess_bytes = 0;
+        std::size_t over_attributed_bytes = 0;
+        int peak_iter = 0;
+        std::vector<PeakSubsystemLine> lines;
+        std::vector<PeakSubsystemLine> peak_rows; // top VramProfiler rows at peak
+    };
+
     struct VramProcessSnapshot {
         std::size_t cuda_used = 0;
         std::size_t cuda_total = 0;
@@ -108,6 +203,9 @@ namespace lfs::diagnostics {
         // still counted in cuda_pool_used but not in the allocator's live map. Lets
         // the HUD split cuda.pool.untracked_used into reclaimable cache vs the rest.
         std::size_t cuda_pool_bucket_cache_bytes = 0;
+        // Quantization waste for outstanding size-bucketed allocations only.
+        // Cached free-list entries are excluded and reported by the cache field.
+        std::size_t cuda_pool_bucket_live_waste_bytes = 0;
         // Device memory committed by the small-allocation slab allocator. Live
         // blocks are tracked individually; the reserve gap is free space inside
         // committed slabs that still belongs to this process.
@@ -136,6 +234,9 @@ namespace lfs::diagnostics {
         // vulkan_vma_block_bytes, so the per-tensor model.* rows account for it
         // without overlapping the Vulkan residual.
         std::size_t exportable_splat_bytes = 0;
+        // Shared CUDA↔Vulkan scratch block (viewport arena external backing).
+        // Separate from exportable_splat_bytes (C4); both form ledger root E.
+        std::size_t shared_scratch_bytes = 0;
         std::size_t process_used = 0;
         std::size_t total_used = 0;
         std::size_t total = 0;
@@ -175,6 +276,7 @@ namespace lfs::diagnostics {
         std::vector<NamedCounter> total_counters;
         std::vector<NamedHistogram> histograms;
         std::vector<TopAlloc> top_live;
+        TrainingStateLedger training_state;
     };
 
     class LFS_DIAGNOSTICS_API VramScope {
@@ -293,18 +395,29 @@ namespace lfs::diagnostics {
         void setVulkanVmaUsed(std::size_t bytes);
         void setVulkanVmaBlockBytes(std::size_t bytes);
         void setCudaPoolBucketCacheBytes(std::size_t bytes);
+        void setCudaPoolBucketLiveWasteBytes(std::size_t bytes);
         void setCudaSlabReservedBytes(std::size_t bytes);
         void setExportableSplatBytes(std::size_t bytes);
+        void setSharedScratchBytes(std::size_t bytes);
         void captureCudaDeviceBaseline();
         void captureCudaWarmupDelta();
         void recordCudaPhaseBytes(std::string_view phase, std::size_t bytes);
         void setCudaContextBaselineBytes(std::size_t bytes);
+        /// Device-wide cudaMemGetInfo captured at primary-context initialization.
+        /// Late configure() samples include unrelated allocations in ex_cache_net.
+        [[nodiscard]] std::size_t cudaDeviceBaselineBytes() const;
 
         void sampleCudaMemory();
         void updateProcessMemory(std::size_t process_used,
                                  std::size_t total_used,
                                  std::size_t total,
                                  std::string device_name);
+
+        // Training-state bytes-per-splat ledger. Caller computes the
+        // ledger from SplatData + AdamOptimizer; profiler stores the last value
+        // for HUD / bench scripts.
+        void setTrainingStateLedger(const TrainingStateLedger& ledger);
+        [[nodiscard]] TrainingStateLedger trainingStateLedger() const;
 
         [[nodiscard]] VramProfilerSnapshot snapshot() const;
 

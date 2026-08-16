@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/modal_request.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/operator/poll_dependency.hpp"
@@ -41,7 +42,7 @@ namespace Rml {
 
 namespace lfs::python {
 
-    class PyOperatorReturnValue {
+    class LFS_LOCAL_SYMBOL PyOperatorReturnValue {
     public:
         std::string status;
         nb::dict data;
@@ -779,7 +780,7 @@ namespace lfs::python {
     };
 
     // UI Hook registry for Python callbacks
-    class PyUIHookRegistry {
+    class LFS_LOCAL_SYMBOL PyUIHookRegistry {
     public:
         static PyUIHookRegistry& instance();
 
@@ -823,7 +824,7 @@ namespace lfs::python {
         PyUIHookRegistry(const PyUIHookRegistry&) = delete;
         PyUIHookRegistry& operator=(const PyUIHookRegistry&) = delete;
 
-        struct HookEntry {
+        struct LFS_LOCAL_SYMBOL HookEntry {
             nb::object callback;
             PyHookPosition position;
             std::string name;
@@ -836,7 +837,7 @@ namespace lfs::python {
 
     // MenuLocation enum defined in python/python_runtime.hpp
 
-    struct PyMenuClassInfo {
+    struct LFS_LOCAL_SYMBOL PyMenuClassInfo {
         std::string idname;
         std::string label;
         MenuLocation location;
@@ -845,7 +846,7 @@ namespace lfs::python {
         nb::object menu_instance;
     };
 
-    class PyMenuRegistry {
+    class LFS_LOCAL_SYMBOL PyMenuRegistry {
     public:
         static PyMenuRegistry& instance();
 
@@ -877,7 +878,7 @@ namespace lfs::python {
         mutable bool synced_from_python_ = false;
     };
 
-    class PyOperatorProperties {
+    class LFS_LOCAL_SYMBOL PyOperatorProperties {
     public:
         explicit PyOperatorProperties(const std::string& operator_id);
 
@@ -902,7 +903,7 @@ namespace lfs::python {
                               Error };
 
     // Modal dialog info
-    struct PyModalDialog {
+    struct LFS_LOCAL_SYMBOL PyModalDialog {
         std::string id;
         std::string title;
         std::string message;
@@ -916,7 +917,7 @@ namespace lfs::python {
         bool needs_open = true;
     };
 
-    class PyModalRegistry {
+    class LFS_LOCAL_SYMBOL PyModalRegistry {
     public:
         using EnqueueCallback = std::function<void(lfs::core::ModalRequest)>;
 

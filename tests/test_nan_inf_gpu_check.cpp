@@ -181,8 +181,8 @@ TEST_F(NaNInfGPUCheckTest, BothNaNAndInf) {
     auto lfs_t = from_torch(torch_t);
 
     EXPECT_TRUE(torch_has_nan_or_inf(torch_t)) << "Torch should detect NaN and Inf";
-    EXPECT_TRUE(lfs_t.has_nan()) << "LFS has_nan should detect (checks both)";
-    EXPECT_TRUE(lfs_t.has_inf()) << "LFS has_inf should detect (checks both)";
+    EXPECT_EQ(lfs_t.has_nan(), torch_has_nan(torch_t));
+    EXPECT_EQ(lfs_t.has_inf(), torch_has_inf(torch_t));
 }
 
 TEST_F(NaNInfGPUCheckTest, NaNOnlyMatchesTorchPredicates) {
@@ -756,7 +756,7 @@ TEST_F(NaNInfGPUCheckTest, RandomStress_1000Trials_VariousSizes) {
 }
 
 TEST_F(NaNInfGPUCheckTest, InfDetection_LargeTensors) {
-    // Verify Inf detection works the same as NaN for large tensors
+    // Verify the split NaN/Inf predicates on large tensors.
     std::vector<int> sizes = {1000000, 5000000};
 
     for (int size : sizes) {
@@ -764,13 +764,21 @@ TEST_F(NaNInfGPUCheckTest, InfDetection_LargeTensors) {
         auto torch_pinf = torch::randn({size}, torch::kCUDA);
         torch_pinf[size / 2] = std::numeric_limits<float>::infinity();
         auto lfs_pinf = from_torch(torch_pinf);
-        EXPECT_TRUE(lfs_pinf.has_nan()) << "+Inf not detected at size " << size; // has_nan checks both
+        EXPECT_FALSE(lfs_pinf.has_nan()) << "+Inf reported as NaN at size " << size;
+        EXPECT_TRUE(lfs_pinf.has_inf()) << "+Inf not detected at size " << size;
 
         // Test -Inf
         auto torch_ninf = torch::randn({size}, torch::kCUDA);
         torch_ninf[size / 2] = -std::numeric_limits<float>::infinity();
         auto lfs_ninf = from_torch(torch_ninf);
-        EXPECT_TRUE(lfs_ninf.has_nan()) << "-Inf not detected at size " << size;
+        EXPECT_FALSE(lfs_ninf.has_nan()) << "-Inf reported as NaN at size " << size;
+        EXPECT_TRUE(lfs_ninf.has_inf()) << "-Inf not detected at size " << size;
+
+        auto torch_nan = torch::randn({size}, torch::kCUDA);
+        torch_nan[size / 2] = std::numeric_limits<float>::quiet_NaN();
+        auto lfs_nan = from_torch(torch_nan);
+        EXPECT_TRUE(lfs_nan.has_nan()) << "NaN not detected at size " << size;
+        EXPECT_FALSE(lfs_nan.has_inf()) << "NaN reported as Inf at size " << size;
     }
 }
 

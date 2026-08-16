@@ -10,6 +10,14 @@ import sys
 
 import pytest
 
+from locale_utils import locale_key_exists, missing_locale_keys
+
+
+def _confirm_reply(state, buttons):
+    """Pick the reply button by index so it matches whatever labels were passed."""
+    index = 0 if state.confirm_response == "Overwrite" else 1
+    return tuple(buttons)[index] if buttons else state.confirm_response
+
 
 def _make_node(node_type, name, gaussian_count):
     return SimpleNamespace(type=node_type, name=name, gaussian_count=gaussian_count)
@@ -54,6 +62,7 @@ def _install_lf_stub(monkeypatch):
         get_export_state=lambda: dict(state.export_state),
         set_panel_enabled=lambda panel_id, enabled: state.set_panel_enabled_calls.append((panel_id, enabled)),
         cancel_export=lambda: setattr(state, "cancel_calls", state.cancel_calls + 1),
+        set_save_asset_callback=lambda _callback: None,
         save_ply_file_dialog=lambda default_name: f"/tmp/{default_name}.ply",
         save_sog_file_dialog=lambda default_name: f"/tmp/{default_name}.sog",
         save_spz_file_dialog=lambda default_name: f"/tmp/{default_name}.spz",
@@ -67,9 +76,17 @@ def _install_lf_stub(monkeypatch):
         select_colmap_sparse_folder_dialog=lambda default_path="": (
             state.folder_dialog_calls.append(default_path) or state.folder_dialog_result
         ),
+        # Reply with the button the panel actually offered. Echoing a hardcoded
+        # "Overwrite" only matched while the panel used English literals; it now
+        # passes translation keys, so a fixed reply never equals its own label
+        # and the confirm branch silently never fires.
         confirm_dialog=lambda title, message, buttons, callback=None: (
             state.confirm_calls.append((title, message, tuple(buttons)))
-            or (callback(state.confirm_response) if callback else None)
+            or (
+                callback(_confirm_reply(state, buttons))
+                if callback
+                else None
+            )
         ),
         get_content_type=lambda: state.content_type,
     )
@@ -408,9 +425,15 @@ def test_export_panel_uses_exact_folder_returned_by_picker(export_panel_module, 
     assert state.folder_dialog_calls == [str(sparse_root)]
     assert len(state.confirm_calls) == 1
     title, message, buttons = state.confirm_calls[0]
-    assert title == "Export COLMAP sparse"
+    # tr() is stubbed as identity here, so `title` is the raw key. Asserting an
+    # English literal only tracked the stub; what matters is that the key the
+    # panel asks for actually exists, otherwise the dialog shows the raw key.
+    assert locale_key_exists(title), f"confirm dialog title key missing from en.json: {title}"
     assert str(child_model) in message
-    assert buttons == ("Overwrite", "Cancel")
+    # Buttons are translation keys under the identity tr() stub; assert they
+    # resolve rather than pinning English text that only the stub produced.
+    assert not missing_locale_keys(buttons), f"confirm buttons missing from en.json: {buttons}"
+    assert len(buttons) == 2
     assert state.export_calls == [
         (int(module.ExportFormat.COLMAP), str(child_model), (), 3),
     ]
@@ -441,9 +464,15 @@ def test_export_panel_confirms_colmap_overwrite(export_panel_module, tmp_path):
 
     assert len(state.confirm_calls) == 1
     title, message, buttons = state.confirm_calls[0]
-    assert title == "Export COLMAP sparse"
+    # tr() is stubbed as identity here, so `title` is the raw key. Asserting an
+    # English literal only tracked the stub; what matters is that the key the
+    # panel asks for actually exists, otherwise the dialog shows the raw key.
+    assert locale_key_exists(title), f"confirm dialog title key missing from en.json: {title}"
     assert str(tmp_path) in message
-    assert buttons == ("Overwrite", "Cancel")
+    # Buttons are translation keys under the identity tr() stub; assert they
+    # resolve rather than pinning English text that only the stub produced.
+    assert not missing_locale_keys(buttons), f"confirm buttons missing from en.json: {buttons}"
+    assert len(buttons) == 2
     assert state.export_calls == [
         (int(module.ExportFormat.COLMAP), str(tmp_path), (), 3),
     ]

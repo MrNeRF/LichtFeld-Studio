@@ -9,10 +9,12 @@
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
+#include "io/project_path.hpp"
 #include <algorithm>
 #include <any>
 #include <args.hxx>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
@@ -302,6 +304,9 @@ namespace {
                 "\n"
                 "EXAMPLES:\n"
                 "lichtfeld-studio -d ./data -o ./output\n"
+                "lichtfeld-studio -v session.licht\n"
+                "lichtfeld-studio --headless --resume session.licht\n"
+                "lichtfeld-studio -d ./data -o ./output --save-project-at-iter 7000\n"
                 "lichtfeld-studio --resume checkpoint.resume\n"
                 "lichtfeld-studio --render-camera-path path.json --render-load model.ply --render-output out.mp4\n"
                 "lichtfeld-studio -v model.ply\n"
@@ -320,8 +325,8 @@ namespace {
             ::args::Group mode_group(parser, "MODE SELECTION:");
             ::args::HelpFlag help(mode_group, "help", "Display help menu", {'h', "help"});
             ::args::Flag version(mode_group, "version", "Display version information", {'V', "version"});
-            ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
-            ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from checkpoint file", {"resume"});
+            ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports projects (.licht), splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
+            ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from a .resume checkpoint or .licht project", {"resume"});
             ::args::ValueFlag<std::string> render_camera_path(mode_group, "path", "Render a JSON camera-keyframe path to video, headless (no GUI/window). Requires --render-load and --render-output; see RENDER PATH options.", {"render-camera-path"});
             ::args::CompletionFlag completion(parser, {"complete"});
 
@@ -339,6 +344,7 @@ namespace {
             ::args::CounterFlag freeze(paths_group, "freeze", "Freeze the immediately preceding --add-splat rows from optimizer gradients and densification", {"freeze"});
             ::args::ValueFlag<float> freeze_lr_scale(paths_group, "scale", "Learning-rate scale for frozen splats (0 = fully frozen, default; try 0.01-0.1 to let frozen splats absorb small appearance mismatch)", {"freeze-lr-scale"});
             ::args::Flag exclude_export(paths_group, "exclude_export", "Exclude frozen --add-splat rows from PLY exports", {"exclude-export"});
+            ::args::Flag no_provenance(paths_group, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
 
             ::args::ValueFlag<std::string> import_cameras(paths_group, "path", "Import COLMAP cameras from sparse folder (no images required)", {"import-cameras"});
 
@@ -353,6 +359,7 @@ namespace {
             ::args::ValueFlag<int> render_height(render_path_group, "height", "Output height (default 1080)", {"render-height"});
             ::args::ValueFlag<int> render_fps(render_path_group, "fps", "Output framerate (default 30)", {"render-fps"});
             ::args::ValueFlag<int> render_crf(render_path_group, "crf", "Video quality, lower=better (default 18)", {"render-crf"});
+            ::args::Group render_path_provenance_note(render_path_group, "  Metadata: videos always embed a minimal build stamp; --no-provenance strips identifying metadata");
 
             // =============================================================================
             // TRAINING PARAMETERS
@@ -402,7 +409,6 @@ namespace {
             ::args::ValueFlag<int> max_width(dataset_group, "max_width", "Max width of images in px; 0 disables the cap (default: 3840)", {"max-width"});
             ::args::ValueFlag<int> min_track_length(dataset_group, "min_track_length", "Minimum point track length for COLMAP sparse point import; 0 disables filtering", {"min-track-length"});
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
-            ::args::Flag no_fs_cache(dataset_group, "no_fs_cache", "Disable filesystem caching (default: enabled)", {"no-fs-cache"});
             ::args::Flag use_16bit(dataset_group, "use_16bit", "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000 (default: 8-bit)", {"use-16bit"});
             ::args::Flag undistort(dataset_group, "undistort", lfs::core::args::optimization_cli_help("--undistort"), {"undistort"});
             ::args::MapFlag<std::string, std::string> centralize(dataset_group, "mode",
@@ -470,6 +476,14 @@ namespace {
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
             ::args::ValueFlagList<std::string> timelapse_images(output_group, "timelapse_images", "Image filenames to render timelapse images for", {"timelapse-images"});
             ::args::ValueFlag<int> timelapse_every(output_group, "timelapse_every", "Render timelapse image every N iterations (default: 50)", {"timelapse-every"});
+            ::args::ValueFlag<uint32_t> save_project_at_iteration(
+                output_group, "iteration",
+                "Save a .licht project through the training snapshot service at this iteration",
+                {"save-project-at-iter"});
+            ::args::ValueFlag<std::string> save_project_path(
+                output_group, "path",
+                "Destination for --save-project-at-iter (default: <output>/project.licht)",
+                {"save-project-path"});
 
             // =============================================================================
             // UI OPTIONS
@@ -483,6 +497,21 @@ namespace {
 #endif
             ::args::Flag debug_python(ui_group, "debug_python", "Start debugpy listener on port 5678 for plugin debugging", {"debug-python"});
             ::args::ValueFlag<int> debug_python_port(ui_group, "port", "Port for debugpy listener (default: 5678)", {"debug-python-port"});
+
+            // =============================================================================
+            // PERF / PROFILING
+            // =============================================================================
+            ::args::Group perf_sep(parser, " ");
+            ::args::Group perf_group(parser, "PERF / PROFILING:");
+            ::args::Flag perf_bench(perf_group, "perf_bench",
+                                    "Enable in-process perf bench collector (writes output/perf_bench.json)",
+                                    {"perf-bench"});
+            ::args::ValueFlag<int> perf_bench_warmup(perf_group, "N",
+                                                     "Warmup iterations excluded from steady-state metrics (default: 200)",
+                                                     {"perf-bench-warmup"});
+            ::args::ValueFlag<std::string> profile_window(perf_group, "START:STOP",
+                                                          "cudaProfilerStart/Stop window [START, STOP); enables per-iter NVTX ranges",
+                                                          {"profile-window"});
 
             // =============================================================================
             // LOGGING
@@ -563,6 +592,32 @@ namespace {
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
             }
 
+            // Validate --profile-window early (START:STOP integers, START < STOP).
+            std::optional<int> parsed_profile_start;
+            std::optional<int> parsed_profile_stop;
+            if (profile_window) {
+                const auto win = ::args::get(profile_window);
+                const auto colon = win.find(':');
+                if (colon == std::string::npos) {
+                    return std::unexpected(
+                        "--profile-window expects START:STOP (e.g. 200:500)");
+                }
+                try {
+                    parsed_profile_start = std::stoi(win.substr(0, colon));
+                    parsed_profile_stop = std::stoi(win.substr(colon + 1));
+                } catch (const std::exception&) {
+                    return std::unexpected(
+                        "--profile-window expects integer START:STOP (e.g. 200:500)");
+                }
+                if (*parsed_profile_start < 0 || *parsed_profile_stop < 0 ||
+                    *parsed_profile_stop <= *parsed_profile_start) {
+                    return std::unexpected(
+                        "--profile-window requires 0 <= START < STOP");
+                }
+            }
+
+            params.include_provenance = !no_provenance;
+
             // NO ARGUMENTS = VIEWER MODE (empty)
             if (args.size() == 1) {
                 return std::make_tuple(ParseResult::Success, std::function<void()>{});
@@ -601,11 +656,28 @@ namespace {
                         }
                         LOG_DEBUG("Found {} view files in directory", params.view_paths.size());
                     } else {
-                        if (!is_supported(view_path)) {
+                        auto extension = view_path.extension().string();
+                        std::ranges::transform(
+                            extension, extension.begin(),
+                            [](const unsigned char character) {
+                                return static_cast<char>(
+                                    std::tolower(character));
+                            });
+                        if (extension == ".licht") {
+                            if (!lfs::io::project::isPublishedLichtPath(
+                                    view_path)) {
+                                return std::unexpected(
+                                    lfs::io::project::
+                                        unpublishedLichtUserMessage(
+                                            view_path));
+                            }
+                            params.project_path = view_path;
+                        } else if (!is_supported(view_path)) {
                             return std::unexpected(std::format(
                                 "Unsupported file format: {}", lfs::core::path_to_utf8(view_path)));
+                        } else {
+                            params.view_paths.push_back(view_path);
                         }
-                        params.view_paths.push_back(view_path);
                     }
                 }
 
@@ -651,6 +723,7 @@ namespace {
                 if (render_crf) {
                     cfg.crf = ::args::get(render_crf);
                 }
+                cfg.include_provenance = params.include_provenance;
                 params.render_path = cfg;
 
                 return std::make_tuple(ParseResult::Success, std::function<void()>{});
@@ -680,10 +753,27 @@ namespace {
                     if (!std::filesystem::exists(ckpt_path)) {
                         return std::unexpected(std::format("Checkpoint file does not exist: {}", ckpt_path_str));
                     }
-                    params.resume_checkpoint = ckpt_path;
+                    auto extension = ckpt_path.extension().string();
+                    std::ranges::transform(
+                        extension, extension.begin(),
+                        [](const unsigned char character) {
+                            return static_cast<char>(
+                                std::tolower(character));
+                        });
+                    if (extension == ".licht") {
+                        if (!lfs::io::project::isPublishedLichtPath(
+                                ckpt_path)) {
+                            return std::unexpected(
+                                lfs::io::project::
+                                    unpublishedLichtUserMessage(
+                                        ckpt_path));
+                        }
+                        params.resume_project = ckpt_path;
+                    } else {
+                        params.resume_checkpoint = ckpt_path;
+                    }
                 }
             }
-
             if (init_path) {
                 const auto path_str = ::args::get(init_path);
                 params.init_path = path_str;
@@ -716,12 +806,16 @@ namespace {
             // Training mode
             const bool has_data_path = data_path && !::args::get(data_path).empty();
             const bool has_output_path = output_path && !::args::get(output_path).empty();
-            const bool has_resume = params.resume_checkpoint.has_value();
+            const bool has_resume =
+                params.resume_checkpoint.has_value() ||
+                params.resume_project.has_value();
 
-            // If headless mode, require data path or resume checkpoint
+            // If headless mode, require data path or resume
+            // (--resume accepts both .resume checkpoints and .licht projects).
             if (headless && !has_data_path && !has_resume) {
                 return std::unexpected(std::format(
-                    "ERROR: Headless mode requires --data-path or --resume\n\n{}",
+                    "ERROR: Headless mode requires --data-path or --resume "
+                    "(--resume file.licht counts as a project source)\n\n{}",
                     parser.Help()));
             }
 
@@ -882,7 +976,6 @@ namespace {
                                         max_width_val = max_width ? std::optional<int>(::args::get(max_width)) : std::optional<int>(3840),
                                         min_track_length_val = cli_option_present({"--min-track-length"}) ? std::optional<int>(::args::get(min_track_length)) : std::optional<int>(),
                                         no_cpu_cache_flag = static_cast<bool>(no_cpu_cache),
-                                        no_fs_cache_flag = static_cast<bool>(no_fs_cache),
                                         use_16bit_flag = static_cast<bool>(use_16bit),
                                         tcp_server_connection_port_val = tcp_server_connection_port ? std::optional<int>(::args::get(tcp_server_connection_port)) : std::optional<int>(),
                                         tcp_broadcast_connection_port_val = tcp_broadcast_connection_port ? std::optional<int>(::args::get(tcp_broadcast_connection_port)) : std::optional<int>(),
@@ -906,6 +999,11 @@ namespace {
                                         sparsify_steps_val = cli_option_present({"--sparsify-steps"}) ? std::optional<int>(::args::get(sparsify_steps)) : std::optional<int>(),
                                         init_rho_val = cli_option_present({"--init-rho"}) ? std::optional<float>(::args::get(init_rho)) : std::optional<float>(),
                                         prune_ratio_val = cli_option_present({"--prune-ratio"}) ? std::optional<float>(::args::get(prune_ratio)) : std::optional<float>(),
+                                        // Perf / profiling
+                                        perf_bench_flag = bool(perf_bench),
+                                        perf_bench_warmup_val = cli_option_present({"--perf-bench-warmup"}) ? std::optional<int>(::args::get(perf_bench_warmup)) : std::optional<int>(),
+                                        profile_start_val = parsed_profile_start,
+                                        profile_stop_val = parsed_profile_stop,
                                         // Mask parameters
                                         mask_mode_val = cli_option_present({"--mask-mode"}) ? std::optional<lfs::core::param::MaskMode>(::args::get(mask_mode)) : std::optional<lfs::core::param::MaskMode>(),
                                         depth_loss_weight_val = cli_option_present({"--depth-loss-weight"}) ? std::optional<float>(::args::get(depth_loss_weight)) : std::optional<float>(),
@@ -950,6 +1048,14 @@ namespace {
                                         no_edge_map_flag = bool(no_edge_map),
                                         freeze_lr_scale_val = cli_option_present({"--freeze-lr-scale"}) ? std::optional<float>(::args::get(freeze_lr_scale)) : std::optional<float>(),
                                         exclude_export_flag = bool(exclude_export),
+                                        save_project_at_iteration_val =
+                                            cli_option_present({"--save-project-at-iter"})
+                                                ? std::optional<uint32_t>(::args::get(save_project_at_iteration))
+                                                : std::optional<uint32_t>(),
+                                        save_project_path_val =
+                                            cli_option_present({"--save-project-path"})
+                                                ? std::optional<std::string>(::args::get(save_project_path))
+                                                : std::optional<std::string>(),
                                         output_name_val = cli_option_present({"--output-name"}) ? std::optional<std::string>(::args::get(output_name)) : std::optional<std::string>()]() {
                 auto& opt = params.optimization;
                 auto& svs = params.server;
@@ -968,13 +1074,13 @@ namespace {
 
                 // Apply all overrides
                 setVal(iterations_val, opt.iterations);
+                params.cli_iterations_set =
+                    iterations_val.has_value();
                 setVal(resize_factor_val, ds.resize_factor);
                 setVal(max_width_val, ds.max_width);
                 setVal(min_track_length_val, ds.min_track_length);
                 if (no_cpu_cache_flag)
                     ds.loading_params.use_cpu_memory = false;
-                if (no_fs_cache_flag)
-                    ds.loading_params.use_fs_cache = false;
                 setFlag(use_16bit_flag, ds.loading_params.use_16bit_color);
                 setVal(max_cap_val, opt.max_cap);
                 setVal(tcp_server_connection_port_val, svs.tcp_server_connection_port);
@@ -994,11 +1100,25 @@ namespace {
                 setVal(timelapse_images_val, ds.timelapse_images);
                 setVal(timelapse_every_val, ds.timelapse_every);
                 setVal(output_name_val, ds.output_name);
+                if (save_project_at_iteration_val) {
+                    params.save_project_at_iteration =
+                        static_cast<size_t>(*save_project_at_iteration_val);
+                }
+                if (save_project_path_val) {
+                    params.save_project_path =
+                        lfs::core::utf8_to_path(*save_project_path_val);
+                }
 
                 // Sparsity parameters
                 setVal(sparsify_steps_val, opt.sparsify_steps);
                 setVal(init_rho_val, opt.init_rho);
                 setVal(prune_ratio_val, opt.prune_ratio);
+
+                // Perf / profiling
+                setFlag(perf_bench_flag, opt.perf_bench);
+                setVal(perf_bench_warmup_val, opt.perf_bench_warmup);
+                setVal(profile_start_val, opt.profile_start_iter);
+                setVal(profile_stop_val, opt.profile_stop_iter);
 
                 setFlag(enable_mip_flag, opt.mip_filter);
                 setFlag(use_bilateral_grid_flag, opt.use_bilateral_grid);
@@ -1177,12 +1297,15 @@ namespace {
         "\n"
         "EXAMPLES:\n"
         "  LichtFeld-Studio convert input.ply output.spz --sh-degree 0\n"
+        "  LichtFeld-Studio convert input.ply output.spz --spz-version 3\n"
         "  LichtFeld-Studio convert input.ply -f html\n"
         "  LichtFeld-Studio convert ./splats/ -f sog --sh-degree 2\n"
         "\n"
         "SUPPORTED FORMATS:\n"
         "  Input:  .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint)\n"
         "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
+        "  SPZ:    --spz-version 4 (default, zstd) or 3 (legacy gzip)\n"
+        "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
 
     constexpr const char* MESH2SPLAT_HELP_HEADER = "LichtFeld Studio - Convert mesh files to Gaussian splats\n";
@@ -1198,6 +1321,7 @@ namespace {
         "  Input:  .obj, .fbx, .gltf, .glb, .stl, .dae, .3ds, .ply\n"
         "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  Multiple output formats: pass a comma-separated list to --format\n"
+        "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
 
     constexpr const char* PREPROCESS_HELP_HEADER = "LichtFeld Studio - Generate dataset depth and normal maps with MoGe-2 ONNX\n";
@@ -1279,6 +1403,8 @@ namespace {
         ::args::Positional<std::string> output(parser, "output", "Output file (optional)");
         ::args::ValueFlag<int> sh_degree(parser, "degree", "SH degree [0-3], -1 to keep original (default: -1)", {"sh-degree"});
         ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, spz, html, usd, usda, usdc, rad", {'f', "format"});
+        ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
+        ::args::Flag no_provenance(parser, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG (default: 10)", {"sog-iterations"});
         ::args::ValueFlag<std::string> tiles(parser, "AxB", "Replicate a PLY source across an AxB ground-plane grid (RAD output only)", {"tiles"});
         ::args::ValueFlag<std::string> lod_builder(parser, "builder", "PLY->RAD LOD tree builder: bhatt (default) or octree (hybrid: octree fine levels + similarity-ordered bhatt top, much faster)", {"lod-builder"});
@@ -1306,6 +1432,8 @@ namespace {
         param::ConvertParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
         params.sh_degree = sh_degree ? ::args::get(sh_degree) : -1;
+        params.spz_version = spz_version ? ::args::get(spz_version) : 4;
+        params.include_provenance = !no_provenance;
 
         if (!std::filesystem::exists(params.input_path)) {
             return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
@@ -1313,6 +1441,9 @@ namespace {
 
         if (params.sh_degree < -1 || params.sh_degree > 3) {
             return std::unexpected("SH degree must be -1 (keep) or 0-3");
+        }
+        if (params.spz_version != 3 && params.spz_version != 4) {
+            return std::unexpected("--spz-version must be 3 or 4");
         }
 
         if (output)
@@ -1394,6 +1525,8 @@ namespace {
         ::args::Positional<std::string> output(parser, "output", "Output file or directory (optional)");
         ::args::ValueFlag<std::string> output_flag(parser, "path", "Output file or directory", {'o', "output"});
         ::args::ValueFlag<std::string> format(parser, "formats", "Output format(s): ply, sog, spz, html, usd, usda, usdc, rad. Use commas for multiple outputs", {'f', "format"});
+        ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
+        ::args::Flag no_provenance(parser, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
         ::args::ValueFlag<int> resolution(parser, "pixels", "Mesh2Splat raster resolution target (default: 1024)", {"resolution"});
         ::args::ValueFlag<float> sigma(parser, "scale", "Gaussian scale sigma (default: 0.65)", {"sigma"});
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG/HTML output (default: 10)", {"sog-iterations"});
@@ -1421,9 +1554,14 @@ namespace {
 
         param::Mesh2SplatParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
+        params.spz_version = spz_version ? ::args::get(spz_version) : 4;
+        params.include_provenance = !no_provenance;
 
         if (!std::filesystem::exists(params.input_path)) {
             return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
+        }
+        if (params.spz_version != 3 && params.spz_version != 4) {
+            return std::unexpected("--spz-version must be 3 or 4");
         }
 
         if (output_flag) {

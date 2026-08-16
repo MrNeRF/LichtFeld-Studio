@@ -14,6 +14,7 @@
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/model_renderability.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/selection_ops.hpp"
 #include "scene/scene_manager.hpp"
@@ -665,11 +666,19 @@ namespace lfs::vis {
                 if (!means.is_valid() || means.ndim() != 2 || means.size(0) != count || means.size(1) != 3) {
                     return nullptr;
                 }
+                assert(means.ndim() == 2);
+                assert(means.size(1) == 3);
+                assert(means.size(0) == count);
                 if (means.dtype() != core::DataType::Float32) {
                     means = means.to(core::DataType::Float32);
                 }
                 if (means.device() == core::Device::CUDA) {
                     try {
+                        if (!means.is_valid() || means.numel() == 0 ||
+                            means.storage_ptr() == nullptr) {
+                            return nullptr;
+                        }
+
                         core::Tensor model_transforms_cuda;
                         const core::Tensor* model_transforms_ptr = nullptr;
                         if (scene.model_transforms && !scene.model_transforms->empty()) {
@@ -1454,9 +1463,16 @@ namespace lfs::vis {
         projection_viewport.windowSize = {context.info.render_width, context.info.render_height};
         const auto viewport = viewportDataFromViewer(projection_viewport, context.info, settings);
 
+        if (const auto* tm = scene_manager_->getTrainerManager()) {
+            if (tm->isCompletionPending() ||
+                tm->getState() == TrainingState::Stopping) {
+                return nullptr;
+            }
+        }
+
         auto render_lock = acquireLiveModelRenderLock(scene_manager_);
         auto scene_state = scene_manager_->buildRenderState();
-        if (!scene_state.combined_model || scene_state.combined_model->size() == 0) {
+        if (!hasRenderableGaussians(scene_state.combined_model)) {
             viewport_screen_positions_[panel_index].reset();
             viewport_screen_position_keys_[panel_index] = {};
             return nullptr;

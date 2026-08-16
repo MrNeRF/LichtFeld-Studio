@@ -389,16 +389,16 @@ def test_training_panel_language_update_requests_panel_update(training_panel_mod
         training_panel_module.RuntimeState.language_generation._fallback = 0
 
 
-def test_training_panel_checkpoint_saved_dirties_field(training_panel_module, monkeypatch):
+def test_training_panel_project_saved_dirties_field(training_panel_module, monkeypatch):
     panel = training_panel_module.TrainingPanel()
     panel._handle = _HandleStub()
     scheduled = []
     monkeypatch.setattr(panel, "_schedule_deferred_update", lambda delay: scheduled.append(delay))
 
-    panel._mark_checkpoint_saved()
+    panel._mark_project_saved()
 
-    assert panel._last_checkpoint_saved_visible is True
-    assert panel._handle.dirty_fields == ["show_checkpoint_saved"]
+    assert panel._last_project_saved_visible is True
+    assert panel._handle.dirty_fields == ["show_project_saved"]
     assert scheduled == [2.05]
 
 

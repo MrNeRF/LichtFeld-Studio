@@ -10,11 +10,16 @@
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
 #include "dataset.hpp"
 #include "io/loader.hpp"
+#include "io/project_document.hpp"
+#include "lfs/training/sh_value_storage.hpp"
+#include "trainer.hpp"
 #include <algorithm>
+#include <filesystem>
 #include <format>
 #include <memory>
 #include <numeric>
@@ -273,13 +278,65 @@ namespace lfs::training {
             }
 
             const size_t n = static_cast<size_t>(model.size());
-            const size_t target_capacity =
+
+            // exportable blocks commit live-N + headroom, not max_cap.
+            // Requiring capacity >= max_cap made readiness always fail (allocator
+            // clamps to the committed row budget), so every strategy step rebuilt
+            // SplatData and wiped capacity_ensure → densify abort.
+            //
+            // Kind note: CUDA-only views use "splat.exportable"; the GUI interop
+            // allocator tags the same clamped VMM block as "vulkan_external_buffer".
+            // Treat both as live-N when committed capacity is below max_cap.
+            const size_t configured_max =
                 params.optimization.max_cap > 0
                     ? std::max<size_t>(static_cast<size_t>(params.optimization.max_cap), n)
-                    : std::max<size_t>(model.means_raw().capacity(), n);
+                    : 0;
+            const auto means_kind =
+                model.means_raw().is_valid() ? model.means_raw().external_storage_kind()
+                                             : std::string{};
+            const bool exportable_or_interop =
+                means_kind == "splat.exportable" || means_kind == "vulkan_external_buffer";
+            const bool exportable_live_n =
+                model.means_raw().is_valid() && model.means_raw().is_external_storage() &&
+                exportable_or_interop && model.means_raw().capacity() > 0 &&
+                (configured_max == 0 || model.means_raw().capacity() < configured_max);
+            // For exportable live-N: stay on the current committed capacity (growth
+            // is capacity_ensure's job). For other external kinds: target max_cap.
+            const size_t target_capacity =
+                exportable_live_n
+                    ? std::max<size_t>(model.means_raw().capacity(), n)
+                    : (configured_max > 0
+                           ? configured_max
+                           : std::max<size_t>(model.means_raw().capacity(), n));
             const auto layout_rest = static_cast<std::uint32_t>(model.max_sh_coeffs_rest());
+            // Exportable/GUI path stores pad-dropped q16 codes; headless non-exportable
+            // may still be float4-swizzle until quant. Size the readiness check from
+            const bool shN_is_q16 = model.shN_value_quantized();
+            // Single-buffer design: q16 is steady-state (always-commit). Densify
+            // may hold a barrier-transient float workspace outside the exportable
+            // block under render_mutex exclusive. Treat that float as migrate-ready
+            // so ensureModel never remigrates/re-encodes mid-barrier.
+            // commit restores q16 before the barrier ends.
+            const bool shN_float_densify_workspace =
+                layout_rest > 0 && model.shN_raw().is_valid() &&
+                model.shN_raw().dtype() == lfs::core::DataType::Float32 && !shN_is_q16;
             const size_t target_shN_capacity =
-                layout_rest > 0 ? lfs::core::sh_swizzled_float_count(target_capacity, layout_rest) : 0;
+                layout_rest == 0
+                    ? 0
+                    : (shN_is_q16
+                           ? lfs::core::sh_value_quant::sh_value_u16_count(target_capacity, layout_rest)
+                           : lfs::core::sh_swizzled_float_count(target_capacity, layout_rest));
+            const size_t target_bounds_capacity =
+                shN_is_q16 ? lfs::core::sh_value_quant::n_bounds_for_prims(target_capacity) * 2u
+                           : 0;
+
+            const bool shN_ready =
+                target_shN_capacity == 0 || shN_float_densify_workspace ||
+                isAllocatorBackedTrainingTensorReady(model.shN_raw(), target_shN_capacity);
+            const bool bounds_ready =
+                target_bounds_capacity == 0 || shN_float_densify_workspace ||
+                isAllocatorBackedTrainingTensorReady(model.shN_value_bounds(),
+                                                     target_bounds_capacity);
 
             const bool already_allocator_backed =
                 isAllocatorBackedTrainingTensorReady(model.means_raw(), target_capacity) &&
@@ -287,14 +344,16 @@ namespace lfs::training {
                 isAllocatorBackedTrainingTensorReady(model.scaling_raw(), target_capacity) &&
                 isAllocatorBackedTrainingTensorReady(model.rotation_raw(), target_capacity) &&
                 isAllocatorBackedTrainingTensorReady(model.opacity_raw(), target_capacity) &&
-                (target_shN_capacity == 0 ||
-                 isAllocatorBackedTrainingTensorReady(model.shN_raw(), target_shN_capacity));
+                shN_ready && bounds_ready;
             if (already_allocator_backed && !force_reallocation) {
                 model.set_tensor_allocator(tensor_allocator);
                 return {};
             }
 
             try {
+                // model = move(migrated) replaces private hooks; transfer densify grow.
+                auto capacity_ensure = model.release_capacity_ensure();
+
                 const int max_sh = model.get_max_sh_degree();
                 const int active_sh = model.get_active_sh_degree();
                 const float scene_scale = model.get_scene_scale();
@@ -335,9 +394,51 @@ namespace lfs::training {
                     model.opacity_raw(), model.opacity_raw().shape(), target_capacity, "SplatData.opacity");
 
                 lfs::core::Tensor shN;
-                if (target_shN_capacity > 0 && model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
-                    shN = copy_param(
-                        model.shN_raw(), model.shN_raw().shape(), target_shN_capacity, "SplatData.shN");
+                lfs::core::Tensor shN_bounds;
+                bool need_q16_encode = false;
+                if (layout_rest > 0 && model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
+                    const size_t float_cap =
+                        lfs::core::sh_swizzled_float_count(target_capacity, layout_rest);
+                    const size_t q16_cap =
+                        lfs::core::sh_value_quant::sh_value_u16_count(target_capacity, layout_rest);
+                    const size_t bounds_cap =
+                        lfs::core::sh_value_quant::n_bounds_for_prims(target_capacity) * 2u;
+
+                    if (model.shN_value_quantized()) {
+                        // Pad-dropped q16 codes + bounds → exportable/view target.
+                        shN = copy_param(
+                            model.shN_raw(), model.shN_raw().shape(), q16_cap, "SplatData.shN");
+                        if (model.shN_value_bounds().is_valid() &&
+                            model.shN_value_bounds().numel() > 0) {
+                            shN_bounds = copy_param(
+                                model.shN_value_bounds(),
+                                model.shN_value_bounds().shape(),
+                                bounds_cap,
+                                "SplatData.shN_value_bounds");
+                        }
+                    } else {
+                        // Try float topology install. Real SplatExportableStorage
+                        // forces Float16 and clamps capacity to q16 cells — detect
+                        // that and re-encode instead of bitcasting float into half.
+                        lfs::core::Tensor src_float = model.shN_raw();
+                        if (src_float.device() != lfs::core::Device::CUDA) {
+                            src_float = src_float.cuda();
+                        }
+                        if (!src_float.is_contiguous()) {
+                            src_float = src_float.contiguous();
+                        }
+                        lfs::core::Tensor installed = copy_param(
+                            src_float, src_float.shape(), float_cap, "SplatData.shN");
+                        const bool landed_in_q16_exportable =
+                            installed.dtype() == lfs::core::DataType::Float16 ||
+                            installed.capacity() < float_cap;
+                        if (landed_in_q16_exportable) {
+                            shN = std::move(src_float);
+                            need_q16_encode = true;
+                        } else {
+                            shN = std::move(installed);
+                        }
+                    }
                 }
 
                 lfs::core::SplatData migrated(max_sh,
@@ -349,6 +450,10 @@ namespace lfs::training {
                                               std::move(opacity),
                                               scene_scale,
                                               lfs::core::SplatData::ShNLayout::Swizzled);
+                if (shN_bounds.is_valid()) {
+                    // Codes and bounds are one declared representation; install before degree validation.
+                    migrated.shN_value_bounds() = std::move(shN_bounds);
+                }
                 migrated.set_active_sh_degree(active_sh);
                 if (deleted.is_valid()) {
                     migrated.deleted() = std::move(deleted);
@@ -359,13 +464,24 @@ namespace lfs::training {
                 migrated.set_frozen_ranges(std::move(frozen_ranges));
                 model = std::move(migrated);
                 model.set_tensor_allocator(tensor_allocator);
+                if (capacity_ensure) {
+                    model.set_capacity_ensure(std::move(capacity_ensure));
+                }
+                // Encode float/f16 rest into exportable q16 when the target block
+                // is pad-dropped (probe above detected Float16-clamped ShN).
+                // Single-buffer: cold migrate and any force rebuild land q16.
+                if (need_q16_encode && model.shN_raw().is_valid() &&
+                    !model.shN_value_quantized()) {
+                    (void)lfs::training::sh_value::apply_shN_value_quant(model);
+                }
                 lfs::core::Tensor::trim_memory_pool();
 
                 LOG_INFO("Migrated training SplatData tensors to Vulkan-external storage "
-                         "(gaussians={}, capacity={}, shN_capacity_floats={})",
+                         "(gaussians={}, capacity={}, shN_q16={}, shN_capacity_cells={})",
                          n,
-                         target_capacity,
-                         target_shN_capacity);
+                         model.means_raw().capacity(),
+                         model.shN_value_quantized(),
+                         model.shN_raw().is_valid() ? model.shN_raw().capacity() : 0);
             } catch (const std::exception& e) {
                 return std::unexpected(std::format(
                     "Failed to migrate training SplatData to Vulkan-external storage: {}",
@@ -397,6 +513,11 @@ namespace lfs::training {
             .images_folder = params.dataset.images,
             .min_track_length = effectiveMinTrackLengthForLoad(params),
             .validate_only = false,
+            .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
+            .load_depths = params.optimization.use_depth_loss &&
+                           params.optimization.depth_loss_weight > 0.0f,
+            .load_normals = params.optimization.use_normal_loss &&
+                            params.optimization.normal_loss_weight > 0.0f,
             .centralize = parse_centralize(params.dataset.centralize_dataset),
             .progress = [&data_path](float percentage, const std::string& message) {
                 LOG_DEBUG("[{:5.1f}%] {}", percentage, message);
@@ -421,8 +542,11 @@ namespace lfs::training {
             if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
                 auto model = std::make_unique<lfs::core::SplatData>(std::move(*data));
                 applyTrainingSHDegree(*model, params.optimization.sh_degree);
-                scene.addSplat("loaded_model", std::move(model));
-                scene.setTrainingModelNode("loaded_model");
+                const auto model_id = scene.addSplat("loaded_model", std::move(model));
+                if (model_id == lfs::core::NULL_NODE) {
+                    return std::unexpected("Failed to add loaded training model to scene");
+                }
+                scene.setTrainingModelNode(model_id);
                 LOG_INFO("Loaded PLY directly into scene");
                 return {};
 
@@ -463,8 +587,11 @@ namespace lfs::training {
                         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
                         LOG_INFO("Initialized {} Gaussians from {} (sh={})",
                                  model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                        scene.addSplat("Model", std::move(model), dataset_id);
-                        scene.setTrainingModelNode("Model");
+                        const auto model_id = scene.addSplat("Model", std::move(model), dataset_id);
+                        if (model_id == lfs::core::NULL_NODE) {
+                            return std::unexpected("Failed to add initialized training model to scene");
+                        }
+                        scene.setTrainingModelNode(model_id);
                     } else {
                         auto loader = lfs::io::Loader::create();
                         auto init_result = loader->load(init_file);
@@ -483,8 +610,11 @@ namespace lfs::training {
 
                             LOG_INFO("Loaded {} Gaussians from {} (sh={})",
                                      model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                            scene.addSplat("Model", std::move(model), dataset_id);
-                            scene.setTrainingModelNode("Model");
+                            const auto model_id = scene.addSplat("Model", std::move(model), dataset_id);
+                            if (model_id == lfs::core::NULL_NODE) {
+                                return std::unexpected("Failed to add loaded training model to scene");
+                            }
+                            scene.setTrainingModelNode(model_id);
                         } catch (const std::bad_variant_access&) {
                             return std::unexpected(std::format("'{}': invalid SplatData", lfs::core::path_to_utf8(init_file)));
                         }
@@ -755,15 +885,18 @@ namespace lfs::training {
         }
         LOG_INFO("Created training model with {} gaussians", model->size());
         const lfs::core::NodeId model_id = scene.addSplat("Model", std::move(model), parent_id);
-        if (node_transform != glm::mat4{1.0f}) {
-            scene.setNodeTransform("Model", node_transform);
+        if (model_id == lfs::core::NULL_NODE) {
+            return std::unexpected("Failed to add training model to scene");
         }
-        scene.setTrainingModelNode("Model");
+        if (node_transform != glm::mat4{1.0f}) {
+            scene.setNodeTransform(model_id, node_transform);
+        }
+        scene.setTrainingModelNode(model_id);
         if (has_preserved_cropbox && model_id != lfs::core::NULL_NODE) {
             const lfs::core::NodeId model_cropbox_id = scene.addCropBox("Model_cropbox", model_id);
             if (model_cropbox_id != lfs::core::NULL_NODE) {
                 scene.setCropBoxData(model_cropbox_id, preserved_cropbox_data);
-                scene.setNodeTransform("Model_cropbox", preserved_cropbox_transform);
+                scene.setNodeTransform(model_cropbox_id, preserved_cropbox_transform);
             }
         }
 
@@ -780,7 +913,12 @@ namespace lfs::training {
             .max_width = params.dataset.max_width,
             .images_folder = params.dataset.images,
             .min_track_length = params.dataset.min_track_length,
-            .validate_only = true};
+            .validate_only = true,
+            .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
+            .load_depths = params.optimization.use_depth_loss &&
+                           params.optimization.depth_loss_weight > 0.0f,
+            .load_normals = params.optimization.use_normal_loss &&
+                            params.optimization.normal_loss_weight > 0.0f};
 
         auto result = data_loader->load(params.dataset.data_path, load_options);
         if (!result) {
@@ -800,8 +938,11 @@ namespace lfs::training {
             if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
                 auto model = std::make_unique<lfs::core::SplatData>(std::move(*data));
                 applyTrainingSHDegree(*model, params.optimization.sh_degree);
-                scene.addSplat("loaded_model", std::move(model));
-                scene.setTrainingModelNode("loaded_model");
+                const auto model_id = scene.addSplat("loaded_model", std::move(model));
+                if (model_id == lfs::core::NULL_NODE) {
+                    return std::unexpected("Failed to add loaded training model to scene");
+                }
+                scene.setTrainingModelNode(model_id);
                 return {};
 
             } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
@@ -839,8 +980,11 @@ namespace lfs::training {
                         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
                         LOG_INFO("Init {} gaussians from {} (sh={})",
                                  model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                        scene.addSplat("Model", std::move(model), dataset_id);
-                        scene.setTrainingModelNode("Model");
+                        const auto model_id = scene.addSplat("Model", std::move(model), dataset_id);
+                        if (model_id == lfs::core::NULL_NODE) {
+                            return std::unexpected("Failed to add initialized training model to scene");
+                        }
+                        scene.setTrainingModelNode(model_id);
                     } else {
                         auto loader = lfs::io::Loader::create();
                         auto init_result = loader->load(init_file);
@@ -858,8 +1002,11 @@ namespace lfs::training {
 
                             LOG_INFO("Loaded {} gaussians from {} (sh={})",
                                      model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                            scene.addSplat("Model", std::move(model), dataset_id);
-                            scene.setTrainingModelNode("Model");
+                            const auto model_id = scene.addSplat("Model", std::move(model), dataset_id);
+                            if (model_id == lfs::core::NULL_NODE) {
+                                return std::unexpected("Failed to add loaded training model to scene");
+                            }
+                            scene.setTrainingModelNode(model_id);
                         } catch (const std::bad_variant_access&) {
                             return std::unexpected(std::format("'{}': invalid SplatData", lfs::core::path_to_utf8(init_file)));
                         }
@@ -923,6 +1070,90 @@ namespace lfs::training {
             }
         },
                           load_result.data);
+    }
+
+    std::expected<ProjectCheckpointTrainer, std::string>
+    installTrainerFromProjectCheckpoint(
+        lfs::core::Scene& scene,
+        const lfs::io::project::ProjectDocument& document,
+        const lfs::core::Uuid& checkpoint_uuid,
+        const lfs::core::param::TrainingParameters& params,
+        const std::string_view source_name,
+        const int expected_iteration,
+        const std::optional<lfs::io::project::RecoverySession>&
+            recovery_session,
+        lfs::core::SplatTensorAllocator tensor_allocator) {
+        if (params.dataset.data_path.empty()) {
+            return std::unexpected(
+                "Project checkpoint has no dataset path");
+        }
+        if (!std::filesystem::exists(
+                params.dataset.data_path)) {
+            return std::unexpected(std::format(
+                "Dataset path does not exist: {}",
+                lfs::core::path_to_utf8(
+                    params.dataset.data_path)));
+        }
+
+        auto trainer = std::make_unique<Trainer>(scene);
+        if (recovery_session) {
+            trainer->set_recovery_session(*recovery_session);
+        }
+        if (!params.python_scripts.empty()) {
+            trainer->set_python_scripts(params.python_scripts);
+        }
+        if (tensor_allocator) {
+            trainer->setSplatTensorAllocator(
+                std::move(tensor_allocator));
+        }
+        if (const auto initialized =
+                trainer->initialize(params);
+            !initialized) {
+            return std::unexpected(std::format(
+                "Failed to initialize trainer from project: {}",
+                initialized.error()));
+        }
+        const auto* checkpoint =
+            document.find_checkpoint(checkpoint_uuid);
+        if (!checkpoint) {
+            return std::unexpected(
+                "Project CKPT handle disappeared");
+        }
+        std::optional<CheckpointLoadResult> restored;
+        auto visited = checkpoint->visit_stream(
+            [&](std::istream& source,
+                const std::uint64_t bytes)
+                -> lfs::Result<void> {
+                restored = trainer->load_checkpoint(
+                    source, bytes, source_name);
+                return {};
+            });
+        if (!visited) {
+            return std::unexpected(std::format(
+                "Failed to stream project CKPT: {}",
+                lfs::format_for_developer(visited.error())));
+        }
+        if (!restored || !*restored) {
+            return std::unexpected(std::format(
+                "Failed to restore project trainer state: {}",
+                restored ? restored->error()
+                         : "CKPT visitor did not run"));
+        }
+        const int restored_iteration = **restored;
+        if (restored_iteration != expected_iteration ||
+            trainer->get_current_iteration() !=
+                expected_iteration) {
+            return std::unexpected(std::format(
+                "Project resume iteration mismatch: "
+                "display={} trainer={} expected={}",
+                restored_iteration,
+                trainer->get_current_iteration(),
+                expected_iteration));
+        }
+        return ProjectCheckpointTrainer{
+            .trainer = std::move(trainer),
+            .iteration = restored_iteration,
+        };
     }
 
 } // namespace lfs::training

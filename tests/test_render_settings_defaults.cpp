@@ -49,6 +49,27 @@ TEST(RenderSettingsProxy, DepthFilterTransformRoundTrips) {
     EXPECT_FLOAT_EQ(roundtrip_translation.z, translation.z);
 }
 
+TEST(RenderSettingsProxy, DepthViewSplitOffsetAndLodFieldsRoundTrip) {
+    lfs::vis::RenderSettings settings;
+    settings.depth_view = true;
+    settings.split_view_offset = 3;
+    settings.lod_auto_enable_rad = true;
+    settings.lod_behind_camera_penalty = 0.55f;
+
+    const auto proxy = lfs::vis::to_proxy(settings);
+    EXPECT_TRUE(proxy.depth_view);
+    EXPECT_EQ(proxy.split_view_offset, 3u);
+    EXPECT_TRUE(proxy.lod_auto_enable_rad);
+    EXPECT_FLOAT_EQ(proxy.lod_behind_camera_penalty, 0.55f);
+
+    lfs::vis::RenderSettings roundtrip;
+    lfs::vis::apply_proxy(roundtrip, proxy);
+    EXPECT_TRUE(roundtrip.depth_view);
+    EXPECT_EQ(roundtrip.split_view_offset, 3u);
+    EXPECT_TRUE(roundtrip.lod_auto_enable_rad);
+    EXPECT_FLOAT_EQ(roundtrip.lod_behind_camera_penalty, 0.55f);
+}
+
 TEST(RenderSettingsBackendNormalization, Explicit3dgsBackendBeatsStaleGutMirror) {
     using Backend = lfs::rendering::GaussianRasterBackend;
 

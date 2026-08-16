@@ -8,6 +8,7 @@
 #include "core/tensor.hpp"
 #include "io/cache_image_loader.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -39,8 +40,7 @@ namespace lfs::io {
         constexpr size_t DEFAULT_OUTPUT_QUEUE_SIZE = 4;
         constexpr size_t DEFAULT_IO_THREADS = 2;
         constexpr size_t DEFAULT_COLD_THREADS = 2;
-        constexpr size_t DEFAULT_MAX_CACHE_BYTES = 8ULL * 1024 * 1024 * 1024;
-        constexpr float DEFAULT_MIN_FREE_RATIO = 0.2f;
+        constexpr size_t DEFAULT_MAX_CACHE_BYTES = 0;
         constexpr int DEFAULT_JPEG_QUALITY = 95;
         constexpr int DEFAULT_BATCH_TIMEOUT_MS = 3;
         constexpr int DEFAULT_OUTPUT_TIMEOUT_MS = 50;
@@ -67,6 +67,8 @@ namespace lfs::io {
         SidecarCount normal;
     };
 
+    constexpr size_t DECODE_FRAME_RING_CAPACITY = 14;
+
     struct PipelinedLoaderConfig {
         size_t jpeg_batch_size = config::DEFAULT_BATCH_SIZE;
         size_t prefetch_count = config::DEFAULT_PREFETCH_COUNT;
@@ -75,8 +77,6 @@ namespace lfs::io {
         size_t io_threads = config::DEFAULT_IO_THREADS;
         size_t cold_process_threads = config::DEFAULT_COLD_THREADS;
         size_t max_cache_bytes = config::DEFAULT_MAX_CACHE_BYTES;
-        float min_free_memory_ratio = config::DEFAULT_MIN_FREE_RATIO;
-        bool use_filesystem_cache = true;
         int cache_jpeg_quality = config::DEFAULT_JPEG_QUALITY;
         std::chrono::milliseconds batch_collect_timeout{config::DEFAULT_BATCH_TIMEOUT_MS};
         std::chrono::milliseconds output_wait_timeout{config::DEFAULT_OUTPUT_TIMEOUT_MS};
@@ -135,6 +135,7 @@ namespace lfs::io {
         // each carries its own event; consumers must wait on both.
         CUevent_st* depth_ready_event = nullptr;
         CUevent_st* normal_ready_event = nullptr;
+        std::vector<std::shared_ptr<void>> decoded_frame_leases;
         std::string error; // Non-empty for a failed primary image request
     };
 
@@ -168,6 +169,8 @@ namespace lfs::io {
         struct CacheStats {
             size_t jpeg_cache_entries = 0;
             size_t jpeg_cache_bytes = 0;
+            size_t spill_cache_entries = 0;
+            size_t spill_cache_bytes = 0;
             size_t hot_path_hits = 0;
             size_t cold_path_misses = 0;
             size_t gpu_batch_decodes = 0;
@@ -202,8 +205,8 @@ namespace lfs::io {
             SidecarTally aggregate_sidecar_tally;
             std::uint64_t accepted_sequences = 0;
             std::uint64_t succeeded_sequences = 0;
-            std::uint64_t failed_sequences = 0;
             std::uint64_t cancelled_sequences = 0;
+            std::uint64_t failed_sequences = 0;
         };
 
         explicit PipelinedImageLoader(PipelinedLoaderConfig config = {});
@@ -214,6 +217,9 @@ namespace lfs::io {
 
         void prefetch(const std::vector<ImageRequest>& requests);
         void prefetch(size_t sequence_id, const std::filesystem::path& path, const LoadParams& params);
+        // Canonicalize a run's source set before normal training consumption.
+        // The encoded results remain available only in this loader's run cache.
+        void canonicalize(const std::vector<ImageRequest>& requests);
 
         ReadyImage get();
         std::optional<ReadyImage> try_get();
@@ -229,11 +235,16 @@ namespace lfs::io {
 
         size_t ready_count() const;
         size_t in_flight_count() const;
+        void observe_training_iteration(double train_ms, double dl_wait_ms, std::size_t iter);
+        void record_decode_latency(double decode_ms);
+        [[nodiscard]] size_t adaptive_prefetch_target() const;
         void clear();
+        void reclaim_idle_decoded_frames();
         void shutdown();
         bool is_running() const { return running_.load(); }
         CacheStats get_stats() const;
         GpuMemoryStats get_gpu_memory_stats() const;
+        [[nodiscard]] std::filesystem::path run_spill_directory() const;
 
     private:
         struct PrefetchedImage {
@@ -263,11 +274,6 @@ namespace lfs::io {
             const lfs::core::UndistortParams* undistort = nullptr;
         };
 
-        struct CachedJpegHit {
-            std::shared_ptr<std::vector<uint8_t>> data;
-            bool from_base_key = false;
-        };
-
         // Pairing buffer: wait for the image and requested auxiliary images before output
         struct PendingPair {
             std::uint64_t loader_generation = 0;
@@ -285,6 +291,7 @@ namespace lfs::io {
             bool mask_failed = false;
             bool depth_failed = false;
             bool normal_failed = false;
+            std::vector<std::shared_ptr<void>> decoded_frame_leases;
             size_t image_bytes = 0;
             size_t mask_bytes = 0;
             size_t depth_bytes = 0;
@@ -400,14 +407,9 @@ namespace lfs::io {
         void cold_process_thread_func(size_t worker_index);
 
         std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
-        std::filesystem::path get_fs_cache_path(const std::string& cache_key) const;
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;
         std::vector<uint8_t> read_file(const std::filesystem::path& path) const;
-        void save_to_fs_cache(const std::string& cache_key, const std::vector<uint8_t>& data);
         std::shared_ptr<std::vector<uint8_t>> load_cached_jpeg_blob(const std::string& cache_key);
-        std::optional<CachedJpegHit> find_cached_jpeg(const std::string& cache_key,
-                                                      const std::string& base_key,
-                                                      const std::filesystem::path& source_path);
         lfs::core::Tensor decode_file_on_cpu(const std::filesystem::path& path,
                                              const LoadParams& params) const;
         void write_derived_cache(NvCodecImageLoader& nvcodec,
@@ -437,6 +439,10 @@ namespace lfs::io {
         void put_in_jpeg_cache(const std::string& cache_key, std::vector<uint8_t>&& data);
         void invalidate_cache_entry(const std::string& cache_key);
         void evict_jpeg_cache_if_needed(size_t required_bytes);
+        void spill_cache_entry_locked(const std::string& cache_key,
+                                      const std::shared_ptr<std::vector<uint8_t>>& data);
+        void cleanup_run_spill_directory();
+        static void cleanup_stale_run_spill_directories();
 
         // Auxiliary image pairing helpers
         std::string make_mask_cache_key(
@@ -450,7 +456,8 @@ namespace lfs::io {
             cudaStream_t stream,
             std::optional<lfs::core::Tensor> depth = std::nullopt,
             std::optional<lfs::core::Tensor> normal = std::nullopt,
-            CUevent_st* sidecar_ready_event = nullptr);
+            CUevent_st* sidecar_ready_event = nullptr,
+            std::shared_ptr<void> decoded_frame_lease = nullptr);
         void try_push_ready_locked(size_t sequence_id,
                                    PendingPairIterator it,
                                    std::unique_lock<std::mutex>& pending_lock);
@@ -478,6 +485,8 @@ namespace lfs::io {
         void destroy_sidecar_ready_event(CUevent_st*& event);
         void reset_pipeline_gpu_bytes();
 
+        void publish_loader_vram_gauges() const;
+
         PipelinedLoaderConfig config_;
         std::atomic<bool> running_{false};
         std::vector<std::thread> io_threads_;
@@ -504,9 +513,19 @@ namespace lfs::io {
         mutable std::mutex jpeg_cache_mutex_;
         std::atomic<size_t> jpeg_cache_bytes_{0};
 
-        std::filesystem::path fs_cache_folder_;
-        std::mutex fs_cache_mutex_;
-        std::set<std::string> files_being_written_;
+        struct SpillCacheEntry {
+            std::filesystem::path path;
+            std::chrono::steady_clock::time_point last_access;
+            size_t size_bytes = 0;
+        };
+        std::unordered_map<std::string, SpillCacheEntry> spill_cache_;
+        std::filesystem::path run_spill_folder_;
+        size_t spill_cache_bytes_ = 0;
+        std::uint64_t spill_sequence_ = 0;
+
+        struct DecodedFrameRing;
+        std::shared_ptr<DecodedFrameRing> decoded_frame_ring_;
+        std::vector<lfs::core::Tensor> decode_hwc_workspace_;
 
         // Cleared on the first failed JPEG 2000 encode (e.g. nvjpeg2k extension not
         // built) so 16-bit runs degrade to uncached decoding with a single error.
@@ -514,6 +533,15 @@ namespace lfs::io {
 
         mutable std::mutex stats_mutex_;
         CacheStats stats_;
+        mutable std::mutex adaptive_mutex_;
+        double decode_latency_ema_ms_ = 0.0;
+        double train_latency_ema_ms_ = 0.0;
+        double adaptive_wait_sum_ms_ = 0.0;
+        size_t adaptive_wait_samples_ = 0;
+        size_t adaptive_target_ = config::DEFAULT_PREFETCH_COUNT;
+        size_t adaptive_low_recommendation_windows_ = 0;
+        size_t adaptive_growth_cooldown_windows_ = 0;
+        size_t adaptive_occupancy_ = 0;
         std::atomic<size_t> in_flight_{0};
         std::atomic<size_t> output_image_bytes_{0};
         std::atomic<size_t> output_mask_bytes_{0};

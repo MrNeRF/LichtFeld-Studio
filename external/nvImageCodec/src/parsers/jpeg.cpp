@@ -117,15 +117,16 @@ namespace nvimgcodec {
             strcpy(codestream_info->codec_name, "jpeg");
             codestream_info->num_images = 1;
 
+            // Calculate bitstream size - for JPEG, it's the entire file size
+            code_stream->io_stream->size(code_stream->io_stream->instance, &(codestream_info->size));
+
             return NVIMGCODEC_STATUS_SUCCESS;
         }
 
     } // namespace
 
     JPEGParserPlugin::JPEGParserPlugin(const nvimgcodecFrameworkDesc_t* framework)
-        : framework_(framework),
-          parser_desc_{NVIMGCODEC_STRUCTURE_TYPE_PARSER_DESC, sizeof(nvimgcodecParserDesc_t), nullptr, this, plugin_id_, "jpeg", static_can_parse, static_create,
-                       Parser::static_destroy, Parser::static_get_codestream_info, Parser::static_get_image_info} {
+        : framework_(framework), parser_desc_{NVIMGCODEC_STRUCTURE_TYPE_PARSER_DESC, sizeof(nvimgcodecParserDesc_t), nullptr, this, plugin_id_, "jpeg", static_can_parse, static_create, Parser::static_destroy, Parser::static_get_codestream_info, Parser::static_get_image_info} {
     }
 
     nvimgcodecParserDesc_t* JPEGParserPlugin::getParserDesc() {
@@ -138,6 +139,13 @@ namespace nvimgcodec {
             CHECK_NULL(result);
             CHECK_NULL(code_stream);
             nvimgcodecIoStreamDesc_t* io_stream = code_stream->io_stream;
+            size_t length = 0;
+            io_stream->size(io_stream->instance, &length);
+            if (length < sizeof(jpeg_marker_t)) {
+                NVIMGCODEC_LOG_DEBUG(framework_, plugin_id_, "Code stream is too short to be a JPEG");
+                *result = 0;
+                return NVIMGCODEC_STATUS_SUCCESS;
+            }
             io_stream->seek(io_stream->instance, 0, SEEK_SET);
             auto signature = ReadValue<jpeg_marker_t>(io_stream);
             *result = (signature == soi_marker);
@@ -159,8 +167,7 @@ namespace nvimgcodec {
     }
 
     JPEGParserPlugin::Parser::Parser(const char* plugin_id, const nvimgcodecFrameworkDesc_t* framework)
-        : plugin_id_(plugin_id),
-          framework_(framework) {
+        : plugin_id_(plugin_id), framework_(framework) {
         NVIMGCODEC_LOG_TRACE(framework_, plugin_id_, "jpeg_parser_destroy");
     }
 
@@ -323,20 +330,27 @@ namespace nvimgcodec {
             }
 
             image_info->struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
-            image_info->sample_format = num_components > 1 ? NVIMGCODEC_SAMPLEFORMAT_P_RGB : NVIMGCODEC_SAMPLEFORMAT_P_Y;
             image_info->orientation = orientation;
             image_info->chroma_subsampling = subsampling;
             strcpy(image_info->codec_name, "jpeg");
             switch (num_components) {
             case 1:
                 image_info->color_spec = NVIMGCODEC_COLORSPEC_GRAY;
+                image_info->sample_format = NVIMGCODEC_SAMPLEFORMAT_P_Y;
                 break;
             case 4:
-                image_info->color_spec = adobe_transform == 2 ? NVIMGCODEC_COLORSPEC_YCCK : NVIMGCODEC_COLORSPEC_CMYK;
+                if (adobe_transform == 2) {
+                    image_info->color_spec = NVIMGCODEC_COLORSPEC_YCCK;
+                    image_info->sample_format = NVIMGCODEC_SAMPLEFORMAT_P_YCCK;
+                } else {
+                    image_info->color_spec = NVIMGCODEC_COLORSPEC_CMYK;
+                    image_info->sample_format = NVIMGCODEC_SAMPLEFORMAT_P_CMYK;
+                }
                 break;
             case 3:
                 // assume that 3 channels is always going to be YCbCr
                 image_info->color_spec = NVIMGCODEC_COLORSPEC_SYCC;
+                image_info->sample_format = NVIMGCODEC_SAMPLEFORMAT_P_YCC;
                 break;
             default:
                 NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Unexpected number of channels" << num_components);
@@ -362,6 +376,9 @@ namespace nvimgcodec {
                     jpeg_image_info->encoding = static_cast<nvimgcodecJpegEncoding_t>(sof_marker[1]);
             }
 
+        } catch (const UnexpectedEndOfStream& e) {
+            NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Could not retrieve image info from jpeg stream - " << e.what());
+            return NVIMGCODEC_STATUS_BAD_CODESTREAM;
         } catch (const std::runtime_error& e) {
             NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Could not retrieve image info from jpeg stream - " << e.what());
             return NVIMGCODEC_STATUS_EXTENSION_INTERNAL_ERROR;
@@ -395,8 +412,7 @@ namespace nvimgcodec {
     class JpegParserExtension {
     public:
         explicit JpegParserExtension(const nvimgcodecFrameworkDesc_t* framework)
-            : framework_(framework),
-              jpeg_parser_plugin_(framework) {
+            : framework_(framework), jpeg_parser_plugin_(framework) {
             framework->registerParser(framework->instance, jpeg_parser_plugin_.getParserDesc(), NVIMGCODEC_PRIORITY_NORMAL);
         }
         ~JpegParserExtension() { framework_->unregisterParser(framework_->instance, jpeg_parser_plugin_.getParserDesc()); }

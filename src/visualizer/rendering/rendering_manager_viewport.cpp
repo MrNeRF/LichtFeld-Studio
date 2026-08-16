@@ -1251,9 +1251,7 @@ namespace lfs::vis {
         if (!scene_manager || render_size.x <= 0 || render_size.y <= 0 ||
             x < 0 || x >= render_size.x || y < 0 || y >= render_size.y ||
             node_visibility_mask.empty() ||
-            !std::any_of(node_visibility_mask.begin(), node_visibility_mask.end(), [](const bool enabled) {
-                return enabled;
-            })) {
+            !std::any_of(node_visibility_mask.begin(), node_visibility_mask.end(), [](const bool enabled) { return enabled; })) {
             return -1.0f;
         }
         auto render_lock = acquireLiveModelRenderLock(scene_manager);

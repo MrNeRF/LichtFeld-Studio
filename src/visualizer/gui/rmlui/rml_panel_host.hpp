@@ -64,6 +64,7 @@ namespace lfs::vis::gui {
         void markContentDirty() {
             content_dirty_ = true;
             direct_cache_dirty_ = true;
+            content_height_rearm_count_ = 0;
         }
         void setForeground(bool fg) { foreground_ = fg; }
         void setFloating(bool floating);
@@ -74,6 +75,9 @@ namespace lfs::vis::gui {
         bool needsAnimationFrame() const {
             return render_needed_ || content_dirty_ || animation_active_ || tooltip_.revealDue();
         }
+        // Finite RmlUi scheduled update delay (seconds) when > 0; nullopt for
+        // continuous demand (0, use needsAnimationFrame) or idle (infinity).
+        [[nodiscard]] std::optional<double> nextScheduledUpdateDelay() const;
 
         Rml::ElementDocument* getDocument() { return document_; }
         Rml::Context* getContext() { return rml_context_; }
@@ -136,6 +140,9 @@ namespace lfs::vis::gui {
 
         bool render_needed_ = true;
         bool animation_active_ = false;
+        double next_update_delay_ = std::numeric_limits<double>::infinity();
+        int content_height_rearm_count_ = 0;
+        bool content_height_rearm_warned_ = false;
         std::uint64_t localized_language_generation_ = std::numeric_limits<std::uint64_t>::max();
         bool direct_cache_dirty_ = true;
         CachedVulkanContextRender direct_cache_;

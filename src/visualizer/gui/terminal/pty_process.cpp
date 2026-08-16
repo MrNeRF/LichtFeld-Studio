@@ -246,7 +246,9 @@ namespace lfs::vis::terminal {
         if (master_fd_ >= 0) {
             if (attached_) {
                 constexpr char CTRL_C = '\x03';
-                ::write(master_fd_, &CTRL_C, 1);
+                if (::write(master_fd_, &CTRL_C, 1) < 0) {
+                    LOG_ERROR("PTY write failed on interrupt: {}", std::strerror(errno));
+                }
             } else {
                 const pid_t fg_pgid = tcgetpgrp(master_fd_);
                 if (fg_pgid > 0) {

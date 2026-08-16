@@ -6,15 +6,49 @@
 
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
+#include "core/uuid.hpp"
 #include "io/loader.hpp"
+#include "io/project_recovery.hpp"
 #include <expected>
+#include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace lfs::core {
     class Scene;
 }
 
+namespace lfs::io::project {
+    class ProjectDocument;
+}
+
 namespace lfs::training {
+    class Trainer;
+
+    /// Result of streaming an embedded project CKPT into a Trainer on an
+    /// already-hydrated scene (no scene clear). Caller owns TrainerManager
+    /// install (setTrainer / setTrainerFromCheckpoint).
+    struct ProjectCheckpointTrainer {
+        std::unique_ptr<Trainer> trainer;
+        int iteration = 0;
+    };
+
+    /// Construct + initialize Trainer on the live scene, then stream the
+    /// document's CKPT payload via load_checkpoint(istream). Does not clear
+    /// the scene and does not install into TrainerManager.
+    [[nodiscard]] std::expected<ProjectCheckpointTrainer, std::string>
+    installTrainerFromProjectCheckpoint(
+        lfs::core::Scene& scene,
+        const lfs::io::project::ProjectDocument& document,
+        const lfs::core::Uuid& checkpoint_uuid,
+        const lfs::core::param::TrainingParameters& params,
+        std::string_view source_name,
+        int expected_iteration,
+        const std::optional<lfs::io::project::RecoverySession>&
+            recovery_session = std::nullopt,
+        lfs::core::SplatTensorAllocator tensor_allocator = {});
+
     /**
      * @brief Load training data into Scene
      *

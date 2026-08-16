@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/elements/scene_graph_element.hpp"
+#include "gui/scene_tree_session.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/tensor.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -433,6 +435,7 @@ namespace lfs::vis::gui {
                 .binary = true,
                 .async = false,
                 .extra_attributes = {},
+                .provenance = core::make_provenance_stamp(),
             };
 
             io::Result<void> result = std::unexpected(
@@ -504,6 +507,28 @@ namespace lfs::vis::gui {
     void SceneGraphElement::setPanelScreenOffset(const float x, const float y) {
         panel_screen_x_ = x;
         panel_screen_y_ = y;
+    }
+
+    void SceneGraphElement::setModelsCollapsed(const bool collapsed) {
+        if (models_collapsed_ == collapsed)
+            return;
+        models_collapsed_ = collapsed;
+        markStateDirty();
+        syncVisibleRows(true);
+    }
+
+    void SceneGraphElement::applySessionCollapseUuids(
+        const std::vector<std::string>& uuids) {
+        session_collapsed_uuids_.clear();
+        session_collapsed_uuids_.insert(uuids.begin(), uuids.end());
+        session_collapse_pending_ = true;
+        tree_rebuild_needed_ = true;
+        markStateDirty();
+    }
+
+    void SceneGraphElement::clearSessionCollapseUuids() {
+        session_collapsed_uuids_.clear();
+        session_collapse_pending_ = false;
     }
 
     void SceneGraphElement::setFilterText(const std::string_view text) {
@@ -602,12 +627,16 @@ namespace lfs::vis::gui {
         auto content = doc->CreateElement("div");
         content->SetClass("scene-graph-content", true);
         content_el_ = AppendChild(std::move(content));
+        if (!content_el_)
+            return;
 
         auto header = doc->CreateElement("div");
         header->SetClass("section-header", true);
         header->SetClass("scene-graph-models-header", true);
         header->SetAttribute("data-role", "models-header");
         header_el_ = content_el_->AppendChild(std::move(header));
+        if (!header_el_)
+            return;
 
         auto arrow = doc->CreateElement("span");
         arrow->SetClass("section-arrow", true);
@@ -641,10 +670,14 @@ namespace lfs::vis::gui {
             row->SetClass("tree-row", true);
             row->SetProperty("display", "none");
             slot.root = content_el_->AppendChild(std::move(row));
+            if (!slot.root)
+                return;
 
             auto content = doc->CreateElement("span");
             content->SetClass("row-content", true);
             slot.content = slot.root->AppendChild(std::move(content));
+            if (!slot.content)
+                return;
 
             auto vis_icon = doc->CreateElement("img");
             vis_icon->SetClass("row-icon", true);
@@ -855,6 +888,20 @@ namespace lfs::vis::gui {
                 snapshot.label = node->name;
                 break;
             }
+            switch (node->payload_hydration) {
+            case core::PayloadHydrationState::Unloaded:
+                snapshot.label += "  [Unloaded]";
+                break;
+            case core::PayloadHydrationState::Hydrating:
+                snapshot.label += "  [Loading...]";
+                break;
+            case core::PayloadHydrationState::Failed:
+                snapshot.label += "  [Load failed]";
+                break;
+            case core::PayloadHydrationState::NotApplicable:
+            case core::PayloadHydrationState::Loaded:
+                break;
+            }
 
             snapshots.emplace(snapshot.id, std::move(snapshot));
             if (node->parent_id == core::NULL_NODE)
@@ -863,9 +910,19 @@ namespace lfs::vis::gui {
 
         auto collapsed_ids = collapsed_ids_;
         collapsed_ids_.clear();
-        for (const auto& [id, _] : snapshots) {
-            if (collapsed_ids.contains(id))
-                collapsed_ids_.insert(id);
+        const bool apply_session_collapse =
+            session_collapse_pending_ && !snapshots.empty();
+        if (apply_session_collapse) {
+            const auto session_ids =
+                collapsedIdsFromUuids(scene, {session_collapsed_uuids_.begin(),
+                                              session_collapsed_uuids_.end()});
+            collapsed_ids_ = session_ids;
+            session_collapse_pending_ = false;
+        } else {
+            for (const auto& [id, _] : snapshots) {
+                if (collapsed_ids.contains(id))
+                    collapsed_ids_.insert(id);
+            }
         }
 
         for (auto& [id, snapshot] : snapshots) {
@@ -889,7 +946,8 @@ namespace lfs::vis::gui {
                 if (const auto* rendering = services().renderingOrNull())
                     snapshot.visible = rendering->getSettings().show_camera_frustums;
             }
-            if (!previous_ids.contains(id) &&
+            if (!apply_session_collapse &&
+                !previous_ids.contains(id) &&
                 snapshot.type == core::NodeType::CAMERA_GROUP &&
                 static_cast<int>(snapshot.children.size()) >= kAutoCollapseCameraGroupThreshold) {
                 collapsed_ids_.insert(id);
@@ -1013,7 +1071,7 @@ namespace lfs::vis::gui {
         if (!update_cached_rows || training_model_node_name.empty())
             return false;
 
-        const core::NodeId node_id = scene.getNodeIdByName(training_model_node_name);
+        const core::NodeId node_id = scene.getTrainingModelNodeId();
         const auto snapshot_it = node_snapshots_.find(node_id);
         if (node_id == core::NULL_NODE || snapshot_it == node_snapshots_.end() ||
             snapshot_it->second.type != core::NodeType::SPLAT) {

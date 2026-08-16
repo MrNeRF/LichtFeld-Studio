@@ -3,6 +3,7 @@
 
 #include "core/memory_pressure.hpp"
 
+#include "core/alloc_counter.hpp"
 #include "core/checked_arithmetic.hpp"
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
@@ -23,23 +24,6 @@
 #include <vector>
 
 namespace lfs::core {
-
-    const char* to_string(MemoryDomain domain) noexcept {
-        switch (domain) {
-        case MemoryDomain::CudaDevice: return "cuda-device";
-        case MemoryDomain::CudaVmm: return "cuda-vmm";
-        case MemoryDomain::VulkanDevice: return "vulkan-device";
-        case MemoryDomain::PinnedHost: return "pinned-host";
-        case MemoryDomain::PageableHost: return "pageable-host";
-        }
-        return "unknown";
-    }
-
-    bool is_device_heap(MemoryDomain domain) noexcept {
-        return domain == MemoryDomain::CudaDevice ||
-               domain == MemoryDomain::CudaVmm ||
-               domain == MemoryDomain::VulkanDevice;
-    }
 
     namespace {
 
@@ -99,6 +83,7 @@ namespace lfs::core {
             const auto pre_call_state = sample_cuda_pre_call_state();
             const cudaError_t status = cudaMalloc(&ptr, bytes);
             if (status == cudaSuccess) {
+                alloc_counter::record_site(alloc_counter::Site::ZerosDirect);
                 return ptr;
             }
             if (failure_status) {
@@ -297,6 +282,10 @@ namespace lfs::core {
             if (mode == CudaStorageMode::Direct) {
                 return try_allocate_direct_cuda_storage(bytes, failure_status);
             }
+            if (mode == CudaStorageMode::ExactAsync) {
+                return CudaMemoryPool::instance().try_allocate_exact_async(
+                    bytes, stream, failure_status);
+            }
             return CudaMemoryPool::instance().try_allocate(bytes, stream, failure_status);
         };
 
@@ -327,6 +316,9 @@ namespace lfs::core {
         if (coordinator.relieve_and_should_retry(failure)) {
             ptr = try_allocate(&failure_status);
         }
+        // A handled OOM and pressure-client reclaim can leave CUDA's last-error
+        // state sticky. Consume it before returning control to later CUDA work.
+        (void)cudaGetLastError();
         if (ptr == nullptr) {
             if (cuda_is_unavailable()) {
                 throw_cuda_unavailable_allocation(bytes, stream, label, operation);

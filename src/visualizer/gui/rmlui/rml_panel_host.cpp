@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <string_view>
 #include <unordered_set>
 
@@ -587,7 +588,9 @@ namespace lfs::vis::gui {
         if (height_mode_ != PanelHeightMode::Content)
             last_content_height_ = display_h;
 
-        animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
+        const double next_delay = rml_context_->GetNextUpdateDelay();
+        next_update_delay_ = next_delay;
+        animation_active_ = (next_delay == 0.0);
         last_fbo_w_ = pw;
         last_fbo_h_ = ph;
         last_fbo_padding_ = padding;
@@ -602,11 +605,30 @@ namespace lfs::vis::gui {
                 last_content_el_height_ = content_el_->GetOffsetHeight();
 
             if (std::abs(actual_content_h - prev_content_h) > 2.0f) {
-                content_dirty_ = true;
-                direct_cache_dirty_ = true;
-                last_measure_w_ = 0;
+                ++content_height_rearm_count_;
+                if (content_height_rearm_count_ > 8) {
+                    if (!content_height_rearm_warned_) {
+                        content_height_rearm_warned_ = true;
+                        LOG_WARN("RmlPanelHost '{}': content-height settle exceeded 8 re-arms "
+                                 "(pw={}, ph={}, prev_h={:.1f}, actual_h={:.1f}); skipping re-arm",
+                                 context_name_, pw, ph, prev_content_h, actual_content_h);
+                    }
+                } else {
+                    content_dirty_ = true;
+                    direct_cache_dirty_ = true;
+                    last_measure_w_ = 0;
+                }
+            } else {
+                content_height_rearm_count_ = 0;
+                content_height_rearm_warned_ = false;
             }
         }
+    }
+
+    std::optional<double> RmlPanelHost::nextScheduledUpdateDelay() const {
+        if (std::isfinite(next_update_delay_) && next_update_delay_ > 0.0)
+            return next_update_delay_;
+        return std::nullopt;
     }
 
     void RmlPanelHost::draw(const PanelDrawContext& ctx) {

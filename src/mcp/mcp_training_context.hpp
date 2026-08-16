@@ -41,11 +41,9 @@ namespace lfs::mcp {
         std::expected<void, std::string> load_checkpoint(
             const std::filesystem::path& path);
 
-        std::expected<void, std::string> save_checkpoint(
-            const std::filesystem::path& path);
-
         std::expected<void, std::string> save_ply(
-            const std::filesystem::path& path);
+            const std::filesystem::path& path,
+            bool include_provenance = true);
 
         std::expected<std::string, std::string> render_to_base64(
             int camera_index = 0,
@@ -121,7 +119,4 @@ namespace lfs::mcp {
         mutable std::mutex mutex_;
         mutable std::mutex selection_mutex_;
     };
-
-    LFS_MCP_API void register_scene_tools();
-
 } // namespace lfs::mcp

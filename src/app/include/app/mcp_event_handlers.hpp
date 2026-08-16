@@ -24,7 +24,7 @@ namespace lfs::app {
         SubscriptionQueue,
     };
 
-    inline constexpr std::array<std::string_view, 22> kMcpRuntimeEventTypes = {
+    inline constexpr std::array<std::string_view, 21> kMcpRuntimeEventTypes = {
         "editor.started",
         "editor.completed",
         "scene.loaded",
@@ -39,7 +39,6 @@ namespace lfs::app {
         "dataset.load_started",
         "dataset.load_progress",
         "dataset.load_completed",
-        "checkpoint.saved",
         "export.completed",
         "export.failed",
         "video_export.completed",
@@ -49,7 +48,7 @@ namespace lfs::app {
         "disk_space.save_failed",
     };
 
-    inline constexpr std::array<std::string_view, 28> kMcpSubscriptionEventTypes = {
+    inline constexpr std::array<std::string_view, 27> kMcpSubscriptionEventTypes = {
         "editor.started",
         "editor.completed",
         "scene.loaded",
@@ -69,7 +68,6 @@ namespace lfs::app {
         "dataset.load_progress",
         "dataset.load_completed",
         "render.frame",
-        "checkpoint.saved",
         "keyframes.changed",
         "export.completed",
         "export.failed",
@@ -230,12 +228,6 @@ namespace lfs::app {
             }
             return payload;
         });
-        register_handler.template operator()<core::events::state::CheckpointSaved>("checkpoint.saved", [](const auto& event) {
-            return nlohmann::json{
-                {"iteration", event.iteration},
-                {"path", core::path_to_utf8(event.path)},
-            };
-        });
         register_handler.template operator()<core::events::state::ExportCompleted>("export.completed", [](const auto& event) {
             return nlohmann::json{
                 {"path", core::path_to_utf8(event.path)},
@@ -276,7 +268,6 @@ namespace lfs::app {
                 {"required_bytes", static_cast<int64_t>(event.required_bytes)},
                 {"available_bytes", static_cast<int64_t>(event.available_bytes)},
                 {"is_disk_space_error", event.is_disk_space_error},
-                {"is_checkpoint", event.is_checkpoint},
             };
         });
 
@@ -290,6 +281,7 @@ namespace lfs::app {
         register_handler.template operator()<core::events::state::PLYAdded>("scene.node_added", [](const auto& event) {
             return nlohmann::json{
                 {"name", event.name},
+                {"uuid", event.uuid.to_string()},
                 {"node_gaussians", static_cast<int64_t>(event.node_gaussians)},
                 {"total_gaussians", static_cast<int64_t>(event.total_gaussians)},
                 {"is_visible", event.is_visible},
@@ -301,6 +293,7 @@ namespace lfs::app {
         register_handler.template operator()<core::events::state::PLYRemoved>("scene.node_removed", [](const auto& event) {
             return nlohmann::json{
                 {"name", event.name},
+                {"uuid", event.uuid.to_string()},
                 {"children_kept", event.children_kept},
                 {"parent_of_removed", event.parent_of_removed},
             };

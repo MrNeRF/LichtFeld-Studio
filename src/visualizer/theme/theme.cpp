@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "theme.hpp"
+#include "core/config_paths.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "internal/resource_paths.hpp"
@@ -1050,28 +1051,7 @@ namespace lfs::vis {
 
     namespace {
         std::filesystem::path getThemeConfigDir() {
-            std::filesystem::path config_dir;
-#ifdef _WIN32
-            const char* path = std::getenv("APPDATA");
-            if (path) {
-                config_dir = std::filesystem::path(path) / "LichtFeldStudio";
-            } else {
-                config_dir = std::filesystem::current_path() / "config";
-            }
-#else
-            const char* xdg = std::getenv("XDG_CONFIG_HOME");
-            if (xdg) {
-                config_dir = std::filesystem::path(xdg) / "LichtFeldStudio";
-            } else {
-                const char* home = std::getenv("HOME");
-                if (home) {
-                    config_dir = std::filesystem::path(home) / ".config" / "LichtFeldStudio";
-                } else {
-                    config_dir = std::filesystem::current_path() / "config";
-                }
-            }
-#endif
-            return config_dir;
+            return lfs::core::user_config_dir();
         }
     } // namespace
 

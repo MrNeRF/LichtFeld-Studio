@@ -85,6 +85,10 @@ namespace lfs::python {
      */
     [[nodiscard]] bool ensure_plugins_loaded(bool wait_for_completion = false);
 
+    // Invoked from finish_plugin_preload after load becomes terminal.
+    // Headless training reasserts SIGINT/SIGTERM here. nullptr clears.
+    void set_plugin_preload_completion_hook(void (*hook)());
+
     /**
      * @brief Schedule plugin autoload after startup.
      *        The complete load pipeline runs on one owned background worker.

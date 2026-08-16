@@ -115,6 +115,40 @@ namespace lfs::vis {
         }
     }
 
+    void RenderingManager::restoreSplitViewMode(
+        const SplitViewMode mode,
+        Viewport& primary_viewport) {
+        std::vector<SplitViewService::ModeChangeResult>
+            changes;
+        {
+            std::lock_guard<std::mutex> lock(
+                settings_mutex_);
+            if (settings_.split_view_mode == mode)
+                return;
+            if (settings_.split_view_mode !=
+                SplitViewMode::Disabled) {
+                changes.push_back(
+                    split_view_service_.toggleMode(
+                        settings_,
+                        settings_.split_view_mode,
+                        &primary_viewport));
+            }
+            if (mode != SplitViewMode::Disabled) {
+                changes.push_back(
+                    split_view_service_.toggleMode(
+                        settings_, mode,
+                        &primary_viewport));
+            }
+            if (mode == SplitViewMode::IndependentDual)
+                syncGridPlanesLocked(settings_.grid_plane);
+            markDirty(DirtyFlag::ALL);
+        }
+        for (const auto& change : changes)
+            applySplitModeChange(change);
+        if (mode != SplitViewMode::GTComparison)
+            invalidateCameraMetricsRequests(true);
+    }
+
     void RenderingManager::handleGoToCamView(const int cam_id) {
         setCurrentCameraId(cam_id);
         LOG_DEBUG("Current camera ID set to: {}", cam_id);
