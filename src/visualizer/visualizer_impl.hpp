@@ -285,6 +285,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_DatasetProjectWithoutCheckpointReloadsTrainer_Test;
         friend class VisualizerImplResetTest_DatasetProjectWithoutReferenceIsNotRecoveredFromContainingDirectory_Test;
         friend class VisualizerImplResetTest_NonDatasetProjectInsideDatasetRootIsNotReimported_Test;
+        friend class VisualizerImplResetTest_OpeningAnotherProjectCancelsPendingDatasetRestoreImport_Test;
         friend class VisualizerImplResetTest_NonDatasetSaveDoesNotBindStaleDatasetPath_Test;
         friend class VisualizerImplResetTest_TrainingCheckpointReopenRestoresPausedResumableState_Test;
         friend class VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;

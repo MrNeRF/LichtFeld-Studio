@@ -5627,6 +5627,84 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           OpeningAnotherProjectCancelsPendingDatasetRestoreImport) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto dataset_path =
+            temporary_.path /
+            "dataset-pending-restore-import";
+        write_minimal_transforms_dataset(dataset_path);
+        const auto project_a =
+            temporary_.path /
+            "dataset-pending-restore-a.licht";
+        write_dataset_project_without_checkpoint(
+            project_a, dataset_path);
+        const auto project_b =
+            temporary_.path /
+            "ply-only-pending-restore-b.licht";
+        write_non_dataset_project_with_stale_dataset_params(
+            project_b, dataset_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened_a = viewer.projectOpen(
+            project_a,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened_a)
+            << lfs::format_for_developer(
+                   opened_a.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       viewer.jobs().anyRunning(
+                           JobType::Import);
+            }));
+
+        auto opened_b = viewer.projectOpen(
+            project_b,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened_b)
+            << lfs::format_for_developer(
+                   opened_b.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                viewer.getGuiManager()
+                    ->asyncTasks()
+                    .pollImportCompletion();
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       !viewer.jobs().anyRunning(
+                           JobType::Import);
+            }));
+
+        EXPECT_NE(
+            viewer.getScene().getNode(
+                "PLY-only marker"),
+            nullptr);
+        EXPECT_FALSE(
+            viewer.getSceneManager()->hasDataset());
+        EXPECT_TRUE(
+            viewer.getSceneManager()
+                ->getDatasetPath()
+                .empty());
+        EXPECT_FALSE(
+            viewer.getTrainerManager()->hasTrainer());
+    }
+
+    TEST_F(VisualizerImplResetTest,
            NonDatasetSaveDoesNotBindStaleDatasetPath) {
         const auto source_path =
             temporary_.path / "non-dataset-source.licht";

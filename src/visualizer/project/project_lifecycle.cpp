@@ -4544,6 +4544,12 @@ namespace lfs::vis::project {
         const auto shell_staged_at =
             std::chrono::steady_clock::now();
 
+        // A stale import completion must not outlive
+        // a project switch.
+        if (auto* const gui = viewer_.getGuiManager()) {
+            gui->asyncTasks().cancelImport();
+        }
+
         stopHydrationThreads();
         if (auto* trainer_manager = viewer_.getTrainerManager();
             trainer_manager && trainer_manager->hasTrainer() &&
@@ -4556,6 +4562,7 @@ namespace lfs::vis::project {
         }
         viewer_.deactivateProjectTools();
         viewer_.resetProjectState();
+        manager->setDatasetPath({});
         manager->getScene().commitRestoreStage(
             std::move(*shell));
         manager->changeContentType(
