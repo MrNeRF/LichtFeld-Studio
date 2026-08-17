@@ -42,8 +42,38 @@ namespace lfs::mcp {
     namespace {
         constexpr size_t MAX_MCP_HTTP_BODY_BYTES = 4 * 1024 * 1024;
         std::mutex g_active_server_mutex;
+        std::condition_variable_any g_config_cv;
         McpHttpServer* g_active_server = nullptr;
-        std::jthread g_config_thread;
+        std::optional<McpHttpConfig> g_pending_config;
+        std::jthread g_config_worker;
+
+        class LifecycleTransition final {
+        public:
+            LifecycleTransition(std::mutex& mutex,
+                                std::condition_variable& cv,
+                                bool& active)
+                : mutex_(mutex), cv_(cv), active_(active) {
+                std::unique_lock lock(mutex_);
+                cv_.wait(lock, [this] { return !active_; });
+                active_ = true;
+            }
+
+            ~LifecycleTransition() {
+                {
+                    std::lock_guard lock(mutex_);
+                    active_ = false;
+                }
+                cv_.notify_all();
+            }
+
+            LifecycleTransition(const LifecycleTransition&) = delete;
+            LifecycleTransition& operator=(const LifecycleTransition&) = delete;
+
+        private:
+            std::mutex& mutex_;
+            std::condition_variable& cv_;
+            bool& active_;
+        };
 
         std::string sessionTimestamp() {
             const auto now = std::chrono::system_clock::now();
@@ -376,9 +406,7 @@ namespace lfs::mcp {
         record["timestamp_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(
                                      std::chrono::system_clock::now().time_since_epoch())
                                      .count();
-        log_contents_ += record.dump();
-        log_contents_ += '\n';
-        if (const auto result = paths->writeMcpLogAtomically(log_filename_, log_contents_);
+        if (const auto result = paths->appendMcpLogLine(log_filename_, record.dump());
             !result && !log_failure_reported_) {
             LOG_WARN("Unable to write MCP session log: {}",
                      lfs::format_for_developer(result.error()));
@@ -390,24 +418,43 @@ namespace lfs::mcp {
         stop();
     }
 
-    bool McpHttpServer::start(const McpHttpConfig& config) {
-        std::lock_guard lock(lifecycle_mutex_);
+    void McpHttpServer::stopListenerAndJoin() {
         if (listener_thread_.joinable()) {
+            // bind_to_port() and listen_after_bind() are separate in cpp-httplib.
+            // Wait until the listener has entered its accept loop (or failed)
+            // before stop(): cpp-httplib ignores stop() while startup is pending.
+            http_server_->wait_until_ready();
             http_server_->stop();
             listener_thread_.join();
+        } else if (http_server_) {
+            // stop() also clears cpp-httplib's decommissioned flag after a bind
+            // failure, which is required before retrying the same endpoint.
+            http_server_->stop();
         }
+    }
+
+    bool McpHttpServer::start(const McpHttpConfig& config) {
+        LifecycleTransition transition(lifecycle_mutex_, lifecycle_cv_,
+                                       lifecycle_transition_active_);
+        const auto listener_generation =
+            listener_generation_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        stopListenerAndJoin();
 
         const bool safe_mode = core::environment::flag("LFS_SAFE_MODE", false);
         const bool enabled = config.enabled && !safe_mode;
         const bool request_logging = config.request_logging && !safe_mode;
-        status_ = {
-            .enabled = enabled,
-            .running = false,
-            .expose_network = config.expose_network,
-            .port = config.port,
-            .endpoints = networkEndpoints(config.expose_network, config.port),
-            .request_logging = request_logging,
-        };
+        {
+            std::lock_guard status_lock(status_mutex_);
+            status_ = {
+                .enabled = enabled,
+                .running = false,
+                .phase = enabled ? McpHttpPhase::Starting : McpHttpPhase::Disabled,
+                .expose_network = config.expose_network,
+                .port = config.port,
+                .endpoints = networkEndpoints(config.expose_network, config.port),
+                .request_logging = request_logging,
+            };
+        }
         has_applied_config_ = false;
         request_logging_.store(request_logging, std::memory_order_release);
 
@@ -430,7 +477,13 @@ namespace lfs::mcp {
         }
         if (config.port < 1 || config.port > 65535) {
             last_announced_listener_url_.clear();
-            status_.error = "Port must be between 1 and 65535";
+            {
+                std::lock_guard status_lock(status_mutex_);
+                status_.phase = McpHttpPhase::Failed;
+                status_.error = "Port must be between 1 and 65535";
+                status_.error_kind = McpHttpErrorKind::InvalidPort;
+                status_.error_port = config.port;
+            }
             appendSessionLog({
                 {"event", "configuration_error"},
                 {"reason", "invalid_port"},
@@ -441,8 +494,17 @@ namespace lfs::mcp {
 
         const char* const bind_address = config.expose_network ? "0.0.0.0" : "127.0.0.1";
         if (!http_server_->bind_to_port(bind_address, config.port)) {
+            // A failed bind decommissions cpp-httplib until stop() resets it.
+            http_server_->stop();
             last_announced_listener_url_.clear();
-            status_.error = std::format("Unable to bind {}:{}", bind_address, config.port);
+            {
+                std::lock_guard status_lock(status_mutex_);
+                status_.phase = McpHttpPhase::Failed;
+                status_.error = std::format("Unable to bind {}:{}", bind_address, config.port);
+                status_.error_kind = McpHttpErrorKind::BindFailed;
+                status_.error_address = bind_address;
+                status_.error_port = config.port;
+            }
             LOG_WARN("MCP HTTP server failed to bind to {}:{}", bind_address, config.port);
             appendSessionLog({
                 {"event", "configuration_error"},
@@ -453,28 +515,14 @@ namespace lfs::mcp {
             return false;
         }
 
-        running_.store(true, std::memory_order_release);
-        applied_config_ = {
-            .enabled = true,
-            .expose_network = config.expose_network,
-            .port = config.port,
-            .request_logging = request_logging,
-        };
-        has_applied_config_ = true;
-        appendSessionLog({
-            {"event", "state"},
-            {"state", "started"},
-            {"address", bind_address},
-            {"port", config.port},
-        });
         const auto listener_url = std::format("http://{}:{}/mcp", bind_address, config.port);
         const bool announce_listener = listener_url != last_announced_listener_url_;
-        if (announce_listener)
-            last_announced_listener_url_ = listener_url;
-        listener_thread_ = std::jthread([this, listener_url, announce_listener](
+        listener_thread_ = std::jthread([this, listener_url, announce_listener,
+                                         listener_generation](
                                             std::stop_token /*st*/) {
             if (announce_listener)
                 LOG_INFO("MCP HTTP server listening on {}", listener_url);
+            bool listener_completed_normally = false;
             lfs::core::run_guarded<void>(
                 lfs::core::TaskContext{
                     .name = "mcp.http-listener",
@@ -482,8 +530,8 @@ namespace lfs::mcp {
                     .operation_id = lfs::OperationId::generate(),
                     .site = LFS_SOURCE_SITE_CURRENT(),
                 },
-                [this]() -> lfs::Result<void> {
-                    http_server_->listen_after_bind();
+                [this, &listener_completed_normally]() -> lfs::Result<void> {
+                    listener_completed_normally = http_server_->listen_after_bind();
                     return {};
                 },
                 [](lfs::Result<void>&& result) {
@@ -492,23 +540,92 @@ namespace lfs::mcp {
                                                                lfs::core::ReportChannel::OwnerLog);
                     }
                 });
-            running_.store(false, std::memory_order_release);
+            std::lock_guard status_lock(status_mutex_);
+            if (listener_generation ==
+                listener_generation_.load(std::memory_order_acquire)) {
+                status_.running = false;
+            }
+            if (listener_generation ==
+                    listener_generation_.load(std::memory_order_acquire) &&
+                status_.phase != McpHttpPhase::Stopping &&
+                status_.phase != McpHttpPhase::Disabled) {
+                status_.phase = McpHttpPhase::Failed;
+                status_.error_kind = McpHttpErrorKind::ListenerFailed;
+                status_.error = listener_completed_normally
+                                    ? "MCP HTTP listener stopped unexpectedly"
+                                    : "MCP HTTP listener failed";
+            }
+        });
+
+        // Do not publish Running until listen_after_bind() has entered its
+        // accept loop. This closes the enable-then-disable race in cpp-httplib.
+        http_server_->wait_until_ready();
+        if (!http_server_->is_running()) {
+            if (listener_thread_.joinable())
+                listener_thread_.join();
+            std::lock_guard status_lock(status_mutex_);
+            status_.running = false;
+            status_.phase = McpHttpPhase::Failed;
+            status_.error_kind = McpHttpErrorKind::ListenerFailed;
+            if (status_.error.empty())
+                status_.error = "MCP HTTP listener failed to start";
+            return false;
+        }
+
+        last_announced_listener_url_ = listener_url;
+        applied_config_ = {
+            .enabled = true,
+            .expose_network = config.expose_network,
+            .port = config.port,
+            .request_logging = request_logging,
+        };
+        has_applied_config_ = true;
+        {
+            std::lock_guard status_lock(status_mutex_);
+            status_.running = true;
+            status_.phase = McpHttpPhase::Running;
+            status_.error.clear();
+            status_.error_kind = McpHttpErrorKind::None;
+            status_.error_address.clear();
+            status_.error_port = 0;
+        }
+        appendSessionLog({
+            {"event", "state"},
+            {"state", "started"},
+            {"address", bind_address},
+            {"port", config.port},
         });
 
         return true;
     }
 
     void McpHttpServer::stop() {
-        std::lock_guard lock(lifecycle_mutex_);
-        if (running_.load(std::memory_order_acquire)) {
+        LifecycleTransition transition(lifecycle_mutex_, lifecycle_cv_,
+                                       lifecycle_transition_active_);
+        listener_generation_.fetch_add(1, std::memory_order_acq_rel);
+        bool was_running = false;
+        {
+            std::lock_guard status_lock(status_mutex_);
+            was_running = status_.running;
+            if (was_running)
+                status_.phase = McpHttpPhase::Stopping;
+        }
+        if (was_running) {
             appendSessionLog({{"event", "state"}, {"state", "stopped"}});
             LOG_INFO("MCP HTTP server stopped");
         }
-        if (http_server_)
-            http_server_->stop();
-        if (listener_thread_.joinable())
-            listener_thread_.join();
-        running_.store(false, std::memory_order_release);
+        stopListenerAndJoin();
+        has_applied_config_ = false;
+        {
+            std::lock_guard status_lock(status_mutex_);
+            status_.enabled = false;
+            status_.running = false;
+            status_.phase = McpHttpPhase::Disabled;
+            status_.error.clear();
+            status_.error_kind = McpHttpErrorKind::None;
+            status_.error_address.clear();
+            status_.error_port = 0;
+        }
     }
 
     bool McpHttpServer::applyConfig(const McpHttpConfig& config) {
@@ -516,35 +633,65 @@ namespace lfs::mcp {
         const bool effective_enabled = config.enabled && !safe_mode;
         const bool effective_logging = config.request_logging && !safe_mode;
         {
-            std::lock_guard lock(lifecycle_mutex_);
+            std::unique_lock lock(lifecycle_mutex_);
+            lifecycle_cv_.wait(lock, [this] { return !lifecycle_transition_active_; });
+            const bool listener_healthy =
+                effective_enabled ? http_server_->is_running() : true;
             if (has_applied_config_ && applied_config_.enabled == effective_enabled &&
                 applied_config_.expose_network == config.expose_network &&
-                applied_config_.port == config.port) {
-                status_.request_logging = effective_logging;
+                applied_config_.port == config.port && listener_healthy) {
+                {
+                    std::lock_guard status_lock(status_mutex_);
+                    status_.enabled = effective_enabled;
+                    status_.running = effective_enabled;
+                    status_.phase = effective_enabled ? McpHttpPhase::Running
+                                                      : McpHttpPhase::Disabled;
+                    status_.request_logging = effective_logging;
+                }
                 applied_config_.request_logging = effective_logging;
                 request_logging_.store(effective_logging, std::memory_order_release);
                 return true;
             }
         }
-        stop();
         return start(config);
     }
 
     void McpHttpServer::stageConfig(const McpHttpConfig& config) {
         const bool safe_mode = core::environment::flag("LFS_SAFE_MODE", false);
-        std::lock_guard lock(lifecycle_mutex_);
-        status_.enabled = config.enabled && !safe_mode;
+        std::lock_guard status_lock(status_mutex_);
+        const bool was_running = status_.running;
+        const bool enabled = config.enabled && !safe_mode;
+        const bool runtime_unchanged =
+            status_.enabled == enabled &&
+            status_.expose_network == config.expose_network &&
+            status_.port == config.port &&
+            ((enabled && status_.phase == McpHttpPhase::Running) ||
+             (!enabled && status_.phase == McpHttpPhase::Disabled));
+        status_.enabled = enabled;
+        if (!runtime_unchanged) {
+            status_.running = enabled ? false : was_running;
+            status_.phase = enabled
+                                ? McpHttpPhase::Starting
+                                : (was_running ? McpHttpPhase::Stopping
+                                               : McpHttpPhase::Disabled);
+        }
         status_.expose_network = config.expose_network;
         status_.port = config.port;
         status_.endpoints = networkEndpoints(config.expose_network, config.port);
         status_.request_logging = config.request_logging && !safe_mode;
+        status_.error.clear();
+        status_.error_kind = McpHttpErrorKind::None;
+        status_.error_address.clear();
+        status_.error_port = 0;
         request_logging_.store(status_.request_logging, std::memory_order_release);
     }
 
     McpHttpStatus McpHttpServer::status() const {
-        std::lock_guard lock(lifecycle_mutex_);
-        auto result = status_;
-        result.running = running_.load(std::memory_order_acquire);
+        McpHttpStatus result;
+        {
+            std::lock_guard status_lock(status_mutex_);
+            result = status_;
+        }
         result.request_count = request_count_.load(std::memory_order_relaxed);
         result.success_count = success_count_.load(std::memory_order_relaxed);
         result.error_count = error_count_.load(std::memory_order_relaxed);
@@ -558,29 +705,62 @@ namespace lfs::mcp {
     }
 
     void setActiveMcpHttpServer(McpHttpServer* const server) {
-        std::lock_guard lock(g_active_server_mutex);
-        if (!server && g_config_thread.joinable())
-            g_config_thread.join();
-        g_active_server = server;
+        std::jthread worker_to_join;
+        {
+            std::lock_guard lock(g_active_server_mutex);
+            g_active_server = server;
+            g_pending_config.reset();
+            if (!server) {
+                if (g_config_worker.joinable()) {
+                    g_config_worker.request_stop();
+                    worker_to_join = std::move(g_config_worker);
+                }
+            } else if (!g_config_worker.joinable()) {
+                g_config_worker = std::jthread([](const std::stop_token stop_token) {
+                    while (!stop_token.stop_requested()) {
+                        McpHttpServer* active_server = nullptr;
+                        McpHttpConfig config;
+                        {
+                            std::unique_lock lock(g_active_server_mutex);
+                            if (!g_config_cv.wait(lock, stop_token, [] {
+                                    return g_pending_config.has_value();
+                                }))
+                                break;
+                            active_server = g_active_server;
+                            config = *g_pending_config;
+                            g_pending_config.reset();
+                        }
+                        if (active_server)
+                            active_server->applyConfig(config);
+                    }
+                });
+            }
+        }
+        g_config_cv.notify_all();
+        if (worker_to_join.joinable())
+            worker_to_join.join();
     }
 
     McpHttpStatus activeMcpHttpStatus() {
         std::lock_guard lock(g_active_server_mutex);
         return g_active_server ? g_active_server->status()
-                               : McpHttpStatus{.enabled = false};
+                               : McpHttpStatus{
+                                     .enabled = false,
+                                     .phase = McpHttpPhase::Disabled,
+                                 };
     }
 
     bool applyActiveMcpHttpConfig(const McpHttpConfig& config) {
-        std::lock_guard lock(g_active_server_mutex);
-        if (!g_active_server)
-            return false;
-        if (g_config_thread.joinable())
-            g_config_thread.join();
-        auto* const server = g_active_server;
-        server->stageConfig(config);
-        g_config_thread = std::jthread([server, config](std::stop_token /*stop_token*/) {
-            server->applyConfig(config);
-        });
+        {
+            std::lock_guard lock(g_active_server_mutex);
+            if (!g_active_server || !g_config_worker.joinable())
+                return false;
+            g_active_server->stageConfig(config);
+            // Coalesce rapid UI changes; the worker applies only the newest
+            // configuration still pending when it becomes available.
+            g_pending_config = config;
+        }
+        g_config_cv.notify_one();
         return true;
     }
 

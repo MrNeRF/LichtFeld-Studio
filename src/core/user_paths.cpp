@@ -34,6 +34,7 @@ namespace lfs::core {
 
         std::atomic<std::uint64_t> g_temporary_file_sequence{0};
         std::mutex g_atomic_write_mutex;
+        std::mutex g_mcp_log_append_mutex;
 
         [[nodiscard]] std::uint64_t currentProcessId() noexcept {
 #ifdef _WIN32
@@ -428,8 +429,8 @@ namespace lfs::core {
     std::filesystem::path UserPaths::assetLibraryDir() const { return data_dir_ / "asset_library"; }
     std::filesystem::path UserPaths::backupDir() const { return data_dir_ / "backups"; }
     std::filesystem::path UserPaths::mcpLogDir() const { return log_dir_ / "mcp"; }
-    lfs::Status UserPaths::writeMcpLogAtomically(
-        const std::filesystem::path& filename, const std::string& contents) const {
+    lfs::Status UserPaths::appendMcpLogLine(
+        const std::filesystem::path& filename, const std::string& line) const {
         if (filename.empty() || filename != filename.filename() ||
             filename == "." || filename == "..")
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
@@ -441,6 +442,38 @@ namespace lfs::core {
                 .detail = "MCP log filenames must not contain a directory",
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
-        return writeTextFileAtomically(mcpLogDir() / filename, contents);
+
+        const std::lock_guard append_lock(g_mcp_log_append_mutex);
+        const auto directory = mcpLogDir();
+        const auto destination = directory / filename;
+        std::error_code error;
+        std::filesystem::create_directories(directory, error);
+        if (error)
+            return failStatus(
+                lfs::ErrorCode::PermissionDenied,
+                "The MCP log directory could not be created.",
+                std::format("Unable to create MCP log directory '{}': {}",
+                            path_to_utf8(directory), error.message()),
+                directory);
+
+        std::ofstream output(destination, std::ios::binary | std::ios::app);
+        if (!output.is_open())
+            return failStatus(
+                lfs::ErrorCode::PermissionDenied,
+                "The MCP session log could not be opened.",
+                std::format("Unable to open MCP log '{}' for append",
+                            path_to_utf8(destination)),
+                destination);
+        output.write(line.data(), static_cast<std::streamsize>(line.size()));
+        output.put('\n');
+        output.flush();
+        if (!output)
+            return failStatus(
+                lfs::ErrorCode::DataLoss,
+                "The MCP session log could not be written.",
+                std::format("Unable to append a complete record to MCP log '{}'",
+                            path_to_utf8(destination)),
+                destination);
+        return {};
     }
 } // namespace lfs::core

@@ -110,16 +110,19 @@ The MCP section in Preferences controls:
 - the HTTP port;
 - opt-in request activity logging.
 
-Port edits are drafts until confirmed with Enter or the adjacent confirmation
-button, preventing a partially typed port from restarting the listener. The
+Port edits are drafts until confirmed with Enter, the adjacent confirmation
+button, or the Preferences footer OK button. Closing Preferences from the title
+bar discards an unconfirmed port draft, preventing it from being applied later. The
 other controls apply immediately. The status bar offers remappable
 `Ctrl+Shift+M` and `Ctrl+Shift+N` actions for server power and bind scope.
-If a bind fails, Preferences keeps the failure visible, identifies the attempted
-address and port, and does not advertise an active endpoint. Choose another port
-when the configured one is already in use or reserved by the operating system.
+If a bind fails, Preferences keeps the structured failure visible, identifies
+the attempted address and port, and does not advertise an active endpoint. A
+retry of the same configuration performs a real listener restart. Choose another
+port when the configured one is already in use or reserved by the operating system.
 
-When request logging is enabled, the current per-session JSONL path is shown in
-Preferences and the log directory can be opened from there. Error records state
+When request logging is enabled, complete JSONL records are appended to the
+current per-session file without rewriting earlier requests. Its path is shown
+in Preferences and the log directory can be opened from there. Error records state
 whether the failure came from the JSON-RPC envelope or from an MCP tool result,
 plus the failure stage and stable diagnostic codes. Each request record also
 includes the source and destination socket IP addresses and ports. Parameters,

@@ -42,9 +42,25 @@ namespace lfs::vis {
         RecoveryPromptPending,
     };
 
+    enum class RuntimeServicePhase : std::uint8_t {
+        Disabled,
+        Starting,
+        Running,
+        Stopping,
+        Failed,
+    };
+
+    enum class RuntimeServiceErrorKind : std::uint8_t {
+        None,
+        InvalidPort,
+        BindFailed,
+        RuntimeFailure,
+    };
+
     struct RuntimeServiceStatus {
         bool enabled = false;
         bool running = false;
+        RuntimeServicePhase phase = RuntimeServicePhase::Disabled;
         bool network_exposed = false;
         int port = 0;
         std::uint64_t request_count = 0;
@@ -54,6 +70,9 @@ namespace lfs::vis {
         bool request_logging = false;
         std::string log_file;
         std::string error;
+        RuntimeServiceErrorKind error_kind = RuntimeServiceErrorKind::None;
+        std::string error_address;
+        int error_port = 0;
     };
 
     struct RuntimeServiceControls {

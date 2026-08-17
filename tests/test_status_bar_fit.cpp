@@ -4,6 +4,7 @@
  */
 
 #include "gui/rml_status_bar.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
@@ -42,6 +43,14 @@ namespace lfs::vis::gui {
 
         static void setMcpExpanded(RmlStatusBar& status_bar, const bool expanded) {
             status_bar.model_.mcp_details_expanded = expanded;
+        }
+
+        static void trackFrame(RmlStatusBar& status_bar,
+                               RmlUIManager& manager,
+                               const float window_x,
+                               const float window_y) {
+            status_bar.rml_manager_ = &manager;
+            status_bar.trackContextFrame(window_x, window_y);
         }
     };
 
@@ -351,6 +360,18 @@ namespace {
                                status_bar_.overlayHeight();
         EXPECT_TRUE(status_bar_.isOverlayPoint(center_x, center_y, 2400.0f));
         EXPECT_FALSE(status_bar_.isOverlayPoint(100.0f, -20.0f, 2400.0f));
+
+        lfs::vis::gui::RmlUIManager manager;
+        manager.beginFrameCursorTracking();
+        constexpr float frame_x = 30.0f;
+        constexpr float frame_y = 40.0f;
+        lfs::vis::gui::RmlStatusBarTestAccess::trackFrame(
+            status_bar_, manager, frame_x, frame_y);
+        EXPECT_TRUE(manager.activeOverlayContainsPoint(
+            frame_x + center_x,
+            frame_y + offset.y + popup->GetOffsetHeight() * 0.5f));
+        EXPECT_FALSE(manager.activeOverlayContainsPoint(frame_x + 100.0f,
+                                                        frame_y + 5.0f));
 
         lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, false);
         EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);

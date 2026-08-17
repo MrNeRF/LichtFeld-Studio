@@ -5,6 +5,7 @@
 #pragma once
 
 #include "config.h"
+#include "core/export.hpp"
 
 #include <RmlUi/Core/Types.h>
 
@@ -80,8 +81,8 @@ namespace lfs::vis::gui {
 
     class RmlUIManager {
     public:
-        RmlUIManager();
-        ~RmlUIManager();
+        LFS_VIS_API RmlUIManager();
+        LFS_VIS_API ~RmlUIManager();
 
         bool initVulkan(SDL_Window* window, lfs::vis::VulkanContext& vulkan_context, float dp_ratio = 1.0f);
         void shutdown();
@@ -126,7 +127,7 @@ namespace lfs::vis::gui {
         void renderQueuedVulkanContexts(bool foreground);
         void endVulkanFrame();
 
-        void beginFrameCursorTracking();
+        LFS_VIS_API void beginFrameCursorTracking();
         void trackContextFrame(const Rml::Context* context, int window_x, int window_y,
                                std::optional<RmlRect> active_overlay = std::nullopt);
         void setContextNeedsPassiveMouseMoveFrames(const Rml::Context* context, bool needs_frames);
@@ -140,7 +141,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
         RmlCursorRequest consumeCursorRequest();
         [[nodiscard]] bool passiveMouseMoveNeedsRender(float window_x, float window_y) const;
-        [[nodiscard]] bool activeOverlayContainsPoint(float window_x, float window_y) const;
+        [[nodiscard]] LFS_VIS_API bool activeOverlayContainsPoint(float window_x,
+                                                                  float window_y) const;
         [[nodiscard]] bool activeOverlayOccludesContext(const Rml::Context* context,
                                                         float window_x,
                                                         float window_y) const;

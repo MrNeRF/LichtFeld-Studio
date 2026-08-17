@@ -1157,6 +1157,20 @@ namespace lfs::app {
                     return vis::RuntimeServiceStatus{
                         .enabled = status.enabled,
                         .running = status.running,
+                        .phase = [&] {
+                            switch (status.phase) {
+                            case mcp::McpHttpPhase::Disabled:
+                                return vis::RuntimeServicePhase::Disabled;
+                            case mcp::McpHttpPhase::Starting:
+                                return vis::RuntimeServicePhase::Starting;
+                            case mcp::McpHttpPhase::Running:
+                                return vis::RuntimeServicePhase::Running;
+                            case mcp::McpHttpPhase::Stopping:
+                                return vis::RuntimeServicePhase::Stopping;
+                            case mcp::McpHttpPhase::Failed:
+                                return vis::RuntimeServicePhase::Failed;
+                            }
+                            return vis::RuntimeServicePhase::Failed; }(),
                         .network_exposed = status.expose_network,
                         .port = status.port,
                         .request_count = status.request_count,
@@ -1166,6 +1180,20 @@ namespace lfs::app {
                         .request_logging = status.request_logging,
                         .log_file = status.log_file,
                         .error = status.error,
+                        .error_kind = [&] {
+                            switch (status.error_kind) {
+                            case mcp::McpHttpErrorKind::None:
+                                return vis::RuntimeServiceErrorKind::None;
+                            case mcp::McpHttpErrorKind::InvalidPort:
+                                return vis::RuntimeServiceErrorKind::InvalidPort;
+                            case mcp::McpHttpErrorKind::BindFailed:
+                                return vis::RuntimeServiceErrorKind::BindFailed;
+                            case mcp::McpHttpErrorKind::ListenerFailed:
+                                return vis::RuntimeServiceErrorKind::RuntimeFailure;
+                            }
+                            return vis::RuntimeServiceErrorKind::RuntimeFailure; }(),
+                        .error_address = status.error_address,
+                        .error_port = status.error_port,
                     };
                 },
                 .gut = params->optimization.gut,

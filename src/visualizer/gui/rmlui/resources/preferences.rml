@@ -152,7 +152,7 @@
       <button class="btn btn--warning" data-event-click="reset_current_section" data-if="show_section_reset">{{ reset_section_label }}</button>
       <span class="preferences-actions-spacer"></span>
       <button class="btn btn--warning" data-event-click="reset_all_settings">@tr:preferences.reset_all_settings</button>
-      <button class="btn btn--primary" data-event-click="close">@tr:common.ok</button>
+      <button class="btn btn--primary" data-event-click="accept_and_close">@tr:common.ok</button>
     </div>
   </div>
 </body>

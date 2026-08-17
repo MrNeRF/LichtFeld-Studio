@@ -145,21 +145,21 @@ namespace {
         EXPECT_EQ(backup_contents, R"({"theme":"light","ui_scale":"150"})");
     }
 
-    TEST_F(UserPathsContractTest, McpLogsAreLazyAtomicAndConfinedToTheirDirectory) {
+    TEST_F(UserPathsContractTest, McpLogsAreLazyAppendOnlyAndConfinedToTheirDirectory) {
         const auto resolved = resolvePaths();
         ASSERT_TRUE(resolved.has_value()) << resolved.error();
         const auto& paths = *resolved;
         ASSERT_TRUE(paths.ensureDirectories().has_value());
         EXPECT_FALSE(fs::exists(paths.mcpLogDir()));
 
-        ASSERT_TRUE(paths.writeMcpLogAtomically("20260817-120000-mcp.jsonl", "first\n").has_value());
+        ASSERT_TRUE(paths.appendMcpLogLine("20260817-120000-mcp.jsonl", "first").has_value());
         ASSERT_TRUE(fs::is_directory(paths.mcpLogDir()));
-        ASSERT_TRUE(paths.writeMcpLogAtomically("20260817-120000-mcp.jsonl", "second\n").has_value());
+        ASSERT_TRUE(paths.appendMcpLogLine("20260817-120000-mcp.jsonl", "second").has_value());
 
         std::ifstream log(paths.mcpLogDir() / "20260817-120000-mcp.jsonl", std::ios::binary);
         const std::string contents((std::istreambuf_iterator<char>(log)), {});
-        EXPECT_EQ(contents, "second\n");
-        EXPECT_FALSE(paths.writeMcpLogAtomically("../outside.jsonl", "invalid").has_value());
+        EXPECT_EQ(contents, "first\nsecond\n");
+        EXPECT_FALSE(paths.appendMcpLogLine("../outside.jsonl", "invalid").has_value());
         EXPECT_FALSE(fs::exists(paths.mcpLogDir().parent_path() / "outside.jsonl"));
     }
 

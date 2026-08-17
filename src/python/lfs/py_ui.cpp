@@ -4854,6 +4854,13 @@ namespace lfs::python {
                 nb::dict result;
                 result["enabled"] = status.enabled;
                 result["running"] = status.running;
+                switch (status.phase) {
+                case mcp::McpHttpPhase::Disabled: result["phase"] = "disabled"; break;
+                case mcp::McpHttpPhase::Starting: result["phase"] = "starting"; break;
+                case mcp::McpHttpPhase::Running: result["phase"] = "running"; break;
+                case mcp::McpHttpPhase::Stopping: result["phase"] = "stopping"; break;
+                case mcp::McpHttpPhase::Failed: result["phase"] = "failed"; break;
+                }
                 result["expose_network"] = status.expose_network;
                 result["port"] = status.port;
                 result["request_count"] = status.request_count;
@@ -4863,6 +4870,20 @@ namespace lfs::python {
                 result["request_logging"] = status.request_logging;
                 result["log_file"] = status.log_file;
                 result["error"] = status.error;
+                switch (status.error_kind) {
+                case mcp::McpHttpErrorKind::None: result["error_kind"] = "none"; break;
+                case mcp::McpHttpErrorKind::InvalidPort:
+                    result["error_kind"] = "invalid_port";
+                    break;
+                case mcp::McpHttpErrorKind::BindFailed:
+                    result["error_kind"] = "bind_failed";
+                    break;
+                case mcp::McpHttpErrorKind::ListenerFailed:
+                    result["error_kind"] = "listener_failed";
+                    break;
+                }
+                result["error_address"] = status.error_address;
+                result["error_port"] = status.error_port;
                 return result;
             },
             "Get current MCP HTTP server runtime status");

@@ -1002,13 +1002,39 @@ namespace lfs::vis::gui {
             std::string details;
             std::string tooltip;
             std::string color;
-            if (!status.enabled) {
-                summary = LOC("status_bar.mcp_off");
-                tooltip = LOC("status_bar.mcp_disabled_detail");
+            if (status.phase == RuntimeServicePhase::Disabled || !status.enabled) {
+                summary = std::format("{} · {}", LOC("status_bar.mcp_off"),
+                                      LOC(status.network_exposed
+                                              ? "status_bar.mcp_scope_network"
+                                              : "status_bar.mcp_scope_local"));
+                tooltip = LOC(status.network_exposed
+                                  ? "status_bar.mcp_disabled_network_detail"
+                                  : "status_bar.mcp_disabled_detail");
                 color = colorToRml(p.text_dim);
-            } else if (!status.running) {
+            } else if (status.phase == RuntimeServicePhase::Starting) {
+                summary = LOC("status_bar.mcp_starting");
+                const auto endpoint = std::format("{}:{}",
+                                                  status.network_exposed ? "0.0.0.0"
+                                                                         : "127.0.0.1",
+                                                  status.port);
+                details = std::vformat(LOC("status_bar.mcp_starting_detail"),
+                                       std::make_format_args(endpoint));
+                tooltip = details;
+                color = colorToRml(p.info);
+            } else if (status.phase == RuntimeServicePhase::Stopping) {
+                summary = LOC("status_bar.mcp_stopping");
+                tooltip = LOC("status_bar.mcp_stopping_detail");
+                color = colorToRml(p.text_dim);
+            } else if (status.phase == RuntimeServicePhase::Failed || !status.running) {
                 summary = LOC("status_bar.mcp_error");
-                details = LOC("status_bar.mcp_error_detail");
+                if (status.error_kind == RuntimeServiceErrorKind::BindFailed) {
+                    const auto endpoint = std::format("{}:{}", status.error_address,
+                                                      status.error_port);
+                    details = std::vformat(LOC("status_bar.mcp_bind_failed"),
+                                           std::make_format_args(endpoint));
+                } else {
+                    details = LOC("status_bar.mcp_error_detail");
+                }
                 tooltip = details;
                 color = colorToRml(p.error);
             } else {
@@ -1375,6 +1401,8 @@ namespace lfs::vis::gui {
             return;
 
         const float overlay_height = overlayHeight();
+        trackContextFrame(bar_x - input.screen_x,
+                          bar_y - overlay_height - input.screen_y);
         const float local_x = input.mouse_x - bar_x;
         const float local_y = input.mouse_y - (bar_y - overlay_height);
         const bool is_inside = local_x >= 0.0f && local_x < bar_w &&
@@ -1436,6 +1464,28 @@ namespace lfs::vis::gui {
         const float context_y = local_y + overlayHeight();
         return local_x >= offset.x && local_x < offset.x + width &&
                context_y >= offset.y && context_y < offset.y + height;
+    }
+
+    void RmlStatusBar::trackContextFrame(const float window_x, const float window_y) {
+        if (!rml_manager_ || !rml_context_)
+            return;
+        std::optional<RmlRect> popup_rect;
+        if (model_.mcp_details_expanded && document_) {
+            if (auto* const popup = document_->GetElementById("mcp-popup");
+                popup && popup->IsVisible()) {
+                const auto offset = popup->GetAbsoluteOffset(Rml::BoxArea::Border);
+                popup_rect = RmlRect{
+                    .x1 = offset.x,
+                    .y1 = offset.y,
+                    .x2 = offset.x + popup->GetOffsetWidth(),
+                    .y2 = offset.y + popup->GetOffsetHeight(),
+                };
+            }
+        }
+        rml_manager_->trackContextFrame(rml_context_,
+                                        static_cast<int>(std::lround(window_x)),
+                                        static_cast<int>(std::lround(window_y)),
+                                        popup_rect);
     }
 
     void RmlStatusBar::queueCachedVulkanContext(const float x, const float y,
@@ -1501,6 +1551,13 @@ namespace lfs::vis::gui {
             return;
         }
 
+        int window_x = 0;
+        int window_y = 0;
+        if (auto* const window = rml_manager_->getWindow())
+            SDL_GetWindowPosition(window, &window_x, &window_y);
+        trackContextFrame(x - static_cast<float>(window_x),
+                          y - overlay_height - static_cast<float>(window_y));
+
         queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
                                  screen_w, screen_h,
                                  render_w, render_h, direct_cache_.texture == 0);
@@ -1551,6 +1608,13 @@ namespace lfs::vis::gui {
             last_render_w_ = render_w;
             last_render_h_ = render_h;
         }
+
+        int window_x = 0;
+        int window_y = 0;
+        if (auto* const window = rml_manager_->getWindow())
+            SDL_GetWindowPosition(window, &window_x, &window_y);
+        trackContextFrame(x - static_cast<float>(window_x),
+                          y - overlay_height - static_cast<float>(window_y));
 
         queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
                                  screen_w, screen_h,

@@ -101,6 +101,7 @@ class PreferencesPanel(Panel):
         model.bind_func("mcp_log_file", self._mcp_log_file_text)
         model.bind_func("mcp_has_log_file", lambda: bool(self._mcp_log_file_text()))
         model.bind_event("close", self._on_close)
+        model.bind_event("accept_and_close", self._on_accept_and_close)
         model.bind_event("reset_current_section", self._on_reset_current_section)
         model.bind_event("reset_all_settings", self._on_reset_all_settings)
         model.bind_event("show_general", lambda *_: self._set_section("general"))
@@ -366,6 +367,7 @@ class PreferencesPanel(Panel):
         return (
             bool(status.get("enabled")),
             bool(status.get("running")),
+            str(status.get("phase", "")),
             bool(status.get("expose_network")),
             int(status.get("port", 0)),
             int(status.get("request_count", 0)),
@@ -374,6 +376,9 @@ class PreferencesPanel(Panel):
             bool(status.get("request_logging")),
             str(status.get("log_file", "")),
             str(status.get("error", "")),
+            str(status.get("error_kind", "")),
+            str(status.get("error_address", "")),
+            int(status.get("error_port", 0)),
             tuple(str(endpoint) for endpoint in status.get("endpoints") or ()),
         )
 
@@ -396,9 +401,16 @@ class PreferencesPanel(Panel):
         if self._validated_mcp_port() is None:
             return lf.ui.tr("preferences.mcp_status_error")
         status = lf.ui.get_mcp_status()
-        if not status.get("enabled"):
+        phase = status.get("phase")
+        if phase == "starting":
+            return lf.ui.tr("preferences.mcp_status_starting")
+        if phase == "stopping":
+            return lf.ui.tr("preferences.mcp_status_stopping")
+        if phase == "failed":
+            return lf.ui.tr("preferences.mcp_status_error")
+        if phase == "disabled" or not status.get("enabled"):
             return lf.ui.tr("preferences.mcp_status_off")
-        if status.get("running"):
+        if phase == "running" or status.get("running"):
             return lf.ui.tr("preferences.mcp_status_running")
         return lf.ui.tr("preferences.mcp_status_error")
 
@@ -418,13 +430,22 @@ class PreferencesPanel(Panel):
     def _mcp_error_text(self):
         if self._validated_mcp_port() is None:
             return lf.ui.tr("preferences.mcp_invalid_port")
-        error = str(lf.ui.get_mcp_status().get("error", ""))
-        bind_prefix = "Unable to bind "
-        if error.startswith(bind_prefix):
+        status = lf.ui.get_mcp_status()
+        error_kind = status.get("error_kind", "none")
+        if error_kind == "invalid_port":
+            return lf.ui.tr("preferences.mcp_invalid_port")
+        if error_kind == "bind_failed":
+            address = str(status.get("error_address", ""))
+            port = int(status.get("error_port", 0))
+            endpoint = f"{address}:{port}" if address and port else address
             return lf.ui.tr("preferences.mcp_bind_failed").format(
-                endpoint=error.removeprefix(bind_prefix)
+                endpoint=endpoint
             )
-        return lf.ui.tr("status_bar.mcp_error_detail") if error else ""
+        return (
+            lf.ui.tr("status_bar.mcp_error_detail")
+            if error_kind not in ("", "none") or status.get("error")
+            else ""
+        )
 
     def _mcp_log_file_text(self):
         return str(lf.ui.get_mcp_status().get("log_file", ""))
@@ -459,6 +480,13 @@ class PreferencesPanel(Panel):
                 endpoint_list.set_attribute("rows", str(self._mcp_endpoint_rows()))
 
     def _on_close(self, _handle, _event, _args):
+        # The floating-window title bar is cancellation: discard an unconfirmed
+        # port draft while preserving settings that were already applied live.
+        self._mcp_port = str(self._mcp_applied_port)
+        self._dirty_mcp()
+        lf.ui.set_panel_enabled(self.id, False)
+
+    def _on_accept_and_close(self, _handle, _event, _args):
         if not self._commit_mcp_port():
             return
         lf.ui.set_panel_enabled(self.id, False)

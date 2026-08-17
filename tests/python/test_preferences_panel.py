@@ -29,6 +29,7 @@ def preferences_panel_module(monkeypatch):
         mcp_status={
             "enabled": True,
             "running": True,
+            "phase": "running",
             "expose_network": False,
             "port": 45677,
             "request_count": 0,
@@ -41,8 +42,12 @@ def preferences_panel_module(monkeypatch):
             ],
             "log_file": "",
             "error": "",
+            "error_kind": "none",
+            "error_address": "",
+            "error_port": 0,
         },
         set_mcp_calls=[],
+        panel_enabled_calls=[],
         section_request="",
     )
 
@@ -73,6 +78,9 @@ def preferences_panel_module(monkeypatch):
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
         set_mcp_preferences=set_mcp_preferences,
         get_mcp_status=lambda: dict(state.mcp_status),
+        set_panel_enabled=lambda panel_id, enabled: state.panel_enabled_calls.append(
+            (panel_id, bool(enabled))
+        ),
         take_preferences_section_request=take_preferences_section_request,
         tr=lambda key: key,
     )
@@ -183,7 +191,15 @@ def test_mcp_runtime_error_explains_the_failed_endpoint(
 ):
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
-    state.mcp_status["error"] = "Unable to bind 0.0.0.0:45677"
+    state.mcp_status.update(
+        {
+            "phase": "failed",
+            "error": "Unable to bind 0.0.0.0:45677",
+            "error_kind": "bind_failed",
+            "error_address": "0.0.0.0",
+            "error_port": 45677,
+        }
+    )
     monkeypatch.setattr(
         module.lf.ui,
         "tr",
@@ -191,6 +207,44 @@ def test_mcp_runtime_error_explains_the_failed_endpoint(
     )
 
     assert panel._mcp_error_text() == "Cannot listen on 0.0.0.0:45677"
+
+
+def test_mcp_starting_phase_is_not_reported_as_an_error(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    state.mcp_status.update({"running": False, "phase": "starting"})
+
+    assert panel._mcp_status_text() == "preferences.mcp_status_starting"
+
+
+def test_title_bar_close_discards_unconfirmed_mcp_port(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._read_mcp_preferences()
+    panel._set_mcp_port("47000")
+
+    panel._on_close(None, None, None)
+
+    assert panel._mcp_port == "45677"
+    assert state.set_mcp_calls == []
+
+
+def test_footer_ok_commits_mcp_port_before_closing(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._read_mcp_preferences()
+    panel._set_mcp_port("47000")
+
+    panel._on_accept_and_close(None, None, None)
+
+    assert state.set_mcp_calls == [
+        {
+            "enabled": True,
+            "expose_network": False,
+            "port": 47000,
+            "request_logging": False,
+        }
+    ]
 
 
 def test_mcp_failed_listener_does_not_advertise_inactive_endpoints(

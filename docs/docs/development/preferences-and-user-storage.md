@@ -27,7 +27,9 @@ Settings.
 The `mcp` object defaults to an enabled server bound to the loopback interface
 on port `45677`; the UI lists both `127.0.0.1` and `localhost` aliases. Confirmed
 changes made in Preferences are staged immediately and listener restarts are
-serialized in the background. Binding to `0.0.0.0` exposes the unauthenticated HTTP
+serialized by one long-lived background worker. Rapid changes are coalesced to
+the newest pending configuration, and the UI reports starting, running, stopping,
+and failed states without waiting for listener shutdown. Binding to `0.0.0.0` exposes the unauthenticated HTTP
 endpoint to the local network and is therefore an explicit opt-in. Safe mode
 forces the MCP server and request logging off for the process and does not
 persist MCP changes.
@@ -36,11 +38,14 @@ The status bar MCP chip reports the effective listener state, usable endpoint
 URLs, request/success/error counters, and bind failures. Its power control does
 not require opening Preferences. The default input profile uses `Ctrl+Shift+M`
 to enable or disable the server and `Ctrl+Shift+N` to switch between loopback
-and network binding without enabling a server that is currently off. Both
+and network binding without enabling a server that is currently off. While the
+server is off, the chip still shows whether the next start will use local or
+network scope. Both
 shortcuts are regular keymap actions and can be rebound in Input Settings.
 
-MCP request logging is disabled by default. When enabled it writes a per-session
-JSONL file lazily under `logs/mcp/` using atomic replacement. Records contain
+MCP request logging is disabled by default. When enabled it appends complete
+records to a per-session JSONL file created lazily under `logs/mcp/`; prior
+records are neither retained in memory nor rewritten for each request. Records contain
 transport metadata such as method, request id, outcome, duration, and the source
 and destination socket IP addresses and ports. Errors distinguish JSON-RPC
 failures from MCP tool-execution failures and record their stage, stable reason,

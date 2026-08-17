@@ -24,6 +24,7 @@
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 namespace lfs::mcp {
 
@@ -768,6 +769,7 @@ namespace lfs::mcp {
         auto status = server.status();
         EXPECT_FALSE(status.enabled);
         EXPECT_FALSE(status.running);
+        EXPECT_EQ(status.phase, McpHttpPhase::Disabled);
         EXPECT_TRUE(status.expose_network);
         EXPECT_EQ(status.port, 50001);
         EXPECT_TRUE(status.request_logging);
@@ -777,13 +779,81 @@ namespace lfs::mcp {
         status = server.status();
         EXPECT_TRUE(status.enabled);
         EXPECT_FALSE(status.running);
+        EXPECT_EQ(status.phase, McpHttpPhase::Failed);
+        EXPECT_EQ(status.error_kind, McpHttpErrorKind::InvalidPort);
         EXPECT_FALSE(status.error.empty());
 
         EXPECT_TRUE(server.applyConfig(McpHttpConfig{.enabled = false, .port = 50002}));
         status = server.status();
         EXPECT_FALSE(status.enabled);
+        EXPECT_EQ(status.phase, McpHttpPhase::Disabled);
         EXPECT_EQ(status.port, 50002);
         EXPECT_TRUE(status.error.empty());
+    }
+
+    TEST(McpHttpServerTest, FailedBindCanRetryTheSameConfiguration) {
+        constexpr int port = 47697;
+        httplib::Server blocker;
+        bool exclusive_socket_configured = false;
+        blocker.set_socket_options([&exclusive_socket_configured](const socket_t socket) {
+#ifdef _WIN32
+            constexpr int enabled = 1;
+            exclusive_socket_configured =
+                ::setsockopt(socket,
+                             SOL_SOCKET,
+                             SO_EXCLUSIVEADDRUSE,
+                             reinterpret_cast<const char*>(&enabled),
+                             sizeof(enabled)) == 0;
+#else
+            // Supplying a no-op callback prevents cpp-httplib from enabling
+            // SO_REUSEPORT/SO_REUSEADDR for this test-only port holder.
+            (void)socket;
+            exclusive_socket_configured = true;
+#endif
+        });
+        ASSERT_TRUE(blocker.bind_to_port("127.0.0.1", port));
+        ASSERT_TRUE(exclusive_socket_configured);
+        std::jthread blocker_thread([&] { blocker.listen_after_bind(); });
+        blocker.wait_until_ready();
+
+        McpHttpServer server;
+        const McpHttpConfig config{
+            .enabled = true,
+            .expose_network = false,
+            .port = port,
+            .request_logging = false,
+        };
+        EXPECT_FALSE(server.start(config));
+        auto status = server.status();
+        EXPECT_EQ(status.phase, McpHttpPhase::Failed);
+        EXPECT_EQ(status.error_kind, McpHttpErrorKind::BindFailed);
+        EXPECT_EQ(status.error_address, "127.0.0.1");
+        EXPECT_EQ(status.error_port, port);
+
+        blocker.stop();
+        blocker_thread.join();
+
+        EXPECT_TRUE(server.applyConfig(config));
+        status = server.status();
+        EXPECT_EQ(status.phase, McpHttpPhase::Running);
+        EXPECT_TRUE(status.running);
+        EXPECT_EQ(status.error_kind, McpHttpErrorKind::None);
+        server.stop();
+    }
+
+    TEST(McpHttpServerTest, RapidQueuedDisableCannotLeaveAListenerRunning) {
+        McpHttpServer server;
+        ASSERT_TRUE(server.start(McpHttpConfig{.enabled = false, .port = 47698}));
+        setActiveMcpHttpServer(&server);
+
+        ASSERT_TRUE(applyActiveMcpHttpConfig({.enabled = true, .port = 47698}));
+        ASSERT_TRUE(applyActiveMcpHttpConfig({.enabled = false, .port = 47698}));
+        setActiveMcpHttpServer(nullptr);
+
+        const auto status = server.status();
+        EXPECT_FALSE(status.enabled);
+        EXPECT_FALSE(status.running);
+        EXPECT_EQ(status.phase, McpHttpPhase::Disabled);
     }
 
     TEST(McpHttpServerTest, ActiveConfigPublishesStagedStatusBeforeRestartCompletes) {

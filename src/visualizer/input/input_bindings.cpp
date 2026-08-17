@@ -965,7 +965,7 @@ namespace lfs::vis::input {
         struct BaseBind {
             InputTrigger trigger;
             Action action;
-            const char* desc;
+            std::string desc;
         };
         const std::vector<BaseBind> global = {
             // Camera
@@ -1024,8 +1024,10 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
             {KeyTrigger{KEY_F10, MODIFIER_NONE}, Action::TOGGLE_PERFORMANCE_HUD, "Performance HUD"},
             {KeyTrigger{KEY_COMMA, MODIFIER_CTRL}, Action::OPEN_PREFERENCES, "Preferences"},
-            {KeyTrigger{KEY_M, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_SERVER, "Toggle MCP server"},
-            {KeyTrigger{KEY_N, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_BINDING, "Toggle MCP binding"},
+            {KeyTrigger{KEY_M, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_SERVER,
+             getActionName(Action::TOGGLE_MCP_SERVER)},
+            {KeyTrigger{KEY_N, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_BINDING,
+             getActionName(Action::TOGGLE_MCP_BINDING)},
             {MouseScrollTrigger{MODIFIER_CTRL}, Action::HISTOGRAM_ZOOM_MARKED, "Zoom histogram at cursor"},
             // Sequencer
             {KeyTrigger{KEY_K, MODIFIER_NONE}, Action::SEQUENCER_ADD_KEYFRAME, "Add keyframe"},
