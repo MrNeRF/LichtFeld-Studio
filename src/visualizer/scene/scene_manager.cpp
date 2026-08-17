@@ -891,6 +891,14 @@ namespace lfs::vis {
                     updateCropBoxToFitScene(true);
                 }
 
+                // Dataset loading enables point-cloud rendering by default. A later
+                // standalone splat load replaces that dataset, so do not carry the
+                // dataset-specific render mode into the new scene.
+                ui::PointCloudModeChanged{
+                    .enabled = false,
+                    .voxel_size = DEFAULT_VOXEL_SIZE}
+                    .emit();
+
                 selectNode(node_id);
 
                 // Check for companion PPISP file
