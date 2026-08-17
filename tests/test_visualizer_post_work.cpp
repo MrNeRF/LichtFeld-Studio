@@ -1388,6 +1388,341 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           ForceExitDiscardDeletesAutosaveSidecarOnTeardown) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "discard-exit.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    EXPECT_TRUE(info);
+                    return info && info->hydration_state == "complete";
+                }));
+            auto hydrated =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(hydrated);
+            ASSERT_EQ(hydrated->hydration_state,
+                      "complete");
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Dirty for autosave"),
+                lfs::core::NULL_NODE);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+            lfs::core::events::cmd::ForceExit{
+                .discard_autosave = true}
+                .emit();
+        }
+        EXPECT_FALSE(std::filesystem::exists(sidecar));
+        EXPECT_TRUE(
+            std::filesystem::is_regular_file(
+                project_path));
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           EmergencyForceExitKeepsAutosaveSidecarOnTeardown) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "emergency-exit.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    EXPECT_TRUE(info);
+                    return info && info->hydration_state == "complete";
+                }));
+            auto hydrated =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(hydrated);
+            ASSERT_EQ(hydrated->hydration_state,
+                      "complete");
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Dirty for autosave"),
+                lfs::core::NULL_NODE);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+            lfs::core::events::cmd::ForceExit{}.emit();
+        }
+        EXPECT_TRUE(
+            std::filesystem::is_regular_file(
+                sidecar));
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           DiscardSwitchDeletesOldProjectAutosaveSidecar) {
+        const auto& temporary = temporary_.path;
+        const auto old_path =
+            temporary / "old.licht";
+        const auto next_path =
+            temporary / "next.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(old_path);
+        write_empty_project(old_path);
+        write_empty_project(next_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                old_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    EXPECT_TRUE(info);
+                    return info && info->hydration_state == "complete";
+                }));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Dirty for autosave"),
+                lfs::core::NULL_NODE);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+            const auto opened =
+                viewer.projectOpen(
+                    next_path,
+                    ProjectSwitchDisposition::
+                        DiscardChanges);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            EXPECT_EQ(*opened,
+                      ProjectOpenOutcome::Opened);
+            EXPECT_FALSE(
+                std::filesystem::exists(sidecar));
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    old_path));
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->document_->source_path());
+            EXPECT_EQ(viewer.project_lifecycle_
+                          ->document_->source_path()
+                          ->lexically_normal(),
+                      next_path.lexically_normal());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           DiscardSamePathReopenSkipsRecoveryPromptAndDeletesSidecar) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "same-path.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    EXPECT_TRUE(info);
+                    return info && info->hydration_state == "complete";
+                }));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Dirty for autosave"),
+                lfs::core::NULL_NODE);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+            const auto reopened =
+                viewer.projectOpen(
+                    project_path,
+                    ProjectSwitchDisposition::
+                        DiscardChanges);
+            ASSERT_TRUE(reopened)
+                << lfs::format_for_developer(
+                       reopened.error());
+            EXPECT_EQ(*reopened,
+                      ProjectOpenOutcome::Opened);
+            EXPECT_FALSE(viewer.project_lifecycle_
+                             ->recovery_prompt_pending_);
+            EXPECT_FALSE(
+                std::filesystem::exists(sidecar));
+            auto info = viewer.projectGetInfo();
+            ASSERT_TRUE(info);
+            EXPECT_FALSE(info->dirty);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           DirtyRequireCleanSwitchKeepsAutosaveSidecar) {
+        const auto& temporary = temporary_.path;
+        const auto old_path =
+            temporary / "old.licht";
+        const auto next_path =
+            temporary / "next.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(old_path);
+        write_empty_project(old_path);
+        write_empty_project(next_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                old_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    EXPECT_TRUE(info);
+                    return info && info->hydration_state == "complete";
+                }));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Dirty for autosave"),
+                lfs::core::NULL_NODE);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+            const auto blocked =
+                viewer.projectOpen(
+                    next_path,
+                    ProjectSwitchDisposition::
+                        RequireClean);
+            ASSERT_FALSE(blocked);
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           NewProjectDiscardDeletesAutosaveSidecar) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "new-project.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    EXPECT_TRUE(info);
+                    return info && info->hydration_state == "complete";
+                }));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Dirty for autosave"),
+                lfs::core::NULL_NODE);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+            ASSERT_TRUE(
+                viewer.project_lifecycle_->newProject(
+                    ProjectSwitchDisposition::
+                        DiscardChanges));
+            EXPECT_FALSE(
+                std::filesystem::exists(sidecar));
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    project_path));
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
            ProjectWriteSettlementCompletesBeforeNextDocumentWrite) {
         const auto& temporary = temporary_.path;
         const auto first_path =

@@ -65,6 +65,12 @@ namespace lfs::vis {
     class VisualizerImplResetTest_OpenAndNewProjectClearSuppressAdoption_Test;
     class VisualizerImplResetTest_InfoDoesNotMutateDocumentUntilExplicitSync_Test;
     class VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
+    class VisualizerImplResetTest_ForceExitDiscardDeletesAutosaveSidecarOnTeardown_Test;
+    class VisualizerImplResetTest_EmergencyForceExitKeepsAutosaveSidecarOnTeardown_Test;
+    class VisualizerImplResetTest_DiscardSwitchDeletesOldProjectAutosaveSidecar_Test;
+    class VisualizerImplResetTest_DiscardSamePathReopenSkipsRecoveryPromptAndDeletesSidecar_Test;
+    class VisualizerImplResetTest_DirtyRequireCleanSwitchKeepsAutosaveSidecar_Test;
+    class VisualizerImplResetTest_NewProjectDiscardDeletesAutosaveSidecar_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -171,6 +177,7 @@ namespace lfs::vis::project {
         [[nodiscard]] std::string
         closeSaveError() const;
         void markApplicationClosePending();
+        void markCloseDiscardRequested();
         [[nodiscard]] bool
         isApplicationClosePending() const;
         void setSuppressTrainingAdoption(bool suppress);
@@ -222,6 +229,12 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_OpenAndNewProjectClearSuppressAdoption_Test;
         friend class lfs::vis::VisualizerImplResetTest_InfoDoesNotMutateDocumentUntilExplicitSync_Test;
         friend class lfs::vis::VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ForceExitDiscardDeletesAutosaveSidecarOnTeardown_Test;
+        friend class lfs::vis::VisualizerImplResetTest_EmergencyForceExitKeepsAutosaveSidecarOnTeardown_Test;
+        friend class lfs::vis::VisualizerImplResetTest_DiscardSwitchDeletesOldProjectAutosaveSidecar_Test;
+        friend class lfs::vis::VisualizerImplResetTest_DiscardSamePathReopenSkipsRecoveryPromptAndDeletesSidecar_Test;
+        friend class lfs::vis::VisualizerImplResetTest_DirtyRequireCleanSwitchKeepsAutosaveSidecar_Test;
+        friend class lfs::vis::VisualizerImplResetTest_NewProjectDiscardDeletesAutosaveSidecar_Test;
         enum class Hydration {
             Empty,
             ShellReady,
@@ -323,6 +336,8 @@ namespace lfs::vis::project {
         isTrainingWriteWindowOpen() const;
         void cancelBackgroundAutosaveIfRunning();
         void cleanupRecoverySession();
+        void removeDiscardedAutosaveArtifacts(
+            const std::filesystem::path& master);
         [[nodiscard]] lfs::Result<void>
         adoptCompletedTrainingSnapshot(
             bool allow_during_application_close = false);
@@ -379,6 +394,7 @@ namespace lfs::vis::project {
             last_autosaved_scene_serial_ = 0;
         std::uint64_t autosave_sequence_ = 0;
         bool application_close_pending_ = false;
+        bool close_discard_requested_ = false;
         bool suppress_training_adoption_ = false;
         std::uint64_t
             project_write_autosave_sequence_ = 0;

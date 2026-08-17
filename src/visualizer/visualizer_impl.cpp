@@ -1492,7 +1492,7 @@ namespace lfs::vis {
             abandonSaveAndExitAttempt();
         });
 
-        cmd::ForceExit::when([this](const auto&) {
+        cmd::ForceExit::when([this](const auto& event) {
             if (gui_manager_) {
                 gui_manager_->setForceExit(true);
                 gui_manager_->dismissExitConfirmation();
@@ -1502,6 +1502,10 @@ namespace lfs::vis {
                     ->markApplicationClosePending();
                 project_lifecycle_
                     ->setSuppressTrainingAdoption(true);
+                if (event.discard_autosave) {
+                    project_lifecycle_
+                        ->markCloseDiscardRequested();
+                }
             }
             if (trainer_manager_ &&
                 (trainer_manager_->isTrainingActive() ||

@@ -290,6 +290,12 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_TrainingCheckpointReopenRestoresPausedResumableState_Test;
         friend class VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;
         friend class VisualizerImplResetTest_ReopenedTwoSplatProjectBuildsExternalCombinedModel_Test;
+        friend class VisualizerImplResetTest_ForceExitDiscardDeletesAutosaveSidecarOnTeardown_Test;
+        friend class VisualizerImplResetTest_EmergencyForceExitKeepsAutosaveSidecarOnTeardown_Test;
+        friend class VisualizerImplResetTest_DiscardSwitchDeletesOldProjectAutosaveSidecar_Test;
+        friend class VisualizerImplResetTest_DiscardSamePathReopenSkipsRecoveryPromptAndDeletesSidecar_Test;
+        friend class VisualizerImplResetTest_DirtyRequireCleanSwitchKeepsAutosaveSidecar_Test;
+        friend class VisualizerImplResetTest_NewProjectDiscardDeletesAutosaveSidecar_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;

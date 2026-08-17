@@ -261,7 +261,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -1320,7 +1320,8 @@ NB_MODULE(lichtfeld, m) {
             nb::gil_scoped_release release;
             emit_project_cmd_marshaled(
                 "python.force_exit", [] {
-                    lfs::core::events::cmd::ForceExit{}
+                    lfs::core::events::cmd::ForceExit{
+                        .discard_autosave = true}
                         .emit();
                 });
         },

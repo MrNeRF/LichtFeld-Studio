@@ -1315,8 +1315,25 @@ namespace lfs::vis::project {
             project_write_thread_.join();
         }
         stopHydrationThreads();
+        std::optional<std::filesystem::path> discard_master;
+        if (close_discard_requested_) {
+            if (recovered_master_path_) {
+                discard_master = *recovered_master_path_;
+            } else if (document_ && document_->source_path()) {
+                discard_master = *document_->source_path();
+            }
+        }
         document_.reset();
         cleanupRecoverySession();
+        // The user explicitly discarded unsaved changes at exit; delete
+        // the autosave overlay only after the write thread has joined and
+        // the document/recovery locks are released. Emergency ForceExit
+        // paths (X11 error, interrupt) never set
+        // close_discard_requested_, so crash recovery survives.
+        if (discard_master) {
+            removeDiscardedAutosaveArtifacts(
+                *discard_master);
+        }
     }
 
     void ProjectLifecycle::stopHydrationThreads() {
@@ -4251,6 +4268,32 @@ namespace lfs::vis::project {
                 }
                 return ProjectOpenOutcome::Opened;
             }
+            // The offered sidecar is the unsaved state
+            // the user just authorized discarding for
+            // this project. Prompting Recover? right
+            // after Discard? is the #1641 confusion.
+            // Do not set declined_recovery_ here:
+            // openMaster's discard cleanup deletes the
+            // sidecar instead.
+            const auto current_master =
+                recovered_master_path_
+                    ? recovered_master_path_
+                    : (document_
+                           ? document_->source_path()
+                           : std::nullopt);
+            if (disposition ==
+                    ProjectSwitchDisposition::
+                        DiscardChanges &&
+                current_master &&
+                current_master->lexically_normal() ==
+                    normalized->lexically_normal()) {
+                auto opened = openMaster(
+                    *normalized, disposition);
+                if (!opened) {
+                    return std::move(opened).error();
+                }
+                return ProjectOpenOutcome::Opened;
+            }
             auto* gui =
                 viewer_.getGuiManager();
             if (!gui) {
@@ -4452,6 +4495,17 @@ namespace lfs::vis::project {
             !preflight) {
             return preflight;
         }
+        std::optional<std::filesystem::path> discard_master;
+        if (disposition ==
+            ProjectSwitchDisposition::DiscardChanges) {
+            if (recovered_master_path_) {
+                discard_master = *recovered_master_path_;
+            } else if (document_ &&
+                       document_->source_path()) {
+                discard_master =
+                    *document_->source_path();
+            }
+        }
         const auto started =
             std::chrono::steady_clock::now();
         auto normalized =
@@ -4582,6 +4636,22 @@ namespace lfs::vis::project {
         document_ = candidate;
         bindTrainerSnapshotTarget();
         cleanupRecoverySession();
+        // Removal runs only after the replacement
+        // document is installed and
+        // cleanupRecoverySession() has released the
+        // old recovery session's writer lock. Every
+        // failure path of openMaster returns before
+        // this point, so a failed switch never
+        // deletes the old project's recovery
+        // artifacts
+        // (FailedNewProjectKeepsRecoveredSessionTemp
+        // relies on that). Capture happens before
+        // cleanupRecoverySession() because it resets
+        // recovered_master_path_.
+        if (discard_master) {
+            removeDiscardedAutosaveArtifacts(
+                *discard_master);
+        }
         adopted_training_snapshot_count_ = 0;
         application_close_pending_ = false;
         suppress_training_adoption_ = false;
@@ -5162,6 +5232,17 @@ namespace lfs::vis::project {
             !preflight) {
             return preflight;
         }
+        std::optional<std::filesystem::path> discard_master;
+        if (disposition ==
+            ProjectSwitchDisposition::DiscardChanges) {
+            if (recovered_master_path_) {
+                discard_master = *recovered_master_path_;
+            } else if (document_ &&
+                       document_->source_path()) {
+                discard_master =
+                    *document_->source_path();
+            }
+        }
         auto created =
             ProjectDocument::create(
                 lfs::core::generate_uuid_v4());
@@ -5184,6 +5265,10 @@ namespace lfs::vis::project {
             std::make_shared<ProjectDocument>(
                 std::move(*created));
         cleanupRecoverySession();
+        if (discard_master) {
+            removeDiscardedAutosaveArtifacts(
+                *discard_master);
+        }
         adopted_training_snapshot_count_ = 0;
         application_close_pending_ = false;
         suppress_training_adoption_ = false;
@@ -5488,6 +5573,24 @@ namespace lfs::vis::project {
 
     void ProjectLifecycle::markApplicationClosePending() {
         application_close_pending_ = true;
+    }
+
+    void ProjectLifecycle::markCloseDiscardRequested() {
+        close_discard_requested_ = true;
+    }
+
+    void ProjectLifecycle::removeDiscardedAutosaveArtifacts(
+        const std::filesystem::path& master) {
+        if (auto removed =
+                lfs::io::project::
+                    remove_autosave_artifacts(
+                        master);
+            !removed) {
+            LOG_WARN(
+                "Discarded autosave cleanup failed for {}: {}",
+                master.string(),
+                developerError(removed.error()));
+        }
     }
 
     bool ProjectLifecycle::isApplicationClosePending()
