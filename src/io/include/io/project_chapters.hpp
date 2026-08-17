@@ -37,6 +37,26 @@ namespace lfs::io::project {
 
     [[nodiscard]] LFS_IO_API Hash128 xxh3_128(std::span<const std::byte> bytes);
 
+    // Incremental XXH3-128 over sequential spans. digest() matches xxh3_128 of
+    // the concatenation of every update() argument, in order.
+    class LFS_IO_API Hash128Stream {
+    public:
+        Hash128Stream();
+        Hash128Stream(Hash128Stream&&) noexcept;
+        Hash128Stream& operator=(Hash128Stream&&) noexcept;
+        Hash128Stream(const Hash128Stream&) = delete;
+        Hash128Stream& operator=(const Hash128Stream&) = delete;
+        ~Hash128Stream();
+
+        [[nodiscard]] bool valid() const noexcept;
+        [[nodiscard]] bool update(std::span<const std::byte> bytes) noexcept;
+        [[nodiscard]] Hash128 digest() const noexcept;
+
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+    };
+
     struct SemanticVersion {
         std::uint16_t major = 1;
         std::uint16_t minor = 0;

@@ -84,14 +84,6 @@ namespace lfs::io::project {
 
         std::optional<std::uint64_t> payload_materialized_bytes_override;
 
-        std::uint64_t max_materialized_bytes_for(const ChunkInfo& row) noexcept {
-            if (is_payload_class_chunk(row)) {
-                return payload_materialized_bytes_override.value_or(
-                    MAX_PAYLOAD_MATERIALIZED_BYTES);
-            }
-            return MAX_MATERIALIZED_CHUNK_BYTES;
-        }
-
         lfs::Result<void> status_failure(lfs::Error error) {
             return lfs::Result<void>::failure(std::move(error));
         }
@@ -3042,6 +3034,14 @@ namespace lfs::io::project {
         payload_materialized_bytes_override = maximum_decoded_size;
     }
 
+    std::uint64_t detail::max_materialized_bytes_for(const ChunkInfo& row) noexcept {
+        if (is_payload_class_chunk(row)) {
+            return payload_materialized_bytes_override.value_or(
+                MAX_PAYLOAD_MATERIALIZED_BYTES);
+        }
+        return MAX_MATERIALIZED_CHUNK_BYTES;
+    }
+
     lfs::Result<void>
     ProjectReader::read_stored_at(const ChunkInfo& chunk,
                                   const std::uint64_t relative_offset,
@@ -3162,7 +3162,7 @@ namespace lfs::io::project {
                     std::to_string(row.stored_bytes)));
             }
             const std::uint64_t materialize_max =
-                max_materialized_bytes_for(row);
+                detail::max_materialized_bytes_for(row);
             auto stored = read_vector(*impl_->state->file, row.payload_offset,
                                       row.stored_bytes,
                                       impl_->state->physical_size,
@@ -3218,7 +3218,7 @@ namespace lfs::io::project {
             std::chrono::steady_clock::now();
         const ChunkInfo& row = **resolved;
         const std::uint64_t materialize_max =
-            max_materialized_bytes_for(**resolved);
+            detail::max_materialized_bytes_for(**resolved);
         if ((*resolved)->stored_bytes > materialize_max ||
             (*resolved)->uncompressed_bytes > materialize_max) {
             return detail::project_error(

@@ -411,6 +411,135 @@ namespace {
             << lfs::format_for_developer(saved.error());
     }
 
+    void write_one_splat_document(
+        const fs::path& path, const lfs::core::SplatData& model,
+        const Uuid& project_uuid, const Uuid& splat_uuid,
+        const std::uint64_t save_tag) {
+        auto document = make_empty_document(project_uuid, 100);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = splat_uuid,
+                .type = "splat",
+                .name = "Splat",
+                .child_order = 0,
+                .payload =
+                    PayloadBinding{
+                        .fourcc = "SPLT",
+                        .instance_uuid = splat_uuid,
+                        .source_kind = "ply",
+                    },
+            }));
+        auto splat = require_result(SplatChapterPayload::capture(
+            model, SplatSourceKind::ImportedPly, false));
+        require_status(document->set_splat(splat_uuid, std::move(splat)));
+        require_status(document->edit_project().upsert_embed_decision(
+            EmbedDecision{
+                .uuid = splat_uuid,
+                .node_uuid = splat_uuid,
+                .payload_fourcc = "SPLT",
+                .decision = "embedded",
+                .reason = "stream-hydrate fixture",
+            }));
+        require_status(document->edit_project().upsert_embedded_payload_provenance(
+            provenance(splat_uuid, "SPLT", "assets/SPLT.bin", 41)));
+        (void)require_result(document->save(path, save_options(save_tag, 200)));
+    }
+
+    void rewrite_splat_chunk(const fs::path& path, const Uuid& splat_uuid,
+                             const Compression compression,
+                             const std::uint64_t commit_tag,
+                             const bool block_crcs = false) {
+        ProjectReader seed = require_result(ProjectReader::open(path));
+        const ChunkInfo* row = seed.find(FOURCC_SPLT, splat_uuid);
+        ASSERT_NE(row, nullptr);
+        auto bytes = require_result(seed.read_chunk(*row));
+        ProjectWriter writer = require_result(ProjectWriter::append(
+            path,
+            AppendOptions{
+                .index_compression =
+                    IndexCompression::StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            }));
+        require_status(writer.plan_commit(CommitOptions{
+            .kind = CommitKind::Explicit,
+            .commit_uuid = fixed_uuid(commit_tag),
+            .snapshot_uuid = seed.commit().snapshot_uuid,
+            .wallclock_unix_ns = 300,
+        }));
+        require_status(writer.preflight(bytes.size()));
+        for (const auto& chunk : seed.chunks()) {
+            if (!chunk.is_live()) {
+                continue;
+            }
+            if (chunk.key.fourcc == FOURCC_SPLT &&
+                chunk.key.instance_uuid == splat_uuid) {
+                require_status(writer.write_chunk(
+                    chunk.key, bytes,
+                    ChunkWriteOptions{
+                        .chunk_version = chunk.chunk_version,
+                        .compression = compression,
+                        .tensor_payload = true,
+                        .block_crcs = block_crcs ||
+                                      chunk.block_crc_table.has_value(),
+                    }));
+                continue;
+            }
+            auto proof = require_result(seed.make_clean_proof(chunk, 1));
+            require_status(writer.reuse_if_clean(proof, 1));
+        }
+        require_status(writer.commit());
+    }
+
+    void expect_splats_bit_equal(const lfs::core::SplatData& lhs,
+                                 const lfs::core::SplatData& rhs) {
+        EXPECT_EQ(lhs.get_active_sh_degree(), rhs.get_active_sh_degree());
+        EXPECT_EQ(lhs.get_max_sh_degree(), rhs.get_max_sh_degree());
+        EXPECT_EQ(lhs.get_scene_scale(), rhs.get_scene_scale());
+        EXPECT_EQ(lhs.size(), rhs.size());
+        EXPECT_EQ(tensor_bytes(lhs.means()), tensor_bytes(rhs.means()));
+        EXPECT_EQ(tensor_bytes(lhs.scaling_raw()),
+                  tensor_bytes(rhs.scaling_raw()));
+        EXPECT_EQ(tensor_bytes(lhs.rotation_raw()),
+                  tensor_bytes(rhs.rotation_raw()));
+        EXPECT_EQ(tensor_bytes(lhs.opacity_raw()),
+                  tensor_bytes(rhs.opacity_raw()));
+        EXPECT_EQ(tensor_bytes(lhs.sh0()), tensor_bytes(rhs.sh0()));
+        EXPECT_EQ(tensor_bytes(lhs.shN()), tensor_bytes(rhs.shN()));
+        EXPECT_EQ(lhs.has_deleted_mask(), rhs.has_deleted_mask());
+        if (lhs.has_deleted_mask() && rhs.has_deleted_mask()) {
+            EXPECT_EQ(tensor_bytes(lhs.deleted()), tensor_bytes(rhs.deleted()));
+        }
+        ASSERT_EQ(lhs.frozen_ranges().size(), rhs.frozen_ranges().size());
+        for (std::size_t i = 0; i < lhs.frozen_ranges().size(); ++i) {
+            EXPECT_EQ(lhs.frozen_ranges()[i].start, rhs.frozen_ranges()[i].start);
+            EXPECT_EQ(lhs.frozen_ranges()[i].count, rhs.frozen_ranges()[i].count);
+        }
+    }
+
+    Hash128 splat_provenance_hash(const ProjectDocument& document,
+                                  const Uuid& splat_uuid) {
+        const auto records =
+            require_result(document.project().embedded_payload_provenance());
+        for (const auto& record : records) {
+            if (record.node_uuid == splat_uuid && record.fourcc == "SPLT") {
+                return record.content_xxh3_128;
+            }
+        }
+        ADD_FAILURE() << "missing SPLT provenance for " << splat_uuid.to_string();
+        return {};
+    }
+
+    struct PayloadCapGuard {
+        explicit PayloadCapGuard(const std::uint64_t value) {
+            detail::set_max_payload_materialized_bytes_for_testing(value);
+        }
+        PayloadCapGuard(const PayloadCapGuard&) = delete;
+        PayloadCapGuard& operator=(const PayloadCapGuard&) = delete;
+        ~PayloadCapGuard() {
+            detail::set_max_payload_materialized_bytes_for_testing(std::nullopt);
+        }
+    };
+
     TEST(SplatChapterTest,
          ImportedBytesRoundTripAndTrainingOrLiveRadEmbeddingIsRefused) {
         auto model = make_splat(3);
@@ -3578,6 +3707,196 @@ namespace {
         const auto expected = make_splat(2);
         EXPECT_EQ(tensor_bytes(splat->means_raw()),
                   tensor_bytes(expected->means_raw()));
+    }
+
+    TEST(ProjectDocumentTest,
+         StreamHydrateDeferredSpltMatchesMaterializedAndContentHash) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "splat-stream.licht";
+        const Uuid project_uuid = fixed_uuid(12100);
+        const Uuid splat_uuid = fixed_uuid(12101);
+        auto model = make_splat(8);
+        model->set_frozen_ranges({{1, 2}, {5, 1}});
+        write_one_splat_document(path, *model, project_uuid, splat_uuid, 12110);
+
+        ProjectReader probe = require_result(ProjectReader::open(path));
+        const ChunkInfo* row = probe.find(FOURCC_SPLT, splat_uuid);
+        ASSERT_NE(row, nullptr);
+        EXPECT_EQ(row->compression, Compression::ZstdFramed);
+        auto raw_bytes = require_result(probe.read_chunk(*row));
+        const auto raw_hash = xxh3_128(raw_bytes);
+
+        auto materialized = require_result_ptr(ProjectDocument::open(path));
+        ASSERT_NE(materialized->find_splat(splat_uuid), nullptr);
+        Scene materialized_scene;
+        auto materialized_report = materialized->hydrate(materialized_scene);
+        ASSERT_TRUE(materialized_report)
+            << lfs::format_for_developer(materialized_report.error());
+        const auto* materialized_node =
+            materialized_scene.getNodeByUuid(splat_uuid);
+        ASSERT_NE(materialized_node, nullptr);
+        ASSERT_NE(materialized_node->model, nullptr);
+
+        auto deferred = require_result_ptr(ProjectDocument::open(
+            path, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+        EXPECT_EQ(deferred->find_splat(splat_uuid), nullptr);
+        ASSERT_EQ(deferred->payload_states().size(), 1u);
+        EXPECT_FALSE(deferred->payload_states().front().loaded);
+        EXPECT_EQ(splat_provenance_hash(*deferred, splat_uuid), raw_hash);
+        Scene deferred_scene;
+        auto deferred_report = deferred->hydrate(deferred_scene);
+        ASSERT_TRUE(deferred_report)
+            << lfs::format_for_developer(deferred_report.error());
+        const auto* deferred_node = deferred_scene.getNodeByUuid(splat_uuid);
+        ASSERT_NE(deferred_node, nullptr);
+        ASSERT_NE(deferred_node->model, nullptr);
+        expect_splats_bit_equal(*materialized_node->model, *deferred_node->model);
+
+        rewrite_splat_chunk(path, splat_uuid,
+                            Compression::ByteShuffleZstdFramed, 12120);
+        ProjectReader shuffled = require_result(ProjectReader::open(path));
+        const ChunkInfo* shuffled_row = shuffled.find(FOURCC_SPLT, splat_uuid);
+        ASSERT_NE(shuffled_row, nullptr);
+        ASSERT_EQ(raw_bytes.size() % 4, 0u);
+        EXPECT_EQ(shuffled_row->compression, Compression::ByteShuffleZstdFramed);
+        auto shuffled_bytes = require_result(shuffled.read_chunk(*shuffled_row));
+        EXPECT_EQ(shuffled_bytes, raw_bytes);
+
+        auto shuffled_deferred = require_result_ptr(ProjectDocument::open(
+            path, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+        Scene shuffled_scene;
+        auto shuffled_report = shuffled_deferred->hydrate(shuffled_scene);
+        ASSERT_TRUE(shuffled_report)
+            << lfs::format_for_developer(shuffled_report.error());
+        const auto* shuffled_node = shuffled_scene.getNodeByUuid(splat_uuid);
+        ASSERT_NE(shuffled_node, nullptr);
+        ASSERT_NE(shuffled_node->model, nullptr);
+        expect_splats_bit_equal(*materialized_node->model, *shuffled_node->model);
+        EXPECT_EQ(splat_provenance_hash(*shuffled_deferred, splat_uuid),
+                  xxh3_128(shuffled_bytes));
+    }
+
+    TEST(ProjectDocumentTest, StreamHydrateForwardsMonotonicPayloadProgress) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "splat-progress.licht";
+        const Uuid project_uuid = fixed_uuid(12180);
+        const Uuid splat_uuid = fixed_uuid(12181);
+        auto model = make_splat(16);
+        write_one_splat_document(path, *model, project_uuid, splat_uuid, 12190);
+
+        struct WindowGuard {
+            explicit WindowGuard(const std::size_t bytes) {
+                detail::set_splat_stream_window_bytes_for_testing(bytes);
+            }
+            WindowGuard(const WindowGuard&) = delete;
+            WindowGuard& operator=(const WindowGuard&) = delete;
+            ~WindowGuard() {
+                detail::set_splat_stream_window_bytes_for_testing(std::nullopt);
+            }
+        };
+        const WindowGuard window(64);
+        auto deferred = require_result_ptr(ProjectDocument::open(
+            path, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+        std::vector<std::pair<std::size_t, std::size_t>> reports;
+        Scene live;
+        auto staged = deferred->stage_hydration(
+            live, {}, {},
+            [&](const std::size_t consumed, const std::size_t total) {
+                reports.emplace_back(consumed, total);
+            });
+        ASSERT_TRUE(staged) << lfs::format_for_developer(staged.error());
+        ASSERT_GE(reports.size(), 2u);
+        EXPECT_EQ(reports.back().first, reports.back().second);
+        for (std::size_t i = 0; i < reports.size(); ++i) {
+            EXPECT_EQ(reports[i].second, reports.back().second);
+            if (i > 0) {
+                EXPECT_LE(reports[i - 1].first, reports[i].first);
+            }
+        }
+        EXPECT_GT(reports.back().first, 0u);
+    }
+
+    TEST(ProjectDocumentTest,
+         OversizedSpltAutoDefersOnOpenAndStreamHydrates) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "splat-auto-defer.licht";
+        const Uuid project_uuid = fixed_uuid(12130);
+        const Uuid splat_uuid = fixed_uuid(12131);
+        auto model = make_splat(6);
+        model->set_frozen_ranges({{0, 2}});
+        auto reference_payload = require_result(SplatChapterPayload::capture(
+            *model, SplatSourceKind::ImportedPly, false));
+        auto reference = require_result(reference_payload.hydrate());
+        write_one_splat_document(path, *model, project_uuid, splat_uuid, 12140);
+        rewrite_splat_chunk(path, splat_uuid, Compression::ByteShuffleZstdFramed,
+                            12141, true);
+
+        ProjectReader probe = require_result(ProjectReader::open(path));
+        const ChunkInfo* row = probe.find(FOURCC_SPLT, splat_uuid);
+        ASSERT_NE(row, nullptr);
+        ASSERT_GT(row->uncompressed_bytes, 1u);
+        const auto raw_bytes = require_result(probe.read_chunk(*row));
+
+        const PayloadCapGuard cap(row->uncompressed_bytes - 1);
+        auto exhausted = probe.read_chunk(*row);
+        ASSERT_FALSE(exhausted);
+        EXPECT_EQ(exhausted.error().code(), lfs::ErrorCode::ResourceExhausted);
+
+        auto opened = require_result_ptr(ProjectDocument::open(path));
+        EXPECT_EQ(opened->find_splat(splat_uuid), nullptr);
+        ASSERT_EQ(opened->payload_states().size(), 1u);
+        EXPECT_EQ(opened->payload_states().front().fourcc, FOURCC_SPLT);
+        EXPECT_EQ(opened->payload_states().front().instance_uuid, splat_uuid);
+        EXPECT_FALSE(opened->payload_states().front().loaded);
+        EXPECT_EQ(splat_provenance_hash(*opened, splat_uuid), xxh3_128(raw_bytes));
+
+        Scene live;
+        auto report = opened->hydrate(live);
+        ASSERT_TRUE(report) << lfs::format_for_developer(report.error());
+        const auto* node = live.getNodeByUuid(splat_uuid);
+        ASSERT_NE(node, nullptr);
+        ASSERT_NE(node->model, nullptr);
+        expect_splats_bit_equal(*reference, *node->model);
+    }
+
+    TEST(ProjectDocumentTest,
+         ByteShuffleZstdFallsBackWhenSpltSizeIsNotMultipleOfFour) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "splat-zstd-fallback.licht";
+        const Uuid project_uuid = fixed_uuid(12150);
+        const Uuid splat_uuid = fixed_uuid(12151);
+        auto model = make_splat(3);
+        model->deleted() = Tensor::zeros({std::size_t{3}}, Device::CPU,
+                                         DataType::Bool);
+        auto reference_payload = require_result(SplatChapterPayload::capture(
+            *model, SplatSourceKind::ImportedPly, false));
+        auto reference = require_result(reference_payload.hydrate());
+        write_one_splat_document(path, *model, project_uuid, splat_uuid, 12160);
+
+        ProjectReader before = require_result(ProjectReader::open(path));
+        const ChunkInfo* source = before.find(FOURCC_SPLT, splat_uuid);
+        ASSERT_NE(source, nullptr);
+        auto raw_bytes = require_result(before.read_chunk(*source));
+        ASSERT_NE(raw_bytes.size() % 4, 0u);
+
+        rewrite_splat_chunk(path, splat_uuid,
+                            Compression::ByteShuffleZstdFramed, 12170);
+        ProjectReader after = require_result(ProjectReader::open(path));
+        const ChunkInfo* row = after.find(FOURCC_SPLT, splat_uuid);
+        ASSERT_NE(row, nullptr);
+        EXPECT_EQ(row->compression, Compression::ZstdFramed);
+
+        auto deferred = require_result_ptr(ProjectDocument::open(
+            path, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+        Scene live;
+        auto report = deferred->hydrate(live);
+        ASSERT_TRUE(report) << lfs::format_for_developer(report.error());
+        const auto* node = live.getNodeByUuid(splat_uuid);
+        ASSERT_NE(node, nullptr);
+        ASSERT_NE(node->model, nullptr);
+        expect_splats_bit_equal(*reference, *node->model);
+        EXPECT_EQ(splat_provenance_hash(*deferred, splat_uuid),
+                  xxh3_128(raw_bytes));
     }
 
     TEST(ProjectDocumentTest,

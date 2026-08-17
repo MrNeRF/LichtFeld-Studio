@@ -1676,10 +1676,18 @@ namespace lfs::io::project {
                                 impl->project_uuid.to_string()),
                     "chunk.instance_uuid");
             }
-            if (options.defer_geometry_payloads &&
-                (row.key.fourcc == FOURCC_SPLT ||
-                 row.key.fourcc == FOURCC_PCLD ||
-                 row.key.fourcc == FOURCC_MESH)) {
+            const bool geometry_payload =
+                row.key.fourcc == FOURCC_SPLT ||
+                row.key.fourcc == FOURCC_PCLD ||
+                row.key.fourcc == FOURCC_MESH;
+            const auto materialized_max =
+                detail::max_materialized_bytes_for(row);
+            const bool oversized_splat =
+                row.key.fourcc == FOURCC_SPLT &&
+                (row.stored_bytes > materialized_max ||
+                 row.uncompressed_bytes > materialized_max);
+            if ((options.defer_geometry_payloads && geometry_payload) ||
+                oversized_splat) {
                 impl->deferred_geometry_keys.insert(row.key);
                 continue;
             }
@@ -3874,39 +3882,48 @@ namespace lfs::io::project {
                 if (key.fourcc != FOURCC_SPLT) {
                     continue;
                 }
+                if (!impl_->source_reader) {
+                    return fail<ProjectHydrationPlan>(
+                        lfs::ErrorCode::FailedPrecondition,
+                        "The unloaded project payload has no source file.",
+                        std::format("{} instance {} lost its clean source handle",
+                                    key.fourcc.to_string(),
+                                    key.instance_uuid.to_string()),
+                        "hydrate.deferred_source");
+                }
+                const auto found = impl_->source_rows.find(key);
+                if (found == impl_->source_rows.end()) {
+                    return fail<ProjectHydrationPlan>(
+                        lfs::ErrorCode::DataLoss,
+                        "The unloaded project payload is missing.",
+                        std::format("{} instance {} has no live source row",
+                                    key.fourcc.to_string(),
+                                    key.instance_uuid.to_string()),
+                        "hydrate.deferred_source");
+                }
                 const auto read_started =
                     std::chrono::steady_clock::now();
-                auto bytes = read_deferred(key);
+                auto bounded = impl_->source_reader->open_bounded_stream(
+                    found->second.info);
                 splat_read_ms += milliseconds(
                     read_started, std::chrono::steady_clock::now());
-                if (!bytes) {
-                    return std::move(bytes).error();
-                }
-                const auto hash_started =
-                    std::chrono::steady_clock::now();
-                hashes.insert_or_assign(key, xxh3_128(*bytes));
-                splat_hash_ms += milliseconds(
-                    hash_started, std::chrono::steady_clock::now());
-                const auto copy_started =
-                    std::chrono::steady_clock::now();
-                auto payload = SplatChapterPayload::from_lfsp(std::move(*bytes));
-                splat_copy_ms += milliseconds(
-                    copy_started, std::chrono::steady_clock::now());
-                if (!payload) {
-                    return std::move(payload).error();
+                if (!bounded) {
+                    return std::move(bounded).error();
                 }
                 const auto materialize_started =
                     std::chrono::steady_clock::now();
-                auto materialized =
-                    payload->hydrate(splat_allocator);
+                auto hydrated = SplatChapterPayload::hydrate_lfsp_stream(
+                    bounded->stream(), bounded->size(), splat_allocator,
+                    payload_progress);
                 splat_materialize_ms += milliseconds(
                     materialize_started,
                     std::chrono::steady_clock::now());
-                if (!materialized) {
-                    return std::move(materialized).error();
+                if (!hydrated) {
+                    return std::move(hydrated).error();
                 }
+                hashes.insert_or_assign(key, hydrated->content_xxh3_128);
                 staged_splats.emplace(
-                    key.instance_uuid, std::move(*materialized));
+                    key.instance_uuid, std::move(hydrated->splat));
             }
 
             std::optional<lfs::core::Uuid>
