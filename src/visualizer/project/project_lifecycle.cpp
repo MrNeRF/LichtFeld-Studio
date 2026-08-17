@@ -5904,10 +5904,15 @@ namespace lfs::vis::project {
         const std::optional<
             std::filesystem::path>& explicit_path) {
         // Never auto-restore from MRU. Startup without an
-        // explicit CLI project path leaves a blank session;
-        // the recent-projects chooser (Python panel) offers
-        // optional open when the MRU is non-empty.
+        // explicit CLI project path leaves a blank session
+        // after a clean previous session; the
+        // recent-projects chooser (Python panel) offers
+        // optional open when the MRU is non-empty. The
+        // only exception is a detected unclean close with
+        // a recoverable autosave, which routes into the
+        // standard recovery prompt.
         if (!explicit_path) {
+            offerStartupCrashRecovery();
             return;
         }
         if (auto opened = open(*explicit_path);
@@ -5916,6 +5921,58 @@ namespace lfs::vis::project {
                 "Failed to open startup project {}: {}",
                 lfs::core::path_to_utf8(
                     *explicit_path),
+                developerError(
+                    opened.error()));
+        } else if (auto* gui = viewer_.getGuiManager()) {
+            gui->dismissStartupOverlay();
+        }
+    }
+
+    void ProjectLifecycle::offerStartupCrashRecovery() {
+        // Intentional closes remove the sidecar (#1652),
+        // so an Offer here implies the previous session
+        // ended uncleanly. The yes/no decision stays with
+        // the existing Recover Autosaved Project? modal.
+        std::filesystem::path path;
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            if (settings_.mru.empty()) {
+                return;
+            }
+            path = resolveProjectMruPath(
+                settings_.mru.front()
+                    .last_known_path);
+        }
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(
+                path, ec) ||
+            ec) {
+            return;
+        }
+        auto inspection =
+            lfs::io::project::
+                inspect_autosave_recovery(path);
+        if (!inspection) {
+            LOG_WARN(
+                "Startup recovery scan skipped for {}: {}",
+                lfs::core::path_to_utf8(path),
+                developerError(
+                    inspection.error()));
+            return;
+        }
+        if (inspection->disposition !=
+            lfs::io::project::
+                RecoveryDisposition::Offer) {
+            return;
+        }
+        LOG_INFO(
+            "Unclean shutdown left a recoverable autosave for {}; offering recovery",
+            lfs::core::path_to_utf8(path));
+        if (auto opened = open(path); !opened) {
+            LOG_ERROR(
+                "Startup recovery open failed for {}: {}",
+                lfs::core::path_to_utf8(path),
                 developerError(
                     opened.error()));
         } else if (auto* gui = viewer_.getGuiManager()) {

@@ -71,6 +71,8 @@ namespace lfs::vis {
     class VisualizerImplResetTest_DiscardSamePathReopenSkipsRecoveryPromptAndDeletesSidecar_Test;
     class VisualizerImplResetTest_DirtyRequireCleanSwitchKeepsAutosaveSidecar_Test;
     class VisualizerImplResetTest_NewProjectDiscardDeletesAutosaveSidecar_Test;
+    class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
+    class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -235,6 +237,8 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_DiscardSamePathReopenSkipsRecoveryPromptAndDeletesSidecar_Test;
         friend class lfs::vis::VisualizerImplResetTest_DirtyRequireCleanSwitchKeepsAutosaveSidecar_Test;
         friend class lfs::vis::VisualizerImplResetTest_NewProjectDiscardDeletesAutosaveSidecar_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
         enum class Hydration {
             Empty,
             ShellReady,
@@ -278,6 +282,7 @@ namespace lfs::vis::project {
             LightTrainingAutosave,
         };
 
+        void offerStartupCrashRecovery();
         [[nodiscard]] lfs::Result<void>
         synchronizeDocumentFromViewer();
         [[nodiscard]] lfs::Result<void>
