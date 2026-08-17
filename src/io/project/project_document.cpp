@@ -3603,6 +3603,24 @@ namespace lfs::io::project {
                 impl_->ppisp_payloads.insert_or_assign(
                     uuid, std::move(payload));
             }
+            const auto erase_recorded_removals =
+                [&original_dirty](auto& payloads,
+                                  const auto& preserved,
+                                  const Fourcc fourcc) {
+                    for (const auto& key : original_dirty) {
+                        if (key.fourcc == fourcc &&
+                            !preserved.contains(
+                                key.instance_uuid)) {
+                            payloads.erase(key.instance_uuid);
+                        }
+                    }
+                };
+            erase_recorded_removals(
+                impl_->checkpoints, dirty_checkpoints,
+                FOURCC_CKPT);
+            erase_recorded_removals(
+                impl_->ppisp_payloads, dirty_ppisp,
+                FOURCC_PPIS);
             impl_->dirty = original_dirty;
             impl_->normalized_source_keys =
                 original_normalized_source_keys;

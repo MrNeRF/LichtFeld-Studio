@@ -2964,6 +2964,67 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
+         SaveAsDropsCheckpointRemovedBeforeRebind) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "ckpt-saveas-master.licht";
+        const fs::path destination =
+            temporary.path / "ckpt-saveas-copy.licht";
+        write_phase_a_fixture(master);
+
+        {
+            auto document =
+                require_result_ptr(ProjectDocument::open(master));
+            install_bound_autosave_checkpoint(
+                *document, fixed_uuid(9930), fixed_uuid(9931));
+            auto options = save_options(9932, 300);
+            options.commit.snapshot_uuid = fixed_uuid(9931);
+            auto published = document->save(master, options);
+            ASSERT_TRUE(published)
+                << lfs::format_for_developer(
+                       published.error());
+        }
+
+        auto document =
+            require_result_ptr(ProjectDocument::open(master));
+        const auto existing = document->checkpoint_uuids();
+        ASSERT_EQ(existing.size(), 1u);
+        EXPECT_EQ(existing.front(), fixed_uuid(9931));
+        for (const auto& uuid : existing) {
+            EXPECT_TRUE(document->remove_checkpoint(uuid));
+        }
+        install_bound_autosave_checkpoint(
+            *document, fixed_uuid(9930), fixed_uuid(9933));
+
+        auto options = save_options(9934, 400);
+        options.commit.snapshot_uuid = fixed_uuid(9933);
+        auto saved = document->save_as(destination, options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+
+        const auto remaining = document->checkpoint_uuids();
+        ASSERT_EQ(remaining.size(), 1u);
+        EXPECT_EQ(remaining.front(), fixed_uuid(9933));
+
+        auto reader =
+            require_result(ProjectReader::open(destination));
+        std::vector<Uuid> live_ckpts;
+        for (const auto& row : reader.chunks()) {
+            if (!row.is_live()) {
+                continue;
+            }
+            if (row.key.fourcc == FOURCC_CKPT) {
+                live_ckpts.push_back(row.key.instance_uuid);
+            }
+        }
+        ASSERT_EQ(live_ckpts.size(), 1u);
+        EXPECT_EQ(live_ckpts.front(), fixed_uuid(9933));
+
+        static_cast<void>(require_result_ptr(
+            ProjectDocument::open(destination)));
+    }
+
+    TEST(ProjectDocumentTest,
          AutosaveInheritsMasterCompatibilityFloorsAndRequiredCapabilities) {
         TemporaryDirectory temporary;
         const fs::path master = temporary.path / "compatibility-master.licht";
