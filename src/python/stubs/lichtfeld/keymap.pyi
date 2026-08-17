@@ -157,6 +157,8 @@ class Action(enum.Enum):
 
     TOGGLE_CAMERA_FRUSTUMS = 72
 
+    OPEN_PREFERENCES = 78
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 

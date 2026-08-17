@@ -25,19 +25,29 @@ body {
     align-items: center;
     justify-content: space-between;
     gap: 6dp;
+    min-width: 0;
 }
 
 .scene-tab-bar {
     display: flex;
     align-items: stretch;
     gap: 4dp;
-    flex-shrink: 0;
+    min-width: 0;
+    flex-grow: 1;
+    flex-shrink: 1;
+    flex-basis: 0;
 }
 
 .scene-tab {
     display: inline-block;
-    min-width: 54dp;
-    padding: 5dp 10dp 6dp;
+    min-width: 0;
+    padding: 5dp 6dp 6dp;
+    flex-grow: 1;
+    flex-shrink: 1;
+    flex-basis: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: #a6adc8;
     background-color: rgba(49, 50, 68, 140);
     border-width: 1dp;

@@ -19,6 +19,13 @@ body {
     overflow: hidden;
 }
 
+#safe-mode-badge {
+    margin-right: 10dp;
+    padding: 0 5dp;
+    border-radius: 2dp;
+    font-weight: bold;
+}
+
 #status-left {
     flex-grow: 1;
     flex-shrink: 1;

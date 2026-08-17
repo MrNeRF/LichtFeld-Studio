@@ -98,6 +98,7 @@ ACTION_NAMES = (
     "SELECT_MODE_SPHERE",
     "CUT_SELECTION",
     "TOGGLE_PERFORMANCE_HUD",
+    "OPEN_PREFERENCES",
 )
 
 
@@ -524,6 +525,7 @@ def test_input_settings_global_mode_exposes_system_sections(input_settings_modul
 
     assert str(module.lf.keymap.Action.TOOL_TRANSLATE.value) in action_ids
     assert str(module.lf.keymap.Action.TOGGLE_UI.value) in action_ids
+    assert str(module.lf.keymap.Action.OPEN_PREFERENCES.value) in action_ids
     assert str(module.lf.keymap.Action.HISTOGRAM_ZOOM_MARKED.value) in action_ids
     assert str(module.lf.keymap.Action.TOGGLE_CAMERA_FRUSTUMS.value) in action_ids
     assert str(module.lf.keymap.Action.SEQUENCER_PLAY_PAUSE.value) in action_ids

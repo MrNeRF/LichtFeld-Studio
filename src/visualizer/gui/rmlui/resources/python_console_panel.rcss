@@ -50,10 +50,20 @@ body {
 .toolbar-row {
     display: flex;
     align-items: center;
-    width: 100%;
+    flex: 1;
     height: 24dp;
     min-width: 0;
-    padding-left: 2dp;
+    padding: 0 4dp 0 2dp;
+    gap: 4dp;
+    overflow: hidden;
+}
+
+.toolbar-actions {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+    height: 24dp;
     gap: 4dp;
     overflow: hidden;
 }
@@ -94,6 +104,21 @@ button {
 
 #python-console-toolbar button:hover {
     background-color: rgb(38, 42, 54);
+}
+
+#close-panel-button {
+    flex: 0 0 28dp;
+    flex-shrink: 0;
+    width: 28dp;
+    min-width: 28dp;
+    max-width: 28dp;
+    height: 24dp;
+    padding: 0;
+    margin-left: 0;
+    margin-right: 0;
+    font-size: 18dp;
+    line-height: 22dp;
+    text-align: center;
 }
 
 #python-console-toolbar button:active,

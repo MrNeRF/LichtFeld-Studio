@@ -5,6 +5,7 @@
 #include "core/logger.hpp"
 #include "core/session_breadcrumb.hpp"
 #include "core/system_info.hpp"
+#include "core/user_paths.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -106,7 +107,10 @@ TEST(SessionBreadcrumbTest, RecordsStartCleanExitAndPreviousSession) {
     HomeDirectoryGuard home_guard(home);
 
     lfs::core::record_session_start();
-    const fs::path breadcrumb = home / ".lichtfeld" / "logs" / "last_session.json";
+    const auto user_paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(user_paths.has_value())
+        << lfs::format_for_developer(user_paths.error());
+    const fs::path breadcrumb = user_paths->logDir() / "last_session.json";
     ASSERT_TRUE(fs::exists(breadcrumb));
     const auto started = read_json(breadcrumb);
     EXPECT_FALSE(started.at("clean_exit").get<bool>());

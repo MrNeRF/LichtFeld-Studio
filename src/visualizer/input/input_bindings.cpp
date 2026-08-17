@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "input/input_bindings.hpp"
-#include "core/config_paths.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -20,8 +21,10 @@ namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 20; // Version 20 adds the performance HUD toggle.
-        constexpr Action LAST_ACTION = Action::TOGGLE_PERFORMANCE_HUD;
+        std::atomic<bool> g_persistence_enabled{true};
+
+        constexpr int PROFILE_VERSION = 21; // Version 21 adds the Preferences shortcut.
+        constexpr Action LAST_ACTION = Action::OPEN_PREFERENCES;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -204,9 +207,11 @@ namespace lfs::vis::input {
 
     InputBindings::InputBindings() {
         const auto config_dir = getConfigDir();
-        const auto saved_path = config_dir / "Default.json";
-        if (std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path)) {
-            return;
+        if (g_persistence_enabled.load(std::memory_order_acquire) &&
+            config_dir) {
+            const auto saved_path = *config_dir / "Default.json";
+            if (std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path))
+                return;
         }
 
         auto profile = createDefaultProfile();
@@ -216,8 +221,20 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::loadProfile(const std::string& name) {
+        if (!g_persistence_enabled.load(std::memory_order_acquire)) {
+            auto profile = createDefaultProfile();
+            current_profile_name_ = profile.name;
+            bindings_ = std::move(profile.bindings);
+            rebuildLookupMaps();
+            notifyBindingsChanged();
+            return;
+        }
         const auto config_dir = getConfigDir();
-        const auto path = config_dir / (name + ".json");
+        if (!config_dir) {
+            LOG_WARN("Cannot load input profile '{}': user keymap directory is unavailable", name);
+            return;
+        }
+        const auto path = *config_dir / (name + ".json");
         if (std::filesystem::exists(path) && loadProfileFromFile(path)) {
             return;
         }
@@ -235,14 +252,28 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::saveProfile(const std::string& name) const {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return;
         const auto config_dir = getConfigDir();
-        std::filesystem::create_directories(config_dir);
-        const auto path = config_dir / (name + ".json");
+        if (!config_dir) {
+            LOG_WARN("Cannot save input profile '{}': user keymap directory is unavailable", name);
+            return;
+        }
+        const auto path = *config_dir / (name + ".json");
         saveProfileToFile(path);
     }
 
-    std::filesystem::path InputBindings::getConfigDir() {
-        return lfs::core::user_config_dir() / "input_profiles";
+    std::optional<std::filesystem::path> InputBindings::getConfigDir() {
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (paths)
+            return paths->keymapDir();
+        LOG_WARN("Unable to resolve input profile path: {}; persistence is disabled",
+                 lfs::format_for_developer(paths.error()));
+        return std::nullopt;
+    }
+
+    void InputBindings::setPersistenceEnabled(const bool enabled) noexcept {
+        g_persistence_enabled.store(enabled, std::memory_order_release);
     }
 
     bool InputBindings::saveProfileToFile(const std::filesystem::path& path) const {
@@ -293,12 +324,13 @@ namespace lfs::vis::input {
         j["bindings"] = bindings_array;
 
         try {
-            std::ofstream file;
-            if (!lfs::core::open_file_for_write(path, file)) {
-                LOG_ERROR("Failed to open file for writing: {}", lfs::core::path_to_utf8(path));
+            const auto written = lfs::core::writeTextFileAtomically(path, j.dump(4) + '\n');
+            if (!written) {
+                LOG_ERROR("Failed to save profile '{}': {}",
+                          lfs::core::path_to_utf8(path),
+                          lfs::format_for_developer(written.error()));
                 return false;
             }
-            file << j.dump(4);
             return true;
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to save profile: {}", e.what());
@@ -425,9 +457,13 @@ namespace lfs::vis::input {
             // the migration still applies in memory.
             if (migrated > 0 && version < PROFILE_VERSION) {
                 std::error_code ec;
-                const auto config_default = getConfigDir() / "Default.json";
-                if (std::filesystem::equivalent(path, config_default, ec)) {
-                    saveProfileToFile(config_default);
+                const auto config_dir = getConfigDir();
+                const auto config_default = config_dir
+                                                ? std::optional<std::filesystem::path>(*config_dir / "Default.json")
+                                                : std::nullopt;
+                if (g_persistence_enabled.load(std::memory_order_acquire) &&
+                    config_default && std::filesystem::equivalent(path, *config_default, ec)) {
+                    saveProfileToFile(*config_default);
                 }
             }
             notifyBindingsChanged();
@@ -476,7 +512,8 @@ namespace lfs::vis::input {
                 (version < 17 && def.action == Action::SELECTION_INTERSECT) ||
                 (version < 18 && selection_volume_shortcut) ||
                 (version < 19 && def.action == Action::CUT_SELECTION) ||
-                (version < 20 && def.action == Action::TOGGLE_PERFORMANCE_HUD);
+                (version < 20 && def.action == Action::TOGGLE_PERFORMANCE_HUD) ||
+                (version < 21 && def.action == Action::OPEN_PREFERENCES);
             if (!should_add) {
                 continue;
             }
@@ -583,9 +620,12 @@ namespace lfs::vis::input {
     std::vector<std::string> InputBindings::getAvailableProfiles() const {
         std::vector<std::string> profiles = {"Default"};
 
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return profiles;
+
         const auto config_dir = getConfigDir();
-        if (std::filesystem::exists(config_dir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(config_dir)) {
+        if (config_dir && std::filesystem::exists(*config_dir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(*config_dir)) {
                 if (entry.path().extension() == ".json") {
                     const std::string name = lfs::core::path_to_utf8(entry.path().stem());
                     if (name != "Default") {
@@ -980,6 +1020,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_F12, MODIFIER_NONE}, Action::TOGGLE_UI, "Hide UI"},
             {KeyTrigger{KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
             {KeyTrigger{KEY_F10, MODIFIER_NONE}, Action::TOGGLE_PERFORMANCE_HUD, "Performance HUD"},
+            {KeyTrigger{KEY_COMMA, MODIFIER_CTRL}, Action::OPEN_PREFERENCES, "Preferences"},
             {MouseScrollTrigger{MODIFIER_CTRL}, Action::HISTOGRAM_ZOOM_MARKED, "Zoom histogram at cursor"},
             // Sequencer
             {KeyTrigger{KEY_K, MODIFIER_NONE}, Action::SEQUENCER_ADD_KEYFRAME, "Add keyframe"},
@@ -1141,6 +1182,7 @@ namespace lfs::vis::input {
         case Action::PIE_MENU: return "Pie Menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "Toggle Camera Frustums";
+        case Action::OPEN_PREFERENCES: return "Open Preferences";
         default: return "Unknown";
         }
     }
@@ -1223,6 +1265,7 @@ namespace lfs::vis::input {
         case Action::PIE_MENU: return "pie_menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "toggle_camera_frustums";
+        case Action::OPEN_PREFERENCES: return "open_preferences";
         default: return {};
         }
     }
@@ -1903,6 +1946,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_UI:
         case Action::TOGGLE_FULLSCREEN:
         case Action::TOGGLE_PERFORMANCE_HUD:
+        case Action::OPEN_PREFERENCES:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:
             return d_ui_scroll;
@@ -1937,6 +1981,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_UI:
         case Action::TOGGLE_FULLSCREEN:
         case Action::TOGGLE_PERFORMANCE_HUD:
+        case Action::OPEN_PREFERENCES:
         case Action::SELECT_MODE_CENTERS:
         case Action::SELECT_MODE_RECTANGLE:
         case Action::SELECT_MODE_POLYGON:

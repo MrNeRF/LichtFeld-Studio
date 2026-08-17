@@ -31,6 +31,7 @@ namespace lfs::vis {
         protected:
             void SetUp() override {
                 isolateInputProfileHome();
+                input::InputBindings::setPersistenceEnabled(false);
                 services().clear();
                 gui::guiFocusState().reset();
             }
@@ -38,6 +39,7 @@ namespace lfs::vis {
             void TearDown() override {
                 gui::guiFocusState().reset();
                 services().clear();
+                input::InputBindings::setPersistenceEnabled(true);
                 restoreHome();
             }
 
@@ -1062,6 +1064,50 @@ namespace lfs::vis {
         EXPECT_FALSE(scroll_trigger->chord_key.has_value());
         EXPECT_TRUE(input::describe(input::Action::HISTOGRAM_ZOOM_MARKED).allowed_kinds &
                     input::TRIGGER_KIND_MOUSE_SCROLL);
+    }
+
+    TEST_F(InputControllerFocusTest, PreferencesDefaultsToRemappableCtrlComma) {
+        input::InputBindings bindings;
+
+        EXPECT_EQ(static_cast<int>(input::Action::OPEN_PREFERENCES), 78);
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::GLOBAL,
+                                           input::KEY_COMMA,
+                                           input::MODIFIER_CTRL),
+                  input::Action::OPEN_PREFERENCES);
+
+        const auto trigger = bindings.getTriggerForAction(input::Action::OPEN_PREFERENCES,
+                                                          input::ToolMode::GLOBAL);
+        ASSERT_TRUE(trigger.has_value());
+        const auto* key_trigger = std::get_if<input::KeyTrigger>(&*trigger);
+        ASSERT_NE(key_trigger, nullptr);
+        EXPECT_EQ(key_trigger->key, input::KEY_COMMA);
+        EXPECT_EQ(key_trigger->modifiers, input::MODIFIER_CTRL);
+        EXPECT_EQ(input::describe(input::Action::OPEN_PREFERENCES).ui_section,
+                  input::ActionSection::UI);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyProfileMigratesPreferencesShortcut) {
+        const auto profile_path = std::filesystem::temp_directory_path() /
+                                  "lfs_input_bindings_legacy_v20.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV20",
+  "version": 20,
+  "bindings": []
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_COMMA,
+                                         input::MODIFIER_CTRL),
+                  input::Action::OPEN_PREFERENCES);
+
+        std::filesystem::remove(profile_path);
     }
 
     TEST_F(InputControllerFocusTest, CameraFrustumsDefaultToAltCAndToggleRenderSetting) {

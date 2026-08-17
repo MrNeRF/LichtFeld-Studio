@@ -347,6 +347,8 @@ set(TEST_FILES
     test_training_terminal_state.cpp
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp
+    test_user_paths.cpp
+    test_window_state.cpp
     test_crash_handler.cpp
     test_gpu_teardown_order.cpp
     test_logger.cpp
@@ -402,7 +404,6 @@ set(TEST_FILES
     test_scene_validity.cpp
     test_uuid.cpp
     test_render_settings_defaults.cpp
-    test_config_paths.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
     test_theme_registry.cpp

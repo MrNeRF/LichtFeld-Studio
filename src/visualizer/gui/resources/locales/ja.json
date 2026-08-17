@@ -767,9 +767,34 @@
     "zoom": "ズーム"
   },
   "preferences": {
-    "language": "言語:",
     "title": "環境設定",
-    "select_language": "言語を選択"
+    "language": "言語:",
+    "select_language": "言語を選択",
+    "interface": "インターフェース",
+    "general": "一般",
+    "appearance": "外観",
+    "input": "入力",
+    "camera_navigation": "カメラ操作",
+    "navigation_mode": "ナビゲーションモード",
+    "camera_view_snap": "軸ビューにスナップ",
+    "enable_axis_view_snap": "軸ビュースナップを有効化",
+    "remember_camera_navigation": "カメラ操作を記憶",
+    "remember_camera_view_snap": "軸ビュースナップを記憶",
+    "navigation_orbit": "オービット",
+    "navigation_trackball": "フリーオービット",
+    "navigation_fpv": "フライ",
+    "navigation_drone": "ドローン",
+    "interface_layout_description": "ドック、パネル、タブ、ウィンドウ表示、HUD を初期レイアウトに戻します。.licht プロジェクトが開いている場合、次回保存時にプロジェクト内のレイアウトが置き換えられます。環境設定は開いたままです。",
+    "reset_current_section": "このセクションをリセット",
+    "reset_section_confirmation": "現在のセクションの設定を既定値に戻しますか？次に直ちに適用されます：",
+    "reset_section_success": "セクションを直ちにリセットしました。",
+    "reset_section_failed": "設定をリセットできませんでした。",
+    "ui_preferences_save_failed": "インターフェース設定を保存できませんでした。",
+    "reset_all_settings": "すべての設定をリセット",
+    "reset_all_settings_confirmation": "言語、テーマ、UI スケール、入力設定、レイアウト、ウィンドウ状態を既定値に戻しますか？直ちに適用されます。.licht プロジェクトが開いている場合、次回保存時に保存済みレイアウトが置き換えられます。プロジェクト内容、データセット、エクスポート、プラグイン、キャッシュは影響を受けません。",
+    "reset_all_settings_success": "すべての設定、レイアウト、ウィンドウ状態を直ちにリセットしました。",
+    "window_manager_unavailable": "ウィンドウマネージャーを利用できません。",
+    "window_state_reset_failed": "ウィンドウを既定の配置に戻せませんでした。"
   },
   "main_panel": {
     "console": "コンソール",
@@ -1360,6 +1385,7 @@
     "action.node_rect_select": "ノードを矩形選択",
     "action.toggle_ui": "UI切替",
     "action.toggle_fullscreen": "全画面切替",
+    "action.open_preferences": "設定を開く",
     "action.histogram_zoom_marked": "カーソル位置でヒストグラムをズーム",
     "action.sequencer_add_keyframe": "キーフレーム追加",
     "action.sequencer_update_keyframe": "キーフレーム更新",
@@ -1765,6 +1791,7 @@
     "reload": "再読み込み"
   },
   "status_bar": {
+    "safe_mode": "セーフモード",
     "export_cancelled": "エクスポートをキャンセルしました",
     "gt_compare": "GT比較",
     "camera": "カメラ {}",

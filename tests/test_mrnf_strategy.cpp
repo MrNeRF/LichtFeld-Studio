@@ -25,6 +25,7 @@ class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_
 #include "lfs/training/sh_value_codec.hpp"
 #include "training/strategies/mrnf.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <gtest/gtest.h>
@@ -66,6 +67,144 @@ namespace {
         auto opacity = Tensor::from_vector(opacity_data, TensorShape({n, 1}), Device::CUDA);
 
         return SplatData(sh_degree, means, sh0, shN, scaling, rotation, opacity, 1.0f);
+    }
+
+    void decode_joint_g1g2(const uint8_t* packed, const int bits, const size_t cell,
+                           const float umin, const float umax, const float smin, const float smax,
+                           float& m, float& v) {
+        if (bits == 16) {
+            joint_adam::Codec16::decode_g1g2(packed, cell, umin, umax, smin, smax, m, v);
+        } else {
+            joint_adam::Codec8::decode_g1g2(packed, cell, umin, umax, smin, smax, m, v);
+        }
+    }
+
+    // 1 LSB of (u, log_s) at the live block bounds, mapped through us_to_g1g2 at (0,0)+1LSB.
+    void joint_zero_decode_tol(const float* bb, const int bits, float& m_tol, float& v_tol) {
+        const float qmax = bits == 16 ? joint_adam::Codec16::kQMax : joint_adam::Codec8::kQMax;
+        const float du = (bb[1] - bb[0]) / qmax;
+        const float ds = (bb[3] - bb[2]) / qmax;
+        float m = 0.0f;
+        float v = 0.0f;
+        joint_adam::Codec16::us_to_g1g2(du, ds, m, v);
+        m_tol = std::max(std::abs(m) * 2.0f, 1e-6f);
+        v_tol = std::max(std::abs(v) * 2.0f, 1e-12f);
+    }
+
+    void expect_contiguous_joint_row_zero(const AdamParamState& state, const size_t prim,
+                                          const char* label) {
+        ASSERT_TRUE(state.is_joint());
+        ASSERT_TRUE(state.exp_avg.is_valid());
+        ASSERT_TRUE(state.joint_bounds.is_valid());
+        ASSERT_GE(state.exp_avg.shape().rank(), 2u);
+        const auto packed = state.exp_avg.cpu();
+        const auto bounds = state.joint_bounds.cpu();
+        const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
+        ASSERT_GT(bpc, 0);
+        ASSERT_EQ(packed.shape()[1] % static_cast<size_t>(bpc), 0u);
+        const size_t n_attr = packed.shape()[1] / static_cast<size_t>(bpc);
+        const size_t bidx = prim / static_cast<size_t>(joint_adam::kBlockSize);
+        ASSERT_LT(bidx, bounds.shape()[0]);
+        const float* bb = bounds.ptr<float>() + bidx * 4;
+        float m_tol = 0.0f;
+        float v_tol = 0.0f;
+        joint_zero_decode_tol(bb, state.joint_bits, m_tol, v_tol);
+        const auto* bytes = packed.ptr<uint8_t>();
+        for (size_t a = 0; a < n_attr; ++a) {
+            float m = 0.0f;
+            float v = 0.0f;
+            decode_joint_g1g2(bytes, state.joint_bits, prim * n_attr + a,
+                              bb[0], bb[1], bb[2], bb[3], m, v);
+            EXPECT_NEAR(m, 0.0f, m_tol) << label << " prim=" << prim << " attr=" << a;
+            EXPECT_NEAR(v, 0.0f, v_tol) << label << " prim=" << prim << " attr=" << a;
+        }
+    }
+
+    bool contiguous_joint_row_has_nonzero(const AdamParamState& state, const size_t prim) {
+        if (!state.is_joint() || !state.exp_avg.is_valid() || !state.joint_bounds.is_valid() ||
+            state.exp_avg.shape().rank() < 2) {
+            return false;
+        }
+        const auto packed = state.exp_avg.cpu();
+        const auto bounds = state.joint_bounds.cpu();
+        const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
+        if (bpc <= 0 || packed.shape()[1] % static_cast<size_t>(bpc) != 0) {
+            return false;
+        }
+        const size_t n_attr = packed.shape()[1] / static_cast<size_t>(bpc);
+        const size_t bidx = prim / static_cast<size_t>(joint_adam::kBlockSize);
+        if (bidx >= bounds.shape()[0]) {
+            return false;
+        }
+        const float* bb = bounds.ptr<float>() + bidx * 4;
+        const auto* bytes = packed.ptr<uint8_t>();
+        for (size_t a = 0; a < n_attr; ++a) {
+            float m = 0.0f;
+            float v = 0.0f;
+            decode_joint_g1g2(bytes, state.joint_bits, prim * n_attr + a,
+                              bb[0], bb[1], bb[2], bb[3], m, v);
+            if (std::abs(m) > 1e-12f || std::abs(v) > 1e-20f) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void seed_shN_joint_nonzero(AdamParamState& state, const uint32_t layout_rest) {
+        auto packed = state.exp_avg.cpu();
+        auto bounds = state.joint_bounds.cpu();
+        auto* bytes = packed.ptr<uint8_t>();
+        auto* bb = bounds.ptr<float>();
+        bb[0] = 0.5f;
+        bb[1] = 1.5f;
+        bb[2] = 0.25f;
+        bb[3] = 1.0f;
+        const uint32_t slots = sh_float4_slots_for_rest(layout_rest);
+        for (const uint32_t prim : {0u, 1u}) {
+            for (uint32_t k = 0; k < slots; ++k) {
+                const size_t base =
+                    static_cast<size_t>(sh_swizzled_index(prim, k, layout_rest)) * 4u;
+                for (int c = 0; c < 4; ++c) {
+                    const size_t cell = base + static_cast<size_t>(c);
+                    bytes[cell * 2 + 0] = 200;
+                    bytes[cell * 2 + 1] = 200;
+                }
+            }
+        }
+        state.exp_avg = packed.cuda();
+        state.joint_bounds = bounds.cuda();
+    }
+
+    void expect_shN_joint_row_zero(const AdamParamState& state, const size_t prim,
+                                   const uint32_t layout_rest, const char* label) {
+        ASSERT_TRUE(state.is_joint());
+        ASSERT_TRUE(state.exp_avg.is_valid());
+        ASSERT_TRUE(state.joint_bounds.is_valid());
+        const auto packed = state.exp_avg.cpu();
+        const auto bounds = state.joint_bounds.cpu();
+        const size_t bidx = prim / static_cast<size_t>(joint_adam::kBlockSize);
+        ASSERT_LT(bidx, bounds.shape()[0]);
+        const float* bb = bounds.ptr<float>() + bidx * 4;
+        float m_tol = 0.0f;
+        float v_tol = 0.0f;
+        joint_zero_decode_tol(bb, state.joint_bits, m_tol, v_tol);
+        const auto* bytes = packed.ptr<uint8_t>();
+        const uint32_t slots = sh_float4_slots_for_rest(layout_rest);
+        for (uint32_t k = 0; k < slots; ++k) {
+            const size_t base =
+                static_cast<size_t>(sh_swizzled_index(static_cast<uint32_t>(prim), k, layout_rest)) *
+                4u;
+            for (int c = 0; c < 4; ++c) {
+                float m = 0.0f;
+                float v = 0.0f;
+                decode_joint_g1g2(bytes, state.joint_bits, base + static_cast<size_t>(c),
+                                  bb[0], bb[1], bb[2], bb[3], m, v);
+                EXPECT_NEAR(m, 0.0f, m_tol)
+                    << label << " prim=" << prim << " slot=" << k << " c=" << c;
+                EXPECT_NEAR(v, 0.0f, v_tol)
+                    << label << " prim=" << prim << " slot=" << k << " c=" << c;
+            }
+        }
     }
 
 } // namespace
@@ -270,12 +409,35 @@ TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
 
     strategy.initialize(opt_params);
 
-    auto* means_state = strategy.get_optimizer().get_state_mutable(ParamType::Means);
+    auto& optimizer = strategy.get_optimizer();
+    auto* means_state = optimizer.get_state_mutable(ParamType::Means);
     ASSERT_NE(means_state, nullptr);
     ASSERT_TRUE(means_state->is_joint());
-    // grad is allocated lazily via get_grad(); force allocation before fill.
-    strategy.get_optimizer().get_grad(ParamType::Means);
-    means_state->grad.fill_(7.0f);
+
+    const ParamType contiguous_types[] = {
+        ParamType::Means, ParamType::Sh0, ParamType::Scaling, ParamType::Rotation, ParamType::Opacity};
+    for (const auto type : contiguous_types) {
+        optimizer.get_grad(type).fill_(7.0f);
+    }
+    auto* shN_state = optimizer.get_state_mutable(ParamType::ShN);
+    ASSERT_NE(shN_state, nullptr);
+    if (shN_state->is_joint() && shN_state->exp_avg.is_valid() && shN_state->size > 0) {
+        optimizer.get_grad(ParamType::ShN);
+    }
+    optimizer.step(1);
+
+    ASSERT_TRUE(contiguous_joint_row_has_nonzero(*means_state, 1))
+        << "seeding failed: sibling row 1 Means (m,v) still decode to zero";
+
+    const auto layout_rest = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
+    const bool check_shN = shN_state->is_joint() && shN_state->exp_avg.is_valid() &&
+                           shN_state->joint_bounds.is_valid() && shN_state->size > 0 &&
+                           layout_rest > 0;
+    if (check_shN) {
+        seed_shN_joint_nonzero(*shN_state, layout_rest);
+    }
+
+    optimizer.get_grad(ParamType::Means).fill_(7.0f);
 
     strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
     strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
@@ -292,6 +454,16 @@ TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
     EXPECT_TRUE(means_state->is_joint());
     EXPECT_TRUE(means_state->exp_avg.is_valid());
     EXPECT_TRUE(means_state->joint_bounds.is_valid());
+
+    // fails when grow_and_split only zeroes grads and leaves joint m/v on split parents
+    expect_contiguous_joint_row_zero(*optimizer.get_state(ParamType::Means), 0, "Means");
+    expect_contiguous_joint_row_zero(*optimizer.get_state(ParamType::Scaling), 0, "Scaling");
+    expect_contiguous_joint_row_zero(*optimizer.get_state(ParamType::Rotation), 0, "Rotation");
+    expect_contiguous_joint_row_zero(*optimizer.get_state(ParamType::Opacity), 0, "Opacity");
+    expect_contiguous_joint_row_zero(*optimizer.get_state(ParamType::Sh0), 0, "Sh0");
+    if (check_shN) {
+        expect_shN_joint_row_zero(*optimizer.get_state(ParamType::ShN), 0, layout_rest, "ShN");
+    }
 
     const auto grad_cpu = means_state->grad.cpu();
     const float* grad_ptr = grad_cpu.ptr<float>();

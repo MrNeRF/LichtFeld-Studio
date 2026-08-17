@@ -1033,8 +1033,13 @@ namespace lfs::vis::gui {
                 break;
             }
 
-            if (auto* gui = viewer_->getGuiManager()) {
-                gui->panelLayout().setShowSequencer(false);
+            // Selecting an editing tool gives the viewport its working space,
+            // but clearing the active tool is a lifecycle operation and must
+            // not mutate the live workspace.
+            if (tool != ToolType::None) {
+                if (auto* gui = viewer_->getGuiManager()) {
+                    gui->panelLayout().setShowSequencer(false);
+                }
             }
         });
 

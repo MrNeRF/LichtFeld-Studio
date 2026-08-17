@@ -767,9 +767,34 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "language": "Lingua:",
     "title": "Preferenze",
-    "select_language": "Seleziona Lingua"
+    "language": "Lingua:",
+    "select_language": "Seleziona Lingua",
+    "interface": "Interfaccia",
+    "general": "Generale",
+    "appearance": "Aspetto",
+    "input": "Input",
+    "camera_navigation": "Navigazione della camera",
+    "navigation_mode": "Modalità di navigazione",
+    "camera_view_snap": "Aggancia alle viste assiali",
+    "enable_axis_view_snap": "Abilita aggancio alle viste assiali",
+    "remember_camera_navigation": "Ricorda navigazione della camera",
+    "remember_camera_view_snap": "Ricorda snap viste assiali",
+    "navigation_orbit": "Orbita",
+    "navigation_trackball": "Orbita libera",
+    "navigation_fpv": "Volo",
+    "navigation_drone": "Drone",
+    "interface_layout_description": "Riporta dock, pannelli, schede, visibilità delle finestre e HUD al layout iniziale. Se è aperto un progetto .licht, il layout salvato nel progetto verrà sostituito al prossimo salvataggio. Il pannello Preferenze rimane aperto.",
+    "reset_current_section": "Reimposta questa sezione",
+    "reset_section_confirmation": "Ripristinare le impostazioni della sezione corrente ai valori predefiniti? L'azione viene applicata subito a",
+    "reset_section_success": "Sezione reimpostata immediatamente.",
+    "reset_section_failed": "Impossibile reimpostare le impostazioni.",
+    "ui_preferences_save_failed": "Impossibile salvare le preferenze dell'interfaccia.",
+    "reset_all_settings": "Reimposta tutte le impostazioni",
+    "reset_all_settings_confirmation": "Ripristinare lingua, tema, scala dell'interfaccia, preferenze di input, layout e stato della finestra ai valori predefiniti? L'azione viene applicata subito. Se è aperto un progetto .licht, il layout salvato verrà sostituito al prossimo salvataggio; contenuti del progetto, dataset, esportazioni, plugin e cache non vengono modificati.",
+    "reset_all_settings_success": "Tutte le preferenze, il layout e lo stato della finestra sono stati reimpostati immediatamente.",
+    "window_manager_unavailable": "Il gestore della finestra non è disponibile.",
+    "window_state_reset_failed": "Non è stato possibile ripristinare la geometria predefinita della finestra."
   },
   "main_panel": {
     "console": "Console",
@@ -1360,6 +1385,7 @@
     "action.node_rect_select": "Selezione rettangolare di nodi",
     "action.toggle_ui": "Attiva UI",
     "action.toggle_fullscreen": "Attiva schermo intero",
+    "action.open_preferences": "Apri preferenze",
     "action.histogram_zoom_marked": "Zoom istogramma al cursore",
     "action.sequencer_add_keyframe": "Aggiungi keyframe",
     "action.sequencer_update_keyframe": "Aggiorna keyframe",
@@ -1765,6 +1791,7 @@
     "reload": "Ricarica"
   },
   "status_bar": {
+    "safe_mode": "MODALITÀ SICURA",
     "export_cancelled": "Esportazione annullata",
     "gt_compare": "Confronto GT",
     "camera": "Fotocamera {}",

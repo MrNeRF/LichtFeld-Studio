@@ -5,6 +5,7 @@
 import importlib.machinery
 import importlib.util
 import logging
+import os
 import shutil
 import sys
 import threading
@@ -82,7 +83,12 @@ class PluginManager:
         self._plugins: Dict[str, PluginInstance] = {}
         self._plugins_lock = threading.RLock()
         self._lifecycle_lock = threading.RLock()
-        self._plugins_dir = Path.home() / ".lichtfeld" / "plugins"
+        self._plugins_dir = Path(
+            os.environ.get(
+                "LFS_RESOLVED_PLUGIN_DIR",
+                Path.home() / ".lichtfeld" / "plugins",
+            )
+        )
         self._watcher: Optional[PluginWatcher] = None
         self._on_plugin_loaded: List[Callable] = []
         self._on_plugin_unloaded: List[Callable] = []

@@ -57,6 +57,7 @@ namespace lfs::python {
     static std::atomic<bool> g_builtin_ui_ready{false};
     static std::atomic<bool> g_builtin_ui_deferred_logged{false};
     static std::atomic<bool> g_python_bridge_failed{false};
+    static std::atomic<bool> g_user_plugin_loading_enabled{true};
     static std::mutex g_python_bridge_failure_mutex;
     static std::optional<lfs::Error> g_python_bridge_failure_error;
 
@@ -67,6 +68,11 @@ namespace lfs::python {
     static std::atomic<bool> g_py_init_failure_reported{false}; // one INFO line + one toast
     static std::atomic<bool> g_py_real_init_succeeded{false};   // real once-lambda reached Ready
     static std::atomic<bool> g_force_py_init_failure{false};    // test-only latch override
+
+    [[nodiscard]] bool user_plugin_loading_enabled() noexcept {
+        return g_user_plugin_loading_enabled.load(std::memory_order_acquire) &&
+               !lfs::core::environment::flag("LFS_SAFE_MODE", false);
+    }
 
     enum class PluginPreloadState : std::uint8_t {
         NotStarted,
@@ -1322,7 +1328,20 @@ _add_dll_dirs()
         g_plugin_preload_completion_hook.store(hook, std::memory_order_release);
     }
 
+    void set_user_plugin_loading_enabled(const bool enabled) noexcept {
+        g_user_plugin_loading_enabled.store(enabled, std::memory_order_release);
+#ifdef _WIN32
+        (void)_putenv_s("LFS_SAFE_MODE", enabled ? "0" : "1");
+#else
+        (void)setenv("LFS_SAFE_MODE", enabled ? "0" : "1", 1);
+#endif
+    }
+
     bool ensure_plugins_loaded(const bool wait_for_completion) {
+        if (!user_plugin_loading_enabled()) {
+            LOG_INFO("User plugin loading is disabled for this process");
+            return false;
+        }
         if (!ensure_initialized()) {
             return false;
         }
@@ -1372,6 +1391,10 @@ _add_dll_dirs()
     }
 
     void preload_user_plugins_async() {
+        if (!user_plugin_loading_enabled()) {
+            LOG_INFO("Skipping user plugin preload because safe mode is active");
+            return;
+        }
         if (!lfs::core::environment::flag("LFS_PLUGIN_AUTOLOAD", true))
             return;
 
@@ -1576,7 +1599,11 @@ sys.stderr = _repl_out
 import lichtfeld as lf
 _repl_locals = {{"lf": lf, "__name__": "__console__", "__doc__": None}}
 
-_histfile = os.path.join(os.path.expanduser("~"), ".lichtfeld", "repl_history")
+_histroot = os.environ.get(
+    "LFS_RESOLVED_DATA_DIR",
+    os.path.join(os.path.expanduser("~"), ".lichtfeld"),
+)
+_histfile = os.path.join(_histroot, "repl_history")
 os.makedirs(os.path.dirname(_histfile), exist_ok=True)
 
 _used_ptpython = False

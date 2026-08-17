@@ -106,6 +106,7 @@ namespace lfs::vis {
         int height = 720;
         bool antialiasing = false;
         bool show_startup_overlay = true;
+        bool safe_mode = false;
         bool gut = false;
         GraphicsBackend graphics_backend = GraphicsBackend::Vulkan;
         int monitor_x = 0; // Monitor hint for window placement

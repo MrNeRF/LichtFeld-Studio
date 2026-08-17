@@ -1,0 +1,43 @@
+/* Theme-dependent styles for the Preferences panel. */
+
+.preferences-nav {
+    background-color: @{surface};
+    border-right-color: @{border};
+}
+
+.preferences-footer-sidebar {
+    background-color: @{surface};
+    border-right-color: @{border};
+}
+
+.preferences-footer-gutter,
+.preferences-actions-main {
+    border-top-color: @{border};
+}
+
+.preferences-nav-item {
+    color: @{text_dim};
+    background-color: @{panel.tab_inactive_bg};
+    border-color: @{border};
+}
+
+.preferences-nav-item:hover,
+.preferences-nav-item:focus-visible {
+    color: @{text};
+    background-color: @{panel.tab_hover_bg};
+    border-color: @{panel.tab_hover_border};
+}
+
+.preferences-nav-item.active {
+    color: @{text};
+    background-color: @{panel.tab_active_bg};
+    border-color: @{panel.tab_active_border};
+    border-left-color: @{primary};
+    border-left-width: 3dp;
+    font-weight: bold;
+}
+
+.legacy-empty,
+.legacy-entry {
+    border-color: @{border};
+}

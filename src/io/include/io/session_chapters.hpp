@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -22,17 +23,52 @@ namespace lfs::io::project {
 
     // User-global GUI fields that must never persist in project GUIL chapters.
     // Shared by sanitize/validate (session_chapters) and runtime capture checks
-    // (session_state). Keys are matched case-insensitively after lowercasing.
-    inline constexpr std::array<std::string_view, 7>
+    // (session_state). Keys are matched case-insensitively only at the GUIL root
+    // and in the known fixed-arrangement payload; opaque plugin payload fields
+    // with the same generic names remain extension-owned.
+    inline constexpr std::array<std::string_view, 9>
         kUserGlobalGuiFieldKeys = {
             "theme",
             "language",
             "scale",
             "ui_scale",
+            "dpi",
+            "dpi_scale",
             "hud",
             "vram_hud",
             "vram_hud_visible",
     };
+
+    // Visit the fixed-arrangement payloads without copying the GUIL DOM. Json
+    // may be const or mutable; callers receive a payload with matching constness.
+    template <typename Json, typename Function>
+    void for_each_fixed_arrangement_payload(Json& root, Function&& function) {
+        const auto layouts = root.find("layouts");
+        if (layouts == root.end() || !layouts->is_array())
+            return;
+        for (auto& layout : *layouts) {
+            if (!layout.is_object())
+                continue;
+            const auto areas = layout.find("areas");
+            if (areas == layout.end() || !areas->is_array())
+                continue;
+            for (auto& area : *areas) {
+                if (!area.is_object())
+                    continue;
+                const auto spaces = area.find("spaces");
+                if (spaces == area.end() || !spaces->is_array())
+                    continue;
+                for (auto& space : *spaces) {
+                    if (!space.is_object() ||
+                        space.value("type", std::string{}) != "fixed_arrangement")
+                        continue;
+                    const auto payload = space.find("opaque_payload");
+                    if (payload != space.end() && payload->is_object())
+                        function(*payload);
+                }
+            }
+        }
+    }
 
     enum class SessionJsonChapterKind : std::uint8_t {
         GuiLayout,

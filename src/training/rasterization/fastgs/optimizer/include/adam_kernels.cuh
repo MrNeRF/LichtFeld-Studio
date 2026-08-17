@@ -131,10 +131,8 @@ namespace fast_lfs::optimizer::kernels::adam {
         }
     }
 
-    // expand block bounds to include (u,log_s)=(0,0) so encode_us(0,0) is
-    // representable. When expansion is needed, re-encode every live cell in the
-    // block under the new bounds (decode under old first) so non-target prims
-    // stay consistent. Raw zero codes under bounds that exclude 0 decode to the
+    // Expand block bounds to include (u,log_s)=(0,0) so encode_us(0,0) is
+    // representable. Raw zero codes under bounds that exclude 0 decode to the
     // block minimum, not (m,v)=(0,0).
     __device__ __forceinline__ float4 joint_expand_bounds_include_zero(const float4 mm) {
         return make_float4(fminf(mm.x, 0.0f), fmaxf(mm.y, 0.0f),
@@ -145,95 +143,135 @@ namespace fast_lfs::optimizer::kernels::adam {
         return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w;
     }
 
-    // Encode (u,log_s)=(0,0) under (possibly widened) block bounds → true (m,v)=(0,0).
-    // Contiguous [N, n_attr] cells; packed is [N, n_attr * bpc] uint8.
-    // bounds is mutable; n_prims is the live primitive count for block re-encode.
+    __global__ void joint_encode_zero_mark_cu(
+        uint8_t* flags,
+        uint8_t* block_touched,
+        const int64_t* indices,
+        const int n_indices,
+        const int n_prims) {
+        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= n_indices)
+            return;
+        const int64_t prim = indices[idx];
+        if (prim < 0 || prim >= static_cast<int64_t>(n_prims))
+            return;
+        flags[prim] = 1;
+        const int bidx = static_cast<int>(prim / lfs::training::joint_adam::kBlockSizeDevice);
+        const unsigned int word = static_cast<unsigned int>(bidx) >> 2;
+        const unsigned int shift = (static_cast<unsigned int>(bidx) & 3u) * 8u;
+        atomicOr(reinterpret_cast<unsigned int*>(block_touched) + word, 1u << shift);
+    }
+
+    // Each thread owns primitive p = blockIdx.x * 256 + threadIdx.x and only
+    // that primitive's cells; no cross-thread overlap on packed data.
     template <int BITS>
     __global__ void joint_encode_zero_rows_cu(
         uint8_t* packed,
         float* bounds,
-        const int64_t* indices,
-        const int n_indices,
+        const uint8_t* flags,
+        const uint8_t* block_touched,
         const int n_attr,
         const int n_prims) {
         using C = lfs::training::joint_adam::DeviceCodec<BITS>;
-        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= n_indices)
+        constexpr int kBS = lfs::training::joint_adam::kBlockSizeDevice;
+        const int bidx = static_cast<int>(blockIdx.x);
+        if (!block_touched[bidx])
             return;
-        const int64_t prim = indices[idx];
-        if (prim < 0 || (n_prims > 0 && prim >= static_cast<int64_t>(n_prims)))
-            return;
-        const int bidx = static_cast<int>(prim / 256);
-        float4* mm_ptr = reinterpret_cast<float4*>(bounds + 4 * bidx);
-        const float4 old_mm = *mm_ptr;
-        const float4 new_mm = joint_expand_bounds_include_zero(old_mm);
-        if (!joint_bounds_equal(old_mm, new_mm)) {
-            const int block_begin = bidx * 256;
-            const int block_end = (n_prims > 0) ? min(block_begin + 256, n_prims)
-                                                : (block_begin + 256);
-            for (int p = block_begin; p < block_end; ++p) {
-                for (int a = 0; a < n_attr; ++a) {
-                    const int64_t cell = static_cast<int64_t>(p) * n_attr + a;
-                    const float2 us = C::decode_us(packed, cell, old_mm);
-                    C::encode_us(packed, cell, us.x, us.y, new_mm);
-                }
-            }
-            *mm_ptr = new_mm;
+
+        const int t = static_cast<int>(threadIdx.x);
+        const int p = bidx * kBS + t;
+        const bool valid = p < n_prims;
+
+        __shared__ float4 sm_old;
+        __shared__ float4 sm_new;
+        if (t == 0) {
+            const float4 old_mm = *reinterpret_cast<const float4*>(bounds + 4 * bidx);
+            sm_old = old_mm;
+            sm_new = joint_expand_bounds_include_zero(old_mm);
         }
-        for (int a = 0; a < n_attr; ++a) {
-            const int64_t cell = prim * static_cast<int64_t>(n_attr) + a;
-            C::encode_us(packed, cell, 0.0f, 0.0f, new_mm);
+        __syncthreads();
+
+        const float4 old_mm = sm_old;
+        const float4 new_mm = sm_new;
+        if (!joint_bounds_equal(old_mm, new_mm) && valid) {
+            for (int a = 0; a < n_attr; ++a) {
+                const int64_t cell = static_cast<int64_t>(p) * n_attr + a;
+                const float2 us = C::decode_us(packed, cell, old_mm);
+                C::encode_us(packed, cell, us.x, us.y, new_mm);
+            }
+        }
+        __syncthreads();
+
+        if (valid && flags[p] != 0) {
+            for (int a = 0; a < n_attr; ++a) {
+                const int64_t cell = static_cast<int64_t>(p) * n_attr + a;
+                C::encode_us(packed, cell, 0.0f, 0.0f, new_mm);
+            }
+        }
+        if (t == 0) {
+            *reinterpret_cast<float4*>(bounds + 4 * bidx) = new_mm;
         }
     }
 
-    // Swizzled shN: one thread per primitive; zero all float cells in layout slots.
+    // Each thread owns primitive p = blockIdx.x * 256 + threadIdx.x and only
+    // that primitive's swizzled shN cells; no cross-thread overlap on packed data.
     template <int BITS>
     __global__ void joint_encode_zero_shN_cu(
         uint8_t* packed,
         float* bounds,
-        const int64_t* indices,
-        const int n_indices,
+        const uint8_t* flags,
+        const uint8_t* block_touched,
         const int slots_per_primitive,
         const int n_prims) {
         using C = lfs::training::joint_adam::DeviceCodec<BITS>;
-        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= n_indices)
-            return;
-        const int64_t prim = indices[idx];
-        if (prim < 0 || (n_prims > 0 && prim >= static_cast<int64_t>(n_prims)))
-            return;
-        const int bidx = static_cast<int>(prim / 256);
-        float4* mm_ptr = reinterpret_cast<float4*>(bounds + 4 * bidx);
-        const float4 old_mm = *mm_ptr;
-        const float4 new_mm = joint_expand_bounds_include_zero(old_mm);
-        const uint32_t slots = static_cast<uint32_t>(slots_per_primitive);
+        constexpr int kBS = lfs::training::joint_adam::kBlockSizeDevice;
         constexpr uint32_t R = 32u;
+        const int bidx = static_cast<int>(blockIdx.x);
+        if (!block_touched[bidx])
+            return;
 
-        auto sh_cell = [&](const uint32_t p, const uint32_t k, const int c) -> int64_t {
-            const uint32_t slot = (p / R) * (slots * R) + k * R + (p % R);
+        const int t = static_cast<int>(threadIdx.x);
+        const int p = bidx * kBS + t;
+        const bool valid = p < n_prims;
+        const uint32_t slots = static_cast<uint32_t>(slots_per_primitive);
+
+        auto sh_cell = [&](const uint32_t prim, const uint32_t k, const int c) -> int64_t {
+            const uint32_t slot = (prim / R) * (slots * R) + k * R + (prim % R);
             return static_cast<int64_t>(slot) * 4 + c;
         };
 
-        if (!joint_bounds_equal(old_mm, new_mm) && slots > 0u) {
-            const int block_begin = bidx * 256;
-            const int block_end = (n_prims > 0) ? min(block_begin + 256, n_prims)
-                                                : (block_begin + 256);
-            for (int p = block_begin; p < block_end; ++p) {
-                for (uint32_t k = 0; k < slots; ++k) {
-                    for (int c = 0; c < 4; ++c) {
-                        const int64_t cell = sh_cell(static_cast<uint32_t>(p), k, c);
-                        const float2 us = C::decode_us(packed, cell, old_mm);
-                        C::encode_us(packed, cell, us.x, us.y, new_mm);
-                    }
+        __shared__ float4 sm_old;
+        __shared__ float4 sm_new;
+        if (t == 0) {
+            const float4 old_mm = *reinterpret_cast<const float4*>(bounds + 4 * bidx);
+            sm_old = old_mm;
+            sm_new = joint_expand_bounds_include_zero(old_mm);
+        }
+        __syncthreads();
+
+        const float4 old_mm = sm_old;
+        const float4 new_mm = sm_new;
+        if (!joint_bounds_equal(old_mm, new_mm) && valid && slots > 0u) {
+            for (uint32_t k = 0; k < slots; ++k) {
+                for (int c = 0; c < 4; ++c) {
+                    const int64_t cell = sh_cell(static_cast<uint32_t>(p), k, c);
+                    const float2 us = C::decode_us(packed, cell, old_mm);
+                    C::encode_us(packed, cell, us.x, us.y, new_mm);
                 }
             }
-            *mm_ptr = new_mm;
         }
-        for (uint32_t k = 0; k < slots; ++k) {
-            for (int c = 0; c < 4; ++c) {
-                C::encode_us(packed, sh_cell(static_cast<uint32_t>(prim), k, c),
-                             0.0f, 0.0f, new_mm);
+        __syncthreads();
+
+        if (valid && flags[p] != 0 && slots > 0u) {
+            for (uint32_t k = 0; k < slots; ++k) {
+                for (int c = 0; c < 4; ++c) {
+                    C::encode_us(packed, sh_cell(static_cast<uint32_t>(p), k, c),
+                                 0.0f, 0.0f, new_mm);
+                }
             }
+        }
+        if (t == 0) {
+            *reinterpret_cast<float4*>(bounds + 4 * bidx) = new_mm;
         }
     }
 

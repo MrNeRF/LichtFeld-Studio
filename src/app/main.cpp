@@ -12,6 +12,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/session_breadcrumb.hpp"
+#include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
 #include "gui/gpu_memory_query.hpp"
@@ -53,6 +54,29 @@ namespace {
 #else
         setenv("CUDA_MODULE_LOADING", "LAZY", /*overwrite=*/0);
 #endif
+    }
+
+    void publishResolvedUserPaths() {
+        // Publish canonical paths for Python plugins; native code calls UserPaths directly.
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (!paths)
+            return;
+        const auto publish = [](const char* const name,
+                                const std::filesystem::path& path) {
+            const auto value = lfs::core::path_to_utf8(path);
+#ifdef _WIN32
+            (void)_putenv_s(name, value.c_str());
+#else
+            (void)setenv(name, value.c_str(), 1);
+#endif
+        };
+        publish("LFS_RESOLVED_CONFIG_DIR", paths->configDir());
+        publish("LFS_RESOLVED_DATA_DIR", paths->dataDir());
+        publish("LFS_RESOLVED_CACHE_DIR", paths->cacheDir());
+        publish("LFS_RESOLVED_LOG_DIR", paths->logDir());
+        publish("LFS_RESOLVED_PLUGIN_DIR", paths->pluginDir());
+        publish("LFS_RESOLVED_VENV_DIR", paths->venvDir());
+        publish("LFS_RESOLVED_ASSET_LIBRARY_DIR", paths->assetLibraryDir());
     }
 
     // Every mode that touches CUDA gates here, before the primary context exists: with
@@ -272,6 +296,8 @@ int main(int argc, char* argv[]) {
         std::println(stderr, "Error: {}", result.error());
         return 1;
     }
+
+    publishResolvedUserPaths();
 
     return lfs::core::run_with_exception_firewall(
         [&result] { return run_mode(std::move(*result)); });

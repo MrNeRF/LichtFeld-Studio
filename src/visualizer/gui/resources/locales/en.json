@@ -767,9 +767,34 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "language": "Language:",
     "title": "Preferences",
-    "select_language": "Select Language"
+    "language": "Language:",
+    "select_language": "Select Language",
+    "interface": "Interface",
+    "general": "General",
+    "appearance": "Appearance",
+    "input": "Input",
+    "camera_navigation": "Camera Navigation",
+    "navigation_mode": "Navigation Mode",
+    "camera_view_snap": "Snap Axis Views",
+    "enable_axis_view_snap": "Enable Axis View Snap",
+    "remember_camera_navigation": "Remember Camera Navigation",
+    "remember_camera_view_snap": "Remember Axis View Snap",
+    "navigation_orbit": "Orbit",
+    "navigation_trackball": "Free Orbit",
+    "navigation_fpv": "Fly",
+    "navigation_drone": "Drone",
+    "interface_layout_description": "Resets docks, panels, tabs, window visibility, and HUDs to their initial layout. If a .licht project is open, its stored layout will be replaced when the project is next saved. Preferences stays open.",
+    "reset_current_section": "Reset this section",
+    "reset_section_confirmation": "Restore the settings in the current section to their defaults? This applies immediately to",
+    "reset_section_success": "Section reset immediately.",
+    "reset_section_failed": "Unable to reset settings.",
+    "ui_preferences_save_failed": "Unable to save interface preferences.",
+    "reset_all_settings": "Reset all settings",
+    "reset_all_settings_confirmation": "Restore language, theme, UI scale, input preferences, layout, and window state to their defaults? This applies immediately. If a .licht project is open, its stored layout will be replaced when next saved; project content, datasets, exports, plugins, and cache are not affected.",
+    "reset_all_settings_success": "All preferences, layout, and window state reset immediately.",
+    "window_manager_unavailable": "Window manager is unavailable.",
+    "window_state_reset_failed": "The window could not be restored to its default geometry."
   },
   "main_panel": {
     "console": "Console",
@@ -1360,6 +1385,7 @@
     "action.node_rect_select": "Rectangle Select Nodes",
     "action.toggle_ui": "Toggle UI",
     "action.toggle_fullscreen": "Toggle Fullscreen",
+    "action.open_preferences": "Open Preferences",
     "action.histogram_zoom_marked": "Zoom Histogram at Cursor",
     "action.sequencer_add_keyframe": "Add Keyframe",
     "action.sequencer_update_keyframe": "Update Keyframe",
@@ -1765,6 +1791,7 @@
     "reload": "Reload"
   },
   "status_bar": {
+    "safe_mode": "SAFE MODE",
     "export_cancelled": "Export cancelled",
     "gt_compare": "GT Compare",
     "camera": "Cam {}",

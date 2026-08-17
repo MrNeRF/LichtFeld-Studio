@@ -7,25 +7,28 @@
             <div id="content">
                 <div id="python-console-toolbar">
                     <div class="toolbar-row">
-                        <button id="new-button" class="toolbar-button btn-new" type="button" data-action="new"></button>
-                        <button id="load-button" class="toolbar-button btn-load" type="button" data-action="load"></button>
-                        <button id="reload-button" class="toolbar-button btn-reload" type="button" data-action="reload"></button>
-                        <button id="save-button" class="toolbar-button btn-save" type="button" data-action="save"></button>
-                        <button id="save-as-button" class="toolbar-button btn-save-as" type="button" data-action="save-as"></button>
-                        <button id="format-button" class="toolbar-button btn-format" type="button" data-action="format"></button>
-                        <button id="vim-button" class="toolbar-button btn-vim" type="button" data-action="toggle-vim"></button>
-                        <button id="run-button" class="toolbar-button btn-run run-button" type="button" data-action="run"></button>
-                        <button id="stop-button" class="toolbar-button btn-stop stop-button" type="button" data-action="stop"></button>
-                        <button id="reset-button" class="toolbar-button btn-reset" type="button" data-action="reset"></button>
-                        <button id="clear-button" class="toolbar-button btn-clear" type="button" data-action="clear"></button>
-                        <span class="toolbar-separator">|</span>
-                        <span id="run-status"></span>
-                        <span id="syntax-status"></span>
-                        <button id="outline-button" type="button" data-action="toggle-outline"></button>
-                        <button id="breadcrumb-button" type="button" data-action="toggle-breadcrumbs"></button>
-                        <button id="fold-button" type="button" data-action="toggle-folds"></button>
-                        <span id="script-label"></span>
-                        <button id="font-status" type="button" data-action="font-reset">100%</button>
+                        <div class="toolbar-actions">
+                            <button id="new-button" class="toolbar-button btn-new" type="button" data-action="new"></button>
+                            <button id="load-button" class="toolbar-button btn-load" type="button" data-action="load"></button>
+                            <button id="reload-button" class="toolbar-button btn-reload" type="button" data-action="reload"></button>
+                            <button id="save-button" class="toolbar-button btn-save" type="button" data-action="save"></button>
+                            <button id="save-as-button" class="toolbar-button btn-save-as" type="button" data-action="save-as"></button>
+                            <button id="format-button" class="toolbar-button btn-format" type="button" data-action="format"></button>
+                            <button id="vim-button" class="toolbar-button btn-vim" type="button" data-action="toggle-vim"></button>
+                            <button id="run-button" class="toolbar-button btn-run run-button" type="button" data-action="run"></button>
+                            <button id="stop-button" class="toolbar-button btn-stop stop-button" type="button" data-action="stop"></button>
+                            <button id="reset-button" class="toolbar-button btn-reset" type="button" data-action="reset"></button>
+                            <button id="clear-button" class="toolbar-button btn-clear" type="button" data-action="clear"></button>
+                            <span class="toolbar-separator">|</span>
+                            <span id="run-status"></span>
+                            <span id="syntax-status"></span>
+                            <button id="outline-button" type="button" data-action="toggle-outline"></button>
+                            <button id="breadcrumb-button" type="button" data-action="toggle-breadcrumbs"></button>
+                            <button id="fold-button" type="button" data-action="toggle-folds"></button>
+                            <span id="script-label"></span>
+                            <button id="font-status" type="button" data-action="font-reset">100%</button>
+                        </div>
+                        <button id="close-panel-button" type="button" data-action="close-panel" data-tooltip="common.close">&#215;</button>
                     </div>
                 </div>
 

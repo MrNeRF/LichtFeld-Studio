@@ -8,7 +8,7 @@ API_VERSION: str = '1.0'
 FEATURES: list = ...
 
 def discover() -> object:
-    """Discover plugins in ~/.lichtfeld/plugins/"""
+    """Discover plugins in the resolved user plugin directory"""
 
 def load(name: str) -> bool:
     """Load plugin"""

@@ -178,7 +178,8 @@ namespace lfs::python {
             .value("PIE_MENU", Action::PIE_MENU)
             .value("DEPTH_ADJUST_NEAR", Action::DEPTH_ADJUST_NEAR)
             .value("HISTOGRAM_ZOOM_MARKED", Action::HISTOGRAM_ZOOM_MARKED)
-            .value("TOGGLE_CAMERA_FRUSTUMS", Action::TOGGLE_CAMERA_FRUSTUMS);
+            .value("TOGGLE_CAMERA_FRUSTUMS", Action::TOGGLE_CAMERA_FRUSTUMS)
+            .value("OPEN_PREFERENCES", Action::OPEN_PREFERENCES);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")
@@ -527,10 +528,11 @@ namespace lfs::python {
             []() {
                 if (!get_keymap_bindings())
                     return;
-                auto config_dir = InputBindings::getConfigDir();
-                auto saved_path = config_dir / "Default.json";
-                if (std::filesystem::exists(saved_path)) {
-                    std::filesystem::remove(saved_path);
+                if (const auto config_dir = InputBindings::getConfigDir()) {
+                    const auto saved_path = *config_dir / "Default.json";
+                    if (std::filesystem::exists(saved_path)) {
+                        std::filesystem::remove(saved_path);
+                    }
                 }
                 get_keymap_bindings()->loadProfile("Default");
                 get_keymap_bindings()->saveProfile("Default");

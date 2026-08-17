@@ -767,9 +767,34 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "language": "Taal:",
     "title": "Voorkeuren",
-    "select_language": "Selecteer Taal"
+    "language": "Taal:",
+    "select_language": "Selecteer Taal",
+    "interface": "Interface",
+    "general": "Algemeen",
+    "appearance": "Uiterlijk",
+    "input": "Invoer",
+    "camera_navigation": "Cameranavigatie",
+    "navigation_mode": "Navigatiemodus",
+    "camera_view_snap": "Asweergaven uitlijnen",
+    "enable_axis_view_snap": "Uitlijning van asweergaven inschakelen",
+    "remember_camera_navigation": "Cameranavigatie onthouden",
+    "remember_camera_view_snap": "Uitlijning van asweergaven onthouden",
+    "navigation_orbit": "Orbit",
+    "navigation_trackball": "Vrije orbit",
+    "navigation_fpv": "Vliegen",
+    "navigation_drone": "Drone",
+    "interface_layout_description": "Zet docks, panelen, tabbladen, vensterzichtbaarheid en HUD's terug naar de beginindeling. Als een .licht-project open is, wordt de opgeslagen indeling bij de volgende opslag vervangen. Voorkeuren blijft open.",
+    "reset_current_section": "Deze sectie resetten",
+    "reset_section_confirmation": "De instellingen in de huidige sectie naar de standaardwaarden herstellen? Dit wordt onmiddellijk toegepast op",
+    "reset_section_success": "Sectie onmiddellijk gereset.",
+    "reset_section_failed": "Instellingen kunnen niet worden gereset.",
+    "ui_preferences_save_failed": "De interfacevoorkeuren konden niet worden opgeslagen.",
+    "reset_all_settings": "Alle instellingen resetten",
+    "reset_all_settings_confirmation": "Taal, thema, UI-schaal, invoervoorkeuren, indeling en vensterstatus naar de standaardwaarden herstellen? Dit wordt onmiddellijk toegepast. Als een .licht-project open is, wordt de opgeslagen indeling bij de volgende opslag vervangen; projectinhoud, datasets, exports, plugins en cache blijven ongewijzigd.",
+    "reset_all_settings_success": "Alle voorkeuren, de indeling en de vensterstatus zijn onmiddellijk gereset.",
+    "window_manager_unavailable": "Vensterbeheer is niet beschikbaar.",
+    "window_state_reset_failed": "De standaardvenstergeometrie kon niet worden hersteld."
   },
   "main_panel": {
     "console": "Console",
@@ -1360,6 +1385,7 @@
     "action.node_rect_select": "Knopen rechthoekig selecteren",
     "action.toggle_ui": "UI omschakelen",
     "action.toggle_fullscreen": "Volledig scherm omschakelen",
+    "action.open_preferences": "Voorkeuren openen",
     "action.histogram_zoom_marked": "Histogram bij cursor zoomen",
     "action.sequencer_add_keyframe": "Keyframe toevoegen",
     "action.sequencer_update_keyframe": "Keyframe bijwerken",
@@ -1765,6 +1791,7 @@
     "reload": "Herladen"
   },
   "status_bar": {
+    "safe_mode": "VEILIGE MODUS",
     "export_cancelled": "Export geannuleerd",
     "gt_compare": "GT-vergelijking",
     "camera": "Cam {}",

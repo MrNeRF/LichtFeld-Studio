@@ -562,7 +562,9 @@ namespace lfs::vis::gui {
         const auto& id = target->GetId();
 
         if (id == "modal-backdrop") {
-            overlay->cancel();
+            // A modal choice must be made explicitly through one of its
+            // buttons. Clicking the backdrop is intentionally inert.
+            event.StopPropagation();
             return;
         }
 

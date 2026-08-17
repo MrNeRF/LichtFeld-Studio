@@ -81,7 +81,7 @@ namespace lfs::core {
             EVENT(SaveAsAndExit, );
             EVENT(StopSaveAndExit, );
             EVENT(CancelExit, );
-            EVENT(ForceExit, );
+            EVENT(ForceExit, bool discard_autosave = false;);
             EVENT(SwitchToEditMode, );
             EVENT(ResetCamera, );
             EVENT(ShowWindow, std::string window_name; bool show;);

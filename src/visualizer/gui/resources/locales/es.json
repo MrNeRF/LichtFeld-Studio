@@ -767,9 +767,34 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "language": "Idioma:",
     "title": "Preferencias",
-    "select_language": "Seleccionar idioma"
+    "language": "Idioma:",
+    "select_language": "Seleccionar idioma",
+    "interface": "Interfaz",
+    "general": "General",
+    "appearance": "Apariencia",
+    "input": "Entrada",
+    "camera_navigation": "Navegación de cámara",
+    "navigation_mode": "Modo de navegación",
+    "camera_view_snap": "Ajustar vistas de ejes",
+    "enable_axis_view_snap": "Activar ajuste de vistas de ejes",
+    "remember_camera_navigation": "Recordar navegación de cámara",
+    "remember_camera_view_snap": "Recordar ajuste de vistas de ejes",
+    "navigation_orbit": "Órbita",
+    "navigation_trackball": "Órbita libre",
+    "navigation_fpv": "Vuelo",
+    "navigation_drone": "Dron",
+    "interface_layout_description": "Restablece los paneles, pestañas, ventanas y HUD a su diseño inicial. Si hay un proyecto .licht abierto, su diseño guardado se sustituirá la próxima vez que se guarde. Preferencias permanece abierto.",
+    "reset_current_section": "Restablecer esta sección",
+    "reset_section_confirmation": "¿Restablecer los ajustes de la sección actual a sus valores predeterminados? Se aplica inmediatamente a",
+    "reset_section_success": "Sección restablecida inmediatamente.",
+    "reset_section_failed": "No se pudieron restablecer los ajustes.",
+    "ui_preferences_save_failed": "No se pudieron guardar las preferencias de la interfaz.",
+    "reset_all_settings": "Restablecer todos los ajustes",
+    "reset_all_settings_confirmation": "¿Restablecer idioma, tema, escala de interfaz, preferencias de entrada, diseño y estado de la ventana a sus valores predeterminados? Se aplica inmediatamente. Si hay un proyecto .licht abierto, su diseño guardado se sustituirá la próxima vez que se guarde; el contenido del proyecto, los conjuntos de datos, las exportaciones, los plugins y la caché no se verán afectados.",
+    "reset_all_settings_success": "Todas las preferencias, el diseño y el estado de la ventana se restablecieron inmediatamente.",
+    "window_manager_unavailable": "El gestor de ventanas no está disponible.",
+    "window_state_reset_failed": "No se pudo restaurar la geometría predeterminada de la ventana."
   },
   "main_panel": {
     "console": "Consola",
@@ -1360,6 +1385,7 @@
     "action.node_rect_select": "Selección rectangular de nodos",
     "action.toggle_ui": "Alternar UI",
     "action.toggle_fullscreen": "Alternar pantalla completa",
+    "action.open_preferences": "Abrir preferencias",
     "action.histogram_zoom_marked": "Zoom del Histograma en el Cursor",
     "action.sequencer_add_keyframe": "Añadir fotograma clave",
     "action.sequencer_update_keyframe": "Actualizar fotograma clave",
@@ -1765,6 +1791,7 @@
     "reload": "Recargar"
   },
   "status_bar": {
+    "safe_mode": "MODO SEGURO",
     "export_cancelled": "Exportación cancelada",
     "gt_compare": "Comparación GT",
     "camera": "Cámara {}",

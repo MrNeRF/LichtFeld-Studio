@@ -48,6 +48,7 @@ class HistogramPanel(Panel):
     id = "lfs.histogram"
     label = "Histogram"
     space = lf.ui.PanelSpace.BOTTOM_DOCK
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     order = 97
     template = "rmlui/histogram_panel.rml"
     size = (860, 660)

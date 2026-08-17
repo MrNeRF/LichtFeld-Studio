@@ -313,8 +313,16 @@ class PortalAccountService:
         if self.is_custom_portal:
             _log.warning("Using non-default LichtFeld portal host: %s", self.portal_host)
 
-        self.credentials_path = Path(credentials_path).expanduser() if credentials_path else (
-            Path.home() / ".lichtfeld" / "account" / "credentials.json"
+        resolved_data = os.environ.get("LFS_RESOLVED_DATA_DIR")
+        default_credentials = (
+            Path(resolved_data) / "account" / "credentials.json"
+            if resolved_data
+            else Path.home() / ".lichtfeld" / "account" / "credentials.json"
+        )
+        self.credentials_path = (
+            Path(credentials_path).expanduser()
+            if credentials_path
+            else default_credentials
         )
         self._lock_path = self.credentials_path.with_suffix(self.credentials_path.suffix + ".lock")
         self._client_name = client_name

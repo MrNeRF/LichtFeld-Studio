@@ -411,10 +411,17 @@ TEST_F(PanelRegistryAnimationDemandTest,
     registry.apply_project_state({keep});
 
     const auto kept = registry.get_panel("test.keep");
-    const auto dropped = registry.get_panel("test.drop");
+    auto dropped = registry.get_panel("test.drop");
     ASSERT_TRUE(kept.has_value());
     ASSERT_TRUE(dropped.has_value());
     EXPECT_TRUE(kept->enabled);
+    EXPECT_FALSE(dropped->enabled);
+
+    registry.set_panel_enabled("test.drop", true);
+    registry.apply_project_state({keep});
+
+    dropped = registry.get_panel("test.drop");
+    ASSERT_TRUE(dropped.has_value());
     EXPECT_TRUE(dropped->enabled);
 }
 
@@ -735,6 +742,25 @@ TEST_F(PanelRegistryAnimationDemandTest, PanelPayloadRoundTripAndReset) {
 
     PanelRegistry::instance().apply_panel_payloads({});
     EXPECT_EQ(panel->chrome, "{}");
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, DefaultClosedAppliesToDockedPanelsAndReset) {
+    using namespace lfs::vis::gui;
+
+    PanelInfo info;
+    info.id = "lfs.asset_manager";
+    info.label = info.id;
+    info.space = PanelSpace::LeftDock;
+    info.options = static_cast<uint32_t>(PanelOption::DEFAULT_CLOSED);
+    info.is_native = false;
+    info.panel = std::make_shared<TestPanel>(false);
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));
+    EXPECT_FALSE(PanelRegistry::instance().is_panel_enabled("lfs.asset_manager"));
+
+    PanelRegistry::instance().set_panel_enabled("lfs.asset_manager", true);
+    ASSERT_TRUE(PanelRegistry::instance().is_panel_enabled("lfs.asset_manager"));
+    PanelRegistry::instance().reset_project_state();
+    EXPECT_FALSE(PanelRegistry::instance().is_panel_enabled("lfs.asset_manager"));
 }
 
 TEST_F(PanelRegistryAnimationDemandTest, LateRegisterAppliesPendingPanelPayload) {

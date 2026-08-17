@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/layout_state.hpp"
-#include "core/config_paths.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/user_paths.hpp"
+#include <atomic>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <utility>
@@ -13,6 +15,19 @@ namespace lfs::vis::gui {
 
     namespace {
         constexpr int LAYOUT_STATE_VERSION = 1;
+        std::atomic<bool> g_persistence_enabled{true};
+
+        [[nodiscard]] lfs::Error uiPreferencesError(std::string detail = {}) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .user_message = std::string(LOC("preferences.ui_preferences_save_failed")),
+                .detail = std::move(detail),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
 
         bool migrateLayoutJson(nlohmann::json& layout,
                                int version,
@@ -139,62 +154,106 @@ namespace lfs::vis::gui {
             applyUserPreferences(state, layout);
             return true;
         }
+
+        [[nodiscard]] nlohmann::json serializeUserPreferences(const LayoutState& state) {
+            nlohmann::json layout;
+            layout["version"] = LAYOUT_STATE_VERSION;
+            if (!state.file_association.empty())
+                layout["file_association"] = state.file_association;
+
+            layout["vram_hud"] = {
+                {"x", state.vram_hud_x},
+                {"y", state.vram_hud_y},
+                {"width", state.vram_hud_width},
+                {"height", state.vram_hud_height},
+                {"active_tab", state.vram_hud_active_tab},
+                {"collapsed", state.vram_hud_collapsed_paths},
+            };
+            layout["perf_hud"] = {
+                {"visible", state.perf_hud_visible},
+                {"expanded", state.perf_hud_expanded},
+            };
+            return layout;
+        }
     } // namespace
 
     std::filesystem::path LayoutState::getConfigDir() {
-        return lfs::core::user_config_dir();
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (!paths) {
+            LOG_WARN("Unable to resolve UI preference directory: {}",
+                     lfs::format_for_developer(paths.error()));
+            return {};
+        }
+        return paths->configDir();
     }
 
     std::filesystem::path LayoutState::getLegacyConfigPath() {
-        return getConfigDir() / "layout.json";
+        const auto directory = getConfigDir();
+        return directory.empty() ? std::filesystem::path{}
+                                 : directory / "layout.json";
     }
 
     std::filesystem::path LayoutState::getUserPreferencesPath() {
-        return getConfigDir() / "ui_preferences.json";
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (!paths) {
+            LOG_WARN("Unable to resolve UI preference path: {}",
+                     lfs::format_for_developer(paths.error()));
+            return {};
+        }
+        return paths->uiPreferencesFile();
     }
 
     bool LayoutState::saveUserPreferences() const {
-        return saveUserPreferencesTo(getUserPreferencesPath());
+        const auto saved = saveUserPreferencesChecked();
+        if (!saved) {
+            LOG_WARN("Failed to save user UI preferences: {}",
+                     lfs::format_for_developer(saved.error()));
+        }
+        return saved.has_value();
+    }
+
+    lfs::Status LayoutState::saveUserPreferencesChecked() const {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return {};
+
+        try {
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths)
+                return lfs::Status::failure(paths.error());
+
+            return paths->writeUiPreferencesAtomically(
+                serializeUserPreferences(*this).dump(2) + '\n');
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): convert JSON serialization failures into a typed status.
+            return lfs::Status::failure(uiPreferencesError(e.what()));
+        } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): contain non-standard serialization failures at the persistence boundary.
+            return lfs::Status::failure(uiPreferencesError());
+        }
     }
 
     bool LayoutState::saveUserPreferencesTo(const std::filesystem::path& path) const {
         try {
-            if (!path.parent_path().empty())
-                std::filesystem::create_directories(path.parent_path());
-
-            nlohmann::json layout;
-            layout["version"] = LAYOUT_STATE_VERSION;
-            if (!file_association.empty())
-                layout["file_association"] = file_association;
-
-            nlohmann::json vram_hud;
-            vram_hud["x"] = vram_hud_x;
-            vram_hud["y"] = vram_hud_y;
-            vram_hud["width"] = vram_hud_width;
-            vram_hud["height"] = vram_hud_height;
-            vram_hud["active_tab"] = vram_hud_active_tab;
-            vram_hud["collapsed"] = vram_hud_collapsed_paths;
-            layout["vram_hud"] = std::move(vram_hud);
-
-            nlohmann::json perf_hud;
-            perf_hud["visible"] = perf_hud_visible;
-            perf_hud["expanded"] = perf_hud_expanded;
-            layout["perf_hud"] = std::move(perf_hud);
-
-            std::ofstream file(path);
-            if (!file)
-                return false;
-            file << layout.dump(2);
-            return static_cast<bool>(file);
+            const auto saved = lfs::core::writeTextFileAtomically(
+                path, serializeUserPreferences(*this).dump(2) + '\n');
+            if (!saved) {
+                LOG_WARN("Failed to save user UI preferences to {}: {}",
+                         path.string(),
+                         lfs::format_for_developer(saved.error()));
+            }
+            return saved.has_value();
         } catch (const std::exception& e) {
-            LOG_WARN("Failed to save user UI preferences: {}", e.what());
+            LOG_WARN("Failed to save user UI preferences to {}: {}", path.string(), e.what());
         } catch (...) {
-            LOG_WARN("Failed to save user UI preferences: unknown error");
+            LOG_WARN("Failed to save user UI preferences to {}: unknown error", path.string());
         }
         return false;
     }
 
     bool LayoutState::load() {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return true;
+
         return loadFrom(getLegacyConfigPath(), getUserPreferencesPath());
     }
 
@@ -215,6 +274,10 @@ namespace lfs::vis::gui {
             LOG_WARN("Failed to load UI state: unknown error");
         }
         return false;
+    }
+
+    void LayoutState::setPersistenceEnabled(const bool enabled) noexcept {
+        g_persistence_enabled.store(enabled, std::memory_order_release);
     }
 
 } // namespace lfs::vis::gui

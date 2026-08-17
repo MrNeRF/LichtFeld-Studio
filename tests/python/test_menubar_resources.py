@@ -89,6 +89,8 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     assert rml.index('data-for="button : menu_render_buttons"') < rml.index(
         'data-for="button : menu_projection_buttons"'
     )
+    toolbar_button_rule = _rule_body(rcss, ".menu-toolbar-btn")
+    assert "transition: none;" in toolbar_button_rule
 
 
 def test_rml_tooltips_request_only_pending_animation_frames():
@@ -156,6 +158,9 @@ def test_menu_bar_uses_retained_bounds_for_submenu_hover():
     assert "RmlMenuBar::sizeOpenDropdowns" in menu_bar_cpp
     assert "GetScrollWidth()" in menu_bar_cpp
     assert 'GetElementsByClassName(submenus, "submenu-popup")' in menu_bar_cpp
+    assert "element->GetDisplay() == Rml::Style::Display::None" in menu_bar_cpp
+    assert "tested against the previous submenu geometry" in menu_bar_cpp
+    assert "a fast following click cannot hit the previous menu's rows" in menu_bar_cpp
     assert "rml_context_->GetElementAtPoint" not in menu_bar_cpp
     assert 'action == "window_toggle_fullscreen"' not in menu_bar_cpp
     assert 'ctor.Bind("menu_camera_buttons", &camera_buttons_)' in menu_bar_cpp
@@ -222,6 +227,19 @@ def test_scene_header_hosts_asset_manager_launcher():
     assert 'id="asset-manager-button"' in scene_rml
     assert 'data-tooltip="toolbar.asset_manager"' in scene_rml
     assert ".scene-header-icon-button" in scene_rcss
+    header_rule = _rule_body(scene_rcss, ".scene-header-row")
+    assert "min-width: 0;" in header_rule
+    tab_bar_rule = _rule_body(scene_rcss, ".scene-tab-bar")
+    assert "min-width: 0;" in tab_bar_rule
+    assert "flex-grow: 1;" in tab_bar_rule
+    assert "flex-shrink: 1;" in tab_bar_rule
+    tab_rule = _rule_body(scene_rcss, ".scene-tab")
+    assert "min-width: 0;" in tab_rule
+    assert "flex-grow: 1;" in tab_rule
+    assert "flex-shrink: 1;" in tab_rule
+    assert "text-overflow: ellipsis;" in tab_rule
+    asset_button_rule = _rule_body(scene_rcss, ".scene-header-icon-button")
+    assert "flex-shrink: 0;" in asset_button_rule
     assert "width: 30dp;" in scene_rcss
     assert "height: 30dp;" in scene_rcss
     assert "width: 20dp;" in scene_rcss

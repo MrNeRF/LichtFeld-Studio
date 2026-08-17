@@ -69,8 +69,8 @@ namespace lfs::core {
                   const std::string& log_file,
                   const std::string& filter_pattern,
                   bool use_stderr);
-        // default_log_dir_override replaces the resolved per-user LichtFeld directory
-        // (normally ~/.lichtfeld) used to place the always-on durable log; empty means
+        // default_log_dir_override replaces the resolved per-user LichtFeld root
+        // used to place the always-on durable log under its logs directory; empty means
         // use the real per-user directory. Exists so tests can redirect it without a
         // process-global env var.
         void init(LogLevel console_level,
