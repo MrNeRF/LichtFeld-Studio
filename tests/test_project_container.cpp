@@ -24,6 +24,7 @@
 #include <fstream>
 #include <functional>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -557,6 +558,96 @@ namespace {
         return payload;
     }
 
+    std::vector<std::byte> compressible_payload(const std::size_t bytes) {
+        std::vector<std::byte> payload(bytes);
+        std::array<std::byte, 256> tile{};
+        for (std::size_t index = 0; index < tile.size(); ++index) {
+            tile[index] =
+                static_cast<std::byte>(static_cast<unsigned>(index * 13u + 7u));
+        }
+        for (std::size_t offset = 0; offset < bytes;) {
+            const auto n = std::min(tile.size(), bytes - offset);
+            std::memcpy(payload.data() + offset, tile.data(), n);
+            offset += n;
+        }
+        constexpr std::size_t kStamp = 1024 * 1024;
+        for (std::size_t block = 0; block * kStamp < bytes; ++block) {
+            payload[block * kStamp] =
+                static_cast<std::byte>(static_cast<unsigned>(block & 0xffu));
+        }
+        return payload;
+    }
+
+    std::uint64_t read_le_u64(const std::vector<std::byte>& bytes,
+                              const std::size_t at) {
+        std::uint64_t value = 0;
+        for (std::size_t index = 0; index < 8; ++index) {
+            value |= static_cast<std::uint64_t>(
+                         std::to_integer<std::uint8_t>(bytes[at + index]))
+                     << (8 * index);
+        }
+        return value;
+    }
+
+    struct FramedTableRecord {
+        std::uint64_t stored_offset = 0;
+        std::uint64_t stored_bytes = 0;
+        std::uint64_t decoded_offset = 0;
+        std::uint64_t decoded_bytes = 0;
+    };
+
+    std::vector<FramedTableRecord> read_framed_table(const fs::path& path,
+                                                     const ChunkInfo& chunk) {
+        const auto header = read_file_range(path, chunk.payload_offset, 16);
+        const auto count = static_cast<std::uint32_t>(header[12]) |
+                           (static_cast<std::uint32_t>(header[13]) << 8) |
+                           (static_cast<std::uint32_t>(header[14]) << 16) |
+                           (static_cast<std::uint32_t>(header[15]) << 24);
+        const auto table = 16u + static_cast<std::size_t>(count) * 16u;
+        const auto bytes = read_file_range(path, chunk.payload_offset, table);
+        std::vector<FramedTableRecord> records;
+        records.reserve(count);
+        std::uint64_t stored_offset = table;
+        std::uint64_t decoded_offset = 0;
+        for (std::uint32_t index = 0; index < count; ++index) {
+            const auto at = 16u + static_cast<std::size_t>(index) * 16u;
+            const auto stored_bytes = read_le_u64(bytes, at);
+            const auto decoded_bytes = read_le_u64(bytes, at + 8);
+            records.push_back({stored_offset, stored_bytes, decoded_offset,
+                               decoded_bytes});
+            stored_offset += stored_bytes;
+            decoded_offset += decoded_bytes;
+        }
+        return records;
+    }
+
+    std::uint64_t first_logical_byte_of_record(const FramedTableRecord& record,
+                                               const std::uint64_t uncompressed,
+                                               const bool byteshuffle) {
+        if (!byteshuffle) {
+            return record.decoded_offset;
+        }
+        if (uncompressed < 4 || uncompressed % 4 != 0) {
+            return record.decoded_offset;
+        }
+        const std::uint64_t n_words = uncompressed / 4;
+        std::uint64_t first = uncompressed;
+        for (std::uint64_t plane = 0; plane < 4; ++plane) {
+            const std::uint64_t plane_lo = plane * n_words;
+            const std::uint64_t plane_hi = plane_lo + n_words;
+            const std::uint64_t overlap_lo =
+                std::max(record.decoded_offset, plane_lo);
+            const std::uint64_t overlap_hi = std::min(
+                record.decoded_offset + record.decoded_bytes, plane_hi);
+            if (overlap_hi <= overlap_lo) {
+                continue;
+            }
+            const std::uint64_t word = overlap_lo - plane_lo;
+            first = std::min(first, word * 4 + plane);
+        }
+        return first;
+    }
+
     struct PayloadCapGuard {
         explicit PayloadCapGuard(const std::optional<std::uint64_t> value) {
             detail::set_max_payload_materialized_bytes_for_testing(value);
@@ -793,6 +884,275 @@ namespace {
                                path, chunk.payload_offset + 20,
                                std::array{std::byte{0xff}});
                        });
+    }
+
+    TEST(ProjectContainerReader, BoundedStreamBulkReadEquivalence) {
+        constexpr std::size_t kBytes =
+            2ull * 64ull * 1024ull * 1024ull + 32ull * 1024ull * 1024ull;
+        const auto payload = patterned_payload(kBytes);
+        const auto check = [&](const Compression compression,
+                               const std::string_view name) {
+            TemporaryDirectory temporary;
+            const fs::path path =
+                temporary.path / (std::string(name) + "-bulk.licht");
+            write_framed_fixture(path, FOURCC_CKPT, 1100, payload, compression,
+                                 true, true, 1100);
+            ProjectReader reader = require_result(ProjectReader::open(path));
+            const ChunkInfo& chunk = reader.chunks().front();
+            EXPECT_EQ(chunk.compression, compression) << name;
+            const auto records = read_framed_table(path, chunk);
+            ASSERT_GE(records.size(), 3u) << name;
+            const auto materialized = require_result(reader.read_chunk(chunk));
+            ASSERT_EQ(materialized, payload) << name;
+
+            auto bounded = reader.open_bounded_stream(chunk);
+            ASSERT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
+            auto& stream = bounded->stream();
+
+            std::vector<std::byte> whole(payload.size());
+            stream.read(reinterpret_cast<char*>(whole.data()),
+                        static_cast<std::streamsize>(whole.size()));
+            ASSERT_EQ(stream.gcount(),
+                      static_cast<std::streamsize>(whole.size()))
+                << name;
+            EXPECT_EQ(whole, materialized) << name;
+            EXPECT_EQ(static_cast<std::uint64_t>(stream.tellg()), payload.size())
+                << name;
+
+            struct Slice {
+                std::uint64_t offset;
+                std::uint64_t length;
+            };
+            const std::array<Slice, 6> slices{{
+                {1, 17},
+                {3, 64ull * 1024ull * 1024ull + 9},
+                {7, 2ull * 64ull * 1024ull * 1024ull + 13},
+                {64ull * 1024ull * 1024ull - 1, 32},
+                {64ull * 1024ull * 1024ull + 3, 64ull * 1024ull * 1024ull + 5},
+                {2ull * 64ull * 1024ull * 1024ull + 1, 1000},
+            }};
+            for (const auto& slice : slices) {
+                ASSERT_LE(slice.offset + slice.length, payload.size()) << name;
+                stream.clear();
+                stream.seekg(static_cast<std::streamoff>(slice.offset));
+                ASSERT_TRUE(stream) << name;
+                std::vector<std::byte> got(static_cast<std::size_t>(slice.length));
+                stream.read(reinterpret_cast<char*>(got.data()),
+                            static_cast<std::streamsize>(got.size()));
+                ASSERT_EQ(stream.gcount(),
+                          static_cast<std::streamsize>(got.size()))
+                    << name << " @" << slice.offset;
+                EXPECT_TRUE(std::equal(
+                    got.begin(), got.end(),
+                    materialized.begin() +
+                        static_cast<std::ptrdiff_t>(slice.offset)))
+                    << name << " @" << slice.offset;
+            }
+
+            stream.clear();
+            stream.seekg(5);
+            ASSERT_TRUE(stream) << name;
+            constexpr std::size_t kLarge1 = 64ull * 1024ull * 1024ull + 100;
+            constexpr std::size_t kLarge2 = 64ull * 1024ull * 1024ull + 77;
+            std::vector<std::byte> first(kLarge1);
+            stream.read(reinterpret_cast<char*>(first.data()),
+                        static_cast<std::streamsize>(first.size()));
+            ASSERT_EQ(stream.gcount(), static_cast<std::streamsize>(kLarge1))
+                << name;
+            EXPECT_TRUE(std::equal(first.begin(), first.end(),
+                                   materialized.begin() + 5))
+                << name;
+            const int mid = stream.get();
+            ASSERT_NE(mid, std::char_traits<char>::eof()) << name;
+            EXPECT_EQ(static_cast<unsigned char>(mid),
+                      std::to_integer<unsigned char>(materialized[5 + kLarge1]))
+                << name;
+            std::vector<std::byte> second(kLarge2);
+            stream.read(reinterpret_cast<char*>(second.data()),
+                        static_cast<std::streamsize>(second.size()));
+            ASSERT_EQ(stream.gcount(), static_cast<std::streamsize>(kLarge2))
+                << name;
+            EXPECT_TRUE(std::equal(
+                second.begin(), second.end(),
+                materialized.begin() +
+                    static_cast<std::ptrdiff_t>(5 + kLarge1 + 1)))
+                << name;
+
+            stream.clear();
+            stream.seekg(0);
+            ASSERT_TRUE(stream) << name;
+            std::vector<std::byte> extra(payload.size() + 32);
+            stream.read(reinterpret_cast<char*>(extra.data()),
+                        static_cast<std::streamsize>(extra.size()));
+            ASSERT_EQ(stream.gcount(),
+                      static_cast<std::streamsize>(payload.size()))
+                << name;
+            EXPECT_TRUE(std::equal(extra.begin(),
+                                   extra.begin() +
+                                       static_cast<std::ptrdiff_t>(payload.size()),
+                                   materialized.begin()))
+                << name;
+            EXPECT_TRUE(stream.eof()) << name;
+            EXPECT_FALSE(stream.bad()) << name;
+            stream.clear();
+            EXPECT_EQ(static_cast<std::uint64_t>(stream.tellg()), payload.size())
+                << name;
+            stream.seekg(0);
+            ASSERT_TRUE(stream) << name;
+            std::byte first_byte{};
+            stream.read(reinterpret_cast<char*>(&first_byte), 1);
+            ASSERT_EQ(stream.gcount(), 1) << name;
+            EXPECT_EQ(first_byte, materialized.front()) << name;
+        };
+        check(Compression::ZstdFramed, "zstd-framed");
+        check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");
+    }
+
+    std::vector<std::byte> incompressible_payload(const std::size_t bytes) {
+        std::vector<std::byte> payload(bytes);
+        std::uint64_t state = 0x9e3779b97f4a7c15ull;
+        auto* words = reinterpret_cast<std::uint64_t*>(payload.data());
+        const std::size_t n_words = bytes / sizeof(std::uint64_t);
+        for (std::size_t index = 0; index < n_words; ++index) {
+            state = state * 6364136223846793005ull + 1;
+            words[index] = state;
+        }
+        for (std::size_t index = n_words * sizeof(std::uint64_t); index < bytes;
+             ++index) {
+            state = state * 6364136223846793005ull + 1;
+            payload[index] = static_cast<std::byte>(state >> 56);
+        }
+        return payload;
+    }
+
+    TEST(ProjectContainerReader, BoundedStreamBulkReadStopsAtCorruptRecord) {
+        constexpr std::size_t kBytes =
+            2ull * 64ull * 1024ull * 1024ull + 32ull * 1024ull * 1024ull;
+        const auto payload = incompressible_payload(kBytes);
+        const auto check = [&](const Compression compression,
+                               const std::string_view name) {
+            TemporaryDirectory temporary;
+            const fs::path path =
+                temporary.path / (std::string(name) + "-bulk-corrupt.licht");
+            write_framed_fixture(path, FOURCC_CKPT, 1110, payload, compression,
+                                 true, true, 1110);
+            ProjectReader reader = require_result(ProjectReader::open(path));
+            const ChunkInfo& chunk = reader.chunks().front();
+            const auto records = read_framed_table(path, chunk);
+            ASSERT_GE(records.size(), 3u) << name;
+            const auto& victim = records[2];
+            ASSERT_GT(victim.stored_bytes, 8u) << name;
+            const std::uint64_t corrupt_rel =
+                victim.stored_offset + victim.stored_bytes - 1;
+            write_file_range(path, chunk.payload_offset + corrupt_rel,
+                             std::array{std::byte{0x7f}});
+            const std::uint64_t block = corrupt_rel / BLOCK_CRC_BYTES;
+            const std::uint64_t block_lo = block * BLOCK_CRC_BYTES;
+            const std::uint64_t block_hi = block_lo + BLOCK_CRC_BYTES;
+            std::size_t first_bad = records.size();
+            for (std::size_t index = 0; index < records.size(); ++index) {
+                const auto& record = records[index];
+                if (record.stored_offset < block_hi &&
+                    record.stored_offset + record.stored_bytes > block_lo) {
+                    first_bad = index;
+                    break;
+                }
+            }
+            ASSERT_LT(first_bad, records.size()) << name;
+            const bool byteshuffle =
+                compression == Compression::ByteShuffleZstdFramed;
+            const auto prefix = first_logical_byte_of_record(
+                records[first_bad], chunk.uncompressed_bytes, byteshuffle);
+            ASSERT_GT(prefix, 0u) << name;
+            ASSERT_LT(prefix, payload.size()) << name;
+
+            auto bounded = reader.open_bounded_stream(chunk);
+            ASSERT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
+            auto& stream = bounded->stream();
+            std::vector<std::byte> got(payload.size(), std::byte{0x3c});
+            stream.read(reinterpret_cast<char*>(got.data()),
+                        static_cast<std::streamsize>(got.size()));
+            EXPECT_EQ(stream.gcount(), static_cast<std::streamsize>(prefix))
+                << name;
+            EXPECT_TRUE(stream.fail()) << name;
+            EXPECT_TRUE(std::equal(got.begin(),
+                                   got.begin() + static_cast<std::ptrdiff_t>(prefix),
+                                   payload.begin()))
+                << name;
+
+            stream.clear();
+            stream.seekg(0);
+            std::byte probe{};
+            stream.read(reinterpret_cast<char*>(&probe), 1);
+            EXPECT_EQ(stream.gcount(), 0) << name;
+            EXPECT_TRUE(stream.fail()) << name;
+        };
+        check(Compression::ZstdFramed, "zstd-framed");
+        check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");
+    }
+
+    TEST(ProjectContainerReader, DISABLED_FramedStreamThroughputBenchmark) {
+        constexpr std::size_t kBytes = 24ull * 64ull * 1024ull * 1024ull;
+        std::vector<std::byte> payload;
+        try {
+            payload = compressible_payload(kBytes);
+        } catch (const std::bad_alloc&) {
+            GTEST_SKIP() << "not enough memory for 1.5GiB framed stream benchmark";
+        }
+
+        const auto run = [&](const Compression compression,
+                             const std::string_view name) {
+            TemporaryDirectory temporary;
+            const fs::path path =
+                temporary.path / (std::string(name) + "-bench.licht");
+            write_framed_fixture(path, FOURCC_CKPT, 1120, payload, compression,
+                                 true, true, 1120);
+            ProjectReader reader = require_result(ProjectReader::open(path));
+            const ChunkInfo& chunk = reader.chunks().front();
+            EXPECT_EQ(chunk.compression, compression) << name;
+            const auto records = read_framed_table(path, chunk);
+            ASSERT_GE(records.size(), 3u) << name;
+
+            const auto started_chunk = std::chrono::steady_clock::now();
+            const auto materialized = require_result(reader.read_chunk(chunk));
+            const auto chunk_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() -
+                                      started_chunk)
+                                      .count();
+            ASSERT_EQ(materialized, payload) << name;
+
+            auto bounded = reader.open_bounded_stream(chunk);
+            ASSERT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
+            std::vector<std::byte> streamed;
+            try {
+                streamed.resize(payload.size());
+            } catch (const std::bad_alloc&) {
+                GTEST_SKIP() << "not enough memory for streamed 1.5GiB buffer";
+            }
+            const auto started_stream = std::chrono::steady_clock::now();
+            bounded->stream().read(reinterpret_cast<char*>(streamed.data()),
+                                   static_cast<std::streamsize>(streamed.size()));
+            const auto stream_ms = std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() -
+                                       started_stream)
+                                       .count();
+            ASSERT_EQ(bounded->stream().gcount(),
+                      static_cast<std::streamsize>(streamed.size()))
+                << name;
+            ASSERT_EQ(streamed, payload) << name;
+
+            const double megabytes = static_cast<double>(kBytes) / (1024.0 * 1024.0);
+            const auto mbps = [&](const double milliseconds) {
+                return milliseconds <= 0.0 ? 0.0
+                                           : megabytes / (milliseconds / 1000.0);
+            };
+            std::cout << "FramedStreamThroughputBenchmark " << name
+                      << " read_chunk=" << mbps(chunk_ms) << " MB/s ("
+                      << chunk_ms << " ms) stream=" << mbps(stream_ms)
+                      << " MB/s (" << stream_ms << " ms)\n";
+        };
+        run(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");
+        run(Compression::ZstdFramed, "zstd-framed");
     }
 
     TEST(ProjectContainerWriter, CleanProofRejectsForcedFalseCleanAndReaderStaysPinned) {

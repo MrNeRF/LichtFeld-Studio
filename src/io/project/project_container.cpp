@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <chrono>
@@ -3958,10 +3959,55 @@ namespace lfs::io::project {
             bool failed_ = false;
         };
 
+        // Inverse of the f32 byte-plane shuffle for a logical byte range.
+        // `plane_cursors[p]` points at the first in-range byte of plane p
+        // (planes that the range does not touch may be null). Full words are
+        // gathered without per-byte `% 4` / `/ 4`; unaligned head/tail bytes
+        // use a short scalar path.
+        void gather_unshuffle_words(char* dest, const std::uint64_t logical_pos,
+                                    const std::size_t count,
+                                    std::array<const char*, 4>& plane_cursors) {
+            if (dest == nullptr || count == 0) {
+                return;
+            }
+            std::size_t offset = 0;
+            auto plane = static_cast<std::size_t>(logical_pos & 3u);
+            while (offset < count && plane != 0) {
+                dest[offset++] = *plane_cursors[plane]++;
+                plane = (plane + 1) & 3u;
+            }
+            const std::size_t remaining = count - offset;
+            const std::size_t words = remaining / 4;
+            if (words != 0) {
+                const char* p0 = plane_cursors[0];
+                const char* p1 = plane_cursors[1];
+                const char* p2 = plane_cursors[2];
+                const char* p3 = plane_cursors[3];
+                char* out = dest + offset;
+                for (std::size_t word = 0; word < words; ++word) {
+                    out[4 * word + 0] = p0[word];
+                    out[4 * word + 1] = p1[word];
+                    out[4 * word + 2] = p2[word];
+                    out[4 * word + 3] = p3[word];
+                }
+                plane_cursors[0] = p0 + words;
+                plane_cursors[1] = p1 + words;
+                plane_cursors[2] = p2 + words;
+                plane_cursors[3] = p3 + words;
+                offset += words * 4;
+            }
+            plane = 0;
+            while (offset < count) {
+                dest[offset++] = *plane_cursors[plane]++;
+                ++plane;
+            }
+        }
+
         // Logical (decoded / unshuffled) view of a framed payload. Resident
         // decoded records are capped: ZstdFramed keeps current + one
         // read-ahead; ByteShuffleZstdFramed keeps at most one record per
-        // byte plane plus a bounded gather window.
+        // byte plane plus a bounded gather window. Bulk `xsgetn` decodes at
+        // most kMaxResidentDecodeRecords (~512MiB decoded) beyond dest.
         class FramedLogicalStreambuf final : public std::streambuf {
         public:
             FramedLogicalStreambuf(std::shared_ptr<ReaderState> state,
@@ -4007,6 +4053,48 @@ namespace lfs::io::project {
                 }
                 failed_ = true;
                 return traits_type::eof();
+            }
+
+            std::streamsize xsgetn(char* s, std::streamsize count) override {
+                if (failed_ || s == nullptr || count <= 0) {
+                    return 0;
+                }
+                std::streamsize delivered = 0;
+                if (gptr() < egptr()) {
+                    const auto available =
+                        static_cast<std::streamsize>(egptr() - gptr());
+                    const auto take = std::min(available, count);
+                    std::memcpy(s, gptr(), static_cast<std::size_t>(take));
+                    gbump(static_cast<int>(take));
+                    delivered += take;
+                    if (delivered >= count) {
+                        return delivered;
+                    }
+                }
+                sync_position();
+                setg(nullptr, nullptr, nullptr);
+                if (position_ >= size_) {
+                    return delivered;
+                }
+                const auto want = static_cast<std::uint64_t>(count - delivered);
+                const auto take = std::min(want, size_ - position_);
+                if (take == 0) {
+                    return delivered;
+                }
+                if (!ensure_table()) {
+                    failed_ = true;
+                    return delivered;
+                }
+                const std::uint64_t before = position_;
+                const bool ok =
+                    byteshuffle_ ? bulk_copy_shuffle(s + delivered, take)
+                                 : bulk_copy_zstd(s + delivered, take);
+                delivered += static_cast<std::streamsize>(position_ - before);
+                if (!ok) {
+                    failed_ = true;
+                }
+                prune_cache_after_bulk();
+                return delivered;
             }
 
             pos_type seekoff(const off_type offset, const std::ios_base::seekdir direction,
@@ -4060,6 +4148,9 @@ namespace lfs::io::project {
         private:
             static constexpr std::size_t kNpos = static_cast<std::size_t>(-1);
             static constexpr std::size_t kShuffleWindowBytes = 8ull * 1024 * 1024;
+            // Bulk decode cap: 8 records × 64MiB target ≈ 512MiB decoded
+            // resident at once beyond the caller's destination buffer.
+            static constexpr std::size_t kMaxResidentDecodeRecords = 8;
 
             struct FramedRecord {
                 std::uint64_t so = 0;
@@ -4267,12 +4358,12 @@ namespace lfs::io::project {
                 return nullptr;
             }
 
-            bool decode_record(const std::size_t index, std::vector<char>& decoded) {
+            bool read_record_stored(const std::size_t index,
+                                    std::vector<std::byte>& stored) {
                 if (index >= records_.size()) {
                     return false;
                 }
                 const FramedRecord& record = records_[index];
-                std::vector<std::byte> stored;
                 try {
                     stored.resize(static_cast<std::size_t>(record.sb));
                 } catch (const std::bad_alloc&) {
@@ -4280,31 +4371,471 @@ namespace lfs::io::project {
                 } catch (const std::length_error&) {
                     return false;
                 }
-                {
-                    std::scoped_lock lock(io_mutex_);
-                    if (!ensure_blocks_locked(record.so, record.sb)) {
-                        return false;
-                    }
-                    if (!read_stored_locked(
-                            record.so, std::span<std::byte>(stored.data(), stored.size()))) {
-                        return false;
-                    }
+                std::scoped_lock lock(io_mutex_);
+                if (!ensure_blocks_locked(record.so, record.sb)) {
+                    return false;
+                }
+                return read_stored_locked(
+                    record.so, std::span<std::byte>(stored.data(), stored.size()));
+            }
+
+            bool decompress_record(const FramedRecord& record,
+                                   const std::vector<std::byte>& stored, void* dest,
+                                   const std::size_t dest_bytes) const {
+                if (dest == nullptr || dest_bytes != record.ub) {
+                    return false;
                 }
                 const auto frame_size =
                     ZSTD_getFrameContentSize(stored.data(), stored.size());
                 if (frame_size != record.ub) {
                     return false;
                 }
+                const auto result = ZSTD_decompress(dest, dest_bytes, stored.data(),
+                                                    stored.size());
+                return !ZSTD_isError(result) && result == record.ub;
+            }
+
+            bool decode_record(const std::size_t index, std::vector<char>& decoded) {
+                if (index >= records_.size()) {
+                    return false;
+                }
+                std::vector<std::byte> stored;
+                if (!read_record_stored(index, stored)) {
+                    return false;
+                }
                 try {
-                    decoded.resize(static_cast<std::size_t>(record.ub));
+                    decoded.resize(static_cast<std::size_t>(records_[index].ub));
                 } catch (const std::bad_alloc&) {
                     return false;
                 } catch (const std::length_error&) {
                     return false;
                 }
-                const auto result = ZSTD_decompress(
-                    decoded.data(), decoded.size(), stored.data(), stored.size());
-                return !ZSTD_isError(result) && result == record.ub;
+                return decompress_record(records_[index], stored, decoded.data(),
+                                         decoded.size());
+            }
+
+            bool decode_record_direct(const std::size_t index, void* dest,
+                                      const std::size_t dest_bytes) {
+                if (index >= records_.size()) {
+                    return false;
+                }
+                std::vector<std::byte> stored;
+                if (!read_record_stored(index, stored)) {
+                    return false;
+                }
+                return decompress_record(records_[index], stored, dest, dest_bytes);
+            }
+
+            struct DecodeItem {
+                std::size_t index = kNpos;
+                char* direct = nullptr;
+            };
+
+            bool decode_items(const std::vector<DecodeItem>& items,
+                              std::vector<std::uint8_t>& ok) {
+                if (items.empty()) {
+                    return true;
+                }
+                ok.assign(items.size(), std::uint8_t{1});
+                std::atomic<std::size_t> next{0};
+                std::mutex cache_mutex;
+                const auto run_one = [&](const std::size_t slot) {
+                    const DecodeItem& item = items[slot];
+                    if (item.index >= records_.size()) {
+                        ok[slot] = 0;
+                        return;
+                    }
+                    if (item.direct != nullptr) {
+                        if (!decode_record_direct(
+                                item.index, item.direct,
+                                static_cast<std::size_t>(records_[item.index].ub))) {
+                            ok[slot] = 0;
+                        }
+                        return;
+                    }
+                    CachedRecord decoded;
+                    decoded.index = item.index;
+                    if (!decode_record(item.index, decoded.bytes)) {
+                        ok[slot] = 0;
+                        return;
+                    }
+                    std::scoped_lock lock(cache_mutex);
+                    if (find_cached(item.index) == nullptr) {
+                        cache_.push_back(std::move(decoded));
+                    }
+                };
+                if (items.size() == 1) {
+                    try {
+                        run_one(0);
+                    } catch (...) {
+                        ok[0] = 0;
+                    }
+                    return ok[0] != 0;
+                }
+                const auto workers_count = std::min<std::size_t>(
+                    items.size(),
+                    std::max(1u, std::thread::hardware_concurrency()));
+                std::vector<std::jthread> workers;
+                try {
+                    workers.reserve(workers_count);
+                    for (std::size_t worker = 0; worker < workers_count; ++worker) {
+                        workers.emplace_back([&] {
+                            while (true) {
+                                const auto slot = next.fetch_add(1);
+                                if (slot >= items.size()) {
+                                    return;
+                                }
+                                try {
+                                    run_one(slot);
+                                } catch (...) {
+                                    ok[slot] = 0;
+                                }
+                            }
+                        });
+                    }
+                } catch (...) {
+                    ok.assign(items.size(), std::uint8_t{0});
+                }
+                workers.clear();
+                return std::find(ok.begin(), ok.end(), std::uint8_t{0}) == ok.end();
+            }
+
+            static std::uint64_t first_plane_word(const std::uint64_t plane,
+                                                  const std::uint64_t lo,
+                                                  const std::uint64_t hi,
+                                                  const std::uint64_t n_words) noexcept {
+                if (lo >= hi || plane >= 4 || n_words == 0) {
+                    return kNpos;
+                }
+                const std::uint64_t first =
+                    lo / 4 + (plane < (lo % 4) ? 1 : 0);
+                const std::uint64_t last_byte = hi - 1;
+                const std::uint64_t last_word = last_byte / 4;
+                const std::uint64_t plane_last =
+                    plane <= (last_byte % 4)
+                        ? last_word
+                        : (last_word == 0 ? static_cast<std::uint64_t>(kNpos)
+                                          : last_word - 1);
+                if (plane_last == kNpos || first > plane_last || first >= n_words) {
+                    return kNpos;
+                }
+                return first;
+            }
+
+            static std::uint64_t last_plane_word(const std::uint64_t plane,
+                                                 const std::uint64_t lo,
+                                                 const std::uint64_t hi,
+                                                 const std::uint64_t n_words) noexcept {
+                if (first_plane_word(plane, lo, hi, n_words) == kNpos) {
+                    return kNpos;
+                }
+                const std::uint64_t last_byte = hi - 1;
+                const std::uint64_t last_word = last_byte / 4;
+                const std::uint64_t plane_last =
+                    plane <= (last_byte % 4) ? last_word : last_word - 1;
+                return std::min(plane_last, n_words - 1);
+            }
+
+            [[nodiscard]] bool
+            shuffle_record_covers(const std::size_t index, const std::uint64_t lo,
+                                  const std::uint64_t hi) const {
+                if (index >= records_.size() || lo >= hi || size_ % 4 != 0) {
+                    return false;
+                }
+                const std::uint64_t n_words = size_ / 4;
+                const FramedRecord& record = records_[index];
+                for (std::uint64_t plane = 0; plane < 4; ++plane) {
+                    const std::uint64_t word =
+                        first_plane_word(plane, lo, hi, n_words);
+                    const std::uint64_t last =
+                        last_plane_word(plane, lo, hi, n_words);
+                    if (word == kNpos || last == kNpos) {
+                        continue;
+                    }
+                    const std::uint64_t dec_lo = plane * n_words + word;
+                    const std::uint64_t dec_hi = plane * n_words + last + 1;
+                    if (record.uo < dec_hi && record.uo + record.ub > dec_lo) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            void retain_cache(const std::vector<std::size_t>& keep) {
+                cache_.erase(std::remove_if(cache_.begin(), cache_.end(),
+                                            [&](const CachedRecord& cached) {
+                                                return std::find(keep.begin(),
+                                                                 keep.end(),
+                                                                 cached.index) ==
+                                                       keep.end();
+                                            }),
+                             cache_.end());
+            }
+
+            void prune_cache_after_bulk() {
+                if (position_ >= size_ || !table_ready_) {
+                    cache_.clear();
+                    return;
+                }
+                std::vector<std::size_t> keep;
+                if (byteshuffle_) {
+                    if (size_ % 4 != 0) {
+                        cache_.clear();
+                        return;
+                    }
+                    const std::uint64_t n_words = size_ / 4;
+                    for (std::uint64_t plane = 0; plane < 4; ++plane) {
+                        const std::uint64_t word =
+                            first_plane_word(plane, position_, size_, n_words);
+                        if (word == kNpos) {
+                            continue;
+                        }
+                        const auto index =
+                            record_index_containing(plane * n_words + word);
+                        if (index != kNpos &&
+                            std::find(keep.begin(), keep.end(), index) ==
+                                keep.end()) {
+                            keep.push_back(index);
+                        }
+                    }
+                } else {
+                    const auto index = record_index_containing(position_);
+                    if (index != kNpos) {
+                        keep.push_back(index);
+                        if (index + 1 < records_.size()) {
+                            keep.push_back(index + 1);
+                        }
+                    }
+                }
+                retain_cache(keep);
+            }
+
+            bool bulk_copy_zstd(char* dest, const std::uint64_t count) {
+                const std::uint64_t start = position_;
+                const std::uint64_t end = start + count;
+                if (count == 0) {
+                    return true;
+                }
+                const auto first = record_index_containing(start);
+                const auto last = record_index_containing(end - 1);
+                if (first == kNpos || last == kNpos || last < first) {
+                    return false;
+                }
+                for (std::size_t batch_begin = first; batch_begin <= last;
+                     batch_begin += kMaxResidentDecodeRecords) {
+                    const std::size_t batch_end = std::min(
+                        batch_begin + kMaxResidentDecodeRecords, last + 1);
+                    std::vector<DecodeItem> items;
+                    items.reserve(batch_end - batch_begin);
+                    for (std::size_t index = batch_begin; index < batch_end;
+                         ++index) {
+                        const FramedRecord& record = records_[index];
+                        const bool full = record.uo >= start &&
+                                          record.uo + record.ub <= end;
+                        DecodeItem item;
+                        item.index = index;
+                        if (full) {
+                            item.direct =
+                                dest + static_cast<std::size_t>(record.uo - start);
+                        }
+                        items.push_back(item);
+                    }
+                    std::vector<std::uint8_t> ok;
+                    decode_items(items, ok);
+                    for (std::size_t slot = 0; slot < items.size(); ++slot) {
+                        const std::size_t index = items[slot].index;
+                        const FramedRecord& record = records_[index];
+                        if (slot >= ok.size() || ok[slot] == 0) {
+                            position_ = std::max(start, record.uo);
+                            return false;
+                        }
+                        if (items[slot].direct != nullptr) {
+                            continue;
+                        }
+                        const CachedRecord* cached = find_cached(index);
+                        if (cached == nullptr) {
+                            position_ = std::max(start, record.uo);
+                            return false;
+                        }
+                        const std::uint64_t lo = std::max(record.uo, start);
+                        const std::uint64_t hi =
+                            std::min(record.uo + record.ub, end);
+                        if (lo < hi) {
+                            std::memcpy(
+                                dest + static_cast<std::size_t>(lo - start),
+                                cached->bytes.data() +
+                                    static_cast<std::size_t>(lo - record.uo),
+                                static_cast<std::size_t>(hi - lo));
+                        }
+                    }
+                }
+                position_ = end;
+                return true;
+            }
+
+            bool bulk_copy_shuffle(char* dest, const std::uint64_t count) {
+                if (size_ % 4 != 0) {
+                    return false;
+                }
+                const std::uint64_t n_words = size_ / 4;
+                const std::uint64_t start = position_;
+                const std::uint64_t end = start + count;
+                if (count == 0) {
+                    return true;
+                }
+                // 0 = unknown, 1 = ready, 2 = failed
+                std::vector<std::uint8_t> status(records_.size(), std::uint8_t{0});
+                for (const auto& cached : cache_) {
+                    if (cached.index < status.size()) {
+                        status[cached.index] = 1;
+                    }
+                }
+                const auto add_unique = [](std::vector<std::size_t>& batch,
+                                           const std::size_t index) {
+                    if (index == kNpos) {
+                        return;
+                    }
+                    if (std::find(batch.begin(), batch.end(), index) !=
+                        batch.end()) {
+                        return;
+                    }
+                    if (batch.size() >= kMaxResidentDecodeRecords) {
+                        return;
+                    }
+                    batch.push_back(index);
+                };
+
+                std::uint64_t logical = start;
+                while (logical < end) {
+                    std::vector<std::size_t> batch;
+                    for (std::uint64_t plane = 0; plane < 4; ++plane) {
+                        const std::uint64_t word =
+                            first_plane_word(plane, logical, end, n_words);
+                        if (word == kNpos) {
+                            continue;
+                        }
+                        add_unique(batch,
+                                   record_index_containing(plane * n_words + word));
+                    }
+                    for (std::uint64_t plane = 0; plane < 4; ++plane) {
+                        const std::uint64_t word =
+                            first_plane_word(plane, logical, end, n_words);
+                        if (word == kNpos) {
+                            continue;
+                        }
+                        const auto index =
+                            record_index_containing(plane * n_words + word);
+                        if (index == kNpos || index + 1 >= records_.size()) {
+                            continue;
+                        }
+                        if (shuffle_record_covers(index + 1, logical, end)) {
+                            add_unique(batch, index + 1);
+                        }
+                    }
+
+                    std::vector<DecodeItem> items;
+                    for (const auto index : batch) {
+                        if (index >= status.size()) {
+                            continue;
+                        }
+                        if (status[index] == 1 || find_cached(index) != nullptr) {
+                            status[index] = 1;
+                            continue;
+                        }
+                        if (status[index] == 2) {
+                            continue;
+                        }
+                        items.push_back(DecodeItem{index, nullptr});
+                    }
+                    std::vector<std::uint8_t> ok;
+                    decode_items(items, ok);
+                    for (std::size_t slot = 0; slot < items.size(); ++slot) {
+                        const auto index = items[slot].index;
+                        if (index >= status.size()) {
+                            continue;
+                        }
+                        status[index] =
+                            (slot < ok.size() && ok[slot] != 0) ? 1 : 2;
+                    }
+                    for (const auto& cached : cache_) {
+                        if (cached.index < status.size() &&
+                            status[cached.index] != 2) {
+                            status[cached.index] = 1;
+                        }
+                    }
+
+                    std::uint64_t stripe_end = end;
+                    for (std::uint64_t plane = 0; plane < 4; ++plane) {
+                        const std::uint64_t word =
+                            first_plane_word(plane, logical, end, n_words);
+                        if (word == kNpos) {
+                            continue;
+                        }
+                        const auto index =
+                            record_index_containing(plane * n_words + word);
+                        const std::uint64_t first_logical = word * 4 + plane;
+                        if (index == kNpos || index >= status.size() ||
+                            status[index] != 1) {
+                            stripe_end = std::min(stripe_end, first_logical);
+                            continue;
+                        }
+                        const FramedRecord& record = records_[index];
+                        const std::uint64_t plane_base = plane * n_words;
+                        const std::uint64_t overlap_hi = std::min(
+                            record.uo + record.ub, plane_base + n_words);
+                        if (overlap_hi <= plane_base + word) {
+                            stripe_end = std::min(stripe_end, first_logical);
+                            continue;
+                        }
+                        const std::uint64_t last_word = overlap_hi - plane_base - 1;
+                        const std::uint64_t record_end = last_word * 4 + plane + 1;
+                        stripe_end = std::min(stripe_end, record_end);
+                    }
+
+                    if (stripe_end <= logical) {
+                        position_ = logical;
+                        return false;
+                    }
+
+                    std::array<const char*, 4> cursors{};
+                    for (std::uint64_t plane = 0; plane < 4; ++plane) {
+                        const std::uint64_t word =
+                            first_plane_word(plane, logical, stripe_end, n_words);
+                        if (word == kNpos) {
+                            continue;
+                        }
+                        const auto index =
+                            record_index_containing(plane * n_words + word);
+                        const CachedRecord* cached =
+                            index == kNpos ? nullptr : find_cached(index);
+                        if (cached == nullptr) {
+                            position_ = logical;
+                            return false;
+                        }
+                        const std::uint64_t decoded = plane * n_words + word;
+                        const std::uint64_t local = decoded - records_[index].uo;
+                        if (local >= cached->bytes.size()) {
+                            position_ = logical;
+                            return false;
+                        }
+                        cursors[static_cast<std::size_t>(plane)] =
+                            cached->bytes.data() + static_cast<std::size_t>(local);
+                    }
+                    gather_unshuffle_words(
+                        dest + static_cast<std::size_t>(logical - start), logical,
+                        static_cast<std::size_t>(stripe_end - logical), cursors);
+                    logical = stripe_end;
+
+                    cache_.erase(
+                        std::remove_if(cache_.begin(), cache_.end(),
+                                       [&](const CachedRecord& cached) {
+                                           return !shuffle_record_covers(
+                                               cached.index, logical, end);
+                                       }),
+                        cache_.end());
+                }
+                position_ = end;
+                return true;
             }
 
             bool ensure_decoded(const std::vector<std::size_t>& needed) {
@@ -4488,20 +5019,25 @@ namespace lfs::io::project {
                 }
 
                 const auto count = static_cast<std::size_t>(window_end - position_);
-                for (std::size_t index = 0; index < count; ++index) {
-                    const std::uint64_t logical = position_ + index;
-                    const std::uint64_t plane = logical % 4;
-                    const std::uint64_t word = logical / 4;
-                    const auto* cached = plane_cache[static_cast<std::size_t>(plane)];
-                    const auto record_index =
+                std::array<const char*, 4> cursors{};
+                for (std::uint64_t plane = 0; plane < 4; ++plane) {
+                    const auto index =
                         plane_record[static_cast<std::size_t>(plane)];
+                    if (index == kNpos) {
+                        continue;
+                    }
+                    const auto* cached = plane_cache[static_cast<std::size_t>(plane)];
+                    const std::uint64_t word =
+                        plane >= start_plane ? start_word : start_word + 1;
                     const std::uint64_t decoded = plane * n_words + word;
-                    const std::uint64_t local = decoded - records_[record_index].uo;
+                    const std::uint64_t local = decoded - records_[index].uo;
                     if (cached == nullptr || local >= cached->bytes.size()) {
                         return false;
                     }
-                    window_[index] = cached->bytes[static_cast<std::size_t>(local)];
+                    cursors[static_cast<std::size_t>(plane)] =
+                        cached->bytes.data() + static_cast<std::size_t>(local);
                 }
+                gather_unshuffle_words(window_.data(), position_, count, cursors);
                 buffer_start_ = position_;
                 setg(window_.data(), window_.data(), window_.data() + count);
                 return true;
