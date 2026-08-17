@@ -891,14 +891,6 @@ namespace lfs::vis {
                     updateCropBoxToFitScene(true);
                 }
 
-                // Dataset loading enables point-cloud rendering by default. A later
-                // standalone splat load replaces that dataset, so do not carry the
-                // dataset-specific render mode into the new scene.
-                ui::PointCloudModeChanged{
-                    .enabled = false,
-                    .voxel_size = DEFAULT_VOXEL_SIZE}
-                    .emit();
-
                 selectNode(node_id);
 
                 // Check for companion PPISP file
@@ -910,6 +902,15 @@ namespace lfs::vis {
 
                 LOG_INFO("Loaded '{}' with {} gaussians", added_name, gaussian_count);
             }
+
+            // Dataset loading enables point-cloud rendering by default. A later
+            // standalone asset load replaces that dataset, so do not carry the
+            // dataset-specific render mode into the new scene. Emit only after the
+            // mesh or splat was loaded successfully.
+            ui::PointCloudModeChanged{
+                .enabled = false,
+                .voxel_size = DEFAULT_VOXEL_SIZE}
+                .emit();
 
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to load splat file: {} (path: {})", e.what(), lfs::core::path_to_utf8(path));
