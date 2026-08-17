@@ -620,6 +620,10 @@ namespace lfs::io::project {
                !impl_->owned;
     }
 
+    void LazyChunkValue::drop_clean_proof_for_testing() noexcept {
+        impl_->proof.reset();
+    }
+
     lfs::Result<void>
     LazyChunkValue::read_at(
         const std::uint64_t offset,
@@ -2212,6 +2216,15 @@ namespace lfs::io::project {
                    : &found->second;
     }
 
+    void ProjectDocument::drop_checkpoint_clean_proof_for_testing(
+        const lfs::core::Uuid& instance_uuid) {
+        const auto found = impl_->checkpoints.find(instance_uuid);
+        if (found == impl_->checkpoints.end()) {
+            return;
+        }
+        found->second.drop_clean_proof_for_testing();
+    }
+
     lfs::Result<void>
     ProjectDocument::set_checkpoint(
         const lfs::core::Uuid& instance_uuid,
@@ -3293,30 +3306,50 @@ namespace lfs::io::project {
                     .fourcc = fourcc,
                     .instance_uuid = uuid,
                 };
-                // Container zstd goes through write_chunk (begin_chunk is
-                // Stored-streaming only). Owned staged bytes avoid an extra
-                // materialization; clean-file sources materialize once.
-                const auto options =
-                    lazy_binary_options(fourcc, payload.size());
+                // Owned staged bytes go through write_chunk (container zstd;
+                // begin_chunk is Stored-streaming only). File-backed sources
+                // without a clean proof are copied stored-byte-verbatim so a
+                // compressed CKPT/PPIS is never inflated on the save path.
+                // The copy keeps the source compression, uncompressed_bytes,
+                // and chunk_version; those are correct for an unchanged
+                // payload. Counted as rewritten_chunks because stored bytes
+                // are physically rewritten.
                 if (payload.impl_->owned) {
+                    const auto options =
+                        lazy_binary_options(fourcc, payload.size());
                     if (auto written = writer->write_chunk(
                             key, *payload.impl_->owned, options);
                         !written) {
                         return written;
                     }
+                } else if (payload.impl_->reader && payload.impl_->source) {
+                    const ChunkInfo& source = *payload.impl_->source;
+                    if (source.key != key) {
+                        return fail<void>(
+                            lfs::ErrorCode::Internal,
+                            "The lazy chapter source key does not match the "
+                            "chapter being saved.",
+                            std::format(
+                                "expected {} instance {}, source is {} "
+                                "instance {}",
+                                key.fourcc.to_string(),
+                                key.instance_uuid.to_string(),
+                                source.key.fourcc.to_string(),
+                                source.key.instance_uuid.to_string()),
+                            "lazy_chunk.source_key");
+                    }
+                    if (auto copied = writer->copy_chunk_verbatim(
+                            *payload.impl_->reader, source);
+                        !copied) {
+                        return copied;
+                    }
                 } else {
-                    std::vector<std::byte> materialized(
-                        static_cast<std::size_t>(payload.size()));
-                    if (auto read = payload.read_at(
-                            0, std::span<std::byte>(materialized));
-                        !read) {
-                        return read;
-                    }
-                    if (auto written = writer->write_chunk(
-                            key, materialized, options);
-                        !written) {
-                        return written;
-                    }
+                    return fail<void>(
+                        lfs::ErrorCode::FailedPrecondition,
+                        "The lazy chapter has no byte source.",
+                        "Neither clean file range nor owned storage is "
+                        "available",
+                        "lazy_chunk.source");
                 }
                 ++report.rewritten_chunks;
             }

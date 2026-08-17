@@ -3581,6 +3581,184 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
+         SaveCopiesFileBackedCkptVerbatimWhenCleanProofIsLost) {
+        TemporaryDirectory temporary;
+        const fs::path path =
+            temporary.path / "ckpt-verbatim-no-proof.licht";
+        const Uuid project_uuid = fixed_uuid(9950);
+        const Uuid training_uuid = fixed_uuid(9951);
+        const Uuid checkpoint_uuid = fixed_uuid(9952);
+        auto document = make_empty_document(project_uuid, 100);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "splat",
+                .name = "Training",
+                .child_order = 0,
+                .payload =
+                    PayloadBinding{
+                        .fourcc = "CKPT",
+                        .instance_uuid = checkpoint_uuid,
+                        .source_kind = "training",
+                    },
+            }));
+        require_status(
+            document->edit_scene_graph().set_training_model_uuid(
+                training_uuid));
+        require_status(document->set_checkpoint(
+            checkpoint_uuid,
+            make_autosave_checkpoint_payload(checkpoint_uuid)));
+        auto seed_options = save_options(9953, 1600);
+        seed_options.commit.snapshot_uuid = checkpoint_uuid;
+        auto seeded = document->save(path, seed_options);
+        ASSERT_TRUE(seeded)
+            << lfs::format_for_developer(seeded.error());
+
+        std::vector<std::byte> logical_payload;
+        {
+            ProjectReader seed = require_result(ProjectReader::open(path));
+            const ChunkInfo* ckpt =
+                seed.find(FOURCC_CKPT, checkpoint_uuid);
+            ASSERT_NE(ckpt, nullptr);
+            logical_payload = require_result(seed.read_chunk(*ckpt));
+            ProjectWriter writer = require_result(
+                ProjectWriter::append(
+                    path,
+                    AppendOptions{
+                        .index_compression =
+                            IndexCompression::
+                                StoredForDeterministicTests,
+                        .disk_reserve_bytes = 0,
+                    }));
+            require_status(writer.plan_commit(
+                CommitOptions{
+                    .kind = CommitKind::Explicit,
+                    .commit_uuid = fixed_uuid(9954),
+                    .snapshot_uuid = checkpoint_uuid,
+                    .wallclock_unix_ns = 1700,
+                }));
+            require_status(writer.preflight(logical_payload.size()));
+            for (const auto& chunk : seed.chunks()) {
+                if (!chunk.is_live()) {
+                    continue;
+                }
+                if (chunk.key.fourcc == FOURCC_CKPT) {
+                    require_status(writer.write_chunk(
+                        chunk.key, logical_payload,
+                        ChunkWriteOptions{
+                            .chunk_version = 1,
+                            .compression = chunk.compression,
+                            .tensor_payload = true,
+                            .block_crcs = true,
+                        }));
+                    continue;
+                }
+                auto proof =
+                    require_result(seed.make_clean_proof(chunk, 1));
+                require_status(writer.reuse_if_clean(proof, 1));
+            }
+            require_status(writer.commit());
+        }
+
+        ProjectReader probe = require_result(ProjectReader::open(path));
+        const ChunkInfo* source_row =
+            probe.find(FOURCC_CKPT, checkpoint_uuid);
+        ASSERT_NE(source_row, nullptr);
+        ASSERT_GT(source_row->uncompressed_bytes, 1u);
+        ASSERT_TRUE(source_row->block_crc_table.has_value());
+        EXPECT_TRUE(source_row->compression == Compression::ZstdFramed ||
+                    source_row->compression ==
+                        Compression::ByteShuffleZstdFramed);
+        const auto source_compression = source_row->compression;
+        const auto source_uncompressed = source_row->uncompressed_bytes;
+        const auto source_version = source_row->chunk_version;
+        const auto source_block_crc_count =
+            source_row->block_crc_table->entries.size();
+        const auto source_payload_offset = source_row->payload_offset;
+        const auto source_generation = probe.commit().generation;
+
+        auto opened = require_result_ptr(ProjectDocument::open(path));
+        const auto* checkpoint = opened->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(checkpoint, nullptr);
+        EXPECT_TRUE(checkpoint->is_clean_reference());
+        opened->drop_checkpoint_clean_proof_for_testing(checkpoint_uuid);
+        EXPECT_FALSE(checkpoint->is_clean_reference());
+
+        struct PayloadCapGuard {
+            explicit PayloadCapGuard(const std::uint64_t value) {
+                detail::set_max_payload_materialized_bytes_for_testing(value);
+            }
+            PayloadCapGuard(const PayloadCapGuard&) = delete;
+            PayloadCapGuard& operator=(const PayloadCapGuard&) = delete;
+            ~PayloadCapGuard() {
+                detail::set_max_payload_materialized_bytes_for_testing(
+                    std::nullopt);
+            }
+        };
+        const PayloadCapGuard cap(source_uncompressed - 1);
+        auto materialized = probe.read_chunk(*source_row);
+        ASSERT_FALSE(materialized);
+        EXPECT_EQ(materialized.error().code(),
+                  lfs::ErrorCode::ResourceExhausted);
+
+        auto rewrite_options = save_options(9955, 1800);
+        rewrite_options.commit.snapshot_uuid = checkpoint_uuid;
+        auto rewritten = opened->save(path, rewrite_options);
+        ASSERT_TRUE(rewritten)
+            << lfs::format_for_developer(rewritten.error());
+        EXPECT_GE(rewritten->rewritten_chunks, 1u);
+        EXPECT_GT(rewritten->generation, source_generation);
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        const auto* restored = reopened->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(restored, nullptr);
+
+        std::vector<std::byte> restored_logical;
+        std::optional<lfs::core::CheckpointHeader> header;
+        bool restored_read_ok = false;
+        auto visited = restored->visit_stream(
+            [&](std::istream& stream, const std::uint64_t bytes)
+                -> lfs::Result<void> {
+                auto loaded_header =
+                    lfs::core::load_checkpoint_header(stream, bytes);
+                if (loaded_header) {
+                    header = *loaded_header;
+                }
+                stream.clear();
+                stream.seekg(0);
+                restored_logical.resize(static_cast<std::size_t>(bytes));
+                if (bytes != 0) {
+                    stream.read(
+                        reinterpret_cast<char*>(restored_logical.data()),
+                        static_cast<std::streamsize>(bytes));
+                }
+                restored_read_ok =
+                    static_cast<bool>(stream) &&
+                    static_cast<std::uint64_t>(stream.gcount()) == bytes;
+                return {};
+            });
+        ASSERT_TRUE(visited)
+            << lfs::format_for_developer(visited.error());
+        ASSERT_TRUE(header.has_value());
+        EXPECT_EQ(header->iteration, 11);
+        EXPECT_EQ(header->num_gaussians, 2u);
+        ASSERT_TRUE(restored_read_ok);
+        EXPECT_EQ(restored_logical, logical_payload);
+
+        ProjectReader after = require_result(ProjectReader::open(path));
+        const ChunkInfo* copied =
+            after.find(FOURCC_CKPT, checkpoint_uuid);
+        ASSERT_NE(copied, nullptr);
+        EXPECT_EQ(copied->uncompressed_bytes, source_uncompressed);
+        EXPECT_EQ(copied->compression, source_compression);
+        EXPECT_EQ(copied->chunk_version, source_version);
+        ASSERT_TRUE(copied->block_crc_table.has_value());
+        EXPECT_EQ(copied->block_crc_table->entries.size(),
+                  source_block_crc_count);
+        EXPECT_NE(copied->payload_offset, source_payload_offset);
+    }
+
+    TEST(ProjectDocumentTest,
          HeadlessOpenWithoutRecoverKeepsSidecarUntilExplicitHeadAdvances) {
         TemporaryDirectory temporary;
         const fs::path master =

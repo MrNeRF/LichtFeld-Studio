@@ -59,6 +59,9 @@ namespace lfs::io::project {
         [[nodiscard]] std::uint64_t size() const noexcept;
         [[nodiscard]] const lfs::core::Uuid& snapshot_uuid() const noexcept;
         [[nodiscard]] bool is_clean_reference() const noexcept;
+        // Test-only: forget the CleanProof while keeping the file-backed
+        // source so save() cannot reuse the row and must copy stored bytes.
+        void drop_clean_proof_for_testing() noexcept;
 
         [[nodiscard]] lfs::Result<void>
         read_at(std::uint64_t offset, std::span<std::byte> destination) const;
@@ -229,6 +232,10 @@ namespace lfs::io::project {
 
         [[nodiscard]] const LazyChunkValue*
         find_checkpoint(const lfs::core::Uuid& instance_uuid) const noexcept;
+        // Test-only: drop the file-backed CKPT CleanProof. find_checkpoint()
+        // is const and LazyChunkValue::Impl is translation-unit local.
+        void drop_checkpoint_clean_proof_for_testing(
+            const lfs::core::Uuid& instance_uuid);
         [[nodiscard]] lfs::Result<void>
         set_checkpoint(const lfs::core::Uuid& instance_uuid,
                        LazyChunkValue payload);
