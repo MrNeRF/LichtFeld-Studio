@@ -15,6 +15,7 @@
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
+#include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
@@ -355,6 +356,88 @@ namespace {
 )");
         lfs::test::licht::write_file_bytes(
             dataset_path / "transforms.json", transforms);
+    }
+
+    void write_dataset_project_without_checkpoint(
+        const std::filesystem::path& project_path,
+        const std::filesystem::path& dataset_path,
+        const bool bind_dataset_reference = true) {
+        auto document =
+            lfs::test::licht::make_empty_document(
+                lfs::core::generate_uuid_v4(), 1);
+        lfs::core::Scene source;
+        const auto dataset =
+            source.addDataset("Dataset");
+        const auto cameras = source.addCameraGroup(
+            "Training", dataset, 1);
+        source.addCamera(
+            "frame_0001.png", cameras,
+            make_project_request_test_camera());
+        document->edit_scene_graph() =
+            lfs::test::licht::require_result(
+                lfs::io::project::capture_scene_graph(
+                    source, {}));
+
+        auto parameters =
+            lfs::test::licht::require_result(
+                document->parameters().snapshot());
+        parameters.dataset.data_path = dataset_path;
+        parameters.mrnf_session.iterations = 1234;
+        parameters.mrnf_current.iterations = 1234;
+        lfs::test::licht::require_status(
+            document->edit_parameters().set_snapshot(
+                parameters));
+
+        if (bind_dataset_reference) {
+            const auto reference =
+                lfs::test::licht::require_result(
+                    lfs::io::project::upsert_path_reference(
+                        document->edit_references(),
+                        project_path.parent_path(),
+                        dataset_path, "dataset", "dataset"));
+            lfs::test::licht::require_status(
+                document->edit_project()
+                    .set_dataset_reference(reference));
+        }
+
+        auto options =
+            lfs::test::licht::
+                deterministic_document_save_options(
+                    0x76000008, 1, 2);
+        options.commit.snapshot_uuid = {};
+        (void)lfs::test::licht::require_result(
+            document->save(project_path, options));
+    }
+
+    void write_non_dataset_project_with_stale_dataset_params(
+        const std::filesystem::path& project_path,
+        const std::filesystem::path& stale_dataset_path) {
+        auto document =
+            lfs::test::licht::make_empty_document(
+                lfs::core::generate_uuid_v4(), 1);
+        lfs::core::Scene source;
+        source.addGroup("PLY-only marker");
+        document->edit_scene_graph() =
+            lfs::test::licht::require_result(
+                lfs::io::project::capture_scene_graph(
+                    source, {}));
+
+        auto parameters =
+            lfs::test::licht::require_result(
+                document->parameters().snapshot());
+        parameters.dataset.data_path =
+            stale_dataset_path;
+        lfs::test::licht::require_status(
+            document->edit_parameters().set_snapshot(
+                parameters));
+
+        auto options =
+            lfs::test::licht::
+                deterministic_document_save_options(
+                    0x76000009, 1, 2);
+        options.commit.snapshot_uuid = {};
+        (void)lfs::test::licht::require_result(
+            document->save(project_path, options));
     }
 
     lfs::io::project::LazyChunkValue
@@ -5390,6 +5473,214 @@ namespace lfs::vis {
                 viewer.getGuiManager()->gizmo().getSelectionSubMode(),
                 SelectionSubMode::Rectangle);
         }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           DatasetProjectWithoutCheckpointReloadsTrainer) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path /
+            "dataset-without-checkpoint.licht";
+        const auto dataset_path =
+            temporary_.path /
+            "dataset-without-checkpoint-source";
+        write_minimal_transforms_dataset(dataset_path);
+        write_dataset_project_without_checkpoint(
+            project_path, dataset_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                viewer.getGuiManager()
+                    ->asyncTasks()
+                    .pollImportCompletion();
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       viewer.getTrainerManager()
+                           ->hasTrainer() &&
+                       !viewer.jobs().anyRunning(
+                           JobType::Import);
+            }));
+
+        EXPECT_TRUE(
+            viewer.getSceneManager()->hasDataset());
+        EXPECT_EQ(
+            viewer.getSceneManager()->getDatasetPath(),
+            dataset_path);
+        ASSERT_NE(viewer.getTrainer(), nullptr);
+        EXPECT_EQ(
+            viewer.getTrainer()->getParams().optimization.iterations,
+            1234);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           DatasetProjectWithoutReferenceIsNotRecoveredFromContainingDirectory) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto dataset_path =
+            temporary_.path /
+            "dataset-without-reference";
+        write_minimal_transforms_dataset(dataset_path);
+        const auto project_path =
+            dataset_path / "project.licht";
+        write_dataset_project_without_checkpoint(
+            project_path, dataset_path, false);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen) &&
+                       !viewer.jobs().anyRunning(
+                           JobType::Import);
+            }));
+
+        EXPECT_FALSE(
+            viewer.getTrainerManager()->hasTrainer());
+        EXPECT_TRUE(
+            viewer.getSceneManager()->hasDataset());
+        EXPECT_TRUE(
+            viewer.getSceneManager()
+                ->getDatasetPath()
+                .empty());
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           NonDatasetProjectInsideDatasetRootIsNotReimported) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto dataset_path =
+            temporary_.path / "dataset-containing-ply-project";
+        write_minimal_transforms_dataset(dataset_path);
+        const auto project_path =
+            dataset_path / "ply-only.licht";
+        write_non_dataset_project_with_stale_dataset_params(
+            project_path, dataset_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen) &&
+                       !viewer.jobs().anyRunning(
+                           JobType::Import);
+            }));
+
+        EXPECT_FALSE(
+            viewer.getTrainerManager()->hasTrainer());
+        EXPECT_FALSE(
+            viewer.getSceneManager()->hasDataset());
+        EXPECT_NE(
+            viewer.getScene().getNode(
+                "PLY-only marker"),
+            nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           NonDatasetSaveDoesNotBindStaleDatasetPath) {
+        const auto source_path =
+            temporary_.path / "non-dataset-source.licht";
+        const auto destination =
+            temporary_.path / "non-dataset-saved.licht";
+        const auto stale_dataset_path =
+            temporary_.path / "stale-dataset";
+        write_minimal_transforms_dataset(
+            stale_dataset_path);
+        write_empty_project(source_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        auto opened = viewer.projectOpen(
+            source_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete";
+            }));
+
+        viewer.getParameterManager()
+            ->getDatasetConfig()
+            .data_path = stale_dataset_path;
+        ASSERT_FALSE(
+            viewer.getSceneManager()->hasDataset());
+        ASSERT_TRUE(
+            viewer.projectSaveAs(destination, false));
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(
+                    JobType::ProjectWrite);
+            }));
+
+        auto saved =
+            lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(
+                    destination));
+        const auto dataset_reference =
+            saved->project().dataset_reference();
+        ASSERT_TRUE(dataset_reference)
+            << lfs::format_for_developer(
+                   dataset_reference.error());
+        EXPECT_FALSE(dataset_reference->has_value());
     }
 
     TEST_F(VisualizerImplResetTest,

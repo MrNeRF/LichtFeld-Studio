@@ -198,8 +198,7 @@ namespace lfs::vis::project {
             std::filesystem::path>
         resolveDatasetRootForTrainer(
             const ProjectDocument& document,
-            const lfs::core::param::
-                TrainingParameters& ckpt_params) {
+            const std::filesystem::path& dataset_hint) {
             const auto project_root =
                 projectRootFor(document);
             if (const auto dataset_ref =
@@ -213,17 +212,42 @@ namespace lfs::vis::project {
                                     .references(),
                                 project_root,
                                 **dataset_ref,
-                                ckpt_params.dataset
-                                    .data_path)) {
+                                dataset_hint)) {
                     return *resolved;
                 }
             }
-            if (!ckpt_params.dataset.data_path
-                     .empty()) {
-                return ckpt_params.dataset
-                    .data_path;
+            if (!dataset_hint.empty()) {
+                return dataset_hint;
             }
             return std::nullopt;
+        }
+
+        struct PersistedDatasetScene {
+            bool has_training_model = false;
+            bool has_dataset_node = false;
+        };
+
+        [[nodiscard]] PersistedDatasetScene
+        inspectPersistedDatasetScene(
+            const ProjectDocument& document) {
+            PersistedDatasetScene result;
+            if (const auto training =
+                    document.scene_graph()
+                        .training_model_uuid();
+                training) {
+                result.has_training_model =
+                    training->has_value();
+            }
+            if (const auto nodes =
+                    document.scene_graph().nodes();
+                nodes) {
+                result.has_dataset_node =
+                    std::ranges::any_of(
+                        *nodes, [](const auto& node) {
+                            return node.type == "dataset";
+                        });
+            }
+            return result;
         }
 
         // After display hydration, stream CKPT into a
@@ -240,111 +264,84 @@ namespace lfs::vis::project {
             if (!report.trainer_state_pending ||
                 !report.checkpoint_uuid ||
                 !report.checkpoint_header) {
+                const auto persisted_dataset =
+                    inspectPersistedDatasetScene(
+                        document);
+                if (!persisted_dataset.has_dataset_node) {
+                    if (persisted_dataset
+                            .has_training_model) {
+                        notifyTrainerRestoreFailure(
+                            viewer,
+                            "Project has a training model but no checkpoint to resume");
+                    }
+                    return;
+                }
+
                 const auto dataset =
                     document.project().dataset_reference();
-                const auto project_root =
-                    projectRootFor(document);
-                const bool has_explicit_dataset_source =
-                    (dataset && *dataset) ||
-                    !report.pending_parameters.dataset
-                         .data_path.empty();
-                if (has_explicit_dataset_source ||
-                    !project_root.empty()) {
-                    auto* const parameter_manager =
-                        viewer.getParameterManager();
-                    auto* const trainer_manager =
-                        viewer.getTrainerManager();
-                    if (!parameter_manager ||
-                        !trainer_manager) {
-                        notifyTrainerRestoreFailure(
-                            viewer,
-                            "Project has no trainer manager or parameter manager");
-                        return;
-                    }
-
-                    std::optional<std::filesystem::path>
-                        dataset_root;
-                    if (const auto dataset_ref =
-                            document.project()
-                                .dataset_reference();
-                        dataset_ref && *dataset_ref) {
-                        if (auto resolved =
-                                lfs::io::project::
-                                    resolve_path_reference(
-                                        document.references(),
-                                        project_root,
-                                        **dataset_ref,
-                                        report.pending_parameters
-                                            .dataset.data_path)) {
-                            dataset_root = *resolved;
-                        }
-                    }
-                    if (!dataset_root &&
-                        !report.pending_parameters.dataset
-                                 .data_path.empty()) {
-                        dataset_root = report.pending_parameters
-                                           .dataset.data_path;
-                    }
-                    // Projects saved before dataset references were captured
-                    // may still live directly inside the dataset root. Recover
-                    // that layout only when the loader validates it.
-                    if (!dataset_root && !project_root.empty()) {
-                        auto candidate =
-                            parameter_manager->createForDataset(
-                                project_root,
-                                report.pending_parameters.dataset
-                                    .output_path);
-                        if (lfs::training::validateDatasetPath(
-                                candidate)) {
-                            dataset_root = project_root;
-                            LOG_INFO(
-                                "Recovered project dataset from its containing directory ({})",
-                                lfs::core::path_to_utf8(
-                                    project_root));
-                        }
-                    }
-                    if (!dataset_root ||
-                        dataset_root->empty() ||
-                        !std::filesystem::exists(*dataset_root)) {
-                        if (has_explicit_dataset_source) {
-                            notifyTrainerRestoreFailure(
-                                viewer,
-                                dataset_root &&
-                                        !dataset_root->empty()
-                                    ? std::format(
-                                          "Dataset path does not exist: {}",
-                                          lfs::core::path_to_utf8(
-                                              *dataset_root))
-                                    : "Project has no resolvable dataset root");
-                        }
-                        return;
-                    }
-
-                    auto* const data_loader =
-                        viewer.getDataLoader();
-                    if (!data_loader) {
-                        notifyTrainerRestoreFailure(
-                            viewer,
-                            "Project dataset loader is unavailable");
-                        return;
-                    }
-                    auto params =
-                        parameter_manager->createForDataset(
-                            *dataset_root,
-                            report.pending_parameters.dataset
-                                .output_path);
-                    data_loader->setParameters(params);
-                    scene_manager.setDatasetPath(*dataset_root);
-                    lfs::core::events::cmd::LoadFile{
-                        .path = *dataset_root,
-                        .is_dataset = true,
-                        .output_path = params.dataset
-                                           .output_path,
-                    }.emit();
-                    LOG_INFO(
-                        "Queued project dataset reload for trainer restoration (dataset={})",
-                        lfs::core::path_to_utf8(*dataset_root));
+                if (!dataset || !*dataset) {
+                    notifyTrainerRestoreFailure(
+                        viewer,
+                        "Project dataset reference is missing");
+                    return;
                 }
+
+                auto* const parameter_manager =
+                    viewer.getParameterManager();
+                auto* const trainer_manager =
+                    viewer.getTrainerManager();
+                if (!parameter_manager ||
+                    !trainer_manager) {
+                    notifyTrainerRestoreFailure(
+                        viewer,
+                        "Project has no trainer manager or parameter manager");
+                    return;
+                }
+
+                auto dataset_root =
+                    resolveDatasetRootForTrainer(
+                        document,
+                        std::filesystem::path{});
+                if (!dataset_root ||
+                    dataset_root->empty() ||
+                    !std::filesystem::exists(*dataset_root)) {
+                    notifyTrainerRestoreFailure(
+                        viewer,
+                        dataset_root &&
+                                !dataset_root->empty()
+                            ? std::format(
+                                  "Dataset path does not exist: {}",
+                                  lfs::core::path_to_utf8(
+                                      *dataset_root))
+                            : "Project dataset reference could not be resolved");
+                    return;
+                }
+
+                auto* const data_loader =
+                    viewer.getDataLoader();
+                if (!data_loader) {
+                    notifyTrainerRestoreFailure(
+                        viewer,
+                        "Project dataset loader is unavailable");
+                    return;
+                }
+                auto params =
+                    parameter_manager->createForDataset(
+                        *dataset_root,
+                        report.pending_parameters.dataset
+                            .output_path);
+                data_loader->setParameters(params);
+                scene_manager.setDatasetPath(*dataset_root);
+                lfs::core::events::cmd::LoadFile{
+                    .path = *dataset_root,
+                    .is_dataset = true,
+                    .output_path = params.dataset
+                                       .output_path,
+                }
+                    .emit();
+                LOG_INFO(
+                    "Queued project dataset reload for trainer restoration; the hydrated scene will be rebuilt from the dataset (dataset={})",
+                    lfs::core::path_to_utf8(*dataset_root));
                 return;
             }
             if (report.checkpoint_header->iteration <
@@ -404,7 +401,8 @@ namespace lfs::vis::project {
 
             const auto dataset_root =
                 resolveDatasetRootForTrainer(
-                    document, ckpt_params);
+                    document,
+                    ckpt_params.dataset.data_path);
             if (!dataset_root ||
                 dataset_root->empty() ||
                 !std::filesystem::exists(
@@ -3603,18 +3601,17 @@ namespace lfs::vis::project {
                 return lfs::Status::failure(
                     std::move(snapshot).error());
             }
-            std::filesystem::path dataset_path =
-                manager->getDatasetPath();
-            if (dataset_path.empty()) {
-                if (const auto* trainer =
-                        viewer_.getTrainer()) {
-                    dataset_path = trainer->getParams()
-                                       .dataset.data_path;
-                }
-            }
-            if (dataset_path.empty()) {
+            std::filesystem::path dataset_path;
+            if (manager->hasDataset()) {
                 dataset_path =
-                    snapshot->dataset.data_path;
+                    manager->getDatasetPath();
+                if (dataset_path.empty()) {
+                    if (const auto* trainer =
+                            viewer_.getTrainer()) {
+                        dataset_path = trainer->getParams()
+                                           .dataset.data_path;
+                    }
+                }
             }
             lfs::training::absolutize_dataset_path_for_snapshot(
                 dataset_path);
