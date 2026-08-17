@@ -178,6 +178,8 @@ namespace lfs::vis::project {
             std::optional<std::filesystem::path> destination =
                 std::nullopt,
             bool allow_existing_destination_replacement = false);
+        [[nodiscard]] lfs::Result<void>
+        prepareForEditModeTransition();
 
     private:
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
@@ -347,6 +349,7 @@ namespace lfs::vis::project {
         ProjectLifecycleSettings settings_;
         mutable std::mutex settings_mutex_;
         std::filesystem::path settings_path_;
+        bool settings_persistence_enabled_ = true;
         std::atomic<std::uint64_t> epoch_{0};
         std::atomic<std::uint64_t> scene_mutation_serial_{0};
         std::uint64_t active_restore_ticket_ = 0;

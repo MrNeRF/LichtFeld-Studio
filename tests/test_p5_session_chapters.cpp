@@ -170,6 +170,58 @@ namespace {
                              .contains(key))
                 << key;
         }
+
+        for (const auto key : {"dpi", "dpi_scale"}) {
+            Json invalid = root;
+            invalid["layouts"][0]["areas"][0]["spaces"][0]["opaque_payload"][key] = 2.0;
+            const auto loaded = GuiLayoutChapter::parse(invalid.dump());
+            ASSERT_FALSE(loaded) << key;
+            EXPECT_EQ(loaded.error().code(), lfs::ErrorCode::DataLoss) << key;
+        }
+
+        Json plugin_fields = root;
+        auto& registry_payload =
+            plugin_fields["layouts"][0]["areas"][0]
+                         ["spaces"][1]["opaque_payload"];
+        registry_payload["panel_payloads"]["plugin.example"] = {
+            {"scale", 2.0},
+            {"theme", "plugin-local"},
+            {"nested", {{"dpi", 144}}},
+        };
+        auto loaded_plugin_fields =
+            GuiLayoutChapter::parse(plugin_fields.dump());
+        ASSERT_TRUE(loaded_plugin_fields);
+        const auto preserved_plugin_payload =
+            json_root(loaded_plugin_fields->dom())
+                ["layouts"][0]["areas"][0]
+                ["spaces"][1]["opaque_payload"]
+                ["panel_payloads"]["plugin.example"];
+        EXPECT_EQ(preserved_plugin_payload["scale"], 2.0);
+        EXPECT_EQ(preserved_plugin_payload["theme"], "plugin-local");
+        EXPECT_EQ(preserved_plugin_payload["nested"]["dpi"], 144);
+
+        Json legacy_window = root;
+        legacy_window["layouts"][0]["areas"][0]
+                     ["spaces"][0]["opaque_payload"]
+                     ["window"] = {
+                         {"x", 101},
+                         {"y", 202},
+                         {"width", 1440},
+                         {"height", 900},
+                         {"maximized", true},
+                     };
+        auto loaded_legacy_window =
+            GuiLayoutChapter::parse(
+                legacy_window.dump());
+        ASSERT_TRUE(loaded_legacy_window)
+            << lfs::format_for_developer(
+                   loaded_legacy_window.error());
+        const auto sanitized_legacy_window =
+            json_root(loaded_legacy_window->dom());
+        EXPECT_FALSE(
+            sanitized_legacy_window["layouts"][0]["areas"][0]
+                                   ["spaces"][0]["opaque_payload"]
+                                       .contains("window"));
     }
 
     TEST(P5SessionChapterTest,
@@ -1920,10 +1972,7 @@ namespace {
         expect_json(panel, "/float_stack_order", 12);
         expect_json(panel, "/vendor_extension", "retained");
         prove("GUIL-169");
-        expect_json(fixed, "/window/x", 101);
-        expect_json(fixed, "/window/width", 1440);
-        expect_bool(fixed, "/window/maximized", true);
-        expect_json(fixed, "/window/restore_width", 1280);
+        EXPECT_FALSE(fixed.contains("window"));
         prove("GUIL-170");
         expect_json(console, "/active_tab", 1);
         expect_float(console, "/font_scale", 1.7f);

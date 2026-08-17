@@ -132,6 +132,7 @@ namespace lfs::vis::input {
         SELECT_MODE_SPHERE,
         CUT_SELECTION,
         TOGGLE_PERFORMANCE_HUD,
+        OPEN_PREFERENCES,
 
     };
 
@@ -278,7 +279,8 @@ namespace lfs::vis::input {
         const std::string& getCurrentProfileName() const { return current_profile_name_; }
         std::uint64_t getBindingsRevision() const { return bindings_revision_; }
 
-        static std::filesystem::path getConfigDir();
+        static std::optional<std::filesystem::path> getConfigDir();
+        static void setPersistenceEnabled(bool enabled) noexcept;
 
         // Query effective bindings. Mode-local bindings are checked first; actions
         // marked as inherited then fall back to GLOBAL.

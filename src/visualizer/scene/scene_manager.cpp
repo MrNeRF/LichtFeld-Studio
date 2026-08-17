@@ -470,10 +470,6 @@ namespace lfs::vis {
                 op::SceneGraphMetadataEntry::captureNodes(*this, {cmd.name}));
         });
 
-        cmd::SwitchToEditMode::when([this](const auto&) {
-            switchToEditMode();
-        });
-
         cmd::ImportColmapCameras::when([this](const auto& cmd) {
             loadColmapCamerasOnly(cmd.sparse_path);
         });

@@ -317,6 +317,11 @@ namespace lfs::vis {
     }
 
     VisualizerImpl::~VisualizerImpl() {
+        // ProjectLifecycle owns worker threads and calls back into the viewer
+        // while shutting down. Destroy it before invalidating the service
+        // locator or releasing any of the components it observes.
+        project_lifecycle_.reset();
+
         // Clear event handlers before destroying components to prevent use-after-free
         lfs::event::EventBridge::instance().clear_all();
         services().clear();
@@ -335,6 +340,10 @@ namespace lfs::vis {
         tool_context_.reset();
         if (gui_manager_) {
             gui_manager_->shutdown();
+            // GuiManager owns AsyncTaskManager, which retains a reference to
+            // job_registry_. Destroy the GUI while that registry and the
+            // window/rendering resources it depends on are still alive.
+            gui_manager_.reset();
         }
         // Tear down viewport interop after the viewport pass is reset above, while
         // the window/Vulkan context is still alive. Belt-and-braces again in
@@ -1283,6 +1292,25 @@ namespace lfs::vis {
                             operation));
                 }
             };
+
+        cmd::SwitchToEditMode::when(
+            [this, publish_project_error](const auto&) {
+                if (project_lifecycle_) {
+                    if (auto prepared =
+                            project_lifecycle_
+                                ->prepareForEditModeTransition();
+                        !prepared) {
+                        publish_project_error(
+                            "Switch to Edit Mode",
+                            prepared.error(),
+                            gui::error_op::kProjectSettings);
+                        return;
+                    }
+                }
+                if (scene_manager_) {
+                    scene_manager_->switchToEditMode();
+                }
+            });
 
         cmd::ProjectSave::when(
             [this, publish_project_error](const auto&) {
@@ -2790,7 +2818,7 @@ namespace lfs::vis {
         }
     }
 
-    void VisualizerImpl::resetProjectState() {
+    void VisualizerImpl::resetProjectState(const bool reset_panel_registry) {
         if (trainer_manager_) {
             trainer_manager_->clearRestoredProjectMetrics();
         }
@@ -2814,8 +2842,10 @@ namespace lfs::vis {
         hydration_terminal_restore_ticket_.reset();
         retained_project_session_ = {};
         camera_bookmarks_.clear();
-        gui::PanelRegistry::instance()
-            .reset_project_state();
+        if (reset_panel_registry) {
+            gui::PanelRegistry::instance()
+                .reset_project_state();
+        }
     }
 
     lfs::Result<

@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include "core/error.hpp"
+#include "core/export.hpp"
+
 #include <filesystem>
 #include <string>
 #include <unordered_map>
@@ -33,8 +36,10 @@ namespace lfs::vis::gui {
         // Writes user-global UI preferences only. Project layout is persisted
         // exclusively in the .licht GUIL chapter.
         void saveUserPreferences() const;
+        [[nodiscard]] lfs::Status saveUserPreferencesChecked() const;
         void load();
         static std::filesystem::path getConfigDir();
+        LFS_VIS_API static void setPersistenceEnabled(bool enabled) noexcept;
 
     private:
         static std::filesystem::path getLegacyConfigPath();

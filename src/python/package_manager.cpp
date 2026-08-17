@@ -9,6 +9,7 @@
 #include <core/executable_path.hpp>
 #include <core/logger.hpp>
 #include <core/path_utils.hpp>
+#include <core/user_paths.hpp>
 
 #include <algorithm>
 #include <cstdio>
@@ -222,26 +223,19 @@ namespace lfs::python {
             return {exit_code, output};
         }
 
-        std::filesystem::path get_lichtfeld_dir() {
-#ifdef _WIN32
-            const DWORD size = GetEnvironmentVariableW(L"USERPROFILE", nullptr, 0);
-            if (size > 0) {
-                std::wstring home(size - 1, L'\0');
-                if (GetEnvironmentVariableW(L"USERPROFILE", home.data(), size) == size - 1) {
-                    return std::filesystem::path(home) / ".lichtfeld";
-                }
-            }
-            return std::filesystem::temp_directory_path() / "lichtfeld";
-#else
-            const char* const home = std::getenv("HOME");
-            return std::filesystem::path(home ? home : "/tmp") / ".lichtfeld";
-#endif
+        std::filesystem::path get_venv_dir() {
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (paths)
+                return paths->venvDir();
+            LOG_WARN("Unable to resolve Python environment directory: {}; using temporary storage",
+                     lfs::format_for_developer(paths.error()));
+            return std::filesystem::temp_directory_path() / "lichtfeld" / "venv";
         }
 
     } // namespace
 
     PackageManager::PackageManager()
-        : m_root_dir(get_lichtfeld_dir()),
+        : m_root_dir(get_venv_dir().parent_path()),
           m_venv_dir(m_root_dir / "venv") {}
 
     PackageManager& PackageManager::instance() {

@@ -767,9 +767,34 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "language": "Sprache:",
     "title": "Einstellungen",
-    "select_language": "Sprache auswählen"
+    "language": "Sprache:",
+    "select_language": "Sprache auswählen",
+    "interface": "Oberfläche",
+    "general": "Allgemein",
+    "appearance": "Erscheinungsbild",
+    "input": "Eingabe",
+    "camera_navigation": "Kameranavigation",
+    "navigation_mode": "Navigationsmodus",
+    "camera_view_snap": "Ansichten an Achsen ausrichten",
+    "enable_axis_view_snap": "Achsansichtsausrichtung aktivieren",
+    "remember_camera_navigation": "Kameranavigation merken",
+    "remember_camera_view_snap": "Achsansichtsausrichtung merken",
+    "navigation_orbit": "Orbit",
+    "navigation_trackball": "Freier Orbit",
+    "navigation_fpv": "Flug",
+    "navigation_drone": "Drohne",
+    "interface_layout_description": "Setzt Docks, Fenster, Tabs, Fenstersichtbarkeit und HUDs auf das ursprüngliche Layout zurück. Ist ein .licht-Projekt geöffnet, wird dessen gespeichertes Layout beim nächsten Speichern ersetzt. Die Einstellungen bleiben geöffnet.",
+    "reset_current_section": "Diesen Bereich zurücksetzen",
+    "reset_section_confirmation": "Die Einstellungen des aktuellen Bereichs auf die Standardwerte zurücksetzen? Dies wird sofort angewendet auf",
+    "reset_section_success": "Bereich sofort zurückgesetzt.",
+    "reset_section_failed": "Einstellungen konnten nicht zurückgesetzt werden.",
+    "ui_preferences_save_failed": "Die Einstellungen der Benutzeroberfläche konnten nicht gespeichert werden.",
+    "reset_all_settings": "Alle Einstellungen zurücksetzen",
+    "reset_all_settings_confirmation": "Sprache, Theme, UI-Skalierung, Eingabeeinstellungen, Layout und Fensterstatus auf die Standardwerte zurücksetzen? Dies wird sofort angewendet. Ist ein .licht-Projekt geöffnet, wird dessen gespeichertes Layout beim nächsten Speichern ersetzt; Projektinhalte, Datensätze, Exporte, Plugins und Cache bleiben unverändert.",
+    "reset_all_settings_success": "Alle Einstellungen, das Layout und der Fensterstatus wurden sofort zurückgesetzt.",
+    "window_manager_unavailable": "Die Fensterverwaltung ist nicht verfügbar.",
+    "window_state_reset_failed": "Die Standardgeometrie des Fensters konnte nicht wiederhergestellt werden."
   },
   "main_panel": {
     "console": "Konsole",
@@ -1360,6 +1385,7 @@
     "action.node_rect_select": "Knoten mit Rechteck auswählen",
     "action.toggle_ui": "UI umschalten",
     "action.toggle_fullscreen": "Vollbild umschalten",
+    "action.open_preferences": "Einstellungen öffnen",
     "action.histogram_zoom_marked": "Histogramm am Cursor zoomen",
     "action.sequencer_add_keyframe": "Keyframe hinzufügen",
     "action.sequencer_update_keyframe": "Keyframe aktualisieren",
@@ -1765,6 +1791,7 @@
     "reload": "Neu laden"
   },
   "status_bar": {
+    "safe_mode": "ABGESICHERTER MODUS",
     "export_cancelled": "Export abgebrochen",
     "gt_compare": "GT-Vergleich",
     "camera": "Kamera {}",

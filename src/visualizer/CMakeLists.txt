@@ -65,7 +65,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/passes/vulkan_split_view_pass.cpp
         rendering/framerate_controller.cpp
 
-        # Theme system
+        # Preferences and theme system
+        preferences.cpp
         theme/theme.cpp
 
         # GUI system

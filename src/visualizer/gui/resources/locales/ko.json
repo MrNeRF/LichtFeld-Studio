@@ -767,9 +767,34 @@
     "zoom": "줌"
   },
   "preferences": {
-    "language": "언어:",
     "title": "환경설정",
-    "select_language": "언어 선택"
+    "language": "언어:",
+    "select_language": "언어 선택",
+    "interface": "인터페이스",
+    "general": "일반",
+    "appearance": "모양",
+    "input": "입력",
+    "camera_navigation": "카메라 탐색",
+    "navigation_mode": "탐색 모드",
+    "camera_view_snap": "축 보기 스냅",
+    "enable_axis_view_snap": "축 보기 스냅 활성화",
+    "remember_camera_navigation": "카메라 탐색 기억",
+    "remember_camera_view_snap": "축 보기 스냅 기억",
+    "navigation_orbit": "궤도",
+    "navigation_trackball": "자유 궤도",
+    "navigation_fpv": "비행",
+    "navigation_drone": "드론",
+    "interface_layout_description": "도크, 패널, 탭, 창 표시 및 HUD를 초기 레이아웃으로 되돌립니다. .licht 프로젝트가 열려 있으면 다음 저장 시 프로젝트에 저장된 레이아웃이 교체됩니다. 환경 설정은 열린 상태로 유지됩니다.",
+    "reset_current_section": "이 섹션 재설정",
+    "reset_section_confirmation": "현재 섹션의 설정을 기본값으로 복원할까요? 다음 항목에 즉시 적용됩니다:",
+    "reset_section_success": "섹션을 즉시 재설정했습니다.",
+    "reset_section_failed": "설정을 재설정할 수 없습니다.",
+    "ui_preferences_save_failed": "인터페이스 환경설정을 저장할 수 없습니다.",
+    "reset_all_settings": "모든 설정 재설정",
+    "reset_all_settings_confirmation": "언어, 테마, UI 배율, 입력 기본 설정, 레이아웃 및 창 상태를 기본값으로 복원할까요? 즉시 적용됩니다. .licht 프로젝트가 열려 있으면 다음 저장 시 저장된 레이아웃이 교체됩니다. 프로젝트 내용, 데이터 세트, 내보내기, 플러그인 및 캐시는 영향을 받지 않습니다.",
+    "reset_all_settings_success": "모든 기본 설정, 레이아웃 및 창 상태를 즉시 재설정했습니다.",
+    "window_manager_unavailable": "창 관리자를 사용할 수 없습니다.",
+    "window_state_reset_failed": "창을 기본 위치와 크기로 복원할 수 없습니다."
   },
   "main_panel": {
     "console": "콘솔",
@@ -1360,6 +1385,7 @@
     "action.node_rect_select": "노드 사각형 선택",
     "action.toggle_ui": "UI 전환",
     "action.toggle_fullscreen": "전체 화면 전환",
+    "action.open_preferences": "환경설정 열기",
     "action.histogram_zoom_marked": "커서 위치에서 히스토그램 확대/축소",
     "action.sequencer_add_keyframe": "키프레임 추가",
     "action.sequencer_update_keyframe": "키프레임 업데이트",
@@ -1765,6 +1791,7 @@
     "reload": "다시 로드"
   },
   "status_bar": {
+    "safe_mode": "안전 모드",
     "export_cancelled": "내보내기 취소됨",
     "gt_compare": "GT 비교",
     "camera": "카메라 {}",

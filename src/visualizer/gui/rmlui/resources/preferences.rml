@@ -1,0 +1,110 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="preferences.rcss"/>
+</head>
+<body template="floating-window" data-model="preferences">
+  <div class="preferences-layout">
+    <div class="preferences-nav">
+      <button class="btn preferences-nav-item" data-class-active="show_general" data-event-click="show_general">@tr:preferences.general</button>
+      <button class="btn preferences-nav-item" data-class-active="show_appearance" data-event-click="show_appearance">@tr:preferences.appearance</button>
+      <button class="btn preferences-nav-item" data-class-active="show_input" data-event-click="show_input">@tr:preferences.input</button>
+      <button class="btn preferences-nav-item" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
+    </div>
+
+    <div class="preferences-content">
+      <div class="preferences-section" data-if="show_general">
+        <div class="section-header text-accent" data-class-is-expanded="language_expanded" data-event-click="toggle_section('language')">
+          <span class="section-arrow text-accent" data-class-is-expanded="language_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.language</span>
+        </div>
+        <div class="section-content" data-if="language_expanded">
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.language</span>
+            <select class="preferences-select" data-value="language_idx">
+              <option data-for="language : languages" data-attr-value="language.index">{{ language.label }}</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="preferences-section" data-if="show_appearance">
+        <div class="section-header text-accent" data-class-is-expanded="appearance_expanded" data-event-click="toggle_section('appearance')">
+          <span class="section-arrow text-accent" data-class-is-expanded="appearance_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:menu.view.theme</span>
+        </div>
+        <div class="section-content" data-if="appearance_expanded">
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:menu.view.theme</span>
+            <select class="preferences-select" data-value="theme_idx">
+              <option data-for="theme : themes" data-attr-value="theme.index">{{ theme.label }}</option>
+            </select>
+          </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:menu.view.ui_scale</span>
+            <select class="preferences-select" data-value="scale_idx">
+              <option data-for="scale : scales" data-attr-value="scale.index">{{ scale.label }}</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="preferences-section" data-if="show_input">
+        <div class="section-header text-accent" data-class-is-expanded="navigation_expanded" data-event-click="toggle_section('navigation')">
+          <span class="section-arrow text-accent" data-class-is-expanded="navigation_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.camera_navigation</span>
+        </div>
+        <div class="section-content" data-if="navigation_expanded">
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.navigation_mode</span>
+            <select class="preferences-select" data-value="navigation_idx">
+              <option data-for="mode : navigation_modes" data-attr-value="mode.index">{{ mode.label }}</option>
+            </select>
+          </div>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.remember_camera_navigation</span>
+            <input type="checkbox" data-checked="remember_navigation" />
+          </div>
+        </div>
+
+        <div class="section-header text-accent" data-class-is-expanded="view_snap_expanded" data-event-click="toggle_section('view_snap')">
+          <span class="section-arrow text-accent" data-class-is-expanded="view_snap_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.camera_view_snap</span>
+        </div>
+        <div class="section-content" data-if="view_snap_expanded">
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.enable_axis_view_snap</span>
+            <input type="checkbox" data-checked="view_snap" />
+          </div>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.remember_camera_view_snap</span>
+            <input type="checkbox" data-checked="remember_view_snap" />
+          </div>
+        </div>
+      </div>
+
+      <div class="preferences-section" data-if="show_interface">
+        <div class="section-header text-accent" data-class-is-expanded="interface_expanded" data-event-click="toggle_section('interface')">
+          <span class="section-arrow text-accent" data-class-is-expanded="interface_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.interface</span>
+        </div>
+        <div class="section-content" data-if="interface_expanded">
+          <span class="preferences-description">@tr:preferences.interface_layout_description</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="preferences-actions">
+    <div class="preferences-footer-sidebar"></div>
+    <div class="preferences-footer-gutter"></div>
+    <div class="preferences-actions-main">
+      <button class="btn btn--warning" data-event-click="reset_current_section" data-if="show_section_reset">{{ reset_section_label }}</button>
+      <span class="preferences-actions-spacer"></span>
+      <button class="btn btn--warning" data-event-click="reset_all_settings">@tr:preferences.reset_all_settings</button>
+      <button class="btn btn--primary" data-event-click="close">@tr:common.ok</button>
+    </div>
+  </div>
+</body>
+</rml>

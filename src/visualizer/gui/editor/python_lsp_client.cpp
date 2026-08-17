@@ -9,6 +9,7 @@
 #include <core/environment.hpp>
 #include <core/logger.hpp>
 #include <core/path_utils.hpp>
+#include <core/user_paths.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -338,13 +339,10 @@ namespace lfs::vis::editor {
                     lfs::core::environment::value("LFS_PYTHON_LSP_WORKSPACE")) {
                 return fs::path(std::string(*override_workspace));
             }
-#ifdef _WIN32
-            const char* const home = std::getenv("USERPROFILE");
-            return fs::path(home ? home : "C:\\") / ".lichtfeld";
-#else
-            const char* const home = std::getenv("HOME");
-            return fs::path(home ? home : "/tmp") / ".lichtfeld";
-#endif
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (paths)
+                return paths->cacheDir();
+            return fs::temp_directory_path() / "lichtfeld";
         }
 
         json workspace_configuration_result_for_section(const std::string& section) {

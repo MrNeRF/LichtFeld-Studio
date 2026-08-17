@@ -319,9 +319,10 @@ namespace lfs::vis::gui {
 
     // RmlStatusBar
 
-    void RmlStatusBar::init(RmlUIManager* mgr) {
+    void RmlStatusBar::init(RmlUIManager* mgr, const bool safe_mode) {
         assert(mgr);
         rml_manager_ = mgr;
+        model_.safe_mode = safe_mode;
 
         const auto& palette = lfs::vis::theme().palette;
         model_.mode_color = colorToRml(palette.text_dim);
@@ -345,6 +346,8 @@ namespace lfs::vis::gui {
 
         auto ctor = rml_context_->CreateDataModel("status_bar");
         assert(ctor);
+        ctor.Bind("safe_mode", &model_.safe_mode);
+        ctor.Bind("safe_mode_text", &model_.safe_mode_text);
         ctor.Bind("mode_text", &model_.mode_text);
         ctor.Bind("mode_color", &model_.mode_color);
         ctor.Bind("show_training", &model_.show_training);
@@ -927,6 +930,8 @@ namespace lfs::vis::gui {
         model_dirty_ = false;
 
         const auto& p = lfs::vis::theme().palette;
+
+        setModelString("safe_mode_text", model_.safe_mode_text, LOC("status_bar.safe_mode"));
 
         // Get managers
         auto* viewer = ctx.ui ? ctx.ui->viewer : nullptr;

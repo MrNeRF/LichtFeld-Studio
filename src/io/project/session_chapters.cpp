@@ -247,19 +247,6 @@ namespace lfs::io::project {
                 {"left_dock_width", 320.0},
                 {"sequencer_visible", false},
                 {"python_console_visible", false},
-                {"window",
-                 {
-                     {"x", 0},
-                     {"y", 0},
-                     {"width", 1280},
-                     {"height", 720},
-                     {"fullscreen", false},
-                     {"maximized", false},
-                     {"restore_x", 0},
-                     {"restore_y", 0},
-                     {"restore_width", 1280},
-                     {"restore_height", 720},
-                 }},
             };
             return Json{
                 {"version", 1},
@@ -474,47 +461,51 @@ namespace lfs::io::project {
                    kUserGlobalGuiFieldKeys.end();
         }
 
-        bool contains_user_global_gui_state(
+        bool object_contains_user_global_gui_state(
             const Json& value) {
-            if (value.is_array()) {
-                return std::ranges::any_of(
-                    value,
-                    contains_user_global_gui_state);
-            }
             if (!value.is_object())
                 return false;
-            for (const auto& [key, child] :
-                 value.items()) {
-                if (is_user_global_gui_key(key) ||
-                    contains_user_global_gui_state(
-                        child)) {
+            for (const auto& item : value.items()) {
+                if (is_user_global_gui_key(item.key()))
                     return true;
-                }
             }
             return false;
         }
 
-        void strip_user_global_gui_state(
-            Json& value) {
-            if (value.is_array()) {
-                for (auto& child : value) {
-                    strip_user_global_gui_state(child);
-                }
-                return;
-            }
+        void strip_user_global_gui_keys(Json& value) {
             if (!value.is_object())
                 return;
-            for (auto item = value.begin();
-                 item != value.end();) {
-                if (is_user_global_gui_key(
-                        item.key())) {
+            for (auto item = value.begin(); item != value.end();) {
+                // DPI belongs to the process window contract and is rejected,
+                // never silently normalized out of a project document.
+                if (is_user_global_gui_key(item.key()) &&
+                    item.key() != "dpi" && item.key() != "dpi_scale")
                     item = value.erase(item);
-                    continue;
-                }
-                strip_user_global_gui_state(
-                    item.value());
-                ++item;
+                else
+                    ++item;
             }
+        }
+
+        bool contains_user_global_gui_state(const Json& value) {
+            if (object_contains_user_global_gui_state(value))
+                return true;
+            bool found = false;
+            for_each_fixed_arrangement_payload(value, [&](const Json& payload) {
+                found = found || object_contains_user_global_gui_state(payload);
+            });
+            return found;
+        }
+
+        void strip_user_global_gui_state(Json& value) {
+            strip_user_global_gui_keys(value);
+            for_each_fixed_arrangement_payload(value, [](Json& payload) {
+                strip_user_global_gui_keys(payload);
+                // Main-window geometry was project-owned in the original
+                // GUIL v1 contract. It is user-global now: accept legacy
+                // projects, but discard the field before validation and
+                // before the retained DOM can participate in a later save.
+                payload.erase("window");
+            });
         }
 
         lfs::Result<void> validate_known_gui_space(
@@ -537,12 +528,11 @@ namespace lfs::io::project {
                     "GUIL.layouts.areas.spaces");
             }
             if (type == "fixed_arrangement") {
-                if (!payload.contains("window") ||
-                    !payload["window"].is_object()) {
+                if (payload.contains("window")) {
                     return fail<void>(
                         lfs::ErrorCode::DataLoss,
-                        "The fixed GUIL arrangement is missing window state",
-                        "GUIL.layouts.areas.spaces.fixed_arrangement");
+                        "The fixed GUIL arrangement contains user-global main-window state",
+                        "GUIL.layouts.areas.spaces.fixed_arrangement.window");
                 }
                 return {};
             }
@@ -705,7 +695,7 @@ namespace lfs::io::project {
                     root)) {
                 return fail<void>(
                     lfs::ErrorCode::DataLoss,
-                    "GUIL cannot contain user-global theme, language, scale, or HUD state",
+                    "GUIL cannot contain user-global theme, language, UI/DPI scale, or HUD state",
                     "GUIL");
             }
             const auto layouts =

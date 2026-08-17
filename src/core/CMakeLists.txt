@@ -92,6 +92,8 @@ set(CORE_SOURCES
         training_snapshot.cpp
         mesh_data.cpp
         system_info.cpp
+        user_paths.cpp
+        legacy_settings_migration.cpp
 )
 
 add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})

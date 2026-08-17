@@ -737,6 +737,25 @@ TEST_F(PanelRegistryAnimationDemandTest, PanelPayloadRoundTripAndReset) {
     EXPECT_EQ(panel->chrome, "{}");
 }
 
+TEST_F(PanelRegistryAnimationDemandTest, DefaultClosedAppliesToDockedPanelsAndReset) {
+    using namespace lfs::vis::gui;
+
+    PanelInfo info;
+    info.id = "lfs.asset_manager";
+    info.label = info.id;
+    info.space = PanelSpace::LeftDock;
+    info.options = static_cast<uint32_t>(PanelOption::DEFAULT_CLOSED);
+    info.is_native = false;
+    info.panel = std::make_shared<TestPanel>(false);
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));
+    EXPECT_FALSE(PanelRegistry::instance().is_panel_enabled("lfs.asset_manager"));
+
+    PanelRegistry::instance().set_panel_enabled("lfs.asset_manager", true);
+    ASSERT_TRUE(PanelRegistry::instance().is_panel_enabled("lfs.asset_manager"));
+    PanelRegistry::instance().reset_project_state();
+    EXPECT_FALSE(PanelRegistry::instance().is_panel_enabled("lfs.asset_manager"));
+}
+
 TEST_F(PanelRegistryAnimationDemandTest, LateRegisterAppliesPendingPanelPayload) {
     using namespace lfs::vis::gui;
 

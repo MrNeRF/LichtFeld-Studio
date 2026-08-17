@@ -281,6 +281,9 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_StopSaveAndExitBindsUntitledDestinationBeforeStop_Test;
         friend class VisualizerImplResetTest_InfoDoesNotMutateDocumentUntilExplicitSync_Test;
         friend class VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
+        friend class VisualizerImplResetTest_SelectedGaussiansAndSelectionToolSurviveSaveAndReopen_Test;
+        friend class VisualizerImplResetTest_TrainingCheckpointReopenRestoresPausedResumableState_Test;
+        friend class VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;
         friend class VisualizerImplResetTest_ReopenedTwoSplatProjectBuildsExternalCombinedModel_Test;
 
         // Allow ToolContext to access GUI manager for logging
@@ -337,7 +340,7 @@ namespace lfs::vis {
         void performPendingTrainingAction();
         void requestApplicationClose();
         void performReset();
-        void resetProjectState();
+        void resetProjectState(bool reset_panel_registry = true);
         void tryApplyProjectSessionRestore();
 
         // Tool initialization

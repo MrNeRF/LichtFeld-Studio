@@ -2,17 +2,17 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "theme.hpp"
-#include "core/config_paths.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "internal/resource_paths.hpp"
+#include "preferences.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <nlohmann/json.hpp>
-#include <optional>
 #include <set>
 #include <utility>
 #include <vector>
@@ -1049,81 +1049,25 @@ namespace lfs::vis {
         }
     }
 
-    namespace {
-        std::filesystem::path getThemeConfigDir() {
-            return lfs::core::user_config_dir();
-        }
-    } // namespace
-
     void saveThemePreferenceName(const std::string& theme_name) {
-        try {
-            const auto config_dir = getThemeConfigDir();
-            std::filesystem::create_directories(config_dir);
-            const auto pref_path = config_dir / "theme_preference";
-            std::ofstream file(pref_path);
-            if (file) {
-                const std::string normalized = normalizeThemeIdImpl(theme_name);
-                if (isKnownThemePresetId(normalized)) {
-                    file << normalized;
-                } else {
-                    file << "dark";
-                }
-            }
-        } catch (...) {
-            // Silently ignore - not critical
-        }
+        const std::string normalized = normalizeThemeIdImpl(theme_name);
+        UserPreferences::instance().setThemeName(
+            isKnownThemePresetId(normalized) ? normalized : "dark");
     }
 
     std::string loadThemePreferenceName() {
-        try {
-            const auto config_dir = getThemeConfigDir();
-            const auto pref_path = config_dir / "theme_preference";
-            if (std::filesystem::exists(pref_path)) {
-                std::ifstream file(pref_path);
-                std::string pref;
-                if (file >> pref) {
-                    const std::string normalized = normalizeThemeIdImpl(pref);
-                    if (isKnownThemePresetId(normalized)) {
-                        return normalized;
-                    }
-                }
-            }
-        } catch (...) {
-            // Silently ignore - not critical
-        }
-        return "dark";
+        const std::string normalized =
+            normalizeThemeIdImpl(UserPreferences::instance().themeName());
+        return isKnownThemePresetId(normalized) ? normalized : "dark";
     }
 
-    void saveUiScalePreference(float scale) {
-        try {
-            const auto config_dir = getThemeConfigDir();
-            std::filesystem::create_directories(config_dir);
-            const auto pref_path = config_dir / "ui_scale";
-            std::ofstream file(pref_path);
-            if (file) {
-                file << scale;
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to save UI scale preference: {}", e.what());
-        }
+    void saveUiScalePreference(const float scale) {
+        UserPreferences::instance().setUiScale(scale);
     }
 
     float loadUiScalePreference() {
-        try {
-            const auto config_dir = getThemeConfigDir();
-            const auto pref_path = config_dir / "ui_scale";
-            if (std::filesystem::exists(pref_path)) {
-                std::ifstream file(pref_path);
-                float scale = 0.0f;
-                if (file >> scale)
-                    return scale;
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to load UI scale preference: {}", e.what());
-        }
-        return 0.0f;
+        return UserPreferences::instance().uiScale();
     }
-
     void setThemeVignetteEnabled(bool enabled) {
         Theme t = theme();
         t.vignette.enabled = enabled;

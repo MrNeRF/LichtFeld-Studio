@@ -9,10 +9,12 @@
 #include "core/checkpoint_format.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_version.hpp"
+#include "core/environment.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/image_loader.hpp"
+#include "core/legacy_settings_migration.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
@@ -20,6 +22,7 @@
 #include "core/scene.hpp"
 #include "core/session_breadcrumb.hpp"
 #include "core/tensor.hpp"
+#include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/project_document.hpp"
@@ -40,9 +43,11 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "sequencer/timeline.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
+#include "visualizer/gui/layout_state.hpp"
 #include "visualizer/gui/panels/python_scripts_panel.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
+#include "visualizer/input/input_bindings.hpp"
 #include <cmath>
 #include <condition_variable>
 #include <cuda_runtime.h>
@@ -50,6 +55,7 @@
 #include <mutex>
 #include <print>
 #include <rasterization_api.h>
+#include <string>
 #include <string_view>
 
 #ifdef WIN32
@@ -1055,6 +1061,55 @@ namespace lfs::app {
         }
 
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+            const bool safe_mode = params->safe_mode ||
+                                   lfs::core::environment::flag("LFS_SAFE_MODE", false);
+            python::set_user_plugin_loading_enabled(!safe_mode);
+            vis::gui::LayoutState::setPersistenceEnabled(!safe_mode);
+            vis::input::InputBindings::setPersistenceEnabled(!safe_mode);
+            if (const auto paths = lfs::core::UserPaths::resolve()) {
+                if (!safe_mode) {
+                    if (const auto migration = lfs::core::migrateLegacySettings(*paths); !migration)
+                        LOG_WARN("Unable to migrate legacy user settings: {}",
+                                 lfs::format_for_developer(migration.error()));
+                }
+                const auto reset_file = [&paths](const bool requested, const char* const label,
+                                                 const auto& reset) {
+                    if (!requested)
+                        return;
+                    const auto result = reset();
+                    if (!result) {
+                        LOG_ERROR("Unable to reset {}: {}", label,
+                                  lfs::format_for_developer(result.error()));
+                    } else if (*result) {
+                        LOG_INFO("Reset {}. Backup saved to {}", label,
+                                 lfs::core::path_to_utf8(**result));
+                    } else {
+                        LOG_INFO("Reset {}. No existing settings file required a backup", label);
+                    }
+                };
+                const bool reset_preferences = params->reset_preferences || params->reset_all_settings;
+                const bool reset_layout = params->reset_layout || params->reset_all_settings;
+                reset_file(reset_preferences, "preferences", [&paths] { return paths->resetPreferences(); });
+                reset_file(reset_layout, "layout", [&paths] { return paths->resetLayout(); });
+                reset_file(reset_layout, "UI preferences", [&paths] { return paths->resetUiPreferences(); });
+                reset_file(params->reset_all_settings, "window", [&paths] { return paths->resetWindowState(); });
+                reset_file(params->reset_all_settings, "project lifecycle", [&paths] {
+                    return paths->resetProjectLifecycle();
+                });
+
+            } else {
+                LOG_WARN("Unable to resolve user settings path: {}",
+                         lfs::format_for_developer(paths.error()));
+            }
+
+            if (safe_mode) {
+                LOG_WARN("Safe mode active: user plugin loading is disabled for this process");
+            }
+
+            const std::string window_title = safe_mode
+                                                 ? "LichtFeld Studio (Safe Mode)"
+                                                 : "LichtFeld Studio";
+
             if (!params->python_scripts.empty()) {
                 vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
             }
@@ -1088,11 +1143,12 @@ namespace lfs::app {
                     ? params->project_path
                     : params->resume_project;
             auto viewer = vis::Visualizer::create({
-                .title = "LichtFeld Studio",
+                .title = window_title,
                 .width = 1280,
                 .height = 720,
                 .antialiasing = false,
                 .show_startup_overlay = !disable_splash,
+                .safe_mode = safe_mode,
                 .gut = params->optimization.gut,
                 .graphics_backend = graphics_backend,
                 .startup_project = startup_project,

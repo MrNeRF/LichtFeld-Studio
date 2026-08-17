@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,14 @@ namespace lfs::vis {
 
     class LFS_VIS_API WindowManager {
     public:
+        struct PersistentWindowState {
+            int x = 0;
+            int y = 0;
+            int width = 1280;
+            int height = 720;
+            bool maximized = false;
+        };
+
         enum class ResizeIntent {
             Interactive,
             Exact,
@@ -37,19 +46,6 @@ namespace lfs::vis {
             int h = 0;
         };
 
-        struct ProjectWindowState {
-            int x = 0;
-            int y = 0;
-            int width = 1280;
-            int height = 720;
-            bool fullscreen = false;
-            bool maximized = false;
-            int restore_x = 0;
-            int restore_y = 0;
-            int restore_width = 1280;
-            int restore_height = 720;
-        };
-
         WindowManager(const std::string& title, int width, int height,
                       int monitor_x = 0, int monitor_y = 0,
                       int monitor_width = 0, int monitor_height = 0,
@@ -60,6 +56,10 @@ namespace lfs::vis {
         WindowManager& operator=(const WindowManager&) = delete;
 
         bool init();
+
+        void setInitialWindowState(PersistentWindowState state);
+        [[nodiscard]] PersistentWindowState persistentWindowState() const;
+        [[nodiscard]] bool resetPersistentWindowState();
 
         void showWindow();
         void updateWindowSize(const char* reason = "manual",
@@ -87,9 +87,6 @@ namespace lfs::vis {
         [[nodiscard]] bool isTitlebarDragPoint(int x, int y) const;
         [[nodiscard]] bool usesEventDrivenTitlebarDrag() const { return native_titlebar_move_available_; }
         void setFullscreen(bool fullscreen);
-        [[nodiscard]] ProjectWindowState
-        captureProjectState() const;
-        void applyProjectState(const ProjectWindowState& state);
         GraphicsBackend graphicsBackend() const { return graphics_backend_; }
         bool isVulkan() const { return true; }
 
@@ -141,6 +138,7 @@ namespace lfs::vis {
         bool is_borderless_maximized_ = false;
         glm::ivec2 borderless_restore_pos_{0, 0};
         glm::ivec2 borderless_restore_size_{1280, 720};
+        std::optional<PersistentWindowState> initial_window_state_;
         bool should_close_ = false;
 
         static void* callback_handler_;

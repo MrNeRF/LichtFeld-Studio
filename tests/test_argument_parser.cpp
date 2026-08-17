@@ -265,6 +265,42 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     EXPECT_FLOAT_EQ((*parsed)->freeze_lr_scale, 0.0f);
 }
 
+TEST(ArgumentParserTest, SafeModeIsProcessLocalAndNotATrainingConfigurationOption) {
+    const auto data_path = make_test_path("lfs_arg_parser_safe_mode_data");
+    const auto output_path = make_test_path("lfs_arg_parser_safe_mode_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--safe-mode",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str()};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->safe_mode);
+}
+
+TEST(ArgumentParserTest, ResetAllSettingsIsProcessLocalAndExplicit) {
+    const auto data_path = make_test_path("lfs_arg_parser_reset_all_data");
+    const auto output_path = make_test_path("lfs_arg_parser_reset_all_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--reset-all-settings",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str()};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->reset_all_settings);
+    EXPECT_FALSE((*parsed)->reset_preferences);
+    EXPECT_FALSE((*parsed)->reset_layout);
+}
+
 TEST(ArgumentParserTest, MaxWidthCanBeExplicitlySet) {
     const auto data_path = make_test_path("lfs_arg_parser_explicit_data");
     const auto output_path = make_test_path("lfs_arg_parser_explicit_output");

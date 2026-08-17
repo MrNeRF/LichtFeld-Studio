@@ -767,9 +767,34 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "language": "Langue :",
     "title": "Préférences",
-    "select_language": "Sélectionner la Langue"
+    "language": "Langue :",
+    "select_language": "Sélectionner la Langue",
+    "interface": "Interface",
+    "general": "Général",
+    "appearance": "Apparence",
+    "input": "Entrée",
+    "camera_navigation": "Navigation de la caméra",
+    "navigation_mode": "Mode de navigation",
+    "camera_view_snap": "Aligner les vues d'axe",
+    "enable_axis_view_snap": "Activer l'alignement des vues d'axe",
+    "remember_camera_navigation": "Mémoriser la navigation de la caméra",
+    "remember_camera_view_snap": "Mémoriser l'alignement des vues d'axe",
+    "navigation_orbit": "Orbite",
+    "navigation_trackball": "Orbite libre",
+    "navigation_fpv": "Vol",
+    "navigation_drone": "Drone",
+    "interface_layout_description": "Rétablit la disposition initiale des volets, panneaux, onglets, fenêtres et HUD. Si un projet .licht est ouvert, sa disposition enregistrée sera remplacée lors du prochain enregistrement. Les préférences restent ouvertes.",
+    "reset_current_section": "Réinitialiser cette section",
+    "reset_section_confirmation": "Rétablir les paramètres de la section actuelle à leurs valeurs par défaut ? Cela s'applique immédiatement à",
+    "reset_section_success": "Section réinitialisée immédiatement.",
+    "reset_section_failed": "Impossible de réinitialiser les paramètres.",
+    "ui_preferences_save_failed": "Impossible d’enregistrer les préférences de l’interface.",
+    "reset_all_settings": "Réinitialiser tous les paramètres",
+    "reset_all_settings_confirmation": "Rétablir la langue, le thème, l'échelle de l'interface, les préférences de saisie, la disposition et l'état de la fenêtre à leurs valeurs par défaut ? Cela s'applique immédiatement. Si un projet .licht est ouvert, sa disposition enregistrée sera remplacée au prochain enregistrement ; le contenu du projet, les jeux de données, les exportations, les plugins et le cache ne sont pas affectés.",
+    "reset_all_settings_success": "Toutes les préférences, la disposition et l'état de la fenêtre ont été réinitialisés immédiatement.",
+    "window_manager_unavailable": "Le gestionnaire de fenêtres n'est pas disponible.",
+    "window_state_reset_failed": "La géométrie par défaut de la fenêtre n'a pas pu être restaurée."
   },
   "main_panel": {
     "console": "Console",
@@ -1360,6 +1385,7 @@
     "action.node_rect_select": "Sélection rectangulaire de nœuds",
     "action.toggle_ui": "Basculer l'interface",
     "action.toggle_fullscreen": "Basculer le plein écran",
+    "action.open_preferences": "Ouvrir les préférences",
     "action.histogram_zoom_marked": "Zoomer l'histogramme au curseur",
     "action.sequencer_add_keyframe": "Ajouter une image clé",
     "action.sequencer_update_keyframe": "Mettre à jour l'image clé",
@@ -1765,6 +1791,7 @@
     "reload": "Recharger"
   },
   "status_bar": {
+    "safe_mode": "MODE SANS ÉCHEC",
     "export_cancelled": "Exportation annulée",
     "gt_compare": "Comparaison GT",
     "camera": "Caméra {}",

@@ -22,6 +22,7 @@
 #include "gui/vulkan_ui_texture.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
+#include "preferences.hpp"
 #include "py_command.hpp"
 #include "py_gizmo.hpp"
 #include "py_keymap.hpp"
@@ -4855,6 +4856,7 @@ namespace lfs::python {
             "set_language",
             [](const std::string& lang_code) {
                 if (lfs::event::LocalizationManager::getInstance().setLanguage(lang_code)) {
+                    lfs::vis::saveLanguagePreference(lang_code);
                     if (lang_code == "ja" || lang_code == "ko" || lang_code == "zh")
                         if (auto* const gui_manager = get_gui_manager())
                             gui_manager->ensureCjkFontsLoaded();
@@ -4875,6 +4877,10 @@ namespace lfs::python {
         m.def(
             "get_languages",
             []() -> std::vector<std::tuple<std::string, std::string>> {
+                // The language list itself contains CJK names even when the
+                // active language is Latin-script.
+                if (auto* const gui_manager = get_gui_manager())
+                    gui_manager->ensureCjkFontsLoaded();
                 auto& loc = lfs::event::LocalizationManager::getInstance();
                 auto codes = loc.getAvailableLanguages();
                 auto names = loc.getAvailableLanguageNames();

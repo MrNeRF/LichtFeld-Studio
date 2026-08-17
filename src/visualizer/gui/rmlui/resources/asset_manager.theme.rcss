@@ -15,6 +15,21 @@
     border-bottom-color: @{border};
 }
 
+.asset-panel-close {
+    background-color: @{surface_bright};
+    border-color: @{border};
+    color: @{text};
+}
+
+.asset-panel-close:hover {
+    background-color: @{lighten(surface_bright,0.06)};
+}
+
+.asset-panel-close:active {
+    background-color: @{alpha(primary,0.32)};
+    border-color: @{primary};
+}
+
 .asset-search-box {
     background-color: @{surface_bright};
     border-color: @{border};

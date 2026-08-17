@@ -767,9 +767,34 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "language": "Język:",
     "title": "Preferencje",
-    "select_language": "Wybierz Język"
+    "language": "Język:",
+    "select_language": "Wybierz Język",
+    "interface": "Interfejs",
+    "general": "Ogólne",
+    "appearance": "Wygląd",
+    "input": "Sterowanie",
+    "camera_navigation": "Nawigacja kamery",
+    "navigation_mode": "Tryb nawigacji",
+    "camera_view_snap": "Przyciągaj widoki osi",
+    "enable_axis_view_snap": "Włącz przyciąganie widoków osi",
+    "remember_camera_navigation": "Zapamiętaj nawigację kamery",
+    "remember_camera_view_snap": "Zapamiętaj przyciąganie widoków osi",
+    "navigation_orbit": "Orbita",
+    "navigation_trackball": "Swobodna orbita",
+    "navigation_fpv": "Lot",
+    "navigation_drone": "Dron",
+    "interface_layout_description": "Przywraca początkowy układ doków, paneli, kart, widoczności okien i HUD. Jeśli projekt .licht jest otwarty, jego zapisany układ zostanie zastąpiony przy następnym zapisie. Preferencje pozostają otwarte.",
+    "reset_current_section": "Resetuj tę sekcję",
+    "reset_section_confirmation": "Przywrócić ustawienia bieżącej sekcji do wartości domyślnych? Zostanie to natychmiast zastosowane do",
+    "reset_section_success": "Sekcja została natychmiast zresetowana.",
+    "reset_section_failed": "Nie można zresetować ustawień.",
+    "ui_preferences_save_failed": "Nie udało się zapisać preferencji interfejsu.",
+    "reset_all_settings": "Resetuj wszystkie ustawienia",
+    "reset_all_settings_confirmation": "Przywrócić język, motyw, skalę interfejsu, preferencje wejścia, układ i stan okna do wartości domyślnych? Zostanie to zastosowane natychmiast. Jeśli projekt .licht jest otwarty, jego zapisany układ zostanie zastąpiony przy następnym zapisie; zawartość projektu, zestawy danych, eksporty, wtyczki i pamięć podręczna nie zostaną zmienione.",
+    "reset_all_settings_success": "Wszystkie preferencje, układ i stan okna zostały natychmiast zresetowane.",
+    "window_manager_unavailable": "Menedżer okien jest niedostępny.",
+    "window_state_reset_failed": "Nie udało się przywrócić domyślnej geometrii okna."
   },
   "main_panel": {
     "console": "Konsola",
@@ -1360,6 +1385,7 @@
     "action.node_rect_select": "Prostokątne zaznaczenie węzłów",
     "action.toggle_ui": "Przełącz interfejs",
     "action.toggle_fullscreen": "Przełącz pełny ekran",
+    "action.open_preferences": "Otwórz preferencje",
     "action.histogram_zoom_marked": "Powiększ histogram przy kursorze",
     "action.sequencer_add_keyframe": "Dodaj klatkę kluczową",
     "action.sequencer_update_keyframe": "Aktualizuj klatkę kluczową",
@@ -1765,6 +1791,7 @@
     "reload": "Przeładuj"
   },
   "status_bar": {
+    "safe_mode": "TRYB BEZPIECZNY",
     "export_cancelled": "Anulowano eksport",
     "gt_compare": "Porównanie GT",
     "camera": "Cam {}",

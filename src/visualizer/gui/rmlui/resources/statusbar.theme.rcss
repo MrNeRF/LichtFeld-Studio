@@ -5,6 +5,15 @@ body,
     color: @{text};
 }
 
+.safe-mode {
+    background-color: @{blend(surface,warning,0.20)};
+}
+
+#safe-mode-badge {
+    color: @{text};
+    background-color: @{blend(surface,warning,0.42)};
+}
+
 .dim,
 .separator {
     color: @{text_dim};

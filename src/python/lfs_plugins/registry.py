@@ -5,6 +5,7 @@
 import hashlib
 import json
 import logging
+import os
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -76,7 +77,12 @@ class RegistryClient:
     """Fetches and caches registry data."""
 
     def __init__(self, cache_dir: Optional[Path] = None):
-        self._cache_dir = cache_dir or Path.home() / ".lichtfeld" / "cache" / "registry"
+        resolved_cache = os.environ.get("LFS_RESOLVED_CACHE_DIR")
+        self._cache_dir = cache_dir or (
+            Path(resolved_cache) / "registry"
+            if resolved_cache
+            else Path.home() / ".lichtfeld" / "cache" / "registry"
+        )
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._index: Optional[Dict] = None
         override = environment_value("LFS_PLUGIN_REGISTRY_URL")

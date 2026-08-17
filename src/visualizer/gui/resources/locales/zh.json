@@ -767,9 +767,34 @@
     "zoom": "缩放"
   },
   "preferences": {
-    "language": "语言：",
     "title": "偏好设置",
-    "select_language": "选择语言"
+    "language": "语言：",
+    "select_language": "选择语言",
+    "interface": "界面",
+    "general": "常规",
+    "appearance": "外观",
+    "input": "输入",
+    "camera_navigation": "相机导航",
+    "navigation_mode": "导航模式",
+    "camera_view_snap": "对齐轴视图",
+    "enable_axis_view_snap": "启用轴视图对齐",
+    "remember_camera_navigation": "记住相机导航",
+    "remember_camera_view_snap": "记住轴视图对齐",
+    "navigation_orbit": "环绕",
+    "navigation_trackball": "自由环绕",
+    "navigation_fpv": "飞行",
+    "navigation_drone": "无人机",
+    "interface_layout_description": "将停靠区、面板、标签页、窗口可见性和 HUD 恢复为初始布局。如果当前打开了 .licht 项目，下次保存时将替换项目中存储的布局。偏好设置窗口会保持打开。",
+    "reset_current_section": "重置此部分",
+    "reset_section_confirmation": "将当前部分的设置恢复为默认值？将立即应用到",
+    "reset_section_success": "此部分已立即重置。",
+    "reset_section_failed": "无法重置设置。",
+    "ui_preferences_save_failed": "无法保存界面偏好设置。",
+    "reset_all_settings": "重置所有设置",
+    "reset_all_settings_confirmation": "将语言、主题、界面缩放、输入偏好、布局和窗口状态恢复为默认值？将立即应用。如果当前打开了 .licht 项目，下次保存时将替换其已存储的布局；项目内容、数据集、导出、插件和缓存不会受到影响。",
+    "reset_all_settings_success": "所有偏好、布局和窗口状态已立即重置。",
+    "window_manager_unavailable": "窗口管理器不可用。",
+    "window_state_reset_failed": "无法将窗口恢复为默认位置和大小。"
   },
   "main_panel": {
     "console": "控制台",
@@ -1360,6 +1385,7 @@
     "action.node_rect_select": "矩形选择节点",
     "action.toggle_ui": "切换 UI",
     "action.toggle_fullscreen": "切换全屏",
+    "action.open_preferences": "打开偏好设置",
     "action.histogram_zoom_marked": "在光标处缩放直方图",
     "action.sequencer_add_keyframe": "添加关键帧",
     "action.sequencer_update_keyframe": "更新关键帧",
@@ -1765,6 +1791,7 @@
     "reload": "重新加载"
   },
   "status_bar": {
+    "safe_mode": "安全模式",
     "export_cancelled": "已取消导出",
     "gt_compare": "真值对比",
     "camera": "相机 {}",

@@ -115,6 +115,7 @@ class AssetManagerPanel(Panel):
     template = "rmlui/asset_manager.rml"
     height_mode = lf.ui.PanelHeightMode.FILL
     size = (980, 620)
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     update_policy = "dirty"
 
     # Storage path for asset manager data

@@ -1702,6 +1702,11 @@ namespace lfs::vis {
                 cmd::ToggleGTComparison{}.emit();
                 return;
 
+            case input::Action::OPEN_PREFERENCES:
+                if (gui)
+                    gui->openPreferences();
+                return;
+
             case input::Action::TOGGLE_CAMERA_FRUSTUMS:
                 if (auto* rendering_manager = services().renderingOrNull()) {
                     auto settings = rendering_manager->getSettings();

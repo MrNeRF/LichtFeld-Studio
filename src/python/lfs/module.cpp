@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "preferences.hpp"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -74,6 +75,7 @@
 #include "input/input_controller.hpp"
 #include "python/runner.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "theme/theme.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/strategies/istrategy.hpp"
 #include "training/trainer.hpp"
@@ -2021,6 +2023,8 @@ NB_MODULE(lichtfeld, m) {
                     "camera navigation mode must be 'orbit', 'trackball', 'turntable', 'fpv', 'fly', or 'drone'");
             }
             controller->setCameraNavigationMode(*parsed);
+            lfs::vis::saveCameraNavigationPreference(
+                lfs::vis::InputController::cameraNavigationModeName(*parsed));
         },
         nb::arg("mode"), "Set the active camera navigation mode");
     m.def(
@@ -2035,6 +2039,7 @@ NB_MODULE(lichtfeld, m) {
             if (!controller)
                 return;
             controller->setCameraViewSnapEnabled(enabled);
+            lfs::vis::saveCameraViewSnapPreference(enabled);
         },
         nb::arg("enabled"), "Enable or disable camera axis-view snapping");
     m.def(

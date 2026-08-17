@@ -14,6 +14,11 @@
 #include <optional>
 #include <regex>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 #ifdef WIN32
 #define FMT_UNICODE 0
 #endif
@@ -44,6 +49,8 @@ namespace lfs::core {
         const char* homepath = std::getenv("HOMEPATH");
         if (drive && drive[0] && homepath && homepath[0])
             return std::filesystem::path(std::string(drive) + homepath);
+        if (const char* home = std::getenv("HOME"); home && home[0])
+            return std::filesystem::path(home);
 #else
         if (const char* home = std::getenv("HOME"); home && home[0])
             return std::filesystem::path(home);
@@ -413,13 +420,13 @@ namespace lfs::core {
         }
 
         fs::path resolve_default_log_directory(const std::string& user_dir_override) {
-            return user_dir_override.empty()
-                       ? lichtfeld_home_directory() / ".lichtfeld"
-                       : fs::path(user_dir_override);
+            if (!user_dir_override.empty())
+                return fs::path(user_dir_override) / "logs";
+            return lichtfeld_home_directory() / ".lichtfeld" / "logs";
         }
 
         fs::path resolve_default_log_path(const std::string& user_dir_override) {
-            return resolve_default_log_directory(user_dir_override) / "logs" / "lichtfeld.log";
+            return resolve_default_log_directory(user_dir_override) / "lichtfeld.log";
         }
 
         std::shared_ptr<spdlog::sinks::rotating_file_sink_mt> make_rotating_file_sink(const fs::path& path) {

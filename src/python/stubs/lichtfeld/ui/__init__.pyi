@@ -217,6 +217,18 @@ def set_theme_vignette_intensity(arg: float, /) -> None:
 def set_theme_vignette_style(arg0: float, arg1: float, arg2: float, /) -> None:
     """Set vignette intensity, radius, and softness"""
 
+def remember_camera_navigation() -> bool:
+    """Return whether camera navigation is persisted between launches"""
+
+def set_remember_camera_navigation(enabled: bool) -> None:
+    """Enable or disable camera navigation persistence"""
+
+def remember_camera_view_snap() -> bool:
+    """Return whether camera view snap is persisted between launches"""
+
+def set_remember_camera_view_snap(enabled: bool) -> None:
+    """Enable or disable camera view snap persistence"""
+
 class PanelSpace(enum.Enum):
     SIDE_PANEL = 0
 
@@ -363,6 +375,16 @@ def get_panel_names(space: PanelSpace = PanelSpace.FLOATING) -> list[str]:
 
 def set_panel_enabled(panel_id: str, enabled: bool) -> None:
     """Enable or disable a panel by id"""
+
+def reset_layout() -> str:
+    """
+    Reset the saved UI layout and apply the default dock arrangement immediately.
+    """
+
+def reset_window_state() -> str:
+    """
+    Reset persisted window geometry and apply the default geometry immediately.
+    """
 
 def is_panel_enabled(panel_id: str) -> bool:
     """Check if a panel is enabled"""

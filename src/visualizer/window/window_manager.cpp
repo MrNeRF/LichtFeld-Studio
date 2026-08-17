@@ -10,6 +10,7 @@
 #include "rendering/cuda_vulkan_interop.hpp"
 #include "vulkan_context.hpp"
 #include "vulkan_loader_probe.hpp"
+#include "window_state_utils.hpp"
 #include <SDL3/SDL.h>
 #if defined(__linux__)
 #include <X11/Xatom.h>
@@ -32,6 +33,8 @@ namespace lfs::vis {
         constexpr int kResizeBorder = 6;
         constexpr int kMinWindowWidth = 640;
         constexpr int kMinWindowHeight = 360;
+        constexpr int kMinimumVisibleWindowWidth = 96;
+        constexpr int kMinimumVisibleWindowHeight = 64;
 #if defined(_WIN32)
         constexpr bool kUseManualBorderlessResize = true;
 #else
@@ -41,6 +44,75 @@ namespace lfs::vis {
         constexpr unsigned kResizeRight = 1u << 1;
         constexpr unsigned kResizeTop = 1u << 2;
         constexpr unsigned kResizeBottom = 1u << 3;
+
+        std::vector<WindowRectangle> availableDisplayRectangles() {
+            int display_count = 0;
+            SDL_DisplayID* displays = SDL_GetDisplays(&display_count);
+            if (!displays)
+                return {};
+
+            std::vector<WindowRectangle> rectangles;
+            rectangles.reserve(static_cast<std::size_t>(std::max(0, display_count)));
+            for (int display = 0; display < display_count; ++display) {
+                SDL_Rect bounds{};
+                if (!SDL_GetDisplayUsableBounds(displays[display], &bounds) &&
+                    !SDL_GetDisplayBounds(displays[display], &bounds))
+                    continue;
+                rectangles.push_back({bounds.x, bounds.y, bounds.w, bounds.h});
+            }
+            SDL_free(displays);
+            return rectangles;
+        }
+
+        WindowRectangle centeredWindowRectangleOnPrimaryDisplay(const int width,
+                                                                const int height) {
+            WindowRectangle target{0, 0, width, height};
+            SDL_Rect available{};
+            const SDL_DisplayID primary_display = SDL_GetPrimaryDisplay();
+            if (primary_display &&
+                (SDL_GetDisplayUsableBounds(primary_display, &available) ||
+                 SDL_GetDisplayBounds(primary_display, &available)) &&
+                available.w > 0 && available.h > 0) {
+                return centerWindowOnDisplay(
+                    target, {available.x, available.y, available.w, available.h},
+                    kMinWindowWidth, kMinWindowHeight);
+            }
+
+            target.x = SDL_WINDOWPOS_CENTERED;
+            target.y = SDL_WINDOWPOS_CENTERED;
+            return target;
+        }
+
+        void sanitizeInitialWindowState(WindowManager::PersistentWindowState& state) {
+            const WindowRectangle saved{state.x, state.y, state.width, state.height};
+            SDL_Rect fallback{};
+            const SDL_DisplayID primary_display = SDL_GetPrimaryDisplay();
+            if (primary_display &&
+                (SDL_GetDisplayUsableBounds(primary_display, &fallback) ||
+                 SDL_GetDisplayBounds(primary_display, &fallback))) {
+                const auto recovered = recoverWindowRectangle(
+                    saved, availableDisplayRectangles(),
+                    {fallback.x, fallback.y, fallback.w, fallback.h},
+                    kMinimumVisibleWindowWidth, kMinimumVisibleWindowHeight,
+                    kMinWindowWidth, kMinWindowHeight);
+                if (recovered == saved)
+                    return;
+                state.x = recovered.x;
+                state.y = recovered.y;
+                state.width = recovered.width;
+                state.height = recovered.height;
+                LOG_WARN("Saved window geometry does not fit the available displays; recovered to {}x{} at {},{}",
+                         state.width, state.height, state.x, state.y);
+            } else {
+                if (windowRectangleVisible(saved, availableDisplayRectangles(),
+                                           kMinimumVisibleWindowWidth,
+                                           kMinimumVisibleWindowHeight))
+                    return;
+                state.x = SDL_WINDOWPOS_CENTERED;
+                state.y = SDL_WINDOWPOS_CENTERED;
+                LOG_WARN("Saved window geometry is outside all displays; using SDL default positioning");
+            }
+        }
 
         void configureValidationLayerSearchPath() {
 #ifdef LFS_VULKAN_VALIDATION_LAYER_DIR
@@ -509,6 +581,79 @@ namespace lfs::vis {
 #endif
     }
 
+    void WindowManager::setInitialWindowState(PersistentWindowState state) {
+        if (state.width <= 0 || state.height <= 0)
+            return;
+        initial_window_state_ = state;
+    }
+
+    WindowManager::PersistentWindowState WindowManager::persistentWindowState() const {
+        PersistentWindowState state;
+        state.maximized = isMaximized();
+        if (!window_)
+            return state;
+
+        // Fullscreen is process-local presentation state. Persist the last
+        // windowed rectangle instead so the next launch never inherits the
+        // fullscreen display dimensions as ordinary window geometry.
+        if (is_fullscreen_) {
+            const auto restore_position = is_borderless_maximized_
+                                              ? borderless_restore_pos_
+                                              : windowed_pos_;
+            const auto restore_size = is_borderless_maximized_
+                                          ? borderless_restore_size_
+                                          : windowed_size_;
+            state.x = restore_position.x;
+            state.y = restore_position.y;
+            state.width = restore_size.x;
+            state.height = restore_size.y;
+            return state;
+        }
+
+        if (is_borderless_maximized_) {
+            state.x = borderless_restore_pos_.x;
+            state.y = borderless_restore_pos_.y;
+            state.width = borderless_restore_size_.x;
+            state.height = borderless_restore_size_.y;
+            return state;
+        }
+
+        SDL_GetWindowPosition(window_, &state.x, &state.y);
+        SDL_GetWindowSize(window_, &state.width, &state.height);
+        return state;
+    }
+
+    bool WindowManager::resetPersistentWindowState() {
+        initial_window_state_.reset();
+        if (!window_)
+            return true;
+
+        if (is_fullscreen_)
+            setFullscreen(false);
+        if (isMaximized())
+            restoreMaximized("reset-persistent-window-state");
+        if (is_fullscreen_ || isMaximized()) {
+            LOG_WARN("Failed to restore the window before resetting its persistent geometry");
+            return false;
+        }
+
+        const WindowRectangle target = centeredWindowRectangleOnPrimaryDisplay(1280, 720);
+
+        const bool size_set = SDL_SetWindowSize(window_, target.width, target.height);
+        const bool position_set = SDL_SetWindowPosition(window_, target.x, target.y);
+        if (!size_set || !position_set) {
+            LOG_WARN("Failed to reset window geometry to {}x{} at {},{}: {}",
+                     target.width, target.height, target.x, target.y, SDL_GetError());
+            return false;
+        }
+
+        borderless_restore_pos_ = {target.x, target.y};
+        borderless_restore_size_ = {target.width, target.height};
+        updateWindowSize("reset-persistent-window-state", ResizeIntent::Exact);
+        wakeEventLoop();
+        return true;
+    }
+
     void WindowManager::setInputController(InputController* ic) {
         input_controller_ = ic;
         input_router_.setInputController(ic);
@@ -577,6 +722,31 @@ namespace lfs::vis {
             const int xpos = monitor_pos_.x + (monitor_size_.x - window_size_.x) / 2;
             const int ypos = monitor_pos_.y + (monitor_size_.y - window_size_.y) / 2;
             SDL_SetWindowPosition(window_, xpos, ypos);
+        }
+
+        if (initial_window_state_) {
+            auto state = *initial_window_state_;
+            sanitizeInitialWindowState(state);
+            const bool position_set = SDL_SetWindowPosition(window_, state.x, state.y);
+            const bool size_set = SDL_SetWindowSize(window_, state.width, state.height);
+            if (!position_set || !size_set) {
+                LOG_WARN("Failed to restore saved window geometry {}x{} at {},{}: {}",
+                         state.width, state.height, state.x, state.y, SDL_GetError());
+            } else if (state.maximized) {
+                saveBorderlessRestoreGeometry();
+                maximizeBorderless("restore-saved-window-state", false);
+            }
+        } else if (monitor_size_.x <= 0 || monitor_size_.y <= 0) {
+            const auto target = centeredWindowRectangleOnPrimaryDisplay(
+                window_size_.x, window_size_.y);
+            const bool size_set = SDL_SetWindowSize(window_, target.width, target.height);
+            const bool position_set = SDL_SetWindowPosition(window_, target.x, target.y);
+            if (!size_set || !position_set) {
+                LOG_WARN("Failed to apply initial window geometry {}x{} at {},{}: {}",
+                         target.width, target.height, target.x, target.y, SDL_GetError());
+            } else {
+                window_size_ = {target.width, target.height};
+            }
         }
 
         int fb_w = 0;
@@ -1040,132 +1210,6 @@ namespace lfs::vis {
 
         updateWindowSize(fullscreen ? "setFullscreen-enter" : "setFullscreen-leave",
                          ResizeIntent::Exact);
-        wakeEventLoop();
-    }
-
-    WindowManager::ProjectWindowState
-    WindowManager::captureProjectState() const {
-        ProjectWindowState state;
-        if (!window_)
-            return state;
-
-        if (is_fullscreen_) {
-            state.x = windowed_pos_.x;
-            state.y = windowed_pos_.y;
-            state.width = windowed_size_.x;
-            state.height = windowed_size_.y;
-        } else {
-            SDL_GetWindowPosition(
-                window_, &state.x, &state.y);
-            SDL_GetWindowSize(
-                window_, &state.width, &state.height);
-        }
-        state.fullscreen = is_fullscreen_;
-        state.maximized = isMaximized();
-        state.restore_x = borderless_restore_pos_.x;
-        state.restore_y = borderless_restore_pos_.y;
-        state.restore_width = borderless_restore_size_.x;
-        state.restore_height = borderless_restore_size_.y;
-        if (!state.maximized) {
-            state.restore_x = state.x;
-            state.restore_y = state.y;
-            state.restore_width = state.width;
-            state.restore_height = state.height;
-        }
-        return state;
-    }
-
-    void WindowManager::applyProjectState(
-        const ProjectWindowState& state) {
-        if (!window_)
-            return;
-
-        if (is_fullscreen_)
-            setFullscreen(false);
-        if (isMaximized())
-            restoreMaximized(
-                "project-session-restore-normalize");
-
-        SDL_Rect work_area{
-            state.x,
-            state.y,
-            std::max(state.width, kMinWindowWidth),
-            std::max(state.height, kMinWindowHeight),
-        };
-        const SDL_Point saved_point{state.x, state.y};
-        SDL_DisplayID display_id =
-            SDL_GetDisplayForPoint(&saved_point);
-        if (display_id == 0)
-            display_id = SDL_GetDisplayForWindow(window_);
-        SDL_Rect available{};
-        if (display_id != 0 &&
-            SDL_GetDisplayUsableBounds(
-                display_id, &available) &&
-            available.w > 0 && available.h > 0) {
-            work_area.w = std::clamp(
-                work_area.w, kMinWindowWidth,
-                std::max(available.w, kMinWindowWidth));
-            work_area.h = std::clamp(
-                work_area.h, kMinWindowHeight,
-                std::max(available.h, kMinWindowHeight));
-            constexpr int kVisibleEdge = 64;
-            work_area.x = std::clamp(
-                work_area.x,
-                available.x - work_area.w + kVisibleEdge,
-                available.x + available.w - kVisibleEdge);
-            work_area.y = std::clamp(
-                work_area.y,
-                available.y,
-                available.y + available.h - kVisibleEdge);
-        }
-
-        SDL_Rect restore_area{
-            state.restore_x,
-            state.restore_y,
-            std::max(state.restore_width, kMinWindowWidth),
-            std::max(state.restore_height, kMinWindowHeight),
-        };
-        if (display_id != 0 &&
-            SDL_GetDisplayUsableBounds(
-                display_id, &available) &&
-            available.w > 0 && available.h > 0) {
-            restore_area.w = std::clamp(
-                restore_area.w, kMinWindowWidth,
-                std::max(available.w, kMinWindowWidth));
-            restore_area.h = std::clamp(
-                restore_area.h, kMinWindowHeight,
-                std::max(available.h, kMinWindowHeight));
-            constexpr int kVisibleEdge = 64;
-            restore_area.x = std::clamp(
-                restore_area.x,
-                available.x - restore_area.w + kVisibleEdge,
-                available.x + available.w - kVisibleEdge);
-            restore_area.y = std::clamp(
-                restore_area.y, available.y,
-                available.y + available.h - kVisibleEdge);
-        }
-
-        SDL_SetWindowSize(
-            window_, work_area.w, work_area.h);
-        SDL_SetWindowPosition(
-            window_, work_area.x, work_area.y);
-        windowed_pos_ = {work_area.x, work_area.y};
-        windowed_size_ = {work_area.w, work_area.h};
-        borderless_restore_pos_ = {
-            restore_area.x, restore_area.y};
-        borderless_restore_size_ = {
-            restore_area.w,
-            restore_area.h,
-        };
-        if (state.maximized)
-            maximizeBorderless(
-                "project-session-restore-maximize",
-                false);
-        if (state.fullscreen)
-            setFullscreen(true);
-        updateWindowSize(
-            "project-session-restore",
-            ResizeIntent::Exact);
         wakeEventLoop();
     }
 
