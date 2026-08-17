@@ -1241,16 +1241,12 @@ namespace lfs::training {
                 layout_rest);
         }
 
-        // fused Adam-scale zero for split parents + grad zero (step runs next).
-        {
-            float* adam_ptrs[12] = {};
-            const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
-            if (n_adam > 0) {
-                kernels::launch_zero_adam_scales_at_indices(
-                    split_indices.ptr<int64_t>(), K, adam_ptrs, n_adam, n);
-            }
-            zero_adam_grads_at_indices(*_optimizer, split_indices, layout_rest);
-        }
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, split_indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, split_indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, split_indices, layout_rest);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, split_indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, split_indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, split_indices);
 
         size_t append_start = 0;
         if (free_count() > 0) {

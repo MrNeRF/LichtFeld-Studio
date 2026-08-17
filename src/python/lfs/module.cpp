@@ -261,7 +261,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                    -> lfs::Result<void> {
+                -> lfs::Result<void> {
                     emit();
                     return {};
                 },

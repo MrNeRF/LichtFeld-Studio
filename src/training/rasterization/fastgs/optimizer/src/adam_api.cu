@@ -7,6 +7,8 @@
 #include "optimizer_config.h"
 #include "utils.h"
 
+#include <cstddef>
+
 namespace fast_lfs::optimizer {
 
     void adam_step_joint_contiguous_raw(
@@ -75,18 +77,38 @@ namespace fast_lfs::optimizer {
             return;
         if (n_attr <= 0)
             throw std::runtime_error("n_attr must be positive");
-        const dim3 grid(div_round_up(n_indices, config::block_size_adam_step));
-        const dim3 block(config::block_size_adam_step);
-        if (bits == 16) {
-            kernels::adam::joint_encode_zero_rows_cu<16><<<grid, block, 0, stream>>>(
-                packed, bounds, indices_device, n_indices, n_attr, n_prims);
-        } else if (bits == 8) {
-            kernels::adam::joint_encode_zero_rows_cu<8><<<grid, block, 0, stream>>>(
-                packed, bounds, indices_device, n_indices, n_attr, n_prims);
-        } else {
+        if (n_prims <= 0)
+            throw std::runtime_error("joint_encode_zero_rows: n_prims must be positive");
+        if (bits != 8 && bits != 16)
             throw std::runtime_error("joint_encode_zero_rows: bits must be 8 or 16");
+
+        constexpr int kBS = lfs::training::joint_adam::kBlockSizeDevice;
+        const int n_blocks = (n_prims + kBS - 1) / kBS;
+        const std::size_t touched_bytes =
+            (static_cast<std::size_t>(n_blocks) + 3u) & ~static_cast<std::size_t>(3u);
+        std::uint8_t* flags = nullptr;
+        std::uint8_t* block_touched = nullptr;
+        LFS_CUDA_CHECK(cudaMallocAsync(&flags, static_cast<std::size_t>(n_prims), stream));
+        LFS_CUDA_CHECK(cudaMallocAsync(&block_touched, touched_bytes, stream));
+        LFS_CUDA_CHECK(cudaMemsetAsync(flags, 0, static_cast<std::size_t>(n_prims), stream));
+        LFS_CUDA_CHECK(cudaMemsetAsync(block_touched, 0, touched_bytes, stream));
+
+        const dim3 mark_grid(div_round_up(n_indices, config::block_size_adam_step));
+        const dim3 mark_block(config::block_size_adam_step);
+        kernels::adam::joint_encode_zero_mark_cu<<<mark_grid, mark_block, 0, stream>>>(
+            flags, block_touched, indices_device, n_indices, n_prims);
+        LFS_CUDA_LAUNCH_CHECK(stream, "joint_encode_zero_mark");
+
+        if (bits == 16) {
+            kernels::adam::joint_encode_zero_rows_cu<16><<<n_blocks, kBS, 0, stream>>>(
+                packed, bounds, flags, block_touched, n_attr, n_prims);
+        } else {
+            kernels::adam::joint_encode_zero_rows_cu<8><<<n_blocks, kBS, 0, stream>>>(
+                packed, bounds, flags, block_touched, n_attr, n_prims);
         }
         LFS_CUDA_LAUNCH_CHECK(stream, "joint_encode_zero_rows_at_indices");
+        LFS_CUDA_CHECK(cudaFreeAsync(flags, stream));
+        LFS_CUDA_CHECK(cudaFreeAsync(block_touched, stream));
     }
 
     void joint_encode_zero_shN_at_indices(
@@ -105,18 +127,38 @@ namespace fast_lfs::optimizer {
             return;
         if (slots_per_primitive <= 0)
             return;
-        const dim3 grid(div_round_up(n_indices, config::block_size_adam_step));
-        const dim3 block(config::block_size_adam_step);
-        if (bits == 16) {
-            kernels::adam::joint_encode_zero_shN_cu<16><<<grid, block, 0, stream>>>(
-                packed, bounds, indices_device, n_indices, slots_per_primitive, n_prims);
-        } else if (bits == 8) {
-            kernels::adam::joint_encode_zero_shN_cu<8><<<grid, block, 0, stream>>>(
-                packed, bounds, indices_device, n_indices, slots_per_primitive, n_prims);
-        } else {
+        if (n_prims <= 0)
+            throw std::runtime_error("joint_encode_zero_shN: n_prims must be positive");
+        if (bits != 8 && bits != 16)
             throw std::runtime_error("joint_encode_zero_shN: bits must be 8 or 16");
+
+        constexpr int kBS = lfs::training::joint_adam::kBlockSizeDevice;
+        const int n_blocks = (n_prims + kBS - 1) / kBS;
+        const std::size_t touched_bytes =
+            (static_cast<std::size_t>(n_blocks) + 3u) & ~static_cast<std::size_t>(3u);
+        std::uint8_t* flags = nullptr;
+        std::uint8_t* block_touched = nullptr;
+        LFS_CUDA_CHECK(cudaMallocAsync(&flags, static_cast<std::size_t>(n_prims), stream));
+        LFS_CUDA_CHECK(cudaMallocAsync(&block_touched, touched_bytes, stream));
+        LFS_CUDA_CHECK(cudaMemsetAsync(flags, 0, static_cast<std::size_t>(n_prims), stream));
+        LFS_CUDA_CHECK(cudaMemsetAsync(block_touched, 0, touched_bytes, stream));
+
+        const dim3 mark_grid(div_round_up(n_indices, config::block_size_adam_step));
+        const dim3 mark_block(config::block_size_adam_step);
+        kernels::adam::joint_encode_zero_mark_cu<<<mark_grid, mark_block, 0, stream>>>(
+            flags, block_touched, indices_device, n_indices, n_prims);
+        LFS_CUDA_LAUNCH_CHECK(stream, "joint_encode_zero_mark");
+
+        if (bits == 16) {
+            kernels::adam::joint_encode_zero_shN_cu<16><<<n_blocks, kBS, 0, stream>>>(
+                packed, bounds, flags, block_touched, slots_per_primitive, n_prims);
+        } else {
+            kernels::adam::joint_encode_zero_shN_cu<8><<<n_blocks, kBS, 0, stream>>>(
+                packed, bounds, flags, block_touched, slots_per_primitive, n_prims);
         }
         LFS_CUDA_LAUNCH_CHECK(stream, "joint_encode_zero_shN_at_indices");
+        LFS_CUDA_CHECK(cudaFreeAsync(flags, stream));
+        LFS_CUDA_CHECK(cudaFreeAsync(block_touched, stream));
     }
 
     void joint_transcode_gathered_rows_at_indices(
