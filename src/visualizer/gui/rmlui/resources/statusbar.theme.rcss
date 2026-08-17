@@ -5,13 +5,66 @@ body,
     color: @{text};
 }
 
-.safe-mode {
+.safe-mode #status-row {
     background-color: @{blend(surface,warning,0.20)};
 }
 
 #safe-mode-badge {
     color: @{text};
     background-color: @{blend(surface,warning,0.42)};
+}
+
+#mcp-chip {
+    background-color: @{alpha(surface_bright,0.35)};
+    border-color: @{alpha(text_dim,0.55)};
+}
+
+#mcp-chip:hover,
+#mcp-chip.expanded {
+    background-color: @{alpha(surface_bright,0.45)};
+    border-color: @{text_dim};
+}
+
+#mcp-popup {
+    color: @{text};
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+.mcp-success {
+    color: @{success};
+}
+
+.mcp-error {
+    color: @{error};
+}
+
+.mcp-switch-track {
+    border-color: @{border};
+    background-color: @{surface_bright};
+}
+
+.mcp-switch-knob {
+    background-color: @{text_dim};
+}
+
+#mcp-toggle.is-on .mcp-switch-track {
+    border-color: @{success};
+}
+
+#mcp-toggle.is-on .mcp-switch-knob {
+    background-color: @{success};
+}
+
+.mcp-edit-button {
+    color: @{text};
+    background-color: @{blend(surface,primary,button.tint_normal)};
+    border-color: @{blend(surface,primary,button.tint_normal)};
+}
+
+.mcp-edit-button:hover {
+    background-color: @{blend(surface,primary,button.tint_hover)};
+    border-color: @{blend(surface,primary,button.tint_hover)};
 }
 
 .dim,

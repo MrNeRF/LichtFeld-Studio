@@ -4,13 +4,18 @@ sidebar_position: 2
 
 # Connecting MCP Clients
 
-LichtFeld Studio embeds its own MCP server. It starts automatically with the GUI and listens on:
+LichtFeld Studio embeds its own MCP server. By default it starts automatically
+with the GUI and listens on:
 
 ```
 http://127.0.0.1:45677/mcp
 ```
 
-The transport is plain HTTP JSON-RPC on localhost only. There is no TLS and no remote access; every connection method below is a different way to reach this one endpoint.
+The transport is plain HTTP JSON-RPC. The default loopback binding is reachable
+only from the same computer. Preferences can explicitly expose the endpoint on
+the local network; that mode has no authentication or TLS and must only be used
+on a trusted network. The port, listener state, usable endpoints, and optional
+request logging are also managed from Preferences or the MCP status-bar chip.
 
 ## Choose a Connection Path
 
@@ -60,7 +65,9 @@ On Linux, replace `"command": "cmd"` and the `"/c"` argument with `"command": "n
 
 Notes:
 
-- `--allow-http` is required; `mcp-remote` refuses plain-HTTP URLs without it. This is safe here because the endpoint is localhost-only.
+- `--allow-http` is required; `mcp-remote` refuses plain-HTTP URLs without it.
+  The default loopback endpoint does not leave the computer. If network
+  exposure is enabled, plain HTTP traffic is visible to the local network.
 - Launch LichtFeld Studio before starting the conversation. `mcp-remote` connects to a running instance; it does not launch the app.
 
 ## In-Repo stdio Bridge
@@ -87,7 +94,39 @@ curl -s -X POST http://127.0.0.1:45677/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-A JSON response with a `tools` array means the server is up and any of the paths above should work. If the connection is refused, the app is not running or another instance already owns the port (the second instance logs a warning and runs without MCP).
+A JSON response with a `tools` array means the server is up and any of the paths
+above should work. If the connection is refused, inspect the MCP status chip:
+the server may be disabled, configured on another port, or unable to bind
+because another process already owns the port. The displayed endpoint list
+contains client-ready URLs; `0.0.0.0` is only the listener bind address and is
+not presented as a client endpoint.
+
+## Runtime Controls and Diagnostics
+
+The MCP section in Preferences controls:
+
+- whether the listener is enabled;
+- loopback-only or local-network binding;
+- the HTTP port;
+- opt-in request activity logging.
+
+Port edits are drafts until confirmed with Enter or the adjacent confirmation
+button, preventing a partially typed port from restarting the listener. The
+other controls apply immediately. The status bar offers remappable
+`Ctrl+Shift+M` and `Ctrl+Shift+N` actions for server power and bind scope.
+If a bind fails, Preferences keeps the failure visible, identifies the attempted
+address and port, and does not advertise an active endpoint. Choose another port
+when the configured one is already in use or reserved by the operating system.
+
+When request logging is enabled, the current per-session JSONL path is shown in
+Preferences and the log directory can be opened from there. Error records state
+whether the failure came from the JSON-RPC envelope or from an MCP tool result,
+plus the failure stage and stable diagnostic codes. Each request record also
+includes the source and destination socket IP addresses and ports. Parameters,
+tool names, payloads, free-form messages, and error details are not logged.
+Network addresses can identify devices and interfaces, so logging remains an
+explicit opt-in. Safe mode forces both the listener and request logging off
+without modifying the persisted configuration.
 
 ## After Connecting
 

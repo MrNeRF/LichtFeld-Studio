@@ -49,6 +49,7 @@ set_target_properties(lfs_mcp PROPERTIES
 )
 
 if(WIN32)
+    target_link_libraries(lfs_mcp PRIVATE iphlpapi ws2_32)
     set_target_properties(lfs_mcp PROPERTIES
         CXX_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON

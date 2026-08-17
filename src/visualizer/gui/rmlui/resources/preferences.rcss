@@ -48,6 +48,24 @@ body.floating-panel {
     opacity: 0.8;
 }
 
+.preferences-warning,
+.preferences-error {
+    margin: 4dp 0 8dp 0;
+}
+
+.preferences-value-selectable {
+    width: 360dp;
+    white-space: pre-wrap;
+}
+
+.preferences-inline-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6dp;
+    justify-content: flex-end;
+    margin: 8dp 0 12dp 0;
+}
+
 .preferences-row {
     display: flex;
     align-items: flex-start;
@@ -69,6 +87,68 @@ body.floating-panel {
     width: 200dp;
     min-width: 140dp;
     margin-left: auto;
+}
+
+.preferences-port-control {
+    display: flex;
+    flex: 0 0 240dp;
+    align-items: center;
+    gap: 6dp;
+    margin-left: auto;
+}
+
+.preferences-port-input {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 100dp;
+    margin-left: 0;
+}
+
+.preferences-port-confirm {
+    flex: 0 0 auto;
+    min-width: 34dp;
+    padding-left: 8dp;
+    padding-right: 8dp;
+}
+
+.preferences-switch-row {
+    align-items: center;
+}
+
+.preferences-mcp-toggle {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    width: 30dp;
+    height: 18dp;
+    margin-left: auto;
+    padding: 0;
+    border-width: 0;
+    background-color: transparent;
+}
+
+.preferences-mcp-switch-track {
+    display: block;
+    position: relative;
+    width: 22dp;
+    height: 10dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+}
+
+.preferences-mcp-switch-knob {
+    display: block;
+    position: absolute;
+    left: 1dp;
+    top: 1dp;
+    width: 6dp;
+    height: 6dp;
+    border-radius: 4dp;
+}
+
+.preferences-mcp-toggle.is-on .preferences-mcp-switch-knob {
+    left: 13dp;
 }
 
 .preferences-checkbox-row input {

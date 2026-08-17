@@ -62,6 +62,9 @@ namespace lfs::vis {
     namespace gui {
         class NativeScenePanel;
 
+        LFS_VIS_API void openPreferencesPanel(std::string section = {});
+        [[nodiscard]] LFS_VIS_API std::string consumePreferencesSectionRequest();
+
         struct GuiHitTestResult {
             bool blocks_pointer = false;
             bool blocks_mouse_button = false;

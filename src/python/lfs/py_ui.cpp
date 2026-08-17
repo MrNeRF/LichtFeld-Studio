@@ -4,6 +4,7 @@
 
 #include "py_ui.hpp"
 #include "control/command_api.hpp"
+#include "core/environment.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -14,6 +15,7 @@
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/user_paths.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/rml_menu_bar.hpp"
@@ -22,6 +24,7 @@
 #include "gui/vulkan_ui_texture.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
+#include "mcp/mcp_http_server.hpp"
 #include "preferences.hpp"
 #include "py_command.hpp"
 #include "py_gizmo.hpp"
@@ -4806,6 +4809,78 @@ namespace lfs::python {
             "get_ui_scale_preference",
             []() -> float { return vis::loadUiScalePreference(); },
             "Get saved UI scale preference (0.0 = auto)");
+
+        m.def(
+            "get_mcp_preferences",
+            [] {
+                const auto state = vis::loadMcpPreferences();
+                const bool safe_mode = core::environment::flag("LFS_SAFE_MODE", false);
+                nb::dict result;
+                result["enabled"] = !safe_mode && state.enabled;
+                result["expose_network"] = state.expose_network;
+                result["port"] = state.port;
+                result["request_logging"] = !safe_mode && state.request_logging;
+                return result;
+            },
+            "Get effective MCP HTTP server preferences");
+
+        m.def(
+            "set_mcp_preferences",
+            [](const bool enabled, const bool expose_network, const int port,
+               const bool request_logging) {
+                if (port < 1 || port > 65535)
+                    throw nb::value_error("MCP port must be between 1 and 65535");
+                vis::saveMcpPreferences({
+                    .enabled = enabled,
+                    .expose_network = expose_network,
+                    .port = port,
+                    .request_logging = request_logging,
+                });
+                return mcp::applyActiveMcpHttpConfig({
+                    .enabled = enabled,
+                    .expose_network = expose_network,
+                    .port = port,
+                    .request_logging = request_logging,
+                });
+            },
+            nb::arg("enabled"), nb::arg("expose_network"), nb::arg("port"),
+            nb::arg("request_logging") = false,
+            "Persist and immediately apply MCP HTTP server preferences");
+
+        m.def(
+            "get_mcp_status",
+            [] {
+                const auto status = mcp::activeMcpHttpStatus();
+                nb::dict result;
+                result["enabled"] = status.enabled;
+                result["running"] = status.running;
+                result["expose_network"] = status.expose_network;
+                result["port"] = status.port;
+                result["request_count"] = status.request_count;
+                result["success_count"] = status.success_count;
+                result["error_count"] = status.error_count;
+                result["endpoints"] = status.endpoints;
+                result["request_logging"] = status.request_logging;
+                result["log_file"] = status.log_file;
+                result["error"] = status.error;
+                return result;
+            },
+            "Get current MCP HTTP server runtime status");
+
+        m.def(
+            "get_mcp_log_directory",
+            [] {
+                const auto paths = core::UserPaths::resolve();
+                if (!paths)
+                    throw std::runtime_error(lfs::format_for_developer(paths.error()));
+                return core::path_to_utf8(paths->mcpLogDir());
+            },
+            "Return the MCP per-session log directory");
+
+        m.def(
+            "take_preferences_section_request",
+            [] { return vis::gui::consumePreferencesSectionRequest(); },
+            "Consume a requested Preferences section name");
 
         m.def(
             "set_clipboard_text",

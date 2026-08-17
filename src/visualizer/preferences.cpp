@@ -8,7 +8,9 @@
 #include "core/logger.hpp"
 #include "core/user_paths.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -230,6 +232,43 @@ namespace lfs::vis {
         return impl_->values.value("remember_camera_view_snap", false);
     }
 
+    void UserPreferences::setMcp(const McpPreferenceState& state) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["mcp"] = {
+            {"enabled", state.enabled},
+            {"expose_network", state.expose_network},
+            {"port", std::clamp(state.port, 1, 65535)},
+            {"request_logging", state.request_logging},
+        };
+        impl_->saveLocked();
+    }
+
+    McpPreferenceState UserPreferences::mcp() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        McpPreferenceState result;
+        const auto it = impl_->values.find("mcp");
+        if (it == impl_->values.end() || !it->is_object())
+            return result;
+        if (const auto enabled = it->find("enabled");
+            enabled != it->end() && enabled->is_boolean())
+            result.enabled = enabled->get<bool>();
+        if (const auto expose = it->find("expose_network");
+            expose != it->end() && expose->is_boolean())
+            result.expose_network = expose->get<bool>();
+        if (const auto port = it->find("port");
+            port != it->end() && port->is_number_integer()) {
+            const auto value = port->get<std::int64_t>();
+            if (value >= 1 && value <= 65535)
+                result.port = static_cast<int>(value);
+        }
+        if (const auto logging = it->find("request_logging");
+            logging != it->end() && logging->is_boolean())
+            result.request_logging = logging->get<bool>();
+        return result;
+    }
+
     void saveLanguagePreference(const std::string& value) { UserPreferences::instance().setLanguage(value); }
     std::string loadLanguagePreference() { return UserPreferences::instance().language(); }
     void clearLanguagePreference() { UserPreferences::instance().clearLanguage(); }
@@ -241,5 +280,7 @@ namespace lfs::vis {
     bool loadCameraViewSnapPreference() { return UserPreferences::instance().cameraViewSnap(); }
     void setRememberCameraViewSnapPreference(const bool enabled) { UserPreferences::instance().setRememberCameraViewSnap(enabled); }
     bool rememberCameraViewSnapPreference() { return UserPreferences::instance().rememberCameraViewSnap(); }
+    void saveMcpPreferences(const McpPreferenceState& state) { UserPreferences::instance().setMcp(state); }
+    McpPreferenceState loadMcpPreferences() { return UserPreferences::instance().mcp(); }
 
 } // namespace lfs::vis

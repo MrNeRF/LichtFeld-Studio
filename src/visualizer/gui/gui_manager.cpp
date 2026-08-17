@@ -106,6 +106,26 @@
 
 namespace lfs::vis::gui {
 
+    namespace {
+        std::mutex g_preferences_section_mutex;
+        std::string g_preferences_section_request;
+    } // namespace
+
+    void openPreferencesPanel(std::string section) {
+        {
+            std::lock_guard lock(g_preferences_section_mutex);
+            g_preferences_section_request = std::move(section);
+        }
+        auto& panels = PanelRegistry::instance();
+        panels.set_panel_enabled("lfs.preferences", true);
+        panels.bring_panel_to_front("lfs.preferences");
+    }
+
+    std::string consumePreferencesSectionRequest() {
+        std::lock_guard lock(g_preferences_section_mutex);
+        return std::exchange(g_preferences_section_request, {});
+    }
+
     GuiFocusState& guiFocusState() {
         static GuiFocusState state;
         return state;
@@ -3448,7 +3468,8 @@ namespace lfs::vis::gui {
         };
         rml_viewport_overlay_.init(&rmlui_manager_);
         rml_menu_bar_.init(&rmlui_manager_);
-        rml_status_bar_.init(&rmlui_manager_, viewer_->options_.safe_mode);
+        rml_status_bar_.init(&rmlui_manager_, viewer_->options_.safe_mode,
+                             viewer_->options_.mcp_status_provider);
         if (global_context_menu_)
             global_context_menu_->preload();
         if (rml_modal_overlay_)
@@ -5620,12 +5641,15 @@ namespace lfs::vis::gui {
             const float status_bar_x = screen.work_pos.x;
             const float status_bar_y = screen.work_pos.y + screen.work_size.y;
             const float status_bar_w = screen.work_size.x;
+            const float status_local_x = panel_input.mouse_x - status_bar_x;
+            const float status_local_y = panel_input.mouse_y - status_bar_y;
+            const bool inside_status_overlay =
+                rml_status_bar_.isOverlayPoint(status_local_x, status_local_y, status_bar_w);
             const bool status_input =
                 !block_underlay_input &&
-                ((panel_input.mouse_x >= status_bar_x &&
-                  panel_input.mouse_x < status_bar_x + status_bar_w &&
-                  panel_input.mouse_y >= status_bar_y &&
-                  panel_input.mouse_y < status_bar_y + status_bar_height) ||
+                (((status_local_x >= 0.0f && status_local_x < status_bar_w &&
+                   status_local_y >= 0.0f && status_local_y < status_bar_height) ||
+                  inside_status_overlay) ||
                  panel_input.mouse_released[0]);
             if (status_input) {
                 rml_status_bar_.processInput(panel_input, status_bar_x, status_bar_y,
@@ -6933,7 +6957,7 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::openPreferences() {
-        PanelRegistry::instance().set_panel_enabled("lfs.preferences", true);
+        openPreferencesPanel();
     }
 
     std::expected<void, std::string> GuiManager::resetLayout() {

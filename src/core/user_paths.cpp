@@ -275,6 +275,12 @@ namespace lfs::core {
                                                         {"language", "en"},
                                                         {"theme", "dark"},
                                                         {"ui_scale", "auto"},
+                                                        {"mcp", {
+                                                                    {"enabled", true},
+                                                                    {"expose_network", false},
+                                                                    {"port", 45677},
+                                                                    {"request_logging", false},
+                                                                }},
                                                     });
         }
 
@@ -421,4 +427,20 @@ namespace lfs::core {
     std::filesystem::path UserPaths::presetDir() const { return data_dir_ / "presets"; }
     std::filesystem::path UserPaths::assetLibraryDir() const { return data_dir_ / "asset_library"; }
     std::filesystem::path UserPaths::backupDir() const { return data_dir_ / "backups"; }
+    std::filesystem::path UserPaths::mcpLogDir() const { return log_dir_ / "mcp"; }
+    lfs::Status UserPaths::writeMcpLogAtomically(
+        const std::filesystem::path& filename, const std::string& contents) const {
+        if (filename.empty() || filename != filename.filename() ||
+            filename == "." || filename == "..")
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .user_message = "The MCP log filename is invalid.",
+                .detail = "MCP log filenames must not contain a directory",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        return writeTextFileAtomically(mcpLogDir() / filename, contents);
+    }
 } // namespace lfs::core

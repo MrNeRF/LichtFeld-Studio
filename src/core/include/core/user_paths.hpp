@@ -90,6 +90,11 @@ namespace lfs::core {
         [[nodiscard]] std::filesystem::path presetDir() const;
         [[nodiscard]] std::filesystem::path assetLibraryDir() const;
         [[nodiscard]] std::filesystem::path backupDir() const;
+        [[nodiscard]] std::filesystem::path mcpLogDir() const;
+        /** Atomically publish one MCP session log below logs/mcp. */
+        [[nodiscard]] lfs::Status
+        writeMcpLogAtomically(const std::filesystem::path& filename,
+                              const std::string& contents) const;
         [[nodiscard]] bool usesUnifiedRoot() const noexcept { return unified_root_; }
 
     private:

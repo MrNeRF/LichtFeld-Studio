@@ -229,6 +229,55 @@ TEST(ThemePreferencesContract, MalformedJsonFallsBackToBuiltInDefaults) {
     std::filesystem::remove_all(root, error);
 }
 
+TEST(ThemePreferencesContract, McpPreferencesRoundTripAndValidateInput) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_mcp_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    const auto defaults = lfs::vis::loadMcpPreferences();
+    EXPECT_TRUE(defaults.enabled);
+    EXPECT_FALSE(defaults.expose_network);
+    EXPECT_EQ(defaults.port, 45677);
+    EXPECT_FALSE(defaults.request_logging);
+
+    lfs::vis::saveMcpPreferences({
+        .enabled = false,
+        .expose_network = true,
+        .port = 50123,
+        .request_logging = true,
+    });
+    const auto saved = lfs::vis::loadMcpPreferences();
+    EXPECT_FALSE(saved.enabled);
+    EXPECT_TRUE(saved.expose_network);
+    EXPECT_EQ(saved.port, 50123);
+    EXPECT_TRUE(saved.request_logging);
+
+    const auto invalid_root = std::filesystem::temp_directory_path() /
+                              "lfs_mcp_preferences_invalid";
+    std::filesystem::remove_all(invalid_root, error);
+    {
+        const ScopedLfsHome invalid_home(invalid_root);
+        const auto invalid_paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(invalid_paths.has_value())
+            << lfs::format_for_developer(invalid_paths.error());
+        ASSERT_TRUE(invalid_paths->ensureDirectories().has_value());
+        std::ofstream(invalid_paths->preferencesFile())
+            << R"({"mcp":{"enabled":"yes","expose_network":7,"port":70000,"request_logging":[]}})";
+
+        const auto invalid = lfs::vis::loadMcpPreferences();
+        EXPECT_TRUE(invalid.enabled);
+        EXPECT_FALSE(invalid.expose_network);
+        EXPECT_EQ(invalid.port, 45677);
+        EXPECT_FALSE(invalid.request_logging);
+    }
+    std::filesystem::remove_all(invalid_root, error);
+    std::filesystem::remove_all(root, error);
+}
+
 TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
     const auto root = std::filesystem::temp_directory_path() / "lfs_theme_preferences_safe_mode";
     std::error_code error;
@@ -237,7 +286,7 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
     const auto paths = lfs::core::UserPaths::resolve();
     ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
     ASSERT_TRUE(paths->ensureDirectories().has_value());
-    const std::string original = R"({"theme":"light","ui_scale":1.5,"language":"it"})";
+    const std::string original = R"({"theme":"light","ui_scale":1.5,"language":"it","mcp":{"enabled":false,"expose_network":true,"port":50000,"request_logging":true}})";
     std::ofstream(paths->preferencesFile()) << original;
 
     {
@@ -245,9 +294,20 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "dark");
         EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
         EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
+        const auto mcp = lfs::vis::loadMcpPreferences();
+        EXPECT_TRUE(mcp.enabled);
+        EXPECT_FALSE(mcp.expose_network);
+        EXPECT_EQ(mcp.port, 45677);
+        EXPECT_FALSE(mcp.request_logging);
         lfs::vis::saveThemePreferenceName("gruvbox");
         lfs::vis::saveUiScalePreference(2.0f);
         lfs::vis::saveLanguagePreference("fr");
+        lfs::vis::saveMcpPreferences({
+            .enabled = true,
+            .expose_network = false,
+            .port = 45677,
+            .request_logging = false,
+        });
     }
 
     std::ifstream file(paths->preferencesFile());

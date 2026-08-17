@@ -42,6 +42,30 @@ namespace lfs::vis {
         RecoveryPromptPending,
     };
 
+    struct RuntimeServiceStatus {
+        bool enabled = false;
+        bool running = false;
+        bool network_exposed = false;
+        int port = 0;
+        std::uint64_t request_count = 0;
+        std::uint64_t success_count = 0;
+        std::uint64_t error_count = 0;
+        std::vector<std::string> endpoints;
+        bool request_logging = false;
+        std::string log_file;
+        std::string error;
+    };
+
+    struct RuntimeServiceControls {
+        std::function<bool()> toggle_mcp_enabled;
+        std::function<bool()> toggle_mcp_binding;
+    };
+
+    LFS_VIS_API void setRuntimeServiceControls(RuntimeServiceControls controls);
+    LFS_VIS_API bool toggleMcpRuntimeEnabled();
+    LFS_VIS_API bool toggleMcpRuntimeBinding();
+    [[nodiscard]] LFS_VIS_API std::uint64_t runtimeServiceRevision();
+
     struct LFS_VIS_API ProjectPayloadInfo {
         std::string chapter;
         std::string node_uuid;
@@ -107,6 +131,7 @@ namespace lfs::vis {
         bool antialiasing = false;
         bool show_startup_overlay = true;
         bool safe_mode = false;
+        std::function<RuntimeServiceStatus()> mcp_status_provider;
         bool gut = false;
         GraphicsBackend graphics_backend = GraphicsBackend::Vulkan;
         int monitor_x = 0; // Monitor hint for window placement

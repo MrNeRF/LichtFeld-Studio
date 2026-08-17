@@ -23,8 +23,8 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 21; // Version 21 adds the Preferences shortcut.
-        constexpr Action LAST_ACTION = Action::OPEN_PREFERENCES;
+        constexpr int PROFILE_VERSION = 22; // Version 22 adds MCP runtime shortcuts.
+        constexpr Action LAST_ACTION = Action::TOGGLE_MCP_BINDING;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -349,6 +349,7 @@ namespace lfs::vis::input {
             }
 
             const json j = json::parse(file);
+            file.close();
             const int version = j.value("version", 0);
             const std::string profile_name = j.value("name", "Custom");
 
@@ -513,7 +514,9 @@ namespace lfs::vis::input {
                 (version < 18 && selection_volume_shortcut) ||
                 (version < 19 && def.action == Action::CUT_SELECTION) ||
                 (version < 20 && def.action == Action::TOGGLE_PERFORMANCE_HUD) ||
-                (version < 21 && def.action == Action::OPEN_PREFERENCES);
+                (version < 21 && def.action == Action::OPEN_PREFERENCES) ||
+                (version < 22 && def.action == Action::TOGGLE_MCP_SERVER) ||
+                (version < 22 && def.action == Action::TOGGLE_MCP_BINDING);
             if (!should_add) {
                 continue;
             }
@@ -1021,6 +1024,8 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
             {KeyTrigger{KEY_F10, MODIFIER_NONE}, Action::TOGGLE_PERFORMANCE_HUD, "Performance HUD"},
             {KeyTrigger{KEY_COMMA, MODIFIER_CTRL}, Action::OPEN_PREFERENCES, "Preferences"},
+            {KeyTrigger{KEY_M, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_SERVER, "Toggle MCP server"},
+            {KeyTrigger{KEY_N, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_BINDING, "Toggle MCP binding"},
             {MouseScrollTrigger{MODIFIER_CTRL}, Action::HISTOGRAM_ZOOM_MARKED, "Zoom histogram at cursor"},
             // Sequencer
             {KeyTrigger{KEY_K, MODIFIER_NONE}, Action::SEQUENCER_ADD_KEYFRAME, "Add keyframe"},
@@ -1183,6 +1188,8 @@ namespace lfs::vis::input {
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "Toggle Camera Frustums";
         case Action::OPEN_PREFERENCES: return "Open Preferences";
+        case Action::TOGGLE_MCP_SERVER: return "Toggle MCP Server";
+        case Action::TOGGLE_MCP_BINDING: return "Toggle MCP Local/Network Binding";
         default: return "Unknown";
         }
     }
@@ -1266,6 +1273,8 @@ namespace lfs::vis::input {
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "toggle_camera_frustums";
         case Action::OPEN_PREFERENCES: return "open_preferences";
+        case Action::TOGGLE_MCP_SERVER: return "toggle_mcp_server";
+        case Action::TOGGLE_MCP_BINDING: return "toggle_mcp_binding";
         default: return {};
         }
     }
@@ -1947,6 +1956,8 @@ namespace lfs::vis::input {
         case Action::TOGGLE_FULLSCREEN:
         case Action::TOGGLE_PERFORMANCE_HUD:
         case Action::OPEN_PREFERENCES:
+        case Action::TOGGLE_MCP_SERVER:
+        case Action::TOGGLE_MCP_BINDING:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:
             return d_ui_scroll;
@@ -2012,6 +2023,10 @@ namespace lfs::vis::input {
         case Action::TOGGLE_CAMERA_FRUSTUMS:
         case Action::CYCLE_SELECTION_VIS:
             return ShortcutScope::GlobalWhenNotTextEditing;
+
+        case Action::TOGGLE_MCP_SERVER:
+        case Action::TOGGLE_MCP_BINDING:
+            return ShortcutScope::Global;
 
         case Action::CAMERA_MOVE_FORWARD:
         case Action::CAMERA_MOVE_BACKWARD:

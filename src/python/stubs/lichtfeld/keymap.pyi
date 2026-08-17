@@ -159,6 +159,10 @@ class Action(enum.Enum):
 
     OPEN_PREFERENCES = 78
 
+    TOGGLE_MCP_SERVER = 79
+
+    TOGGLE_MCP_BINDING = 80
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 

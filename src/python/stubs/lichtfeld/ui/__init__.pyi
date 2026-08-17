@@ -2555,6 +2555,21 @@ def get_ui_scale() -> float:
 def get_ui_scale_preference() -> float:
     """Get saved UI scale preference (0.0 = auto)"""
 
+def get_mcp_preferences() -> dict:
+    """Get effective MCP HTTP server preferences"""
+
+def set_mcp_preferences(enabled: bool, expose_network: bool, port: int, request_logging: bool = False) -> bool:
+    """Persist and immediately apply MCP HTTP server preferences"""
+
+def get_mcp_status() -> dict:
+    """Get current MCP HTTP server runtime status"""
+
+def get_mcp_log_directory() -> str:
+    """Return the MCP per-session log directory"""
+
+def take_preferences_section_request() -> str:
+    """Consume a requested Preferences section name"""
+
 def set_clipboard_text(text: str) -> None:
     """Copy text to the system clipboard"""
 

@@ -94,6 +94,7 @@ namespace {
         EXPECT_TRUE(fs::is_directory(paths.dataDir()));
         EXPECT_TRUE(fs::is_directory(paths.cacheDir()));
         EXPECT_TRUE(fs::is_directory(paths.logDir()));
+        EXPECT_FALSE(fs::exists(paths.mcpLogDir()));
         EXPECT_TRUE(fs::is_directory(paths.pluginDir()));
         EXPECT_TRUE(fs::is_directory(paths.venvDir()));
         EXPECT_EQ(paths.uiPreferencesFile(), paths.configDir() / "ui_preferences.json");
@@ -115,6 +116,12 @@ namespace {
         EXPECT_NE(contents.find("\"theme\": \"dark\""), std::string::npos);
         EXPECT_NE(contents.find("\"ui_scale\": \"auto\""), std::string::npos);
         EXPECT_NE(contents.find("\"language\": \"en\""), std::string::npos);
+        const auto json = nlohmann::json::parse(contents);
+        ASSERT_TRUE(json.at("mcp").is_object());
+        EXPECT_TRUE(json.at("mcp").at("enabled").get<bool>());
+        EXPECT_FALSE(json.at("mcp").at("expose_network").get<bool>());
+        EXPECT_EQ(json.at("mcp").at("port").get<int>(), 45677);
+        EXPECT_FALSE(json.at("mcp").at("request_logging").get<bool>());
     }
 
     TEST_F(UserPathsContractTest, ResetPreferencesBacksUpExistingFile) {
@@ -136,6 +143,24 @@ namespace {
         std::ifstream backup(**reset, std::ios::binary);
         const std::string backup_contents((std::istreambuf_iterator<char>(backup)), {});
         EXPECT_EQ(backup_contents, R"({"theme":"light","ui_scale":"150"})");
+    }
+
+    TEST_F(UserPathsContractTest, McpLogsAreLazyAtomicAndConfinedToTheirDirectory) {
+        const auto resolved = resolvePaths();
+        ASSERT_TRUE(resolved.has_value()) << resolved.error();
+        const auto& paths = *resolved;
+        ASSERT_TRUE(paths.ensureDirectories().has_value());
+        EXPECT_FALSE(fs::exists(paths.mcpLogDir()));
+
+        ASSERT_TRUE(paths.writeMcpLogAtomically("20260817-120000-mcp.jsonl", "first\n").has_value());
+        ASSERT_TRUE(fs::is_directory(paths.mcpLogDir()));
+        ASSERT_TRUE(paths.writeMcpLogAtomically("20260817-120000-mcp.jsonl", "second\n").has_value());
+
+        std::ifstream log(paths.mcpLogDir() / "20260817-120000-mcp.jsonl", std::ios::binary);
+        const std::string contents((std::istreambuf_iterator<char>(log)), {});
+        EXPECT_EQ(contents, "second\n");
+        EXPECT_FALSE(paths.writeMcpLogAtomically("../outside.jsonl", "invalid").has_value());
+        EXPECT_FALSE(fs::exists(paths.mcpLogDir().parent_path() / "outside.jsonl"));
     }
 
     TEST_F(UserPathsContractTest, LegacySettingsMigrationIsOneShotAndNonDestructive) {

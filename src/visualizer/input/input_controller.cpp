@@ -1597,7 +1597,16 @@ namespace lfs::vis {
             return;
         }
 
-        if (lfs::python::has_keyboard_capture_request()) {
+        const auto tool_mode = getCurrentToolMode();
+        auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
+        if (bound_action == input::Action::NONE) {
+            bound_action = resolveCrossToolActivationShortcut(bindings_, tool_mode, logical_key, mods);
+        }
+
+        const bool is_mcp_runtime_action =
+            bound_action == input::Action::TOGGLE_MCP_SERVER ||
+            bound_action == input::Action::TOGGLE_MCP_BINDING;
+        if (lfs::python::has_keyboard_capture_request() && !is_mcp_runtime_action) {
             return;
         }
 
@@ -1606,11 +1615,6 @@ namespace lfs::vis {
         SDL_GetMouseState(&mx_f, &my_f);
         double mx = mx_f, my = my_f;
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
-        const auto tool_mode = getCurrentToolMode();
-        auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
-        if (bound_action == input::Action::NONE) {
-            bound_action = resolveCrossToolActivationShortcut(bindings_, tool_mode, logical_key, mods);
-        }
         if (action == input::ACTION_PRESS &&
             dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
             return;
@@ -1705,6 +1709,14 @@ namespace lfs::vis {
             case input::Action::OPEN_PREFERENCES:
                 if (gui)
                     gui->openPreferences();
+                return;
+
+            case input::Action::TOGGLE_MCP_SERVER:
+                toggleMcpRuntimeEnabled();
+                return;
+
+            case input::Action::TOGGLE_MCP_BINDING:
+                toggleMcpRuntimeBinding();
                 return;
 
             case input::Action::TOGGLE_CAMERA_FRUSTUMS:

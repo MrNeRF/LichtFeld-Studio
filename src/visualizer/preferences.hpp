@@ -10,6 +10,13 @@
 
 namespace lfs::vis {
 
+    struct McpPreferenceState {
+        bool enabled = true;
+        bool expose_network = false;
+        int port = 45677;
+        bool request_logging = false;
+    };
+
     /** Process-local, atomically persisted user preferences. */
     class LFS_VIS_API UserPreferences {
     public:
@@ -37,6 +44,9 @@ namespace lfs::vis {
         void setRememberCameraViewSnap(bool enabled);
         [[nodiscard]] bool rememberCameraViewSnap();
 
+        void setMcp(const McpPreferenceState& state);
+        [[nodiscard]] McpPreferenceState mcp();
+
     private:
         UserPreferences();
         struct Impl;
@@ -55,5 +65,7 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API bool loadCameraViewSnapPreference();
     LFS_VIS_API void setRememberCameraViewSnapPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool rememberCameraViewSnapPreference();
+    LFS_VIS_API void saveMcpPreferences(const McpPreferenceState& state);
+    [[nodiscard]] LFS_VIS_API McpPreferenceState loadMcpPreferences();
 
 } // namespace lfs::vis

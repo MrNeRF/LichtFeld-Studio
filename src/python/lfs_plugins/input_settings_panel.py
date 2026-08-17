@@ -121,6 +121,8 @@ class InputSettingsPanel(Panel):
             lf.keymap.Action.TOGGLE_UI,
             lf.keymap.Action.TOGGLE_FULLSCREEN,
             lf.keymap.Action.OPEN_PREFERENCES,
+            lf.keymap.Action.TOGGLE_MCP_SERVER,
+            lf.keymap.Action.TOGGLE_MCP_BINDING,
             lf.keymap.Action.HISTOGRAM_ZOOM_MARKED,
             lf.keymap.Action.TOGGLE_PERFORMANCE_HUD,
         ],

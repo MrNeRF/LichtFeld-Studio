@@ -17,7 +17,52 @@ def preferences_panel_module(monkeypatch):
     if str(source_python) not in sys.path:
         sys.path.insert(0, str(source_python))
 
-    state = SimpleNamespace(language="it", set_language_calls=[])
+    state = SimpleNamespace(
+        language="it",
+        set_language_calls=[],
+        mcp_preferences={
+            "enabled": True,
+            "expose_network": False,
+            "port": 45677,
+            "request_logging": False,
+        },
+        mcp_status={
+            "enabled": True,
+            "running": True,
+            "expose_network": False,
+            "port": 45677,
+            "request_count": 0,
+            "success_count": 0,
+            "error_count": 0,
+            "request_logging": False,
+            "endpoints": [
+                "http://127.0.0.1:45677/mcp",
+                "http://localhost:45677/mcp",
+            ],
+            "log_file": "",
+            "error": "",
+        },
+        set_mcp_calls=[],
+        section_request="",
+    )
+
+    def set_mcp_preferences(enabled, expose_network, port, request_logging):
+        config = {
+            "enabled": bool(enabled),
+            "expose_network": bool(expose_network),
+            "port": int(port),
+            "request_logging": bool(request_logging),
+        }
+        state.set_mcp_calls.append(config)
+        state.mcp_preferences = dict(config)
+        state.mcp_status.update(config)
+        return True
+
+    def take_preferences_section_request():
+        section = state.section_request
+        state.section_request = ""
+        return section
+
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
@@ -25,6 +70,11 @@ def preferences_panel_module(monkeypatch):
         PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
         get_current_language=lambda: state.language,
         set_language=lambda language: state.set_language_calls.append(language),
+        get_mcp_preferences=lambda: dict(state.mcp_preferences),
+        set_mcp_preferences=set_mcp_preferences,
+        get_mcp_status=lambda: dict(state.mcp_status),
+        take_preferences_section_request=take_preferences_section_request,
+        tr=lambda key: key,
     )
 
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -55,3 +105,104 @@ def test_language_selection_applies_a_different_language(
     panel._set_language_index("0")
 
     assert state.set_language_calls == ["en"]
+
+
+def test_mcp_port_is_drafted_until_explicit_confirmation(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._read_mcp_preferences()
+
+    panel._set_mcp_port("50123")
+    assert state.set_mcp_calls == []
+
+    assert panel._commit_mcp_port()
+    assert state.set_mcp_calls == [
+        {
+            "enabled": True,
+            "expose_network": False,
+            "port": 50123,
+            "request_logging": False,
+        }
+    ]
+
+
+def test_invalid_mcp_port_blocks_application(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._read_mcp_preferences()
+
+    panel._set_mcp_port("70000")
+
+    assert not panel._commit_mcp_port()
+    assert state.set_mcp_calls == []
+    assert panel._mcp_error_text() == "preferences.mcp_invalid_port"
+
+
+def test_failed_bind_can_retry_the_same_confirmed_port(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._read_mcp_preferences()
+    state.mcp_status.update({"running": False, "error": "bind failed"})
+
+    assert panel._commit_mcp_port()
+
+    assert state.set_mcp_calls == [
+        {
+            "enabled": True,
+            "expose_network": False,
+            "port": 45677,
+            "request_logging": False,
+        }
+    ]
+
+
+def test_mcp_section_request_is_consumed_once(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    state.section_request = "mcp"
+
+    panel._consume_section_request()
+
+    assert panel._section == "mcp"
+    assert state.section_request == ""
+
+
+def test_mcp_endpoint_fallback_never_exposes_listener_wildcard(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    state.mcp_status.update({"expose_network": True, "endpoints": []})
+
+    endpoints = panel._mcp_endpoint_text()
+
+    assert "0.0.0.0" not in endpoints
+    assert "http://127.0.0.1:45677/mcp" in endpoints
+
+
+def test_mcp_runtime_error_explains_the_failed_endpoint(
+    preferences_panel_module, monkeypatch
+):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    state.mcp_status["error"] = "Unable to bind 0.0.0.0:45677"
+    monkeypatch.setattr(
+        module.lf.ui,
+        "tr",
+        lambda key: "Cannot listen on {endpoint}" if key == "preferences.mcp_bind_failed" else key,
+    )
+
+    assert panel._mcp_error_text() == "Cannot listen on 0.0.0.0:45677"
+
+
+def test_mcp_failed_listener_does_not_advertise_inactive_endpoints(
+    preferences_panel_module,
+):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    state.mcp_status.update(
+        {
+            "running": False,
+            "error": "Unable to bind 127.0.0.1:45677",
+        }
+    )
+
+    assert panel._mcp_endpoint_text() == "preferences.mcp_no_active_endpoint"

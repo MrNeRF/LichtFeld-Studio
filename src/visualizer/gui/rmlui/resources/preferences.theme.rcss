@@ -37,6 +37,31 @@
     font-weight: bold;
 }
 
+.preferences-warning {
+    color: @{warning};
+}
+
+.preferences-error {
+    color: @{error};
+}
+
+.preferences-mcp-switch-track {
+    border-color: @{border};
+    background-color: @{surface_bright};
+}
+
+.preferences-mcp-switch-knob {
+    background-color: @{text_dim};
+}
+
+.preferences-mcp-toggle.is-on .preferences-mcp-switch-track {
+    border-color: @{success};
+}
+
+.preferences-mcp-toggle.is-on .preferences-mcp-switch-knob {
+    background-color: @{success};
+}
+
 .legacy-empty,
 .legacy-entry {
     border-color: @{border};

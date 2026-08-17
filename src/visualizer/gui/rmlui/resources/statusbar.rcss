@@ -8,15 +8,26 @@ body {
     width: 100%;
     height: 100%;
     box-sizing: border-box;
+    position: relative;
+    padding: 0;
+    margin: 0;
+    background-color: transparent;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+#status-row {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 22dp;
+    box-sizing: border-box;
     display: flex;
     flex-direction: row;
     flex-wrap: nowrap;
     align-items: stretch;
     padding: 0 6dp;
-    margin: 0;
-    background-color: transparent;
-    white-space: nowrap;
-    overflow: hidden;
 }
 
 #safe-mode-badge {
@@ -24,6 +35,107 @@ body {
     padding: 0 5dp;
     border-radius: 2dp;
     font-weight: bold;
+}
+
+#mcp-chip {
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-right: 10dp;
+    height: 16dp;
+    padding: 0 7dp;
+    border-width: 1dp;
+    border-radius: 2dp;
+    cursor: pointer;
+}
+
+#mcp-popup {
+    position: absolute;
+    right: 0;
+    bottom: 20dp;
+    width: 300dp;
+    box-sizing: border-box;
+    padding: 9dp 10dp;
+    border-width: 1dp;
+    border-radius: 3dp;
+    white-space: normal;
+}
+
+#mcp-popup-header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: bold;
+    margin-bottom: 5dp;
+}
+
+#mcp-popup-title {
+    flex: 1;
+}
+
+#mcp-details {
+    margin-bottom: 8dp;
+    white-space: pre-wrap;
+}
+
+#mcp-counters {
+    display: flex;
+    flex-direction: row;
+    margin-bottom: 8dp;
+}
+
+#mcp-counters > span {
+    margin-right: 8dp;
+}
+
+#mcp-toggle {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    width: 30dp;
+    height: 18dp;
+    padding: 0;
+    border-width: 0;
+    background-color: transparent;
+}
+
+.mcp-switch-track {
+    display: block;
+    position: relative;
+    width: 22dp;
+    height: 10dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+}
+
+.mcp-switch-knob {
+    display: block;
+    position: absolute;
+    left: 1dp;
+    top: 1dp;
+    width: 6dp;
+    height: 6dp;
+    border-radius: 4dp;
+}
+
+#mcp-toggle.is-on .mcp-switch-knob {
+    left: 13dp;
+}
+
+#mcp-actions {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-end;
+}
+
+.mcp-edit-button {
+    min-width: 54dp;
+    padding: 2dp 10dp;
+    border-width: 1dp;
+    border-radius: 2dp;
 }
 
 #status-left {

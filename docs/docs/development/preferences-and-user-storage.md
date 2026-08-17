@@ -17,11 +17,37 @@ The Preferences panel currently exposes:
 - application theme and UI scale;
 - camera navigation mode and axis/view snap;
 - per-setting remember options;
+- MCP server enablement, bind scope, port, and opt-in request logging;
 - interface, layout, and window reset actions.
 
 The panel can be opened from the Edit menu or with the default `Ctrl+,`
 shortcut. The shortcut is a regular keymap action and can be rebound in Input
 Settings.
+
+The `mcp` object defaults to an enabled server bound to the loopback interface
+on port `45677`; the UI lists both `127.0.0.1` and `localhost` aliases. Confirmed
+changes made in Preferences are staged immediately and listener restarts are
+serialized in the background. Binding to `0.0.0.0` exposes the unauthenticated HTTP
+endpoint to the local network and is therefore an explicit opt-in. Safe mode
+forces the MCP server and request logging off for the process and does not
+persist MCP changes.
+
+The status bar MCP chip reports the effective listener state, usable endpoint
+URLs, request/success/error counters, and bind failures. Its power control does
+not require opening Preferences. The default input profile uses `Ctrl+Shift+M`
+to enable or disable the server and `Ctrl+Shift+N` to switch between loopback
+and network binding without enabling a server that is currently off. Both
+shortcuts are regular keymap actions and can be rebound in Input Settings.
+
+MCP request logging is disabled by default. When enabled it writes a per-session
+JSONL file lazily under `logs/mcp/` using atomic replacement. Records contain
+transport metadata such as method, request id, outcome, duration, and the source
+and destination socket IP addresses and ports. Errors distinguish JSON-RPC
+failures from MCP tool-execution failures and record their stage, stable reason,
+protocol or application code, application domain, retryability, and operation
+id when available. Request parameters, tool names, payloads, free-form messages,
+and error details are deliberately not recorded. Because network addresses can
+identify devices and interfaces, request logging remains an explicit opt-in.
 
 Application preferences are stored in `config/preferences.json`. User-global
 UI details that are not project layout, such as HUD state, are written to
@@ -64,6 +90,7 @@ data/presets/
 data/asset_library/
 cache/
 logs/
+logs/mcp/
 plugins/
 venv/
 ```
@@ -141,6 +168,9 @@ avoids write probes and migration in safe mode. The process uses built-in
 defaults, including English, without overwriting the user's saved values. An
 externally supplied `LFS_SAFE_MODE=1` must remain effective when the
 application is otherwise started normally.
+
+Safe mode also forces the effective MCP listener and MCP request logging off.
+The persisted MCP configuration is neither read nor overwritten.
 
 Explicit operations such as exporting a keymap remain separate from automatic
 persistence and can stay available in safe mode. The status bar identifies

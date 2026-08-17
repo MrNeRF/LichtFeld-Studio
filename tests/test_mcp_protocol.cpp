@@ -18,6 +18,11 @@
 #include <httplib/httplib.h>
 
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <sstream>
 #include <stdexcept>
 
 namespace lfs::mcp {
@@ -44,6 +49,34 @@ namespace lfs::mcp {
 
         private:
             std::string prefix_;
+        };
+
+        class ScopedEnvironmentVariable {
+        public:
+            ScopedEnvironmentVariable(const char* name,
+                                      const std::optional<std::string>& value)
+                : name_(name) {
+                if (const char* previous = std::getenv(name))
+                    previous_ = previous;
+                set(value);
+            }
+
+            ~ScopedEnvironmentVariable() { set(previous_); }
+
+        private:
+            void set(const std::optional<std::string>& value) const {
+#ifdef _WIN32
+                (void)_putenv_s(name_.c_str(), value ? value->c_str() : "");
+#else
+                if (value)
+                    (void)setenv(name_.c_str(), value->c_str(), 1);
+                else
+                    (void)unsetenv(name_.c_str());
+#endif
+            }
+
+            std::string name_;
+            std::optional<std::string> previous_;
         };
 
         bool is_claude_compatible_tool_name(const std::string& name) {
@@ -711,10 +744,167 @@ namespace lfs::mcp {
         ASSERT_TRUE(body.contains("error"));
         EXPECT_EQ(body["error"]["code"], JsonRpcError::PARSE_ERROR);
 
+        const auto status = server.status();
+        EXPECT_EQ(status.request_count, 1u);
+        EXPECT_EQ(status.success_count, 0u);
+        EXPECT_EQ(status.error_count, 1u);
+        EXPECT_EQ(status.endpoints,
+                  (std::vector<std::string>{
+                      "http://127.0.0.1:47691/mcp",
+                      "http://localhost:47691/mcp",
+                  }));
+
         server.stop();
     }
 
-    TEST(McpHttpServerTest, ToolHandlerThrowRespondsWithInternalErrorAndEchoedIdNoLeak) {
+    TEST(McpHttpServerTest, DisabledAndInvalidConfigurationsReportTruthfulStatus) {
+        McpHttpServer server;
+        EXPECT_TRUE(server.start(McpHttpConfig{
+            .enabled = false,
+            .expose_network = true,
+            .port = 50001,
+            .request_logging = true,
+        }));
+        auto status = server.status();
+        EXPECT_FALSE(status.enabled);
+        EXPECT_FALSE(status.running);
+        EXPECT_TRUE(status.expose_network);
+        EXPECT_EQ(status.port, 50001);
+        EXPECT_TRUE(status.request_logging);
+        EXPECT_TRUE(status.error.empty());
+
+        EXPECT_FALSE(server.applyConfig(McpHttpConfig{.enabled = true, .port = 0}));
+        status = server.status();
+        EXPECT_TRUE(status.enabled);
+        EXPECT_FALSE(status.running);
+        EXPECT_FALSE(status.error.empty());
+
+        EXPECT_TRUE(server.applyConfig(McpHttpConfig{.enabled = false, .port = 50002}));
+        status = server.status();
+        EXPECT_FALSE(status.enabled);
+        EXPECT_EQ(status.port, 50002);
+        EXPECT_TRUE(status.error.empty());
+    }
+
+    TEST(McpHttpServerTest, ActiveConfigPublishesStagedStatusBeforeRestartCompletes) {
+        McpHttpServer server;
+        ASSERT_TRUE(server.start(McpHttpConfig{.enabled = false, .port = 47694}));
+        setActiveMcpHttpServer(&server);
+
+        EXPECT_TRUE(applyActiveMcpHttpConfig({
+            .enabled = false,
+            .expose_network = true,
+            .port = 47695,
+            .request_logging = false,
+        }));
+        const auto status = activeMcpHttpStatus();
+        setActiveMcpHttpServer(nullptr);
+
+        EXPECT_FALSE(status.enabled);
+        EXPECT_TRUE(status.expose_network);
+        EXPECT_EQ(status.port, 47695);
+        ASSERT_GE(status.endpoints.size(), 2u);
+        EXPECT_EQ(status.endpoints[0], "http://127.0.0.1:47695/mcp");
+        EXPECT_EQ(status.endpoints[1], "http://localhost:47695/mcp");
+    }
+
+    TEST(McpHttpServerTest, RequestLogClassifiesErrorsWithoutParametersOrPayloads) {
+        const auto root = std::filesystem::temp_directory_path() /
+                          "lfs_mcp_http_request_logging";
+        std::error_code filesystem_error;
+        std::filesystem::remove_all(root, filesystem_error);
+        const ScopedEnvironmentVariable home("LFS_HOME", root.string());
+        const ScopedEnvironmentVariable safe_mode("LFS_SAFE_MODE", std::nullopt);
+
+        McpHttpServer server;
+        ASSERT_TRUE(server.start(McpHttpConfig{
+            .enabled = true,
+            .expose_network = false,
+            .port = 47696,
+            .request_logging = true,
+        }));
+
+        constexpr std::string_view secret = "secret-value-that-must-not-be-logged";
+        const json request{
+            {"jsonrpc", "2.0"},
+            {"id", "log-contract"},
+            {"method", "initialize"},
+            {"params", json{{"secret", secret}}},
+        };
+        httplib::Client client("127.0.0.1", 47696);
+        ASSERT_TRUE(client.Post("/mcp", request.dump(), "application/json"));
+
+        const json unknown_method{
+            {"jsonrpc", "2.0"},
+            {"id", "unknown-method"},
+            {"method", "method/that/does/not/exist"},
+            {"params", json::object()},
+        };
+        ASSERT_TRUE(client.Post("/mcp", unknown_method.dump(), "application/json"));
+
+        const json missing_tool{
+            {"jsonrpc", "2.0"},
+            {"id", "missing-tool"},
+            {"method", "tools/call"},
+            {"params", json{{"name", secret}, {"arguments", json::object()}}},
+        };
+        ASSERT_TRUE(client.Post("/mcp", missing_tool.dump(), "application/json"));
+        ASSERT_TRUE(client.Post("/mcp", "{malformed", "application/json"));
+        server.stop();
+
+        const auto status = server.status();
+        ASSERT_FALSE(status.log_file.empty());
+        std::ifstream input(std::filesystem::path(status.log_file), std::ios::binary);
+        ASSERT_TRUE(input.is_open());
+        const std::string contents((std::istreambuf_iterator<char>(input)), {});
+        EXPECT_NE(contents.find("initialize"), std::string::npos);
+        EXPECT_NE(contents.find("log-contract"), std::string::npos);
+        EXPECT_NE(contents.find("success"), std::string::npos);
+        EXPECT_NE(contents.find("\"error_type\":\"json_rpc\""), std::string::npos);
+        EXPECT_NE(contents.find("\"error_stage\":\"parse\""), std::string::npos);
+        EXPECT_NE(contents.find("\"error_reason\":\"parse_error\""),
+                  std::string::npos);
+        EXPECT_NE(contents.find("\"jsonrpc_error_code\":-32700"), std::string::npos);
+        EXPECT_NE(contents.find("\"error_stage\":\"dispatch\""), std::string::npos);
+        EXPECT_NE(contents.find("\"error_reason\":\"method_not_found\""),
+                  std::string::npos);
+        EXPECT_NE(contents.find("\"jsonrpc_error_code\":-32601"), std::string::npos);
+        EXPECT_NE(contents.find("\"error_type\":\"tool_execution\""),
+                  std::string::npos);
+        EXPECT_NE(contents.find("\"error_stage\":\"tool_call\""), std::string::npos);
+        EXPECT_NE(contents.find("\"error_reason\":\"NotFound\""), std::string::npos);
+        EXPECT_NE(contents.find("\"application_error_code\":\"NotFound\""),
+                  std::string::npos);
+        EXPECT_NE(contents.find("\"application_error_domain\":\"MCP\""),
+                  std::string::npos);
+        EXPECT_NE(contents.find("\"retryable\":false"), std::string::npos);
+        EXPECT_EQ(contents.find(secret), std::string::npos);
+        EXPECT_EQ(contents.find("\"params\""), std::string::npos);
+
+        std::istringstream records(contents);
+        std::string line;
+        size_t request_records = 0;
+        while (std::getline(records, line)) {
+            const auto record = json::parse(line);
+            if (record.value("event", std::string{}) != "request")
+                continue;
+            ++request_records;
+            EXPECT_EQ(record.value("source_ip", std::string{}), "127.0.0.1");
+            EXPECT_GT(record.value("source_port", -1), 0);
+            EXPECT_EQ(record.value("destination_ip", std::string{}), "127.0.0.1");
+            EXPECT_EQ(record.value("destination_port", -1), 47696);
+        }
+        EXPECT_EQ(request_records, 4u);
+
+        EXPECT_EQ(status.request_count, 4u);
+        EXPECT_EQ(status.success_count, 1u);
+        EXPECT_EQ(status.error_count, 3u);
+
+        input.close();
+        std::filesystem::remove_all(root, filesystem_error);
+    }
+
+    TEST(McpHttpServerTest, ToolErrorsUseResultEnvelopeWithoutLeakingDetailsAndCountAsErrors) {
         static constexpr const char* tool_name = "test.throwing_tool";
         static constexpr const char* leaked_detail = "sensitive internal detail";
         ScopedToolRegistration cleanup(tool_name);
@@ -764,6 +954,24 @@ namespace lfs::mcp {
         EXPECT_TRUE(result["isError"].get<bool>());
         ASSERT_TRUE(result["structuredContent"].contains("error"));
         EXPECT_EQ(result["structuredContent"]["error"]["code"], "Internal");
+
+        const json missing_tool_req{
+            {"jsonrpc", "2.0"},
+            {"id", "req-missing"},
+            {"method", "tools/call"},
+            {"params", json{{"name", "tool_that_does_not_exist"},
+                            {"arguments", json::object()}}}};
+        const auto missing_tool_res =
+            client.Post("/mcp", missing_tool_req.dump(), "application/json");
+        ASSERT_TRUE(missing_tool_res);
+        const auto missing_tool_body = json::parse(missing_tool_res->body);
+        ASSERT_TRUE(missing_tool_body.contains("result"));
+        EXPECT_TRUE(missing_tool_body["result"]["isError"].get<bool>());
+
+        const auto status = server.status();
+        EXPECT_EQ(status.request_count, 3u);
+        EXPECT_EQ(status.success_count, 1u);
+        EXPECT_EQ(status.error_count, 2u);
 
         server.stop();
     }
