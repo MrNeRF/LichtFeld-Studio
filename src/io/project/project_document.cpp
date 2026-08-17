@@ -514,9 +514,9 @@ namespace lfs::io::project {
         std::optional<CleanProof> proof;
         std::shared_ptr<const std::vector<std::byte>> owned;
         // Cache of container-decompressed logical bytes for Zstd /
-        // ByteShuffleZstd sources. Stored sources keep streaming via
-        // read_stored_at (no second copy). Full-buffer inflate is intentional:
-        // consumers need the whole tensor/LFKP payload.
+        // ByteShuffleZstd sources. visit_stream prefers a bounded decode
+        // stream and does not populate this. read_at still materializes
+        // compressed sources once.
         mutable std::shared_ptr<const std::vector<std::byte>> inflated;
         lfs::core::Uuid snapshot_uuid;
 
@@ -690,7 +690,15 @@ namespace lfs::io::project {
                 "Neither clean file range nor owned storage is available",
                 "lazy_chunk.source");
         }
-        if (impl_->source->compression == Compression::Stored) {
+        if (impl_->inflated) {
+            ReadOnlyMemoryBuffer buffer(std::span<const std::byte>(
+                impl_->inflated->data(), impl_->inflated->size()));
+            std::istream stream(&buffer);
+            return visitor(stream, impl_->inflated->size());
+        }
+        if (impl_->source->compression == Compression::Stored ||
+            impl_->source->compression == Compression::ZstdFramed ||
+            impl_->source->compression == Compression::ByteShuffleZstdFramed) {
             auto bounded =
                 impl_->reader->open_bounded_stream(*impl_->source);
             if (!bounded) {

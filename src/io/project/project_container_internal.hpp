@@ -32,6 +32,11 @@ namespace lfs::io::project::detail {
         std::span<const std::byte> stored, std::uint64_t expected_size,
         std::uint64_t maximum_decoded_size);
 
+    // Test-only override of MAX_PAYLOAD_MATERIALIZED_BYTES for payload-class
+    // chunks (TENSOR_PAYLOAD / CKPT / PPIS). nullopt restores the production cap.
+    void set_max_payload_materialized_bytes_for_testing(
+        std::optional<std::uint64_t> maximum_decoded_size);
+
     [[nodiscard]] lfs::Error project_error(
         lfs::ErrorCode code, std::string user_message, std::string detail,
         const std::filesystem::path& path = {}, std::optional<std::uint64_t> offset = std::nullopt,

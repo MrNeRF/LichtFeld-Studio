@@ -5,6 +5,7 @@
 
 #include "app/headless_recovery_document.hpp"
 #include "io/loaders/loader_utils.hpp"
+#include "io/project/project_container_internal.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
@@ -3433,6 +3434,150 @@ namespace {
                    training.error());
         ASSERT_TRUE(training->has_value());
         EXPECT_EQ(**training, fixed_uuid(9930));
+    }
+
+    TEST(ProjectDocumentTest,
+         OpenStreamsCkptWhenDecodedSizeExceedsMaterializeCap) {
+        TemporaryDirectory temporary;
+        const fs::path path =
+            temporary.path / "ckpt-stream-cap.licht";
+        const Uuid project_uuid = fixed_uuid(9940);
+        const Uuid training_uuid = fixed_uuid(9941);
+        const Uuid checkpoint_uuid = fixed_uuid(9942);
+        auto document = make_empty_document(project_uuid, 100);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "splat",
+                .name = "Training",
+                .child_order = 0,
+                .payload =
+                    PayloadBinding{
+                        .fourcc = "CKPT",
+                        .instance_uuid = checkpoint_uuid,
+                        .source_kind = "training",
+                    },
+            }));
+        require_status(
+            document->edit_scene_graph().set_training_model_uuid(
+                training_uuid));
+        require_status(document->set_checkpoint(
+            checkpoint_uuid,
+            make_autosave_checkpoint_payload(checkpoint_uuid)));
+        auto options = save_options(9943, 1600);
+        options.commit.snapshot_uuid = checkpoint_uuid;
+        auto saved = document->save(path, options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+
+        {
+            ProjectReader seed = require_result(ProjectReader::open(path));
+            const ChunkInfo* ckpt =
+                seed.find(FOURCC_CKPT, checkpoint_uuid);
+            ASSERT_NE(ckpt, nullptr);
+            auto ckpt_bytes = require_result(seed.read_chunk(*ckpt));
+            ProjectWriter writer = require_result(
+                ProjectWriter::append(
+                    path,
+                    AppendOptions{
+                        .index_compression =
+                            IndexCompression::
+                                StoredForDeterministicTests,
+                        .disk_reserve_bytes = 0,
+                    }));
+            require_status(writer.plan_commit(
+                CommitOptions{
+                    .kind = CommitKind::Explicit,
+                    .commit_uuid = fixed_uuid(9944),
+                    .snapshot_uuid = checkpoint_uuid,
+                    .wallclock_unix_ns = 1700,
+                }));
+            require_status(writer.preflight(ckpt_bytes.size()));
+            for (const auto& chunk : seed.chunks()) {
+                if (!chunk.is_live()) {
+                    continue;
+                }
+                if (chunk.key.fourcc == FOURCC_CKPT) {
+                    require_status(writer.write_chunk(
+                        chunk.key, ckpt_bytes,
+                        ChunkWriteOptions{
+                            .chunk_version = 1,
+                            .compression = chunk.compression,
+                            .tensor_payload = true,
+                            .block_crcs = true,
+                        }));
+                    continue;
+                }
+                auto proof =
+                    require_result(seed.make_clean_proof(chunk, 1));
+                require_status(writer.reuse_if_clean(proof, 1));
+            }
+            require_status(writer.commit());
+        }
+
+        ProjectReader probe = require_result(ProjectReader::open(path));
+        const ChunkInfo* row =
+            probe.find(FOURCC_CKPT, checkpoint_uuid);
+        ASSERT_NE(row, nullptr);
+        ASSERT_GT(row->uncompressed_bytes, 1u);
+        ASSERT_TRUE(row->block_crc_table.has_value());
+        EXPECT_TRUE(row->compression == Compression::ZstdFramed ||
+                    row->compression == Compression::ByteShuffleZstdFramed);
+
+        struct PayloadCapGuard {
+            explicit PayloadCapGuard(const std::uint64_t value) {
+                detail::set_max_payload_materialized_bytes_for_testing(value);
+            }
+            PayloadCapGuard(const PayloadCapGuard&) = delete;
+            PayloadCapGuard& operator=(const PayloadCapGuard&) = delete;
+            ~PayloadCapGuard() {
+                detail::set_max_payload_materialized_bytes_for_testing(
+                    std::nullopt);
+            }
+        };
+        const PayloadCapGuard cap(row->uncompressed_bytes - 1);
+        auto materialized = probe.read_chunk(*row);
+        ASSERT_FALSE(materialized);
+        EXPECT_EQ(materialized.error().code(),
+                  lfs::ErrorCode::ResourceExhausted);
+
+        auto opened = require_result_ptr(ProjectDocument::open(path));
+        const auto* checkpoint = opened->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(checkpoint, nullptr);
+        std::optional<lfs::core::CheckpointHeader> header;
+        std::optional<lfs::core::SplatData> splat;
+        auto visited = checkpoint->visit_stream(
+            [&](std::istream& stream, const std::uint64_t bytes)
+                -> lfs::Result<void> {
+                auto loaded_header =
+                    lfs::core::load_checkpoint_header(stream, bytes);
+                if (!loaded_header) {
+                    return {};
+                }
+                header = *loaded_header;
+                stream.clear();
+                stream.seekg(0);
+                if (!stream) {
+                    return {};
+                }
+                auto loaded_splat =
+                    lfs::core::load_checkpoint_splat_data(stream, bytes);
+                if (loaded_splat) {
+                    splat = std::move(*loaded_splat);
+                }
+                return {};
+            });
+        ASSERT_TRUE(visited)
+            << lfs::format_for_developer(visited.error());
+        ASSERT_TRUE(header.has_value());
+        EXPECT_EQ(header->iteration, 11);
+        EXPECT_EQ(header->num_gaussians, 2u);
+        ASSERT_TRUE(splat.has_value());
+        EXPECT_EQ(splat->size(), 2);
+        EXPECT_EQ(splat->get_max_sh_degree(), 0);
+        const auto expected = make_splat(2);
+        EXPECT_EQ(tensor_bytes(splat->means_raw()),
+                  tensor_bytes(expected->means_raw()));
     }
 
     TEST(ProjectDocumentTest,
