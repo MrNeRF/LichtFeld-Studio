@@ -24,6 +24,10 @@
 #include <windows.h>
 #endif
 
+namespace lfs::io::project {
+    struct ChunkInfo;
+}
+
 namespace lfs::io::project::detail {
 
     [[nodiscard]] lfs::Result<std::vector<std::byte>>
@@ -31,6 +35,15 @@ namespace lfs::io::project::detail {
         const std::filesystem::path& path, std::uint64_t offset,
         std::span<const std::byte> stored, std::uint64_t expected_size,
         std::uint64_t maximum_decoded_size);
+
+    // Test-only override of MAX_PAYLOAD_MATERIALIZED_BYTES for payload-class
+    // chunks (TENSOR_PAYLOAD / CKPT / PPIS). nullopt restores the production cap.
+    void set_max_payload_materialized_bytes_for_testing(
+        std::optional<std::uint64_t> maximum_decoded_size);
+
+    // Same cap read_chunk uses for a materialized decode of `row`.
+    [[nodiscard]] std::uint64_t
+    max_materialized_bytes_for(const ChunkInfo& row) noexcept;
 
     [[nodiscard]] lfs::Error project_error(
         lfs::ErrorCode code, std::string user_message, std::string detail,

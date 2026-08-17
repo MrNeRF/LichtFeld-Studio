@@ -296,6 +296,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_DiscardSamePathReopenSkipsRecoveryPromptAndDeletesSidecar_Test;
         friend class VisualizerImplResetTest_DirtyRequireCleanSwitchKeepsAutosaveSidecar_Test;
         friend class VisualizerImplResetTest_NewProjectDiscardDeletesAutosaveSidecar_Test;
+        friend class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
+        friend class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;

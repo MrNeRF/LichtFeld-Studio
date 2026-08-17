@@ -1723,6 +1723,128 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           StartupOffersRecoveryAfterUncleanShutdown) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "startup-crash.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    EXPECT_TRUE(info);
+                    return info && info->hydration_state == "complete";
+                }));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Dirty for autosave"),
+                lfs::core::NULL_NODE);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+        }
+        ASSERT_TRUE(
+            std::filesystem::is_regular_file(
+                sidecar));
+
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(gui->rml_modal_overlay_, gui->rmlui_manager_);
+            viewer.project_lifecycle_
+                ->openStartupProject(std::nullopt);
+            EXPECT_TRUE(viewer.project_lifecycle_
+                            ->recovery_prompt_pending_);
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
+            EXPECT_EQ(
+                request.title,
+                "Recover Autosaved Project?");
+            request.on_result({.button_label = "Recover"});
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->recovery_session_);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->recovery_session_path_);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->document_->source_path());
+            EXPECT_EQ(viewer.project_lifecycle_
+                          ->document_->source_path()
+                          ->lexically_normal(),
+                      viewer.project_lifecycle_
+                          ->recovery_session_path_
+                          ->lexically_normal());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StartupWithCleanLastSessionLeavesBlankSession) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "startup-clean.licht";
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    EXPECT_TRUE(info);
+                    return info && info->hydration_state == "complete";
+                }));
+        }
+
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(gui->rml_modal_overlay_, gui->rmlui_manager_);
+            viewer.project_lifecycle_
+                ->openStartupProject(std::nullopt);
+            EXPECT_FALSE(viewer.project_lifecycle_
+                             ->recovery_prompt_pending_);
+            {
+                auto& overlay =
+                    *gui->rml_modal_overlay_;
+                std::lock_guard lock(
+                    overlay.queue_mutex_);
+                EXPECT_TRUE(overlay.queue_.empty());
+            }
+            EXPECT_FALSE(viewer.project_lifecycle_
+                             ->document_->source_path());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
            ProjectWriteSettlementCompletesBeforeNextDocumentWrite) {
         const auto& temporary = temporary_.path;
         const auto first_path =

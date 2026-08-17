@@ -514,9 +514,9 @@ namespace lfs::io::project {
         std::optional<CleanProof> proof;
         std::shared_ptr<const std::vector<std::byte>> owned;
         // Cache of container-decompressed logical bytes for Zstd /
-        // ByteShuffleZstd sources. Stored sources keep streaming via
-        // read_stored_at (no second copy). Full-buffer inflate is intentional:
-        // consumers need the whole tensor/LFKP payload.
+        // ByteShuffleZstd sources. visit_stream prefers a bounded decode
+        // stream and does not populate this. read_at still materializes
+        // compressed sources once.
         mutable std::shared_ptr<const std::vector<std::byte>> inflated;
         lfs::core::Uuid snapshot_uuid;
 
@@ -620,6 +620,10 @@ namespace lfs::io::project {
                !impl_->owned;
     }
 
+    void LazyChunkValue::drop_clean_proof_for_testing() noexcept {
+        impl_->proof.reset();
+    }
+
     lfs::Result<void>
     LazyChunkValue::read_at(
         const std::uint64_t offset,
@@ -690,7 +694,15 @@ namespace lfs::io::project {
                 "Neither clean file range nor owned storage is available",
                 "lazy_chunk.source");
         }
-        if (impl_->source->compression == Compression::Stored) {
+        if (impl_->inflated) {
+            ReadOnlyMemoryBuffer buffer(std::span<const std::byte>(
+                impl_->inflated->data(), impl_->inflated->size()));
+            std::istream stream(&buffer);
+            return visitor(stream, impl_->inflated->size());
+        }
+        if (impl_->source->compression == Compression::Stored ||
+            impl_->source->compression == Compression::ZstdFramed ||
+            impl_->source->compression == Compression::ByteShuffleZstdFramed) {
             auto bounded =
                 impl_->reader->open_bounded_stream(*impl_->source);
             if (!bounded) {
@@ -1664,10 +1676,18 @@ namespace lfs::io::project {
                                 impl->project_uuid.to_string()),
                     "chunk.instance_uuid");
             }
-            if (options.defer_geometry_payloads &&
-                (row.key.fourcc == FOURCC_SPLT ||
-                 row.key.fourcc == FOURCC_PCLD ||
-                 row.key.fourcc == FOURCC_MESH)) {
+            const bool geometry_payload =
+                row.key.fourcc == FOURCC_SPLT ||
+                row.key.fourcc == FOURCC_PCLD ||
+                row.key.fourcc == FOURCC_MESH;
+            const auto materialized_max =
+                detail::max_materialized_bytes_for(row);
+            const bool oversized_splat =
+                row.key.fourcc == FOURCC_SPLT &&
+                (row.stored_bytes > materialized_max ||
+                 row.uncompressed_bytes > materialized_max);
+            if ((options.defer_geometry_payloads && geometry_payload) ||
+                oversized_splat) {
                 impl->deferred_geometry_keys.insert(row.key);
                 continue;
             }
@@ -2202,6 +2222,15 @@ namespace lfs::io::project {
         return found == impl_->checkpoints.end()
                    ? nullptr
                    : &found->second;
+    }
+
+    void ProjectDocument::drop_checkpoint_clean_proof_for_testing(
+        const lfs::core::Uuid& instance_uuid) {
+        const auto found = impl_->checkpoints.find(instance_uuid);
+        if (found == impl_->checkpoints.end()) {
+            return;
+        }
+        found->second.drop_clean_proof_for_testing();
     }
 
     lfs::Result<void>
@@ -3285,30 +3314,50 @@ namespace lfs::io::project {
                     .fourcc = fourcc,
                     .instance_uuid = uuid,
                 };
-                // Container zstd goes through write_chunk (begin_chunk is
-                // Stored-streaming only). Owned staged bytes avoid an extra
-                // materialization; clean-file sources materialize once.
-                const auto options =
-                    lazy_binary_options(fourcc, payload.size());
+                // Owned staged bytes go through write_chunk (container zstd;
+                // begin_chunk is Stored-streaming only). File-backed sources
+                // without a clean proof are copied stored-byte-verbatim so a
+                // compressed CKPT/PPIS is never inflated on the save path.
+                // The copy keeps the source compression, uncompressed_bytes,
+                // and chunk_version; those are correct for an unchanged
+                // payload. Counted as rewritten_chunks because stored bytes
+                // are physically rewritten.
                 if (payload.impl_->owned) {
+                    const auto options =
+                        lazy_binary_options(fourcc, payload.size());
                     if (auto written = writer->write_chunk(
                             key, *payload.impl_->owned, options);
                         !written) {
                         return written;
                     }
+                } else if (payload.impl_->reader && payload.impl_->source) {
+                    const ChunkInfo& source = *payload.impl_->source;
+                    if (source.key != key) {
+                        return fail<void>(
+                            lfs::ErrorCode::Internal,
+                            "The lazy chapter source key does not match the "
+                            "chapter being saved.",
+                            std::format(
+                                "expected {} instance {}, source is {} "
+                                "instance {}",
+                                key.fourcc.to_string(),
+                                key.instance_uuid.to_string(),
+                                source.key.fourcc.to_string(),
+                                source.key.instance_uuid.to_string()),
+                            "lazy_chunk.source_key");
+                    }
+                    if (auto copied = writer->copy_chunk_verbatim(
+                            *payload.impl_->reader, source);
+                        !copied) {
+                        return copied;
+                    }
                 } else {
-                    std::vector<std::byte> materialized(
-                        static_cast<std::size_t>(payload.size()));
-                    if (auto read = payload.read_at(
-                            0, std::span<std::byte>(materialized));
-                        !read) {
-                        return read;
-                    }
-                    if (auto written = writer->write_chunk(
-                            key, materialized, options);
-                        !written) {
-                        return written;
-                    }
+                    return fail<void>(
+                        lfs::ErrorCode::FailedPrecondition,
+                        "The lazy chapter has no byte source.",
+                        "Neither clean file range nor owned storage is "
+                        "available",
+                        "lazy_chunk.source");
                 }
                 ++report.rewritten_chunks;
             }
@@ -3833,39 +3882,48 @@ namespace lfs::io::project {
                 if (key.fourcc != FOURCC_SPLT) {
                     continue;
                 }
+                if (!impl_->source_reader) {
+                    return fail<ProjectHydrationPlan>(
+                        lfs::ErrorCode::FailedPrecondition,
+                        "The unloaded project payload has no source file.",
+                        std::format("{} instance {} lost its clean source handle",
+                                    key.fourcc.to_string(),
+                                    key.instance_uuid.to_string()),
+                        "hydrate.deferred_source");
+                }
+                const auto found = impl_->source_rows.find(key);
+                if (found == impl_->source_rows.end()) {
+                    return fail<ProjectHydrationPlan>(
+                        lfs::ErrorCode::DataLoss,
+                        "The unloaded project payload is missing.",
+                        std::format("{} instance {} has no live source row",
+                                    key.fourcc.to_string(),
+                                    key.instance_uuid.to_string()),
+                        "hydrate.deferred_source");
+                }
                 const auto read_started =
                     std::chrono::steady_clock::now();
-                auto bytes = read_deferred(key);
+                auto bounded = impl_->source_reader->open_bounded_stream(
+                    found->second.info);
                 splat_read_ms += milliseconds(
                     read_started, std::chrono::steady_clock::now());
-                if (!bytes) {
-                    return std::move(bytes).error();
-                }
-                const auto hash_started =
-                    std::chrono::steady_clock::now();
-                hashes.insert_or_assign(key, xxh3_128(*bytes));
-                splat_hash_ms += milliseconds(
-                    hash_started, std::chrono::steady_clock::now());
-                const auto copy_started =
-                    std::chrono::steady_clock::now();
-                auto payload = SplatChapterPayload::from_lfsp(std::move(*bytes));
-                splat_copy_ms += milliseconds(
-                    copy_started, std::chrono::steady_clock::now());
-                if (!payload) {
-                    return std::move(payload).error();
+                if (!bounded) {
+                    return std::move(bounded).error();
                 }
                 const auto materialize_started =
                     std::chrono::steady_clock::now();
-                auto materialized =
-                    payload->hydrate(splat_allocator);
+                auto hydrated = SplatChapterPayload::hydrate_lfsp_stream(
+                    bounded->stream(), bounded->size(), splat_allocator,
+                    payload_progress);
                 splat_materialize_ms += milliseconds(
                     materialize_started,
                     std::chrono::steady_clock::now());
-                if (!materialized) {
-                    return std::move(materialized).error();
+                if (!hydrated) {
+                    return std::move(hydrated).error();
                 }
+                hashes.insert_or_assign(key, hydrated->content_xxh3_128);
                 staged_splats.emplace(
-                    key.instance_uuid, std::move(*materialized));
+                    key.instance_uuid, std::move(hydrated->splat));
             }
 
             std::optional<lfs::core::Uuid>

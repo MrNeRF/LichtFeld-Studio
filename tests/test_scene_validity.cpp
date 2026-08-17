@@ -1233,6 +1233,83 @@ namespace lfs::python {
         EXPECT_TRUE(scene_manager.getPPISPPath().empty());
     }
 
+    TEST_F(SceneValidityTest, StandaloneSplatLoadDisablesInheritedPointCloudMode) {
+        const ScopedTestDirectory temp_dir("lfs_scene_manager_splat_render_mode");
+        const auto splat_path = temp_dir.path() / "standalone.ply";
+        const auto saved = io::save_ply(*make_test_splat(1), {
+                                                                 .output_path = splat_path,
+                                                                 .binary = true,
+                                                                 .async = false,
+                                                             });
+        ASSERT_TRUE(saved.has_value());
+
+        std::vector<core::events::ui::PointCloudModeChanged> mode_events;
+        auto mode_handler = core::events::ui::PointCloudModeChanged::when(
+            [&](const auto& event) { mode_events.push_back(event); });
+        core::events::ui::PointCloudModeChanged{
+            .enabled = true,
+            .voxel_size = 0.25f}
+            .emit();
+
+        lfs::vis::SceneManager scene_manager;
+        scene_manager.loadSplatFile(splat_path);
+
+        ASSERT_EQ(mode_events.size(), 2u);
+        EXPECT_TRUE(mode_events[0].enabled);
+        EXPECT_FLOAT_EQ(mode_events[0].voxel_size, 0.25f);
+        EXPECT_FALSE(mode_events[1].enabled);
+        EXPECT_FLOAT_EQ(mode_events[1].voxel_size, 0.01f);
+        const auto* node = scene_manager.getScene().getNode("standalone");
+        ASSERT_NE(node, nullptr);
+        EXPECT_EQ(node->type, core::NodeType::SPLAT);
+
+        (void)mode_handler;
+    }
+
+    TEST_F(SceneValidityTest, StandaloneMeshLoadDisablesInheritedPointCloudMode) {
+        const ScopedTestDirectory temp_dir("lfs_scene_manager_mesh_render_mode");
+        const auto mesh_path = temp_dir.path() / "standalone-mesh.ply";
+        {
+            std::ofstream mesh_file(mesh_path);
+            mesh_file << "ply\n"
+                         "format ascii 1.0\n"
+                         "element vertex 3\n"
+                         "property float x\n"
+                         "property float y\n"
+                         "property float z\n"
+                         "element face 1\n"
+                         "property list uchar int vertex_indices\n"
+                         "end_header\n"
+                         "0 0 0\n"
+                         "1 0 0\n"
+                         "0 1 0\n"
+                         "3 0 1 2\n";
+            ASSERT_TRUE(mesh_file.good());
+        }
+
+        std::vector<core::events::ui::PointCloudModeChanged> mode_events;
+        auto mode_handler = core::events::ui::PointCloudModeChanged::when(
+            [&](const auto& event) { mode_events.push_back(event); });
+        core::events::ui::PointCloudModeChanged{
+            .enabled = true,
+            .voxel_size = 0.25f}
+            .emit();
+
+        lfs::vis::SceneManager scene_manager;
+        scene_manager.loadSplatFile(mesh_path);
+
+        ASSERT_EQ(mode_events.size(), 2u);
+        EXPECT_TRUE(mode_events[0].enabled);
+        EXPECT_FLOAT_EQ(mode_events[0].voxel_size, 0.25f);
+        EXPECT_FALSE(mode_events[1].enabled);
+        EXPECT_FLOAT_EQ(mode_events[1].voxel_size, 0.01f);
+        const auto* node = scene_manager.getScene().getNode("standalone-mesh");
+        ASSERT_NE(node, nullptr);
+        EXPECT_EQ(node->type, core::NodeType::MESH);
+
+        (void)mode_handler;
+    }
+
     TEST_F(SceneValidityTest, SceneManagerClearReleasesMeshRayPickCpuCache) {
         lfs::vis::SceneManager scene_manager;
         auto mesh = make_test_mesh(core::Device::CUDA);

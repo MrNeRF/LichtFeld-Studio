@@ -782,6 +782,44 @@ namespace lfs::io::project {
         return hash128_from_xxh(XXH3_128bits(bytes.data(), bytes.size()));
     }
 
+    struct Hash128Stream::Impl {
+        using StatePtr = std::unique_ptr<XXH3_state_t, decltype(&XXH3_freeState)>;
+        StatePtr state{nullptr, &XXH3_freeState};
+    };
+
+    Hash128Stream::Hash128Stream() : impl_(std::make_unique<Impl>()) {
+        impl_->state.reset(XXH3_createState());
+        if (!impl_->state || XXH3_128bits_reset(impl_->state.get()) == XXH_ERROR) {
+            impl_->state.reset();
+        }
+    }
+
+    Hash128Stream::Hash128Stream(Hash128Stream&&) noexcept = default;
+    Hash128Stream& Hash128Stream::operator=(Hash128Stream&&) noexcept = default;
+    Hash128Stream::~Hash128Stream() = default;
+
+    bool Hash128Stream::valid() const noexcept {
+        return impl_ && impl_->state;
+    }
+
+    bool Hash128Stream::update(const std::span<const std::byte> bytes) noexcept {
+        if (!valid()) {
+            return false;
+        }
+        if (bytes.empty()) {
+            return true;
+        }
+        return XXH3_128bits_update(impl_->state.get(), bytes.data(),
+                                   bytes.size()) != XXH_ERROR;
+    }
+
+    Hash128 Hash128Stream::digest() const noexcept {
+        if (!valid()) {
+            return {};
+        }
+        return hash128_from_xxh(XXH3_128bits_digest(impl_->state.get()));
+    }
+
     lfs::Result<ReferenceFingerprint> fingerprint_path(
         const std::filesystem::path& path, const bool include_full_hash) {
         std::error_code error;
@@ -2624,8 +2662,7 @@ namespace lfs::io::project {
                 value.georef_pose->rotation[2] * value.georef_pose->rotation[2] +
                 value.georef_pose->rotation[3] * value.georef_pose->rotation[3]);
             if (!std::isfinite(norm) || norm < 1e-12 ||
-                std::ranges::any_of(value.georef_pose->translation,
-                                    [](const double item) { return !std::isfinite(item); })) {
+                std::ranges::any_of(value.georef_pose->translation, [](const double item) { return !std::isfinite(item); })) {
                 return fail<void>(
                     lfs::ErrorCode::InvalidArgument,
                     "The node georeference pose is invalid.",

@@ -19,9 +19,13 @@
 #include <cuda_runtime_api.h>
 #include <exception>
 #include <format>
+#include <functional>
+#include <istream>
 #include <limits>
+#include <optional>
 #include <ranges>
 #include <streambuf>
+#include <string_view>
 #include <utility>
 
 namespace lfs::io::project {
@@ -72,12 +76,36 @@ namespace lfs::io::project {
             std::uint64_t length = 0;
         };
 
+        struct RawSplatHeader {
+            int active = 0;
+            int maximum = 0;
+            float scene_scale = 0.0f;
+            std::uint32_t count = 0;
+            std::uint64_t manifest_bytes = 0;
+        };
+
+        struct RawSplatManifest {
+            int active = 0;
+            int maximum = 0;
+            float scene_scale = 0.0f;
+            std::uint64_t manifest_bytes = 0;
+            std::vector<RawTensor> descriptors;
+            std::vector<lfs::core::SplatData::FrozenRange> ranges;
+        };
+
         lfs::Error splat_error(const lfs::ErrorCode code, std::string message,
                                std::string detail);
 
-        lfs::Result<std::unique_ptr<lfs::core::SplatData>> hydrate_raw(
-            const std::span<const std::byte> bytes,
-            lfs::core::SplatTensorAllocator allocator) {
+        constexpr std::size_t RAW_STREAM_WINDOW_BYTES = 16ull * 1024ull * 1024ull;
+        constexpr std::uint64_t RAW_STREAM_MAX_MANIFEST_BYTES = 32ull * 1024ull * 1024ull;
+        std::optional<std::size_t> splat_stream_window_override;
+
+        std::size_t splat_stream_window_bytes() noexcept {
+            return splat_stream_window_override.value_or(RAW_STREAM_WINDOW_BYTES);
+        }
+
+        lfs::Result<RawSplatHeader>
+        parse_raw_splat_header(const std::span<const std::byte> bytes) {
             if (bytes.size() < RAW_HEADER_BYTES ||
                 !std::equal(RAW_MAGIC.begin(), RAW_MAGIC.end(), bytes.begin()) ||
                 get_u16(bytes, 8) != 2 || get_u16(bytes, 10) != 0) {
@@ -85,57 +113,89 @@ namespace lfs::io::project {
                                    "The raw splat payload header is invalid.",
                                    "expected LFSPLT2 version 2");
             }
-            const int active = static_cast<int>(get_u32(bytes, 12));
-            const int maximum = static_cast<int>(get_u32(bytes, 16));
-            float scene_scale = 0.0f;
+            RawSplatHeader header;
+            header.active = static_cast<int>(get_u32(bytes, 12));
+            header.maximum = static_cast<int>(get_u32(bytes, 16));
             const auto scene_bits = get_u32(bytes, 20);
-            std::memcpy(&scene_scale, &scene_bits, sizeof(scene_scale));
-            const auto count = get_u32(bytes, 24);
-            const auto manifest_bytes = get_u64(bytes, 32);
-            if (count == 0 || count > 8 || manifest_bytes > bytes.size() ||
-                manifest_bytes < RAW_HEADER_BYTES + static_cast<std::uint64_t>(count) * RAW_DESCRIPTOR_BYTES + 8) {
-                return splat_error(lfs::ErrorCode::DataLoss,
-                                   "The raw splat payload manifest is invalid.",
-                                   "tensor count or manifest length is out of range");
+            std::memcpy(&header.scene_scale, &scene_bits, sizeof(header.scene_scale));
+            header.count = get_u32(bytes, 24);
+            header.manifest_bytes = get_u64(bytes, 32);
+            return header;
+        }
+
+        lfs::Result<void> validate_raw_splat_manifest_bounds(
+            const RawSplatHeader& header, const std::uint64_t payload_size,
+            const std::size_t prefix_size) {
+            if (header.count == 0 || header.count > 8 ||
+                header.manifest_bytes > payload_size ||
+                header.manifest_bytes < RAW_HEADER_BYTES +
+                                            static_cast<std::uint64_t>(header.count) *
+                                                RAW_DESCRIPTOR_BYTES +
+                                            8 ||
+                prefix_size < header.manifest_bytes) {
+                return lfs::Result<void>::failure(splat_error(
+                    lfs::ErrorCode::DataLoss,
+                    "The raw splat payload manifest is invalid.",
+                    "tensor count or manifest length is out of range"));
             }
-            std::vector<RawTensor> descriptors;
-            descriptors.reserve(count);
+            return {};
+        }
+
+        lfs::Result<RawSplatManifest> parse_raw_splat_manifest(
+            const std::span<const std::byte> prefix, const std::uint64_t payload_size) {
+            auto header = parse_raw_splat_header(prefix);
+            if (!header) {
+                return std::move(header).error();
+            }
+            if (auto bounds = validate_raw_splat_manifest_bounds(
+                    *header, payload_size, prefix.size());
+                !bounds) {
+                return std::move(bounds).error();
+            }
+            RawSplatManifest parsed;
+            parsed.active = header->active;
+            parsed.maximum = header->maximum;
+            parsed.scene_scale = header->scene_scale;
+            parsed.manifest_bytes = header->manifest_bytes;
+            const auto count = header->count;
+            parsed.descriptors.reserve(count);
             std::uint32_t seen = 0;
             for (std::uint32_t i = 0; i < count; ++i) {
                 const auto at = RAW_HEADER_BYTES + static_cast<std::size_t>(i) * RAW_DESCRIPTOR_BYTES;
-                const auto id = get_u32(bytes, at);
-                const auto rank = std::to_integer<std::uint8_t>(bytes[at + 5]);
+                const auto id = get_u32(prefix, at);
+                const auto rank = std::to_integer<std::uint8_t>(prefix[at + 5]);
                 if (id >= 8 || (seen & (1u << id)) != 0 || rank > 4)
                     return splat_error(lfs::ErrorCode::DataLoss, "The raw splat tensor manifest is invalid.", "duplicate id or rank");
                 seen |= 1u << id;
-                const auto dtype = static_cast<lfs::core::DataType>(std::to_integer<std::uint8_t>(bytes[at + 4]));
+                const auto dtype = static_cast<lfs::core::DataType>(std::to_integer<std::uint8_t>(prefix[at + 4]));
                 if (lfs::core::dtype_size(dtype) == 0)
                     return splat_error(lfs::ErrorCode::DataLoss, "The raw splat tensor manifest is invalid.", "unsupported dtype");
                 std::vector<std::size_t> shape(rank);
                 for (std::size_t d = 0; d < shape.size(); ++d) {
-                    const auto dimension = get_u64(bytes, at + 8 + d * 8);
+                    const auto dimension = get_u64(prefix, at + 8 + d * 8);
                     if (dimension > std::numeric_limits<std::size_t>::max())
                         return splat_error(lfs::ErrorCode::DataLoss, "The raw splat tensor manifest is invalid.", "dimension overflow");
                     shape[d] = static_cast<std::size_t>(dimension);
                 }
-                descriptors.push_back({id, dtype, std::move(shape), get_u64(bytes, at + 40), get_u64(bytes, at + 48)});
+                parsed.descriptors.push_back(
+                    {id, dtype, std::move(shape), get_u64(prefix, at + 40),
+                     get_u64(prefix, at + 48)});
             }
-            const auto frozen_count = get_u64(bytes, RAW_HEADER_BYTES + static_cast<std::size_t>(count) * RAW_DESCRIPTOR_BYTES);
-            const auto ranges_end = manifest_bytes;
+            const auto frozen_count = get_u64(
+                prefix, RAW_HEADER_BYTES + static_cast<std::size_t>(count) * RAW_DESCRIPTOR_BYTES);
+            const auto ranges_end = parsed.manifest_bytes;
             if (frozen_count > 1'000'000 ||
                 frozen_count > (ranges_end - (RAW_HEADER_BYTES + static_cast<std::size_t>(count) * RAW_DESCRIPTOR_BYTES + 8)) / 16)
                 return splat_error(lfs::ErrorCode::DataLoss, "The raw splat payload manifest is invalid.", "frozen-range table overflow");
-            std::vector<lfs::core::SplatData::FrozenRange> ranges;
-            ranges.reserve(static_cast<std::size_t>(frozen_count));
+            parsed.ranges.reserve(static_cast<std::size_t>(frozen_count));
             auto range_at = RAW_HEADER_BYTES + static_cast<std::size_t>(count) * RAW_DESCRIPTOR_BYTES + 8;
             for (std::uint64_t i = 0; i < frozen_count; ++i, range_at += 16)
-                ranges.push_back({static_cast<std::size_t>(get_u64(bytes, range_at)), static_cast<std::size_t>(get_u64(bytes, range_at + 8))});
-            const auto data_start = static_cast<std::size_t>(manifest_bytes);
-            std::vector<lfs::core::Tensor> tensors(8);
-            auto owner = std::shared_ptr<void>(
-                const_cast<std::byte*>(bytes.data()), [](void*) {});
+                parsed.ranges.push_back({static_cast<std::size_t>(get_u64(prefix, range_at)),
+                                         static_cast<std::size_t>(get_u64(prefix, range_at + 8))});
+            const auto data_start = parsed.manifest_bytes;
+            std::uint32_t present = 0;
             std::uint64_t end = data_start;
-            for (const auto& descriptor : descriptors) {
+            for (const auto& descriptor : parsed.descriptors) {
                 std::uint64_t elements = 1;
                 for (const auto dimension : descriptor.shape) {
                     if (dimension != 0 && elements > std::numeric_limits<std::uint64_t>::max() / dimension)
@@ -144,10 +204,43 @@ namespace lfs::io::project {
                 }
                 if (elements > std::numeric_limits<std::uint64_t>::max() / lfs::core::dtype_size(descriptor.dtype) ||
                     descriptor.length != elements * lfs::core::dtype_size(descriptor.dtype) ||
-                    descriptor.offset < data_start || descriptor.offset > bytes.size() ||
-                    descriptor.length > bytes.size() - descriptor.offset || descriptor.offset != end)
+                    descriptor.offset < data_start || descriptor.offset > payload_size ||
+                    descriptor.length > payload_size - descriptor.offset || descriptor.offset != end)
                     return splat_error(lfs::ErrorCode::DataLoss, "The raw splat tensor manifest is invalid.", "tensor range is overlapping or out of bounds");
                 end = descriptor.offset + descriptor.length;
+                present |= 1u << descriptor.id;
+            }
+            if (end != payload_size)
+                return splat_error(lfs::ErrorCode::DataLoss, "The raw splat tensor manifest is invalid.", "tensor data does not cover the payload exactly");
+            if ((present & 0x3fu) != 0x3fu)
+                return splat_error(lfs::ErrorCode::DataLoss, "The raw splat tensor manifest is invalid.", "required tensor is missing");
+            return parsed;
+        }
+
+        lfs::Result<std::unique_ptr<lfs::core::SplatData>>
+        splat_from_cpu_tensors(RawSplatManifest& parsed,
+                               std::vector<lfs::core::Tensor> tensors,
+                               lfs::core::SplatTensorAllocator allocator) {
+            return lfs::core::SplatData::from_raw_tensors(
+                parsed.active, parsed.maximum, parsed.scene_scale,
+                std::move(tensors[0]), std::move(tensors[1]),
+                std::move(tensors[2]), std::move(tensors[3]),
+                std::move(tensors[4]), std::move(tensors[5]),
+                std::move(tensors[6]), std::move(tensors[7]),
+                std::move(parsed.ranges), std::move(allocator));
+        }
+
+        lfs::Result<std::unique_ptr<lfs::core::SplatData>> hydrate_raw(
+            const std::span<const std::byte> bytes,
+            lfs::core::SplatTensorAllocator allocator) {
+            auto parsed = parse_raw_splat_manifest(bytes, bytes.size());
+            if (!parsed) {
+                return std::move(parsed).error();
+            }
+            std::vector<lfs::core::Tensor> tensors(8);
+            auto owner = std::shared_ptr<void>(
+                const_cast<std::byte*>(bytes.data()), [](void*) {});
+            for (const auto& descriptor : parsed->descriptors) {
                 auto tensor = lfs::core::Tensor::from_external_owner(
                     const_cast<std::byte*>(bytes.data() + descriptor.offset),
                     lfs::core::TensorShape(descriptor.shape), lfs::core::Device::CPU,
@@ -156,16 +249,34 @@ namespace lfs::io::project {
                     return splat_error(lfs::ErrorCode::DataLoss, "The raw splat tensor manifest is invalid.", "tensor byte length mismatch");
                 tensors[descriptor.id] = std::move(tensor);
             }
-            if (end != bytes.size())
-                return splat_error(lfs::ErrorCode::DataLoss, "The raw splat tensor manifest is invalid.", "tensor data does not cover the payload exactly");
-            if (!tensors[0].is_valid() || !tensors[1].is_valid() || !tensors[2].is_valid() ||
-                !tensors[3].is_valid() || !tensors[4].is_valid() || !tensors[5].is_valid())
-                return splat_error(lfs::ErrorCode::DataLoss, "The raw splat tensor manifest is invalid.", "required tensor is missing");
-            return lfs::core::SplatData::from_raw_tensors(
-                active, maximum, scene_scale, std::move(tensors[0]), std::move(tensors[1]),
-                std::move(tensors[2]), std::move(tensors[3]), std::move(tensors[4]),
-                std::move(tensors[5]), std::move(tensors[6]), std::move(tensors[7]),
-                std::move(ranges), std::move(allocator));
+            return splat_from_cpu_tensors(*parsed, std::move(tensors),
+                                          std::move(allocator));
+        }
+
+        lfs::Result<void> read_exact_stream(std::istream& stream,
+                                            const std::span<std::byte> destination,
+                                            const std::string_view what) {
+            if (destination.empty()) {
+                return {};
+            }
+            if (destination.size() >
+                static_cast<std::size_t>(
+                    std::numeric_limits<std::streamsize>::max())) {
+                return lfs::Result<void>::failure(splat_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "The raw splat payload could not be read.",
+                    std::format("{} exceeds this build's streamsize range", what)));
+            }
+            stream.read(reinterpret_cast<char*>(destination.data()),
+                        static_cast<std::streamsize>(destination.size()));
+            if (stream.gcount() != static_cast<std::streamsize>(destination.size())) {
+                return lfs::Result<void>::failure(splat_error(
+                    lfs::ErrorCode::DataLoss,
+                    "The raw splat payload is truncated.",
+                    std::format("short read of {}: expected {}, got {}", what,
+                                destination.size(), stream.gcount())));
+            }
+            return {};
         }
 
         class SpanStreambuf final : public std::streambuf {
@@ -596,9 +707,156 @@ namespace lfs::io::project {
         }
     }
 
+    lfs::Result<HydratedSplatStream> SplatChapterPayload::hydrate_lfsp_stream(
+        std::istream& stream, const std::uint64_t size,
+        lfs::core::SplatTensorAllocator allocator,
+        std::function<void(std::size_t, std::size_t)> progress) {
+        try {
+            if (size > std::numeric_limits<std::size_t>::max()) {
+                return splat_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "The raw splat payload is too large for this build.",
+                    std::format("logical size {} exceeds size_t", size));
+            }
+            Hash128Stream hasher;
+            if (!hasher.valid()) {
+                return splat_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "The splat content hash could not be initialized.",
+                    "XXH3 state allocation/reset failed");
+            }
+            const auto report = [&](const std::uint64_t consumed) {
+                if (!progress) {
+                    return;
+                }
+                progress(static_cast<std::size_t>(consumed),
+                         static_cast<std::size_t>(size));
+            };
+            if (size < RAW_HEADER_BYTES) {
+                return splat_error(lfs::ErrorCode::DataLoss,
+                                   "The raw splat payload header is invalid.",
+                                   "expected LFSPLT2 version 2");
+            }
+            std::array<std::byte, RAW_HEADER_BYTES> header{};
+            if (auto read = read_exact_stream(stream, header, "LFSPLT2 header");
+                !read) {
+                return std::move(read).error();
+            }
+            auto parsed_header = parse_raw_splat_header(header);
+            if (!parsed_header) {
+                return std::move(parsed_header).error();
+            }
+            // prefix_size is the full declared manifest so a header-only buffer
+            // does not trip the "prefix shorter than manifest" bound.
+            if (auto bounds = validate_raw_splat_manifest_bounds(
+                    *parsed_header, size,
+                    static_cast<std::size_t>(parsed_header->manifest_bytes));
+                !bounds) {
+                return std::move(bounds).error();
+            }
+            const auto manifest_bytes = parsed_header->manifest_bytes;
+            if (manifest_bytes > RAW_STREAM_MAX_MANIFEST_BYTES) {
+                return splat_error(
+                    lfs::ErrorCode::DataLoss,
+                    "The raw splat payload manifest is invalid.",
+                    "tensor count or manifest length is out of range");
+            }
+            std::vector<std::byte> manifest(static_cast<std::size_t>(manifest_bytes));
+            std::copy(header.begin(), header.end(), manifest.begin());
+            if (manifest_bytes > RAW_HEADER_BYTES) {
+                if (auto read = read_exact_stream(
+                        stream,
+                        std::span<std::byte>(manifest.data() + RAW_HEADER_BYTES,
+                                             static_cast<std::size_t>(
+                                                 manifest_bytes - RAW_HEADER_BYTES)),
+                        "LFSPLT2 manifest");
+                    !read) {
+                    return std::move(read).error();
+                }
+            }
+            auto parsed = parse_raw_splat_manifest(manifest, size);
+            if (!parsed) {
+                return std::move(parsed).error();
+            }
+            if (!hasher.update(manifest)) {
+                return splat_error(
+                    lfs::ErrorCode::Internal,
+                    "The splat content hash could not be computed.",
+                    "XXH3 streaming update failed");
+            }
+            std::uint64_t consumed = manifest_bytes;
+            report(consumed);
+
+            std::vector<lfs::core::Tensor> tensors(8);
+            const auto window =
+                std::max<std::size_t>(splat_stream_window_bytes(), 1);
+            for (const auto& descriptor : parsed->descriptors) {
+                auto tensor = lfs::core::Tensor::empty_unpinned(
+                    lfs::core::TensorShape(descriptor.shape), descriptor.dtype);
+                if (tensor.bytes() != descriptor.length) {
+                    return splat_error(
+                        lfs::ErrorCode::DataLoss,
+                        "The raw splat tensor manifest is invalid.",
+                        "tensor byte length mismatch");
+                }
+                if (descriptor.length != 0) {
+                    auto* destination = static_cast<std::byte*>(tensor.data_ptr());
+                    std::uint64_t remaining = descriptor.length;
+                    while (remaining > 0) {
+                        const auto chunk = static_cast<std::size_t>(
+                            std::min<std::uint64_t>(window, remaining));
+                        if (auto read = read_exact_stream(
+                                stream, std::span<std::byte>(destination, chunk),
+                                "LFSPLT2 tensor");
+                            !read) {
+                            return std::move(read).error();
+                        }
+                        if (!hasher.update(std::span<const std::byte>(
+                                destination, chunk))) {
+                            return splat_error(
+                                lfs::ErrorCode::Internal,
+                                "The splat content hash could not be computed.",
+                                "XXH3 streaming update failed");
+                        }
+                        destination += chunk;
+                        remaining -= chunk;
+                        consumed += chunk;
+                        report(consumed);
+                    }
+                }
+                tensors[descriptor.id] = std::move(tensor);
+            }
+            report(consumed);
+            auto splat = splat_from_cpu_tensors(*parsed, std::move(tensors),
+                                                std::move(allocator));
+            if (!splat) {
+                return std::move(splat).error();
+            }
+            return HydratedSplatStream{
+                .splat = std::move(*splat),
+                .content_xxh3_128 = hasher.digest(),
+            };
+        } catch (const std::bad_alloc& error) {
+            return splat_error(
+                lfs::ErrorCode::ResourceExhausted,
+                "The raw splat payload could not be hydrated.",
+                std::format("SPLT stream allocation failed: {}", error.what()));
+        } catch (const std::exception& error) {
+            return splat_error(
+                lfs::ErrorCode::DataLoss,
+                "The raw splat payload could not be hydrated.",
+                std::format("SPLT stream hydrate failed: {}", error.what()));
+        }
+    }
+
     bool SplatChapterPayload::must_reference_external(
         const SplatSourceKind source_kind) noexcept {
         return source_kind == SplatSourceKind::LiveRad;
+    }
+
+    void detail::set_splat_stream_window_bytes_for_testing(
+        const std::optional<std::size_t> window_bytes) {
+        splat_stream_window_override = window_bytes;
     }
 
 } // namespace lfs::io::project

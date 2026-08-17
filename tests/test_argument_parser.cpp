@@ -482,6 +482,18 @@ TEST(ArgumentParserTest, ConvertNoProvenanceDisablesStamp) {
     EXPECT_FALSE(mode->params.include_provenance);
 }
 
+TEST(ArgumentParserTest, ConvertHelpListsLichtProjectInput) {
+    const char* argv[] = {"LichtFeld-Studio", "convert", "--help"};
+    testing::internal::CaptureStdout();
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    const auto help = testing::internal::GetCapturedStdout();
+
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
+    EXPECT_NE(help.find(".licht (project)"), std::string::npos);
+    EXPECT_NE(help.find("LichtFeld-Studio convert project.licht output.ply"), std::string::npos);
+}
+
 TEST(ArgumentParserTest, TrainingParsesAddSplats) {
     const auto dir = make_test_path("lfs_arg_parser_add_splat");
     const auto data_path = std::filesystem::path(dir) / "data";

@@ -323,6 +323,7 @@ set(TEST_FILES
     test_spz_format.cpp
     test_provenance.cpp
     test_converter_usd.cpp
+    test_converter_licht.cpp
     test_usd_format.cpp
     test_nurec_usdz_format.cpp
     test_unicode_paths_windows.cpp
