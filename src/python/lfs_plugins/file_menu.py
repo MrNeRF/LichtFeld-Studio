@@ -40,6 +40,47 @@ def _confirm_discard_then(title: str, callback) -> None:
     )
 
 
+def _offer_remove_missing_recent(path: str) -> None:
+    tr = lf.ui.tr
+    remove_label = tr("menu.file.remove_from_recent")
+
+    def _on_result(button):
+        if button == remove_label:
+            lf.project_remove_recent_file(path)
+
+    lf.ui.confirm_dialog(
+        tr("menu.file.recent_missing_title"),
+        tr("menu.file.recent_missing_message").format(path=path),
+        [remove_label, tr("common.cancel")],
+        _on_result,
+    )
+
+
+def _open_recent_checked(path: str) -> None:
+    try:
+        lf.project_open(path, True)
+    except FileNotFoundError:
+        # NotFoundError subclasses FileNotFoundError (see startup_recent_panel).
+        _offer_remove_missing_recent(path)
+    except Exception as exc:
+        message = str(exc).strip() or lf.ui.tr(
+            "menu.file.recent_missing_message"
+        ).format(path=path)
+        lf.ui.message_dialog(
+            lf.ui.tr("menu.file.open_project"), message, "error"
+        )
+
+
+def _open_recent_project(path: str) -> None:
+    if not Path(path).is_file():
+        _offer_remove_missing_recent(path)
+        return
+    _confirm_discard_then(
+        lf.ui.tr("menu.file.open_project"),
+        lambda: _open_recent_checked(path),
+    )
+
+
 def format_recent_project_entry(path: str, tr) -> tuple[str, str]:
     """Return the compact recent-project label and full-path tooltip."""
     windows_path = PureWindowsPath(path)
@@ -307,10 +348,7 @@ class FileMenu:
             recent_items.append(
                 menu_action(
                     label,
-                    lambda selected=path: _confirm_discard_then(
-                        lf.ui.tr("menu.file.open_project"),
-                        lambda: lf.project_open(selected, True),
-                    ),
+                    lambda selected=path: _open_recent_project(selected),
                     tooltip=tooltip,
                 )
             )

@@ -170,6 +170,9 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         clearRecentProjects();
         [[nodiscard]] lfs::Result<void>
+        removeRecentProject(
+            const std::filesystem::path& path);
+        [[nodiscard]] lfs::Result<void>
         setAutosaveIntervalSeconds(
             std::uint64_t seconds);
         [[nodiscard]] bool containsEmbeddedSecrets() const;

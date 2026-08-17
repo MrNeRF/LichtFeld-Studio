@@ -114,6 +114,8 @@ namespace lfs::vis {
         projectGetMenuInfo() override;
         lfs::Result<void>
         projectClearRecentFiles() override;
+        lfs::Result<void>
+        projectRemoveRecentFile(const std::filesystem::path& path) override;
         [[nodiscard]] bool projectContainsEmbeddedSecrets() const;
 
         // Getters for GUI (delegating to state manager)

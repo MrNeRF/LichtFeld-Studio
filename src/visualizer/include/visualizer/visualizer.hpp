@@ -190,6 +190,11 @@ namespace lfs::vis {
         projectClearRecentFiles() {
             return {};
         }
+        virtual lfs::Result<void>
+        projectRemoveRecentFile(
+            const std::filesystem::path&) {
+            return {};
+        }
 
         virtual ~Visualizer() = default;
     };

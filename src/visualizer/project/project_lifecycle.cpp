@@ -1506,6 +1506,38 @@ namespace lfs::vis::project {
     }
 
     lfs::Result<void>
+    ProjectLifecycle::removeRecentProject(
+        const std::filesystem::path& path) {
+        std::vector<ProjectMruEntry> previous;
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            previous = settings_.mru;
+            const auto new_end = std::remove_if(
+                settings_.mru.begin(),
+                settings_.mru.end(),
+                [&](const ProjectMruEntry& entry) {
+                    return projectMruPathsEqual(
+                        resolveProjectMruPath(
+                            entry.last_known_path),
+                        resolveProjectMruPath(path));
+                });
+            if (new_end == settings_.mru.end()) {
+                return {};
+            }
+            settings_.mru.erase(
+                new_end, settings_.mru.end());
+        }
+        if (auto saved = persistSettings(); !saved) {
+            const std::lock_guard lock(
+                settings_mutex_);
+            settings_.mru = std::move(previous);
+            return saved;
+        }
+        return {};
+    }
+
+    lfs::Result<void>
     ProjectLifecycle::setAutosaveIntervalSeconds(
         const std::uint64_t seconds) {
         std::uint64_t previous = 0;

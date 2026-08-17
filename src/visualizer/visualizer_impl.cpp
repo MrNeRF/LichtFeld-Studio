@@ -3240,6 +3240,19 @@ namespace lfs::vis {
         return project_lifecycle_->clearRecentProjects();
     }
 
+    lfs::Result<void>
+    VisualizerImpl::projectRemoveRecentFile(
+        const std::filesystem::path& path) {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->removeRecentProject(path);
+    }
+
     lfs::Result<bool>
     VisualizerImpl::projectIsDirty() {
         if (!project_lifecycle_) {

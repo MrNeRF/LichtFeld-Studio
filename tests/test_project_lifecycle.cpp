@@ -405,4 +405,98 @@ namespace {
         lfs::event::EventBridge::instance().clear_all();
     }
 
+    TEST(ProjectLifecycleSettingsTest,
+         RemoveRecentProjectDropsSingleEntryAndPersists) {
+        lfs::event::EventBridge::instance().clear_all();
+        lfs::core::event::bus().clear_all();
+        lfs::vis::services().clear();
+        lfs::vis::op::undoHistory().clear();
+
+        TemporaryDirectory temporary;
+        const auto settings_path =
+            temporary.path / "project_lifecycle.json";
+        const auto keep_path =
+            temporary.path / "keep.licht";
+        const auto drop_path =
+            temporary.path / "drop.licht";
+        createEmptyProjectFile(keep_path);
+        createEmptyProjectFile(drop_path);
+
+        ProjectLifecycleSettings settings;
+        rememberProject(
+            settings, lfs::core::generate_uuid_v4(),
+            keep_path);
+        rememberProject(
+            settings, lfs::core::generate_uuid_v4(),
+            drop_path);
+        ASSERT_EQ(settings.mru.size(), 2u);
+        ASSERT_TRUE(saveProjectLifecycleSettings(
+            settings_path, settings))
+            << "seed MRU settings";
+
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            settings_path;
+
+        {
+            auto viewer =
+                lfs::vis::Visualizer::create(options);
+            ASSERT_NE(viewer, nullptr);
+            auto info = viewer->projectGetMenuInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            ASSERT_EQ(info->recent_projects.size(), 2u);
+
+            auto removed =
+                viewer->projectRemoveRecentFile(drop_path);
+            ASSERT_TRUE(removed)
+                << lfs::format_for_developer(
+                       removed.error());
+
+            info = viewer->projectGetMenuInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            ASSERT_EQ(info->recent_projects.size(), 1u);
+            EXPECT_EQ(
+                info->recent_projects.front()
+                    .last_known_path,
+                resolveProjectMruPath(keep_path));
+
+            auto missing_removed =
+                viewer->projectRemoveRecentFile(
+                    temporary.path / "absent.licht");
+            ASSERT_TRUE(missing_removed)
+                << lfs::format_for_developer(
+                       missing_removed.error());
+
+            info = viewer->projectGetMenuInfo();
+            ASSERT_TRUE(info)
+                << lfs::format_for_developer(
+                       info.error());
+            ASSERT_EQ(info->recent_projects.size(), 1u);
+            EXPECT_EQ(
+                info->recent_projects.front()
+                    .last_known_path,
+                resolveProjectMruPath(keep_path));
+        }
+
+        auto reloaded =
+            loadProjectLifecycleSettings(settings_path);
+        ASSERT_TRUE(reloaded)
+            << lfs::format_for_developer(
+                   reloaded.error());
+        ASSERT_EQ(reloaded->mru.size(), 1u);
+        EXPECT_EQ(
+            reloaded->mru.front().last_known_path,
+            resolveProjectMruPath(keep_path));
+
+        lfs::vis::op::undoHistory().clear();
+        lfs::vis::services().clear();
+        lfs::core::event::bus().clear_all();
+        lfs::event::EventBridge::instance().clear_all();
+    }
+
 } // namespace

@@ -23,13 +23,43 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     def tr(key):
         if key == "menu.file.recent_entry":
             return "{name} — {parent}"
+        if key == "menu.file.recent_missing_message":
+            return "{path} missing"
         return f"tr:{key}"
 
+    opened = []
+    removed = []
+    confirm_dialogs = []
+    message_dialogs = []
+
+    def project_open(path, discard=False):
+        opened.append((path, discard))
+
+    def project_remove_recent_file(path):
+        removed.append(path)
+
+    def confirm_dialog(title, message, buttons, callback=None):
+        confirm_dialogs.append((title, message, buttons, callback))
+
+    def message_dialog(title, message, style=None):
+        message_dialogs.append((title, message, style))
+
     lf_stub = ModuleType("lichtfeld")
-    lf_stub.ui = SimpleNamespace(tr=tr)
+    lf_stub.ui = SimpleNamespace(
+        tr=tr,
+        confirm_dialog=confirm_dialog,
+        message_dialog=message_dialog,
+    )
     lf_stub.project_recent_files = lambda: list(recent_paths)
     lf_stub.project_clear_recent_files = lambda: None
     lf_stub.project_auto_save_on_close_enabled = lambda: False
+    lf_stub.project_is_dirty = lambda: False
+    lf_stub.project_open = project_open
+    lf_stub.project_remove_recent_file = project_remove_recent_file
+    lf_stub.project_open_calls = opened
+    lf_stub.project_remove_recent_file_calls = removed
+    lf_stub.confirm_dialogs = confirm_dialogs
+    lf_stub.message_dialogs = message_dialogs
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
     class Operator:
@@ -108,4 +138,85 @@ def test_open_recent_submenu_appends_clear_only_when_entries_exist(monkeypatch):
     assert empty[0]["label"] == "tr:menu.file.no_recent_projects"
     assert empty[0]["enabled"] is False
     assert empty[0].get("type", "item") == "item"
+
+
+def _recent_item_callback(file_menu):
+    return file_menu.FileMenu().menu_items()[2]["items"][0]["callback"]
+
+
+def test_open_recent_missing_path_offers_remove(monkeypatch):
+    missing_path = "/no/such/recent/project.licht"
+    file_menu = _load_file_menu(monkeypatch, [missing_path])
+
+    _recent_item_callback(file_menu)()
+
+    assert file_menu.lf.project_open_calls == []
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:menu.file.recent_missing_title"
+    assert buttons == [
+        "tr:menu.file.remove_from_recent",
+        "tr:common.cancel",
+    ]
+    assert missing_path in message
+
+    callback("tr:common.cancel")
+    assert file_menu.lf.project_remove_recent_file_calls == []
+
+    callback("tr:menu.file.remove_from_recent")
+    assert file_menu.lf.project_remove_recent_file_calls == [missing_path]
+
+
+def test_open_recent_existing_path_opens_without_dialog(monkeypatch, tmp_path):
+    project = tmp_path / "existing.licht"
+    project.write_bytes(b"")
+    path = str(project)
+    file_menu = _load_file_menu(monkeypatch, [path])
+
+    _recent_item_callback(file_menu)()
+
+    assert file_menu.lf.project_open_calls == [(path, True)]
+    assert file_menu.lf.confirm_dialogs == []
+    assert file_menu.lf.message_dialogs == []
+
+
+def test_open_recent_existing_file_not_found_offers_remove(monkeypatch, tmp_path):
+    project = tmp_path / "gone.licht"
+    project.write_bytes(b"")
+    path = str(project)
+    file_menu = _load_file_menu(monkeypatch, [path])
+
+    def raise_not_found(selected, discard=False):
+        raise FileNotFoundError(selected)
+
+    file_menu.lf.project_open = raise_not_found
+    _recent_item_callback(file_menu)()
+
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, _message, buttons, _callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:menu.file.recent_missing_title"
+    assert buttons == [
+        "tr:menu.file.remove_from_recent",
+        "tr:common.cancel",
+    ]
+    assert file_menu.lf.message_dialogs == []
+
+
+def test_open_recent_existing_other_error_shows_message(monkeypatch, tmp_path):
+    project = tmp_path / "broken.licht"
+    project.write_bytes(b"")
+    path = str(project)
+    file_menu = _load_file_menu(monkeypatch, [path])
+
+    def raise_boom(selected, discard=False):
+        raise RuntimeError("boom")
+
+    file_menu.lf.project_open = raise_boom
+    _recent_item_callback(file_menu)()
+
+    assert file_menu.lf.confirm_dialogs == []
+    assert len(file_menu.lf.message_dialogs) == 1
+    _title, message, style = file_menu.lf.message_dialogs[0]
+    assert style == "error"
+    assert "boom" in message
 
