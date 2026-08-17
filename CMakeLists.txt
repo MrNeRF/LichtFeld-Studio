@@ -1295,6 +1295,7 @@ if(LFS_FAST_COMPILE AND MSVC)
             target_compile_options(${target} PRIVATE
                 $<$<COMPILE_LANGUAGE:CXX>:/Od>
                 $<$<COMPILE_LANGUAGE:CXX>:/Ob0>
+                $<$<COMPILE_LANGUAGE:CXX>:/wd9025>
             )
         endif()
     endfunction()
