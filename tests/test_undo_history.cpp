@@ -1595,6 +1595,67 @@ TEST_F(UndoHistoryTest, GaussianSelectionIgnoresSoftDeletedRowsForAllSelectionSo
     EXPECT_EQ(mean_x_values(*pasted_node->model), (std::vector<float>{0.0f, 2.0f}));
 }
 
+TEST_F(UndoHistoryTest, NodeCopyPasteExcludesSoftDeletedRows) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(4));
+    auto* node = scene_manager->getScene().getNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    node->model->soft_delete(make_uint8_mask({0, 1, 0, 1}).to(DataType::Bool));
+
+    scene_manager->selectNode("model");
+    EXPECT_TRUE(scene_manager->copySelectedNodes());
+
+    const auto pasted = scene_manager->pasteNodes();
+    ASSERT_EQ(pasted.size(), 1u);
+    const auto* pasted_node = scene_manager->getScene().getNode(pasted.front());
+    ASSERT_NE(pasted_node, nullptr);
+    ASSERT_NE(pasted_node->model, nullptr);
+    EXPECT_EQ(pasted_node->model->size(), 2);
+    EXPECT_FALSE(pasted_node->model->has_deleted_mask());
+    EXPECT_EQ(mean_x_values(*pasted_node->model), (std::vector<float>{0.0f, 2.0f}));
+}
+
+TEST_F(UndoHistoryTest, NodeCopyPasteWithoutDeletionsKeepsAllRows) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(3));
+    scene_manager->selectNode("model");
+    EXPECT_TRUE(scene_manager->copySelectedNodes());
+
+    const auto pasted = scene_manager->pasteNodes();
+    ASSERT_EQ(pasted.size(), 1u);
+    const auto* pasted_node = scene_manager->getScene().getNode(pasted.front());
+    ASSERT_NE(pasted_node, nullptr);
+    ASSERT_NE(pasted_node->model, nullptr);
+    EXPECT_EQ(pasted_node->model->size(), 3);
+    EXPECT_FALSE(pasted_node->model->has_deleted_mask());
+}
+
+TEST_F(UndoHistoryTest, NodeCopyWithAllRowsDeletedProducesNoClipboard) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(2));
+    auto* node = scene_manager->getScene().getNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    node->model->soft_delete(make_uint8_mask({1, 1}).to(DataType::Bool));
+
+    scene_manager->selectNode("model");
+    EXPECT_FALSE(scene_manager->copySelectedNodes());
+    EXPECT_FALSE(scene_manager->hasClipboard());
+}
+
 TEST_F(UndoHistoryTest, SelectingOnlySoftDeletedRowsClearsSelectionAndClipboard) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
