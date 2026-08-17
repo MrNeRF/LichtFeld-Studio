@@ -411,10 +411,17 @@ TEST_F(PanelRegistryAnimationDemandTest,
     registry.apply_project_state({keep});
 
     const auto kept = registry.get_panel("test.keep");
-    const auto dropped = registry.get_panel("test.drop");
+    auto dropped = registry.get_panel("test.drop");
     ASSERT_TRUE(kept.has_value());
     ASSERT_TRUE(dropped.has_value());
     EXPECT_TRUE(kept->enabled);
+    EXPECT_FALSE(dropped->enabled);
+
+    registry.set_panel_enabled("test.drop", true);
+    registry.apply_project_state({keep});
+
+    dropped = registry.get_panel("test.drop");
+    ASSERT_TRUE(dropped.has_value());
     EXPECT_TRUE(dropped->enabled);
 }
 

@@ -1456,6 +1456,10 @@ apply_registered_chrome:
             std::lock_guard lock(mutex_);
             for (auto& p : panels_) {
                 if (p.id == id) {
+                    if (enabled)
+                        disabled_overrides_.erase(id);
+                    else
+                        disabled_overrides_.insert(id);
                     changed = p.enabled != enabled;
                     if (!changed)
                         break;
