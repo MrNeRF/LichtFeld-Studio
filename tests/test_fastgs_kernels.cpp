@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "adam_api.h"
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
@@ -13,7 +14,10 @@
 #include "rasterization/fastgs/utils/utils.h"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
@@ -21,6 +25,7 @@
 #include <random>
 #include <stdexcept>
 #include <torch/torch.h>
+#include <unordered_set>
 #include <vector>
 
 using namespace lfs::training;
@@ -1389,4 +1394,295 @@ TEST_F(FastGSDenseTileGradientTest, GradientDescent_DenseTile) {
     EXPECT_LT(loss_after, loss_before) << "Gradient descent should reduce loss";
     // Expect at least 10% reduction with 10 steps
     EXPECT_LT(loss_after, loss_before * 0.9f) << "Loss reduction too small - gradients may be wrong";
+}
+
+namespace {
+
+    // 1 LSB of (u, log_s) at the live block bounds, mapped through us_to_g1g2 at (0,0)+1LSB.
+    void joint_zero_decode_tol(const float* bb, const int bits, float& m_tol, float& v_tol) {
+        const float qmax = bits == 16 ? joint_adam::Codec16::kQMax : joint_adam::Codec8::kQMax;
+        const float du = (bb[1] - bb[0]) / qmax;
+        const float ds = (bb[3] - bb[2]) / qmax;
+        float m = 0.0f;
+        float v = 0.0f;
+        joint_adam::Codec16::us_to_g1g2(du, ds, m, v);
+        m_tol = std::max(std::abs(m) * 2.0f, 1e-6f);
+        v_tol = std::max(std::abs(v) * 2.0f, 1e-12f);
+    }
+
+    int64_t joint_sh_cell(const int p, const int k, const int c, const int slots) {
+        constexpr int R = 32;
+        const int slot = (p / R) * (slots * R) + k * R + (p % R);
+        return static_cast<int64_t>(slot) * 4 + c;
+    }
+
+    void fill_realistic_moments(std::vector<float>& m, std::vector<float>& v, const uint32_t seed) {
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<float> dm(-1e-3f, 1e-3f);
+        std::uniform_real_distribution<float> dv(1e-12f, 1e-4f);
+        for (size_t i = 0; i < m.size(); ++i) {
+            m[i] = dm(rng);
+            v[i] = dv(rng);
+        }
+    }
+
+    Tensor upload_u8(const std::vector<uint8_t>& host) {
+        auto t = Tensor::empty({host.size()}, Device::CPU, DataType::UInt8);
+        std::memcpy(t.ptr<uint8_t>(), host.data(), host.size());
+        return t.to(Device::CUDA);
+    }
+
+    Tensor upload_i64(const std::vector<int64_t>& host) {
+        auto t = Tensor::empty({host.size()}, Device::CPU, DataType::Int64);
+        std::memcpy(t.ptr<int64_t>(), host.data(), host.size() * sizeof(int64_t));
+        return t.to(Device::CUDA);
+    }
+
+    void expect_bounds_include_zero(const float* bb, const char* label) {
+        EXPECT_LE(bb[0], 0.0f) << label << " umin";
+        EXPECT_GE(bb[1], 0.0f) << label << " umax";
+        EXPECT_LE(bb[2], 0.0f) << label << " smin";
+        EXPECT_GE(bb[3], 0.0f) << label << " smax";
+    }
+
+    template <int BITS>
+    void expect_reset_cell_zero(const uint8_t* packed, const size_t cell, const float* bb,
+                                const char* label) {
+        float m = 0.0f;
+        float v = 0.0f;
+        joint_adam::Codec<BITS>::decode_g1g2(packed, cell, bb[0], bb[1], bb[2], bb[3], m, v);
+        float m_tol = 0.0f;
+        float v_tol = 0.0f;
+        joint_zero_decode_tol(bb, BITS, m_tol, v_tol);
+        EXPECT_NEAR(m, 0.0f, m_tol) << label << " cell=" << cell;
+        EXPECT_NEAR(v, 0.0f, v_tol) << label << " cell=" << cell;
+    }
+
+    template <int BITS>
+    void expect_live_cell_preserved(const uint8_t* packed, const size_t cell, const float* bb,
+                                    const float m0, const float v0, const char* label) {
+        float u0 = 0.0f;
+        float s0 = 0.0f;
+        joint_adam::Codec<BITS>::g1g2_to_us(m0, v0, u0, s0);
+        float u = 0.0f;
+        float s = 0.0f;
+        joint_adam::Codec<BITS>::decode_us(packed, cell, bb[0], bb[1], bb[2], bb[3], u, s);
+        const float qmax = joint_adam::Codec<BITS>::kQMax;
+        const float u_tol = 2.0f * (bb[1] - bb[0]) / qmax;
+        const float s_tol = 2.0f * (bb[3] - bb[2]) / qmax;
+        EXPECT_NEAR(u, u0, u_tol) << label << " cell=" << cell << " u";
+        EXPECT_NEAR(s, s0, s_tol) << label << " cell=" << cell << " log_s";
+    }
+
+} // namespace
+
+// fails when several threads re-encode the same 256-row block concurrently
+TEST(JointEncodeZero, Contiguous16BitMultiIndexSameBlock) {
+    constexpr int n_prims = 1024;
+    constexpr int n_attr = 3;
+    constexpr int bits = 16;
+    constexpr int kBS = joint_adam::kBlockSize;
+    const int n_blocks = static_cast<int>(joint_adam::n_bounds_for_prims(n_prims));
+    const int bpc = joint_adam::Codec16::kBytesPerCell;
+    const size_t n_cells = static_cast<size_t>(n_prims) * static_cast<size_t>(n_attr);
+
+    std::vector<float> m(n_cells);
+    std::vector<float> v(n_cells);
+    fill_realistic_moments(m, v, 20260816u);
+
+    std::vector<uint8_t> packed_h(n_cells * static_cast<size_t>(bpc), 0);
+    std::vector<float> bounds_h(static_cast<size_t>(n_blocks) * 4, 0.0f);
+    for (int b = 0; b < n_blocks; ++b) {
+        const int begin = b * kBS;
+        const int end = std::min(begin + kBS, n_prims);
+        const size_t n_block_cells = static_cast<size_t>(end - begin) * static_cast<size_t>(n_attr);
+        std::vector<float> g1(n_block_cells);
+        std::vector<float> g2(n_block_cells);
+        size_t t = 0;
+        for (int p = begin; p < end; ++p) {
+            for (int a = 0; a < n_attr; ++a) {
+                const size_t cell = static_cast<size_t>(p) * n_attr + static_cast<size_t>(a);
+                g1[t] = m[cell];
+                g2[t] = v[cell];
+                ++t;
+            }
+        }
+        float bb[4];
+        joint_adam::Codec16::reduce_bounds(g1.data(), g2.data(), n_block_cells, bb);
+        bounds_h[static_cast<size_t>(b) * 4 + 0] = bb[0];
+        bounds_h[static_cast<size_t>(b) * 4 + 1] = bb[1];
+        bounds_h[static_cast<size_t>(b) * 4 + 2] = bb[2];
+        bounds_h[static_cast<size_t>(b) * 4 + 3] = bb[3];
+        for (int p = begin; p < end; ++p) {
+            for (int a = 0; a < n_attr; ++a) {
+                const size_t cell = static_cast<size_t>(p) * n_attr + static_cast<size_t>(a);
+                joint_adam::Codec16::encode_g1g2(packed_h.data(), cell, m[cell], v[cell],
+                                                 bb[0], bb[1], bb[2], bb[3]);
+            }
+        }
+    }
+    const std::vector<uint8_t> packed_before = packed_h;
+    const std::vector<float> bounds_before = bounds_h;
+
+    std::vector<int64_t> indices;
+    indices.reserve(180);
+    for (int i = 0; i < 120; ++i)
+        indices.push_back(i);
+    for (int i = 0; i < 60; ++i)
+        indices.push_back(2 * kBS + i);
+    std::mt19937 shuf(424242u);
+    std::shuffle(indices.begin(), indices.end(), shuf);
+
+    auto packed = upload_u8(packed_h);
+    auto bounds = Tensor::from_vector(bounds_h,
+                                      {static_cast<size_t>(n_blocks), size_t{4}},
+                                      Device::CUDA);
+    auto idx = upload_i64(indices);
+
+    fast_lfs::optimizer::joint_encode_zero_rows_at_indices(
+        packed.ptr<uint8_t>(),
+        bounds.ptr<float>(),
+        idx.ptr<int64_t>(),
+        static_cast<int>(indices.size()),
+        n_attr,
+        bits,
+        n_prims,
+        nullptr);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    auto packed_cpu = packed.cpu();
+    auto bounds_cpu = bounds.cpu();
+    const auto* bytes = packed_cpu.ptr<uint8_t>();
+    const float* bb_all = bounds_cpu.ptr<float>();
+
+    const std::unordered_set<int64_t> reset(indices.begin(), indices.end());
+    for (int b : {0, 2}) {
+        const float* bb = bb_all + b * 4;
+        expect_bounds_include_zero(bb, "contiguous touched block");
+        const int begin = b * kBS;
+        const int end = begin + kBS;
+        for (int p = begin; p < end; ++p) {
+            for (int a = 0; a < n_attr; ++a) {
+                const size_t cell = static_cast<size_t>(p) * n_attr + static_cast<size_t>(a);
+                if (reset.count(p) != 0) {
+                    expect_reset_cell_zero<16>(bytes, cell, bb, "contiguous reset");
+                } else {
+                    expect_live_cell_preserved<16>(bytes, cell, bb, m[cell], v[cell],
+                                                   "contiguous live");
+                }
+            }
+        }
+    }
+
+    for (int b : {1, 3}) {
+        EXPECT_EQ(std::memcmp(bb_all + b * 4, bounds_before.data() + static_cast<size_t>(b) * 4,
+                              4 * sizeof(float)),
+                  0)
+            << "untouched bounds block " << b;
+        const size_t byte0 = static_cast<size_t>(b) * kBS * n_attr * static_cast<size_t>(bpc);
+        const size_t nbytes = static_cast<size_t>(kBS) * n_attr * static_cast<size_t>(bpc);
+        EXPECT_EQ(std::memcmp(bytes + byte0, packed_before.data() + byte0, nbytes), 0)
+            << "untouched packed block " << b;
+    }
+}
+
+// fails when several threads re-encode the same 256-row block concurrently
+TEST(JointEncodeZero, SwizzledShN8BitMultiIndexSameBlock) {
+    constexpr int n_prims = 512;
+    constexpr int slots = 2;
+    constexpr int bits = 8;
+    constexpr int kBS = joint_adam::kBlockSize;
+    const int n_blocks = static_cast<int>(joint_adam::n_bounds_for_prims(n_prims));
+    const int bpc = joint_adam::Codec8::kBytesPerCell;
+    const size_t n_cells = static_cast<size_t>(n_prims) * static_cast<size_t>(slots) * 4u;
+
+    std::vector<float> m(n_cells);
+    std::vector<float> v(n_cells);
+    fill_realistic_moments(m, v, 20260817u);
+
+    std::vector<uint8_t> packed_h(n_cells * static_cast<size_t>(bpc), 0);
+    std::vector<float> bounds_h(static_cast<size_t>(n_blocks) * 4, 0.0f);
+    for (int b = 0; b < n_blocks; ++b) {
+        const int begin = b * kBS;
+        const int end = std::min(begin + kBS, n_prims);
+        std::vector<float> g1;
+        std::vector<float> g2;
+        g1.reserve(static_cast<size_t>(end - begin) * slots * 4);
+        g2.reserve(g1.capacity());
+        for (int p = begin; p < end; ++p) {
+            for (int k = 0; k < slots; ++k) {
+                for (int c = 0; c < 4; ++c) {
+                    const size_t cell = static_cast<size_t>(joint_sh_cell(p, k, c, slots));
+                    g1.push_back(m[cell]);
+                    g2.push_back(v[cell]);
+                }
+            }
+        }
+        float bb[4];
+        joint_adam::Codec8::reduce_bounds(g1.data(), g2.data(), g1.size(), bb);
+        bounds_h[static_cast<size_t>(b) * 4 + 0] = bb[0];
+        bounds_h[static_cast<size_t>(b) * 4 + 1] = bb[1];
+        bounds_h[static_cast<size_t>(b) * 4 + 2] = bb[2];
+        bounds_h[static_cast<size_t>(b) * 4 + 3] = bb[3];
+        for (int p = begin; p < end; ++p) {
+            for (int k = 0; k < slots; ++k) {
+                for (int c = 0; c < 4; ++c) {
+                    const size_t cell = static_cast<size_t>(joint_sh_cell(p, k, c, slots));
+                    joint_adam::Codec8::encode_g1g2(packed_h.data(), cell, m[cell], v[cell],
+                                                    bb[0], bb[1], bb[2], bb[3]);
+                }
+            }
+        }
+    }
+
+    std::vector<int64_t> indices;
+    indices.reserve(120);
+    for (int i = 0; i < 100; ++i)
+        indices.push_back(i);
+    for (int i = 0; i < 20; ++i)
+        indices.push_back(kBS + i);
+    std::mt19937 shuf(434343u);
+    std::shuffle(indices.begin(), indices.end(), shuf);
+
+    auto packed = upload_u8(packed_h);
+    auto bounds = Tensor::from_vector(bounds_h,
+                                      {static_cast<size_t>(n_blocks), size_t{4}},
+                                      Device::CUDA);
+    auto idx = upload_i64(indices);
+
+    fast_lfs::optimizer::joint_encode_zero_shN_at_indices(
+        packed.ptr<uint8_t>(),
+        bounds.ptr<float>(),
+        idx.ptr<int64_t>(),
+        static_cast<int>(indices.size()),
+        slots,
+        bits,
+        n_prims,
+        nullptr);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    auto packed_cpu = packed.cpu();
+    auto bounds_cpu = bounds.cpu();
+    const auto* bytes = packed_cpu.ptr<uint8_t>();
+    const float* bb_all = bounds_cpu.ptr<float>();
+
+    const std::unordered_set<int64_t> reset(indices.begin(), indices.end());
+    for (int b : {0, 1}) {
+        const float* bb = bb_all + b * 4;
+        expect_bounds_include_zero(bb, "shN touched block");
+        const int begin = b * kBS;
+        const int end = begin + kBS;
+        for (int p = begin; p < end; ++p) {
+            for (int k = 0; k < slots; ++k) {
+                for (int c = 0; c < 4; ++c) {
+                    const size_t cell = static_cast<size_t>(joint_sh_cell(p, k, c, slots));
+                    if (reset.count(p) != 0) {
+                        expect_reset_cell_zero<8>(bytes, cell, bb, "shN reset");
+                    } else {
+                        expect_live_cell_preserved<8>(bytes, cell, bb, m[cell], v[cell], "shN live");
+                    }
+                }
+            }
+        }
+    }
 }
