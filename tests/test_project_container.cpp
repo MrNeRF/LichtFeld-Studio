@@ -33,6 +33,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #ifndef _WIN32
@@ -648,6 +649,9 @@ namespace {
         return first;
     }
 
+    [[nodiscard]] std::optional<std::string>
+    error_field_string(const lfs::Error& error, std::string_view key);
+
     struct PayloadCapGuard {
         explicit PayloadCapGuard(const std::optional<std::uint64_t> value) {
             detail::set_max_payload_materialized_bytes_for_testing(value);
@@ -838,6 +842,109 @@ namespace {
         ASSERT_EQ(bounded->stream().gcount(),
                   static_cast<std::streamsize>(got.size()));
         EXPECT_EQ(got, payload);
+    }
+
+    TEST(ProjectContainerReader,
+         BoundedStreamReadsNoTableFramedPayloadBeyondMaterializeCap) {
+        const auto check = [](const Compression compression,
+                              const std::string_view name) {
+            TemporaryDirectory temporary;
+            const fs::path path =
+                temporary.path / (std::string(name) + "-no-table-cap.licht");
+            const auto payload = patterned_payload(64 * 1024);
+            write_framed_fixture(path, FOURCC_CKPT, 1200, payload, compression,
+                                 true, false, 1200);
+            ProjectReader reader = require_result(ProjectReader::open(path));
+            const ChunkInfo& chunk = reader.chunks().front();
+            EXPECT_EQ(chunk.compression, compression) << name;
+            ASSERT_FALSE(chunk.block_crc_table.has_value()) << name;
+            ASSERT_LT(chunk.stored_bytes, BLOCK_CRC_REQUIRED_AT) << name;
+            ASSERT_GT(chunk.uncompressed_bytes, 64u) << name;
+            const PayloadCapGuard cap(chunk.uncompressed_bytes - 1);
+            auto materialized = reader.read_chunk(chunk);
+            ASSERT_FALSE(materialized) << name;
+            EXPECT_EQ(materialized.error().code(),
+                      lfs::ErrorCode::ResourceExhausted)
+                << name;
+            auto bounded = reader.open_bounded_stream(chunk);
+            ASSERT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
+            expect_bounded_stream_matches(*bounded, payload);
+        };
+        check(Compression::ZstdFramed, "zstd-framed");
+        check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");
+    }
+
+    TEST(ProjectContainerReader, BoundedStreamRejectsNoTableFramedPayloadCrcMismatch) {
+        const auto check = [](const Compression compression,
+                              const std::string_view name) {
+            TemporaryDirectory temporary;
+            const fs::path path =
+                temporary.path / (std::string(name) + "-no-table-crc.licht");
+            const auto payload = patterned_payload(64 * 1024);
+            write_framed_fixture(path, FOURCC_CKPT, 1201, payload, compression,
+                                 true, false, 1201);
+            ProjectReader reader = require_result(ProjectReader::open(path));
+            const ChunkInfo& chunk = reader.chunks().front();
+            ASSERT_FALSE(chunk.block_crc_table.has_value()) << name;
+            ASSERT_GT(chunk.stored_bytes, 0u) << name;
+            const std::uint64_t corrupt_offset =
+                chunk.payload_offset + chunk.stored_bytes / 2;
+            const auto original = read_file_range(path, corrupt_offset, 1);
+            ASSERT_EQ(original.size(), 1u) << name;
+            write_file_range(path, corrupt_offset,
+                             std::array{original.front() ^ std::byte{0xff}});
+            auto bounded = reader.open_bounded_stream(chunk);
+            ASSERT_FALSE(bounded) << name;
+            const auto formatted = lfs::format_for_developer(bounded.error());
+            const auto field =
+                std::format("payload[{}].crc32c", chunk.key_string());
+            EXPECT_EQ(error_field_string(bounded.error(), "field"), field)
+                << formatted;
+            EXPECT_EQ(bounded.error().code(), lfs::ErrorCode::DataLoss) << name;
+            EXPECT_NE(formatted.find(std::format("expected 0x{:08x}",
+                                                 chunk.payload_crc32c)),
+                      std::string::npos)
+                << formatted;
+            EXPECT_NE(formatted.find("got 0x"), std::string::npos) << formatted;
+        };
+        check(Compression::ZstdFramed, "zstd-framed");
+        check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");
+    }
+
+    TEST(ProjectContainerReader,
+         BoundedStreamOpenAccountsStoredPrePassOnlyWithoutBlockTable) {
+        const auto measure_open = [](const bool with_table,
+                                     const std::string_view name) {
+            TemporaryDirectory temporary;
+            const fs::path path =
+                temporary.path / (std::string(name) + "-open-account.licht");
+            const auto payload = patterned_payload(64 * 1024);
+            write_framed_fixture(path, FOURCC_CKPT, 1202, payload,
+                                 Compression::ZstdFramed, true, with_table,
+                                 1202);
+            auto payload_reads = std::make_shared<std::atomic_uint64_t>(0);
+            ReaderOptions options;
+            options.payload_bytes_read = payload_reads;
+            ProjectReader reader =
+                require_result(ProjectReader::open(path, options));
+            const ChunkInfo& chunk = reader.chunks().front();
+            EXPECT_EQ(chunk.block_crc_table.has_value(), with_table) << name;
+            EXPECT_GT(chunk.stored_bytes, 0u) << name;
+            EXPECT_EQ(payload_reads->load(), 0u) << name;
+            auto bounded = reader.open_bounded_stream(chunk);
+            EXPECT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
+            return std::pair{payload_reads->load(), chunk.stored_bytes};
+        };
+
+        const auto [with_table_reads, with_table_stored] =
+            measure_open(true, "with-table");
+        EXPECT_LT(with_table_reads, with_table_stored);
+        EXPECT_EQ(with_table_reads, 0u);
+
+        const auto [no_table_reads, no_table_stored] =
+            measure_open(false, "no-table");
+        EXPECT_EQ(no_table_reads, no_table_stored);
+        EXPECT_GT(no_table_stored, 0u);
     }
 
     TEST(ProjectContainerReader, BoundedStreamRejectsCorruptFramedStoredBytes) {

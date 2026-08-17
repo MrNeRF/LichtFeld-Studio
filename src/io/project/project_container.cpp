@@ -2857,6 +2857,46 @@ namespace lfs::io::project {
             return {};
         }
 
+        // Stored-only integrity: one bounded pass over the payload range.
+        // Matches verify_chunk's payload CRC mismatch identity (field string
+        // and expected/actual hex). Does not decode framed records.
+        // payload_bytes_read is incremented before each block read, same as
+        // verify_chunk's stored CRC loop (the subsequent framed materialize
+        // in verify_chunk does not increment this counter).
+        lfs::Result<void> verify_stored_payload_crc32c(const ReaderState& state,
+                                                       const ChunkInfo& row) {
+            std::uint32_t running_crc = 0;
+            std::uint64_t relative = 0;
+            while (relative < row.stored_bytes) {
+                const std::uint64_t count =
+                    std::min<std::uint64_t>(BLOCK_CRC_BYTES,
+                                            row.stored_bytes - relative);
+                if (state.options.payload_bytes_read) {
+                    state.options.payload_bytes_read->fetch_add(
+                        count, std::memory_order_relaxed);
+                }
+                auto bytes = read_vector(*state.file,
+                                         row.payload_offset + relative, count,
+                                         state.physical_size,
+                                         state.selected.commit.info.committed_file_end,
+                                         "payload.verify",
+                                         BLOCK_CRC_BYTES);
+                if (!bytes) {
+                    return status_failure(std::move(bytes).error());
+                }
+                running_crc = crc32c(running_crc, bytes->data(), bytes->size());
+                relative += count;
+            }
+            if (running_crc != row.payload_crc32c) {
+                return status_failure(format_error(
+                    state.path, row.payload_offset,
+                    std::format("payload[{}].crc32c", row.key_string()),
+                    std::format("0x{:08x}", row.payload_crc32c),
+                    std::format("0x{:08x}", running_crc)));
+            }
+            return {};
+        }
+
         lfs::Result<void>
         require_supported_payload_access(const ProjectReader& reader) {
             if (reader.open_state() == OpenState::Open) {
@@ -5117,7 +5157,18 @@ namespace lfs::io::project {
                 std::to_string(row.uncompressed_bytes));
         }
         if (!row.block_crc_table.has_value()) {
-            if (auto verified = verify_chunk(row); !verified) {
+            // Framed: CRC the stored range in BLOCK_CRC_BYTES windows. Do not
+            // decode — ensure_table validates the record table on first use,
+            // and decompress_record checks ZSTD_getFrameContentSize == ub and
+            // decode size == ub when that record is read.
+            // Stored: verify_chunk does not decode and stays as-is.
+            if (framed) {
+                if (auto verified =
+                        verify_stored_payload_crc32c(*impl_->state, row);
+                    !verified) {
+                    return std::move(verified).error();
+                }
+            } else if (auto verified = verify_chunk(row); !verified) {
                 return std::move(verified).error();
             }
         }
