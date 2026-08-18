@@ -789,6 +789,23 @@ namespace lfs::python {
                      2);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
+        add_string(&Proxy::scene_upscaler,
+                   "scene_upscaler",
+                   "Scene Reconstruction",
+                   "Stable scene reconstruction backend identifier",
+                   "native");
+        add_string(&Proxy::scene_upscaler_preset,
+                   "scene_upscaler_preset",
+                   "Scene Reconstruction Preset",
+                   "Backend-specific scene reconstruction quality preset",
+                   "native");
+        add_float(&Proxy::scene_upscaler_scale,
+                  "scene_upscaler_scale",
+                  "Scene Reconstruction Input Scale",
+                  "Backend-owned input scale, independent of the base render scale",
+                  1.0,
+                  0.25,
+                  1.0);
         add_float(&Proxy::depth_view_min, "depth_view_min", "Depth Near", "Depth-map visualization near range",
                   lfs::rendering::DEFAULT_DEPTH_VIEW_MIN, 0.0, lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
         add_float(&Proxy::depth_view_max, "depth_view_max", "Depth Far", "Depth-map visualization far range",

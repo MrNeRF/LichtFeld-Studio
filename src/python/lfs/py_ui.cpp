@@ -41,6 +41,7 @@
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
 #include "rendering/render_constants.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
@@ -4809,6 +4810,39 @@ namespace lfs::python {
             "get_ui_scale_preference",
             []() -> float { return vis::loadUiScalePreference(); },
             "Get saved UI scale preference (0.0 = auto)");
+
+        m.def(
+            "get_scene_reconstruction_options",
+            [] {
+                nb::list backends;
+                for (const auto& descriptor : vis::sceneUpscalerDescriptors()) {
+                    nb::dict backend;
+                    backend["id"] = std::string(descriptor.id);
+                    backend["label_key"] = std::string(descriptor.label_key);
+                    backend["built_in"] = descriptor.built_in;
+                    nb::list presets;
+                    for (const auto& preset : descriptor.presets) {
+                        nb::dict item;
+                        item["id"] = std::string(preset.id);
+                        item["label_key"] = std::string(preset.label_key);
+                        item["input_scale"] = preset.input_scale;
+                        presets.append(item);
+                    }
+                    backend["presets"] = presets;
+                    backends.append(backend);
+                }
+                return backends;
+            },
+            "Get registered scene reconstruction backends and their presets");
+
+        m.def(
+            "get_scene_reconstruction_preset_preference",
+            [](const std::string& backend_id) {
+                nb::gil_scoped_release release;
+                return vis::loadSceneUpscalerPresetPreference(backend_id);
+            },
+            nb::arg("backend_id"),
+            "Get the saved preset for a scene reconstruction backend");
 
         m.def(
             "get_mcp_preferences",

@@ -4065,6 +4065,8 @@ namespace lfs::vis::gui {
 
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             const auto settings = rendering_manager->getSettings();
+            params.scene_upscaler = sceneUpscalerBackendFromId(settings.scene_upscaler)
+                                          .value_or(SceneUpscalerBackend::Native);
             params.background_color = settings.background_color;
             params.grid_enabled =
                 settings.show_grid &&

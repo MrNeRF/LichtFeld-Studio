@@ -287,6 +287,9 @@ def project_recent_files() -> list[str]:
 def project_clear_recent_files() -> None:
     """Clear the most-recently-used .licht project list"""
 
+def project_remove_recent_file(path: str) -> None:
+    """Remove one path from the most-recently-used .licht project list"""
+
 def project_autosave_recovery_disposition(path: str) -> str:
     """
     Return autosave recovery disposition for a .licht master path ("none", "offer", "stale_deleted", "invalid", "ambiguous", "busy", "unavailable")

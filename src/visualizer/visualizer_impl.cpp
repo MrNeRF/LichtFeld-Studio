@@ -36,6 +36,8 @@
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/model_renderability.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
+#include "preferences.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/builtin_tools.hpp"
@@ -272,6 +274,19 @@ namespace lfs::vis {
         // Set initial antialiasing
         RenderSettings initial_settings;
         initial_settings.antialiasing = options.antialiasing;
+        initial_settings.scene_upscaler = options.safe_mode
+                                              ? "native"
+                                              : loadSceneUpscalerPreference();
+        initial_settings.scene_upscaler_preset = options.safe_mode
+                                                     ? "native"
+                                                     : loadSceneUpscalerPresetPreference(
+                                                           initial_settings.scene_upscaler);
+        if (const auto backend = sceneUpscalerBackendFromId(initial_settings.scene_upscaler)) {
+            const auto preset = sceneUpscalerPreset(*backend, initial_settings.scene_upscaler_preset)
+                                    .value_or(defaultSceneUpscalerPreset(*backend));
+            initial_settings.scene_upscaler_preset = std::string(preset.id);
+            initial_settings.scene_upscaler_scale = preset.input_scale;
+        }
         initial_settings.gut = options.gut;
         initial_settings.raster_backend = options.gut
                                               ? lfs::rendering::GaussianRasterBackend::ThreeDgut
@@ -955,8 +970,16 @@ namespace lfs::vis {
                 if (!rendering_manager_)
                     return;
                 auto s = rendering_manager_->getSettings();
+                const std::string previous_upscaler = s.scene_upscaler;
+                const std::string previous_preset = s.scene_upscaler_preset;
                 vis::apply_proxy(s, proxy);
                 rendering_manager_->updateSettings(s);
+                const auto& applied = rendering_manager_->getSettings();
+                if (applied.scene_upscaler != previous_upscaler ||
+                    applied.scene_upscaler_preset != previous_preset) {
+                    saveSceneUpscalerPreference(applied.scene_upscaler,
+                                                applied.scene_upscaler_preset);
+                }
                 wakeMainLoop();
             });
         callback_cleanup_.add([] { vis::set_render_settings_callbacks(nullptr, nullptr); });

@@ -51,6 +51,11 @@ def preferences_panel_module(monkeypatch):
         set_mcp_calls=[],
         panel_enabled_calls=[],
         section_request="",
+        render_settings=SimpleNamespace(
+            scene_upscaler="native",
+            scene_upscaler_preset="native",
+        ),
+        scene_reconstruction_presets={"native": "native", "spatial": "quality"},
     )
 
     def set_mcp_preferences(enabled, expose_network, port, request_logging):
@@ -85,7 +90,45 @@ def preferences_panel_module(monkeypatch):
         ),
         take_preferences_section_request=take_preferences_section_request,
         tr=lambda key: key,
+        get_scene_reconstruction_options=lambda: [
+            {
+                "id": "native",
+                "label_key": "preferences.scene_reconstruction_off",
+                "presets": [
+                    {
+                        "id": "native",
+                        "label_key": "preferences.scene_reconstruction_off",
+                        "input_scale": 1.0,
+                    }
+                ],
+            },
+            {
+                "id": "spatial",
+                "label_key": "preferences.scene_reconstruction_spatial",
+                "presets": [
+                    {
+                        "id": "quality",
+                        "label_key": "preferences.scene_reconstruction_quality",
+                        "input_scale": 0.75,
+                    },
+                    {
+                        "id": "balanced",
+                        "label_key": "preferences.scene_reconstruction_balanced",
+                        "input_scale": 0.67,
+                    },
+                    {
+                        "id": "performance",
+                        "label_key": "preferences.scene_reconstruction_performance",
+                        "input_scale": 0.5,
+                    },
+                ],
+            },
+        ],
+        get_scene_reconstruction_preset_preference=lambda backend: (
+            state.scene_reconstruction_presets[backend]
+        ),
     )
+    lf_stub.get_render_settings = lambda: state.render_settings
 
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     sys.modules.pop("lfs_plugins.preferences_panel", None)
@@ -102,6 +145,36 @@ def test_language_selection_does_not_reload_active_language(preferences_panel_mo
     panel._set_language_index("1")
 
     assert state.set_language_calls == []
+
+
+def test_scene_reconstruction_uses_backend_specific_presets(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+
+    panel._set_scene_upscaler_index("1")
+    assert state.render_settings.scene_upscaler == "spatial"
+    assert state.render_settings.scene_upscaler_preset == "quality"
+
+    panel._set_scene_upscaler_preset_index("2")
+    assert state.render_settings.scene_upscaler_preset == "performance"
+
+    panel._set_scene_upscaler_index("0")
+    assert state.render_settings.scene_upscaler == "native"
+    assert state.render_settings.scene_upscaler_preset == "native"
+
+
+def test_scene_reconstruction_restores_the_backend_specific_preset(preferences_panel_module):
+    module, state = preferences_panel_module
+    state.scene_reconstruction_presets["spatial"] = "performance"
+    panel = module.PreferencesPanel()
+    panel._sync_scene_reconstruction_catalog()
+    panel._refresh_selection = lambda: None
+
+    panel._set_scene_upscaler_index("1")
+
+    assert state.render_settings.scene_upscaler == "spatial"
+    assert state.render_settings.scene_upscaler_preset == "performance"
 
 
 def test_language_selection_applies_a_different_language(
@@ -399,6 +472,17 @@ def test_preferences_content_scrolls_without_overlapping_the_fixed_footer():
     assert "min-height: 0;" in content_rule
     assert "overflow-y: auto;" in content_rule
     assert "padding-right: 6dp;" in content_rule
+
+
+def test_scene_reconstruction_catalog_comes_from_the_native_registry():
+    project_root = Path(__file__).parent.parent.parent
+    source = (project_root / "src" / "python" / "lfs" / "py_ui.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"get_scene_reconstruction_options"' in source
+    assert "sceneUpscalerDescriptors()" in source
+    assert '"get_scene_reconstruction_preset_preference"' in source
 
 
 def test_mcp_python_bindings_release_the_gil_around_native_work():

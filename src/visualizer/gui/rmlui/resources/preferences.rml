@@ -50,6 +50,28 @@
         </div>
       </div>
 
+      <div class="preferences-section" data-if="show_appearance">
+        <div class="section-header text-accent" data-class-is-expanded="scene_rendering_expanded" data-event-click="toggle_section('scene_rendering')">
+          <span class="section-arrow text-accent" data-class-is-expanded="scene_rendering_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.scene_rendering</span>
+        </div>
+        <div class="section-content" data-if="scene_rendering_expanded">
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.scene_reconstruction</span>
+            <select class="preferences-select" data-value="scene_upscaler_idx">
+              <option data-for="upscaler : scene_upscalers" data-attr-value="upscaler.index">{{ upscaler.label }}</option>
+            </select>
+          </div>
+          <div class="preferences-row" data-if="scene_upscaler_has_preset">
+            <span class="preferences-label">@tr:preferences.scene_reconstruction_preset</span>
+            <select class="preferences-select" data-value="scene_upscaler_preset_idx">
+              <option data-for="preset : scene_upscaler_presets" data-attr-value="preset.index">{{ preset.label }}</option>
+            </select>
+          </div>
+          <span class="preferences-description">@tr:preferences.scene_reconstruction_description</span>
+        </div>
+      </div>
+
       <div class="preferences-section" data-if="show_input">
         <div class="section-header text-accent" data-class-is-expanded="navigation_expanded" data-event-click="toggle_section('navigation')">
           <span class="section-arrow text-accent" data-class-is-expanded="navigation_expanded">&#x25B6;</span>
