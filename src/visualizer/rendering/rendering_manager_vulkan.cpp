@@ -1789,20 +1789,17 @@ namespace lfs::vis {
                 (void)frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
             }
         }
-        if (!has_render_content && !has_cached_viewport_output) {
+        // Scene state is authoritative here (contended frames returned above): nothing
+        // visible must clear the viewport even when a cached frame exists — a consolidated
+        // multi-splat scene keeps the same combined-model pointer when every node is
+        // hidden, so model-change tracking never clears the stale image.
+        if (!has_render_content) {
             clearVulkanViewportImageState();
             last_logged_vksplat_render_error_.clear();
             viewport_artifact_service_.clearViewportOutput();
             clearVulkanMeshFrame();
             render_lock.reset();
             return {};
-        }
-        if (!has_render_content && has_cached_viewport_output) {
-            if (frame_dirty != 0) {
-                dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
-            }
-            render_lock.reset();
-            return cached_frame_result();
         }
 
         const DirtyMask split_deferred_dirty = frame_dirty & ~DirtyFlag::SPLIT_POSITION;
