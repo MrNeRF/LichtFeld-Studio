@@ -241,6 +241,11 @@ namespace lfs::vis::project {
                 training) {
                 result.has_training_model =
                     training->has_value();
+            } else {
+                LOG_WARN(
+                    "Persisted SCNG training_model_uuid is unreadable: {}",
+                    developerError(
+                        training.error()));
             }
             if (const auto nodes =
                     document.scene_graph().nodes();
@@ -250,6 +255,10 @@ namespace lfs::vis::project {
                         *nodes, [](const auto& node) {
                             return node.type == "dataset";
                         });
+            } else {
+                LOG_WARN(
+                    "Persisted SCNG nodes are unreadable: {}",
+                    developerError(nodes.error()));
             }
             return result;
         }
@@ -1597,6 +1606,11 @@ namespace lfs::vis::project {
                 .open_epoch = epoch,
                 .retry = std::move(retry),
             };
+        LOG_WARN(
+            "Project dataset root is missing; offering a relocation prompt (missing={})",
+            lfs::core::path_to_utf8(
+                pending_dataset_relocation_
+                    ->missing_path));
         if (viewer_.getGuiManager()) {
             enqueueMissingDatasetDialog(epoch);
             return;

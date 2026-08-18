@@ -1567,12 +1567,17 @@ namespace lfs::vis {
     }
 
     FinishReason TrainerManager::resolvedRestoredFinishReason() const {
-        // UserStopped is a saved pause: resume unless the run already hit total.
+        // UserStopped and Error are saved pauses: resume unless the run
+        // already hit total. An error terminal save is a valid safe-point
+        // snapshot; the persisted Error value is provenance, not a restore
+        // directive. Only Completed still restores as Finished.
         if (restored_finish_reason_ &&
             *restored_finish_reason_ !=
                 lfs::io::project::TrainingFinishReason::None &&
             *restored_finish_reason_ !=
-                lfs::io::project::TrainingFinishReason::UserStopped) {
+                lfs::io::project::TrainingFinishReason::UserStopped &&
+            *restored_finish_reason_ !=
+                lfs::io::project::TrainingFinishReason::Error) {
             return fromIoFinishReason(*restored_finish_reason_);
         }
         int iteration = getCurrentIteration();
@@ -1603,6 +1608,22 @@ namespace lfs::vis {
         }
         const FinishReason finish_reason =
             resolvedRestoredFinishReason();
+        if (finish_reason == FinishReason::None &&
+            restored_finish_reason_ &&
+            *restored_finish_reason_ ==
+                lfs::io::project::TrainingFinishReason::
+                    Error) {
+            int iteration = getCurrentIteration();
+            if (checkpoint_baseline_iteration_ &&
+                *checkpoint_baseline_iteration_ >
+                    iteration) {
+                iteration =
+                    *checkpoint_baseline_iteration_;
+            }
+            LOG_INFO(
+                "Previous training run ended in an error; restoring as paused at iteration {}",
+                iteration);
+        }
         if (finish_reason != FinishReason::None &&
             getState() != TrainingState::Finished) {
             if (!state_machine_.transitionToFinished(finish_reason)) {

@@ -522,7 +522,11 @@ namespace {
         const std::filesystem::path& path,
         const lfs::core::Uuid& training_uuid,
         const lfs::core::Uuid& checkpoint_uuid,
-        const std::filesystem::path& dataset_path) {
+        const std::filesystem::path& dataset_path,
+        lfs::io::project::TrainingFinishReason
+            finish_reason =
+                lfs::io::project::
+                    TrainingFinishReason::None) {
         auto document = lfs::test::licht::make_empty_document(
             lfs::core::generate_uuid_v4(), 1);
         lfs::core::Scene source;
@@ -565,6 +569,12 @@ namespace {
                 checkpoint_uuid,
                 make_training_autosave_checkpoint_payload(
                     checkpoint_uuid, dataset_path)));
+        if (finish_reason !=
+            lfs::io::project::TrainingFinishReason::
+                None) {
+            document->edit_metrics().finish_reason =
+                finish_reason;
+        }
         auto options =
             lfs::test::licht::
                 deterministic_document_save_options(
@@ -6705,6 +6715,107 @@ namespace lfs::vis {
         EXPECT_EQ(manager->checkpointBaselineIteration(),
                   std::optional<int>{11});
         EXPECT_EQ(manager->getCurrentIteration(), 11);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ErrorFinishedCheckpointProjectReopensPausedAndResumable) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path / "error-finish-reopen.licht";
+        const auto dataset_path =
+            temporary_.path / "error-finish-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path,
+            lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(),
+            dataset_path,
+            lfs::io::project::TrainingFinishReason::
+                Error);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       viewer.getTrainerManager()
+                           ->hasTrainer();
+            }));
+
+        auto* const manager =
+            viewer.getTrainerManager();
+        ASSERT_NE(manager, nullptr);
+        EXPECT_TRUE(manager->isPaused());
+        EXPECT_TRUE(manager->canResume());
+        EXPECT_EQ(manager->checkpointBaselineIteration(),
+                  std::optional<int>{11});
+        EXPECT_EQ(manager->getCurrentIteration(), 11);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           CompletedCheckpointProjectStillReopensFinished) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path /
+            "completed-finish-reopen.licht";
+        const auto dataset_path =
+            temporary_.path / "completed-finish-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path,
+            lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(),
+            dataset_path,
+            lfs::io::project::TrainingFinishReason::
+                Completed);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       viewer.getTrainerManager()
+                           ->hasTrainer();
+            }));
+
+        auto* const manager =
+            viewer.getTrainerManager();
+        ASSERT_NE(manager, nullptr);
+        EXPECT_FALSE(manager->isPaused());
+        EXPECT_FALSE(manager->canResume());
+        EXPECT_TRUE(manager->isFinished());
     }
 
     TEST_F(VisualizerImplResetTest,

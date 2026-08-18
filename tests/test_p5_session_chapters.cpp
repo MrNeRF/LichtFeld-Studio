@@ -1590,8 +1590,11 @@ namespace {
     }
 
     TEST_F(P5MetricsRestoreTest,
-           ErrorRestoreDisablesResumeBothOrders) {
+           ErrorRestoreStaysPausedAndResumableBothOrders) {
         MetricsChapter metrics;
+        metrics.loss_history = {
+            {.iteration = 8, .value = 0.31f},
+        };
         metrics.accumulated_training_seconds =
             3.0;
         metrics.finish_reason =
@@ -1613,31 +1616,57 @@ namespace {
             return scene;
         };
 
+        const auto expect_resumable =
+            [](lfs::vis::TrainerManager& manager) {
+                EXPECT_EQ(
+                    manager.getState(),
+                    lfs::vis::TrainingState::Paused);
+                EXPECT_EQ(
+                    manager.getStateMachine()
+                        .getFinishReason(),
+                    lfs::vis::FinishReason::None);
+                EXPECT_TRUE(manager.canResume());
+                EXPECT_TRUE(manager.canPerform(
+                    lfs::vis::TrainingAction::Resume));
+                EXPECT_FALSE(manager.canStart());
+                EXPECT_FALSE(manager.isFinished());
+                EXPECT_NEAR(
+                    manager.getElapsedSeconds(),
+                    3.0f, 0.001f);
+                const auto snapshot =
+                    lfs::training::CommandCenter::
+                        instance()
+                            .snapshot();
+                EXPECT_EQ(snapshot.iteration, 8);
+                EXPECT_TRUE(snapshot.is_paused);
+                EXPECT_FALSE(snapshot.is_running);
+            };
+
         {
+            bool completed_emitted = false;
             auto scene = make_scene();
             lfs::vis::TrainerManager manager;
+            lfs::core::events::state::TrainingCompleted::
+                when([&](const auto&) {
+                    completed_emitted = true;
+                });
             manager.restoreProjectMetrics(metrics);
             manager.setTrainerFromCheckpoint(
                 std::make_unique<
                     lfs::training::Trainer>(
                     *scene),
                 8);
-            EXPECT_EQ(
-                manager.getState(),
-                lfs::vis::TrainingState::Finished);
-            EXPECT_EQ(
-                manager.getStateMachine()
-                    .getFinishReason(),
-                lfs::vis::FinishReason::Error);
-            EXPECT_FALSE(manager.canResume());
-            EXPECT_FALSE(manager.canStart());
-            EXPECT_NEAR(
-                manager.getElapsedSeconds(),
-                3.0f, 0.001f);
+            expect_resumable(manager);
+            EXPECT_FALSE(completed_emitted);
         }
         {
+            bool completed_emitted = false;
             auto scene = make_scene();
             lfs::vis::TrainerManager manager;
+            lfs::core::events::state::TrainingCompleted::
+                when([&](const auto&) {
+                    completed_emitted = true;
+                });
             manager.setTrainerFromCheckpoint(
                 std::make_unique<
                     lfs::training::Trainer>(
@@ -1647,15 +1676,8 @@ namespace {
                 manager.getState(),
                 lfs::vis::TrainingState::Paused);
             manager.restoreProjectMetrics(metrics);
-            EXPECT_EQ(
-                manager.getState(),
-                lfs::vis::TrainingState::Finished);
-            EXPECT_EQ(
-                manager.getStateMachine()
-                    .getFinishReason(),
-                lfs::vis::FinishReason::Error);
-            EXPECT_FALSE(manager.canResume());
-            EXPECT_FALSE(manager.canStart());
+            expect_resumable(manager);
+            EXPECT_FALSE(completed_emitted);
         }
     }
 
