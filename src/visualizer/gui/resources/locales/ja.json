@@ -1652,6 +1652,20 @@
     "tooltip_max_resolution": "サンプリンググリッドの最大解像度。値が高いほどクオリティ1.0でより細かいサンプリングが可能になります。",
     "effective_resolution": "実効解像度"
   },
+  "dataset_relocate": {
+    "title": "データセットが見つかりません",
+    "message": "プロジェクトの学習用データセットが見つかりませんでした。",
+    "expected_label": "想定される場所：",
+    "locate": "データセットを指定",
+    "invalid_title": "選択したフォルダーが一致しません",
+    "invalid_message": "選択したフォルダーには想定されたデータセットが含まれていません。",
+    "missing_label": "不足：",
+    "missing_images": "学習画像を含む images フォルダー",
+    "missing_cameras": "カメラメタデータ（COLMAP の sparse 再構成または transforms.json）",
+    "missing_point_cloud": "点群（points3D）",
+    "choose_again": "再選択",
+    "unavailable": "データセットの場所を更新できません。"
+  },
   "disk_space_dialog": {
     "error_label": "エラー",
     "checkpoint_save_failed": "チェックポイント保存失敗（反復 {}）",

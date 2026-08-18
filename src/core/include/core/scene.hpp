@@ -504,6 +504,11 @@ namespace lfs::core {
         [[nodiscard]] std::shared_ptr<const lfs::core::Camera> getCameraByUid(int uid) const;
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getAllCameras() const;
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getActiveCameras() const;
+        // Rebases every camera node's asset paths from old_root to new_root and
+        // refreshes the SceneNode mirror strings. Returns the number of cameras
+        // touched.
+        size_t rebaseCameraAssetPaths(const std::filesystem::path& old_root,
+                                      const std::filesystem::path& new_root);
         [[nodiscard]] size_t getActiveCameraCount() const;
         [[nodiscard]] CameraTrainingCounts getCameraTrainingCounts(NodeId camera_group_id) const;
         void setCameraTrainingEnabled(const std::string& name, bool enabled);

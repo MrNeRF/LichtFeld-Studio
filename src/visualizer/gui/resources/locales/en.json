@@ -1652,6 +1652,20 @@
     "tooltip_max_resolution": "Maximum resolution for the sampling grid. Higher values allow finer sampling at quality 1.0.",
     "effective_resolution": "Effective Resolution"
   },
+  "dataset_relocate": {
+    "title": "Dataset Not Found",
+    "message": "The project's training dataset was not found.",
+    "expected_label": "Expected location:",
+    "locate": "Locate Dataset",
+    "invalid_title": "Selected Folder Does Not Match",
+    "invalid_message": "The selected folder does not contain the expected dataset.",
+    "missing_label": "Missing:",
+    "missing_images": "images folder with training images",
+    "missing_cameras": "camera metadata (COLMAP sparse reconstruction or transforms.json)",
+    "missing_point_cloud": "point cloud (points3D)",
+    "choose_again": "Choose Again",
+    "unavailable": "The dataset location cannot be updated."
+  },
   "disk_space_dialog": {
     "error_label": "Error",
     "checkpoint_save_failed": "Checkpoint Save Failed (Iteration {})",

@@ -15,7 +15,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -193,6 +195,12 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         prepareForEditModeTransition();
 
+        [[nodiscard]] std::optional<std::filesystem::path>
+        pendingDatasetRelocationPath() const;
+        bool relocateProjectDataset(
+            const std::filesystem::path& new_root,
+            std::string* error_message = nullptr);
+
     private:
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
         friend class lfs::vis::VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
@@ -367,6 +375,44 @@ namespace lfs::vis::project {
         [[nodiscard]] static std::string
         hydrationName(Hydration state);
 
+        struct PendingDatasetRelocation {
+            std::filesystem::path missing_path;
+            std::uint64_t open_epoch = 0;
+            std::function<void(const std::filesystem::path&)>
+                retry;
+        };
+
+        void tryInstallTrainerFromHydratedProject(
+            SceneManager& scene_manager,
+            lfs::io::project::ProjectDocument& document,
+            const lfs::io::project::ProjectDocumentHydrationReport&
+                report);
+        void beginPendingDatasetRelocation(
+            std::filesystem::path missing_path,
+            std::function<void(const std::filesystem::path&)>
+                retry);
+        void armMissingDatasetReload(
+            std::filesystem::path missing_path,
+            std::filesystem::path output_path);
+        void armMissingCheckpointDataset(
+            std::filesystem::path missing_path,
+            lfs::core::Uuid checkpoint_uuid,
+            const lfs::core::param::TrainingParameters&
+                ckpt_params,
+            int expected_iteration);
+        void cancelPendingDatasetRelocation(
+            std::uint64_t epoch);
+        void enqueueMissingDatasetDialog(
+            std::uint64_t epoch);
+        void enqueueInvalidDatasetDialog(
+            std::uint64_t epoch,
+            const std::filesystem::path& chosen_path,
+            const std::string& detail);
+        void handleLocateDatasetPicker(
+            std::uint64_t epoch);
+        [[nodiscard]] bool isDatasetRelocationCurrent(
+            std::uint64_t epoch) const;
+
         VisualizerImpl& viewer_;
         std::shared_ptr<lfs::io::project::ProjectDocument> document_;
         ProjectLifecycleSettings settings_;
@@ -458,6 +504,8 @@ namespace lfs::vis::project {
         mutable std::mutex close_save_mutex_;
         std::string close_save_error_;
         std::string hydration_error_;
+        std::optional<PendingDatasetRelocation>
+            pending_dataset_relocation_;
     };
 
 } // namespace lfs::vis::project

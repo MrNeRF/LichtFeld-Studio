@@ -4691,6 +4691,22 @@ namespace lfs::core {
         return result;
     }
 
+    size_t Scene::rebaseCameraAssetPaths(const std::filesystem::path& old_root,
+                                         const std::filesystem::path& new_root) {
+        size_t touched = 0;
+        for (const auto& node : nodes_) {
+            if (node->type != NodeType::CAMERA || !node->camera) {
+                continue;
+            }
+            node->camera->rebase_asset_paths(old_root, new_root);
+            node->image_path = lfs::core::path_to_utf8(node->camera->image_path());
+            node->mask_path = lfs::core::path_to_utf8(node->camera->mask_path());
+            node->depth_path = lfs::core::path_to_utf8(node->camera->depth_path());
+            ++touched;
+        }
+        return touched;
+    }
+
     size_t Scene::getActiveCameraCount() const {
         size_t count = 0;
         for (const auto& node : nodes_) {

@@ -1652,6 +1652,20 @@
     "tooltip_max_resolution": "샘플링 그리드의 최대 해상도. 높은 값은 품질 1.0에서 더 세밀한 샘플링을 가능하게 합니다.",
     "effective_resolution": "유효 해상도"
   },
+  "dataset_relocate": {
+    "title": "데이터셋을 찾을 수 없음",
+    "message": "프로젝트의 학습 데이터셋을 찾을 수 없습니다.",
+    "expected_label": "예상 위치:",
+    "locate": "데이터셋 찾기",
+    "invalid_title": "선택한 폴더가 일치하지 않음",
+    "invalid_message": "선택한 폴더에 예상된 데이터셋이 없습니다.",
+    "missing_label": "누락:",
+    "missing_images": "학습 이미지가 있는 images 폴더",
+    "missing_cameras": "카메라 메타데이터(COLMAP 희소 재구성 또는 transforms.json)",
+    "missing_point_cloud": "포인트 클라우드(points3D)",
+    "choose_again": "다시 선택",
+    "unavailable": "데이터셋 위치를 업데이트할 수 없습니다."
+  },
   "disk_space_dialog": {
     "error_label": "오류",
     "checkpoint_save_failed": "체크포인트 저장 실패 (반복 {})",

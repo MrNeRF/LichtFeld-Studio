@@ -454,6 +454,43 @@ namespace lfs::core {
         return num_bytes;
     }
 
+    static bool path_is_under_root(const std::filesystem::path& stored,
+                                   const std::filesystem::path& old_root,
+                                   std::filesystem::path& relative_out) {
+        const auto relative =
+            stored.lexically_normal().lexically_relative(old_root.lexically_normal());
+        if (relative.empty()) {
+            return false;
+        }
+        const auto first = relative.begin();
+        if (first != relative.end() && *first == "..") {
+            return false;
+        }
+        relative_out = relative;
+        return true;
+    }
+
+    static void rebase_path_if_under(std::filesystem::path& stored,
+                                     const std::filesystem::path& old_root,
+                                     const std::filesystem::path& new_root) {
+        if (stored.empty()) {
+            return;
+        }
+        std::filesystem::path relative;
+        if (!path_is_under_root(stored, old_root, relative)) {
+            return;
+        }
+        stored = new_root / relative;
+    }
+
+    void Camera::rebase_asset_paths(const std::filesystem::path& old_root,
+                                    const std::filesystem::path& new_root) {
+        rebase_path_if_under(_image_path, old_root, new_root);
+        rebase_path_if_under(_mask_path, old_root, new_root);
+        rebase_path_if_under(_depth_path, old_root, new_root);
+        rebase_path_if_under(_normal_path, old_root, new_root);
+    }
+
     void Camera::set_mask_tensor(Tensor mask) {
         _in_memory_mask_raw = std::move(mask);
         // Force reprocessing on the next load_and_get_mask call.

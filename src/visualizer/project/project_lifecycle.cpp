@@ -20,6 +20,10 @@
 #include "gui/error_event_bridge.hpp"
 #include "gui/error_surface_types.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/string_keys.hpp"
+#include "gui/utils/native_file_dialog.hpp"
+#include "io/filesystem_utils.hpp"
+#include "io/loader.hpp"
 #include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
@@ -250,202 +254,144 @@ namespace lfs::vis::project {
             return result;
         }
 
-        // After display hydration, stream CKPT into a
-        // Trainer and install it as Paused. Soft-fails:
-        // keeps the display model, never dirties the
-        // document.
-        void tryInstallTrainerFromHydratedProject(
+        [[nodiscard]] std::optional<std::string>
+        describeDatasetFolderProblem(
+            const std::filesystem::path& root) {
+            if (lfs::io::Loader::getDatasetType(root) !=
+                lfs::io::DatasetType::Unknown) {
+                return std::nullopt;
+            }
+
+            const auto info =
+                lfs::io::detect_dataset_info(root);
+            std::vector<std::string> missing;
+            const bool has_images =
+                lfs::io::safe_is_directory(
+                    info.images_path) &&
+                info.image_count > 0;
+            if (!has_images) {
+                missing.push_back(LOC(
+                    lichtfeld::Strings::DatasetRelocate::
+                        MISSING_IMAGES));
+            }
+
+            const bool has_transforms =
+                lfs::io::safe_exists(
+                    root / "transforms.json") ||
+                lfs::io::safe_exists(
+                    root / "transforms_train.json");
+            bool has_colmap_cameras = false;
+            std::filesystem::path sparse_dir;
+            for (const auto& search :
+                 lfs::io::get_colmap_search_paths(root)) {
+                const bool has_camera_marker =
+                    !lfs::io::find_file_ci(
+                         search, "cameras.bin")
+                         .empty() ||
+                    !lfs::io::find_file_ci(
+                         search, "cameras.txt")
+                         .empty() ||
+                    !lfs::io::find_file_ci(
+                         search, "images.bin")
+                         .empty() ||
+                    !lfs::io::find_file_ci(
+                         search, "images.txt")
+                         .empty();
+                if (has_camera_marker) {
+                    has_colmap_cameras = true;
+                    if (sparse_dir.empty()) {
+                        sparse_dir = search;
+                    }
+                }
+                if (search != root &&
+                    lfs::io::safe_is_directory(search) &&
+                    sparse_dir.empty()) {
+                    sparse_dir = search;
+                }
+            }
+            if (!has_colmap_cameras && !has_transforms) {
+                missing.push_back(LOC(
+                    lichtfeld::Strings::DatasetRelocate::
+                        MISSING_CAMERAS));
+            }
+            if (!sparse_dir.empty()) {
+                const bool has_points =
+                    !lfs::io::find_file_ci(
+                         sparse_dir, "points3D.bin")
+                         .empty() ||
+                    !lfs::io::find_file_ci(
+                         sparse_dir, "points3D.txt")
+                         .empty();
+                if (!has_points) {
+                    missing.push_back(LOC(
+                        lichtfeld::Strings::
+                            DatasetRelocate::
+                                MISSING_POINT_CLOUD));
+                }
+            }
+
+            if (missing.empty()) {
+                return LOC(
+                    lichtfeld::Strings::DatasetRelocate::
+                        INVALID_MESSAGE);
+            }
+            std::string detail = missing.front();
+            for (std::size_t i = 1; i < missing.size();
+                 ++i) {
+                detail += ", ";
+                detail += missing[i];
+            }
+            return detail;
+        }
+
+        void installCheckpointTrainerWithDatasetRoot(
             VisualizerImpl& viewer,
             SceneManager& scene_manager,
             ProjectDocument& document,
-            const lfs::io::project::
-                ProjectDocumentHydrationReport&
-                    report) {
-            if (!report.trainer_state_pending ||
-                !report.checkpoint_uuid ||
-                !report.checkpoint_header) {
-                const auto persisted_dataset =
-                    inspectPersistedDatasetScene(
-                        document);
-                if (!persisted_dataset.has_dataset_node) {
-                    if (persisted_dataset
-                            .has_training_model) {
-                        notifyTrainerRestoreFailure(
-                            viewer,
-                            "Project has a training model but no checkpoint to resume");
-                    }
-                    return;
-                }
-
-                const auto dataset =
-                    document.project().dataset_reference();
-                if (!dataset || !*dataset) {
-                    notifyTrainerRestoreFailure(
-                        viewer,
-                        "Project dataset reference is missing");
-                    return;
-                }
-
-                auto* const parameter_manager =
-                    viewer.getParameterManager();
-                auto* const trainer_manager =
-                    viewer.getTrainerManager();
-                if (!parameter_manager ||
-                    !trainer_manager) {
-                    notifyTrainerRestoreFailure(
-                        viewer,
-                        "Project has no trainer manager or parameter manager");
-                    return;
-                }
-
-                auto dataset_root =
-                    resolveDatasetRootForTrainer(
-                        document,
-                        std::filesystem::path{});
-                if (!dataset_root ||
-                    dataset_root->empty() ||
-                    !std::filesystem::exists(*dataset_root)) {
-                    notifyTrainerRestoreFailure(
-                        viewer,
-                        dataset_root &&
-                                !dataset_root->empty()
-                            ? std::format(
-                                  "Dataset path does not exist: {}",
-                                  lfs::core::path_to_utf8(
-                                      *dataset_root))
-                            : "Project dataset reference could not be resolved");
-                    return;
-                }
-
-                auto* const data_loader =
-                    viewer.getDataLoader();
-                if (!data_loader) {
-                    notifyTrainerRestoreFailure(
-                        viewer,
-                        "Project dataset loader is unavailable");
-                    return;
-                }
-                auto params =
-                    parameter_manager->createForDataset(
-                        *dataset_root,
-                        report.pending_parameters.dataset
-                            .output_path);
-                data_loader->setParameters(params);
-                scene_manager.setDatasetPath(*dataset_root);
-                lfs::core::events::cmd::LoadFile{
-                    .path = *dataset_root,
-                    .is_dataset = true,
-                    .output_path = params.dataset
-                                       .output_path,
-                }
-                    .emit();
+            const lfs::core::Uuid& checkpoint_uuid,
+            lfs::core::param::TrainingParameters
+                ckpt_params,
+            const int expected_iteration,
+            const std::filesystem::path& dataset_root) {
+            const auto old_root =
+                ckpt_params.dataset.data_path;
+            if (!old_root.empty() &&
+                old_root.lexically_normal() !=
+                    dataset_root.lexically_normal()) {
+                const auto rebased =
+                    scene_manager.getScene()
+                        .rebaseCameraAssetPaths(
+                            old_root, dataset_root);
                 LOG_INFO(
-                    "Queued project dataset reload for trainer restoration; the hydrated scene will be rebuilt from the dataset (dataset={})",
-                    lfs::core::path_to_utf8(*dataset_root));
-                return;
+                    "Rebased {} camera asset path(s) from {} to {}",
+                    rebased,
+                    lfs::core::path_to_utf8(old_root),
+                    lfs::core::path_to_utf8(
+                        dataset_root));
             }
-            if (report.checkpoint_header->iteration <
-                0) {
-                notifyTrainerRestoreFailure(
-                    viewer,
-                    "Project CKPT iteration is negative");
-                return;
-            }
-            const auto* checkpoint =
-                document.find_checkpoint(
-                    *report.checkpoint_uuid);
-            if (!checkpoint) {
-                notifyTrainerRestoreFailure(
-                    viewer,
-                    "Project CKPT handle disappeared");
-                return;
-            }
-
-            std::optional<
-                lfs::core::
-                    CheckpointParametersLoadResult>
-                parsed_params;
-            auto params_visit =
-                checkpoint->visit_stream(
-                    [&](std::istream& source,
-                        const std::uint64_t bytes)
-                        -> lfs::Result<void> {
-                        parsed_params =
-                            lfs::core::
-                                load_checkpoint_params(
-                                    source, bytes);
-                        return {};
-                    });
-            if (!params_visit) {
-                notifyTrainerRestoreFailure(
-                    viewer,
-                    developerError(
-                        params_visit.error()));
-                return;
-            }
-            if (!parsed_params || !*parsed_params) {
-                notifyTrainerRestoreFailure(
-                    viewer,
-                    parsed_params
-                        ? parsed_params->error()
-                        : "CKPT parameter visitor did not run");
-                return;
-            }
-            auto ckpt_params =
-                std::move(**parsed_params);
-            ckpt_params.resume_checkpoint.reset();
-            if (const auto source =
-                    document.source_path()) {
-                ckpt_params.resume_project = *source;
-            }
-
-            const auto dataset_root =
-                resolveDatasetRootForTrainer(
-                    document,
-                    ckpt_params.dataset.data_path);
-            if (!dataset_root ||
-                dataset_root->empty() ||
-                !std::filesystem::exists(
-                    *dataset_root)) {
-                notifyTrainerRestoreFailure(
-                    viewer,
-                    dataset_root &&
-                            !dataset_root->empty()
-                        ? std::format(
-                              "Dataset path does not exist: {}",
-                              lfs::core::path_to_utf8(
-                                  *dataset_root))
-                        : "Project has no resolvable dataset root");
-                return;
-            }
-            ckpt_params.dataset.data_path =
-                *dataset_root;
+            ckpt_params.dataset.data_path = dataset_root;
 
             // Reset path authority without re-applying
             // PRMS onto the live trainer (ownership
             // matrix rule 3).
-            scene_manager.setDatasetPath(
-                *dataset_root);
+            scene_manager.setDatasetPath(dataset_root);
             if (auto* data_loader =
                     viewer.getDataLoader()) {
                 auto loader_params =
                     data_loader->getParameters();
                 loader_params.dataset.data_path =
-                    *dataset_root;
+                    dataset_root;
                 if (!ckpt_params.dataset.output_path
                          .empty()) {
-                    loader_params.dataset
-                        .output_path =
-                        ckpt_params.dataset
-                            .output_path;
+                    loader_params.dataset.output_path =
+                        ckpt_params.dataset.output_path;
                 }
-                data_loader->setParameters(
-                    loader_params);
+                data_loader->setParameters(loader_params);
             }
             if (auto* param_mgr =
                     viewer.getParameterManager()) {
-                param_mgr->getDatasetConfig()
-                    .data_path = *dataset_root;
+                param_mgr->getDatasetConfig().data_path =
+                    dataset_root;
             }
 
             auto* trainer_manager =
@@ -457,8 +403,7 @@ namespace lfs::vis::project {
                 return;
             }
             if (trainer_manager->hasTrainer()) {
-                if (!trainer_manager
-                         ->clearTrainer()) {
+                if (!trainer_manager->clearTrainer()) {
                     notifyTrainerRestoreFailure(
                         viewer,
                         "Previous training worker is still stopping");
@@ -470,18 +415,16 @@ namespace lfs::vis::project {
                 document.source_path()
                     ? lfs::core::path_to_utf8(
                           *document.source_path())
-                    : std::string{
-                          "project CKPT"};
+                    : std::string{"project CKPT"};
             auto installed =
                 lfs::training::
                     installTrainerFromProjectCheckpoint(
                         scene_manager.getScene(),
                         document,
-                        *report.checkpoint_uuid,
+                        checkpoint_uuid,
                         ckpt_params,
                         source_name,
-                        report.checkpoint_header
-                            ->iteration,
+                        expected_iteration,
                         std::nullopt,
                         makeViewerSplatTensorAllocator());
             if (!installed) {
@@ -491,10 +434,9 @@ namespace lfs::vis::project {
             }
             trainer_manager->setScene(
                 &scene_manager.getScene());
-            trainer_manager
-                ->setTrainerFromCheckpoint(
-                    std::move(installed->trainer),
-                    installed->iteration);
+            trainer_manager->setTrainerFromCheckpoint(
+                std::move(installed->trainer),
+                installed->iteration);
             if (!trainer_manager->hasTrainer()) {
                 notifyTrainerRestoreFailure(
                     viewer,
@@ -504,9 +446,164 @@ namespace lfs::vis::project {
             LOG_INFO(
                 "Project trainer restored at iteration {} (dataset={})",
                 installed->iteration,
-                lfs::core::path_to_utf8(
-                    *dataset_root));
+                lfs::core::path_to_utf8(dataset_root));
         }
+
+    } // namespace
+
+    // After display hydration, stream CKPT into a
+    // Trainer and install it as Paused. Soft-fails:
+    // keeps the display model, never dirties the
+    // document.
+    void ProjectLifecycle::tryInstallTrainerFromHydratedProject(
+        SceneManager& scene_manager,
+        lfs::io::project::ProjectDocument& document,
+        const lfs::io::project::
+            ProjectDocumentHydrationReport&
+                report) {
+        if (!report.trainer_state_pending ||
+            !report.checkpoint_uuid ||
+            !report.checkpoint_header) {
+            const auto persisted_dataset =
+                inspectPersistedDatasetScene(document);
+            if (!persisted_dataset.has_dataset_node) {
+                if (persisted_dataset.has_training_model) {
+                    notifyTrainerRestoreFailure(
+                        viewer_,
+                        "Project has a training model but no checkpoint to resume");
+                }
+                return;
+            }
+
+            const auto dataset =
+                document.project().dataset_reference();
+            if (!dataset || !*dataset) {
+                notifyTrainerRestoreFailure(
+                    viewer_,
+                    "Project dataset reference is missing");
+                return;
+            }
+
+            auto* const parameter_manager =
+                viewer_.getParameterManager();
+            auto* const trainer_manager =
+                viewer_.getTrainerManager();
+            if (!parameter_manager || !trainer_manager) {
+                notifyTrainerRestoreFailure(
+                    viewer_,
+                    "Project has no trainer manager or parameter manager");
+                return;
+            }
+
+            auto dataset_root =
+                resolveDatasetRootForTrainer(
+                    document, std::filesystem::path{});
+            if (!dataset_root || dataset_root->empty() ||
+                !std::filesystem::exists(*dataset_root)) {
+                if (dataset_root && !dataset_root->empty()) {
+                    armMissingDatasetReload(
+                        *dataset_root,
+                        report.pending_parameters.dataset
+                            .output_path);
+                } else {
+                    notifyTrainerRestoreFailure(
+                        viewer_,
+                        "Project dataset reference could not be resolved");
+                }
+                return;
+            }
+
+            auto* const data_loader = viewer_.getDataLoader();
+            if (!data_loader) {
+                notifyTrainerRestoreFailure(
+                    viewer_,
+                    "Project dataset loader is unavailable");
+                return;
+            }
+            auto params = parameter_manager->createForDataset(
+                *dataset_root,
+                report.pending_parameters.dataset.output_path);
+            data_loader->setParameters(params);
+            scene_manager.setDatasetPath(*dataset_root);
+            lfs::core::events::cmd::LoadFile{
+                .path = *dataset_root,
+                .is_dataset = true,
+                .output_path = params.dataset.output_path,
+            }
+                .emit();
+            LOG_INFO(
+                "Queued project dataset reload for trainer restoration; the hydrated scene will be rebuilt from the dataset (dataset={})",
+                lfs::core::path_to_utf8(*dataset_root));
+            return;
+        }
+        if (report.checkpoint_header->iteration < 0) {
+            notifyTrainerRestoreFailure(
+                viewer_, "Project CKPT iteration is negative");
+            return;
+        }
+        const auto* checkpoint =
+            document.find_checkpoint(*report.checkpoint_uuid);
+        if (!checkpoint) {
+            notifyTrainerRestoreFailure(
+                viewer_, "Project CKPT handle disappeared");
+            return;
+        }
+
+        std::optional<lfs::core::CheckpointParametersLoadResult>
+            parsed_params;
+        auto params_visit = checkpoint->visit_stream(
+            [&](std::istream& source, const std::uint64_t bytes)
+                -> lfs::Result<void> {
+                parsed_params = lfs::core::load_checkpoint_params(
+                    source, bytes);
+                return {};
+            });
+        if (!params_visit) {
+            notifyTrainerRestoreFailure(
+                viewer_, developerError(params_visit.error()));
+            return;
+        }
+        if (!parsed_params || !*parsed_params) {
+            notifyTrainerRestoreFailure(
+                viewer_,
+                parsed_params ? parsed_params->error()
+                              : "CKPT parameter visitor did not run");
+            return;
+        }
+        auto ckpt_params = std::move(**parsed_params);
+        ckpt_params.resume_checkpoint.reset();
+        if (const auto source = document.source_path()) {
+            ckpt_params.resume_project = *source;
+        }
+
+        const auto dataset_root = resolveDatasetRootForTrainer(
+            document, ckpt_params.dataset.data_path);
+        if (!dataset_root || dataset_root->empty() ||
+            !std::filesystem::exists(*dataset_root)) {
+            if (dataset_root && !dataset_root->empty()) {
+                armMissingCheckpointDataset(
+                    *dataset_root,
+                    *report.checkpoint_uuid,
+                    ckpt_params,
+                    report.checkpoint_header->iteration);
+            } else {
+                notifyTrainerRestoreFailure(
+                    viewer_,
+                    "Project has no resolvable dataset root");
+            }
+            return;
+        }
+        installCheckpointTrainerWithDatasetRoot(
+            viewer_,
+            scene_manager,
+            document,
+            *report.checkpoint_uuid,
+            std::move(ckpt_params),
+            report.checkpoint_header->iteration,
+            *dataset_root);
+    }
+
+    namespace {
 
         void bindRolePathReference(
             lfs::io::project::ReferencesChapter&
@@ -1310,6 +1407,7 @@ namespace lfs::vis::project {
         }
         recovery_prompt_pending_ = false;
         epoch_.fetch_add(1, std::memory_order_acq_rel);
+        pending_dataset_relocation_.reset();
         project_write_thread_.request_stop();
         if (project_write_thread_.joinable()) {
             project_write_thread_.join();
@@ -1430,6 +1528,349 @@ namespace lfs::vis::project {
                 "project.dirty");
         }
         return {};
+    }
+
+    std::optional<std::filesystem::path>
+    ProjectLifecycle::pendingDatasetRelocationPath()
+        const {
+        if (!isDatasetRelocationCurrent(
+                epoch_.load(std::memory_order_acquire))) {
+            return std::nullopt;
+        }
+        return pending_dataset_relocation_->missing_path;
+    }
+
+    bool ProjectLifecycle::relocateProjectDataset(
+        const std::filesystem::path& new_root,
+        std::string* error_message) {
+        const auto set_error = [&](std::string message) {
+            if (error_message) {
+                *error_message = std::move(message);
+            }
+        };
+        const auto epoch =
+            epoch_.load(std::memory_order_acquire);
+        if (!pending_dataset_relocation_) {
+            set_error(LOC(
+                lichtfeld::Strings::DatasetRelocate::
+                    UNAVAILABLE));
+            return false;
+        }
+        if (pending_dataset_relocation_->open_epoch !=
+            epoch) {
+            pending_dataset_relocation_.reset();
+            set_error(LOC(
+                lichtfeld::Strings::DatasetRelocate::
+                    UNAVAILABLE));
+            return false;
+        }
+        if (auto problem =
+                describeDatasetFolderProblem(new_root)) {
+            set_error(std::move(*problem));
+            return false;
+        }
+        auto retry =
+            std::move(pending_dataset_relocation_->retry);
+        pending_dataset_relocation_.reset();
+        retry(new_root);
+        return true;
+    }
+
+    bool ProjectLifecycle::isDatasetRelocationCurrent(
+        const std::uint64_t epoch) const {
+        return pending_dataset_relocation_ &&
+               pending_dataset_relocation_->open_epoch ==
+                   epoch &&
+               epoch_.load(std::memory_order_acquire) ==
+                   epoch;
+    }
+
+    void ProjectLifecycle::beginPendingDatasetRelocation(
+        std::filesystem::path missing_path,
+        std::function<void(const std::filesystem::path&)>
+            retry) {
+        const auto epoch =
+            epoch_.load(std::memory_order_acquire);
+        pending_dataset_relocation_ =
+            PendingDatasetRelocation{
+                .missing_path = std::move(missing_path),
+                .open_epoch = epoch,
+                .retry = std::move(retry),
+            };
+        if (viewer_.getGuiManager()) {
+            enqueueMissingDatasetDialog(epoch);
+            return;
+        }
+        notifyTrainerRestoreFailure(
+            viewer_,
+            std::format(
+                "Dataset path does not exist: {}",
+                lfs::core::path_to_utf8(
+                    pending_dataset_relocation_
+                        ->missing_path)));
+    }
+
+    void ProjectLifecycle::armMissingDatasetReload(
+        std::filesystem::path missing_path,
+        std::filesystem::path output_path) {
+        const auto epoch =
+            epoch_.load(std::memory_order_acquire);
+        beginPendingDatasetRelocation(
+            std::move(missing_path),
+            [this, epoch,
+             output_path = std::move(output_path)](
+                const std::filesystem::path& new_root) {
+                if (!viewer_.postWork({
+                        .run =
+                            [this, epoch, output_path,
+                             new_root] {
+                                if (epoch_.load(
+                                        std::memory_order_acquire) !=
+                                    epoch) {
+                                    return;
+                                }
+                                auto* parameter_manager =
+                                    viewer_
+                                        .getParameterManager();
+                                auto* data_loader =
+                                    viewer_.getDataLoader();
+                                auto* scene_manager =
+                                    viewer_
+                                        .getSceneManager();
+                                if (!parameter_manager ||
+                                    !data_loader ||
+                                    !scene_manager) {
+                                    notifyTrainerRestoreFailure(
+                                        viewer_,
+                                        "Project dataset loader is unavailable");
+                                    return;
+                                }
+                                auto params =
+                                    parameter_manager
+                                        ->createForDataset(
+                                            new_root,
+                                            output_path);
+                                data_loader->setParameters(
+                                    params);
+                                scene_manager->setDatasetPath(
+                                    new_root);
+                                lfs::core::events::cmd::
+                                    LoadFile{
+                                        .path = new_root,
+                                        .is_dataset = true,
+                                        .output_path =
+                                            params.dataset
+                                                .output_path,
+                                    }
+                                        .emit();
+                                LOG_INFO(
+                                    "Queued project dataset reload for trainer restoration; the hydrated scene will be rebuilt from the dataset (dataset={})",
+                                    lfs::core::path_to_utf8(
+                                        new_root));
+                            },
+                        .cancel = {},
+                    })) {
+                    notifyTrainerRestoreFailure(
+                        viewer_,
+                        "Project dataset loader is unavailable");
+                }
+            });
+    }
+
+    void ProjectLifecycle::armMissingCheckpointDataset(
+        std::filesystem::path missing_path,
+        lfs::core::Uuid checkpoint_uuid,
+        const lfs::core::param::TrainingParameters&
+            ckpt_params,
+        const int expected_iteration) {
+        const auto epoch =
+            epoch_.load(std::memory_order_acquire);
+        beginPendingDatasetRelocation(
+            std::move(missing_path),
+            [this, epoch, checkpoint_uuid, ckpt_params,
+             expected_iteration](
+                const std::filesystem::path& new_root) {
+                if (!viewer_.postWork({
+                        .run =
+                            [this, epoch, checkpoint_uuid,
+                             ckpt_params,
+                             expected_iteration,
+                             new_root] {
+                                if (epoch_.load(
+                                        std::memory_order_acquire) !=
+                                    epoch) {
+                                    return;
+                                }
+                                if (!document_ ||
+                                    !document_
+                                         ->find_checkpoint(
+                                             checkpoint_uuid)) {
+                                    notifyTrainerRestoreFailure(
+                                        viewer_,
+                                        "Project CKPT handle disappeared");
+                                    return;
+                                }
+                                auto* scene_manager =
+                                    viewer_
+                                        .getSceneManager();
+                                if (!scene_manager) {
+                                    notifyTrainerRestoreFailure(
+                                        viewer_,
+                                        "No trainer manager available");
+                                    return;
+                                }
+                                installCheckpointTrainerWithDatasetRoot(
+                                    viewer_,
+                                    *scene_manager,
+                                    *document_,
+                                    checkpoint_uuid,
+                                    ckpt_params,
+                                    expected_iteration,
+                                    new_root);
+                            },
+                        .cancel = {},
+                    })) {
+                    notifyTrainerRestoreFailure(
+                        viewer_,
+                        "No trainer manager available");
+                }
+            });
+    }
+
+    void ProjectLifecycle::cancelPendingDatasetRelocation(
+        const std::uint64_t epoch) {
+        if (!isDatasetRelocationCurrent(epoch)) {
+            return;
+        }
+        const auto missing_path =
+            pending_dataset_relocation_->missing_path;
+        pending_dataset_relocation_.reset();
+        notifyTrainerRestoreFailure(
+            viewer_,
+            std::format(
+                "Dataset path does not exist: {}",
+                lfs::core::path_to_utf8(missing_path)));
+    }
+
+    void ProjectLifecycle::enqueueMissingDatasetDialog(
+        const std::uint64_t epoch) {
+        auto* gui = viewer_.getGuiManager();
+        if (!gui || !isDatasetRelocationCurrent(epoch)) {
+            return;
+        }
+        namespace Keys = lichtfeld::Strings::DatasetRelocate;
+        const auto missing_utf8 = lfs::core::path_to_utf8(
+            pending_dataset_relocation_->missing_path);
+        lfs::core::ModalRequest request;
+        request.title = LOC(Keys::TITLE);
+        request.body_rml = std::format(
+            "<div>{}</div>"
+            "<div class=\"content-row\"><span class=\"dim-text\">{} </span>{}</div>",
+            lfs::vis::gui::escapeRmlText(LOC(Keys::MESSAGE)),
+            lfs::vis::gui::escapeRmlText(
+                LOC(Keys::EXPECTED_LABEL)),
+            lfs::vis::gui::escapeRmlText(missing_utf8));
+        request.style = lfs::core::ModalStyle::Warning;
+        request.width_dp = 520;
+        request.buttons = {
+            {LOC(lichtfeld::Strings::Common::CANCEL),
+             "secondary"},
+            {LOC(Keys::LOCATE), "primary"},
+        };
+        request.on_result =
+            [this, epoch](const lfs::core::ModalResult&
+                              result) {
+                if (!isDatasetRelocationCurrent(epoch)) {
+                    return;
+                }
+                if (result.button_label ==
+                    LOC(lichtfeld::Strings::DatasetRelocate::
+                            LOCATE)) {
+                    handleLocateDatasetPicker(epoch);
+                    return;
+                }
+                cancelPendingDatasetRelocation(epoch);
+            };
+        request.on_cancel = [this, epoch] {
+            cancelPendingDatasetRelocation(epoch);
+        };
+        gui->enqueueModal(std::move(request));
+    }
+
+    void ProjectLifecycle::enqueueInvalidDatasetDialog(
+        const std::uint64_t epoch,
+        const std::filesystem::path& chosen_path,
+        const std::string& detail) {
+        auto* gui = viewer_.getGuiManager();
+        if (!gui || !isDatasetRelocationCurrent(epoch)) {
+            return;
+        }
+        namespace Keys = lichtfeld::Strings::DatasetRelocate;
+        lfs::core::ModalRequest request;
+        request.title = LOC(Keys::INVALID_TITLE);
+        request.body_rml = std::format(
+            "<div>{}</div>"
+            "<div class=\"content-row\"><span class=\"dim-text\">{} </span>{}</div>"
+            "<div class=\"content-row\"><span class=\"dim-text\">{}</span></div>",
+            lfs::vis::gui::escapeRmlText(
+                LOC(Keys::INVALID_MESSAGE)),
+            lfs::vis::gui::escapeRmlText(
+                LOC(Keys::MISSING_LABEL)),
+            lfs::vis::gui::escapeRmlText(detail),
+            lfs::vis::gui::escapeRmlText(
+                lfs::core::path_to_utf8(chosen_path)));
+        request.style = lfs::core::ModalStyle::Error;
+        request.width_dp = 520;
+        request.buttons = {
+            {LOC(lichtfeld::Strings::Common::CANCEL),
+             "secondary"},
+            {LOC(Keys::CHOOSE_AGAIN), "primary"},
+        };
+        request.on_result =
+            [this, epoch](const lfs::core::ModalResult&
+                              result) {
+                if (!isDatasetRelocationCurrent(epoch)) {
+                    return;
+                }
+                if (result.button_label ==
+                    LOC(lichtfeld::Strings::DatasetRelocate::
+                            CHOOSE_AGAIN)) {
+                    handleLocateDatasetPicker(epoch);
+                    return;
+                }
+                cancelPendingDatasetRelocation(epoch);
+            };
+        request.on_cancel = [this, epoch] {
+            cancelPendingDatasetRelocation(epoch);
+        };
+        gui->enqueueModal(std::move(request));
+    }
+
+    void ProjectLifecycle::handleLocateDatasetPicker(
+        const std::uint64_t epoch) {
+        if (!isDatasetRelocationCurrent(epoch)) {
+            return;
+        }
+        const auto default_path =
+            pending_dataset_relocation_->missing_path
+                .parent_path();
+        const auto chosen =
+            lfs::vis::gui::OpenDatasetFolderDialog(
+                default_path);
+        if (chosen.empty()) {
+            enqueueMissingDatasetDialog(epoch);
+            return;
+        }
+        std::string error_message;
+        if (relocateProjectDataset(
+                chosen, &error_message)) {
+            return;
+        }
+        if (!isDatasetRelocationCurrent(epoch)) {
+            return;
+        }
+        enqueueInvalidDatasetDialog(
+            epoch, chosen, error_message);
     }
 
     lfs::Result<void>
@@ -4695,6 +5136,7 @@ namespace lfs::vis::project {
             epoch_.fetch_add(
                 1, std::memory_order_acq_rel) +
             1;
+        pending_dataset_relocation_.reset();
         hydration_.store(
             Hydration::ShellReady,
             std::memory_order_release);
@@ -5056,8 +5498,8 @@ namespace lfs::vis::project {
                                             epoch &&
                                         document_ == document) {
                                         tryInstallTrainerFromHydratedProject(
-                                            viewer_, *manager,
-                                            *document, report);
+                                            *manager, *document,
+                                            report);
                                     }
                                     const auto trainer_restored_at =
                                         std::chrono::steady_clock::
@@ -5315,6 +5757,7 @@ namespace lfs::vis::project {
         recovery_prompt_pending_ = false;
         epoch_.fetch_add(
             1, std::memory_order_acq_rel);
+        pending_dataset_relocation_.reset();
         hydration_.store(
             Hydration::Empty,
             std::memory_order_release);

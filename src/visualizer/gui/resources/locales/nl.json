@@ -1652,6 +1652,20 @@
     "tooltip_max_resolution": "Maximale resolutie voor het bemonsteringsraster. Hogere waarden maken fijnere bemonstering mogelijk bij kwaliteit 1.0.",
     "effective_resolution": "Effectieve resolutie"
   },
+  "dataset_relocate": {
+    "title": "Dataset niet gevonden",
+    "message": "De trainingsdataset van het project is niet gevonden.",
+    "expected_label": "Verwachte locatie:",
+    "locate": "Dataset zoeken",
+    "invalid_title": "Geselecteerde map komt niet overeen",
+    "invalid_message": "De geselecteerde map bevat niet de verwachte dataset.",
+    "missing_label": "Ontbreekt:",
+    "missing_images": "map met trainingsafbeeldingen",
+    "missing_cameras": "camerametagegevens (COLMAP sparse reconstructie of transforms.json)",
+    "missing_point_cloud": "puntenwolk (points3D)",
+    "choose_again": "Opnieuw kiezen",
+    "unavailable": "De datasetlocatie kan niet worden bijgewerkt."
+  },
   "disk_space_dialog": {
     "error_label": "Fout",
     "checkpoint_save_failed": "Checkpoint opslaan mislukt (iteratie {})",

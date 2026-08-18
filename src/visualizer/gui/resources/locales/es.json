@@ -1652,6 +1652,20 @@
     "tooltip_max_resolution": "Resolución máxima para la cuadrícula de muestreo. Los valores más altos permiten un muestreo más fino a calidad 1.0.",
     "effective_resolution": "Resolución efectiva"
   },
+  "dataset_relocate": {
+    "title": "Dataset no encontrado",
+    "message": "No se encontró el dataset de entrenamiento del proyecto.",
+    "expected_label": "Ubicación esperada:",
+    "locate": "Localizar dataset",
+    "invalid_title": "La carpeta seleccionada no coincide",
+    "invalid_message": "La carpeta seleccionada no contiene el dataset esperado.",
+    "missing_label": "Falta:",
+    "missing_images": "carpeta de imágenes con imágenes de entrenamiento",
+    "missing_cameras": "metadatos de cámara (reconstrucción dispersa COLMAP o transforms.json)",
+    "missing_point_cloud": "nube de puntos (points3D)",
+    "choose_again": "Elegir de nuevo",
+    "unavailable": "No se puede actualizar la ubicación del dataset."
+  },
   "disk_space_dialog": {
     "error_label": "Error",
     "checkpoint_save_failed": "Error al guardar el punto de control (iteración {})",

@@ -1652,6 +1652,20 @@
     "tooltip_max_resolution": "Résolution maximale pour la grille d'échantillonnage. Des valeurs plus élevées permettent un échantillonnage plus fin à qualité 1.0.",
     "effective_resolution": "Résolution effective"
   },
+  "dataset_relocate": {
+    "title": "Dataset introuvable",
+    "message": "Le dataset d'entraînement du projet est introuvable.",
+    "expected_label": "Emplacement attendu :",
+    "locate": "Localiser le dataset",
+    "invalid_title": "Le dossier sélectionné ne correspond pas",
+    "invalid_message": "Le dossier sélectionné ne contient pas le dataset attendu.",
+    "missing_label": "Manquant :",
+    "missing_images": "dossier d'images avec les images d'entraînement",
+    "missing_cameras": "métadonnées de caméra (reconstruction éparse COLMAP ou transforms.json)",
+    "missing_point_cloud": "nuage de points (points3D)",
+    "choose_again": "Choisir à nouveau",
+    "unavailable": "L'emplacement du dataset ne peut pas être mis à jour."
+  },
   "disk_space_dialog": {
     "error_label": "Erreur",
     "checkpoint_save_failed": "Échec de la sauvegarde du checkpoint (itération {})",

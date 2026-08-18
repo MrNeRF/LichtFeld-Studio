@@ -156,6 +156,14 @@ namespace lfs::core {
         const std::filesystem::path& mask_path() const noexcept { return _mask_path; }
         const std::filesystem::path& depth_path() const noexcept { return _depth_path; }
         const std::filesystem::path& normal_path() const noexcept { return _normal_path; }
+
+        // Rewrites image/mask/depth/normal paths that live under old_root to the same
+        // relative location under new_root. Paths outside old_root are left unchanged.
+        // Sidecar caches and in-memory masks (set_mask_tensor) are not cleared: a
+        // dataset relocation keeps the same files, and injected masks do not originate
+        // from _mask_path.
+        void rebase_asset_paths(const std::filesystem::path& old_root,
+                                const std::filesystem::path& new_root);
         bool has_in_memory_mask() const noexcept { return _in_memory_mask_raw.is_valid(); }
         bool has_mask() const noexcept {
             return has_in_memory_mask() ||

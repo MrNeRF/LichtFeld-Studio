@@ -1652,6 +1652,20 @@
     "tooltip_max_resolution": "采样网格的最大分辨率。数值越高，质量1.0时的采样越精细。",
     "effective_resolution": "有效分辨率"
   },
+  "dataset_relocate": {
+    "title": "未找到数据集",
+    "message": "未找到该项目的训练数据集。",
+    "expected_label": "预期位置：",
+    "locate": "定位数据集",
+    "invalid_title": "所选文件夹不匹配",
+    "invalid_message": "所选文件夹不包含预期的数据集。",
+    "missing_label": "缺少：",
+    "missing_images": "包含训练图像的 images 文件夹",
+    "missing_cameras": "相机元数据（COLMAP 稀疏重建或 transforms.json）",
+    "missing_point_cloud": "点云（points3D）",
+    "choose_again": "重新选择",
+    "unavailable": "无法更新数据集位置。"
+  },
   "disk_space_dialog": {
     "error_label": "错误",
     "checkpoint_save_failed": "检查点保存失败（迭代 {}）",

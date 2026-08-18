@@ -786,6 +786,21 @@ namespace lichtfeld::Strings {
         inline constexpr const char* EDIT_DELTA = "sequencer.edit_delta";
     } // namespace Sequencer
 
+    namespace DatasetRelocate {
+        inline constexpr const char* TITLE = "dataset_relocate.title";
+        inline constexpr const char* MESSAGE = "dataset_relocate.message";
+        inline constexpr const char* EXPECTED_LABEL = "dataset_relocate.expected_label";
+        inline constexpr const char* LOCATE = "dataset_relocate.locate";
+        inline constexpr const char* INVALID_TITLE = "dataset_relocate.invalid_title";
+        inline constexpr const char* INVALID_MESSAGE = "dataset_relocate.invalid_message";
+        inline constexpr const char* MISSING_LABEL = "dataset_relocate.missing_label";
+        inline constexpr const char* MISSING_IMAGES = "dataset_relocate.missing_images";
+        inline constexpr const char* MISSING_CAMERAS = "dataset_relocate.missing_cameras";
+        inline constexpr const char* MISSING_POINT_CLOUD = "dataset_relocate.missing_point_cloud";
+        inline constexpr const char* CHOOSE_AGAIN = "dataset_relocate.choose_again";
+        inline constexpr const char* UNAVAILABLE = "dataset_relocate.unavailable";
+    } // namespace DatasetRelocate
+
     namespace DiskSpaceDialog {
         inline constexpr const char* ERROR_LABEL = "disk_space_dialog.error_label";
         inline constexpr const char* CHECKPOINT_SAVE_FAILED = "disk_space_dialog.checkpoint_save_failed";

@@ -1652,6 +1652,20 @@
     "tooltip_max_resolution": "Risoluzione massima per la griglia di campionamento. Valori più alti permettono un campionamento più fine a qualità 1.0.",
     "effective_resolution": "Risoluzione effettiva"
   },
+  "dataset_relocate": {
+    "title": "Dataset non trovato",
+    "message": "Il dataset di addestramento del progetto non è stato trovato.",
+    "expected_label": "Percorso previsto:",
+    "locate": "Individua dataset",
+    "invalid_title": "La cartella selezionata non corrisponde",
+    "invalid_message": "La cartella selezionata non contiene il dataset previsto.",
+    "missing_label": "Mancante:",
+    "missing_images": "cartella immagini con le immagini di addestramento",
+    "missing_cameras": "metadati della camera (ricostruzione sparsa COLMAP o transforms.json)",
+    "missing_point_cloud": "nuvola di punti (points3D)",
+    "choose_again": "Scegli di nuovo",
+    "unavailable": "Impossibile aggiornare il percorso del dataset."
+  },
   "disk_space_dialog": {
     "error_label": "Errore",
     "checkpoint_save_failed": "Salvataggio checkpoint fallito (iterazione {})",

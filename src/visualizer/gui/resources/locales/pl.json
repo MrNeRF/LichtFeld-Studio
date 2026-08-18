@@ -1652,6 +1652,20 @@
     "tooltip_max_resolution": "Maksymalna rozdzielczość siatki próbkowania. Wyższe wartości umożliwiają dokładniejsze próbkowanie przy jakości 1,0.",
     "effective_resolution": "Efektywna rozdzielczość"
   },
+  "dataset_relocate": {
+    "title": "Nie znaleziono zbioru danych",
+    "message": "Nie znaleziono zbioru danych treningowych projektu.",
+    "expected_label": "Oczekiwana lokalizacja:",
+    "locate": "Wskaż zbiór danych",
+    "invalid_title": "Wybrany folder nie pasuje",
+    "invalid_message": "Wybrany folder nie zawiera oczekiwanego zbioru danych.",
+    "missing_label": "Brakuje:",
+    "missing_images": "folder images z obrazami treningowymi",
+    "missing_cameras": "metadane kamery (rzadka rekonstrukcja COLMAP lub transforms.json)",
+    "missing_point_cloud": "chmura punktów (points3D)",
+    "choose_again": "Wybierz ponownie",
+    "unavailable": "Nie można zaktualizować lokalizacji zbioru danych."
+  },
   "disk_space_dialog": {
     "error_label": "Błąd",
     "checkpoint_save_failed": "Błąd zapisu punktu kontrolnego (iteracja {})",

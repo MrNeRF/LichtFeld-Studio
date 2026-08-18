@@ -1652,6 +1652,20 @@
     "tooltip_max_resolution": "Maximale Auflösung für das Abtastraster. Höhere Werte ermöglichen feinere Abtastung bei Qualität 1.0.",
     "effective_resolution": "Effektive Auflösung"
   },
+  "dataset_relocate": {
+    "title": "Datensatz nicht gefunden",
+    "message": "Der Trainingsdatensatz des Projekts wurde nicht gefunden.",
+    "expected_label": "Erwarteter Speicherort:",
+    "locate": "Datensatz suchen",
+    "invalid_title": "Ausgewählter Ordner stimmt nicht überein",
+    "invalid_message": "Der ausgewählte Ordner enthält nicht den erwarteten Datensatz.",
+    "missing_label": "Fehlt:",
+    "missing_images": "Bilderordner mit Trainingsbildern",
+    "missing_cameras": "Kamerametadaten (COLMAP Sparse Reconstruction oder transforms.json)",
+    "missing_point_cloud": "Punktwolke (points3D)",
+    "choose_again": "Erneut wählen",
+    "unavailable": "Der Datensatzspeicherort kann nicht aktualisiert werden."
+  },
   "disk_space_dialog": {
     "error_label": "Fehler",
     "checkpoint_save_failed": "Checkpoint-Speicherung fehlgeschlagen (Iteration {})",

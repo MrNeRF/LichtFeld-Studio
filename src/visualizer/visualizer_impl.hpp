@@ -285,6 +285,12 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
         friend class VisualizerImplResetTest_SelectedGaussiansAndSelectionToolSurviveSaveAndReopen_Test;
         friend class VisualizerImplResetTest_DatasetProjectWithoutCheckpointReloadsTrainer_Test;
+        friend class VisualizerImplResetTest_MissingDatasetProjectArmsRelocationInsteadOfImport_Test;
+        friend class VisualizerImplResetTest_RelocateProjectDatasetRestoresTrainerFromNewRoot_Test;
+        friend class VisualizerImplResetTest_RelocateRejectsFolderWithoutDatasetElements_Test;
+        friend class VisualizerImplResetTest_OpeningAnotherProjectClearsPendingRelocation_Test;
+        friend class VisualizerImplResetTest_MissingCheckpointDatasetProjectArmsRelocationInsteadOfInstall_Test;
+        friend class VisualizerImplResetTest_RelocateCheckpointProjectDatasetRestoresTrainerFromNewRoot_Test;
         friend class VisualizerImplResetTest_DatasetProjectWithoutReferenceIsNotRecoveredFromContainingDirectory_Test;
         friend class VisualizerImplResetTest_NonDatasetProjectInsideDatasetRootIsNotReimported_Test;
         friend class VisualizerImplResetTest_OpeningAnotherProjectCancelsPendingDatasetRestoreImport_Test;

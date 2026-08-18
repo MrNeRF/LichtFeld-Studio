@@ -313,7 +313,8 @@ namespace {
     }
 
     std::shared_ptr<lfs::core::Camera>
-    make_project_request_test_camera() {
+    make_project_request_test_camera(
+        const std::filesystem::path& image_path = {}) {
         const auto empty_distortion =
             lfs::core::Tensor::zeros(
                 {0}, lfs::core::Device::CPU,
@@ -326,7 +327,7 @@ namespace {
             100.0F, 100.0F, 32.0F, 32.0F,
             empty_distortion, empty_distortion,
             lfs::core::CameraModelType::PINHOLE,
-            "camera.png", std::filesystem::path{},
+            "camera.png", image_path,
             std::filesystem::path{}, 64, 64, 0);
     }
 
@@ -530,7 +531,8 @@ namespace {
             "Training cameras", root, 1);
         source.addCamera(
             "frame_0001.png", cameras,
-            make_project_request_test_camera());
+            make_project_request_test_camera(
+                dataset_path / "frame_0001.png"));
         const auto training = source.restoreNodeWithUuid(
             lfs::core::Scene::RestoreNodeDesc{
                 .uuid = training_uuid,
@@ -5984,6 +5986,444 @@ namespace lfs::vis {
         EXPECT_EQ(
             viewer.getTrainer()->getParams().optimization.iterations,
             1234);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           MissingDatasetProjectArmsRelocationInsteadOfImport) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path /
+            "dataset-missing-relocation.licht";
+        const auto dataset_path =
+            temporary_.path /
+            "dataset-missing-relocation-source";
+        const auto moved_path =
+            temporary_.path /
+            "dataset-missing-relocation-moved";
+        write_minimal_transforms_dataset(dataset_path);
+        write_dataset_project_without_checkpoint(
+            project_path, dataset_path);
+        std::filesystem::rename(dataset_path, moved_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen);
+            }));
+
+        EXPECT_FALSE(viewer.jobs().anyRunning(
+            JobType::Import));
+        EXPECT_FALSE(
+            viewer.getTrainerManager()->hasTrainer());
+        const auto pending =
+            viewer.project_lifecycle_
+                ->pendingDatasetRelocationPath();
+        ASSERT_TRUE(pending.has_value());
+        EXPECT_EQ(
+            pending->lexically_normal(),
+            dataset_path.lexically_normal());
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RelocateProjectDatasetRestoresTrainerFromNewRoot) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path /
+            "dataset-relocate-restore.licht";
+        const auto dataset_path =
+            temporary_.path /
+            "dataset-relocate-restore-source";
+        const auto moved_path =
+            temporary_.path /
+            "dataset-relocate-restore-moved";
+        write_minimal_transforms_dataset(dataset_path);
+        write_dataset_project_without_checkpoint(
+            project_path, dataset_path);
+        std::filesystem::rename(dataset_path, moved_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen);
+            }));
+
+        ASSERT_TRUE(
+            viewer.project_lifecycle_
+                ->pendingDatasetRelocationPath()
+                .has_value());
+        ASSERT_TRUE(
+            viewer.project_lifecycle_
+                ->relocateProjectDataset(moved_path))
+            << "relocateProjectDataset rejected a valid dataset";
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                viewer.getGuiManager()
+                    ->asyncTasks()
+                    .pollImportCompletion();
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       viewer.getTrainerManager()
+                           ->hasTrainer() &&
+                       !viewer.jobs().anyRunning(
+                           JobType::Import);
+            }));
+
+        EXPECT_FALSE(
+            viewer.project_lifecycle_
+                ->pendingDatasetRelocationPath()
+                .has_value());
+        EXPECT_TRUE(
+            viewer.getSceneManager()->hasDataset());
+        EXPECT_EQ(
+            viewer.getSceneManager()->getDatasetPath(),
+            moved_path);
+        ASSERT_NE(viewer.getTrainer(), nullptr);
+        EXPECT_EQ(
+            viewer.getTrainer()->getParams().optimization.iterations,
+            1234);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RelocateRejectsFolderWithoutDatasetElements) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path /
+            "dataset-relocate-reject.licht";
+        const auto dataset_path =
+            temporary_.path /
+            "dataset-relocate-reject-source";
+        const auto moved_path =
+            temporary_.path /
+            "dataset-relocate-reject-moved";
+        const auto empty_path =
+            temporary_.path /
+            "dataset-relocate-reject-empty";
+        write_minimal_transforms_dataset(dataset_path);
+        write_dataset_project_without_checkpoint(
+            project_path, dataset_path);
+        std::filesystem::rename(dataset_path, moved_path);
+        std::filesystem::create_directories(empty_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen);
+            }));
+
+        ASSERT_TRUE(
+            viewer.project_lifecycle_
+                ->pendingDatasetRelocationPath()
+                .has_value());
+        std::string error_message;
+        EXPECT_FALSE(
+            viewer.project_lifecycle_
+                ->relocateProjectDataset(
+                    empty_path, &error_message));
+        EXPECT_FALSE(error_message.empty());
+        const auto pending =
+            viewer.project_lifecycle_
+                ->pendingDatasetRelocationPath();
+        ASSERT_TRUE(pending.has_value());
+        EXPECT_EQ(
+            pending->lexically_normal(),
+            dataset_path.lexically_normal());
+        EXPECT_FALSE(
+            viewer.getTrainerManager()->hasTrainer());
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           OpeningAnotherProjectClearsPendingRelocation) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path /
+            "dataset-relocate-switch-a.licht";
+        const auto other_path =
+            temporary_.path /
+            "dataset-relocate-switch-b.licht";
+        const auto dataset_path =
+            temporary_.path /
+            "dataset-relocate-switch-source";
+        const auto moved_path =
+            temporary_.path /
+            "dataset-relocate-switch-moved";
+        write_minimal_transforms_dataset(dataset_path);
+        write_dataset_project_without_checkpoint(
+            project_path, dataset_path);
+        write_empty_project(other_path);
+        std::filesystem::rename(dataset_path, moved_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened_a = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened_a)
+            << lfs::format_for_developer(
+                   opened_a.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen);
+            }));
+
+        ASSERT_TRUE(
+            viewer.project_lifecycle_
+                ->pendingDatasetRelocationPath()
+                .has_value());
+
+        auto opened_b = viewer.projectOpen(
+            other_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened_b)
+            << lfs::format_for_developer(
+                   opened_b.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen);
+            }));
+
+        EXPECT_FALSE(
+            viewer.project_lifecycle_
+                ->pendingDatasetRelocationPath()
+                .has_value());
+        EXPECT_FALSE(
+            viewer.project_lifecycle_
+                ->relocateProjectDataset(moved_path));
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           MissingCheckpointDatasetProjectArmsRelocationInsteadOfInstall) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path /
+            "ckpt-missing-relocation.licht";
+        const auto dataset_path =
+            temporary_.path /
+            "ckpt-missing-relocation-source";
+        const auto moved_path =
+            temporary_.path /
+            "ckpt-missing-relocation-moved";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path,
+            lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(),
+            dataset_path);
+        std::filesystem::rename(dataset_path, moved_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen);
+            }));
+
+        EXPECT_FALSE(
+            viewer.getTrainerManager()->hasTrainer());
+        const auto pending =
+            viewer.project_lifecycle_
+                ->pendingDatasetRelocationPath();
+        ASSERT_TRUE(pending.has_value());
+        EXPECT_EQ(
+            pending->lexically_normal(),
+            dataset_path.lexically_normal());
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RelocateCheckpointProjectDatasetRestoresTrainerFromNewRoot) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path /
+            "ckpt-relocate-restore.licht";
+        const auto dataset_path =
+            temporary_.path /
+            "ckpt-relocate-restore-source";
+        const auto moved_path =
+            temporary_.path /
+            "ckpt-relocate-restore-moved";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path,
+            lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(),
+            dataset_path);
+        std::filesystem::rename(dataset_path, moved_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen);
+            }));
+
+        ASSERT_TRUE(
+            viewer.project_lifecycle_
+                ->pendingDatasetRelocationPath()
+                .has_value());
+        ASSERT_TRUE(
+            viewer.project_lifecycle_
+                ->relocateProjectDataset(moved_path))
+            << "relocateProjectDataset rejected a valid dataset";
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       viewer.getTrainerManager()
+                           ->hasTrainer();
+            }));
+
+        EXPECT_FALSE(
+            viewer.project_lifecycle_
+                ->pendingDatasetRelocationPath()
+                .has_value());
+        EXPECT_EQ(
+            viewer.getSceneManager()->getDatasetPath(),
+            moved_path);
+        auto* const manager = viewer.getTrainerManager();
+        ASSERT_NE(manager, nullptr);
+        EXPECT_TRUE(manager->isPaused());
+        EXPECT_TRUE(manager->canResume());
+        EXPECT_EQ(manager->checkpointBaselineIteration(),
+                  std::optional<int>{11});
+        EXPECT_EQ(manager->getCurrentIteration(), 11);
+
+        const auto cameras =
+            viewer.getSceneManager()
+                ->getScene()
+                .getActiveCameras();
+        ASSERT_FALSE(cameras.empty());
+        const auto moved_prefix =
+            moved_path.lexically_normal().string();
+        for (const auto& cam : cameras) {
+            ASSERT_NE(cam, nullptr);
+            const auto image =
+                cam->image_path()
+                    .lexically_normal()
+                    .string();
+            EXPECT_TRUE(image.starts_with(moved_prefix))
+                << image << " does not start with "
+                << moved_prefix;
+            EXPECT_TRUE(std::filesystem::exists(
+                cam->image_path()))
+                << cam->image_path();
+        }
     }
 
     TEST_F(VisualizerImplResetTest,
