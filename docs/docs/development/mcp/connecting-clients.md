@@ -119,6 +119,8 @@ If a bind fails, Preferences keeps the structured failure visible, identifies
 the attempted address and port, and does not advertise an active endpoint. A
 retry of the same configuration performs a real listener restart. Choose another
 port when the configured one is already in use or reserved by the operating system.
+The MCP listener deliberately claims single-process ownership of its address and
+port, so a second listener cannot silently share the configured endpoint.
 
 When request logging is enabled, complete JSONL records are appended to the
 current per-session file without rewriting earlier requests. Its path is shown
@@ -129,7 +131,8 @@ includes the source and destination socket IP addresses and ports. Parameters,
 tool names, payloads, free-form messages, and error details are not logged.
 Network addresses can identify devices and interfaces, so logging remains an
 explicit opt-in. Safe mode forces both the listener and request logging off
-without modifying the persisted configuration.
+without modifying the persisted configuration; the MCP section reports why and
+disables its configuration controls for the lifetime of that safe-mode process.
 
 ## After Connecting
 

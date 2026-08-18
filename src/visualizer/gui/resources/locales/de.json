@@ -787,6 +787,7 @@
     "interface_layout_description": "Setzt Docks, Fenster, Tabs, Fenstersichtbarkeit und HUDs auf das ursprüngliche Layout zurück. Ist ein .licht-Projekt geöffnet, wird dessen gespeichertes Layout beim nächsten Speichern ersetzt. Die Einstellungen bleiben geöffnet.",
     "mcp": "MCP",
     "mcp_server": "MCP-Server",
+    "mcp_safe_mode_notice": "MCP-Steuerelemente sind im abgesicherten Modus nicht verfügbar. Gespeicherte MCP-Einstellungen bleiben unverändert.",
     "mcp_enabled": "MCP-Server aktivieren",
     "mcp_expose_network": "Im lokalen Netzwerk freigeben (0.0.0.0)",
     "mcp_network_warning": "Bei Netzwerkfreigabe können andere Geräte MCP-Werkzeuge ohne Authentifizierung aufrufen. Nur in vertrauenswürdigen Netzwerken aktivieren.",

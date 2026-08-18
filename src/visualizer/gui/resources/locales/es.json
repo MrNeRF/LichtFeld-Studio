@@ -787,6 +787,7 @@
     "interface_layout_description": "Restablece los paneles, pestañas, ventanas y HUD a su diseño inicial. Si hay un proyecto .licht abierto, su diseño guardado se sustituirá la próxima vez que se guarde. Preferencias permanece abierto.",
     "mcp": "MCP",
     "mcp_server": "Servidor MCP",
+    "mcp_safe_mode_notice": "Los controles MCP no están disponibles en modo seguro. La configuración MCP guardada no se modifica.",
     "mcp_enabled": "Activar servidor MCP",
     "mcp_expose_network": "Exponer en la red local (0.0.0.0)",
     "mcp_network_warning": "La exposición en red permite que otros dispositivos invoquen herramientas MCP sin autenticación. Actívala solo en redes de confianza.",

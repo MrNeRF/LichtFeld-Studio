@@ -99,6 +99,9 @@ namespace lfs::vis::gui {
                                       int render_w, int render_h,
                                       bool refresh_cache);
         LFS_VIS_API void trackContextFrame(float window_x, float window_y);
+        void trackRenderedContextFrame(float bar_x, float bar_y) {
+            trackContextFrame(bar_x, bar_y - overlayHeight());
+        }
         void pollGpuMemoryQuery(std::chrono::steady_clock::time_point now);
         void setModelString(const char* name, std::string& field, std::string value);
         void setModelBool(const char* name, bool& field, bool value);

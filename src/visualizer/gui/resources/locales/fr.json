@@ -787,6 +787,7 @@
     "interface_layout_description": "Rétablit la disposition initiale des volets, panneaux, onglets, fenêtres et HUD. Si un projet .licht est ouvert, sa disposition enregistrée sera remplacée lors du prochain enregistrement. Les préférences restent ouvertes.",
     "mcp": "MCP",
     "mcp_server": "Serveur MCP",
+    "mcp_safe_mode_notice": "Les contrôles MCP ne sont pas disponibles en mode sans échec. Les paramètres MCP enregistrés restent inchangés.",
     "mcp_enabled": "Activer le serveur MCP",
     "mcp_expose_network": "Exposer sur le réseau local (0.0.0.0)",
     "mcp_network_warning": "L'exposition réseau permet à d'autres appareils d'appeler les outils MCP sans authentification. Activez-la uniquement sur un réseau de confiance.",

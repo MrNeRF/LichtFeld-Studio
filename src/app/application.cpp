@@ -1239,7 +1239,9 @@ namespace lfs::app {
 
             mcp::setActiveMcpHttpServer(&mcp_http);
             vis::setRuntimeServiceControls({
-                .toggle_mcp_enabled = [] {
+                .toggle_mcp_enabled = [safe_mode] {
+                    if (safe_mode)
+                        return false;
                     const auto status = mcp::activeMcpHttpStatus();
                     const mcp::McpHttpConfig config{
                         .enabled = !status.enabled,
@@ -1256,7 +1258,9 @@ namespace lfs::app {
                         .request_logging = config.request_logging,
                     });
                     return true; },
-                .toggle_mcp_binding = [] {
+                .toggle_mcp_binding = [safe_mode] {
+                    if (safe_mode)
+                        return false;
                     const auto status = mcp::activeMcpHttpStatus();
                     const mcp::McpHttpConfig config{
                         .enabled = status.enabled,

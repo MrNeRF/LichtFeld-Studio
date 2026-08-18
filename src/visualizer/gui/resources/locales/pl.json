@@ -787,6 +787,7 @@
     "interface_layout_description": "Przywraca początkowy układ doków, paneli, kart, widoczności okien i HUD. Jeśli projekt .licht jest otwarty, jego zapisany układ zostanie zastąpiony przy następnym zapisie. Preferencje pozostają otwarte.",
     "mcp": "MCP",
     "mcp_server": "Serwer MCP",
+    "mcp_safe_mode_notice": "Sterowanie MCP jest niedostępne w trybie bezpiecznym. Zapisane ustawienia MCP pozostają bez zmian.",
     "mcp_enabled": "Włącz serwer MCP",
     "mcp_expose_network": "Udostępnij w sieci lokalnej (0.0.0.0)",
     "mcp_network_warning": "Udostępnienie w sieci pozwala innym urządzeniom wywoływać narzędzia MCP bez uwierzytelniania. Włączaj je tylko w zaufanych sieciach.",

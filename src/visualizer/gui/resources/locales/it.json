@@ -787,6 +787,7 @@
     "interface_layout_description": "Riporta dock, pannelli, schede, visibilità delle finestre e HUD al layout iniziale. Se è aperto un progetto .licht, il layout salvato nel progetto verrà sostituito al prossimo salvataggio. Il pannello Preferenze rimane aperto.",
     "mcp": "MCP",
     "mcp_server": "Server MCP",
+    "mcp_safe_mode_notice": "I controlli MCP non sono disponibili in modalità sicura. Le impostazioni MCP salvate rimangono invariate.",
     "mcp_enabled": "Abilita server MCP",
     "mcp_expose_network": "Esponi sulla rete locale (0.0.0.0)",
     "mcp_network_warning": "L'esposizione di rete consente ad altri dispositivi di richiamare gli strumenti MCP senza autenticazione. Abilitala solo su reti fidate.",

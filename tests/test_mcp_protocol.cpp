@@ -80,6 +80,18 @@ namespace lfs::mcp {
             std::optional<std::string> previous_;
         };
 
+        int availableLoopbackPort() {
+            httplib::Server picker;
+            const int port = picker.bind_to_any_port("127.0.0.1");
+            if (port <= 0)
+                return port;
+            std::jthread listener([&] { picker.listen_after_bind(); });
+            picker.wait_until_ready();
+            picker.stop();
+            listener.join();
+            return port;
+        }
+
         bool is_claude_compatible_tool_name(const std::string& name) {
             if (name.empty() || name.size() > 64)
                 return false;
@@ -792,7 +804,6 @@ namespace lfs::mcp {
     }
 
     TEST(McpHttpServerTest, FailedBindCanRetryTheSameConfiguration) {
-        constexpr int port = 47697;
         httplib::Server blocker;
         bool exclusive_socket_configured = false;
         blocker.set_socket_options([&exclusive_socket_configured](const socket_t socket) {
@@ -811,7 +822,8 @@ namespace lfs::mcp {
             exclusive_socket_configured = true;
 #endif
         });
-        ASSERT_TRUE(blocker.bind_to_port("127.0.0.1", port));
+        const int port = blocker.bind_to_any_port("127.0.0.1");
+        ASSERT_GT(port, 0);
         ASSERT_TRUE(exclusive_socket_configured);
         std::jthread blocker_thread([&] { blocker.listen_after_bind(); });
         blocker.wait_until_ready();
@@ -841,13 +853,55 @@ namespace lfs::mcp {
         server.stop();
     }
 
+    TEST(McpHttpServerTest, ListenerRejectsConcurrentOwnershipOfTheSamePort) {
+        const int port = availableLoopbackPort();
+        ASSERT_GT(port, 0);
+        const McpHttpConfig config{
+            .enabled = true,
+            .expose_network = false,
+            .port = port,
+            .request_logging = false,
+        };
+
+        McpHttpServer first;
+        ASSERT_TRUE(first.start(config));
+
+        McpHttpServer second;
+        EXPECT_FALSE(second.start(config));
+        const auto status = second.status();
+        EXPECT_EQ(status.phase, McpHttpPhase::Failed);
+        EXPECT_EQ(status.error_kind, McpHttpErrorKind::BindFailed);
+        EXPECT_EQ(status.error_address, "127.0.0.1");
+        EXPECT_EQ(status.error_port, port);
+
+        first.stop();
+    }
+
     TEST(McpHttpServerTest, RapidQueuedDisableCannotLeaveAListenerRunning) {
+        const int port = availableLoopbackPort();
+        ASSERT_GT(port, 0);
         McpHttpServer server;
-        ASSERT_TRUE(server.start(McpHttpConfig{.enabled = false, .port = 47698}));
+        ASSERT_TRUE(server.start(McpHttpConfig{.enabled = false, .port = port}));
         setActiveMcpHttpServer(&server);
 
-        ASSERT_TRUE(applyActiveMcpHttpConfig({.enabled = true, .port = 47698}));
-        ASSERT_TRUE(applyActiveMcpHttpConfig({.enabled = false, .port = 47698}));
+        ASSERT_TRUE(applyActiveMcpHttpConfig({.enabled = true, .port = port}));
+        ASSERT_TRUE(applyActiveMcpHttpConfig({.enabled = false, .port = port}));
+        setActiveMcpHttpServer(nullptr);
+
+        const auto status = server.status();
+        EXPECT_FALSE(status.enabled);
+        EXPECT_FALSE(status.running);
+        EXPECT_EQ(status.phase, McpHttpPhase::Disabled);
+    }
+
+    TEST(McpHttpServerTest, DetachCancelsQueuedEnableAndStopsListener) {
+        const int port = availableLoopbackPort();
+        ASSERT_GT(port, 0);
+        McpHttpServer server;
+        ASSERT_TRUE(server.start(McpHttpConfig{.enabled = false, .port = port}));
+        setActiveMcpHttpServer(&server);
+
+        ASSERT_TRUE(applyActiveMcpHttpConfig({.enabled = true, .port = port}));
         setActiveMcpHttpServer(nullptr);
 
         const auto status = server.status();

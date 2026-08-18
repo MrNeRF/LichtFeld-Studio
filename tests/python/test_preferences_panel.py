@@ -25,6 +25,7 @@ def preferences_panel_module(monkeypatch):
             "expose_network": False,
             "port": 45677,
             "request_logging": False,
+            "safe_mode": False,
         },
         mcp_status={
             "enabled": True,
@@ -45,6 +46,7 @@ def preferences_panel_module(monkeypatch):
             "error_kind": "none",
             "error_address": "",
             "error_port": 0,
+            "safe_mode": False,
         },
         set_mcp_calls=[],
         panel_enabled_calls=[],
@@ -150,7 +152,14 @@ def test_failed_bind_can_retry_the_same_confirmed_port(preferences_panel_module)
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
     panel._read_mcp_preferences()
-    state.mcp_status.update({"running": False, "error": "bind failed"})
+    state.mcp_status.update(
+        {
+            "running": False,
+            "phase": "failed",
+            "error": "bind failed",
+            "error_kind": "bind_failed",
+        }
+    )
 
     assert panel._commit_mcp_port()
 
@@ -162,6 +171,18 @@ def test_failed_bind_can_retry_the_same_confirmed_port(preferences_panel_module)
             "request_logging": False,
         }
     ]
+
+
+def test_starting_listener_does_not_retry_an_already_confirmed_port(
+    preferences_panel_module,
+):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._read_mcp_preferences()
+    state.mcp_status.update({"running": False, "phase": "starting"})
+
+    assert panel._commit_mcp_port()
+    assert state.set_mcp_calls == []
 
 
 def test_mcp_section_request_is_consumed_once(preferences_panel_module):
@@ -217,16 +238,126 @@ def test_mcp_starting_phase_is_not_reported_as_an_error(preferences_panel_module
     assert panel._mcp_status_text() == "preferences.mcp_status_starting"
 
 
-def test_title_bar_close_discards_unconfirmed_mcp_port(preferences_panel_module):
+def test_title_bar_close_listener_discards_unconfirmed_mcp_port(
+    preferences_panel_module, monkeypatch
+):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+
+    class CloseButton:
+        def __init__(self):
+            self.listeners = []
+
+        def add_event_listener(self, event_name, callback):
+            assert event_name == "click"
+            self.listeners.append(callback)
+
+    close_button = CloseButton()
+    document = SimpleNamespace(
+        get_element_by_id=lambda element_id: (
+            close_button if element_id == "close-btn" else None
+        )
+    )
+    monkeypatch.setattr(panel, "_dirty_expanded_sections", lambda: None)
+    monkeypatch.setattr(panel, "_rebuild_records", lambda: None)
+    monkeypatch.setattr(panel, "_consume_section_request", lambda: None)
+    monkeypatch.setattr(panel, "_state", lambda: ())
+    monkeypatch.setattr(panel, "_refresh_selection", lambda: None)
+
+    panel.on_mount(document)
+    panel._set_mcp_port("47000")
+
+    assert len(close_button.listeners) == 1
+    close_button.listeners[0](None)
+
+    assert panel._mcp_port == "45677"
+    assert state.set_mcp_calls == []
+    assert state.panel_enabled_calls[-1] == ("lfs.preferences", False)
+
+
+def test_external_mcp_toggle_preserves_an_unconfirmed_port_draft(
+    preferences_panel_module,
+):
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
     panel._read_mcp_preferences()
     panel._set_mcp_port("47000")
 
-    panel._on_close(None, None, None)
+    state.mcp_preferences["expose_network"] = True
+    state.mcp_status["expose_network"] = True
+    panel._sync_mcp_runtime()
 
+    assert panel._mcp_port == "47000"
+    assert panel._mcp_applied_port == 45677
+    assert panel._mcp_expose_network is True
+
+
+def test_safe_mode_disables_live_mcp_mutations(preferences_panel_module):
+    module, state = preferences_panel_module
+    state.mcp_preferences.update({"enabled": False, "safe_mode": True})
+    state.mcp_status.update({"enabled": False, "phase": "disabled", "safe_mode": True})
+    panel = module.PreferencesPanel()
+    panel._read_mcp_preferences()
+
+    panel._set_mcp_enabled(True)
+    panel._set_mcp_expose_network(True)
+    panel._set_mcp_port("47000")
+    panel._set_mcp_request_logging(True)
+
+    assert panel._mcp_safe_mode is True
+    assert panel._mcp_enabled is False
     assert panel._mcp_port == "45677"
     assert state.set_mcp_calls == []
+
+
+def test_safe_mode_disables_preferences_and_status_bar_mcp_controls():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    preferences = (resources / "preferences.rml").read_text(encoding="utf-8")
+    status_bar = (resources / "statusbar.rml").read_text(encoding="utf-8")
+
+    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 5
+    assert (
+        '<button id="mcp-toggle" data-class-is-on="mcp_server_enabled" '
+        'data-attr-title="mcp_toggle_label" data-attrif-disabled="safe_mode">'
+        in status_bar
+    )
+
+
+def test_preferences_content_scrolls_without_overlapping_the_fixed_footer():
+    project_root = Path(__file__).parent.parent.parent
+    stylesheet = (
+        project_root
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "preferences.rcss"
+    ).read_text(encoding="utf-8")
+    content_rule = stylesheet.split(".preferences-content {", 1)[1].split("}", 1)[0]
+
+    assert "min-height: 0;" in content_rule
+    assert "overflow-y: auto;" in content_rule
+    assert "padding-right: 6dp;" in content_rule
+
+
+def test_mcp_python_bindings_release_the_gil_around_native_work():
+    project_root = Path(__file__).parent.parent.parent
+    source = (project_root / "src" / "python" / "lfs" / "py_ui.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    for name in (
+        '"get_mcp_preferences"',
+        '"set_mcp_preferences"',
+        '"get_mcp_status"',
+        '"get_mcp_log_directory"',
+    ):
+        start = source.index(name)
+        end = source.find("m.def(", start + len(name))
+        block = source[start : end if end != -1 else len(source)]
+        assert "nb::gil_scoped_release" in block
 
 
 def test_footer_ok_commits_mcp_port_before_closing(preferences_panel_module):

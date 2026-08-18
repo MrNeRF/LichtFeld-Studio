@@ -4813,13 +4813,19 @@ namespace lfs::python {
         m.def(
             "get_mcp_preferences",
             [] {
-                const auto state = vis::loadMcpPreferences();
-                const bool safe_mode = core::environment::flag("LFS_SAFE_MODE", false);
+                vis::McpPreferenceState state;
+                bool safe_mode = false;
+                {
+                    nb::gil_scoped_release release;
+                    state = vis::loadMcpPreferences();
+                    safe_mode = core::environment::flag("LFS_SAFE_MODE", false);
+                }
                 nb::dict result;
                 result["enabled"] = !safe_mode && state.enabled;
                 result["expose_network"] = state.expose_network;
                 result["port"] = state.port;
                 result["request_logging"] = !safe_mode && state.request_logging;
+                result["safe_mode"] = safe_mode;
                 return result;
             },
             "Get effective MCP HTTP server preferences");
@@ -4830,17 +4836,19 @@ namespace lfs::python {
                const bool request_logging) {
                 if (port < 1 || port > 65535)
                     throw nb::value_error("MCP port must be between 1 and 65535");
-                vis::saveMcpPreferences({
+                nb::gil_scoped_release release;
+                const vis::McpPreferenceState state{
                     .enabled = enabled,
                     .expose_network = expose_network,
                     .port = port,
                     .request_logging = request_logging,
-                });
+                };
+                vis::saveMcpPreferences(state);
                 return mcp::applyActiveMcpHttpConfig({
-                    .enabled = enabled,
-                    .expose_network = expose_network,
-                    .port = port,
-                    .request_logging = request_logging,
+                    .enabled = state.enabled,
+                    .expose_network = state.expose_network,
+                    .port = state.port,
+                    .request_logging = state.request_logging,
                 });
             },
             nb::arg("enabled"), nb::arg("expose_network"), nb::arg("port"),
@@ -4850,10 +4858,17 @@ namespace lfs::python {
         m.def(
             "get_mcp_status",
             [] {
-                const auto status = mcp::activeMcpHttpStatus();
+                mcp::McpHttpStatus status;
+                bool safe_mode = false;
+                {
+                    nb::gil_scoped_release release;
+                    status = mcp::activeMcpHttpStatus();
+                    safe_mode = core::environment::flag("LFS_SAFE_MODE", false);
+                }
                 nb::dict result;
                 result["enabled"] = status.enabled;
                 result["running"] = status.running;
+                result["safe_mode"] = safe_mode;
                 switch (status.phase) {
                 case mcp::McpHttpPhase::Disabled: result["phase"] = "disabled"; break;
                 case mcp::McpHttpPhase::Starting: result["phase"] = "starting"; break;
@@ -4891,10 +4906,19 @@ namespace lfs::python {
         m.def(
             "get_mcp_log_directory",
             [] {
-                const auto paths = core::UserPaths::resolve();
-                if (!paths)
-                    throw std::runtime_error(lfs::format_for_developer(paths.error()));
-                return core::path_to_utf8(paths->mcpLogDir());
+                std::string path;
+                std::string error;
+                {
+                    nb::gil_scoped_release release;
+                    const auto paths = core::UserPaths::resolve();
+                    if (paths)
+                        path = core::path_to_utf8(paths->mcpLogDir());
+                    else
+                        error = lfs::format_for_developer(paths.error());
+                }
+                if (!error.empty())
+                    throw std::runtime_error(error);
+                return path;
             },
             "Return the MCP per-session log directory");
 

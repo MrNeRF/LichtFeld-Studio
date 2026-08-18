@@ -98,6 +98,15 @@ namespace lfs::vis::gui {
             return std::to_string(n);
         }
 
+        std::string formatLocalizedValue(const std::string& pattern,
+                                         const std::string& value) noexcept {
+            try {
+                return std::vformat(pattern, std::make_format_args(value));
+            } catch (const std::format_error&) {
+                return pattern;
+            }
+        }
+
         std::string fmtTime(float secs) {
             if (secs < 0)
                 return "--:--";
@@ -1017,8 +1026,8 @@ namespace lfs::vis::gui {
                                                   status.network_exposed ? "0.0.0.0"
                                                                          : "127.0.0.1",
                                                   status.port);
-                details = std::vformat(LOC("status_bar.mcp_starting_detail"),
-                                       std::make_format_args(endpoint));
+                details = formatLocalizedValue(LOC("status_bar.mcp_starting_detail"),
+                                               endpoint);
                 tooltip = details;
                 color = colorToRml(p.info);
             } else if (status.phase == RuntimeServicePhase::Stopping) {
@@ -1030,8 +1039,8 @@ namespace lfs::vis::gui {
                 if (status.error_kind == RuntimeServiceErrorKind::BindFailed) {
                     const auto endpoint = std::format("{}:{}", status.error_address,
                                                       status.error_port);
-                    details = std::vformat(LOC("status_bar.mcp_bind_failed"),
-                                           std::make_format_args(endpoint));
+                    details = formatLocalizedValue(LOC("status_bar.mcp_bind_failed"),
+                                                   endpoint);
                 } else {
                     details = LOC("status_bar.mcp_error_detail");
                 }
@@ -1551,12 +1560,7 @@ namespace lfs::vis::gui {
             return;
         }
 
-        int window_x = 0;
-        int window_y = 0;
-        if (auto* const window = rml_manager_->getWindow())
-            SDL_GetWindowPosition(window, &window_x, &window_y);
-        trackContextFrame(x - static_cast<float>(window_x),
-                          y - overlay_height - static_cast<float>(window_y));
+        trackRenderedContextFrame(x, y);
 
         queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
                                  screen_w, screen_h,
@@ -1609,12 +1613,7 @@ namespace lfs::vis::gui {
             last_render_h_ = render_h;
         }
 
-        int window_x = 0;
-        int window_y = 0;
-        if (auto* const window = rml_manager_->getWindow())
-            SDL_GetWindowPosition(window, &window_x, &window_y);
-        trackContextFrame(x - static_cast<float>(window_x),
-                          y - overlay_height - static_cast<float>(window_y));
+        trackRenderedContextFrame(x, y);
 
         queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
                                  screen_w, screen_h,

@@ -787,6 +787,7 @@
     "interface_layout_description": "将停靠区、面板、标签页、窗口可见性和 HUD 恢复为初始布局。如果当前打开了 .licht 项目，下次保存时将替换项目中存储的布局。偏好设置窗口会保持打开。",
     "mcp": "MCP",
     "mcp_server": "MCP 服务器",
+    "mcp_safe_mode_notice": "安全模式下无法使用 MCP 控件。已保存的 MCP 设置不会更改。",
     "mcp_enabled": "启用 MCP 服务器",
     "mcp_expose_network": "向本地网络开放 (0.0.0.0)",
     "mcp_network_warning": "开放网络访问后，其他设备无需身份验证即可调用 MCP 工具。请仅在受信任的网络中启用。",

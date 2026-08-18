@@ -100,28 +100,29 @@
           <span class="text-accent">@tr:preferences.mcp_server</span>
         </div>
         <div class="section-content" data-if="mcp_expanded">
+          <span class="preferences-description preferences-warning" data-if="mcp_safe_mode">@tr:preferences.mcp_safe_mode_notice</span>
           <div class="preferences-row preferences-switch-row">
             <span class="preferences-label">@tr:preferences.mcp_enabled</span>
-            <button class="preferences-mcp-toggle" data-class-is-on="mcp_enabled" data-event-click="toggle_mcp_enabled" data-attr-title="mcp_status">
+            <button class="preferences-mcp-toggle" data-class-is-on="mcp_enabled" data-event-click="toggle_mcp_enabled" data-attr-title="mcp_status" data-attrif-disabled="mcp_safe_mode">
               <span class="preferences-mcp-switch-track"><span class="preferences-mcp-switch-knob"></span></span>
             </button>
           </div>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.mcp_expose_network</span>
-            <input type="checkbox" data-checked="mcp_expose_network" />
+            <input type="checkbox" data-checked="mcp_expose_network" data-attrif-disabled="mcp_safe_mode" />
           </div>
           <span class="preferences-description preferences-warning">@tr:preferences.mcp_network_warning</span>
           <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.mcp_port</span>
             <div class="preferences-port-control">
               <input class="preferences-select preferences-port-input" type="text" data-value="mcp_port" maxlength="5"
-                     data-event-change="mcp_port_change(ev.value)" />
-              <button class="btn btn--primary preferences-port-confirm" data-event-click="confirm_mcp_port">@tr:common.ok</button>
+                     data-event-change="mcp_port_change(ev.value)" data-attrif-disabled="mcp_safe_mode" />
+              <button class="btn btn--primary preferences-port-confirm" data-event-click="confirm_mcp_port" data-attrif-disabled="mcp_safe_mode">@tr:common.ok</button>
             </div>
           </div>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.mcp_request_logging</span>
-            <input type="checkbox" data-checked="mcp_request_logging" />
+            <input type="checkbox" data-checked="mcp_request_logging" data-attrif-disabled="mcp_safe_mode" />
           </div>
           <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.mcp_status</span>

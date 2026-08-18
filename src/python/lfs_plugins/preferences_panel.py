@@ -61,6 +61,7 @@ class PreferencesPanel(Panel):
         self._mcp_port = "45677"
         self._mcp_applied_port = 45677
         self._mcp_request_logging = False
+        self._mcp_safe_mode = False
         self._last_mcp_runtime_config = None
         self._document = None
 
@@ -94,6 +95,7 @@ class PreferencesPanel(Panel):
         model.bind("mcp_expose_network", lambda: self._mcp_expose_network, self._set_mcp_expose_network)
         model.bind("mcp_port", lambda: self._mcp_port, self._set_mcp_port)
         model.bind("mcp_request_logging", lambda: self._mcp_request_logging, self._set_mcp_request_logging)
+        model.bind_func("mcp_safe_mode", lambda: self._mcp_safe_mode)
         model.bind_func("mcp_status", self._mcp_status_text)
         model.bind("mcp_endpoint_value", self._mcp_endpoint_text, lambda _value: None)
         model.bind_func("mcp_error", self._mcp_error_text)
@@ -121,7 +123,14 @@ class PreferencesPanel(Panel):
         self._handle = model.get_handle()
 
     def on_mount(self, doc):
-        super().on_mount(doc)
+        # The title bar is a cancellation boundary for the drafted MCP port,
+        # so it needs the specialized close handler instead of Panel's generic
+        # visibility-only listener.
+        close_btn = doc.get_element_by_id("close-btn") if doc else None
+        if close_btn:
+            close_btn.add_event_listener(
+                "click", lambda _ev: self._on_close(None, None, None)
+            )
         self._document = doc
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._dirty_expanded_sections()
@@ -291,6 +300,7 @@ class PreferencesPanel(Panel):
         self._mcp_port = str(preferences.get("port", 45677))
         self._mcp_applied_port = int(self._mcp_port)
         self._mcp_request_logging = bool(preferences.get("request_logging", False))
+        self._mcp_safe_mode = bool(preferences.get("safe_mode", False))
         self._last_mcp_runtime_config = self._mcp_runtime_config_signature()
 
     def _load_mcp_preferences(self):
@@ -298,6 +308,8 @@ class PreferencesPanel(Panel):
         self._dirty_mcp()
 
     def _set_mcp_enabled(self, enabled):
+        if self._mcp_safe_mode:
+            return
         self._mcp_enabled = bool(enabled)
         self._apply_mcp_preferences()
 
@@ -305,10 +317,14 @@ class PreferencesPanel(Panel):
         self._set_mcp_enabled(not self._mcp_enabled)
 
     def _set_mcp_expose_network(self, enabled):
+        if self._mcp_safe_mode:
+            return
         self._mcp_expose_network = bool(enabled)
         self._apply_mcp_preferences()
 
     def _set_mcp_port(self, value):
+        if self._mcp_safe_mode:
+            return
         self._mcp_port = str(value).strip()
         self._dirty_mcp()
 
@@ -328,18 +344,20 @@ class PreferencesPanel(Panel):
             return False
         if port == self._mcp_applied_port:
             status = lf.ui.get_mcp_status()
-            if status.get("enabled") and (
-                not status.get("running") or status.get("error")
-            ):
+            if status.get("enabled") and status.get("phase") == "failed":
                 return self._apply_mcp_preferences(port)
             return True
         return self._apply_mcp_preferences(port)
 
     def _set_mcp_request_logging(self, enabled):
+        if self._mcp_safe_mode:
+            return
         self._mcp_request_logging = bool(enabled)
         self._apply_mcp_preferences()
 
     def _apply_mcp_preferences(self, port=None):
+        if self._mcp_safe_mode:
+            return False
         port = self._mcp_applied_port if port is None else port
         accepted = lf.ui.set_mcp_preferences(
             self._mcp_enabled,
@@ -379,6 +397,7 @@ class PreferencesPanel(Panel):
             str(status.get("error_kind", "")),
             str(status.get("error_address", "")),
             int(status.get("error_port", 0)),
+            bool(status.get("safe_mode", False)),
             tuple(str(endpoint) for endpoint in status.get("endpoints") or ()),
         )
 
@@ -389,13 +408,19 @@ class PreferencesPanel(Panel):
             bool(status.get("expose_network")),
             int(status.get("port", 45677)),
             bool(status.get("request_logging")),
+            bool(status.get("safe_mode", False)),
         )
 
     def _sync_mcp_runtime(self):
         signature = self._mcp_runtime_config_signature()
         if signature == self._last_mcp_runtime_config:
             return
+        draft_port = self._mcp_port
+        has_unconfirmed_port = draft_port != str(self._mcp_applied_port)
         self._load_mcp_preferences()
+        if has_unconfirmed_port:
+            self._mcp_port = draft_port
+            self._dirty_mcp()
 
     def _mcp_status_text(self):
         if self._validated_mcp_port() is None:
@@ -466,6 +491,7 @@ class PreferencesPanel(Panel):
             "mcp_expose_network",
             "mcp_port",
             "mcp_request_logging",
+            "mcp_safe_mode",
             "mcp_status",
             "mcp_endpoint_value",
             "mcp_error",

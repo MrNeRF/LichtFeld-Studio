@@ -787,6 +787,7 @@
     "interface_layout_description": "Resets docks, panels, tabs, window visibility, and HUDs to their initial layout. If a .licht project is open, its stored layout will be replaced when the project is next saved. Preferences stays open.",
     "mcp": "MCP",
     "mcp_server": "MCP Server",
+    "mcp_safe_mode_notice": "MCP controls are unavailable in Safe Mode. Saved MCP settings are unchanged.",
     "mcp_enabled": "Enable MCP server",
     "mcp_expose_network": "Expose on the local network (0.0.0.0)",
     "mcp_network_warning": "Network exposure allows other devices to invoke MCP tools without authentication. Enable it only on trusted networks.",

@@ -31,8 +31,10 @@ serialized by one long-lived background worker. Rapid changes are coalesced to
 the newest pending configuration, and the UI reports starting, running, stopping,
 and failed states without waiting for listener shutdown. Binding to `0.0.0.0` exposes the unauthenticated HTTP
 endpoint to the local network and is therefore an explicit opt-in. Safe mode
-forces the MCP server and request logging off for the process and does not
-persist MCP changes.
+forces the MCP server and request logging off for the process. Preferences
+identifies that effective state and disables the MCP controls, so opening the
+panel cannot accidentally stage or persist an MCP change while safe mode is
+active.
 
 The status bar MCP chip reports the effective listener state, usable endpoint
 URLs, request/success/error counters, and bind failures. Its power control does
@@ -175,7 +177,9 @@ externally supplied `LFS_SAFE_MODE=1` must remain effective when the
 application is otherwise started normally.
 
 Safe mode also forces the effective MCP listener and MCP request logging off.
-The persisted MCP configuration is neither read nor overwritten.
+The persisted MCP configuration is neither read nor overwritten. The MCP
+section remains visible for diagnosis, but it displays a safe-mode notice and
+keeps every live configuration control disabled.
 
 Explicit operations such as exporting a keymap remain separate from automatic
 persistence and can stay available in safe mode. The status bar identifies

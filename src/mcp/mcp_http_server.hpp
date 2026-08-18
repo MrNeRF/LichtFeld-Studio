@@ -79,6 +79,7 @@ namespace lfs::mcp {
 
     private:
         friend LFS_MCP_API bool applyActiveMcpHttpConfig(const McpHttpConfig& config);
+        friend LFS_MCP_API void setActiveMcpHttpServer(McpHttpServer* server);
 
         std::unique_ptr<McpServer> mcp_server_;
         std::unique_ptr<httplib::Server> http_server_;
@@ -95,15 +96,18 @@ namespace lfs::mcp {
         std::atomic<std::uint64_t> error_count_{0};
         std::atomic<std::uint64_t> listener_generation_{0};
         std::atomic<bool> request_logging_{false};
-        mutable std::mutex log_mutex_;
+        mutable std::mutex log_state_mutex_;
+        mutable std::mutex log_write_mutex_;
         std::string log_session_timestamp_;
         std::string log_filename_;
+        std::string log_file_path_;
         bool log_failure_reported_ = false;
         std::string last_announced_listener_url_;
 
         void appendSessionLog(const nlohmann::json& event);
         void stageConfig(const McpHttpConfig& config);
         void stopListenerAndJoin();
+        void reportConfigWorkerFailure();
     };
 
     LFS_MCP_API void setActiveMcpHttpServer(McpHttpServer* server);

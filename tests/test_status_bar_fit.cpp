@@ -45,12 +45,12 @@ namespace lfs::vis::gui {
             status_bar.model_.mcp_details_expanded = expanded;
         }
 
-        static void trackFrame(RmlStatusBar& status_bar,
-                               RmlUIManager& manager,
-                               const float window_x,
-                               const float window_y) {
+        static void trackRenderedFrame(RmlStatusBar& status_bar,
+                                       RmlUIManager& manager,
+                                       const float bar_x,
+                                       const float bar_y) {
             status_bar.rml_manager_ = &manager;
-            status_bar.trackContextFrame(window_x, window_y);
+            status_bar.trackRenderedContextFrame(bar_x, bar_y);
         }
     };
 
@@ -363,15 +363,16 @@ namespace {
 
         lfs::vis::gui::RmlUIManager manager;
         manager.beginFrameCursorTracking();
-        constexpr float frame_x = 30.0f;
-        constexpr float frame_y = 40.0f;
-        lfs::vis::gui::RmlStatusBarTestAccess::trackFrame(
-            status_bar_, manager, frame_x, frame_y);
+        constexpr float bar_x = 30.0f;
+        constexpr float bar_y = 700.0f;
+        lfs::vis::gui::RmlStatusBarTestAccess::trackRenderedFrame(
+            status_bar_, manager, bar_x, bar_y);
+        const float context_y = bar_y - status_bar_.overlayHeight();
         EXPECT_TRUE(manager.activeOverlayContainsPoint(
-            frame_x + center_x,
-            frame_y + offset.y + popup->GetOffsetHeight() * 0.5f));
-        EXPECT_FALSE(manager.activeOverlayContainsPoint(frame_x + 100.0f,
-                                                        frame_y + 5.0f));
+            bar_x + center_x,
+            context_y + offset.y + popup->GetOffsetHeight() * 0.5f));
+        EXPECT_FALSE(manager.activeOverlayContainsPoint(bar_x + 100.0f,
+                                                        context_y + 5.0f));
 
         lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, false);
         EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);

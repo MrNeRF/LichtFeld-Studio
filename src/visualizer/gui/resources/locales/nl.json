@@ -787,6 +787,7 @@
     "interface_layout_description": "Zet docks, panelen, tabbladen, vensterzichtbaarheid en HUD's terug naar de beginindeling. Als een .licht-project open is, wordt de opgeslagen indeling bij de volgende opslag vervangen. Voorkeuren blijft open.",
     "mcp": "MCP",
     "mcp_server": "MCP-server",
+    "mcp_safe_mode_notice": "MCP-bediening is niet beschikbaar in de veilige modus. Opgeslagen MCP-instellingen blijven ongewijzigd.",
     "mcp_enabled": "MCP-server inschakelen",
     "mcp_expose_network": "Beschikbaar maken op het lokale netwerk (0.0.0.0)",
     "mcp_network_warning": "Bij netwerktoegang kunnen andere apparaten MCP-hulpmiddelen zonder authenticatie aanroepen. Schakel dit alleen in op vertrouwde netwerken.",
