@@ -358,7 +358,7 @@ namespace lfs::core::cuda {
 
             // Initialize sorted indices
             thrust::device_ptr<int> si_ptr(sorted_indices.ptr<int>());
-            thrust::sequence(thrust::cuda::par.on(stream), si_ptr, si_ptr + N);
+            thrust::sequence(thrust::cuda::par_nosync.on(stream), si_ptr, si_ptr + N);
 
             // Sort by cell ID
             thrust::device_ptr<int> ci_ptr(cell_ids.ptr<int>());
@@ -367,10 +367,10 @@ namespace lfs::core::cuda {
             // Build cell start/end
             auto cell_start = Tensor::empty({static_cast<size_t>(num_cells)}, Device::CUDA, DataType::Int32);
             auto cell_end = Tensor::empty({static_cast<size_t>(num_cells)}, Device::CUDA, DataType::Int32);
-            thrust::fill(thrust::cuda::par.on(stream),
+            thrust::fill(thrust::cuda::par_nosync.on(stream),
                          thrust::device_ptr<int>(cell_start.ptr<int>()),
                          thrust::device_ptr<int>(cell_start.ptr<int>()) + num_cells, -1);
-            thrust::fill(thrust::cuda::par.on(stream),
+            thrust::fill(thrust::cuda::par_nosync.on(stream),
                          thrust::device_ptr<int>(cell_end.ptr<int>()),
                          thrust::device_ptr<int>(cell_end.ptr<int>()) + num_cells, -1);
 

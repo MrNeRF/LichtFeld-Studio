@@ -63,7 +63,7 @@ namespace lfs::core::tensor_ops {
             auto mask_ptr = thrust::device_pointer_cast(mask);
             auto begin = thrust::make_zip_iterator(thrust::make_tuple(data_ptr, mask_ptr));
             auto end = thrust::make_zip_iterator(thrust::make_tuple(data_ptr + n, mask_ptr + n));
-            thrust::transform(thrust::cuda::par.on(stream), begin, end, data_ptr,
+            thrust::transform(thrust::cuda::par_nosync.on(stream), begin, end, data_ptr,
                               ops::masked_fill_op<T>(val));
         }
 
@@ -197,21 +197,21 @@ namespace lfs::core::tensor_ops {
     void launch_compare_scalar_eq(const float* a, float val, unsigned char* r, size_t n, cudaStream_t s) {
         auto a_ptr = thrust::device_pointer_cast(a);
         auto r_ptr = thrust::device_pointer_cast(r);
-        thrust::transform(thrust::cuda::par.on(s), a_ptr, a_ptr + n, r_ptr,
+        thrust::transform(thrust::cuda::par_nosync.on(s), a_ptr, a_ptr + n, r_ptr,
                           ops::equal_scalar_op<float>(val));
     }
 
     void launch_compare_scalar_lt(const float* a, float val, unsigned char* r, size_t n, cudaStream_t s) {
         auto a_ptr = thrust::device_pointer_cast(a);
         auto r_ptr = thrust::device_pointer_cast(r);
-        thrust::transform(thrust::cuda::par.on(s), a_ptr, a_ptr + n, r_ptr,
+        thrust::transform(thrust::cuda::par_nosync.on(s), a_ptr, a_ptr + n, r_ptr,
                           ops::less_scalar_op<float>(val));
     }
 
     void launch_compare_scalar_gt(const float* a, float val, unsigned char* r, size_t n, cudaStream_t s) {
         auto a_ptr = thrust::device_pointer_cast(a);
         auto r_ptr = thrust::device_pointer_cast(r);
-        thrust::transform(thrust::cuda::par.on(s), a_ptr, a_ptr + n, r_ptr,
+        thrust::transform(thrust::cuda::par_nosync.on(s), a_ptr, a_ptr + n, r_ptr,
                           ops::greater_scalar_op<float>(val));
     }
 
@@ -294,7 +294,7 @@ namespace lfs::core::tensor_ops {
     void launch_logical_not(const unsigned char* a, unsigned char* r, size_t n, cudaStream_t s) {
         auto a_ptr = thrust::device_pointer_cast(a);
         auto r_ptr = thrust::device_pointer_cast(r);
-        thrust::transform(thrust::cuda::par.on(s), a_ptr, a_ptr + n, r_ptr,
+        thrust::transform(thrust::cuda::par_nosync.on(s), a_ptr, a_ptr + n, r_ptr,
                           ops::logical_not_op());
     }
 
@@ -1041,7 +1041,7 @@ namespace lfs::core::tensor_ops {
         auto permuted_view = thrust::make_permutation_iterator(in_ptr, clamped_idx);
 
         // Single fused kernel: gather + unary operation!
-        thrust::transform(thrust::cuda::par.on(stream),
+        thrust::transform(thrust::cuda::par_nosync.on(stream),
                           permuted_view, permuted_view + out_size,
                           out_ptr,
                           op);
@@ -1133,7 +1133,7 @@ namespace lfs::core::tensor_ops {
                            size_t n_idx, cudaStream_t stream) {
         CudaDeviceMemory<T> val_buffer(n_idx, stream);
         auto val_ptr = thrust::device_pointer_cast(val_buffer.get());
-        thrust::fill(thrust::cuda::par.on(stream), val_ptr, val_ptr + n_idx, val);
+        thrust::fill(thrust::cuda::par_nosync.on(stream), val_ptr, val_ptr + n_idx, val);
 
         size_t in_shape[MAX_TENSOR_RANK] = {0};
         std::copy(shape, shape + rank, in_shape);
@@ -1232,7 +1232,7 @@ namespace lfs::core::tensor_ops {
             thrust::make_tuple(out1_ptr, out2_ptr));
 
         // Single gather operation copies both tensors!
-        thrust::copy(thrust::cuda::par.on(stream),
+        thrust::copy(thrust::cuda::par_nosync.on(stream),
                      gathered, gathered + index_size,
                      zipped_output);
     }
@@ -1271,7 +1271,7 @@ namespace lfs::core::tensor_ops {
             thrust::make_tuple(out1_ptr, out2_ptr, out3_ptr));
 
         // Single gather for all three tensors!
-        thrust::copy(thrust::cuda::par.on(stream),
+        thrust::copy(thrust::cuda::par_nosync.on(stream),
                      gathered, gathered + index_size,
                      zipped_output);
     }

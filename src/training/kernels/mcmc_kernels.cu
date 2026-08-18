@@ -580,7 +580,7 @@ namespace lfs::training::mcmc {
         auto alive_probs = lfs::core::Tensor::empty({n_alive}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
         auto cumsum_buf = lfs::core::Tensor::empty({n_alive}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
-        thrust::transform(thrust::cuda::par.on(cuda_stream),
+        thrust::transform(thrust::cuda::par_nosync.on(cuda_stream),
                           thrust::counting_iterator<int>(0),
                           thrust::counting_iterator<int>(n_alive),
                           thrust::device_ptr<float>(alive_probs.ptr<float>()),
