@@ -62,6 +62,18 @@ namespace lfs::vis {
         return window;
     }
 
+    [[nodiscard]] inline WindowRectangle clampWindowIntoDisplay(
+        WindowRectangle window, const WindowRectangle& display,
+        const int minimum_width = 640, const int minimum_height = 360) {
+        if (display.width <= 0 || display.height <= 0)
+            return window;
+        window.width = std::clamp(window.width, std::min(minimum_width, display.width), display.width);
+        window.height = std::clamp(window.height, std::min(minimum_height, display.height), display.height);
+        window.x = std::clamp(window.x, display.x, display.x + display.width - window.width);
+        window.y = std::clamp(window.y, display.y, display.y + display.height - window.height);
+        return window;
+    }
+
     [[nodiscard]] inline std::optional<WindowRectangle> displayWithLargestIntersection(
         const WindowRectangle& window, const std::vector<WindowRectangle>& displays) {
         std::optional<WindowRectangle> best;
@@ -96,6 +108,30 @@ namespace lfs::vis {
         if (!windowRectangleVisible(window, displays, minimum_visible_width,
                                     minimum_visible_height)) {
             return centerWindowOnDisplay(window, fallback_display, minimum_width, minimum_height);
+        }
+
+        int intersecting_displays = 0;
+        std::optional<WindowRectangle> unique_display;
+        for (const auto& display : displays) {
+            if (display.width <= 0 || display.height <= 0)
+                continue;
+            const std::int64_t left = std::max<std::int64_t>(window.x, display.x);
+            const std::int64_t top = std::max<std::int64_t>(window.y, display.y);
+            const std::int64_t right = std::min<std::int64_t>(
+                static_cast<std::int64_t>(window.x) + window.width,
+                static_cast<std::int64_t>(display.x) + display.width);
+            const std::int64_t bottom = std::min<std::int64_t>(
+                static_cast<std::int64_t>(window.y) + window.height,
+                static_cast<std::int64_t>(display.y) + display.height);
+            const std::int64_t area = std::max<std::int64_t>(0, right - left) *
+                                      std::max<std::int64_t>(0, bottom - top);
+            if (area <= 0)
+                continue;
+            ++intersecting_displays;
+            unique_display = display;
+        }
+        if (intersecting_displays == 1 && unique_display) {
+            return clampWindowIntoDisplay(window, *unique_display, minimum_width, minimum_height);
         }
 
         if (intersected_display &&

@@ -1560,6 +1560,16 @@ namespace lfs::vis {
             return;
         }
 
+#if !defined(_WIN32)
+        // The WM may maximize a window that already spans the work area (e.g.
+        // auto-maximize at map). Undoing that shrinks the window to a WM-invented
+        // restore size; accept the native maximize state instead.
+        if (is_borderless_maximized_) {
+            updateWindowSize(reason, ResizeIntent::Exact);
+            return;
+        }
+#endif
+
         bool restored_sdl_maximize = false;
         if (isSdlMaximized()) {
             if (!SDL_RestoreWindow(window_)) {
@@ -1615,10 +1625,12 @@ namespace lfs::vis {
         }
 
         SDL_Rect target_bounds = usable_bounds;
-        // Keep work-area dimensions so taskbars stay visible. Ask for the
-        // display top; some WMs may still clamp managed windows to work-area y.
+#if defined(_WIN32)
+        // Windows-only: keep work-area dimensions so the taskbar stays visible.
+        // Ask for the display top; the WM may still clamp managed windows to work-area y.
         target_bounds.y = display_bounds.y;
         target_bounds.h = std::min(usable_bounds.h, display_bounds.h);
+#endif
 
         const bool size_set = SDL_SetWindowSize(window_, target_bounds.w, target_bounds.h);
         const bool position_set = SDL_SetWindowPosition(window_, target_bounds.x, target_bounds.y);

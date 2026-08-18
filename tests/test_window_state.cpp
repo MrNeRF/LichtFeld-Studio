@@ -73,6 +73,33 @@ namespace {
         EXPECT_EQ(lfs::vis::recoverWindowRectangle(saved, displays, displays.front()), saved);
     }
 
+    TEST(WindowStateContract, SavedGeometryUnderTopPanelIsPushedIntoWorkArea) {
+        const std::vector<WindowRectangle> displays{{67, 32, 1853, 1168}};
+        const auto recovered = lfs::vis::recoverWindowRectangle(
+            {0, 0, 1280, 720}, displays, displays.front());
+        EXPECT_EQ(recovered, (WindowRectangle{67, 32, 1280, 720}));
+    }
+
+    TEST(WindowStateContract, FullDisplaySaveIsClampedToWorkArea) {
+        const std::vector<WindowRectangle> displays{{67, 32, 1853, 1168}};
+        const auto recovered = lfs::vis::recoverWindowRectangle(
+            {0, 0, 1920, 1200}, displays, displays.front());
+        EXPECT_EQ(recovered, (WindowRectangle{67, 32, 1853, 1168}));
+    }
+
+    TEST(WindowStateContract, WindowAboveWorkAreaTopIsPulledDown) {
+        const std::vector<WindowRectangle> displays{{0, 32, 1920, 1168}};
+        const auto recovered = lfs::vis::recoverWindowRectangle(
+            {600, -40, 1280, 720}, displays, displays.front());
+        EXPECT_EQ(recovered, (WindowRectangle{600, 32, 1280, 720}));
+    }
+
+    TEST(WindowStateContract, StraddlingTwoDisplaysIsPreserved) {
+        const std::vector<WindowRectangle> displays{{0, 32, 1920, 1168}, {1920, 32, 1920, 1168}};
+        const WindowRectangle saved{1400, 100, 1200, 700};
+        EXPECT_EQ(lfs::vis::recoverWindowRectangle(saved, displays, displays.front()), saved);
+    }
+
     TEST(WindowStateContract, SafeModeDisablesAutomaticPersistence) {
         const char* previous_raw = std::getenv("LFS_SAFE_MODE");
         const std::optional<std::string> previous = previous_raw
