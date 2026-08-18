@@ -79,6 +79,25 @@ namespace {
         }
     }
 
+    TEST(SequencerTimelineRegressionTest, SavedTimelineLoadsBackFromTheSameFile) {
+        Timeline source;
+        source.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}, 35.0f));
+        source.addKeyframe(makeKeyframe(2.0f, {4.0f, 5.0f, 6.0f}, 50.0f));
+
+        TempJsonPath file;
+        ASSERT_TRUE(source.saveToJson(file.path.string()));
+
+        Timeline loaded;
+        ASSERT_TRUE(loaded.loadFromJson(file.path.string()));
+        ASSERT_EQ(loaded.realKeyframeCount(), 2u);
+        ASSERT_NE(loaded.getKeyframe(0), nullptr);
+        ASSERT_NE(loaded.getKeyframe(1), nullptr);
+        expectVec3Eq(loaded.getKeyframe(0)->position, {1.0f, 2.0f, 3.0f});
+        expectVec3Eq(loaded.getKeyframe(1)->position, {4.0f, 5.0f, 6.0f});
+        EXPECT_FLOAT_EQ(loaded.getKeyframe(0)->focal_length_mm, 35.0f);
+        EXPECT_FLOAT_EQ(loaded.getKeyframe(1)->focal_length_mm, 50.0f);
+    }
+
     TEST(SequencerTimelineRegressionTest, LoadReplacesStateAndClearsAbsentClip) {
         Timeline timeline;
         timeline.addKeyframe(makeKeyframe(9.0f, {9.0f, 0.0f, 0.0f}));

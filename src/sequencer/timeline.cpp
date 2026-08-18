@@ -438,7 +438,10 @@ namespace lfs::sequencer {
         try {
             const std::filesystem::path path_fs = lfs::core::utf8_to_path(path);
             std::ifstream file;
-            if (!lfs::core::open_file_for_read(path_fs, file)) {
+            // The size guard below compares bytes read with filesystem::file_size().
+            // Binary mode is required on Windows so CRLF translation does not make
+            // the logical character count smaller than the physical file size.
+            if (!lfs::core::open_file_for_read(path_fs, std::ios::binary, file)) {
                 LOG_ERROR("Failed to open timeline file: {}", path);
                 return false;
             }
