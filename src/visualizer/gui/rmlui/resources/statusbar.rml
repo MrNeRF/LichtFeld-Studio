@@ -69,7 +69,7 @@
             <div id="mcp-popup" class="hidden" data-class-hidden="!mcp_details_expanded">
                 <div id="mcp-popup-header">
                     <div id="mcp-popup-title" data-style-color="mcp_color">{{ mcp_summary }}</div>
-                    <button id="mcp-toggle" data-class-is-on="mcp_server_enabled" data-attr-title="mcp_toggle_label" data-attrif-disabled="safe_mode">
+                    <button id="mcp-toggle" data-class-is-on="mcp_server_enabled" data-attr-title="mcp_toggle_label" data-attrif-disabled="safe_mode" data-class-disabled="safe_mode">
                         <span class="mcp-switch-track"><span class="mcp-switch-knob"></span></span>
                     </button>
                 </div>

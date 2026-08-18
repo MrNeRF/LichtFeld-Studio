@@ -113,6 +113,11 @@ body.floating-panel {
     padding-right: 8dp;
 }
 
+.preferences-port-confirm.disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 .preferences-switch-row {
     align-items: center;
 }
@@ -128,6 +133,11 @@ body.floating-panel {
     padding: 0;
     border-width: 0;
     background-color: transparent;
+}
+
+.preferences-mcp-toggle.disabled {
+    opacity: 0.5;
+    cursor: default;
 }
 
 .preferences-mcp-switch-track {

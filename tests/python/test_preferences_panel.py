@@ -310,6 +310,63 @@ def test_safe_mode_disables_live_mcp_mutations(preferences_panel_module):
     assert state.set_mcp_calls == []
 
 
+def test_safe_mode_reset_does_not_stage_mcp_changes(preferences_panel_module):
+    module, state = preferences_panel_module
+    state.mcp_preferences.update({"enabled": False, "safe_mode": True})
+    state.mcp_status.update({"enabled": False, "phase": "disabled", "safe_mode": True})
+    panel = module.PreferencesPanel()
+    panel._read_mcp_preferences()
+    panel._refresh_selection = lambda: None
+
+    snapshot = (
+        panel._mcp_enabled,
+        panel._mcp_expose_network,
+        panel._mcp_port,
+        panel._mcp_applied_port,
+        panel._mcp_request_logging,
+        panel._mcp_safe_mode,
+    )
+
+    panel._section = "mcp"
+    panel._reset_section()
+
+    assert state.set_mcp_calls == []
+    assert (
+        panel._mcp_enabled,
+        panel._mcp_expose_network,
+        panel._mcp_port,
+        panel._mcp_applied_port,
+        panel._mcp_request_logging,
+        panel._mcp_safe_mode,
+    ) == snapshot
+
+    def confirm_dialog(_title, _message, _buttons, callback):
+        callback("preferences.reset_all_settings")
+
+    module.lf.ui.confirm_dialog = confirm_dialog
+    module.lf.ui.message_dialog = lambda *_a, **_k: None
+    module.lf.ui.set_theme = lambda *_a, **_k: None
+    module.lf.ui.set_ui_scale = lambda *_a, **_k: None
+    module.lf.ui.set_remember_camera_navigation = lambda *_a, **_k: None
+    module.lf.ui.set_remember_camera_view_snap = lambda *_a, **_k: None
+    module.lf.ui.reset_layout = lambda: None
+    module.lf.ui.reset_window_state = lambda: None
+    module.lf.set_camera_navigation_mode = lambda *_a, **_k: None
+    module.lf.set_camera_view_snap_enabled = lambda *_a, **_k: None
+
+    panel._on_reset_all_settings(None, None, None)
+
+    assert state.set_mcp_calls == []
+    assert (
+        panel._mcp_enabled,
+        panel._mcp_expose_network,
+        panel._mcp_port,
+        panel._mcp_applied_port,
+        panel._mcp_request_logging,
+        panel._mcp_safe_mode,
+    ) == snapshot
+
+
 def test_safe_mode_disables_preferences_and_status_bar_mcp_controls():
     project_root = Path(__file__).parent.parent.parent
     resources = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources"
@@ -317,9 +374,11 @@ def test_safe_mode_disables_preferences_and_status_bar_mcp_controls():
     status_bar = (resources / "statusbar.rml").read_text(encoding="utf-8")
 
     assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 5
+    assert preferences.count('data-class-disabled="mcp_safe_mode"') == 2
     assert (
         '<button id="mcp-toggle" data-class-is-on="mcp_server_enabled" '
-        'data-attr-title="mcp_toggle_label" data-attrif-disabled="safe_mode">'
+        'data-attr-title="mcp_toggle_label" data-attrif-disabled="safe_mode" '
+        'data-class-disabled="safe_mode">'
         in status_bar
     )
 

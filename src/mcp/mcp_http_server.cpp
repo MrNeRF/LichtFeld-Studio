@@ -476,15 +476,11 @@ namespace lfs::mcp {
             // Wait until the listener has entered its accept loop (or failed)
             // before stop(): cpp-httplib ignores stop() while startup is pending.
             http_server_->wait_until_ready();
-            // listen_internal() closes its socket on an accept failure without
-            // invalidating the stored descriptor. Do not close it a second time
-            // after the accept loop has already exited.
-            if (http_server_->is_running())
-                http_server_->stop();
-            listener_thread_.join();
-            // The listener exit path decommissions the server to wake readiness
-            // waiters. With no listener running, stop() only resets that flag so
+            // stop() invalidates-then-closes the listener socket exactly once.
+            // After join, a second stop() only resets the decommissioned flag so
             // the same endpoint can be bound again.
+            http_server_->stop();
+            listener_thread_.join();
             http_server_->stop();
         } else if (http_server_) {
             // stop() also clears cpp-httplib's decommissioned flag after a bind
@@ -713,6 +709,7 @@ namespace lfs::mcp {
             if (has_applied_config_ && applied_config_.enabled == effective_enabled &&
                 applied_config_.expose_network == config.expose_network &&
                 applied_config_.port == config.port && listener_healthy) {
+                auto endpoints = networkEndpoints(config.expose_network, config.port);
                 {
                     std::lock_guard status_lock(status_mutex_);
                     status_.enabled = effective_enabled;
@@ -720,6 +717,7 @@ namespace lfs::mcp {
                     status_.phase = effective_enabled ? McpHttpPhase::Running
                                                       : McpHttpPhase::Disabled;
                     status_.request_logging = effective_logging;
+                    status_.endpoints = std::move(endpoints);
                 }
                 applied_config_.request_logging = effective_logging;
                 request_logging_.store(effective_logging, std::memory_order_release);
@@ -731,9 +729,9 @@ namespace lfs::mcp {
 
     void McpHttpServer::stageConfig(const McpHttpConfig& config) {
         const bool safe_mode = core::environment::flag("LFS_SAFE_MODE", false);
-        // Staging runs on the UI thread. Keep it allocation-only and avoid the
-        // adapter walk used to discover network-facing endpoints; the worker
-        // publishes the complete list when it applies the configuration.
+        // Staging may run on any caller thread. Keep it allocation-only (no
+        // adapter walk / no I/O); the worker publishes the complete endpoint
+        // list when it applies the configuration.
         auto endpoints = loopbackEndpoints(config.port);
         std::lock_guard status_lock(status_mutex_);
         const bool was_running = status_.running;
@@ -782,7 +780,7 @@ namespace lfs::mcp {
 
     void McpHttpServer::reportConfigWorkerFailure() {
         std::lock_guard status_lock(status_mutex_);
-        status_.running = http_server_ && http_server_->is_running();
+        status_.running = false;
         status_.phase = McpHttpPhase::Failed;
         status_.error = "MCP HTTP configuration failed";
         status_.error_kind = McpHttpErrorKind::ListenerFailed;
@@ -828,9 +826,17 @@ namespace lfs::mcp {
                         } catch (const std::exception& e) {
                             LOG_ERROR("MCP configuration worker recovered from an exception: {}",
                                       e.what());
+                            try {
+                                active_server->stop();
+                            } catch (...) {
+                            }
                             active_server->reportConfigWorkerFailure();
                         } catch (...) {
                             LOG_ERROR("MCP configuration worker recovered from an unknown exception");
+                            try {
+                                active_server->stop();
+                            } catch (...) {
+                            }
                             active_server->reportConfigWorkerFailure();
                         }
                     }

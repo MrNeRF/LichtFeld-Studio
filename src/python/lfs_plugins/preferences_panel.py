@@ -102,7 +102,6 @@ class PreferencesPanel(Panel):
         model.bind_func("mcp_has_error", lambda: bool(self._mcp_error_text()))
         model.bind_func("mcp_log_file", self._mcp_log_file_text)
         model.bind_func("mcp_has_log_file", lambda: bool(self._mcp_log_file_text()))
-        model.bind_event("close", self._on_close)
         model.bind_event("accept_and_close", self._on_accept_and_close)
         model.bind_event("reset_current_section", self._on_reset_current_section)
         model.bind_event("reset_all_settings", self._on_reset_all_settings)
@@ -619,8 +618,9 @@ class PreferencesPanel(Panel):
         elif section == "interface":
             return lf.ui.reset_layout()
         elif section == "mcp":
-            lf.ui.set_mcp_preferences(True, False, 45677, False)
-            self._load_mcp_preferences()
+            if not self._mcp_safe_mode:
+                lf.ui.set_mcp_preferences(True, False, 45677, False)
+                self._load_mcp_preferences()
         self._refresh_selection()
         return None
 

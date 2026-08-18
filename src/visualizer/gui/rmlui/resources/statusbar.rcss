@@ -102,6 +102,11 @@ body {
     background-color: transparent;
 }
 
+#mcp-toggle.disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 .mcp-switch-track {
     display: block;
     position: relative;

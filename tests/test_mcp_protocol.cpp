@@ -17,6 +17,7 @@
 
 #include <httplib/httplib.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -877,6 +878,42 @@ namespace lfs::mcp {
         first.stop();
     }
 
+    TEST(McpHttpServerTest, FastPathApplyConfigPreservesStartedEndpoints) {
+        const int port = availableLoopbackPort();
+        ASSERT_GT(port, 0);
+        McpHttpServer server;
+        ASSERT_TRUE(server.start(McpHttpConfig{
+            .enabled = true,
+            .expose_network = false,
+            .port = port,
+            .request_logging = false,
+        }));
+        const auto started_endpoints = server.status().endpoints;
+        ASSERT_FALSE(started_endpoints.empty());
+
+        ASSERT_TRUE(server.applyConfig(McpHttpConfig{
+            .enabled = true,
+            .expose_network = false,
+            .port = port,
+            .request_logging = true,
+        }));
+        EXPECT_EQ(server.status().endpoints, started_endpoints);
+        EXPECT_FALSE(server.status().endpoints.empty());
+        EXPECT_TRUE(server.status().request_logging);
+        server.stop();
+    }
+
+    TEST(McpHttpServerTest, HttplibStopClosesBoundButNotListeningSocket) {
+        httplib::Server bound;
+        const int port = bound.bind_to_any_port("127.0.0.1");
+        ASSERT_GT(port, 0);
+        bound.stop();
+
+        httplib::Server rebound;
+        EXPECT_TRUE(rebound.bind_to_port("127.0.0.1", port));
+        rebound.stop();
+    }
+
     TEST(McpHttpServerTest, RapidQueuedDisableCannotLeaveAListenerRunning) {
         const int port = availableLoopbackPort();
         ASSERT_GT(port, 0);
@@ -886,6 +923,20 @@ namespace lfs::mcp {
 
         ASSERT_TRUE(applyActiveMcpHttpConfig({.enabled = true, .port = port}));
         ASSERT_TRUE(applyActiveMcpHttpConfig({.enabled = false, .port = port}));
+
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        bool reached_disabled = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto polled = server.status();
+            if (polled.phase == McpHttpPhase::Disabled && !polled.running) {
+                reached_disabled = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        ASSERT_TRUE(reached_disabled);
+
         setActiveMcpHttpServer(nullptr);
 
         const auto status = server.status();

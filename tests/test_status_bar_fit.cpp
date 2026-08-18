@@ -50,7 +50,8 @@ namespace lfs::vis::gui {
                                        const float bar_x,
                                        const float bar_y) {
             status_bar.rml_manager_ = &manager;
-            status_bar.trackRenderedContextFrame(bar_x, bar_y);
+            status_bar.trackRenderedContextFrame(bar_x, bar_y,
+                                                 status_bar.overlayHeight());
         }
     };
 
