@@ -818,7 +818,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                             conic.y * delta.x * delta.y;
                         if (!(sigma_over_2 >= 0.0f))
                             return;
-                        const float gaussian = expf(-sigma_over_2);
+                        const float gaussian = __expf(-sigma_over_2);
                         const float unclamped_alpha = compensated_opacity * gaussian;
                         const float alpha = fminf(unclamped_alpha, config::max_fragment_alpha);
                         if (!(alpha >= config::min_alpha_threshold))
