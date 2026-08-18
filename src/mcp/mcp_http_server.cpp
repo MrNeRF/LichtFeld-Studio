@@ -829,6 +829,7 @@ namespace lfs::mcp {
                             try {
                                 active_server->stop();
                             } catch (...) {
+                                // LFS-CENSUS-OK(empty-catch): best-effort listener stop during failure recovery; the outer handler already logged and reportConfigWorkerFailure records the state.
                             }
                             active_server->reportConfigWorkerFailure();
                         } catch (...) {
@@ -836,6 +837,7 @@ namespace lfs::mcp {
                             try {
                                 active_server->stop();
                             } catch (...) {
+                                // LFS-CENSUS-OK(empty-catch): best-effort listener stop during failure recovery; the outer handler already logged and reportConfigWorkerFailure records the state.
                             }
                             active_server->reportConfigWorkerFailure();
                         }

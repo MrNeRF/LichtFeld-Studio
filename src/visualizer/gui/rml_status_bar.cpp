@@ -103,6 +103,7 @@ namespace lfs::vis::gui {
             try {
                 return std::vformat(pattern, std::make_format_args(value));
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): render-loop translation fallback returns the untranslated pattern; logging here would spam every frame.
                 return pattern;
             }
         }
