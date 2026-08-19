@@ -112,17 +112,13 @@ namespace fast_lfs::rasterization::kernels::backward {
 
         // Grad buffers. Joint block-bounds needs all threads to hit the same
         // adam_step_row sequence — no early returns before Adam sections.
-        // sh0/shN Adam runs immediately after SH-grad fill so
-        // shN_grads[15]×3 + joint us_u/us_s do not live across covariance/EWA.
+        // sh0/shN Adam runs immediately after SH-dir backward so the SH
+        // streaming temporaries do not live across covariance/EWA.
         float mean_grads[3] = {0.0f, 0.0f, 0.0f};
         float rotation_grads[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         float sh0_grads[3] = {0.0f, 0.0f, 0.0f};
         float scale_grads[3] = {0.0f, 0.0f, 0.0f};
         float opacity_grads[1] = {0.0f};
-        float3 shN_grads[15];
-#pragma unroll
-        for (int i = 0; i < 15; ++i)
-            shN_grads[i] = make_float3(0.0f, 0.0f, 0.0f);
         float3 dL_dmean3d_from_color = make_float3(0.0f, 0.0f, 0.0f);
 
         const bool invisible = in_range && primitive_n_touched_tiles[primitive_idx] == 0;
@@ -145,7 +141,6 @@ namespace fast_lfs::rasterization::kernels::backward {
                 primitive_idx,
                 sh_layout_slots,
                 sh0_grads,
-                shN_grads,
                 // q16: bits==16 + bounds. IEEE f16: bits==16 + null bounds.
                 // decode from the model bind, NOT fused_adam.shN
                 // the optimizer copy is null during SH warmup while the buffer
@@ -159,11 +154,14 @@ namespace fast_lfs::rasterization::kernels::backward {
         // Also the single re-encode site for SH value quant.
         adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         if constexpr (ACTIVE_SH_BASES > 1) {
-            constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
-                                                                                         : 3u;
-            apply_shN_grads_packed(fused_adam, primitive_idx, shN_grads, N_SLOTS, sh_layout_slots);
+            const float3 sh_mean = visible ? means[primitive_idx] : make_float3(0.0f, 0.0f, 0.0f);
+            const float3 sh_cam = visible ? cam_position[0] : make_float3(0.0f, 0.0f, 0.0f);
+            const float3 sh_gc = visible ? grad_color_helper[primitive_idx] : make_float3(0.0f, 0.0f, 0.0f);
+            apply_shN_grads_packed<ACTIVE_SH_BASES>(
+                fused_adam, primitive_idx, sh_layout_slots,
+                sh_mean, sh_cam, sh_gc, visible);
         }
-        // sh0_grads / shN_grads are dead from here on (compiler can free them).
+        // sh0 / streamed shN Adam state is dead from here on (compiler can free it).
 
         // Re-enter the visible-only path for covariance, EWA, and geometry gradients.
         if (visible) {
