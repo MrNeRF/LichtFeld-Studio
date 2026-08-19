@@ -15,8 +15,8 @@
 #include "point_cloud_vulkan_renderer.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering_manager.hpp"
-#include "scene_upscaler_registry.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene_upscaler_registry.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "viewport_appearance_correction.hpp"
@@ -683,6 +683,23 @@ namespace lfs::vis {
                 return {};
             }
 
+            // CPU readback tensors are tight (exactly valid-size). Panel
+            // uv_scale/uv_clamp_max were authored for padded GPU pool textures
+            // and would crop/zoom any panel whose size is not a 64-px bucket.
+            VulkanSplitViewPanel left_panel = params.left;
+            VulkanSplitViewPanel right_panel = params.right;
+            const auto apply_tight_cpu_uv = [](VulkanSplitViewPanel& panel, const int w, const int h) {
+                const int tex_w = std::max(w, 1);
+                const int tex_h = std::max(h, 1);
+                panel.uv_scale = {1.0f, 1.0f};
+                panel.uv_clamp_max = {
+                    (static_cast<float>(tex_w) - 0.5f) / static_cast<float>(tex_w),
+                    (static_cast<float>(tex_h) - 0.5f) / static_cast<float>(tex_h),
+                };
+            };
+            apply_tight_cpu_uv(left_panel, std::get<1>(*left_data), std::get<2>(*left_data));
+            apply_tight_cpu_uv(right_panel, std::get<1>(*right_data), std::get<2>(*right_data));
+
             const int width = output_size.x;
             const int height = output_size.y;
             if (width <= 0 || height <= 0) {
@@ -746,14 +763,16 @@ namespace lfs::vis {
 
             for (int y = rect_y; y < rect_y + rect_h; ++y) {
                 const float v = rect_h > 1
-                                    ? static_cast<float>(y - rect_y) / static_cast<float>(rect_h - 1)
+                                    ? (static_cast<float>(y) + 0.5f - static_cast<float>(rect_y)) /
+                                          static_cast<float>(rect_h - 1)
                                     : 0.0f;
                 for (int x = rect_x; x < rect_x + rect_w; ++x) {
                     const float u = rect_w > 1
-                                        ? static_cast<float>(x - rect_x) / static_cast<float>(rect_w - 1)
+                                        ? (static_cast<float>(x) + 0.5f - static_cast<float>(rect_x)) /
+                                              static_cast<float>(rect_w - 1)
                                         : 0.0f;
                     const bool use_left = x < divider;
-                    const auto& panel = use_left ? params.left : params.right;
+                    const auto& panel = use_left ? left_panel : right_panel;
                     const auto& data = use_left ? *left_data : *right_data;
                     float panel_u = u;
                     if (panel.normalize_x_to_panel) {
@@ -764,7 +783,7 @@ namespace lfs::vis {
                     const glm::vec2 clamp_max = glm::clamp(panel.uv_clamp_max,
                                                            glm::vec2(0.0f), glm::vec2(1.0f));
                     const glm::vec2 texture_uv = glm::min(glm::vec2(panel_u, panel_v) * panel.uv_scale,
-                                                           clamp_max);
+                                                          clamp_max);
                     const std::size_t idx = static_cast<std::size_t>(y) * width + x;
                     const auto sample_color = [&](const glm::vec2 sample_uv) {
                         return glm::vec3{
@@ -4008,6 +4027,33 @@ namespace lfs::vis {
                         }
                         if (!capture_params.left.image || !capture_params.right.image) {
                             return {};
+                        }
+                        // content_rect is authored in coordinate_extent (render_size)
+                        // space; the capture tensor is current_size. Match
+                        // recordScenePass: per-edge rounding into output pixels.
+                        // Capture has no on-screen viewport offset.
+                        if (capture_params.coordinate_extent.x > 0 &&
+                            capture_params.coordinate_extent.y > 0 &&
+                            capture_params.coordinate_extent != current_size) {
+                            const float scale_x =
+                                static_cast<float>(current_size.x) /
+                                static_cast<float>(capture_params.coordinate_extent.x);
+                            const float scale_y =
+                                static_cast<float>(current_size.y) /
+                                static_cast<float>(capture_params.coordinate_extent.y);
+                            const int left = static_cast<int>(
+                                std::lround(capture_params.content_rect.x * scale_x));
+                            const int top = static_cast<int>(
+                                std::lround(capture_params.content_rect.y * scale_y));
+                            const int right = static_cast<int>(std::lround(
+                                (capture_params.content_rect.x + capture_params.content_rect.z) *
+                                scale_x));
+                            const int bottom = static_cast<int>(std::lround(
+                                (capture_params.content_rect.y + capture_params.content_rect.w) *
+                                scale_y));
+                            capture_params.content_rect = {
+                                left, top, std::max(right - left, 1), std::max(bottom - top, 1)};
+                            capture_params.coordinate_extent = current_size;
                         }
                         return composeSplitViewCpu(capture_params, current_size);
                     },

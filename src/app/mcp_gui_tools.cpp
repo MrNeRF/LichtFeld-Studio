@@ -44,6 +44,7 @@
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_properties.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
+#include "visualizer/rendering/scene_upscaler_registry.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
@@ -965,8 +966,10 @@ namespace lfs::app {
                 if (!vis::sceneUpscalerPreset(*backend, preset_id)) {
                     return std::unexpected("Field 'scene_upscaler_preset' is not valid for the selected scene reconstruction backend");
                 }
-                if (args.contains("scene_upscaler")) settings.scene_upscaler = backend_id;
-                if (args.contains("scene_upscaler_preset")) settings.scene_upscaler_preset = preset_id;
+                if (args.contains("scene_upscaler"))
+                    settings.scene_upscaler = backend_id;
+                if (args.contains("scene_upscaler_preset"))
+                    settings.scene_upscaler_preset = preset_id;
                 touched = touched || args.contains("scene_upscaler") || args.contains("scene_upscaler_preset");
                 return {};
             };
@@ -1003,7 +1006,8 @@ namespace lfs::app {
             set_bool("mip_filter", settings.mip_filter);
             set_int("sh_degree", settings.sh_degree);
             set_float("render_scale", settings.render_scale);
-            if (auto result = set_scene_reconstruction(settings); !result) return result;
+            if (auto result = set_scene_reconstruction(settings); !result)
+                return result;
             set_bool("show_crop_box", settings.show_crop_box);
             set_bool("use_crop_box", settings.use_crop_box);
             set_bool("show_ellipsoid", settings.show_ellipsoid);
@@ -2862,6 +2866,20 @@ namespace lfs::app {
                 });
             });
 
+        json scene_upscaler_backend_enum = json::array();
+        json scene_upscaler_preset_enum = json::array();
+        for (const auto& descriptor : vis::sceneUpscalerDescriptors()) {
+            scene_upscaler_backend_enum.push_back(std::string(descriptor.id));
+            for (const auto& preset : descriptor.presets) {
+                const std::string preset_id(preset.id);
+                if (std::find(scene_upscaler_preset_enum.begin(),
+                              scene_upscaler_preset_enum.end(),
+                              preset_id) == scene_upscaler_preset_enum.end()) {
+                    scene_upscaler_preset_enum.push_back(preset_id);
+                }
+            }
+        }
+
         registry.register_tool(
             McpTool{
                 .name = "render.settings.set",
@@ -2871,8 +2889,8 @@ namespace lfs::app {
                     .properties = json{
                         {"focal_length_mm", json{{"type", "number"}}},
                         {"render_scale", json{{"type", "number"}}},
-                        {"scene_upscaler", json{{"type", "string"}, {"enum", json::array({"native", "spatial"})}}},
-                        {"scene_upscaler_preset", json{{"type", "string"}, {"enum", json::array({"native", "quality", "balanced", "performance"})}}},
+                        {"scene_upscaler", json{{"type", "string"}, {"enum", scene_upscaler_backend_enum}}},
+                        {"scene_upscaler_preset", json{{"type", "string"}, {"enum", scene_upscaler_preset_enum}}},
                         {"background_color", json{{"type", "array"}, {"items", json{{"type", "number"}}}}},
                         {"environment_mode", json{{"type", "integer"}}},
                         {"environment_map_path", json{{"type", "string"}}},

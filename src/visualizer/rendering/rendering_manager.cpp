@@ -6,12 +6,12 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
+#include "preferences.hpp"
 #include "rendering/export_post_process.hpp"
 #include "rendering/ppisp_overrides_utils.hpp"
 #include "rendering/rendering.hpp"
-#include "rendering/selection_ops.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
-#include "preferences.hpp"
+#include "rendering/selection_ops.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include "training/trainer.hpp"
@@ -433,12 +433,9 @@ namespace lfs::vis {
     void RenderingManager::updateSettings(const RenderSettings& new_settings,
                                           const DirtyMask dirty_flags) {
         RenderSettings sanitized_settings = new_settings;
-        const auto previous_settings = getSettings();
         const auto backend = sceneUpscalerBackendFromId(sanitized_settings.scene_upscaler)
                                  .value_or(SceneUpscalerBackend::Native);
-        const bool backend_changed = previous_settings.scene_upscaler !=
-            std::string(sceneUpscalerBackendId(backend));
-        if (backend_changed && !sceneUpscalerPreset(backend, sanitized_settings.scene_upscaler_preset)) {
+        if (!sceneUpscalerPreset(backend, sanitized_settings.scene_upscaler_preset)) {
             sanitized_settings.scene_upscaler_preset = loadSceneUpscalerPresetPreference(
                 std::string(sceneUpscalerBackendId(backend)));
         }

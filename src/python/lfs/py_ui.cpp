@@ -4847,6 +4847,10 @@ namespace lfs::python {
         m.def(
             "set_scene_reconstruction",
             [](const std::string& backend_id, const std::string& preset_id) {
+                const auto backend = vis::sceneUpscalerBackendFromId(backend_id);
+                if (!backend || !vis::sceneUpscalerPreset(*backend, preset_id))
+                    return false;
+                nb::gil_scoped_release release;
                 auto settings = vis::get_render_settings();
                 if (!settings)
                     return false;

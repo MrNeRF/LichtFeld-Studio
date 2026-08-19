@@ -46,8 +46,9 @@ divider remain aligned at reduced internal resolutions.
 The selected backend and the last valid preset for each backend are user-global
 preferences in `config/preferences.json`; they are not project state. Invalid
 backend or preset identifiers fall back to the registry defaults. Safe mode
-uses native presentation for the process and neither reads nor writes the saved
-selection.
+starts native presentation, disables the two Preferences reconstruction
+selects, and neither reads nor writes the preference file; Python and plugins
+can still change the live setting for that session.
 
 Future temporal and vendor backends must extend the same registry and effective
 state contract, but their resource and synchronization lifecycles belong in
