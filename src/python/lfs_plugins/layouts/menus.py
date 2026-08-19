@@ -58,6 +58,8 @@ def menu_operator(
     operator_cls_or_id: Any,
     label: str = "",
     shortcut: str = "",
+    *,
+    enabled: bool = True,
 ) -> dict[str, Any]:
     """Create an operator-backed menu entry.
 
@@ -78,6 +80,8 @@ def menu_operator(
     }
     if shortcut:
         entry["shortcut"] = shortcut
+    if not enabled:
+        entry["enabled"] = False
     return entry
 
 

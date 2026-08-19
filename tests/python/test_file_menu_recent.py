@@ -54,6 +54,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.project_clear_recent_files = lambda: None
     lf_stub.project_auto_save_on_close_enabled = lambda: False
     lf_stub.project_is_dirty = lambda: False
+    lf_stub.project_has_path = lambda: False
     lf_stub.project_open = project_open
     lf_stub.project_remove_recent_file = project_remove_recent_file
     lf_stub.project_open_calls = opened
@@ -219,4 +220,30 @@ def test_open_recent_existing_other_error_shows_message(monkeypatch, tmp_path):
     _title, message, style = file_menu.lf.message_dialogs[0]
     assert style == "error"
     assert "boom" in message
+
+
+def _compact_project_item(file_menu):
+    for item in file_menu.FileMenu().menu_items():
+        if str(item.get("operator_id", "")).endswith("CompactProjectOperator"):
+            return item
+    raise AssertionError("CompactProjectOperator menu entry missing")
+
+
+def test_compact_project_enabled_only_with_durable_path(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+
+    file_menu.lf.project_has_path = lambda: False
+    disabled = _compact_project_item(file_menu)
+    assert disabled["enabled"] is False
+
+    file_menu.lf.project_has_path = lambda: True
+    enabled = _compact_project_item(file_menu)
+    assert "enabled" not in enabled or enabled["enabled"] is True
+
+    def raise_missing():
+        raise RuntimeError("project_has_path unavailable")
+
+    file_menu.lf.project_has_path = raise_missing
+    guarded = _compact_project_item(file_menu)
+    assert guarded["enabled"] is False
 

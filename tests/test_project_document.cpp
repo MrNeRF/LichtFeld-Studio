@@ -3245,6 +3245,82 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
+         SaveAsToExistingForeignProjectSucceedsWithLazyCheckpoint) {
+        TemporaryDirectory temporary;
+        const fs::path source =
+            temporary.path / "saveas-handles-source.licht";
+        const fs::path destination =
+            temporary.path / "saveas-handles-dest.licht";
+        const Uuid checkpoint_uuid = fixed_uuid(9961);
+        write_phase_a_fixture(source);
+        {
+            auto seeded =
+                require_result_ptr(ProjectDocument::open(source));
+            install_bound_autosave_checkpoint(
+                *seeded, fixed_uuid(9960), checkpoint_uuid);
+            auto options = save_options(9962, 300);
+            options.commit.snapshot_uuid = checkpoint_uuid;
+            auto published = seeded->save(source, options);
+            ASSERT_TRUE(published)
+                << lfs::format_for_developer(
+                       published.error());
+        }
+
+        auto foreign = make_empty_document(fixed_uuid(9963), 100);
+        ASSERT_TRUE(foreign->save(
+            destination, save_options(9964, 400)));
+
+        auto document =
+            require_result_ptr(ProjectDocument::open(source));
+        const auto* checkpoint =
+            document->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(checkpoint, nullptr);
+        EXPECT_TRUE(checkpoint->is_clean_reference());
+        std::vector<std::byte> expected(
+            static_cast<std::size_t>(checkpoint->size()));
+        require_status(checkpoint->read_at(0, expected));
+        require_status(
+            document->edit_view().dom().set(
+                "save_as_handle_marker",
+                std::string{"dirty"}));
+        EXPECT_TRUE(document->dirty());
+
+        auto options = save_options(9965, 500);
+        options.commit.snapshot_uuid = checkpoint_uuid;
+        auto saved = document->save_as(destination, options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        EXPECT_FALSE(document->dirty());
+        ASSERT_TRUE(document->source_path());
+        EXPECT_EQ(
+            *document->source_path(),
+            std::filesystem::absolute(destination)
+                .lexically_normal());
+
+        auto published =
+            require_result(ProjectReader::open(destination));
+        require_status(published.verify_all());
+        EXPECT_EQ(
+            published.superblock().project_uuid,
+            fixed_uuid(950));
+
+        const auto* rebound =
+            document->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(rebound, nullptr);
+        std::vector<std::byte> actual(
+            static_cast<std::size_t>(rebound->size()));
+        require_status(rebound->read_at(0, actual));
+        EXPECT_EQ(actual, expected);
+
+        auto append_options = save_options(9966, 600);
+        append_options.commit.snapshot_uuid = checkpoint_uuid;
+        auto appended =
+            document->save(destination, append_options);
+        ASSERT_TRUE(appended)
+            << lfs::format_for_developer(appended.error());
+    }
+
+    TEST(ProjectDocumentTest,
          AutosaveInheritsMasterCompatibilityFloorsAndRequiredCapabilities) {
         TemporaryDirectory temporary;
         const fs::path master = temporary.path / "compatibility-master.licht";

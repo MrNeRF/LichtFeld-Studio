@@ -332,6 +332,13 @@ def _on_show_resume_checkpoint_popup(path: str):
     open_resume_checkpoint_panel(path)
 
 
+def _can_compact_project() -> bool:
+    try:
+        return bool(lf.project_has_path())
+    except Exception:
+        return False
+
+
 @register_menu
 class FileMenu:
     """File menu for the menu bar."""
@@ -382,7 +389,10 @@ class FileMenu:
                 shortcut="Ctrl+S",
             ),
             menu_operator(SaveProjectAsOperator),
-            menu_operator(CompactProjectOperator),
+            menu_operator(
+                CompactProjectOperator,
+                enabled=_can_compact_project(),
+            ),
             menu_toggle(
                 lf.ui.tr("menu.file.auto_save_on_close"),
                 lambda: lf.project_set_auto_save_on_close(
