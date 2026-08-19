@@ -55,6 +55,7 @@
 .is-binding-row {
     display: flex;
     align-items: center;
+    gap: 8dp;
     padding: 2dp 4dp;
     min-height: 22dp;
 }
@@ -64,6 +65,13 @@
     font-size: 12dp;
     flex-shrink: 0;
 }
+
+.is-binding-desc {
+    flex: 1;
+    min-width: 0;
+    font-size: 12dp;
+}
+
 .is-rebind-btn {
     flex-shrink: 0;
     min-width: 60dp;
