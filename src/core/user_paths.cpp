@@ -5,7 +5,6 @@
 #include "core/user_paths.hpp"
 
 #include "core/environment.hpp"
-#include "core/executable_path.hpp"
 #include "path_utils.hpp"
 
 #include <nlohmann/json.hpp>
@@ -324,20 +323,6 @@ namespace lfs::core {
 
         if (const auto root = environmentPath("LFS_HOME"))
             return fromUnifiedRoot(*root);
-
-#ifdef LFS_BUILD_PORTABLE
-        if (!options.portable) {
-            try {
-                return fromUnifiedRoot(getExecutableDir() / ".lichtfeld");
-            } catch (const std::exception& error) {
-                // LFS-CENSUS-OK(empty-catch): convert executable path failures into a typed result.
-                return userPathError(
-                    lfs::ErrorCode::Unavailable,
-                    "Portable user storage could not be resolved.",
-                    std::format("Unable to resolve portable executable directory: {}", error.what()));
-            }
-        }
-#endif
 
         if (options.portable) {
             if (!options.executable_dir || options.executable_dir->empty())
