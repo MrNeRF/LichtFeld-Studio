@@ -47,6 +47,7 @@
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
+#include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
@@ -4842,6 +4843,20 @@ namespace lfs::python {
             },
             nb::arg("backend_id"),
             "Get the saved preset for a scene reconstruction backend");
+
+        m.def(
+            "set_scene_reconstruction",
+            [](const std::string& backend_id, const std::string& preset_id) {
+                auto settings = vis::get_render_settings();
+                if (!settings)
+                    return false;
+                settings->scene_upscaler = backend_id;
+                settings->scene_upscaler_preset = preset_id;
+                vis::update_render_settings(*settings);
+                return true;
+            },
+            nb::arg("backend_id"), nb::arg("preset_id"),
+            "Atomically select a scene reconstruction backend and preset");
 
         m.def(
             "get_mcp_preferences",

@@ -302,11 +302,16 @@ class PreferencesPanel(Panel):
         if not self._handle:
             return
         presets = self._scene_upscaler_presets.get(self._scene_upscaler(), ())
+        selected_preset = self._scene_upscaler_preset()
         self._handle.update_record_list(
             "scene_upscaler_presets",
             [
-                {"index": str(index), "label": lf.ui.tr(label_key)}
-                for index, (_preset, label_key) in enumerate(presets)
+                {
+                    "index": str(index),
+                    "label": lf.ui.tr(label_key),
+                    "selected": preset == selected_preset,
+                }
+                for index, (preset, label_key) in enumerate(presets)
             ],
         )
 
@@ -340,10 +345,21 @@ class PreferencesPanel(Panel):
             if any(item[0] == remembered_preset for item in presets)
             else default_preset
         )
-        settings.scene_upscaler = backend
-        settings.scene_upscaler_preset = preset
+        self._apply_scene_reconstruction(backend, preset)
         self._sync_scene_upscaler_preset_records()
         self._refresh_selection()
+
+    @staticmethod
+    def _apply_scene_reconstruction(backend, preset):
+        setter = getattr(lf.ui, "set_scene_reconstruction", None)
+        if setter is not None:
+            return setter(backend, preset)
+        settings = lf.get_render_settings()
+        if settings is None:
+            return False
+        settings.scene_upscaler = backend
+        settings.scene_upscaler_preset = preset
+        return True
 
     def _scene_upscaler_preset(self):
         backend = self._scene_upscaler()
@@ -372,10 +388,9 @@ class PreferencesPanel(Panel):
         presets = self._scene_upscaler_presets.get(backend, ())
         if not 0 <= index < len(presets):
             return
-        settings = lf.get_render_settings()
-        if settings is None or len(presets) <= 1:
+        if len(presets) <= 1:
             return
-        settings.scene_upscaler_preset = presets[index][0]
+        self._apply_scene_reconstruction(backend, presets[index][0])
         self._refresh_selection()
 
     def _language_index(self):

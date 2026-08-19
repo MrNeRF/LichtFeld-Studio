@@ -254,6 +254,7 @@ namespace lfs::vis {
         VkPipeline scene_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout scene_spatial_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline scene_spatial_pipeline = VK_NULL_HANDLE;
+        bool scene_spatial_pipeline_failed = false;
         SceneUpscalerSelection scene_upscaler_selection{};
         std::optional<SceneUpscalerSelection> logged_scene_upscaler_selection;
         VkPipelineLayout vignette_pipeline_layout = VK_NULL_HANDLE;
@@ -1612,6 +1613,8 @@ namespace lfs::vis {
         [[nodiscard]] bool ensureSpatialScenePipeline() {
             if (scene_spatial_pipeline != VK_NULL_HANDLE)
                 return true;
+            if (scene_spatial_pipeline_failed)
+                return false;
             VkPushConstantRange scene_push{};
             scene_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
             scene_push.offset = 0;
@@ -1636,6 +1639,7 @@ namespace lfs::vis {
                 vkDestroyPipelineLayout(device, scene_spatial_pipeline_layout, nullptr);
                 scene_spatial_pipeline_layout = VK_NULL_HANDLE;
             }
+            scene_spatial_pipeline_failed = true;
             return false;
         }
 
@@ -2008,8 +2012,11 @@ namespace lfs::vis {
         }
 
         void prepare(const VulkanViewportPassParams& params) {
-            if (params.scene_upscaler == SceneUpscalerBackend::Spatial)
+            if (params.scene_upscaler == SceneUpscalerBackend::Native) {
+                scene_spatial_pipeline_failed = false;
+            } else {
                 static_cast<void>(ensureSpatialScenePipeline());
+            }
             auto& frame = resourcesForFrame(params.frame_slot);
             updateQuadBuffer(params.scene_image_flip_y);
             updateGridUniforms(params);
@@ -2045,7 +2052,7 @@ namespace lfs::vis {
             depth_blit_pass.prepare(params.depth_blit, params.frame_slot);
             split_view_pass.prepare(params.split_view, params.frame_slot);
             const bool runtime_available = params.split_view.enabled
-                                               ? split_view_pass.ready(params.frame_slot)
+                                               ? split_view_pass.available()
                                                : scene_spatial_pipeline != VK_NULL_HANDLE;
             scene_upscaler_selection = resolveSceneUpscalerSelection(
                 params.scene_upscaler, runtime_available);

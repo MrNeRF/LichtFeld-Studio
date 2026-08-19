@@ -75,6 +75,12 @@ def preferences_panel_module(monkeypatch):
         state.section_request = ""
         return section
 
+    def set_scene_reconstruction(backend, preset):
+        state.render_settings.scene_upscaler = str(backend)
+        state.render_settings.scene_upscaler_preset = str(preset)
+        state.scene_reconstruction_presets[str(backend)] = str(preset)
+        return True
+
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
@@ -127,6 +133,7 @@ def preferences_panel_module(monkeypatch):
         get_scene_reconstruction_preset_preference=lambda backend: (
             state.scene_reconstruction_presets[backend]
         ),
+        set_scene_reconstruction=set_scene_reconstruction,
     )
     lf_stub.get_render_settings = lambda: state.render_settings
 
@@ -150,6 +157,7 @@ def test_language_selection_does_not_reload_active_language(preferences_panel_mo
 def test_scene_reconstruction_uses_backend_specific_presets(preferences_panel_module):
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
+    panel._sync_scene_reconstruction_catalog()
     panel._refresh_selection = lambda: None
 
     panel._set_scene_upscaler_index("1")
@@ -163,6 +171,10 @@ def test_scene_reconstruction_uses_backend_specific_presets(preferences_panel_mo
     assert state.render_settings.scene_upscaler == "native"
     assert state.render_settings.scene_upscaler_preset == "native"
 
+    panel._set_scene_upscaler_index("1")
+    assert state.render_settings.scene_upscaler == "spatial"
+    assert state.render_settings.scene_upscaler_preset == "performance"
+
 
 def test_scene_reconstruction_restores_the_backend_specific_preset(preferences_panel_module):
     module, state = preferences_panel_module
@@ -175,6 +187,26 @@ def test_scene_reconstruction_restores_the_backend_specific_preset(preferences_p
 
     assert state.render_settings.scene_upscaler == "spatial"
     assert state.render_settings.scene_upscaler_preset == "performance"
+
+
+def test_scene_reconstruction_preset_records_mark_the_active_preset(
+    preferences_panel_module,
+):
+    module, state = preferences_panel_module
+    state.render_settings.scene_upscaler = "spatial"
+    state.render_settings.scene_upscaler_preset = "performance"
+    panel = module.PreferencesPanel()
+    panel._sync_scene_reconstruction_catalog()
+
+    records = []
+    panel._handle = SimpleNamespace(
+        update_record_list=lambda name, items: records.extend(
+            items if name == "scene_upscaler_presets" else []
+        )
+    )
+    panel._sync_scene_upscaler_preset_records()
+
+    assert [record["selected"] for record in records] == [False, False, True]
 
 
 def test_language_selection_applies_a_different_language(
@@ -446,7 +478,7 @@ def test_safe_mode_disables_preferences_and_status_bar_mcp_controls():
     preferences = (resources / "preferences.rml").read_text(encoding="utf-8")
     status_bar = (resources / "statusbar.rml").read_text(encoding="utf-8")
 
-    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 5
+    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 7
     assert preferences.count('data-class-disabled="mcp_safe_mode"') == 2
     assert (
         '<button id="mcp-toggle" data-class-is-on="mcp_server_enabled" '

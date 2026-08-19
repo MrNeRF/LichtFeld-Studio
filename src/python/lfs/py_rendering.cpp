@@ -936,6 +936,14 @@ namespace lfs::python {
                 static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
         }
         vis::update_render_settings(settings_);
+        // update_render_settings may normalize dependent properties (for
+        // example the preset when switching scene reconstruction backends).
+        // Keep this Python proxy in lockstep with that applied state so the
+        // next property assignment cannot restore a stale, cross-backend
+        // preset.
+        if (const auto applied = vis::get_render_settings()) {
+            settings_ = *applied;
+        }
         request_redraw();
     }
 

@@ -1897,7 +1897,9 @@ namespace lfs::vis {
         if (resize_deferring &&
             has_cached_viewport_output &&
             !resize_result.render_interactive_frame) {
-            update_cached_split_position(false);
+            if (!splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
+                update_cached_split_position(false);
+            }
             constexpr DirtyMask resize_defer_consumed_dirty =
                 DirtyFlag::CAMERA | DirtyFlag::VIEWPORT | DirtyFlag::OVERLAY;
             const DirtyMask deferred_dirty = frame_dirty & ~resize_defer_consumed_dirty;
@@ -3954,7 +3956,7 @@ namespace lfs::vis {
 
             if (pending_split_view.enabled) {
                 viewport_artifact_service_.setLazyCapture(
-                    [this, params = pending_split_view, render_size]()
+                    [this, params = pending_split_view, current_size]()
                         -> std::shared_ptr<lfs::core::Tensor> {
                         VulkanSplitViewParams capture_params = params;
                         {
@@ -3990,10 +3992,10 @@ namespace lfs::vis {
                         if (!capture_params.left.image || !capture_params.right.image) {
                             return {};
                         }
-                        return composeSplitViewCpu(capture_params, render_size);
+                        return composeSplitViewCpu(capture_params, current_size);
                     },
                     rendered_metadata,
-                    render_size);
+                    current_size);
             } else {
                 viewport_artifact_service_.clearViewportOutput();
             }

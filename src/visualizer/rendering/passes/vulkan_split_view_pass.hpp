@@ -67,6 +67,7 @@ namespace lfs::vis {
         void shutdown();
 
         [[nodiscard]] bool ready(std::size_t frame_slot) const;
+        [[nodiscard]] bool available() const;
 
     private:
         struct Impl;

@@ -1222,6 +1222,8 @@ namespace lfs::vis {
                    descriptor.left_view != VK_NULL_HANDLE &&
                    descriptor.right_view != VK_NULL_HANDLE;
         }
+
+        [[nodiscard]] bool available() const { return pipeline != VK_NULL_HANDLE; }
     };
 
     VulkanSplitViewPass::VulkanSplitViewPass() = default;
@@ -1258,6 +1260,10 @@ namespace lfs::vis {
 
     bool VulkanSplitViewPass::ready(const std::size_t frame_slot) const {
         return impl_ && impl_->ready(frame_slot);
+    }
+
+    bool VulkanSplitViewPass::available() const {
+        return impl_ && impl_->available();
     }
 
 } // namespace lfs::vis

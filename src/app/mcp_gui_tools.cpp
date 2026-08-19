@@ -950,6 +950,26 @@ namespace lfs::app {
                 touched = true;
                 return {};
             };
+            const auto set_scene_reconstruction = [&args, &touched](vis::RenderSettingsProxy& settings)
+                -> std::expected<void, std::string> {
+                const std::string backend_id = args.value("scene_upscaler", settings.scene_upscaler);
+                const auto backend = vis::sceneUpscalerBackendFromId(backend_id);
+                if (!backend) {
+                    return std::unexpected("Field 'scene_upscaler' must name a registered scene reconstruction backend");
+                }
+                std::string preset_id = args.value("scene_upscaler_preset", settings.scene_upscaler_preset);
+                if (!args.contains("scene_upscaler_preset") &&
+                    !vis::sceneUpscalerPreset(*backend, preset_id)) {
+                    preset_id = std::string(vis::defaultSceneUpscalerPreset(*backend).id);
+                }
+                if (!vis::sceneUpscalerPreset(*backend, preset_id)) {
+                    return std::unexpected("Field 'scene_upscaler_preset' is not valid for the selected scene reconstruction backend");
+                }
+                if (args.contains("scene_upscaler")) settings.scene_upscaler = backend_id;
+                if (args.contains("scene_upscaler_preset")) settings.scene_upscaler_preset = preset_id;
+                touched = touched || args.contains("scene_upscaler") || args.contains("scene_upscaler_preset");
+                return {};
+            };
 
             const auto set_vec3 = [&args, &touched](const char* key,
                                                     std::array<float, 3>& field) -> std::expected<void, std::string> {
@@ -983,8 +1003,7 @@ namespace lfs::app {
             set_bool("mip_filter", settings.mip_filter);
             set_int("sh_degree", settings.sh_degree);
             set_float("render_scale", settings.render_scale);
-            set_string("scene_upscaler", settings.scene_upscaler);
-            set_string("scene_upscaler_preset", settings.scene_upscaler_preset);
+            if (auto result = set_scene_reconstruction(settings); !result) return result;
             set_bool("show_crop_box", settings.show_crop_box);
             set_bool("use_crop_box", settings.use_crop_box);
             set_bool("show_ellipsoid", settings.show_ellipsoid);
@@ -2852,8 +2871,8 @@ namespace lfs::app {
                     .properties = json{
                         {"focal_length_mm", json{{"type", "number"}}},
                         {"render_scale", json{{"type", "number"}}},
-                        {"scene_upscaler", json{{"type", "string"}}},
-                        {"scene_upscaler_preset", json{{"type", "string"}}},
+                        {"scene_upscaler", json{{"type", "string"}, {"enum", json::array({"native", "spatial"})}}},
+                        {"scene_upscaler_preset", json{{"type", "string"}, {"enum", json::array({"native", "quality", "balanced", "performance"})}}},
                         {"background_color", json{{"type", "array"}, {"items", json{{"type", "number"}}}}},
                         {"environment_mode", json{{"type", "integer"}}},
                         {"environment_map_path", json{{"type", "string"}}},
