@@ -87,6 +87,54 @@ TEST(DensificationInfoZeroTest, MrnfFoldMatchesMultiStepReference) {
     }
 }
 
+TEST(DensificationInfoZeroTest, MrnfMaxFoldUsesViewMaxRow) {
+    constexpr size_t N = 4;
+    auto vis = Tensor::zeros({N}, Device::CUDA);
+    auto refine_max = Tensor::from_vector(std::vector<float>{0.1f, 0.0f, 0.4f, 0.0f}, {N}, Device::CUDA);
+
+    std::vector<float> flat(N * 3);
+    const std::vector<float> row0{1.0f, 0.0f, 2.0f, 0.5f};
+    const std::vector<float> row1{0.2f, 9.0f, 0.3f, 0.0f};
+    const std::vector<float> row2{0.8f, 0.1f, 1.5f, 0.4f};
+    for (size_t i = 0; i < N; ++i) {
+        flat[i] = row0[i];
+        flat[N + i] = row1[i];
+        flat[2 * N + i] = row2[i];
+    }
+    auto info = Tensor::from_vector(flat, {size_t{3}, N}, Device::CUDA);
+    mrnf_strategy::launch_fold_densification_and_zero(
+        vis.ptr<float>(), refine_max.ptr<float>(), info.ptr<float>(), N, nullptr, 3, true);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    const auto vis_h = to_host(vis);
+    const auto max_h = to_host(refine_max);
+    EXPECT_FLOAT_EQ(vis_h[0], 1.0f);
+    EXPECT_FLOAT_EQ(vis_h[2], 2.0f);
+    EXPECT_FLOAT_EQ(max_h[0], 0.8f);
+    EXPECT_FLOAT_EQ(max_h[1], 0.1f);
+    EXPECT_FLOAT_EQ(max_h[2], 1.5f);
+    EXPECT_FLOAT_EQ(max_h[3], 0.4f);
+    for (float v : to_host(info)) {
+        EXPECT_FLOAT_EQ(v, 0.f);
+    }
+}
+
+TEST(DensificationInfoZeroTest, MrnfSumFoldIgnoresThirdRow) {
+    constexpr size_t N = 3;
+    auto vis = Tensor::zeros({N}, Device::CUDA);
+    auto refine_max = Tensor::zeros({N}, Device::CUDA);
+    std::vector<float> flat(N * 3, 0.f);
+    flat[0] = 1.0f;
+    flat[N] = 0.25f;
+    flat[2 * N] = 9.0f;
+    auto info = Tensor::from_vector(flat, {size_t{3}, N}, Device::CUDA);
+    mrnf_strategy::launch_fold_densification_and_zero(
+        vis.ptr<float>(), refine_max.ptr<float>(), info.ptr<float>(), N, nullptr, 3, false);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    EXPECT_FLOAT_EQ(to_host(vis)[0], 1.0f);
+    EXPECT_FLOAT_EQ(to_host(refine_max)[0], 0.25f);
+}
+
 TEST(DensificationInfoZeroTest, McmcMaxMatchesMultiStepReference) {
     constexpr size_t N = 6;
     auto err_max = Tensor::zeros({N}, Device::CUDA);

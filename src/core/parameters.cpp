@@ -277,6 +277,42 @@ namespace lfs::core {
                 return std::format("init_scaling must be finite and positive (got {})", init_scaling);
             if (!std::isfinite(init_opacity) || init_opacity <= 0.0f || init_opacity >= 1.0f)
                 return std::format("init_opacity must be finite and within (0, 1) (got {})", init_opacity);
+            if (explore_splits < 0)
+                return std::format("explore_splits must be nonnegative (got {})", explore_splits);
+            if (explore_seeds < 0)
+                return std::format("explore_seeds must be nonnegative (got {})", explore_seeds);
+            if (far_unseen_cull_windows < 0)
+                return std::format("far_unseen_cull_windows must be nonnegative (got {})",
+                                   far_unseen_cull_windows);
+            if (growth_score_mode != GrowthScoreMode::Sum &&
+                growth_score_mode != GrowthScoreMode::Max)
+                return "growth_score_mode must be 'sum' or 'max'";
+            if (growth_mode != GrowthMode::Threshold && growth_mode != GrowthMode::Always)
+                return "growth_mode must be 'threshold' or 'always'";
+            if (mean_step_mode != MeanStepMode::Global && mean_step_mode != MeanStepMode::PerSplat)
+                return "mean_step_mode must be 'global' or 'per_splat'";
+            if (!std::isfinite(mean_step_ratio_max) || mean_step_ratio_max < 1.0f)
+                return std::format("mean_step_ratio_max must be finite and >= 1 (got {})",
+                                   mean_step_ratio_max);
+            if (!std::isfinite(far_mask_orbits) || far_mask_orbits < 0.0f)
+                return std::format("far_mask_orbits must be finite and nonnegative (got {})",
+                                   far_mask_orbits);
+            if (!std::isfinite(far_cap_ratio_full) || !std::isfinite(far_cap_ratio_rich) ||
+                !(far_cap_ratio_full > 0.0f) || !(far_cap_ratio_full < far_cap_ratio_rich))
+                return std::format(
+                    "far_cap_ratio_full/rich must be finite and 0 < full < rich (got {}, {})",
+                    far_cap_ratio_full, far_cap_ratio_rich);
+            if (!std::isfinite(seed_depth_orbits) || seed_depth_orbits < 0.0f)
+                return std::format("seed_depth_orbits must be finite and nonnegative (got {})",
+                                   seed_depth_orbits);
+            if (!std::isfinite(growth_target_factor) || growth_target_factor < 1.0f)
+                return std::format("growth_target_factor must be finite and >= 1 (got {})",
+                                   growth_target_factor);
+            if (!std::isfinite(max_screen_clip_frac) || max_screen_clip_frac < 0.0f)
+                return std::format("max_screen_clip_frac must be finite and nonnegative (got {})",
+                                   max_screen_clip_frac);
+            if (!std::isfinite(seed_opacity) || seed_opacity <= 0.0f || seed_opacity >= 1.0f)
+                return std::format("seed_opacity must be finite and within (0, 1) (got {})", seed_opacity);
             if (!std::isfinite(mask_opacity_penalty_power) || mask_opacity_penalty_power <= 0.0f)
                 return std::format("mask_opacity_penalty_power must be finite and positive (got {})", mask_opacity_penalty_power);
             if (!std::isfinite(steps_scaler))
@@ -324,6 +360,9 @@ namespace lfs::core {
                 std::pair{"scale_decay", scale_decay},
                 std::pair{"bounds_percentile", bounds_percentile},
                 std::pair{"prune_ratio", prune_ratio},
+                std::pair{"far_growth_cap", far_growth_cap},
+                std::pair{"far_decay_scale", far_decay_scale},
+                std::pair{"far_scene_min_fraction", far_scene_min_fraction},
             };
             for (const auto& [name, value] : probability_fields) {
                 if (auto error = invalid_probability(value, name); !error.empty())

@@ -763,6 +763,10 @@ namespace lfs::training {
         fused_adam.sparsity_n = fused_extra_gradients.sparsity_n;
         fused_adam.sparsity_rho = fused_extra_gradients.sparsity_rho;
         fused_adam.sparsity_grad_loss = fused_extra_gradients.sparsity_grad_loss;
+        fused_adam.per_splat_mean_step = optimizer_fused.per_splat_mean_step;
+        fused_adam.mean_step_median_extent = optimizer_fused.mean_step_median_extent;
+        fused_adam.mean_step_r_min = optimizer_fused.mean_step_r_min;
+        fused_adam.mean_step_r_max = optimizer_fused.mean_step_r_max;
         fused_adam.means = convert_param(optimizer_fused.means);
         fused_adam.scaling = convert_param(optimizer_fused.scaling);
         fused_adam.rotation = convert_param(optimizer_fused.rotation);
@@ -831,7 +835,9 @@ namespace lfs::training {
             &fused_adam,
             bwd_shN_bounds_ptr,
             bwd_shN_n_cells,
-            bwd_shN_bits);
+            bwd_shN_bits,
+            optimizer_fused.mean_step_far_mask,
+            optimizer_fused.mean_step_far_mask_n);
 
         ctx.mark_forward_context_released();
 

@@ -903,6 +903,121 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.enable_eval = v; }); },
                 "Enable evaluation during training")
             .def_prop_rw(
+                "explore_splits",
+                [](PyOptimizationParams& self) { return self.params().explore_splits; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.explore_splits = v; }); },
+                "Error-guided exploration splits per MRNF refine window")
+            .def_prop_rw(
+                "explore_seeds",
+                [](PyOptimizationParams& self) { return self.params().explore_seeds; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.explore_seeds = v; }); },
+                "Error-guided ray seeds per MRNF refine window")
+            .def_prop_rw(
+                "seed_opacity",
+                [](PyOptimizationParams& self) { return self.params().seed_opacity; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.seed_opacity = v; }); },
+                "Initial opacity of MRNF exploration seeds")
+            .def_prop_rw(
+                "far_growth_cap",
+                [](PyOptimizationParams& self) { return self.params().far_growth_cap; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.far_growth_cap = v; }); },
+                "Max fraction of new MRNF splats that may land in the far field")
+            .def_prop_rw(
+                "far_decay_scale",
+                [](PyOptimizationParams& self) { return self.params().far_decay_scale; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.far_decay_scale = v; }); },
+                "Scale MRNF opacity/scale decay for far-field splats (1 disables)")
+            .def_prop_rw(
+                "growth_score_mode",
+                [](PyOptimizationParams& self) {
+                    return std::string(growth_score_mode_name(self.params().growth_score_mode));
+                },
+                [](PyOptimizationParams&, const std::string& v) {
+                    modify_params([&v](auto& p) {
+                        if (const auto parsed = growth_score_mode_from_string(v)) {
+                            p.growth_score_mode = *parsed;
+                        } else {
+                            p.growth_score_mode = static_cast<GrowthScoreMode>(-1);
+                        }
+                    });
+                },
+                "MRNF growth score mode: 'sum' or 'max'")
+            .def_prop_rw(
+                "growth_mode",
+                [](PyOptimizationParams& self) {
+                    return std::string(growth_mode_name(self.params().growth_mode));
+                },
+                [](PyOptimizationParams&, const std::string& v) {
+                    modify_params([&v](auto& p) {
+                        if (const auto parsed = growth_mode_from_string(v)) {
+                            p.growth_mode = *parsed;
+                        } else {
+                            p.growth_mode = static_cast<GrowthMode>(-1);
+                        }
+                    });
+                },
+                "MRNF growth mode: 'threshold' or 'always'")
+            .def_prop_rw(
+                "growth_target_factor",
+                [](PyOptimizationParams& self) { return self.params().growth_target_factor; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.growth_target_factor = v; }); },
+                "Always-mode multiplicative growth per MRNF refine window")
+            .def_prop_rw(
+                "far_unseen_cull_windows",
+                [](PyOptimizationParams& self) { return self.params().far_unseen_cull_windows; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.far_unseen_cull_windows = v; }); },
+                "Prune far-field splats unseen for this many MRNF refine windows (0 disables)")
+            .def_prop_rw(
+                "max_screen_clip_frac",
+                [](PyOptimizationParams& self) { return self.params().max_screen_clip_frac; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.max_screen_clip_frac = v; }); },
+                "Soft-clip MRNF world scale when projected radius exceeds this fraction of min(W,H)")
+            .def_prop_rw(
+                "mean_step_mode",
+                [](PyOptimizationParams& self) {
+                    return std::string(mean_step_mode_name(self.params().mean_step_mode));
+                },
+                [](PyOptimizationParams&, const std::string& v) {
+                    modify_params([&v](auto& p) {
+                        if (const auto parsed = mean_step_mode_from_string(v)) {
+                            p.mean_step_mode = *parsed;
+                        } else {
+                            p.mean_step_mode = static_cast<MeanStepMode>(-1);
+                        }
+                    });
+                },
+                "MRNF position step mode: 'global' or 'per_splat'")
+            .def_prop_rw(
+                "mean_step_ratio_max",
+                [](PyOptimizationParams& self) { return self.params().mean_step_ratio_max; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.mean_step_ratio_max = v; }); },
+                "Upper clamp on the per-splat mean-step ratio vs the median splat")
+            .def_prop_rw(
+                "far_mask_orbits",
+                [](PyOptimizationParams& self) { return self.params().far_mask_orbits; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.far_mask_orbits = v; }); },
+                "Far-field mask radius as a multiple of the camera-orbit radius")
+            .def_prop_rw(
+                "far_scene_min_fraction",
+                [](PyOptimizationParams& self) { return self.params().far_scene_min_fraction; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.far_scene_min_fraction = v; }); },
+                "Minimum deep-far splat fraction that activates far-field features (0 = always on)")
+            .def_prop_rw(
+                "far_cap_ratio_full",
+                [](PyOptimizationParams& self) { return self.params().far_cap_ratio_full; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.far_cap_ratio_full = v; }); },
+                "cap/points at or below this applies the full far-field dose")
+            .def_prop_rw(
+                "far_cap_ratio_rich",
+                [](PyOptimizationParams& self) { return self.params().far_cap_ratio_rich; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.far_cap_ratio_rich = v; }); },
+                "cap/points at or above this turns the far-field dose off")
+            .def_prop_rw(
+                "seed_depth_orbits",
+                [](PyOptimizationParams& self) { return self.params().seed_depth_orbits; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.seed_depth_orbits = v; }); },
+                "Seeding far-depth limit as a multiple of the camera-orbit radius")
+            .def_prop_rw(
                 "steps_scaler",
                 [](PyOptimizationParams& self) { return self.params().steps_scaler; },
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.steps_scaler = v; }); },

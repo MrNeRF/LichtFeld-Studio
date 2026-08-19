@@ -34,6 +34,8 @@ namespace lfs::training {
 
         virtual void pre_step(int /*iter*/, RenderOutput& /*render_output*/) {}
 
+        virtual void post_render(int /*iter*/, RenderOutput& /*render_output*/) {}
+
         virtual void post_backward(int iter, RenderOutput& render_output) = 0;
 
         virtual void step(int iter) = 0;

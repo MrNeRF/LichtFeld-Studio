@@ -7,6 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace lfs::training {
+    struct GumbelTopKScratch;
+}
+
 namespace lfs::training::mrnf_strategy {
 
     struct MRNFBounds {
@@ -68,8 +72,11 @@ namespace lfs::training::mrnf_strategy {
         float* log_scales,
         const bool* frozen_mask,
         size_t frozen_mask_size,
+        const bool* far_mask,
+        size_t far_mask_size,
         float opacity_decay,
         float scale_decay,
+        float far_decay_scale,
         float train_t,
         size_t N,
         void* stream = nullptr);
@@ -94,6 +101,18 @@ namespace lfs::training::mrnf_strategy {
         void* stream = nullptr);
 
     /**
+     * Median of geomean(exp(scaling_raw)) over the provided rows.
+     * Non-finite or non-positive extents are dropped. out_valid is false
+     * when no usable extent remains (caller falls back to the global step).
+     */
+    void launch_median_geomean_extent(
+        const float* scaling_raw,
+        size_t N,
+        float* out_median,
+        bool* out_valid,
+        void* stream = nullptr);
+
+    /**
      * Gumbel-top-k sampling — weighted sampling without replacement.
      *
      * key[i] = -log(-log(U)) + log(weight[i])
@@ -112,7 +131,10 @@ namespace lfs::training::mrnf_strategy {
         size_t K,
         uint64_t seed,
         int64_t* output_indices,
-        void* stream = nullptr);
+        void* stream = nullptr,
+        bool compact_sparse = true,
+        lfs::training::GumbelTopKScratch* scratch = nullptr,
+        size_t known_nnz = 0);
 
     void launch_elementwise_add_inplace(
         float* a,
@@ -121,14 +143,109 @@ namespace lfs::training::mrnf_strategy {
         void* stream = nullptr);
 
     /**
-     * fold densification_info into vis_count (add row0) and
-     * refine_weight_max (max row1), then zero the [2,N] buffer — one kernel
-     * replaces add + max + full memset.
+     * fold densification_info into vis_count (add row0) and refine_weight_max
+     * (max of row1, or row2 when use_view_max_row), then zero n_rows rows.
      */
     void launch_fold_densification_and_zero(
         float* vis_count,
         float* refine_weight_max,
         float* densification_info,
+        size_t N,
+        void* stream = nullptr,
+        size_t n_rows = 2,
+        bool use_view_max_row = false);
+
+    void launch_project_visible_centers(
+        const float* means,
+        const float* w2c,
+        float fx,
+        float fy,
+        float cx,
+        float cy,
+        int width,
+        int height,
+        float near_plane,
+        float* means2d,
+        float* radii,
+        size_t N,
+        void* stream = nullptr);
+
+    void launch_gather_center_error(
+        const float* means2d,
+        const float* radii,
+        const float* error,
+        int width,
+        int height,
+        float* scores,
+        size_t N,
+        void* stream = nullptr);
+
+    void launch_far_field_mask(
+        const float* means,
+        float centroid_x,
+        float centroid_y,
+        float centroid_z,
+        float far_radius,
+        bool* far,
+        size_t N,
+        void* stream = nullptr);
+
+    void launch_mean_abs_error_hw(
+        const float* pred,
+        const float* target,
+        int channels,
+        int height,
+        int width,
+        float* out_hw,
+        void* stream = nullptr);
+
+    void launch_seed_weights_from_error_alpha(
+        const float* error_hw,
+        const float* alpha,
+        float* out_weights,
+        size_t hw,
+        void* stream = nullptr);
+
+    void launch_gather_seed_payloads(
+        const int64_t* pixel_indices,
+        size_t K,
+        size_t hw,
+        const float* target,
+        int channels,
+        const float* alpha,
+        const float* depth,
+        float* out_rgb,
+        float* out_alpha,
+        float* out_depth,
+        void* stream = nullptr);
+
+    void launch_update_far_unseen_windows(
+        uint8_t* counters,
+        bool* cull_mask,
+        const float* vis_count,
+        const bool* far_mask,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
+        const bool* free_mask,
+        size_t free_mask_size,
+        int k,
+        size_t N,
+        void* stream = nullptr);
+
+    void launch_zero_u8_at_indices(
+        uint8_t* values,
+        const int64_t* indices,
+        size_t K,
+        void* stream = nullptr);
+
+    void launch_clip_screen_size(
+        float* log_scales,
+        const float* radii,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
+        const bool* free_mask,
+        size_t free_mask_size,
+        float limit,
         size_t N,
         void* stream = nullptr);
 

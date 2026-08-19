@@ -287,6 +287,9 @@ def project_recent_files() -> list[str]:
 def project_clear_recent_files() -> None:
     """Clear the most-recently-used .licht project list"""
 
+def project_remove_recent_file(path: str) -> None:
+    """Remove one path from the most-recently-used .licht project list"""
+
 def project_autosave_recovery_disposition(path: str) -> str:
     """
     Return autosave recovery disposition for a .licht master path ("none", "offer", "stale_deleted", "invalid", "ambiguous", "busy", "unavailable")
@@ -2034,6 +2037,131 @@ class OptimizationParams:
 
     @enable_eval.setter
     def enable_eval(self, arg: bool, /) -> None: ...
+
+    @property
+    def explore_splits(self) -> int:
+        """Error-guided exploration splits per MRNF refine window"""
+
+    @explore_splits.setter
+    def explore_splits(self, arg: int, /) -> None: ...
+
+    @property
+    def explore_seeds(self) -> int:
+        """Error-guided ray seeds per MRNF refine window"""
+
+    @explore_seeds.setter
+    def explore_seeds(self, arg: int, /) -> None: ...
+
+    @property
+    def seed_opacity(self) -> float:
+        """Initial opacity of MRNF exploration seeds"""
+
+    @seed_opacity.setter
+    def seed_opacity(self, arg: float, /) -> None: ...
+
+    @property
+    def far_growth_cap(self) -> float:
+        """Max fraction of new MRNF splats that may land in the far field"""
+
+    @far_growth_cap.setter
+    def far_growth_cap(self, arg: float, /) -> None: ...
+
+    @property
+    def far_decay_scale(self) -> float:
+        """Scale MRNF opacity/scale decay for far-field splats (1 disables)"""
+
+    @far_decay_scale.setter
+    def far_decay_scale(self, arg: float, /) -> None: ...
+
+    @property
+    def growth_score_mode(self) -> str:
+        """MRNF growth score mode: 'sum' or 'max'"""
+
+    @growth_score_mode.setter
+    def growth_score_mode(self, arg: str, /) -> None: ...
+
+    @property
+    def growth_mode(self) -> str:
+        """MRNF growth mode: 'threshold' or 'always'"""
+
+    @growth_mode.setter
+    def growth_mode(self, arg: str, /) -> None: ...
+
+    @property
+    def growth_target_factor(self) -> float:
+        """Always-mode multiplicative growth per MRNF refine window"""
+
+    @growth_target_factor.setter
+    def growth_target_factor(self, arg: float, /) -> None: ...
+
+    @property
+    def far_unseen_cull_windows(self) -> int:
+        """
+        Prune far-field splats unseen for this many MRNF refine windows (0 disables)
+        """
+
+    @far_unseen_cull_windows.setter
+    def far_unseen_cull_windows(self, arg: int, /) -> None: ...
+
+    @property
+    def max_screen_clip_frac(self) -> float:
+        """
+        Soft-clip MRNF world scale when projected radius exceeds this fraction of min(W,H)
+        """
+
+    @max_screen_clip_frac.setter
+    def max_screen_clip_frac(self, arg: float, /) -> None: ...
+
+    @property
+    def mean_step_mode(self) -> str:
+        """MRNF position step mode: 'global' or 'per_splat'"""
+
+    @mean_step_mode.setter
+    def mean_step_mode(self, arg: str, /) -> None: ...
+
+    @property
+    def mean_step_ratio_max(self) -> float:
+        """Upper clamp on the per-splat mean-step ratio vs the median splat"""
+
+    @mean_step_ratio_max.setter
+    def mean_step_ratio_max(self, arg: float, /) -> None: ...
+
+    @property
+    def far_mask_orbits(self) -> float:
+        """Far-field mask radius as a multiple of the camera-orbit radius"""
+
+    @far_mask_orbits.setter
+    def far_mask_orbits(self, arg: float, /) -> None: ...
+
+    @property
+    def far_scene_min_fraction(self) -> float:
+        """
+        Minimum deep-far splat fraction that activates far-field features (0 = always on)
+        """
+
+    @far_scene_min_fraction.setter
+    def far_scene_min_fraction(self, arg: float, /) -> None: ...
+
+    @property
+    def far_cap_ratio_full(self) -> float:
+        """cap/points at or below this applies the full far-field dose"""
+
+    @far_cap_ratio_full.setter
+    def far_cap_ratio_full(self, arg: float, /) -> None: ...
+
+    @property
+    def far_cap_ratio_rich(self) -> float:
+        """cap/points at or above this turns the far-field dose off"""
+
+    @far_cap_ratio_rich.setter
+    def far_cap_ratio_rich(self, arg: float, /) -> None: ...
+
+    @property
+    def seed_depth_orbits(self) -> float:
+        """Seeding far-depth limit as a multiple of the camera-orbit radius"""
+
+    @seed_depth_orbits.setter
+    def seed_depth_orbits(self, arg: float, /) -> None: ...
 
     @property
     def steps_scaler(self) -> float:

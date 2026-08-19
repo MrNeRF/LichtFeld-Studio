@@ -57,6 +57,8 @@ namespace fast_lfs::rasterization {
         const float2* shN_value_bounds,
         const uint shN_value_n_cells,
         const uint shN_value_bits,
+        const bool* mean_step_far_mask,
+        const int mean_step_far_mask_n,
         cudaStream_t stream);
 
 } // namespace fast_lfs::rasterization

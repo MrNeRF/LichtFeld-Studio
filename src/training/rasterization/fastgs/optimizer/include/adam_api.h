@@ -35,7 +35,14 @@ namespace fast_lfs::optimizer {
         float eps,
         float bias_correction1_rcp,
         float bias_correction2_sqrt_rcp,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const float* mean_step_scale_raw = nullptr,
+        int mean_step_scale_n = 0,
+        float mean_step_median_extent = 0.0f,
+        float mean_step_r_min = 1.0f,
+        float mean_step_r_max = 300.0f,
+        const bool* mean_step_far_mask = nullptr,
+        int mean_step_far_mask_n = 0);
 
     // Joint (u,log_s) densify reset: encode true (m,v)=(0,0). Widens block
     // bounds to include 0 when needed and re-encodes the block.

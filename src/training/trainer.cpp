@@ -5649,7 +5649,10 @@ namespace lfs::training {
                 if (params_.optimization.strategy == "mcmc")
                     densification_type = DensificationType::MCMC;
                 else if (core::param::is_mrnf_strategy(params_.optimization.strategy))
-                    densification_type = DensificationType::MRNF;
+                    densification_type =
+                        params_.optimization.growth_score_mode == core::param::GrowthScoreMode::Max
+                            ? DensificationType::MRNFMax
+                            : DensificationType::MRNF;
                 const bool update_gaussians_this_iter = !freeze_gaussians_this_iter;
                 const bool run_fastgs_gaussian_backward =
                     fastgs_path &&
@@ -6997,6 +7000,9 @@ namespace lfs::training {
                     }
 
                     nvtxRangePop(); // End rasterize
+                    if (strategy_ && !in_sparsification) {
+                        strategy_->post_render(iter, r_output);
+                    }
                 }
 
                 if (tiles_processed == 0) {

@@ -489,6 +489,176 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.use_edge_map")
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
+            .all_strategies()
+            .int_prop(&OptimizationParameters::explore_splits,
+                      "explore_splits", "Explore Splits", d.explore_splits, 0, 200,
+                      "Error-guided exploration splits per refine window (0 disables)")
+            .locale("training.advanced.explore_splits")
+            .tooltip("training.tooltip.explore_splits")
+            .precision(0)
+            .ui_step(1)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .int_prop(&OptimizationParameters::explore_seeds,
+                      "explore_seeds", "Explore Seeds", d.explore_seeds, 0, 200,
+                      "Error-guided ray seeds per refine window (0 disables)")
+            .locale("training.advanced.explore_seeds")
+            .tooltip("training.tooltip.explore_seeds")
+            .precision(0)
+            .ui_step(1)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::seed_opacity,
+                        "seed_opacity", "Seed Opacity", d.seed_opacity, 0.001f, 0.5f,
+                        "Initial opacity of exploration seeds")
+            .locale("training.advanced.seed_opacity")
+            .tooltip("training.tooltip.seed_opacity")
+            .precision(3)
+            .ui_step(0.01)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::far_growth_cap,
+                        "far_growth_cap", "Far Growth Cap", d.far_growth_cap, 0.0f, 1.0f,
+                        "Max fraction of new splats that may land in the far field (1 = off)")
+            .locale("training.advanced.far_growth_cap")
+            .tooltip("training.tooltip.far_growth_cap")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::far_decay_scale,
+                        "far_decay_scale", "Far Decay Scale", d.far_decay_scale, 0.0f, 1.0f,
+                        "Scale MRNF opacity/scale decay for far-field splats (1 = off)")
+            .locale("training.advanced.far_decay_scale")
+            .tooltip("training.tooltip.far_decay_scale")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .enum_prop(&OptimizationParameters::growth_score_mode,
+                       "growth_score_mode", "Growth Score Mode", d.growth_score_mode,
+                       {{"sum", GrowthScoreMode::Sum, "training.options.growth_score_mode.sum", "sum"},
+                        {"max", GrowthScoreMode::Max, "training.options.growth_score_mode.max", "max"}},
+                       "MRNF growth score: sum of err*alpha*T, or per-view max over pixels")
+            .locale("training.advanced.growth_score_mode")
+            .tooltip("training.tooltip.growth_score_mode")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .enum_prop(&OptimizationParameters::growth_mode,
+                       "growth_mode", "Growth Mode", d.growth_mode,
+                       {{"threshold", GrowthMode::Threshold, "training.options.growth_mode.threshold", "threshold"},
+                        {"always", GrowthMode::Always, "training.options.growth_mode.always", "always"}},
+                       "MRNF growth: threshold-gated (default) or unconditional target factor")
+            .locale("training.advanced.growth_mode")
+            .tooltip("training.tooltip.growth_mode")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::growth_target_factor,
+                        "growth_target_factor", "Growth Target Factor", d.growth_target_factor, 1.0f, 2.0f,
+                        "Always-mode multiplicative growth per refine window (1.05 = +5%)")
+            .locale("training.advanced.growth_target_factor")
+            .tooltip("training.tooltip.growth_target_factor")
+            .precision(3)
+            .ui_step(0.01)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .int_prop(&OptimizationParameters::far_unseen_cull_windows,
+                      "far_unseen_cull_windows", "Far Unseen Cull Windows", d.far_unseen_cull_windows, 0, 32,
+                      "Prune far-field splats unseen for this many refine windows (0 disables)")
+            .locale("training.advanced.far_unseen_cull_windows")
+            .tooltip("training.tooltip.far_unseen_cull_windows")
+            .precision(0)
+            .ui_step(1)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::max_screen_clip_frac,
+                        "max_screen_clip_frac", "Max Screen Clip Frac", d.max_screen_clip_frac, 0.0f, 1.0f,
+                        "Soft-clip world scale when projected radius exceeds this fraction of min(W,H) (0 = off)")
+            .locale("training.advanced.max_screen_clip_frac")
+            .tooltip("training.tooltip.max_screen_clip_frac")
+            .precision(3)
+            .ui_step(0.05)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .enum_prop(&OptimizationParameters::mean_step_mode,
+                       "mean_step_mode", "Mean Step Mode", d.mean_step_mode,
+                       {{"global", MeanStepMode::Global, "training.options.mean_step_mode.global", "global"},
+                        {"per_splat", MeanStepMode::PerSplat, "training.options.mean_step_mode.per_splat", "per_splat"}},
+                       "MRNF position step: one global scene scale, or each splat's own world extent")
+            .locale("training.advanced.mean_step_mode")
+            .tooltip("training.tooltip.mean_step_mode")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::mean_step_ratio_max,
+                        "mean_step_ratio_max", "Mean Step Ratio Max", d.mean_step_ratio_max, 1.0f, 1000.0f,
+                        "Upper clamp on the per-splat mean-step ratio vs the median splat")
+            .locale("training.advanced.mean_step_ratio_max")
+            .tooltip("training.tooltip.mean_step_ratio_max")
+            .precision(1)
+            .ui_step(10)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::far_mask_orbits,
+                        "far_mask_orbits", "Far Mask Orbits", d.far_mask_orbits, 0.0f, 64.0f,
+                        "Far-field mask radius as a multiple of the camera-orbit radius")
+            .locale("training.advanced.far_mask_orbits")
+            .tooltip("training.tooltip.far_mask_orbits")
+            .precision(2)
+            .ui_step(0.25)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::far_scene_min_fraction,
+                        "far_scene_min_fraction", "Far Scene Min Fraction", d.far_scene_min_fraction, 0.0f, 1.0f,
+                        "Minimum deep-far splat fraction that activates far-field features (0 = always on)")
+            .locale("training.advanced.far_scene_min_fraction")
+            .tooltip("training.tooltip.far_scene_min_fraction")
+            .precision(3)
+            .ui_step(0.01)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::far_cap_ratio_full,
+                        "far_cap_ratio_full", "Far Cap Ratio Full", d.far_cap_ratio_full, 0.0f, 16.0f,
+                        "cap/points at or below this applies the full far-field dose")
+            .locale("training.advanced.far_cap_ratio_full")
+            .tooltip("training.tooltip.far_cap_ratio_full")
+            .precision(2)
+            .ui_step(0.1)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::far_cap_ratio_rich,
+                        "far_cap_ratio_rich", "Far Cap Ratio Rich", d.far_cap_ratio_rich, 0.0f, 16.0f,
+                        "cap/points at or above this turns the far-field dose off")
+            .locale("training.advanced.far_cap_ratio_rich")
+            .tooltip("training.tooltip.far_cap_ratio_rich")
+            .precision(2)
+            .ui_step(0.1)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::seed_depth_orbits,
+                        "seed_depth_orbits", "Seed Depth Orbits", d.seed_depth_orbits, 0.0f, 128.0f,
+                        "Seeding far-depth limit as a multiple of the camera-orbit radius")
+            .locale("training.advanced.seed_depth_orbits")
+            .tooltip("training.tooltip.seed_depth_orbits")
+            .precision(1)
+            .ui_step(1)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
 
             // Flags
             .all_strategies()

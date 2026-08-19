@@ -451,6 +451,23 @@ EXPECTED_ADVANCED_IDS = (
     "bounds_percentile",
     "use_error_map",
     "use_edge_map",
+    "explore_splits",
+    "explore_seeds",
+    "seed_opacity",
+    "far_growth_cap",
+    "far_decay_scale",
+    "growth_score_mode",
+    "growth_mode",
+    "growth_target_factor",
+    "far_unseen_cull_windows",
+    "max_screen_clip_frac",
+    "mean_step_mode",
+    "mean_step_ratio_max",
+    "far_mask_orbits",
+    "far_scene_min_fraction",
+    "far_cap_ratio_full",
+    "far_cap_ratio_rich",
+    "seed_depth_orbits",
     "ppisp_lr",
     "ppisp_reg_weight",
     "ppisp_warmup_steps",
@@ -484,7 +501,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(rendered) == len(set(rendered)) == 68
+    assert len(rendered) == len(set(rendered)) == 85
     assert set(rendered) == (
         set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
     ) - set(property_view.BESPOKE_OR_HIDDEN)
@@ -539,6 +556,23 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
         "bounds_percentile",
         "use_error_map",
         "use_edge_map",
+        "explore_splits",
+        "explore_seeds",
+        "seed_opacity",
+        "far_growth_cap",
+        "far_decay_scale",
+        "growth_score_mode",
+        "growth_mode",
+        "growth_target_factor",
+        "far_unseen_cull_windows",
+        "max_screen_clip_frac",
+        "mean_step_mode",
+        "mean_step_ratio_max",
+        "far_mask_orbits",
+        "far_scene_min_fraction",
+        "far_cap_ratio_full",
+        "far_cap_ratio_rich",
+        "seed_depth_orbits",
     }
     auto_mrnf_only = known_mrnf_only - {"grow_until_iter"}
     for prop_id in known_mrnf_only:
