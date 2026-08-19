@@ -3604,40 +3604,52 @@ namespace lfs::io::project {
             return save_error;
         }
 
-        auto staged_reader =
-            ProjectReader::open(temporary);
-        if (!staged_reader) {
-            auto cause =
-                std::move(staged_reader).error();
-            auto restored =
-                rebind_preserving_dirty_lazy(
-                    original_path);
-            remove_temporary();
-            if (!restored) {
-                return std::move(cause)
-                    .with_suppressed(
-                        std::move(restored).error());
+        lfs::core::Uuid expected_commit_uuid;
+        {
+            auto staged_reader =
+                ProjectReader::open(temporary);
+            if (!staged_reader) {
+                auto cause =
+                    std::move(staged_reader).error();
+                auto restored =
+                    rebind_preserving_dirty_lazy(
+                        original_path);
+                remove_temporary();
+                if (!restored) {
+                    return std::move(cause)
+                        .with_suppressed(
+                            std::move(restored).error());
+                }
+                return cause;
             }
-            return cause;
-        }
-        if (auto verified =
-                staged_reader->verify_all();
-            !verified) {
-            auto cause =
-                std::move(verified).error();
-            auto restored =
-                rebind_preserving_dirty_lazy(
-                    original_path);
-            remove_temporary();
-            if (!restored) {
-                return std::move(cause)
-                    .with_suppressed(
-                        std::move(restored).error());
+            if (auto verified =
+                    staged_reader->verify_all();
+                !verified) {
+                auto cause =
+                    std::move(verified).error();
+                auto restored =
+                    rebind_preserving_dirty_lazy(
+                        original_path);
+                remove_temporary();
+                if (!restored) {
+                    return std::move(cause)
+                        .with_suppressed(
+                            std::move(restored).error());
+                }
+                return cause;
             }
-            return cause;
+            expected_commit_uuid =
+                staged_reader->commit().commit_uuid;
         }
-        const auto expected_commit_uuid =
-            staged_reader->commit().commit_uuid;
+
+        auto post_save_dirty = impl_->dirty;
+        auto post_save_keys = impl_->normalized_source_keys;
+        if (auto rebound =
+                rebind_preserving_dirty_lazy(original_path);
+            !rebound) {
+            remove_temporary();
+            return std::move(rebound).error();
+        }
 
         auto replacement =
             detail::atomic_replace(
@@ -3645,14 +3657,6 @@ namespace lfs::io::project {
         if (!replacement) {
             auto cause =
                 std::move(replacement).error();
-            auto restored =
-                rebind_preserving_dirty_lazy(
-                    original_path);
-            if (!restored) {
-                return std::move(cause)
-                    .with_suppressed(
-                        std::move(restored).error());
-            }
             return cause;
         }
         auto published =
@@ -3671,19 +3675,10 @@ namespace lfs::io::project {
             auto rollback =
                 detail::rollback_atomic_replace(
                     *replacement, *normalized);
-            auto restored =
-                rebind_preserving_dirty_lazy(
-                    original_path);
             if (!rollback) {
                 cause = std::move(cause)
                             .with_suppressed(
                                 std::move(rollback)
-                                    .error());
-            }
-            if (!restored) {
-                cause = std::move(cause)
-                            .with_suppressed(
-                                std::move(restored)
                                     .error());
             }
             return cause;
@@ -3695,19 +3690,10 @@ namespace lfs::io::project {
             auto rollback =
                 detail::rollback_atomic_replace(
                     *replacement, *normalized);
-            auto restored =
-                rebind_preserving_dirty_lazy(
-                    original_path);
             if (!rollback) {
                 cause = std::move(cause)
                             .with_suppressed(
                                 std::move(rollback)
-                                    .error());
-            }
-            if (!restored) {
-                cause = std::move(cause)
-                            .with_suppressed(
-                                std::move(restored)
                                     .error());
             }
             return cause;
@@ -3717,6 +3703,8 @@ namespace lfs::io::project {
             !refreshed) {
             return std::move(refreshed).error();
         }
+        impl_->dirty = std::move(post_save_dirty);
+        impl_->normalized_source_keys = std::move(post_save_keys);
         if (auto finished =
                 detail::finish_atomic_replace(
                     *replacement, *normalized);
