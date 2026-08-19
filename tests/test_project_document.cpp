@@ -6,6 +6,7 @@
 #include "app/headless_recovery_document.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/project/project_container_internal.hpp"
+#include "io/project/span_streambuf.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
@@ -31,6 +32,7 @@
 #include <fstream>
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -579,6 +581,224 @@ namespace {
         EXPECT_FALSE(live_rad);
         EXPECT_EQ(live_rad.error().code(),
                   lfs::ErrorCode::FailedPrecondition);
+    }
+
+    TEST(SpanStreambufTest, WindowedReadsAndSeeks) {
+        constexpr std::size_t n = 1000;
+        std::vector<std::byte> pattern(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            pattern[i] = static_cast<std::byte>((i * 131u) & 0xffu);
+        }
+        SpanStreambuf buffer(
+            std::span<const std::byte>(pattern.data(),
+                                       pattern.size()),
+            7);
+        std::istream stream(&buffer);
+
+        for (std::size_t i = 0; i < n; ++i) {
+            const int ch = stream.get();
+            ASSERT_NE(ch, std::char_traits<char>::eof()) << i;
+            EXPECT_EQ(static_cast<unsigned char>(ch),
+                      static_cast<unsigned char>(pattern[i]))
+                << i;
+        }
+        EXPECT_EQ(stream.get(), std::char_traits<char>::eof());
+
+        stream.clear();
+        stream.seekg(0);
+        ASSERT_TRUE(stream);
+        std::array<char, 64> chunk{};
+        stream.read(chunk.data(), 64);
+        ASSERT_EQ(stream.gcount(), 64);
+        ASSERT_TRUE(stream);
+        for (std::size_t i = 0; i < chunk.size(); ++i) {
+            EXPECT_EQ(static_cast<unsigned char>(chunk[i]),
+                      static_cast<unsigned char>(pattern[i]))
+                << i;
+        }
+
+        stream.clear();
+        stream.seekg(333, std::ios::beg);
+        EXPECT_EQ(stream.tellg(), std::streampos(333));
+        ASSERT_TRUE(stream);
+        {
+            const int ch = stream.get();
+            ASSERT_NE(ch, std::char_traits<char>::eof());
+            EXPECT_EQ(static_cast<unsigned char>(ch),
+                      static_cast<unsigned char>(pattern[333]));
+        }
+
+        stream.seekg(17, std::ios::cur);
+        EXPECT_EQ(stream.tellg(), std::streampos(351));
+        ASSERT_TRUE(stream);
+        {
+            const int ch = stream.get();
+            ASSERT_NE(ch, std::char_traits<char>::eof());
+            EXPECT_EQ(static_cast<unsigned char>(ch),
+                      static_cast<unsigned char>(pattern[351]));
+        }
+
+        stream.seekg(-12, std::ios::cur);
+        EXPECT_EQ(stream.tellg(), std::streampos(340));
+        ASSERT_TRUE(stream);
+        {
+            const int ch = stream.get();
+            ASSERT_NE(ch, std::char_traits<char>::eof());
+            EXPECT_EQ(static_cast<unsigned char>(ch),
+                      static_cast<unsigned char>(pattern[340]));
+        }
+
+        stream.seekg(-80, std::ios::end);
+        EXPECT_EQ(stream.tellg(), std::streampos(920));
+        ASSERT_TRUE(stream);
+        {
+            const int ch = stream.get();
+            ASSERT_NE(ch, std::char_traits<char>::eof());
+            EXPECT_EQ(static_cast<unsigned char>(ch),
+                      static_cast<unsigned char>(pattern[920]));
+        }
+
+        stream.clear();
+        stream.seekg(static_cast<std::streamoff>(n),
+                     std::ios::beg);
+        ASSERT_TRUE(stream);
+        EXPECT_EQ(stream.tellg(), std::streampos(n));
+        EXPECT_EQ(stream.get(), std::char_traits<char>::eof());
+        EXPECT_TRUE(stream.eof());
+
+        stream.clear();
+        stream.seekg(static_cast<std::streamoff>(n + 1),
+                     std::ios::beg);
+        EXPECT_TRUE(stream.fail());
+
+        stream.clear();
+        stream.seekg(0);
+        ASSERT_TRUE(stream);
+        stream.seekg(-1, std::ios::beg);
+        EXPECT_TRUE(stream.fail());
+
+        stream.clear();
+        stream.seekg(static_cast<std::streamoff>(n - 10));
+        ASSERT_TRUE(stream);
+        std::array<char, 32> tail{};
+        stream.read(tail.data(), 32);
+        EXPECT_EQ(stream.gcount(), 10);
+        EXPECT_TRUE(stream.eof());
+        for (std::size_t i = 0; i < 10; ++i) {
+            EXPECT_EQ(static_cast<unsigned char>(tail[i]),
+                      static_cast<unsigned char>(
+                          pattern[n - 10 + i]))
+                << i;
+        }
+    }
+
+    TEST(ProjectDocumentTest, VisitStreamOwnedSeekableRoundTrip) {
+        constexpr std::size_t n = 512;
+        std::vector<std::byte> pattern(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            pattern[i] = static_cast<std::byte>((i * 131u) & 0xffu);
+        }
+        const auto expected = pattern;
+        auto chunk = require_result(LazyChunkValue::from_owned(
+            std::move(pattern), fixed_uuid(1679)));
+        auto visited = chunk.visit_stream(
+            [&](std::istream& stream,
+                const std::uint64_t bytes) -> lfs::Result<void> {
+                EXPECT_EQ(bytes, n);
+                std::array<char, 32> head{};
+                stream.read(
+                    head.data(),
+                    static_cast<std::streamsize>(head.size()));
+                EXPECT_TRUE(stream.good());
+                EXPECT_EQ(stream.gcount(), 32);
+                for (std::size_t i = 0; i < head.size(); ++i) {
+                    EXPECT_EQ(
+                        static_cast<unsigned char>(head[i]),
+                        static_cast<unsigned char>(expected[i]))
+                        << i;
+                }
+                const auto tail_offset =
+                    static_cast<std::streamoff>(bytes - 16);
+                stream.seekg(tail_offset);
+                EXPECT_TRUE(stream.good());
+                EXPECT_EQ(stream.tellg(),
+                          std::streampos(tail_offset));
+                std::array<char, 16> tail{};
+                stream.read(
+                    tail.data(),
+                    static_cast<std::streamsize>(tail.size()));
+                EXPECT_TRUE(stream.good());
+                EXPECT_EQ(stream.gcount(), 16);
+                for (std::size_t i = 0; i < tail.size(); ++i) {
+                    EXPECT_EQ(
+                        static_cast<unsigned char>(tail[i]),
+                        static_cast<unsigned char>(
+                            expected[expected.size() - 16 + i]))
+                        << i;
+                }
+                return {};
+            });
+        ASSERT_TRUE(visited)
+            << lfs::format_for_developer(visited.error());
+    }
+
+    TEST(SpanStreambufTest, SpanStreambufServesBuffersOver2GiB) {
+        const auto int_max = static_cast<std::size_t>(
+            std::numeric_limits<int>::max());
+        const std::size_t size = int_max + 4096;
+        std::vector<std::byte> bytes(size, std::byte{0});
+        for (std::size_t i = 0; i < 40; ++i) {
+            bytes[i] = static_cast<std::byte>(0xA0 + i);
+        }
+        for (std::size_t i = 0; i < 16; ++i) {
+            bytes[int_max - 8 + i] =
+                static_cast<std::byte>(0xB0 + i);
+        }
+        for (std::size_t i = 0; i < 16; ++i) {
+            bytes[size - 16 + i] =
+                static_cast<std::byte>(0xC0 + i);
+        }
+
+        SpanStreambuf buffer(
+            std::span<const std::byte>(bytes.data(),
+                                       bytes.size()));
+        std::istream stream(&buffer);
+
+        std::array<char, 40> head{};
+        stream.read(head.data(), 40);
+        ASSERT_TRUE(stream.good());
+        ASSERT_EQ(stream.gcount(), 40);
+        for (std::size_t i = 0; i < head.size(); ++i) {
+            EXPECT_EQ(static_cast<unsigned char>(head[i]),
+                      static_cast<unsigned char>(bytes[i]))
+                << i;
+        }
+
+        stream.seekg(static_cast<std::streamoff>(int_max - 8));
+        ASSERT_TRUE(stream.good());
+        std::array<char, 16> mid{};
+        stream.read(mid.data(), 16);
+        ASSERT_TRUE(stream.good());
+        ASSERT_EQ(stream.gcount(), 16);
+        for (std::size_t i = 0; i < mid.size(); ++i) {
+            EXPECT_EQ(
+                static_cast<unsigned char>(mid[i]),
+                static_cast<unsigned char>(bytes[int_max - 8 + i]))
+                << i;
+        }
+
+        stream.seekg(-16, std::ios::end);
+        ASSERT_TRUE(stream.good());
+        std::array<char, 16> tail{};
+        stream.read(tail.data(), 16);
+        ASSERT_TRUE(stream.good());
+        ASSERT_EQ(stream.gcount(), 16);
+        for (std::size_t i = 0; i < tail.size(); ++i) {
+            EXPECT_EQ(
+                static_cast<unsigned char>(tail[i]),
+                static_cast<unsigned char>(bytes[size - 16 + i]))
+                << i;
+        }
     }
 
     TEST(LoaderGeoreferenceTest,
