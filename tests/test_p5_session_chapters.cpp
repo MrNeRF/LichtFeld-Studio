@@ -1755,7 +1755,7 @@ namespace {
     }
 
     TEST_F(P5MetricsRestoreTest,
-           ProjectCheckpointLocksSaveSteps) {
+           ProjectCheckpointAcceptsSaveStepEdits) {
         lfs::core::Scene scene;
         const auto cameras = scene.addGroup("Cameras");
         const auto training_cameras =
@@ -1774,7 +1774,8 @@ namespace {
         lfs::vis::TrainerManager manager;
         manager.setTrainerFromCheckpoint(
             std::move(trainer), 3);
-        EXPECT_FALSE(manager.canEditSaveSteps());
+        manager.setSaveSteps({5});
+        EXPECT_EQ(manager.getSaveSteps(), (std::vector<size_t>{5}));
     }
 
     TEST_F(P5MetricsRestoreTest,

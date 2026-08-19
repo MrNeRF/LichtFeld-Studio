@@ -1287,19 +1287,7 @@ namespace lfs::vis {
         return pending_opt_params_.save_steps;
     }
 
-    bool TrainerManager::canEditSaveSteps() const {
-        if (!trainer_) {
-            return true;
-        }
-        const auto params = trainer_->getParams();
-        return !params.resume_checkpoint.has_value() &&
-               !params.resume_project.has_value();
-    }
-
-    bool TrainerManager::setSaveSteps(std::vector<size_t> save_steps) {
-        if (!canEditSaveSteps())
-            return false;
-
+    void TrainerManager::setSaveSteps(std::vector<size_t> save_steps) {
         save_steps = normalize_save_steps(std::move(save_steps));
         apply_save_steps(pending_opt_params_, save_steps);
 
@@ -1320,8 +1308,6 @@ namespace lfs::vis {
             apply_save_steps(params.optimization, save_steps);
             trainer_->setParams(params);
         }
-
-        return true;
     }
 
     const char* TrainerManager::getStrategyType() const {
@@ -1887,9 +1873,12 @@ namespace lfs::vis {
 
         if (trainer_->isInitialized() && trainer_->getParams().resume_checkpoint.has_value()) {
             if (auto* const param_mgr = services().paramsOrNull()) {
-                param_mgr->importTrainingParams(trainer_->getParams());
+                auto params = trainer_->getParams();
+                params.optimization.save_steps = param_mgr->copyActiveParams().save_steps;
+                trainer_->setParams(params);
+                param_mgr->importTrainingParams(params);
             }
-            LOG_DEBUG("Ignoring parameter updates for checkpoint-backed trainer");
+            LOG_DEBUG("Ignoring parameter updates for checkpoint-backed trainer (save steps kept)");
             return;
         }
 

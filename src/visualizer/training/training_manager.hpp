@@ -123,8 +123,7 @@ namespace lfs::vis {
         int getNumSplats() const;
         int getMaxGaussians() const;
         std::vector<size_t> getSaveSteps() const;
-        bool setSaveSteps(std::vector<size_t> save_steps);
-        bool canEditSaveSteps() const;
+        void setSaveSteps(std::vector<size_t> save_steps);
         const char* getStrategyType() const;
         bool isGutEnabled() const;
 

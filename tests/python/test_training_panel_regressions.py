@@ -202,6 +202,12 @@ class _ModelStub:
     def bind(self, name, getter, setter):
         self.bindings[name] = (getter, setter)
 
+    def bind_func(self, name, getter):
+        self.bindings[name] = (getter, None)
+
+    def bind_string_list(self, name):
+        self.bindings[name] = (None, None)
+
 
 def test_strategy_switch_resyncs_generated_rows_and_requests_panel_update(
     training_panel_module, monkeypatch
@@ -938,3 +944,38 @@ def test_training_panel_no_longer_uses_removed_image_dialog_alias():
     training_panel = project_root / "src" / "python" / "lfs_plugins" / "training_panel.py"
 
     assert "open_image_file_dialog" not in training_panel.read_text()
+
+
+def test_save_steps_editable_in_active_trainer_states(training_panel_module):
+    """Issue #1648: save steps stay editable after checkpoint resume and while running."""
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    runtime = training_panel_module.RuntimeState
+
+    panel._bind_visibility(model, lambda: params, lambda: dataset)
+    save_edit_mode = model.bindings["save_edit_mode"][0]
+    save_readonly_mode = model.bindings["save_readonly_mode"][0]
+
+    try:
+        runtime.trainer_state.value = "ready"
+        runtime.iteration.value = 0
+        assert save_edit_mode() is True
+        assert save_readonly_mode() is False
+
+        runtime.iteration.value = 15000
+        assert save_edit_mode() is True
+
+        runtime.trainer_state.value = "paused"
+        assert save_edit_mode() is True
+
+        runtime.trainer_state.value = "running"
+        assert save_edit_mode() is True
+
+        runtime.trainer_state.value = "finished"
+        assert save_edit_mode() is False
+        assert save_readonly_mode() is True
+    finally:
+        runtime.iteration._fallback = 0
+        runtime.training_state._fallback = "idle"
