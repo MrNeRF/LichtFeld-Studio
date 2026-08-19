@@ -286,6 +286,14 @@ namespace lfs::vis {
         impl_->saveLocked();
     }
 
+    void UserPreferences::clearSceneUpscaler() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values.erase("scene_upscaler");
+        impl_->values.erase("scene_upscaler_presets");
+        impl_->saveLocked();
+    }
+
     std::string UserPreferences::sceneUpscaler() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
@@ -330,6 +338,7 @@ namespace lfs::vis {
                                      const std::string& preset_id) {
         UserPreferences::instance().setSceneUpscaler(backend_id, preset_id);
     }
+    void clearSceneUpscalerPreference() { UserPreferences::instance().clearSceneUpscaler(); }
     std::string loadSceneUpscalerPreference() {
         return UserPreferences::instance().sceneUpscaler();
     }

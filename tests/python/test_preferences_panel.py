@@ -81,6 +81,9 @@ def preferences_panel_module(monkeypatch):
         state.scene_reconstruction_presets[str(backend)] = str(preset)
         return True
 
+    def reset_scene_reconstruction_preferences():
+        state.scene_reconstruction_presets = {"native": "native", "spatial": "quality"}
+
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
@@ -134,6 +137,7 @@ def preferences_panel_module(monkeypatch):
             state.scene_reconstruction_presets[backend]
         ),
         set_scene_reconstruction=set_scene_reconstruction,
+        reset_scene_reconstruction_preferences=reset_scene_reconstruction_preferences,
     )
     lf_stub.get_render_settings = lambda: state.render_settings
 
@@ -462,6 +466,9 @@ def test_safe_mode_reset_does_not_stage_mcp_changes(preferences_panel_module):
     panel._on_reset_all_settings(None, None, None)
 
     assert state.set_mcp_calls == []
+    assert state.render_settings.scene_upscaler == "native"
+    assert state.render_settings.scene_upscaler_preset == "native"
+    assert state.scene_reconstruction_presets == {"native": "native", "spatial": "quality"}
     assert (
         panel._mcp_enabled,
         panel._mcp_expose_network,

@@ -4859,6 +4859,14 @@ namespace lfs::python {
             "Atomically select a scene reconstruction backend and preset");
 
         m.def(
+            "reset_scene_reconstruction_preferences",
+            [] {
+                nb::gil_scoped_release release;
+                vis::clearSceneUpscalerPreference();
+            },
+            "Clear all saved scene reconstruction backend and preset preferences");
+
+        m.def(
             "get_mcp_preferences",
             [] {
                 vis::McpPreferenceState state;

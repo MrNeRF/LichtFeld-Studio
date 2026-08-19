@@ -696,16 +696,26 @@ namespace lfs::vis {
                 output[2 * pixel_count + i] = params.background.b;
             }
 
-            const auto sample = [](const lfs::core::Tensor& tensor, int w, int h,
-                                   float u, float v, int channel) {
-                const int x = std::clamp(static_cast<int>(std::lround(std::clamp(u, 0.0f, 1.0f) *
-                                                                      static_cast<float>(w - 1))),
-                                         0, w - 1);
-                const int y = std::clamp(static_cast<int>(std::lround(std::clamp(v, 0.0f, 1.0f) *
-                                                                      static_cast<float>(h - 1))),
-                                         0, h - 1);
+            const auto sample = [](const lfs::core::Tensor& tensor, const int w, const int h,
+                                   const float u, const float v, const int channel) {
+                // Match texture(...): normalized coordinates address texel centers and use the
+                // Vulkan sampler's linear filtering, with edge samples clamped to the texture.
+                const float sample_x = std::clamp(u, 0.0f, 1.0f) * static_cast<float>(w) - 0.5f;
+                const float sample_y = std::clamp(v, 0.0f, 1.0f) * static_cast<float>(h) - 0.5f;
+                const int x0_unclamped = static_cast<int>(std::floor(sample_x));
+                const int y0_unclamped = static_cast<int>(std::floor(sample_y));
+                const int x0 = std::clamp(x0_unclamped, 0, w - 1);
+                const int y0 = std::clamp(y0_unclamped, 0, h - 1);
+                const int x1 = std::clamp(x0_unclamped + 1, 0, w - 1);
+                const int y1 = std::clamp(y0_unclamped + 1, 0, h - 1);
+                const float tx = sample_x - static_cast<float>(x0_unclamped);
+                const float ty = sample_y - static_cast<float>(y0_unclamped);
                 const float* data = tensor.ptr<float>();
-                return data[(static_cast<std::size_t>(channel) * h + y) * w + x];
+                const auto at = [data, w, h, channel](const int x, const int y) {
+                    return data[(static_cast<std::size_t>(channel) * h + y) * w + x];
+                };
+                return std::lerp(std::lerp(at(x0, y0), at(x1, y0), tx),
+                                 std::lerp(at(x0, y1), at(x1, y1), tx), ty);
             };
 
             const int rect_x = params.content_rect.x;
@@ -751,25 +761,32 @@ namespace lfs::vis {
                         panel_u = (u - panel.start_position) / span;
                     }
                     const float panel_v = panel.flip_y ? 1.0f - v : v;
+                    const glm::vec2 clamp_max = glm::clamp(panel.uv_clamp_max,
+                                                           glm::vec2(0.0f), glm::vec2(1.0f));
+                    const glm::vec2 texture_uv = glm::min(glm::vec2(panel_u, panel_v) * panel.uv_scale,
+                                                           clamp_max);
                     const std::size_t idx = static_cast<std::size_t>(y) * width + x;
-                    const auto sample_color = [&](const float sample_u, const float sample_v) {
+                    const auto sample_color = [&](const glm::vec2 sample_uv) {
                         return glm::vec3{
                             sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                   sample_u, sample_v, 0),
+                                   sample_uv.x, sample_uv.y, 0),
                             sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                   sample_u, sample_v, 1),
+                                   sample_uv.x, sample_uv.y, 1),
                             sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                   sample_u, sample_v, 2)};
+                                   sample_uv.x, sample_uv.y, 2)};
                     };
-                    glm::vec3 color = sample_color(panel_u, panel_v);
+                    glm::vec3 color = sample_color(texture_uv);
                     if (panel.spatial_filter) {
                         constexpr float kSpatialSharpenStrength = 0.18f;
                         const float texel_x = 1.0f / static_cast<float>(std::max(std::get<1>(data), 1));
                         const float texel_y = 1.0f / static_cast<float>(std::max(std::get<2>(data), 1));
-                        const glm::vec3 left = sample_color(panel_u - texel_x, panel_v);
-                        const glm::vec3 right = sample_color(panel_u + texel_x, panel_v);
-                        const glm::vec3 up = sample_color(panel_u, panel_v - texel_y);
-                        const glm::vec3 down = sample_color(panel_u, panel_v + texel_y);
+                        const auto clamp_uv = [&clamp_max](const glm::vec2 uv) {
+                            return glm::clamp(uv, glm::vec2(0.0f), clamp_max);
+                        };
+                        const glm::vec3 left = sample_color(clamp_uv(texture_uv - glm::vec2(texel_x, 0.0f)));
+                        const glm::vec3 right = sample_color(clamp_uv(texture_uv + glm::vec2(texel_x, 0.0f)));
+                        const glm::vec3 up = sample_color(clamp_uv(texture_uv - glm::vec2(0.0f, texel_y)));
+                        const glm::vec3 down = sample_color(clamp_uv(texture_uv + glm::vec2(0.0f, texel_y)));
                         const glm::vec3 sharpened = color * (1.0f + 4.0f * kSpatialSharpenStrength) -
                                                     (left + right + up + down) * kSpatialSharpenStrength;
                         color = glm::clamp(sharpened,

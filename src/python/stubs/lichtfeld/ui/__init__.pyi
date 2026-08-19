@@ -2564,6 +2564,9 @@ def get_scene_reconstruction_preset_preference(backend_id: str) -> str:
 def set_scene_reconstruction(backend_id: str, preset_id: str) -> bool:
     """Atomically select a scene reconstruction backend and preset"""
 
+def reset_scene_reconstruction_preferences() -> None:
+    """Clear all saved scene reconstruction backend and preset preferences"""
+
 def get_mcp_preferences() -> dict:
     """Get effective MCP HTTP server preferences"""
 

@@ -762,11 +762,9 @@ class PreferencesPanel(Panel):
         elif section == "appearance":
             lf.ui.set_theme("dark")
             lf.ui.set_ui_scale(0.0)
-            settings = lf.get_render_settings()
-            if settings is not None:
-                settings.scene_upscaler = "native"
-                settings.scene_upscaler_preset = "native"
-                self._sync_scene_upscaler_preset_records()
+            lf.ui.set_scene_reconstruction("native", "native")
+            lf.ui.reset_scene_reconstruction_preferences()
+            self._sync_scene_upscaler_preset_records()
         elif section == "input":
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)

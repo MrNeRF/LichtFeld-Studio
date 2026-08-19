@@ -48,6 +48,7 @@ namespace lfs::vis {
         [[nodiscard]] McpPreferenceState mcp();
 
         void setSceneUpscaler(const std::string& backend_id, const std::string& preset_id);
+        void clearSceneUpscaler();
         [[nodiscard]] std::string sceneUpscaler();
         [[nodiscard]] std::string sceneUpscalerPreset(const std::string& backend_id);
 
@@ -73,6 +74,7 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API McpPreferenceState loadMcpPreferences();
     LFS_VIS_API void saveSceneUpscalerPreference(const std::string& backend_id,
                                                  const std::string& preset_id);
+    LFS_VIS_API void clearSceneUpscalerPreference();
     [[nodiscard]] LFS_VIS_API std::string loadSceneUpscalerPreference();
     [[nodiscard]] LFS_VIS_API std::string loadSceneUpscalerPresetPreference(
         const std::string& backend_id);
