@@ -26,7 +26,6 @@
     "file.mesh_to_splat": "メッシュをスプラットに変換...",
     "file.exit": "終了",
     "edit": "編集",
-    "edit.input_settings": "入力設定...",
     "select": "選択",
     "select.copy_selection": "選択をコピー",
     "select.cut_selection": "選択を切り取り",
@@ -56,7 +55,6 @@
     "view.debug_info": "デバッグ情報..."
   },
   "window": {
-    "input_settings": "入力設定",
     "export": "エクスポート",
     "scene": "シーン",
     "rendering": "レンダリング",
@@ -786,6 +784,7 @@
     "scene_reconstruction_performance": "パフォーマンス",
     "scene_reconstruction_description": "空間再構成は、低い内部解像度でシーンを描画し、ビューポート解像度へ再構成します。トレーニングや保存済みのスプラットデータには影響しません。",
     "input": "入力",
+    "key_bindings": "キー割り当て",
     "camera_navigation": "カメラ操作",
     "navigation_mode": "ナビゲーションモード",
     "camera_view_snap": "軸ビューにスナップ",
@@ -1305,13 +1304,11 @@
     "status_label": "ステータス: %s"
   },
   "input_settings": {
-    "title": "入力設定",
     "active_profile": "アクティブプロファイル:",
     "save_current_profile": "現在のプロファイルを保存",
     "reset_to_default": "デフォルトにリセット",
     "export": "エクスポート...",
     "import": "インポート...",
-    "action": "アクション",
     "rebind": "再割り当て",
     "cancel": "キャンセル",
     "replace": "置き換え",
@@ -1332,7 +1329,6 @@
     "click_again_double": "ダブルクリックにするにはもう一度クリック...",
     "tool_mode": "ツールモード",
     "select_tool_mode": "ツールモードを選択して割り当てを表示/編集",
-    "current_bindings": "現在の割り当て",
     "global_bindings_hint": "グローバル割り当ては上書きされない限りどこでも適用されます",
     "tool_bindings_hint": "ツール固有の割り当てはグローバル割り当てを上書きします",
     "section.navigation": "ナビゲーション",
@@ -1378,6 +1374,7 @@
     "action.toggle_independent_split_view": "独立分割ビュー切替",
     "action.toggle_gt_comparison": "GT比較切替",
     "action.toggle_camera_frustums": "カメラ視錐台を切り替え",
+    "action.toggle_grid": "グリッドを切り替え",
     "action.toggle_depth_mode": "深度ボックス切替",
     "action.cycle_ply": "PLY切替",
     "action.delete_selected": "選択したガウシアンを削除",
@@ -1436,8 +1433,7 @@
     "trigger.drag": " ドラッグ",
     "trigger.scroll": "スクロール",
     "trigger.unknown": "不明",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "割り当て"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "履歴をクリア",

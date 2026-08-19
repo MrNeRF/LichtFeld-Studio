@@ -26,7 +26,6 @@
     "file.mesh_to_splat": "Mesh naar Splat...",
     "file.exit": "Afsluiten",
     "edit": "Bewerken",
-    "edit.input_settings": "Invoerinstellingen...",
     "select": "Selectie",
     "select.copy_selection": "Selectie kopiëren",
     "select.cut_selection": "Selectie knippen",
@@ -56,7 +55,6 @@
     "view.debug_info": "Debug Info..."
   },
   "window": {
-    "input_settings": "Invoerinstellingen",
     "export": "Exporteren",
     "scene": "Scène",
     "rendering": "Renderen",
@@ -786,6 +784,7 @@
     "scene_reconstruction_performance": "Prestaties",
     "scene_reconstruction_description": "Ruimtelijke reconstructie rendert de scène op een lagere interne resolutie en reconstrueert die op viewportresolutie. Training en opgeslagen splatgegevens blijven ongewijzigd.",
     "input": "Invoer",
+    "key_bindings": "Toetsbindingen",
     "camera_navigation": "Cameranavigatie",
     "navigation_mode": "Navigatiemodus",
     "camera_view_snap": "Asweergaven uitlijnen",
@@ -1305,13 +1304,11 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
-    "title": "INVOERINSTELLINGEN",
     "active_profile": "Actief Profiel:",
     "save_current_profile": "Huidig Profiel Opslaan",
     "reset_to_default": "Reset naar Standaard",
     "export": "Exporteren...",
     "import": "Importeren...",
-    "action": "Actie",
     "rebind": "Opnieuw toewijzen",
     "cancel": "Annuleren",
     "replace": "Vervangen",
@@ -1332,7 +1329,6 @@
     "click_again_double": "Klik nogmaals voor dubbelklik...",
     "tool_mode": "GEREEDSCHAP MODUS",
     "select_tool_mode": "Selecteer gereedschap modus om toewijzingen te bekijken/bewerken",
-    "current_bindings": "HUIDIGE TOEWIJZINGEN",
     "global_bindings_hint": "Globale toewijzingen gelden overal tenzij overschreven",
     "tool_bindings_hint": "Gereedschap-specifieke toewijzingen overschrijven globale toewijzingen",
     "section.navigation": "NAVIGATIE",
@@ -1378,6 +1374,7 @@
     "action.toggle_independent_split_view": "Onafhankelijke gesplitste weergave omschakelen",
     "action.toggle_gt_comparison": "GT-vergelijking omschakelen",
     "action.toggle_camera_frustums": "Camerafrustums in-/uitschakelen",
+    "action.toggle_grid": "Raster in-/uitschakelen",
     "action.toggle_depth_mode": "Diepteboog omschakelen",
     "action.cycle_ply": "PLY doorlopen",
     "action.delete_selected": "Geselecteerde gaussians verwijderen",
@@ -1436,8 +1433,7 @@
     "trigger.drag": " Slepen",
     "trigger.scroll": "Scrollen",
     "trigger.unknown": "Onbekend",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "Toewijzing"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "Geschiedenis Wissen",

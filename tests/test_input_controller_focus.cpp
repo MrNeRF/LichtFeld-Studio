@@ -1148,6 +1148,7 @@ namespace lfs::vis {
 
         EXPECT_EQ(static_cast<int>(input::Action::TOGGLE_MCP_SERVER), 79);
         EXPECT_EQ(static_cast<int>(input::Action::TOGGLE_MCP_BINDING), 80);
+        EXPECT_EQ(static_cast<int>(input::Action::TOGGLE_GRID), 81);
         EXPECT_EQ(bindings.getActionForKey(input::ToolMode::GLOBAL,
                                            input::KEY_M,
                                            input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
@@ -1279,6 +1280,31 @@ namespace lfs::vis {
         EXPECT_FALSE(rendering_manager.getSettings().show_camera_frustums);
     }
 
+    TEST_F(InputControllerFocusTest, GridDefaultToAltGAndToggleRenderSetting) {
+        RenderingManager rendering_manager;
+        services().set(&rendering_manager);
+
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+
+        EXPECT_EQ(controller.getBindings().getActionForKey(input::ToolMode::GLOBAL,
+                                                           input::KEY_G,
+                                                           input::MODIFIER_ALT),
+                  input::Action::TOGGLE_GRID);
+        EXPECT_EQ(input::shortcutScopeForAction(input::Action::TOGGLE_GRID),
+                  input::ShortcutScope::GlobalWhenNotTextEditing);
+
+        EXPECT_TRUE(rendering_manager.getSettings().show_grid);
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_ALT);
+        EXPECT_FALSE(rendering_manager.getSettings().show_grid);
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_ALT);
+        EXPECT_TRUE(rendering_manager.getSettings().show_grid);
+    }
+
     TEST_F(InputControllerFocusTest, VersionFifteenProfileMigratesCameraFrustumShortcutWhenFree) {
         const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v15.json";
         std::filesystem::remove(profile_path);
@@ -1331,6 +1357,64 @@ namespace lfs::vis {
                                          input::MODIFIER_ALT),
                   input::Action::CYCLE_PLY);
         EXPECT_FALSE(loaded.getTriggerForAction(input::Action::TOGGLE_CAMERA_FRUSTUMS,
+                                                input::ToolMode::GLOBAL)
+                         .has_value());
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyTwoProfileMigratesGridShortcutWhenFree) {
+        const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v22.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV22",
+  "version": 22,
+  "bindings": []
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_G,
+                                         input::MODIFIER_ALT),
+                  input::Action::TOGGLE_GRID);
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyTwoProfilePreservesOccupiedAltG) {
+        const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v22_alt_g.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV22AltG",
+  "version": 22,
+  "bindings": [
+    {
+      "mode": 0,
+      "action": 25,
+      "description": "Cycle PLY",
+      "trigger_type": "key",
+      "key": 71,
+      "modifiers": 4
+    }
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_G,
+                                         input::MODIFIER_ALT),
+                  input::Action::CYCLE_PLY);
+        EXPECT_FALSE(loaded.getTriggerForAction(input::Action::TOGGLE_GRID,
                                                 input::ToolMode::GLOBAL)
                          .has_value());
 

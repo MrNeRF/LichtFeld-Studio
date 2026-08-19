@@ -348,23 +348,30 @@ namespace {
             return tensor;
         }
         if (allocator) {
-            Tensor t = allocate_param_tensor(TensorShape({logical_floats}),
-                                             capacity_floats,
-                                             allocator,
-                                             name,
-                                             DataType::Float32);
             // Real SplatExportableStorage forces Float16 and clamps to pad-dropped
-            // q16 cells — too small / wrong dtype for float construction. Keep a
-            // float zeros_direct workspace; apply_shN_value_quant later encodes
-            // into the exportable q16 region via the same allocator.
-            if (t.dtype() != DataType::Float32 || t.capacity() < capacity_floats) {
-                Tensor workspace = Tensor::zeros_direct(TensorShape({logical_floats}),
-                                                        capacity_floats,
-                                                        Device::CUDA);
-                workspace.set_name(std::string{name});
-                return workspace;
+            // q16 cells — too small / wrong dtype for float construction — and
+            // rejects the swizzled float shape outright once live-N swizzled cells
+            // exceed the q16 region (SH1: 12 vs 9, SH3: 48 vs 45 cells/prim near
+            // max-cap). Either way fall through to a float zeros_direct workspace;
+            // apply_shN_value_quant later encodes into the exportable q16 region
+            // via the same allocator.
+            Tensor t;
+            try {
+                t = allocate_param_tensor(TensorShape({logical_floats}),
+                                          capacity_floats,
+                                          allocator,
+                                          name,
+                                          DataType::Float32);
+            } catch (const std::exception& error) {
+                LOG_DEBUG("allocate_swizzled_shN: allocator rejected float topology "
+                          "for '{}' ({}); using zeros_direct workspace",
+                          name,
+                          error.what());
             }
-            return t;
+            if (t.is_valid() && t.dtype() == DataType::Float32 &&
+                t.capacity() >= capacity_floats) {
+                return t;
+            }
         }
         Tensor tensor = Tensor::zeros_direct(TensorShape({logical_floats}),
                                              capacity_floats,

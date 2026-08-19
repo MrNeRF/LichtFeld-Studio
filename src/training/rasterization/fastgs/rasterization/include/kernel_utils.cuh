@@ -190,6 +190,90 @@ namespace fast_lfs::rasterization::kernels {
         // a11.y / a11.z / a11.w are tail padding (always zero).
     }
 
+    // Streaming SH-rest loaders. One coefficient (or the 1–2 float4 slots it
+    // occupies) so the 15-coeff working set never lands in local memory.
+    // Decode matches load_shN_coeffs: q16 cell-linear, IEEE f16 float4-swizzle,
+    // fp32 float4-swizzle. COEFF is a compile-time index (0..14).
+    template <int LANE>
+    __device__ __forceinline__ float shN_float4_lane(const float4 a) {
+        static_assert(LANE >= 0 && LANE < 4, "float4 lane");
+        if constexpr (LANE == 0)
+            return a.x;
+        else if constexpr (LANE == 1)
+            return a.y;
+        else if constexpr (LANE == 2)
+            return a.z;
+        else
+            return a.w;
+    }
+
+    __device__ __forceinline__ float4 load_shN_float4_slot(
+        const float4* __restrict__ sh_f4,
+        const uint primitive_idx,
+        const uint slot,
+        const uint slots_per_primitive,
+        const uint sh_value_bits) {
+        if (sh_value_bits == 16u) {
+            const __half* sh_h = reinterpret_cast<const __half*>(sh_f4);
+            const uint base = shAt(primitive_idx, slot, slots_per_primitive) * 4u;
+            return make_float4(__half2float(sh_h[base + 0]),
+                               __half2float(sh_h[base + 1]),
+                               __half2float(sh_h[base + 2]),
+                               __half2float(sh_h[base + 3]));
+        }
+        return sh_f4[shAt(primitive_idx, slot, slots_per_primitive)];
+    }
+
+    template <int COEFF>
+    __device__ __forceinline__ float3 load_shN_coeff(
+        const float4* __restrict__ sh_f4,
+        const uint primitive_idx,
+        const uint sh_layout_slots,
+        const float2* __restrict__ sh_value_bounds,
+        const uint sh_value_n_cells,
+        const uint sh_value_bits) {
+        static_assert(COEFF >= 0 && COEFF < 15, "SH rest coeff 0..14");
+
+        if (sh_value_bounds != nullptr && sh_value_n_cells > 0u) {
+            using DC = lfs::training::sh_value::DeviceCodec16;
+            const uint16_t* sh_u16 = reinterpret_cast<const uint16_t*>(sh_f4);
+            const float2 mm = sh_value_bounds[primitive_idx / 256u];
+            const uint base = static_cast<uint>(COEFF) * 3u;
+            if (base + 2u >= sh_value_n_cells)
+                return make_float3(0.0f, 0.0f, 0.0f);
+            return make_float3(
+                DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 0, sh_value_n_cells)],
+                           mm.x, mm.y),
+                DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 1, sh_value_n_cells)],
+                           mm.x, mm.y),
+                DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 2, sh_value_n_cells)],
+                           mm.x, mm.y));
+        }
+
+        if (sh_layout_slots == 0u)
+            return make_float3(0.0f, 0.0f, 0.0f);
+
+        constexpr int lin0 = COEFF * 3;
+        constexpr uint slot0 = static_cast<uint>(lin0) / 4u;
+        constexpr uint slot1 = static_cast<uint>(lin0 + 1) / 4u;
+        constexpr uint slot2 = static_cast<uint>(lin0 + 2) / 4u;
+        const float4 a0 = load_shN_float4_slot(sh_f4, primitive_idx, slot0, sh_layout_slots, sh_value_bits);
+        const float x = shN_float4_lane<(lin0 & 3)>(a0);
+        float y, z;
+        if constexpr (slot2 == slot0) {
+            y = shN_float4_lane<((lin0 + 1) & 3)>(a0);
+            z = shN_float4_lane<((lin0 + 2) & 3)>(a0);
+        } else {
+            const float4 a2 = load_shN_float4_slot(sh_f4, primitive_idx, slot2, sh_layout_slots, sh_value_bits);
+            if constexpr (slot1 == slot0)
+                y = shN_float4_lane<((lin0 + 1) & 3)>(a0);
+            else
+                y = shN_float4_lane<((lin0 + 1) & 3)>(a2);
+            z = shN_float4_lane<((lin0 + 2) & 3)>(a2);
+        }
+        return make_float3(x, y, z);
+    }
+
     __device__ inline float3 convert_sh_to_color(
         const float3* sh_coefficients_0,
         const float4* sh_coefficients_rest,
@@ -426,24 +510,213 @@ namespace fast_lfs::rasterization::kernels {
         return grad;
     }
 
-    // Shuffle the 15 float3 grad coefficients (c0..c14) into float4 slot k, matching the
-    // swizzled load_shN_coeffs packing. Slot 11's tail lanes are padding (0 grad).
-    __device__ inline float4 shN_grad_for_slot(const float3 (&g)[15], const uint k) {
+    // Per-coefficient SH-rest color gradient: basis_i(dir) * dL/dcolor.
+    // Unused rest indices (i >= ACTIVE_SH_BASES-1) are zero, matching the
+    // previous g[15] fill (degree-1 leaves g[3] at 0 even though slot 2 packs it).
+    template <int I>
+    __device__ __forceinline__ float3 shN_coeff_color_grad(
+        const float x,
+        const float y,
+        const float z,
+        const float xx,
+        const float yy,
+        const float zz,
+        const float xy,
+        const float xz,
+        const float yz,
+        const float3 grad_color) {
+        static_assert(I >= 0 && I < 15, "SH rest coeff 0..14");
+        if constexpr (I == 0)
+            return (-0.48860251190291987f * y) * grad_color;
+        else if constexpr (I == 1)
+            return (0.48860251190291987f * z) * grad_color;
+        else if constexpr (I == 2)
+            return (-0.48860251190291987f * x) * grad_color;
+        else if constexpr (I == 3)
+            return (1.0925484305920792f * xy) * grad_color;
+        else if constexpr (I == 4)
+            return (-1.0925484305920792f * yz) * grad_color;
+        else if constexpr (I == 5)
+            return (0.94617469575755997f * zz - 0.31539156525251999f) * grad_color;
+        else if constexpr (I == 6)
+            return (-1.0925484305920792f * xz) * grad_color;
+        else if constexpr (I == 7)
+            return (0.54627421529603959f * xx - 0.54627421529603959f * yy) * grad_color;
+        else if constexpr (I == 8)
+            return (0.59004358992664352f * y * (-3.0f * xx + yy)) * grad_color;
+        else if constexpr (I == 9)
+            return (2.8906114426405538f * xy * z) * grad_color;
+        else if constexpr (I == 10)
+            return (0.45704579946446572f * y * (1.0f - 5.0f * zz)) * grad_color;
+        else if constexpr (I == 11)
+            return (0.3731763325901154f * z * (5.0f * zz - 3.0f)) * grad_color;
+        else if constexpr (I == 12)
+            return (0.45704579946446572f * x * (1.0f - 5.0f * zz)) * grad_color;
+        else if constexpr (I == 13)
+            return (1.4453057213202769f * z * (xx - yy)) * grad_color;
+        else
+            return (0.59004358992664352f * x * (-xx + 3.0f * yy)) * grad_color;
+    }
+
+    template <int ACTIVE_SH_BASES, int I>
+    __device__ __forceinline__ float3 shN_active_coeff_grad(
+        const float x,
+        const float y,
+        const float z,
+        const float xx,
+        const float yy,
+        const float zz,
+        const float xy,
+        const float xz,
+        const float yz,
+        const float3 grad_color) {
+        constexpr int N_REST = ACTIVE_SH_BASES > 1 ? ACTIVE_SH_BASES - 1 : 0;
+        if constexpr (I >= N_REST)
+            return make_float3(0.0f, 0.0f, 0.0f);
+        else
+            return shN_coeff_color_grad<I>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+    }
+
+    // Pack one float4-slot of SH-rest grads from the basis — no g[15] array.
+    // `k` is the unrolled slot index; the switch constant-folds.
+    template <int ACTIVE_SH_BASES>
+    __device__ __forceinline__ float4 shN_slot_grad_from_basis(
+        const uint k,
+        const float x,
+        const float y,
+        const float z,
+        const float xx,
+        const float yy,
+        const float zz,
+        const float xy,
+        const float xz,
+        const float yz,
+        const float3 grad_color) {
         switch (k) {
-        case 0: return make_float4(g[0].x, g[0].y, g[0].z, g[1].x);
-        case 1: return make_float4(g[1].y, g[1].z, g[2].x, g[2].y);
-        case 2: return make_float4(g[2].z, g[3].x, g[3].y, g[3].z);
-        case 3: return make_float4(g[4].x, g[4].y, g[4].z, g[5].x);
-        case 4: return make_float4(g[5].y, g[5].z, g[6].x, g[6].y);
-        case 5: return make_float4(g[6].z, g[7].x, g[7].y, g[7].z);
-        case 6: return make_float4(g[8].x, g[8].y, g[8].z, g[9].x);
-        case 7: return make_float4(g[9].y, g[9].z, g[10].x, g[10].y);
-        case 8: return make_float4(g[10].z, g[11].x, g[11].y, g[11].z);
-        case 9: return make_float4(g[12].x, g[12].y, g[12].z, g[13].x);
-        case 10: return make_float4(g[13].y, g[13].z, g[14].x, g[14].y);
-        case 11: return make_float4(g[14].z, 0.0f, 0.0f, 0.0f);
-        default: return make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        case 0: {
+            const float3 a = shN_active_coeff_grad<ACTIVE_SH_BASES, 0>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            const float3 b = shN_active_coeff_grad<ACTIVE_SH_BASES, 1>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            return make_float4(a.x, a.y, a.z, b.x);
         }
+        case 1: {
+            const float3 a = shN_active_coeff_grad<ACTIVE_SH_BASES, 1>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            const float3 b = shN_active_coeff_grad<ACTIVE_SH_BASES, 2>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            return make_float4(a.y, a.z, b.x, b.y);
+        }
+        case 2: {
+            const float3 a = shN_active_coeff_grad<ACTIVE_SH_BASES, 2>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            const float3 b = shN_active_coeff_grad<ACTIVE_SH_BASES, 3>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            return make_float4(a.z, b.x, b.y, b.z);
+        }
+        case 3: {
+            const float3 a = shN_active_coeff_grad<ACTIVE_SH_BASES, 4>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            const float3 b = shN_active_coeff_grad<ACTIVE_SH_BASES, 5>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            return make_float4(a.x, a.y, a.z, b.x);
+        }
+        case 4: {
+            const float3 a = shN_active_coeff_grad<ACTIVE_SH_BASES, 5>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            const float3 b = shN_active_coeff_grad<ACTIVE_SH_BASES, 6>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            return make_float4(a.y, a.z, b.x, b.y);
+        }
+        case 5: {
+            const float3 a = shN_active_coeff_grad<ACTIVE_SH_BASES, 6>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            const float3 b = shN_active_coeff_grad<ACTIVE_SH_BASES, 7>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            return make_float4(a.z, b.x, b.y, b.z);
+        }
+        case 6: {
+            const float3 a = shN_active_coeff_grad<ACTIVE_SH_BASES, 8>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            const float3 b = shN_active_coeff_grad<ACTIVE_SH_BASES, 9>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            return make_float4(a.x, a.y, a.z, b.x);
+        }
+        case 7: {
+            const float3 a = shN_active_coeff_grad<ACTIVE_SH_BASES, 9>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            const float3 b = shN_active_coeff_grad<ACTIVE_SH_BASES, 10>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            return make_float4(a.y, a.z, b.x, b.y);
+        }
+        case 8: {
+            const float3 a = shN_active_coeff_grad<ACTIVE_SH_BASES, 10>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            const float3 b = shN_active_coeff_grad<ACTIVE_SH_BASES, 11>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            return make_float4(a.z, b.x, b.y, b.z);
+        }
+        case 9: {
+            const float3 a = shN_active_coeff_grad<ACTIVE_SH_BASES, 12>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            const float3 b = shN_active_coeff_grad<ACTIVE_SH_BASES, 13>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            return make_float4(a.x, a.y, a.z, b.x);
+        }
+        case 10: {
+            const float3 a = shN_active_coeff_grad<ACTIVE_SH_BASES, 13>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            const float3 b = shN_active_coeff_grad<ACTIVE_SH_BASES, 14>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            return make_float4(a.y, a.z, b.x, b.y);
+        }
+        case 11: {
+            const float3 a = shN_active_coeff_grad<ACTIVE_SH_BASES, 14>(x, y, z, xx, yy, zz, xy, xz, yz, grad_color);
+            return make_float4(a.z, 0.0f, 0.0f, 0.0f);
+        }
+        default:
+            return make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+    }
+
+    template <typename C>
+    __device__ __forceinline__ float2 shN_adam_moment_us(
+        const float grad,
+        const int64_t cell,
+        const uint8_t* __restrict__ joint_packed,
+        const float4 old_mm,
+        const bool apply_step,
+        const bool update_param,
+        const float beta1,
+        const float beta2,
+        const float row_step_size,
+        const float eps,
+        const float bias_correction2_sqrt_rcp,
+        float& pc) {
+        const float2 mv = C::decode_g1g2(joint_packed, cell, old_mm);
+        float m = mv.x;
+        float v = mv.y;
+        if (apply_step) {
+            m = beta1 * mv.x + (1.0f - beta1) * grad;
+            v = beta2 * mv.y + (1.0f - beta2) * grad * grad;
+            if (update_param) {
+                const float denom = sqrtf(v) * bias_correction2_sqrt_rcp + eps;
+                pc -= row_step_size * m / denom;
+            }
+        }
+        return C::g1g2_to_us(m, v);
+    }
+
+    __device__ __forceinline__ float4 load_shN_param_slot(
+        const bool value_q16,
+        const bool value_f16,
+        const uint16_t* __restrict__ param_u16,
+        const __half* __restrict__ param_h,
+        const float4* __restrict__ param4,
+        const uint primitive_idx,
+        const uint k,
+        const uint slot,
+        const uint n_value_cells,
+        const float2 old_vmm) {
+        using VC = lfs::training::sh_value::DeviceCodec16;
+        if (value_q16) {
+            float px = 0.0f, py = 0.0f, pz = 0.0f, pw = 0.0f;
+            if (k * 4u + 0u < n_value_cells)
+                px = VC::decode(param_u16[lfs::training::sh_value::shAtU16(primitive_idx, k * 4u + 0u, n_value_cells)], old_vmm.x, old_vmm.y);
+            if (k * 4u + 1u < n_value_cells)
+                py = VC::decode(param_u16[lfs::training::sh_value::shAtU16(primitive_idx, k * 4u + 1u, n_value_cells)], old_vmm.x, old_vmm.y);
+            if (k * 4u + 2u < n_value_cells)
+                pz = VC::decode(param_u16[lfs::training::sh_value::shAtU16(primitive_idx, k * 4u + 2u, n_value_cells)], old_vmm.x, old_vmm.y);
+            if (k * 4u + 3u < n_value_cells)
+                pw = VC::decode(param_u16[lfs::training::sh_value::shAtU16(primitive_idx, k * 4u + 3u, n_value_cells)], old_vmm.x, old_vmm.y);
+            return make_float4(px, py, pz, pw);
+        }
+        if (value_f16) {
+            const uint base = slot * 4u;
+            return make_float4(__half2float(param_h[base + 0]),
+                               __half2float(param_h[base + 1]),
+                               __half2float(param_h[base + 2]),
+                               __half2float(param_h[base + 3]));
+        }
+        return param4[slot];
     }
 
     // Joint 8-bit shN Adam (swizzled float cells × 2 B). ALL threads must call when joint.
@@ -453,12 +726,20 @@ namespace fast_lfs::rasterization::kernels {
     // when p.sh_value_bits==16, param is pad-dropped uint16 codes; decode in
     // registers, Adam-update, then single re-encode after value bounds reduce. Moments still
     // use the float4-slot cell indexing (48 cells). Value re-encode is the single writer.
+    //
+    // Streaming: one float4 slot at a time. Pass 1 applies Adam and reduces bounds
+    // without storing the 48-cell (u, log_s, pval) workspace. Pass 2 recomputes the
+    // same per-cell Adam from still-original packed moments (and q16 values) and
+    // encodes. Slot / cell order is unchanged.
+    template <int ACTIVE_SH_BASES>
     __device__ inline void apply_shN_grads_packed_joint(
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
-        const float3 (&g)[15],
-        const uint n_slots_to_update,
-        const uint sh_layout_slots) {
+        const uint sh_layout_slots,
+        const float3 mean3d,
+        const float3 cam_position,
+        const float3 grad_color,
+        const bool compute_sh_grads) {
         using C = lfs::training::joint_adam::DeviceCodec<8>;
         using VC = lfs::training::sh_value::DeviceCodec16;
         constexpr float kInf = 1e30f;
@@ -512,75 +793,64 @@ namespace fast_lfs::rasterization::kernels {
         float local_u_min = kInf, local_u_max = -kInf;
         float local_s_min = kInf, local_s_max = -kInf;
         float local_v_min = kInf, local_v_max = -kInf;
-        // Up to 12 slots × 4 cells; store (u,log_s) for encode after bounds reduce.
-        float us_u[48], us_s[48];
-        // Updated param values (q16 path holds them until value bounds reduce).
-        float pval[48];
+
+        constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
+                                                                                     : 3u;
+        float bx = 0.0f, by = 0.0f, bz = 0.0f;
+        float bxx = 0.0f, byy = 0.0f, bzz = 0.0f, bxy = 0.0f, bxz = 0.0f, byz = 0.0f;
+        if (compute_sh_grads) {
+            const float3 direction = safe_normalize(mean3d - cam_position);
+            bx = direction.x;
+            by = direction.y;
+            bz = direction.z;
+            bxx = bx * bx;
+            byy = by * by;
+            bzz = bz * bz;
+            bxy = bx * by;
+            bxz = bx * bz;
+            byz = by * bz;
+        }
 
         if (touch) {
-            int n_cells_local = 0;
 #pragma unroll
             for (uint k = 0; k < 12u; ++k) {
                 if (k >= sh_layout_slots)
                     break;
                 const uint slot = shAt(primitive_idx, k, sh_layout_slots);
-                const bool active_slot = k < n_slots_to_update;
-                const float4 gk = active_slot ? shN_grad_for_slot(g, k)
-                                              : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-                const float gc[4] = {gk.x, gk.y, gk.z, gk.w};
-                float pc[4];
-                if (value_q16) {
-#pragma unroll
-                    for (int c = 0; c < 4; ++c) {
-                        const uint cell_lin = k * 4u + static_cast<uint>(c);
-                        if (cell_lin < n_value_cells) {
-                            pc[c] = VC::decode(
-                                param_u16[lfs::training::sh_value::shAtU16(
-                                    primitive_idx, cell_lin, n_value_cells)],
-                                old_vmm.x, old_vmm.y);
-                        } else {
-                            pc[c] = 0.0f;
-                        }
-                    }
-                } else if (value_f16) {
-                    const uint base = slot * 4u;
-                    pc[0] = __half2float(param_h[base + 0]);
-                    pc[1] = __half2float(param_h[base + 1]);
-                    pc[2] = __half2float(param_h[base + 2]);
-                    pc[3] = __half2float(param_h[base + 3]);
-                } else {
-                    float4 pv = param4[slot];
-                    pc[0] = pv.x;
-                    pc[1] = pv.y;
-                    pc[2] = pv.z;
-                    pc[3] = pv.w;
-                }
+                const bool active_slot = k < N_SLOTS;
+                const float4 gk = (compute_sh_grads && active_slot)
+                                      ? shN_slot_grad_from_basis<ACTIVE_SH_BASES>(
+                                            k, bx, by, bz, bxx, byy, bzz, bxy, bxz, byz, grad_color)
+                                      : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                float4 pc = load_shN_param_slot(value_q16, value_f16, param_u16, param_h, param4,
+                                                primitive_idx, k, slot, n_value_cells, old_vmm);
 #pragma unroll
                 for (int c = 0; c < 4; ++c) {
+                    float pci = (c == 0) ? pc.x : (c == 1) ? pc.y
+                                              : (c == 2)   ? pc.z
+                                                           : pc.w;
+                    const float gci = (c == 0) ? gk.x : (c == 1) ? gk.y
+                                                    : (c == 2)   ? gk.z
+                                                                 : gk.w;
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
-                    const float2 mv = C::decode_g1g2(p.joint_packed, cell, old_mm);
-                    float m = mv.x;
-                    float v = mv.y;
-                    if (apply_step) {
-                        m = beta1 * mv.x + (1.0f - beta1) * gc[c];
-                        v = beta2 * mv.y + (1.0f - beta2) * gc[c] * gc[c];
-                        if (active_slot) {
-                            const float denom = sqrtf(v) * p.bias_correction2_sqrt_rcp + eps;
-                            pc[c] -= row_step_size * m / denom;
-                        }
-                    }
-                    const float2 prim = C::g1g2_to_us(m, v);
-                    us_u[n_cells_local] = prim.x;
-                    us_s[n_cells_local] = prim.y;
-                    pval[n_cells_local] = pc[c];
+                    const float2 prim = shN_adam_moment_us<C>(
+                        gci, cell, p.joint_packed, old_mm, apply_step, active_slot,
+                        beta1, beta2, row_step_size, eps, p.bias_correction2_sqrt_rcp, pci);
+                    if (c == 0)
+                        pc.x = pci;
+                    else if (c == 1)
+                        pc.y = pci;
+                    else if (c == 2)
+                        pc.z = pci;
+                    else
+                        pc.w = pci;
                     if (value_q16) {
                         const uint cell_lin = k * 4u + static_cast<uint>(c);
                         if (cell_lin < n_value_cells) {
-                            local_v_min = fminf(local_v_min, pc[c]);
-                            local_v_max = fmaxf(local_v_max, pc[c]);
+                            local_v_min = fminf(local_v_min, pci);
+                            local_v_max = fmaxf(local_v_max, pci);
                         }
                     }
-                    ++n_cells_local;
                     local_u_min = fminf(local_u_min, prim.x);
                     local_u_max = fmaxf(local_u_max, prim.x);
                     local_s_min = fminf(local_s_min, prim.y);
@@ -589,16 +859,15 @@ namespace fast_lfs::rasterization::kernels {
                 if (apply_step && active_slot) {
                     if (value_f16) {
                         const uint base = slot * 4u;
-                        param_h[base + 0] = __float2half(pc[0]);
-                        param_h[base + 1] = __float2half(pc[1]);
-                        param_h[base + 2] = __float2half(pc[2]);
-                        param_h[base + 3] = __float2half(pc[3]);
+                        param_h[base + 0] = __float2half(pc.x);
+                        param_h[base + 1] = __float2half(pc.y);
+                        param_h[base + 2] = __float2half(pc.z);
+                        param_h[base + 3] = __float2half(pc.w);
                     } else if (!value_q16) {
-                        param4[slot] = make_float4(pc[0], pc[1], pc[2], pc[3]);
+                        param4[slot] = pc;
                     }
                 }
             }
-            (void)n_cells_local;
         }
 
         // fused min4 bounds reduce for Adam moment (u,log_s).
@@ -636,16 +905,34 @@ namespace fast_lfs::rasterization::kernels {
         const float inv_s_range = 1.0f / fmaxf(new_mm.w - new_mm.z, lfs::training::joint_adam::kEpsDevice);
 
         if (touch) {
-            int ci = 0;
 #pragma unroll
             for (uint k = 0; k < 12u; ++k) {
                 if (k >= sh_layout_slots)
                     break;
                 const uint slot = shAt(primitive_idx, k, sh_layout_slots);
+                const bool active_slot = k < N_SLOTS;
+                const float4 gk = (compute_sh_grads && active_slot)
+                                      ? shN_slot_grad_from_basis<ACTIVE_SH_BASES>(
+                                            k, bx, by, bz, bxx, byy, bzz, bxy, bxz, byz, grad_color)
+                                      : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                float4 pc = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                if (value_q16) {
+                    pc = load_shN_param_slot(true, false, param_u16, param_h, param4,
+                                             primitive_idx, k, slot, n_value_cells, old_vmm);
+                }
 #pragma unroll
                 for (int c = 0; c < 4; ++c) {
+                    float pci = (c == 0) ? pc.x : (c == 1) ? pc.y
+                                              : (c == 2)   ? pc.z
+                                                           : pc.w;
+                    const float gci = (c == 0) ? gk.x : (c == 1) ? gk.y
+                                                    : (c == 2)   ? gk.z
+                                                                 : gk.w;
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
-                    C::encode_us(p.joint_packed, cell, us_u[ci], us_s[ci],
+                    const float2 prim = shN_adam_moment_us<C>(
+                        gci, cell, p.joint_packed, old_mm, apply_step, active_slot,
+                        beta1, beta2, row_step_size, eps, p.bias_correction2_sqrt_rcp, pci);
+                    C::encode_us(p.joint_packed, cell, prim.x, prim.y,
                                  new_mm.x, new_mm.z, inv_u_range, inv_s_range);
                     // Always re-encode under new block bounds (frozen/crop-damped too),
                     // matching joint-moment encode. apply_step only gates the Adam update.
@@ -654,33 +941,41 @@ namespace fast_lfs::rasterization::kernels {
                         if (cell_lin < n_value_cells) {
                             param_u16[lfs::training::sh_value::shAtU16(
                                 primitive_idx, cell_lin, n_value_cells)] =
-                                VC::encode(pval[ci], new_vmm.x, new_vmm.y);
+                                VC::encode(pci, new_vmm.x, new_vmm.y);
                         }
                     }
-                    ++ci;
                 }
             }
         }
     }
 
     // Joint (u, log_s) Adam step over swizzled shN moments of one primitive.
-    // n_slots_to_update is derived from active SH bases. All threads must call
+    // Slot count is derived from ACTIVE_SH_BASES. All threads must call
     // when joint_bits==8 (block bounds).
+    template <int ACTIVE_SH_BASES>
     __device__ inline void apply_shN_grads_packed(
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
-        const float3 (&g)[15],
-        const uint n_slots_to_update,
-        const uint sh_layout_slots) {
+        const uint sh_layout_slots,
+        const float3 mean3d,
+        const float3 cam_position,
+        const float3 grad_color,
+        const bool compute_sh_grads) {
         const FusedAdamParam& p = fused_adam.shN;
         if (p.joint_bits == 8) {
-            apply_shN_grads_packed_joint(fused_adam, primitive_idx, g, n_slots_to_update, sh_layout_slots);
+            apply_shN_grads_packed_joint<ACTIVE_SH_BASES>(
+                fused_adam, primitive_idx, sh_layout_slots,
+                mean3d, cam_position, grad_color, compute_sh_grads);
         }
         // Non-joint state is unsupported (joint is the only codec).
     }
 
-    // SH backward: fills sh0_grads[3] and shN_grads[15]; does NOT apply Adam
-    // (caller runs a unified adam section so joint block-bounds can sync).
+    // SH backward: fills sh0_grads[3] and returns dL/dmean from view-dir.
+    // Per-coefficient shN color grads are independent (basis_i * dL/dcolor) and
+    // are recomputed in the fused-Adam stream — they are not materialized here.
+    // dL/ddir keeps the original grouped accumulation (degree-1 init from
+    // c2,c0,c1; degree-2 adds c3,c6,c7 / c3,c4,c7 / c4,c5,c6; degree-3 adds
+    // c8,c9,c12,c13,c14 / c8,c9,c10,c13,c14 / c9,c10,c11,c12,c13).
     template <int ACTIVE_SH_BASES>
     __device__ inline float3 convert_sh_to_color_backward_grads(
         const float4* sh_coefficients_rest,
@@ -690,7 +985,6 @@ namespace fast_lfs::rasterization::kernels {
         const uint primitive_idx,
         const uint sh_layout_slots,
         float* __restrict__ sh0_grads_out,
-        float3* __restrict__ shN_grads_out,
         const float2* __restrict__ sh_value_bounds = nullptr,
         const uint sh_value_n_cells = 0u,
         const uint sh_value_bits = 0u) {
@@ -699,9 +993,6 @@ namespace fast_lfs::rasterization::kernels {
         sh0_grads_out[0] = dL_dsh0.x;
         sh0_grads_out[1] = dL_dsh0.y;
         sh0_grads_out[2] = dL_dsh0.z;
-#pragma unroll
-        for (int i = 0; i < 15; ++i)
-            shN_grads_out[i] = make_float3(0.0f, 0.0f, 0.0f);
 
         float3 dcolor_dposition = make_float3(0.0f);
         if constexpr (ACTIVE_SH_BASES > 1) {
@@ -709,44 +1000,53 @@ namespace fast_lfs::rasterization::kernels {
             const float x_raw = raw_direction.x;
             const float y_raw = raw_direction.y;
             const float z_raw = raw_direction.z;
-            const float3 direction = safe_normalize(raw_direction);
-            const float x = direction.x;
-            const float y = direction.y;
-            const float z = direction.z;
-
-            float3 c[15];
-            load_shN_coeffs(sh_coefficients_rest, primitive_idx, ACTIVE_SH_BASES, sh_layout_slots, c,
-                            sh_value_bounds, sh_value_n_cells, sh_value_bits);
-
-            float3* g = shN_grads_out;
-            g[0] = (-0.48860251190291987f * y) * grad_color;
-            g[1] = (0.48860251190291987f * z) * grad_color;
-            g[2] = (-0.48860251190291987f * x) * grad_color;
-            float3 grad_direction_x = -0.48860251190291987f * c[2];
-            float3 grad_direction_y = -0.48860251190291987f * c[0];
-            float3 grad_direction_z = 0.48860251190291987f * c[1];
+            const float3 c0 = load_shN_coeff<0>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                sh_value_bounds, sh_value_n_cells, sh_value_bits);
+            const float3 c1 = load_shN_coeff<1>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                sh_value_bounds, sh_value_n_cells, sh_value_bits);
+            const float3 c2 = load_shN_coeff<2>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                sh_value_bounds, sh_value_n_cells, sh_value_bits);
+            float3 grad_direction_x = -0.48860251190291987f * c2;
+            float3 grad_direction_y = -0.48860251190291987f * c0;
+            float3 grad_direction_z = 0.48860251190291987f * c1;
             if constexpr (ACTIVE_SH_BASES > 4) {
+                const float3 direction = safe_normalize(raw_direction);
+                const float x = direction.x;
+                const float y = direction.y;
+                const float z = direction.z;
                 const float xx = x * x, yy = y * y, zz = z * z;
                 const float xy = x * y, xz = x * z, yz = y * z;
-                g[3] = (1.0925484305920792f * xy) * grad_color;
-                g[4] = (-1.0925484305920792f * yz) * grad_color;
-                g[5] = (0.94617469575755997f * zz - 0.31539156525251999f) * grad_color;
-                g[6] = (-1.0925484305920792f * xz) * grad_color;
-                g[7] = (0.54627421529603959f * xx - 0.54627421529603959f * yy) * grad_color;
-                grad_direction_x = grad_direction_x + (1.0925484305920792f * y) * c[3] + (-1.0925484305920792f * z) * c[6] + (1.0925484305920792f * x) * c[7];
-                grad_direction_y = grad_direction_y + (1.0925484305920792f * x) * c[3] + (-1.0925484305920792f * z) * c[4] + (-1.0925484305920792f * y) * c[7];
-                grad_direction_z = grad_direction_z + (-1.0925484305920792f * y) * c[4] + (1.8923493915151202f * z) * c[5] + (-1.0925484305920792f * x) * c[6];
+                const float3 c3 = load_shN_coeff<3>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                    sh_value_bounds, sh_value_n_cells, sh_value_bits);
+                const float3 c4 = load_shN_coeff<4>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                    sh_value_bounds, sh_value_n_cells, sh_value_bits);
+                const float3 c5 = load_shN_coeff<5>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                    sh_value_bounds, sh_value_n_cells, sh_value_bits);
+                const float3 c6 = load_shN_coeff<6>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                    sh_value_bounds, sh_value_n_cells, sh_value_bits);
+                const float3 c7 = load_shN_coeff<7>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                    sh_value_bounds, sh_value_n_cells, sh_value_bits);
+                grad_direction_x = grad_direction_x + (1.0925484305920792f * y) * c3 + (-1.0925484305920792f * z) * c6 + (1.0925484305920792f * x) * c7;
+                grad_direction_y = grad_direction_y + (1.0925484305920792f * x) * c3 + (-1.0925484305920792f * z) * c4 + (-1.0925484305920792f * y) * c7;
+                grad_direction_z = grad_direction_z + (-1.0925484305920792f * y) * c4 + (1.8923493915151202f * z) * c5 + (-1.0925484305920792f * x) * c6;
                 if constexpr (ACTIVE_SH_BASES > 9) {
-                    g[8] = (0.59004358992664352f * y * (-3.0f * xx + yy)) * grad_color;
-                    g[9] = (2.8906114426405538f * xy * z) * grad_color;
-                    g[10] = (0.45704579946446572f * y * (1.0f - 5.0f * zz)) * grad_color;
-                    g[11] = (0.3731763325901154f * z * (5.0f * zz - 3.0f)) * grad_color;
-                    g[12] = (0.45704579946446572f * x * (1.0f - 5.0f * zz)) * grad_color;
-                    g[13] = (1.4453057213202769f * z * (xx - yy)) * grad_color;
-                    g[14] = (0.59004358992664352f * x * (-xx + 3.0f * yy)) * grad_color;
-                    grad_direction_x = grad_direction_x + (-3.5402615395598609f * xy) * c[8] + (2.8906114426405538f * yz) * c[9] + (0.45704579946446572f - 2.2852289973223288f * zz) * c[12] + (2.8906114426405538f * xz) * c[13] + (-1.7701307697799304f * xx + 1.7701307697799304f * yy) * c[14];
-                    grad_direction_y = grad_direction_y + (-1.7701307697799304f * xx + 1.7701307697799304f * yy) * c[8] + (2.8906114426405538f * xz) * c[9] + (0.45704579946446572f - 2.2852289973223288f * zz) * c[10] + (-2.8906114426405538f * yz) * c[13] + (3.5402615395598609f * xy) * c[14];
-                    grad_direction_z = grad_direction_z + (2.8906114426405538f * xy) * c[9] + (-4.5704579946446566f * yz) * c[10] + (5.597644988851731f * zz - 1.1195289977703462f) * c[11] + (-4.5704579946446566f * xz) * c[12] + (1.4453057213202769f * xx - 1.4453057213202769f * yy) * c[13];
+                    const float3 c8 = load_shN_coeff<8>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                        sh_value_bounds, sh_value_n_cells, sh_value_bits);
+                    const float3 c9 = load_shN_coeff<9>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                        sh_value_bounds, sh_value_n_cells, sh_value_bits);
+                    const float3 c10 = load_shN_coeff<10>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                          sh_value_bounds, sh_value_n_cells, sh_value_bits);
+                    const float3 c11 = load_shN_coeff<11>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                          sh_value_bounds, sh_value_n_cells, sh_value_bits);
+                    const float3 c12 = load_shN_coeff<12>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                          sh_value_bounds, sh_value_n_cells, sh_value_bits);
+                    const float3 c13 = load_shN_coeff<13>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                          sh_value_bounds, sh_value_n_cells, sh_value_bits);
+                    const float3 c14 = load_shN_coeff<14>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                                          sh_value_bounds, sh_value_n_cells, sh_value_bits);
+                    grad_direction_x = grad_direction_x + (-3.5402615395598609f * xy) * c8 + (2.8906114426405538f * yz) * c9 + (0.45704579946446572f - 2.2852289973223288f * zz) * c12 + (2.8906114426405538f * xz) * c13 + (-1.7701307697799304f * xx + 1.7701307697799304f * yy) * c14;
+                    grad_direction_y = grad_direction_y + (-1.7701307697799304f * xx + 1.7701307697799304f * yy) * c8 + (2.8906114426405538f * xz) * c9 + (0.45704579946446572f - 2.2852289973223288f * zz) * c10 + (-2.8906114426405538f * yz) * c13 + (3.5402615395598609f * xy) * c14;
+                    grad_direction_z = grad_direction_z + (2.8906114426405538f * xy) * c9 + (-4.5704579946446566f * yz) * c10 + (5.597644988851731f * zz - 1.1195289977703462f) * c11 + (-4.5704579946446566f * xz) * c12 + (1.4453057213202769f * xx - 1.4453057213202769f * yy) * c13;
                 }
             }
 

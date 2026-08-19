@@ -149,12 +149,6 @@ def _build_builtin_panel_steps(lf):
         lf.register_class(ScriptsPanel)
         lf.ui.set_panel_enabled("lfs.scripts", False)
 
-    def input_settings_panel():
-        from .input_settings_panel import InputSettingsPanel
-
-        lf.register_class(InputSettingsPanel)
-        lf.ui.set_panel_enabled("lfs.input_settings", False)
-
     def preferences_panel():
         from .preferences_panel import PreferencesPanel
 
@@ -205,7 +199,6 @@ def _build_builtin_panel_steps(lf):
         ("image_preview_panel", image_preview_panel),
         ("histogram_panel", histogram_panel),
         ("scripts_panel", scripts_panel),
-        ("input_settings_panel", input_settings_panel),
         ("preferences_panel", preferences_panel),
         ("mesh2splat_panel", mesh2splat_panel),
         ("plugin_marketplace_panel", plugin_marketplace_panel),

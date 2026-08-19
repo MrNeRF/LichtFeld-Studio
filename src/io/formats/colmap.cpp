@@ -491,7 +491,7 @@ namespace lfs::io {
 
             if (!std::ranges::all_of(point.xyz, [](const double value) { return std::isfinite(value); }) ||
                 red < 0 || red > 255 || green < 0 || green > 255 || blue < 0 || blue > 255 ||
-                !std::isfinite(point.error) || point.error < 0.0) {
+                !std::isfinite(point.error)) {
                 return false;
             }
 
@@ -566,7 +566,7 @@ namespace lfs::io {
             }
             if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
                 red < 0 || red > 255 || green < 0 || green > 255 || blue < 0 || blue > 255 ||
-                !std::isfinite(error) || error < 0.0) {
+                !std::isfinite(error)) {
                 return false;
             }
 
@@ -1460,7 +1460,7 @@ namespace lfs::io {
             point.color[2] = static_cast<uint8_t>(*cur++);
 
             point.error = read_f64(cur, end, "points3D.bin error");
-            valid = valid && std::isfinite(point.error) && point.error >= 0.0;
+            valid = valid && std::isfinite(point.error);
             const uint64_t track_len = read_u64(cur, end, "points3D.bin track length");
             if (track_len > static_cast<uint64_t>(end - cur) / (2 * sizeof(uint32_t))) {
                 throw_colmap_error(
@@ -3189,8 +3189,8 @@ namespace lfs::io {
                                return std::isfinite(value);
                            }),
                            std::format("COLMAP point {} coordinates must be finite", point.point3D_id));
-            LFS_ASSERT_MSG(std::isfinite(point.error) && point.error >= 0.0,
-                           std::format("COLMAP point {} error must be finite and non-negative",
+            LFS_ASSERT_MSG(std::isfinite(point.error),
+                           std::format("COLMAP point {} error must be finite",
                                        point.point3D_id));
             LFS_ASSERT_MSG(point.track_count == point.track.size(),
                            std::format("COLMAP point track count must match its stored track "

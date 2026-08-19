@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include "core/executable_path.hpp"
 #include "core/legacy_settings_migration.hpp"
 #include "core/user_paths.hpp"
 
@@ -459,7 +458,6 @@ namespace {
         EXPECT_NE((*first)->parent_path(), (*second)->parent_path());
     }
 
-#if !defined(LFS_BUILD_PORTABLE)
 #ifdef _WIN32
     TEST_F(UserPathsContractTest, WindowsDefaultUsesProfileDotLichtfeld) {
         const ScopedEnvironmentVariable lfs_home("LFS_HOME", std::nullopt);
@@ -497,17 +495,6 @@ namespace {
         ASSERT_TRUE(resolved.has_value()) << resolved.error();
         EXPECT_EQ(resolved->configDir(), root_ / "home" / ".lichtfeld" / "config");
         EXPECT_EQ(resolved->logDir(), root_ / "home" / ".lichtfeld" / "logs");
-    }
-#endif
-#endif
-
-#if defined(LFS_BUILD_PORTABLE)
-    TEST_F(UserPathsContractTest, PortableBuildDefaultsNextToExecutable) {
-        const ScopedEnvironmentVariable lfs_home("LFS_HOME", std::nullopt);
-        const auto resolved = lfs::core::UserPaths::resolve();
-        ASSERT_TRUE(resolved.has_value()) << resolved.error();
-        EXPECT_EQ(resolved->configDir(),
-                  lfs::core::getExecutableDir() / ".lichtfeld" / "config");
     }
 #endif
 

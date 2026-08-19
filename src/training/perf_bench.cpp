@@ -12,6 +12,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <fstream>
@@ -93,6 +94,44 @@ namespace lfs::training {
             std::size_t grow_required_bytes = 0;
         };
 
+        struct PhaseStats {
+            double wall_ms = 0.0;
+            double gpu_span_ms = 0.0;
+            double bubble_ms = 0.0;
+            double wall_p90_ms = 0.0;
+        };
+
+        [[nodiscard]] double mean_or_zero(const std::vector<double>& values) {
+            if (values.empty()) {
+                return 0.0;
+            }
+            double sum = 0.0;
+            for (const double v : values) {
+                sum += v;
+            }
+            return sum / static_cast<double>(values.size());
+        }
+
+        [[nodiscard]] double p90_or_zero(std::vector<double> values) {
+            if (values.empty()) {
+                return 0.0;
+            }
+            std::sort(values.begin(), values.end());
+            const std::size_t idx = static_cast<std::size_t>(
+                0.9 * static_cast<double>(values.size() - 1));
+            return values[idx];
+        }
+
+        [[nodiscard]] PhaseStats summarize_phase(const std::vector<double>& wall,
+                                                 const std::vector<double>& gpu) {
+            PhaseStats stats;
+            stats.wall_ms = mean_or_zero(wall);
+            stats.gpu_span_ms = mean_or_zero(gpu);
+            stats.bubble_ms = std::max(0.0, stats.wall_ms - stats.gpu_span_ms);
+            stats.wall_p90_ms = p90_or_zero(wall);
+            return stats;
+        }
+
         [[nodiscard]] MrnfTransientPeaks mrnf_transient_peaks(
             const diagnostics::VramProfilerSnapshot& snapshot) {
             MrnfTransientPeaks peaks;
@@ -151,8 +190,80 @@ namespace lfs::training {
         return collector;
     }
 
+    PerfBenchCollector::~PerfBenchCollector() {
+        destroy_phase_event_pool();
+    }
+
+    void PerfBenchCollector::set_timing_stream(const cudaStream_t stream) {
+        timing_stream_ = stream;
+    }
+
+    void PerfBenchCollector::destroy_phase_event_pool() {
+        for (auto& ev : phase_events_) {
+            if (ev) {
+                (void)cudaEventDestroy(ev);
+                ev = nullptr;
+            }
+        }
+        phase_events_.clear();
+        phase_pool_ready_ = false;
+    }
+
+    bool PerfBenchCollector::ensure_phase_event_pool() {
+        if (phase_pool_ready_) {
+            return true;
+        }
+        const std::size_t n =
+            static_cast<std::size_t>(kPhaseSampleCap) *
+            static_cast<std::size_t>(kPhaseBoundaryCount);
+        phase_events_.assign(n, nullptr);
+        phase_samples_.assign(static_cast<std::size_t>(kPhaseSampleCap), PhaseSample{});
+        for (std::size_t i = 0; i < n; ++i) {
+            if (cudaEventCreateWithFlags(&phase_events_[i], cudaEventDefault) != cudaSuccess) {
+                (void)cudaGetLastError();
+                destroy_phase_event_pool();
+                LOG_WARN("PerfBench: failed to allocate phase event pool; phase timings disabled");
+                return false;
+            }
+        }
+        phase_pool_ready_ = true;
+        return true;
+    }
+
+    void PerfBenchCollector::reset_phase_session() {
+        phase_active_iter_ = 0;
+        phase_sample_count_ = 0;
+        phase_current_index_ = -1;
+        phase_last_primary_iter_ = 0;
+    }
+
+    void PerfBenchCollector::record_phase_mark(const PhaseBoundary b) {
+        if (phase_current_index_ < 0 || !phase_pool_ready_ ||
+            phase_current_index_ >= phase_sample_count_) {
+            return;
+        }
+        const int bi = static_cast<int>(b);
+        if (bi < 0 || bi >= kPhaseBoundaryCount) {
+            return;
+        }
+        auto& sample = phase_samples_[static_cast<std::size_t>(phase_current_index_)];
+        sample.host_ns[bi] = now_ns();
+        const std::size_t ev_idx =
+            static_cast<std::size_t>(phase_current_index_) *
+                static_cast<std::size_t>(kPhaseBoundaryCount) +
+            static_cast<std::size_t>(bi);
+        if (cudaEventRecord(phase_events_[ev_idx], timing_stream_) != cudaSuccess) {
+            (void)cudaGetLastError();
+            return;
+        }
+        sample.seen_mask |= (1u << bi);
+    }
+
     void PerfBenchCollector::configure(const bool enable, const int warmup) {
         g_perf_bench_enabled.store(enable, std::memory_order_relaxed);
+        if (!enable) {
+            phase_active_iter_ = 0;
+        }
         if (warmup > 0) {
             g_perf_bench_warmup.store(warmup, std::memory_order_relaxed);
         }
@@ -244,17 +355,50 @@ namespace lfs::training {
         train_end_ns_ = train_start_ns_;
         lfs::core::alloc_counter::reset_site_counts();
 
+        reset_phase_session();
+        // Allocate the event pool before any sampled step so creation cost is
+        // not charged to the first phase sample.
+        (void)ensure_phase_event_pool();
+
         // Ensure the VRAM profiler is on so the ledger is published each step.
         lfs::diagnostics::VramProfiler::instance().setEnabled(true);
-        LOG_INFO("PerfBench: enabled (warmup={} iters, total={})", warmup_, total_iters_);
+        LOG_INFO("PerfBench: enabled (warmup={} iters, total={}, phase stride={} cap={})",
+                 warmup_, total_iters_, kPhaseSampleStride, kPhaseSampleCap);
     }
 
-    void PerfBenchCollector::on_step_begin(const int /*iter*/) {
+    void PerfBenchCollector::on_step_begin(const int iter) {
         if (!started_) {
             return;
         }
         step_alloc_snap_ = lfs::core::alloc_counter::snapshot();
         step_start_ns_ = now_ns();
+
+        phase_active_iter_ = 0;
+        phase_current_index_ = -1;
+        if (iter <= warmup_ || !phase_pool_ready_ ||
+            phase_sample_count_ >= kPhaseSampleCap) {
+            return;
+        }
+        const int offset = iter - warmup_;
+        if (offset <= 0) {
+            return;
+        }
+        const int rem = offset % kPhaseSampleStride;
+        const bool primary = rem == 0;
+        const bool pair = rem == 1 && phase_last_primary_iter_ == iter - 1;
+        if (!primary && !pair) {
+            return;
+        }
+
+        auto& sample = phase_samples_[static_cast<std::size_t>(phase_sample_count_)];
+        sample = PhaseSample{};
+        sample.iter = iter;
+        phase_current_index_ = phase_sample_count_;
+        ++phase_sample_count_;
+        if (primary) {
+            phase_last_primary_iter_ = iter;
+        }
+        phase_active_iter_ = iter;
     }
 
     void PerfBenchCollector::capture_peak_snapshot(const int iter,
@@ -626,6 +770,101 @@ namespace lfs::training {
         const double signed_residual_mib =
             static_cast<double>(peak_ledger.signed_residual_bytes) / (1024.0 * 1024.0);
 
+        constexpr int kDerivedPhaseCount = 6;
+        constexpr const char* kDerivedPhaseNames[kDerivedPhaseCount] = {
+            "pre_fwd", "forward", "loss", "backward", "optimizer", "inter_step"};
+        const std::uint32_t kAllBoundaries =
+            (1u << static_cast<unsigned>(kPhaseBoundaryCount)) - 1u;
+        std::array<std::vector<double>, kDerivedPhaseCount> phase_wall{};
+        std::array<std::vector<double>, kDerivedPhaseCount> phase_gpu{};
+        int phase_valid = 0;
+
+        if (phase_pool_ready_ && phase_sample_count_ > 0) {
+            // Bench-end only: the training loop has finished; make events readable.
+            if (timing_stream_ != nullptr) {
+                if (cudaStreamSynchronize(timing_stream_) != cudaSuccess) {
+                    (void)cudaGetLastError();
+                }
+            }
+
+            const auto event_at = [this](const int sample, const int boundary) -> cudaEvent_t {
+                return phase_events_[static_cast<std::size_t>(sample) *
+                                         static_cast<std::size_t>(kPhaseBoundaryCount) +
+                                     static_cast<std::size_t>(boundary)];
+            };
+
+            std::vector<char> sample_ok(static_cast<std::size_t>(phase_sample_count_), 0);
+            for (int i = 0; i < phase_sample_count_; ++i) {
+                const auto& sample = phase_samples_[static_cast<std::size_t>(i)];
+                if (sample.seen_mask != kAllBoundaries) {
+                    continue;
+                }
+                bool ok = true;
+                double wall[5];
+                double gpu[5];
+                for (int p = 0; p < 5; ++p) {
+                    const int a = p;
+                    const int b = p + 1;
+                    wall[p] = static_cast<double>(sample.host_ns[b] - sample.host_ns[a]) / 1.0e6;
+                    if (wall[p] < 0.0) {
+                        ok = false;
+                        break;
+                    }
+                    float elapsed_ms = 0.0f;
+                    if (cudaEventElapsedTime(&elapsed_ms, event_at(i, a), event_at(i, b)) !=
+                        cudaSuccess) {
+                        (void)cudaGetLastError();
+                        ok = false;
+                        break;
+                    }
+                    gpu[p] = static_cast<double>(elapsed_ms);
+                }
+                if (!ok) {
+                    continue;
+                }
+                sample_ok[static_cast<std::size_t>(i)] = 1;
+                ++phase_valid;
+                for (int p = 0; p < 5; ++p) {
+                    phase_wall[static_cast<std::size_t>(p)].push_back(wall[p]);
+                    phase_gpu[static_cast<std::size_t>(p)].push_back(gpu[p]);
+                }
+            }
+
+            for (int i = 0; i + 1 < phase_sample_count_; ++i) {
+                if (!sample_ok[static_cast<std::size_t>(i)] ||
+                    !sample_ok[static_cast<std::size_t>(i + 1)]) {
+                    continue;
+                }
+                const auto& a = phase_samples_[static_cast<std::size_t>(i)];
+                const auto& b = phase_samples_[static_cast<std::size_t>(i + 1)];
+                if (b.iter != a.iter + 1) {
+                    continue;
+                }
+                const int end_b = static_cast<int>(PhaseBoundary::StepEnd);
+                const int begin_b = static_cast<int>(PhaseBoundary::StepBegin);
+                const double wall =
+                    static_cast<double>(b.host_ns[begin_b] - a.host_ns[end_b]) / 1.0e6;
+                float elapsed_ms = 0.0f;
+                if (cudaEventElapsedTime(&elapsed_ms, event_at(i, end_b),
+                                         event_at(i + 1, begin_b)) != cudaSuccess) {
+                    (void)cudaGetLastError();
+                    continue;
+                }
+                phase_wall[5].push_back(wall);
+                phase_gpu[5].push_back(static_cast<double>(elapsed_ms));
+            }
+        }
+
+        std::array<PhaseStats, kDerivedPhaseCount> phase_stats{};
+        for (int p = 0; p < kDerivedPhaseCount; ++p) {
+            phase_stats[static_cast<std::size_t>(p)] =
+                summarize_phase(phase_wall[static_cast<std::size_t>(p)],
+                                phase_gpu[static_cast<std::size_t>(p)]);
+        }
+
+        phase_active_iter_ = 0;
+        phase_current_index_ = -1;
+
         std::error_code ec;
         std::filesystem::create_directories(path.parent_path(), ec);
 
@@ -865,7 +1104,19 @@ namespace lfs::training {
             out << (i + 1 < peak_ledger.peak_rows.size() ? ",\n" : "\n");
         }
         out << "    ]\n";
-        out << "  }\n";
+        out << "  },\n";
+        out << "  \"phases\": {\n";
+        for (int p = 0; p < kDerivedPhaseCount; ++p) {
+            const auto& s = phase_stats[static_cast<std::size_t>(p)];
+            out << "    \"" << kDerivedPhaseNames[p] << "\": {"
+                << "\"wall_ms\": " << s.wall_ms
+                << ", \"gpu_span_ms\": " << s.gpu_span_ms
+                << ", \"bubble_ms\": " << s.bubble_ms
+                << ", \"wall_p90_ms\": " << s.wall_p90_ms << "}";
+            out << (p + 1 < kDerivedPhaseCount ? ",\n" : "\n");
+        }
+        out << "  },\n";
+        out << "  \"phase_samples\": " << phase_valid << "\n";
         out << "}\n";
         out.close();
 
@@ -887,6 +1138,20 @@ namespace lfs::training {
                  static_cast<double>(peak_ledger.fastgs_sort_allocated_bytes) /
                      (1024.0 * 1024.0),
                  ledger_.bytes_per_splat);
+
+        std::ostringstream phase_line;
+        phase_line << std::fixed << std::setprecision(2);
+        phase_line << "PerfBench phases (n=" << phase_valid << "):";
+        for (int p = 0; p < kDerivedPhaseCount; ++p) {
+            const auto& s = phase_stats[static_cast<std::size_t>(p)];
+            phase_line << ' ' << kDerivedPhaseNames[p] << " wall=" << s.wall_ms
+                       << " gpu=" << s.gpu_span_ms << " bubble=" << s.bubble_ms
+                       << " p90=" << s.wall_p90_ms;
+            if (p + 1 < kDerivedPhaseCount) {
+                phase_line << " |";
+            }
+        }
+        LOG_INFO("{}", phase_line.str());
     }
 
 } // namespace lfs::training

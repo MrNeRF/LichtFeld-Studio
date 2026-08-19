@@ -489,4 +489,133 @@ namespace {
         }
     }
 
+    TEST(ProjectChapterTest, SceneGraphBatchedUpsertRetainsUnknownNodeMembers) {
+        const auto node_id = uuid_literal("43000000-0000-4000-8000-000000000001");
+        const std::string source = std::format(
+            R"({{
+  "schema_version": 1,
+  "training_model_uuid": null,
+  "nodes": [{{
+    "uuid": "{}",
+    "type": "group",
+    "name": "Root",
+    "parent_uuid": null,
+    "child_order": 0,
+    "local_transform": [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],
+    "visible": true,
+    "locked": false,
+    "training_enabled": true,
+    "payload_diverged": false,
+    "vendor_extra": {{"keep": 42, "nested": [1, {{"x": true}}]}}
+  }}]
+}})",
+            node_id.to_string());
+        auto chapter = SceneGraphChapter::parse(source);
+        ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
+        auto found = chapter->find(node_id);
+        ASSERT_TRUE(found) << lfs::format_for_developer(found.error());
+        ASSERT_TRUE(*found);
+        auto node = **found;
+        node.name = "Renamed";
+        node.visible = false;
+        ASSERT_TRUE(chapter->upsert_node(node));
+
+        const auto dumped = lfs::io::JsonChapterDom::Json::parse(chapter->dom().dump());
+        ASSERT_EQ(dumped["nodes"].size(), 1);
+        EXPECT_EQ(dumped["nodes"][0]["name"], "Renamed");
+        EXPECT_EQ(dumped["nodes"][0]["visible"], false);
+        const auto extra = dumped["nodes"][0]["vendor_extra"];
+        ASSERT_TRUE(extra.is_object());
+        EXPECT_EQ(extra["keep"], 42);
+        ASSERT_TRUE(extra["nested"].is_array());
+        ASSERT_EQ(extra["nested"].size(), 2);
+        EXPECT_EQ(extra["nested"][0], 1);
+        EXPECT_EQ(extra["nested"][1]["x"], true);
+    }
+
+    TEST(SceneGraphChapterScaleTest, UpsertParseAndEnumerateThousandsOfCameraNodes) {
+        using clock = std::chrono::steady_clock;
+        const auto started = clock::now();
+
+        const auto root_id = uuid_literal("52000000-0000-4000-8000-000000000001");
+        const auto group_id = uuid_literal("52000000-0000-4000-8000-000000000002");
+
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = root_id,
+            .type = "dataset",
+            .name = "Dataset",
+            .parent_uuid = std::nullopt,
+            .child_order = 0,
+        }));
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = group_id,
+            .type = "camera_group",
+            .name = "Cameras",
+            .parent_uuid = root_id,
+            .child_order = 0,
+        }));
+
+        constexpr int camera_count = 1998;
+        for (int i = 0; i < camera_count; ++i) {
+            const auto camera_id = uuid_literal(std::format(
+                "52000000-0000-4000-8000-{:012x}", static_cast<unsigned>(i + 3)));
+            CameraRecord camera;
+            camera.uid = i;
+            camera.camera_id = 1;
+            camera.rotation = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+            camera.translation = {0.0f, 0.0f, static_cast<float>(i)};
+            camera.focal_x = 800.0f;
+            camera.focal_y = 800.0f;
+            camera.center_x = 640.0f;
+            camera.center_y = 360.0f;
+            camera.camera_width = 1280;
+            camera.camera_height = 720;
+            camera.image_width = 1280;
+            camera.image_height = 720;
+            camera.image_name = std::format("cam_{:04}.png", i);
+            camera.image_path = camera.image_name;
+            camera.split = "train";
+            ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+                .uuid = camera_id,
+                .type = "camera",
+                .name = camera.image_name,
+                .parent_uuid = group_id,
+                .child_order = static_cast<std::uint32_t>(i),
+                .camera = std::move(camera),
+            })) << "failed to upsert camera "
+                << i;
+        }
+
+        auto hierarchy = chapter.validate_hierarchy();
+        ASSERT_TRUE(hierarchy) << lfs::format_for_developer(hierarchy.error());
+        const auto bytes = chapter.to_bytes();
+        auto reparsed = SceneGraphChapter::from_bytes(bytes);
+        ASSERT_TRUE(reparsed) << lfs::format_for_developer(reparsed.error());
+        auto nodes = reparsed->nodes();
+        ASSERT_TRUE(nodes) << lfs::format_for_developer(nodes.error());
+        ASSERT_EQ(nodes->size(), 2000u);
+        EXPECT_EQ((*nodes)[0].uuid, root_id);
+        EXPECT_EQ((*nodes)[0].type, "dataset");
+        EXPECT_EQ((*nodes)[0].name, "Dataset");
+        EXPECT_EQ((*nodes)[1].uuid, group_id);
+        EXPECT_EQ((*nodes)[1].type, "camera_group");
+        EXPECT_EQ((*nodes)[1].parent_uuid, root_id);
+        EXPECT_EQ((*nodes)[2].type, "camera");
+        ASSERT_TRUE((*nodes)[2].camera);
+        EXPECT_EQ((*nodes)[2].camera->uid, 0);
+        EXPECT_EQ((*nodes)[2].camera->image_name, "cam_0000.png");
+        const auto& last = nodes->back();
+        EXPECT_EQ(last.type, "camera");
+        ASSERT_TRUE(last.camera);
+        EXPECT_EQ(last.camera->uid, 1997);
+        EXPECT_EQ(last.camera->image_name, "cam_1997.png");
+        EXPECT_EQ(last.parent_uuid, group_id);
+        EXPECT_EQ(last.child_order, 1997u);
+
+        const auto elapsed = clock::now() - started;
+        EXPECT_LT(elapsed, std::chrono::seconds(30))
+            << "scale pass took " << std::chrono::duration<double>(elapsed).count() << "s";
+    }
+
 } // namespace

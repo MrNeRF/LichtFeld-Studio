@@ -48,6 +48,10 @@ def _install_stub_modules(monkeypatch):
         def set_active(_tool_id):
             return None
 
+        @staticmethod
+        def sync_native_active():
+            return None
+
     tools_mod.ToolRegistry = _ToolRegistryStub
     monkeypatch.setitem(sys.modules, "lfs_plugins.tools", tools_mod)
 
@@ -285,7 +289,9 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "selection_depth_far_slider_min" in model.bound_funcs
     assert "selection_depth_far_slider_max" in model.bound_funcs
     assert "selection_action" in model.bound_events
-    assert "transform_tool_label" in model.bound_funcs
+    assert "transform_show_translate" in model.bound_funcs
+    assert "transform_show_rotate" in model.bound_funcs
+    assert "transform_show_scale" in model.bound_funcs
     assert "transform_bake_label" in model.bound_funcs
     assert "transform_show_actions" in model.bound_funcs
     assert "transform_pos_x_str" in model.bound_binds
@@ -1513,7 +1519,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     model = _DataModelStub()
     lf_stub = sys.modules["lichtfeld"]
     panel_enabled = {
-        "lfs.input_settings": True,
+        "lfs.preferences": True,
         "lfs.plugin_marketplace": True,
     }
 
@@ -1543,7 +1549,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
         lambda key: {
             "toolbar.focus_selection": "Focus Selection",
             "menu.tools.plugin_marketplace": "Plugins",
-            "window.input_settings": "Input",
+            "window.preferences": "Preferences",
             "toolbar.viewport_export": "Export",
         }.get(key, key),
         raising=False,
@@ -1587,18 +1593,18 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert primary_buttons[1]["icon_src"] == "../icon/focus-selection.png"
     assert primary_buttons[1]["tooltip_text"] == "Focus Selection"
     assert [button["button_id"] for button in extra_buttons] == [
-        "util-input-settings",
+        "util-preferences",
         "util-viewport-export",
         "util-plugin-marketplace",
         "util-sequencer",
     ]
     extra_by_id = {button["button_id"]: button for button in extra_buttons}
-    input_settings = extra_by_id["util-input-settings"]
-    assert input_settings["action"] == "toggle_panel"
-    assert input_settings["value"] == "lfs.input_settings"
-    assert input_settings["icon_src"] == "../icon/settings.png"
-    assert input_settings["tooltip_text"] == "Input"
-    assert input_settings["selected"] is True
+    preferences = extra_by_id["util-preferences"]
+    assert preferences["action"] == "toggle_panel"
+    assert preferences["value"] == "lfs.preferences"
+    assert preferences["icon_src"] == "../icon/settings.png"
+    assert preferences["tooltip_text"] == "Preferences"
+    assert preferences["selected"] is True
     assert extra_by_id["util-viewport-export"]["action"] == "toggle_viewport_export"
     assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/sequencer/export.png"
     assert extra_by_id["util-viewport-export"]["tooltip_text"] == "Export"

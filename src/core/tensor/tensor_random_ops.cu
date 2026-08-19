@@ -211,18 +211,19 @@ namespace lfs::core::tensor_ops {
 
         size_t invalid_count = 0;
         double sum = 0.0;
-        run_with_thrust_policy(stream, [&](auto policy) {
+        {
+            auto sync_policy = thrust::cuda::par.on(stream);
             invalid_count = thrust::count_if(
-                policy,
+                sync_policy,
                 weights_ptr, weights_ptr + n,
                 invalid_multinomial_weight{});
             sum = thrust::transform_reduce(
-                policy,
+                sync_policy,
                 weights_ptr, weights_ptr + n,
                 multinomial_weight_to_double{},
                 0.0,
                 thrust::plus<double>());
-        });
+        }
 
         LFS_ASSERT_MSG(invalid_count == 0,
                        "multinomial weights must be finite and non-negative");
@@ -245,23 +246,24 @@ namespace lfs::core::tensor_ops {
                 weights, thrust::raw_pointer_cast(keys.data()), n, seed);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.random.multinomial_gumbel_keys");
 
-            run_with_thrust_policy(stream, [&](auto policy) {
-                thrust::sequence(
-                    policy,
-                    indices.begin(), indices.end());
+            // keys/indices are destroyed when this scope ends. Keep a
+            // synchronous policy so the sort/copy finish before that free.
+            auto sync_policy = thrust::cuda::par.on(stream);
+            thrust::sequence(
+                sync_policy,
+                indices.begin(), indices.end());
 
-                thrust::sort_by_key(
-                    policy,
-                    keys.begin(), keys.end(),
-                    indices.begin(),
-                    thrust::greater<float>());
+            thrust::sort_by_key(
+                sync_policy,
+                keys.begin(), keys.end(),
+                indices.begin(),
+                thrust::greater<float>());
 
-                thrust::copy_n(
-                    policy,
-                    indices.begin(),
-                    num_samples,
-                    thrust::device_pointer_cast(samples));
-            });
+            thrust::copy_n(
+                sync_policy,
+                indices.begin(),
+                num_samples,
+                thrust::device_pointer_cast(samples));
         }
     }
 

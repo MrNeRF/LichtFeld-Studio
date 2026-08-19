@@ -98,6 +98,58 @@ namespace {
         EXPECT_FLOAT_EQ(loaded.getKeyframe(1)->focal_length_mm, 50.0f);
     }
 
+    TEST(SequencerTimelineRegressionTest, LoadAcceptsCrlfAndBomTimelineFile) {
+        Timeline source;
+        source.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}));
+        source.addKeyframe(makeKeyframe(2.0f, {4.0f, 5.0f, 6.0f}));
+
+        TempJsonPath file;
+        ASSERT_TRUE(source.saveToJson(file.path.string()));
+
+        std::ifstream input(file.path, std::ios::binary);
+        ASSERT_TRUE(input.is_open());
+        const std::string saved((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        input.close();
+
+        std::string crlf_bom = "\xEF\xBB\xBF";
+        crlf_bom.reserve(saved.size() * 2 + 3);
+        for (const char ch : saved) {
+            if (ch == '\n')
+                crlf_bom += "\r\n";
+            else
+                crlf_bom += ch;
+        }
+
+        TempJsonPath crlf_file;
+        std::ofstream output(crlf_file.path, std::ios::binary);
+        ASSERT_TRUE(output.is_open());
+        output << crlf_bom;
+        output.close();
+
+        Timeline loaded;
+        ASSERT_TRUE(loaded.loadFromJson(crlf_file.path.string()));
+        ASSERT_EQ(loaded.realKeyframeCount(), 2u);
+        ASSERT_NE(loaded.getKeyframe(0), nullptr);
+        ASSERT_NE(loaded.getKeyframe(1), nullptr);
+        expectVec3Eq(loaded.getKeyframe(0)->position, {1.0f, 2.0f, 3.0f});
+        expectVec3Eq(loaded.getKeyframe(1)->position, {4.0f, 5.0f, 6.0f});
+    }
+
+    TEST(SequencerTimelineRegressionTest, SavedTimelineContainsNoCarriageReturns) {
+        Timeline timeline;
+        timeline.addKeyframe(makeKeyframe(0.0f));
+
+        TempJsonPath file;
+        ASSERT_TRUE(timeline.saveToJson(file.path.string()));
+
+        std::ifstream input(file.path, std::ios::binary);
+        ASSERT_TRUE(input.is_open());
+        const std::string saved((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+
+        EXPECT_EQ(saved.find('\r'), std::string::npos);
+        EXPECT_FALSE(saved.empty());
+    }
+
     TEST(SequencerTimelineRegressionTest, LoadReplacesStateAndClearsAbsentClip) {
         Timeline timeline;
         timeline.addKeyframe(makeKeyframe(9.0f, {9.0f, 0.0f, 0.0f}));

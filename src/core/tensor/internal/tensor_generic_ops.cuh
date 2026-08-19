@@ -21,9 +21,14 @@ namespace lfs::core::tensor_ops {
 
     template <typename Func>
     inline void run_with_thrust_policy(cudaStream_t stream, Func&& func) {
-        // Always use .on(stream) to avoid implicit sync after thrust operations
-        // When stream is nullptr/0, this uses the default stream without syncing
-        func(thrust::cuda::par.on(stream));
+        // thrust::cuda::par is synchronous regardless of .on(stream): the calling
+        // thread waits for the stream before the algorithm returns. .on(stream)
+        // only selects which stream to enqueue on; it does not make the call async.
+        // par_nosync skips that blocking wait. Callers get stream-order guarantees
+        // only — later work on the same stream (or an explicit sync) must consume
+        // the output. Do not use this helper for reduce/scan/sort or any algorithm
+        // that returns a host-side result.
+        func(thrust::cuda::par_nosync.on(stream));
     }
 
     // ============================================================================

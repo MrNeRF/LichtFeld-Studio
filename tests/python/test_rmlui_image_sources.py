@@ -25,6 +25,7 @@ def _install_lf_stub(monkeypatch):
         Panel=_Panel,
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
         PanelHeightMode=SimpleNamespace(CONTENT="CONTENT"),
+        PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
         tr=lambda key: key,
         open_url=lambda _url: None,
         get_ui_scale=lambda: 1.0,

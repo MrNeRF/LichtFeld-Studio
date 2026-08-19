@@ -66,3 +66,29 @@
 .legacy-entry {
     border-color: @{border};
 }
+
+.preferences-action-name {
+    color: @{text};
+}
+
+.preferences-binding-section {
+    color: @{primary};
+    background-color: @{panel.primary_bg_soft};
+}
+
+.preferences-conflict-overlay {
+    background-color: @{alpha(background,0.72)};
+}
+
+.preferences-conflict-dialog {
+    background-color: @{surface};
+    border-color: @{warning};
+}
+
+.preferences-conflict-title {
+    color: @{warning};
+}
+
+.preferences-conflict-message {
+    color: @{text};
+}

@@ -47,6 +47,35 @@ TEST(ColmapPoints3DText, ReportsStatsAndFiltersByMinimumTrackLength) {
     EXPECT_EQ(result->value.point_cloud.size(), 1u);
 }
 
+TEST(ColmapPoints3DText, AcceptsUnknownNegativePointError) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
+    }
+
+    const auto result = lfs::io::read_colmap_point_cloud_text(fixture_dir("unknown_error"));
+
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->value.size(), 3u);
+    EXPECT_TRUE(result->warnings.empty());
+}
+
+TEST(ColmapPoints3DText, FiltersUnknownNegativeErrorPointsByMinimumTrackLength) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
+    }
+
+    const auto result = lfs::io::read_colmap_point_cloud_text_with_stats(
+        fixture_dir("unknown_error"),
+        lfs::io::LoadOptions{.min_track_length = 3});
+
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->value.track_filter_applied);
+    EXPECT_EQ(result->value.total_points, 3u);
+    EXPECT_EQ(result->value.points_after_filtering, 1u);
+    EXPECT_EQ(result->value.point_cloud.size(), 1u);
+    EXPECT_TRUE(result->warnings.empty());
+}
+
 TEST(ColmapPoints3DText, SkipsDanglingOddTrackTokenWhenFiltering) {
     const auto result = lfs::io::read_colmap_point_cloud_text_with_stats(
         fixture_dir("dangling_track_token"),

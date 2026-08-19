@@ -1091,7 +1091,7 @@ class _GizmoToolbarController:
 
 
 class _UtilityToolbarController:
-    _INPUT_SETTINGS_PANEL_ID = "lfs.input_settings"
+    _PREFERENCES_PANEL_ID = "lfs.preferences"
     _PLUGIN_MARKETPLACE_PANEL_ID = "lfs.plugin_marketplace"
     _CAMERA_MODE_SPECS = (
         ("camera-orbit", "orbit", "toolbar.orbit_camera", "Orbit Camera"),
@@ -1164,13 +1164,13 @@ class _UtilityToolbarController:
 
         utility_extra_buttons = [
             _button_record(
-                "util-input-settings",
+                "util-preferences",
                 "toggle_panel",
-                self._INPUT_SETTINGS_PANEL_ID,
+                self._PREFERENCES_PANEL_ID,
                 _icon_src("settings"),
-                tooltip_key="window.input_settings",
-                tooltip_text="Input Settings",
-                selected=_panel_enabled(self._INPUT_SETTINGS_PANEL_ID),
+                tooltip_key="window.preferences",
+                tooltip_text="Preferences",
+                selected=_panel_enabled(self._PREFERENCES_PANEL_ID),
             ),
             _button_record(
                 "util-viewport-export",
@@ -1708,11 +1708,11 @@ class _ViewportToolbarController:
         can_transform_selection = bool(
             call(False, getattr(lf, "can_transform_selection", None))
         )
-        input_settings_enabled = bool(
+        preferences_enabled = bool(
             call(
                 False,
                 getattr(lf.ui, "is_panel_enabled", None),
-                _UtilityToolbarController._INPUT_SETTINGS_PANEL_ID,
+                _UtilityToolbarController._PREFERENCES_PANEL_ID,
             )
         )
         plugin_marketplace_enabled = bool(
@@ -1746,7 +1746,7 @@ class _ViewportToolbarController:
             self._viewport_export_controls.visible,
             bool(call(False, getattr(lf.ui, "is_sequencer_visible", None))),
             bool(histogram_mode_available(ui_context)) if ui_context is not None else False,
-            input_settings_enabled,
+            preferences_enabled,
             plugin_marketplace_enabled,
             bool(call(False, getattr(lf.ui, "is_panel_enabled", None), "lfs.histogram")),
         )

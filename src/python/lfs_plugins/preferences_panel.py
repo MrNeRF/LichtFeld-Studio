@@ -4,6 +4,7 @@
 
 import lichtfeld as lf
 
+from .keymap_bindings import KeymapBindingsSection
 from .types import Panel
 
 __lfs_panel_classes__ = ["PreferencesPanel"]
@@ -46,6 +47,7 @@ class PreferencesPanel(Panel):
         "scene_rendering",
         "navigation",
         "view_snap",
+        "key_bindings",
         "interface",
         "mcp",
     )
@@ -54,6 +56,7 @@ class PreferencesPanel(Panel):
         self._handle = None
         self._scene_upscaler_catalog = []
         self._scene_upscaler_presets = {}
+        self._keymap = KeymapBindingsSection()
         self._theme_catalog = []
         self._language_catalog = []
         self._last_state = None
@@ -139,6 +142,7 @@ class PreferencesPanel(Panel):
         model.bind_record_list("languages")
         model.bind_record_list("navigation_modes")
         self._handle = model.get_handle()
+        self._keymap.bind(model)
 
     def on_mount(self, doc):
         # The title bar is a cancellation boundary for the drafted MCP port,
@@ -157,8 +161,10 @@ class PreferencesPanel(Panel):
         self._consume_section_request()
         self._last_state = self._state()
         self._refresh_selection()
+        self._keymap.on_mount(doc)
 
     def on_unmount(self, doc):
+        self._keymap.on_unmount()
         self._document = None
         self._handle = None
         doc.remove_data_model("preferences")
@@ -173,6 +179,12 @@ class PreferencesPanel(Panel):
         self._sync_scene_upscaler_preset_records()
         self._dirty_selection()
         self._dirty_mcp()
+        if state != self._last_state:
+            self._last_state = state
+            self._sync_scene_upscaler_preset_records()
+            self._dirty_selection()
+            self._dirty_mcp()
+        self._keymap.on_update(doc)
 
     def _state(self):
         return (

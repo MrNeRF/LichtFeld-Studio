@@ -39,7 +39,6 @@ namespace lfs::core {
      *
      * - Windows: `%USERPROFILE%/.lichtfeld/{config,data,cache,logs}`.
      * - Linux: `~/.lichtfeld/{config,data,cache,logs,plugins,venv}`.
-     * - Portable builds: `.lichtfeld` next to the executable.
      * - `LFS_HOME` and explicit roots use one unified root on every OS.
      */
     class LFS_CORE_API UserPaths {

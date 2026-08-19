@@ -453,19 +453,14 @@ namespace fast_lfs::rasterization::kernels::forward {
             tile_instance_ranges[instance_tile_idx].y = n_instances;
     }
 
-    // Warp-level sub-tile culling + 128-bit splat layout for forward blend.
-    // Source: Yang, Drettakis, Bernstein, "Warp-Level Culling for Efficient Blending
-    // in 3D Gaussian Splatting", ACM CGIT 9(4):54, 2026, doi:10.1145/3820019.
-    //
-    // 16×16 tile → 8×4 sub-tiles (32 px = 1 warp). Warp ballots splat×sub-tile AABB
-    // intersection 32-at-a-time; non-intersecting splats skip full data/alpha eval.
-    // Output is bit-identical to the pre-cull kernel when the AABB is conservative.
+    // Dual-pixel forward blend: replaced a 256-thread one-pixel-per-thread variant.
+    // The 2-pixel shape mirrors blend_backward_cu (128 threads, 4 warps × 2 pixels).
     //
     // warp_cull_mode: 0 = enabled (production), 1 = disabled (mask all-1s, reference),
     //                 2 = deliberately incorrect empty mask for negative coverage.
-    // blend_batch_size_runtime: multiple of 32 in [32, block_size_blend]; 0 → config default.
+    // blend_batch_size_runtime: multiple of 32 in [32, block_size_blend_forward]; 0 → config default.
     template <bool kRenderNormal>
-    __global__ void __launch_bounds__(config::block_size_blend) blend_cu(
+    __global__ void __launch_bounds__(config::block_size_blend_forward) blend_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
         const PackedMeanBBox* __restrict__ primitive_mean2d,
@@ -479,9 +474,6 @@ namespace fast_lfs::rasterization::kernels::forward {
         float* __restrict__ normal_map,
         uint* __restrict__ tile_n_contributions,
         float* __restrict__ tile_final_transmittance,
-        // fuse background compose into the final write.
-        // out = fg + T * bg  (equivalent to fg + (1-alpha)*bg).
-        // bg_image (CHW [3,H,W]) wins over solid bg_color [3]; either may be null → black.
         const float* __restrict__ bg_color,
         const float* __restrict__ bg_image,
         const uint width,
@@ -493,72 +485,95 @@ namespace fast_lfs::rasterization::kernels::forward {
         const dim3 group_index = block.group_index();
         const uint thread_rank = block.thread_rank();
 
-        // 8×4 sub-tile mapping: 8 warps tile a 16×16 block (2 cols × 4 rows).
-        static_assert(config::tile_width == 16 && config::tile_height == 16, "warp sub-tile layout assumes 16×16 tiles");
-        static_assert(config::warp_subtile_width == 8 && config::warp_subtile_height == 4, "warp sub-tile is 8×4");
-        static_assert(config::block_size_blend == 256, "block_size_blend must be 256");
+        static_assert(config::tile_width == 16 && config::tile_height == 16,
+                      "warp sub-tile layout assumes 16×16 tiles");
+        static_assert(config::warp_subtile_width == 8 && config::warp_subtile_height == 4,
+                      "warp sub-tile is 8×4");
+        static_assert(config::block_size_blend_forward == 128,
+                      "blend forward is 128 threads (4 warps x 2 pixels)");
+        static_assert(config::block_size_blend_forward % 32 == 0,
+                      "blend forward block size must be a multiple of warp size");
+        static_assert(config::block_size_blend / config::block_size_blend_forward == 2,
+                      "each thread owns 2 pixels");
+
         const uint lane_id = thread_rank & 31u;
-        const uint warp_id = thread_rank >> 5;
-        const uint subtile_origin_x = (warp_id & 1u) * static_cast<uint>(config::warp_subtile_width);
-        const uint subtile_origin_y = (warp_id >> 1) * static_cast<uint>(config::warp_subtile_height);
+        const uint warp_id = thread_rank >> 5; // 0..3
         const uint local_x = lane_id & 7u;
         const uint local_y = lane_id >> 3;
-        const uint tile_local_x = subtile_origin_x + local_x;
-        const uint tile_local_y = subtile_origin_y + local_y;
-        // Geometric pixel rank (dy*16+dx) for transmittance / backward layout.
-        const uint pixel_rank = tile_local_y * static_cast<uint>(config::tile_width) + tile_local_x;
+        // Two sub-tiles per warp: warp w → subtiles w and w+4 (same 2×2 XY packing as forward).
+        const uint st0 = warp_id;     // 0..3
+        const uint st1 = warp_id + 4; // 4..7
+        const uint st0_ox = (st0 & 1u) * static_cast<uint>(config::warp_subtile_width);
+        const uint st0_oy = (st0 >> 1) * static_cast<uint>(config::warp_subtile_height);
+        const uint st1_ox = (st1 & 1u) * static_cast<uint>(config::warp_subtile_width);
+        const uint st1_oy = (st1 >> 1) * static_cast<uint>(config::warp_subtile_height);
+        const uint tlx0 = st0_ox + local_x;
+        const uint tly0 = st0_oy + local_y;
+        const uint tlx1 = st1_ox + local_x;
+        const uint tly1 = st1_oy + local_y;
+        const uint pixel_rank0 = tly0 * static_cast<uint>(config::tile_width) + tlx0;
+        const uint pixel_rank1 = tly1 * static_cast<uint>(config::tile_width) + tlx1;
 
-        const uint2 pixel_coords = make_uint2(
-            group_index.x * config::tile_width + tile_local_x,
-            group_index.y * config::tile_height + tile_local_y);
-        const bool inside = pixel_coords.x < width && pixel_coords.y < height;
-        const float2 pixel = make_float2(__uint2float_rn(pixel_coords.x), __uint2float_rn(pixel_coords.y)) + 0.5f;
+        const uint2 start_pixel_coords = {
+            group_index.x * static_cast<uint>(config::tile_width),
+            group_index.y * static_cast<uint>(config::tile_height)};
+        const uint2 pix0 = {start_pixel_coords.x + tlx0, start_pixel_coords.y + tly0};
+        const uint2 pix1 = {start_pixel_coords.x + tlx1, start_pixel_coords.y + tly1};
+        const bool inside0 = pix0.x < width && pix0.y < height;
+        const bool inside1 = pix1.x < width && pix1.y < height;
+        const float2 pixel0 = make_float2(__uint2float_rn(pix0.x), __uint2float_rn(pix0.y)) + 0.5f;
+        const float2 pixel1 = make_float2(__uint2float_rn(pix1.x), __uint2float_rn(pix1.y)) + 0.5f;
 
-        // Absolute sub-tile AABB (half-open) for ballot culling.
-        const uint sub_x0 = group_index.x * config::tile_width + subtile_origin_x;
-        const uint sub_y0 = group_index.y * config::tile_height + subtile_origin_y;
-        const uint sub_x1 = sub_x0 + static_cast<uint>(config::warp_subtile_width);
-        const uint sub_y1 = sub_y0 + static_cast<uint>(config::warp_subtile_height);
+        const uint sub0_ix0 = start_pixel_coords.x + st0_ox;
+        const uint sub0_iy0 = start_pixel_coords.y + st0_oy;
+        const uint sub0_ix1 = sub0_ix0 + static_cast<uint>(config::warp_subtile_width);
+        const uint sub0_iy1 = sub0_iy0 + static_cast<uint>(config::warp_subtile_height);
+        const uint sub1_ix0 = start_pixel_coords.x + st1_ox;
+        const uint sub1_iy0 = start_pixel_coords.y + st1_oy;
+        const uint sub1_ix1 = sub1_ix0 + static_cast<uint>(config::warp_subtile_width);
+        const uint sub1_iy1 = sub1_iy0 + static_cast<uint>(config::warp_subtile_height);
 
         const uint tile_idx = group_index.y * grid_width + group_index.x;
         const uint2 tile_range = tile_instance_ranges[tile_idx];
         const int n_points_total = static_cast<int>(tile_range.y - tile_range.x);
 
         int batch_size = blend_batch_size_runtime > 0 ? blend_batch_size_runtime : config::blend_batch_size;
-        // Clamp to legal warp-multiple range without diverging the block.
-        batch_size = max(32, min(batch_size, config::block_size_blend));
+        batch_size = max(32, min(batch_size, config::block_size_blend_forward));
         batch_size = batch_size & ~31; // force multiple of 32
 
-        // Shared memory: sized to max batch (256); only first batch_size slots used.
-        // 128-bit packed geom + float4 color (padded) + float4 conic_opacity.
-        __shared__ PackedMeanBBox collected_geom[config::block_size_blend];
-        __shared__ float4 collected_conic_opacity[config::block_size_blend];
-        __shared__ float4 collected_color[config::block_size_blend];
-        __shared__ float collected_depth[config::block_size_blend];
-        __shared__ float3 collected_normal[kRenderNormal ? config::block_size_blend : 1];
+        __shared__ PackedMeanBBox collected_geom[config::block_size_blend_forward];
+        __shared__ float4 collected_conic_opacity[config::block_size_blend_forward];
+        __shared__ float4 collected_color[config::block_size_blend_forward];
+        __shared__ float collected_depth[config::block_size_blend_forward];
+        __shared__ float3 collected_normal[kRenderNormal ? config::block_size_blend_forward : 1];
 
-        float3 color_pixel = make_float3(0.0f);
-        float depth_pixel = 0.0f;
-        float3 normal_pixel = make_float3(0.0f);
-        float transmittance = 1.0f;
-        uint n_possible_contributions = 0;
-        uint n_contributions = 0;
-        bool done = !inside;
+        float3 color_pixel0 = make_float3(0.0f);
+        float3 color_pixel1 = make_float3(0.0f);
+        float depth_pixel0 = 0.0f;
+        float depth_pixel1 = 0.0f;
+        float3 normal_pixel0 = make_float3(0.0f);
+        float3 normal_pixel1 = make_float3(0.0f);
+        float transmittance0 = 1.0f;
+        float transmittance1 = 1.0f;
+        uint n_possible_contributions0 = 0;
+        uint n_possible_contributions1 = 0;
+        uint n_contributions0 = 0;
+        uint n_contributions1 = 0;
+        bool done0 = !inside0;
+        bool done1 = !inside1;
 
         for (int n_points_remaining = n_points_total, batch_base = 0;
              n_points_remaining > 0;
              n_points_remaining -= batch_size, batch_base += batch_size) {
-            if (__syncthreads_count(done) == config::block_size_blend)
+            if (__syncthreads_count(done0 && done1) == config::block_size_blend_forward)
                 break;
 
-            // Collaborative fetch: first batch_size threads load one splat each.
             if (static_cast<int>(thread_rank) < batch_size) {
                 const int fetch_idx = static_cast<int>(tile_range.x) + batch_base + static_cast<int>(thread_rank);
                 if (fetch_idx < static_cast<int>(tile_range.y)) {
                     const uint primitive_idx = instance_primitive_indices[fetch_idx];
                     collected_geom[thread_rank] = primitive_mean2d[primitive_idx];
                     collected_conic_opacity[thread_rank] = primitive_conic_opacity[primitive_idx];
-                    // Clamp RGB; keep w=0 padding.
                     const float4 raw_c = primitive_color[primitive_idx];
                     const float3 clamped = fminf(fmaxf(make_float3(raw_c), 0.0f), config::max_blend_color);
                     collected_color[thread_rank] = make_float4(clamped, 0.0f);
@@ -572,65 +587,105 @@ namespace fast_lfs::rasterization::kernels::forward {
 
             const int current_batch_size = min(batch_size, n_points_remaining);
 
-            // Warp iterates the batch 32 splats at a time with ballot culling.
             for (int j_base = 0; j_base < current_batch_size; j_base += 32) {
                 const int j_test = j_base + static_cast<int>(lane_id);
-                bool intersects = false;
+                bool intersects0 = false;
+                bool intersects1 = false;
                 if (j_test < current_batch_size) {
                     const ushort4 bb = collected_geom[j_test].pixel_bbox;
-                    // Half-open AABB overlap: [bb.x, bb.y) × [bb.z, bb.w) vs sub-tile.
-                    intersects = (static_cast<uint>(bb.x) < sub_x1) &&
-                                 (static_cast<uint>(bb.y) > sub_x0) &&
-                                 (static_cast<uint>(bb.z) < sub_y1) &&
-                                 (static_cast<uint>(bb.w) > sub_y0);
+                    intersects0 = (static_cast<uint>(bb.x) < sub0_ix1) &&
+                                  (static_cast<uint>(bb.y) > sub0_ix0) &&
+                                  (static_cast<uint>(bb.z) < sub0_iy1) &&
+                                  (static_cast<uint>(bb.w) > sub0_iy0);
+                    intersects1 = (static_cast<uint>(bb.x) < sub1_ix1) &&
+                                  (static_cast<uint>(bb.y) > sub1_ix0) &&
+                                  (static_cast<uint>(bb.z) < sub1_iy1) &&
+                                  (static_cast<uint>(bb.w) > sub1_iy0);
                 }
-                unsigned mask = __ballot_sync(0xffffffffu, intersects);
-                // Test hooks: 1 = disable cull (process all), 2 = empty mask (wrong).
+                unsigned mask0 = __ballot_sync(0xffffffffu, intersects0);
+                unsigned mask1 = __ballot_sync(0xffffffffu, intersects1);
                 if (warp_cull_mode == 1) {
-                    mask = 0xffffffffu;
+                    mask0 = mask1 = 0xffffffffu;
                 } else if (warp_cull_mode == 2) {
-                    mask = 0u;
+                    mask0 = mask1 = 0u;
                 }
 
-                // Per-pixel composite; always advance n_possible for every splat index
-                // so last_contributor stays bit-identical to the uncull path.
-                for (int k = 0; !done && k < 32; ++k) {
+                for (int k = 0; k < 32; ++k) {
                     const int j = j_base + k;
                     if (j >= current_batch_size)
                         break;
-                    n_possible_contributions++;
-                    if (((mask >> k) & 1u) == 0u)
+
+                    const bool walk0 = !done0;
+                    const bool walk1 = !done1;
+                    if (walk0)
+                        n_possible_contributions0++;
+                    if (walk1)
+                        n_possible_contributions1++;
+                    const bool hit0 = walk0 && (((mask0 >> k) & 1u) != 0u);
+                    const bool hit1 = walk1 && (((mask1 >> k) & 1u) != 0u);
+                    if (!hit0 && !hit1)
                         continue;
 
                     const float4 conic_opacity = collected_conic_opacity[j];
                     const float3 conic = make_float3(conic_opacity);
-                    const float2 delta = collected_geom[j].mean2d - pixel;
+                    const float2 mean2d = collected_geom[j].mean2d;
                     const float opacity = conic_opacity.w;
-                    const float sigma_over_2 = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-                    if (sigma_over_2 < 0.0f)
-                        continue;
-                    const float gaussian = expf(-sigma_over_2);
-                    const float alpha = fminf(opacity * gaussian, config::max_fragment_alpha);
-                    if (alpha < config::min_alpha_threshold)
-                        continue;
-                    const float weight = transmittance * alpha;
                     const float4 c = collected_color[j];
-                    color_pixel += weight * make_float3(c);
-                    depth_pixel += weight * collected_depth[j];
+                    const float depth = collected_depth[j];
+                    float3 normal = make_float3(0.0f);
                     if constexpr (kRenderNormal) {
-                        normal_pixel += weight * collected_normal[j];
+                        normal = collected_normal[j];
                     }
-                    transmittance *= (1.0f - alpha);
-                    n_contributions = n_possible_contributions;
-                    if (transmittance < config::transmittance_threshold) {
-                        done = true;
+
+                    if (hit0) {
+                        const float2 delta = mean2d - pixel0;
+                        const float sigma_over_2 = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
+                        if (!(sigma_over_2 < 0.0f)) {
+                            // __expf: -6.7% blend kernel time vs expf at equal 30k PSNR/SSIM (bonsai A/B).
+                            const float gaussian = __expf(-sigma_over_2);
+                            const float alpha = fminf(opacity * gaussian, config::max_fragment_alpha);
+                            if (!(alpha < config::min_alpha_threshold)) {
+                                const float weight = transmittance0 * alpha;
+                                color_pixel0 += weight * make_float3(c);
+                                depth_pixel0 += weight * depth;
+                                if constexpr (kRenderNormal) {
+                                    normal_pixel0 += weight * normal;
+                                }
+                                transmittance0 *= (1.0f - alpha);
+                                n_contributions0 = n_possible_contributions0;
+                                if (transmittance0 < config::transmittance_threshold) {
+                                    done0 = true;
+                                }
+                            }
+                        }
+                    }
+                    if (hit1) {
+                        const float2 delta = mean2d - pixel1;
+                        const float sigma_over_2 = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
+                        if (!(sigma_over_2 < 0.0f)) {
+                            const float gaussian = __expf(-sigma_over_2);
+                            const float alpha = fminf(opacity * gaussian, config::max_fragment_alpha);
+                            if (!(alpha < config::min_alpha_threshold)) {
+                                const float weight = transmittance1 * alpha;
+                                color_pixel1 += weight * make_float3(c);
+                                depth_pixel1 += weight * depth;
+                                if constexpr (kRenderNormal) {
+                                    normal_pixel1 += weight * normal;
+                                }
+                                transmittance1 *= (1.0f - alpha);
+                                n_contributions1 = n_possible_contributions1;
+                                if (transmittance1 < config::transmittance_threshold) {
+                                    done1 = true;
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
-        if (inside) {
-            const int pixel_idx = width * pixel_coords.y + pixel_coords.x;
+        if (inside0) {
+            const int pixel_idx = width * pix0.y + pix0.x;
             const int n_pixels = width * height;
             float3 bg = make_float3(0.0f, 0.0f, 0.0f);
             if (bg_image != nullptr) {
@@ -640,19 +695,44 @@ namespace fast_lfs::rasterization::kernels::forward {
             } else if (bg_color != nullptr) {
                 bg = make_float3(bg_color[0], bg_color[1], bg_color[2]);
             }
-            image[pixel_idx] = color_pixel.x + transmittance * bg.x;
-            image[pixel_idx + n_pixels] = color_pixel.y + transmittance * bg.y;
-            image[pixel_idx + n_pixels * 2] = color_pixel.z + transmittance * bg.z;
-            alpha_map[pixel_idx] = 1.0f - transmittance;
-            depth_map[pixel_idx] = depth_pixel;
+            image[pixel_idx] = color_pixel0.x + transmittance0 * bg.x;
+            image[pixel_idx + n_pixels] = color_pixel0.y + transmittance0 * bg.y;
+            image[pixel_idx + n_pixels * 2] = color_pixel0.z + transmittance0 * bg.z;
+            alpha_map[pixel_idx] = 1.0f - transmittance0;
+            depth_map[pixel_idx] = depth_pixel0;
             if constexpr (kRenderNormal) {
-                normal_map[pixel_idx] = normal_pixel.x;
-                normal_map[pixel_idx + n_pixels] = normal_pixel.y;
-                normal_map[pixel_idx + n_pixels * 2] = normal_pixel.z;
+                normal_map[pixel_idx] = normal_pixel0.x;
+                normal_map[pixel_idx + n_pixels] = normal_pixel0.y;
+                normal_map[pixel_idx + n_pixels * 2] = normal_pixel0.z;
             }
-            tile_n_contributions[pixel_idx] = n_contributions;
+            tile_n_contributions[pixel_idx] = n_contributions0;
         }
-        tile_final_transmittance[tile_idx * config::block_size_blend + pixel_rank] = inside ? transmittance : 1.0f;
+        tile_final_transmittance[tile_idx * config::block_size_blend + pixel_rank0] = inside0 ? transmittance0 : 1.0f;
+
+        if (inside1) {
+            const int pixel_idx = width * pix1.y + pix1.x;
+            const int n_pixels = width * height;
+            float3 bg = make_float3(0.0f, 0.0f, 0.0f);
+            if (bg_image != nullptr) {
+                bg = make_float3(bg_image[pixel_idx],
+                                 bg_image[pixel_idx + n_pixels],
+                                 bg_image[pixel_idx + 2 * n_pixels]);
+            } else if (bg_color != nullptr) {
+                bg = make_float3(bg_color[0], bg_color[1], bg_color[2]);
+            }
+            image[pixel_idx] = color_pixel1.x + transmittance1 * bg.x;
+            image[pixel_idx + n_pixels] = color_pixel1.y + transmittance1 * bg.y;
+            image[pixel_idx + n_pixels * 2] = color_pixel1.z + transmittance1 * bg.z;
+            alpha_map[pixel_idx] = 1.0f - transmittance1;
+            depth_map[pixel_idx] = depth_pixel1;
+            if constexpr (kRenderNormal) {
+                normal_map[pixel_idx] = normal_pixel1.x;
+                normal_map[pixel_idx + n_pixels] = normal_pixel1.y;
+                normal_map[pixel_idx + n_pixels * 2] = normal_pixel1.z;
+            }
+            tile_n_contributions[pixel_idx] = n_contributions1;
+        }
+        tile_final_transmittance[tile_idx * config::block_size_blend + pixel_rank1] = inside1 ? transmittance1 : 1.0f;
     }
 
 } // namespace fast_lfs::rasterization::kernels::forward

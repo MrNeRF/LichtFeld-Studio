@@ -326,7 +326,8 @@ namespace lfs::sequencer {
                 lfs::io::AtomicOutputTempName::AppendSuffix,
                 lfs::io::AtomicOutputDurability::Durable);
             std::ofstream file;
-            if (!lfs::core::open_file_for_write(atomic_output.temp_path(), file)) {
+            // Binary mode keeps saved paths byte-identical on every platform (no CRLF rewriting on Windows).
+            if (!lfs::core::open_file_for_write(atomic_output.temp_path(), std::ios::binary, file)) {
                 LOG_ERROR("Failed to open timeline file: {}", path);
                 return false;
             }
@@ -439,8 +440,8 @@ namespace lfs::sequencer {
             const std::filesystem::path path_fs = lfs::core::utf8_to_path(path);
             std::ifstream file;
             // The size guard below compares bytes read with filesystem::file_size().
-            // Binary mode is required on Windows so CRLF translation does not make
-            // the logical character count smaller than the physical file size.
+            // Binary mode is required on Windows so CRLF translation does not shrink
+            // the bytes read below the physical file size.
             if (!lfs::core::open_file_for_read(path_fs, std::ios::binary, file)) {
                 LOG_ERROR("Failed to open timeline file: {}", path);
                 return false;
