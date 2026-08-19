@@ -173,12 +173,6 @@ class PreferencesPanel(Panel):
         self._consume_section_request()
         self._sync_mcp_runtime()
         state = self._state()
-        if state == self._last_state:
-            return
-        self._last_state = state
-        self._sync_scene_upscaler_preset_records()
-        self._dirty_selection()
-        self._dirty_mcp()
         if state != self._last_state:
             self._last_state = state
             self._sync_scene_upscaler_preset_records()

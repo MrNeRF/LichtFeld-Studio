@@ -158,6 +158,11 @@ def _install_lf_stub(monkeypatch):
             "error_port": 0,
             "safe_mode": False,
         },
+        render_settings=SimpleNamespace(
+            scene_upscaler="native",
+            scene_upscaler_preset="native",
+        ),
+        scene_reconstruction_presets={"native": "native", "spatial": "quality"},
     )
 
     def get_captured_trigger():
@@ -201,6 +206,15 @@ def _install_lf_stub(monkeypatch):
 
     def tr(key):
         return translations.get(key, key)
+
+    def set_scene_reconstruction(backend, preset):
+        state.render_settings.scene_upscaler = str(backend)
+        state.render_settings.scene_upscaler_preset = str(preset)
+        state.scene_reconstruction_presets[str(backend)] = str(preset)
+        return True
+
+    def reset_scene_reconstruction_preferences():
+        state.scene_reconstruction_presets = {"native": "native", "spatial": "quality"}
 
     keymap = SimpleNamespace(
         ToolMode=tool_mode,
@@ -247,7 +261,47 @@ def _install_lf_stub(monkeypatch):
         get_ui_scale_preference=lambda: 0.0,
         remember_camera_navigation=lambda: False,
         remember_camera_view_snap=lambda: False,
+        get_scene_reconstruction_options=lambda: [
+            {
+                "id": "native",
+                "label_key": "preferences.scene_reconstruction_off",
+                "presets": [
+                    {
+                        "id": "native",
+                        "label_key": "preferences.scene_reconstruction_off",
+                        "input_scale": 1.0,
+                    }
+                ],
+            },
+            {
+                "id": "spatial",
+                "label_key": "preferences.scene_reconstruction_spatial",
+                "presets": [
+                    {
+                        "id": "quality",
+                        "label_key": "preferences.scene_reconstruction_quality",
+                        "input_scale": 0.75,
+                    },
+                    {
+                        "id": "balanced",
+                        "label_key": "preferences.scene_reconstruction_balanced",
+                        "input_scale": 0.67,
+                    },
+                    {
+                        "id": "performance",
+                        "label_key": "preferences.scene_reconstruction_performance",
+                        "input_scale": 0.5,
+                    },
+                ],
+            },
+        ],
+        get_scene_reconstruction_preset_preference=lambda backend: (
+            state.scene_reconstruction_presets[backend]
+        ),
+        set_scene_reconstruction=set_scene_reconstruction,
+        reset_scene_reconstruction_preferences=reset_scene_reconstruction_preferences,
     )
+    lf_stub.get_render_settings = lambda: state.render_settings
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     return state
 
