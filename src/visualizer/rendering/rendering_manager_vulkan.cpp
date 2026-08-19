@@ -1058,6 +1058,11 @@ namespace lfs::vis {
         bool queued = false;
         GTComparisonImageLookup result;
         const auto now = std::chrono::steady_clock::now();
+        // Capture the camera identity before `request` can be moved into the
+        // pending/active slots; the stale-image fallback below needs it to
+        // avoid showing a different camera's reference while reloading.
+        const int request_camera_uid = request.camera_uid;
+        const std::filesystem::path request_image_path = request.image_path;
         {
             std::lock_guard lock(gt_comparison_image_mutex_);
             auto cache_entry = std::find_if(gt_comparison_image_cache_.begin(),
@@ -1152,14 +1157,33 @@ namespace lfs::vis {
                         : nullptr;
                 result.status = GTComparisonImageStatus::Loading;
                 if (!cache_hit) {
+                    // Prefer the previous image of the SAME camera at any
+                    // resolution so a transient re-decode never flashes a
+                    // different camera's ground truth while the request is in
+                    // flight; otherwise fall back to the most recently used
+                    // valid image across the cache.
+                    const auto is_same_camera = [request_camera_uid, request_image_path](
+                                                    const GTComparisonImageCacheEntry& entry) {
+                        return entry.camera_uid == request_camera_uid &&
+                               entry.image_path == request_image_path;
+                    };
                     const auto stale = std::max_element(
                         gt_comparison_image_cache_.begin(),
                         gt_comparison_image_cache_.end(),
-                        [](const auto& lhs, const auto& rhs) {
-                            const bool lhs_valid = lhs.image && lhs.image->is_valid();
-                            const bool rhs_valid = rhs.image && rhs.image->is_valid();
-                            return (!lhs_valid && rhs_valid) ||
-                                   (lhs_valid && rhs_valid && lhs.last_used < rhs.last_used);
+                        [&](const GTComparisonImageCacheEntry& lhs,
+                            const GTComparisonImageCacheEntry& rhs) {
+                            const auto rank = [&](const GTComparisonImageCacheEntry& entry) {
+                                if (!entry.image || !entry.image->is_valid()) {
+                                    return 0;
+                                }
+                                return is_same_camera(entry) ? 2 : 1;
+                            };
+                            const int lhs_rank = rank(lhs);
+                            const int rhs_rank = rank(rhs);
+                            if (lhs_rank != rhs_rank) {
+                                return lhs_rank < rhs_rank;
+                            }
+                            return lhs.last_used < rhs.last_used;
                         });
                     if (stale != gt_comparison_image_cache_.end() && stale->image &&
                         stale->image->is_valid()) {
@@ -1631,6 +1655,17 @@ namespace lfs::vis {
         glm::ivec2 render_size(
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * scale)), 1),
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * scale)), 1));
+        // Ground-truth comparison is a stable reference readout. Its preview
+        // resolution follows only the viewport size and the base render scale;
+        // scene reconstruction, interactive-resize, and memory-pressure
+        // reductions must not re-size it, otherwise toggling the reconstruction
+        // setting re-decodes the reference image and briefly flashes a stale
+        // cache entry (possibly from a different camera).
+        const float gt_comparison_scale =
+            effectiveSceneRenderScale(frame_settings.render_scale, 1.0f, false);
+        const glm::ivec2 gt_comparison_size(
+            std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * gt_comparison_scale)), 1),
+            std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * gt_comparison_scale)), 1));
         auto& resolution_profiler = lfs::diagnostics::VramProfiler::instance();
         resolution_profiler.setGauge("viewer.resolution.scene.base_scale",
                                      effectiveSceneRenderScale(frame_settings.render_scale, 1.0f, false));
@@ -2399,7 +2434,7 @@ namespace lfs::vis {
             if (camera) {
                 try {
                     const GTComparisonMode gt_mode = frame_settings.gt_comparison_mode;
-                    const glm::ivec2 preview_gt_size = gtComparisonPreviewSize(*camera, render_size);
+                    const glm::ivec2 preview_gt_size = gtComparisonPreviewSize(*camera, gt_comparison_size);
                     const int preview_max_dimension = std::max(preview_gt_size.x, preview_gt_size.y);
                     std::shared_ptr<lfs::core::Tensor> gt_image;
                     std::string gt_error;
@@ -2464,7 +2499,7 @@ namespace lfs::vis {
                                             continue;
                                         }
                                         const glm::ivec2 neighbor_size =
-                                            gtComparisonPreviewSize(*neighbor, render_size);
+                                            gtComparisonPreviewSize(*neighbor, gt_comparison_size);
                                         const bool neighbor_undistort =
                                             neighbor->camera_model_type() !=
                                                 lfs::core::CameraModelType::EQUIRECTANGULAR &&
