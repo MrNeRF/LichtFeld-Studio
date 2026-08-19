@@ -289,7 +289,9 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "selection_depth_far_slider_min" in model.bound_funcs
     assert "selection_depth_far_slider_max" in model.bound_funcs
     assert "selection_action" in model.bound_events
-    assert "transform_tool_label" in model.bound_funcs
+    assert "transform_show_translate" in model.bound_funcs
+    assert "transform_show_rotate" in model.bound_funcs
+    assert "transform_show_scale" in model.bound_funcs
     assert "transform_bake_label" in model.bound_funcs
     assert "transform_show_actions" in model.bound_funcs
     assert "transform_pos_x_str" in model.bound_binds
