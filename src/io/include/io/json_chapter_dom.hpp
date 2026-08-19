@@ -135,6 +135,14 @@ namespace lfs::io {
             return read_scalar<T>(find_node_from(root_, path));
         }
 
+        template <json_chapter_detail::ReadableScalar T>
+        [[nodiscard]] static std::optional<T> read(const Json& node,
+                                                   std::string_view path) {
+            return read_scalar<T>(find_node_from(node, path));
+        }
+        [[nodiscard]] static std::optional<Json> read_json(const Json& node,
+                                                           std::string_view path);
+
         template <typename T>
             requires json_chapter_detail::WritableScalar<T>
         [[nodiscard]] lfs::Result<void> set(const std::string_view path, T&& value) {
@@ -154,6 +162,23 @@ namespace lfs::io {
         [[nodiscard]] lfs::Result<bool> array_remove(std::string_view path, std::string_view uuid);
         [[nodiscard]] lfs::Result<std::vector<std::string>>
         array_uuids(std::string_view path) const;
+
+        // One-pass enumeration of a UUID-addressed object array: each element's
+        // canonical uuid together with a copy of its JSON, in array order. Same
+        // validation and error taxonomy as array_uuids; a missing path yields an
+        // empty vector.
+        [[nodiscard]] lfs::Result<std::vector<std::pair<std::string, Json>>>
+        array_items(std::string_view path) const;
+
+        // Copy of one element's JSON, or nullopt when the array or element is absent
+        // (same resolution semantics as const array_find).
+        [[nodiscard]] std::optional<Json> array_get(std::string_view path,
+                                                    std::string_view uuid) const;
+
+        // Replace-or-insert one element. value must be an object whose "uuid" member
+        // equals uuid (canonical form); a replaced element keeps its array position.
+        [[nodiscard]] lfs::Result<void> array_put(std::string_view path,
+                                                  std::string_view uuid, Json value);
 
     private:
         explicit JsonChapterDom(Json root)

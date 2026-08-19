@@ -1346,21 +1346,20 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::vector<EmbedDecision>> ProjectChapter::embed_decisions() const {
-        auto uuids = dom_.array_uuids("embed_decisions");
-        if (!uuids) {
-            return std::move(uuids).error();
+        auto items = dom_.array_items("embed_decisions");
+        if (!items) {
+            return std::move(items).error();
         }
         std::vector<EmbedDecision> result;
-        result.reserve(uuids->size());
-        for (const std::string& id : *uuids) {
-            auto element = dom_.array_find("embed_decisions", id);
+        result.reserve(items->size());
+        for (const auto& [id, element] : *items) {
             auto uuid = lfs::core::Uuid::from_string(id);
-            auto node_text = element->get<std::string>("node_uuid");
+            auto node_text = JsonChapterDom::read<std::string>(element, "node_uuid");
             auto node = node_text ? lfs::core::Uuid::from_string(*node_text) : std::nullopt;
-            auto fourcc = element->get<std::string>("payload_fourcc");
-            auto decision = element->get<std::string>("decision");
-            auto reason = element->get<std::string>("reason");
-            auto ref_text = element->get<std::string>("reference_uuid");
+            auto fourcc = JsonChapterDom::read<std::string>(element, "payload_fourcc");
+            auto decision = JsonChapterDom::read<std::string>(element, "decision");
+            auto reason = JsonChapterDom::read<std::string>(element, "reason");
+            auto ref_text = JsonChapterDom::read<std::string>(element, "reference_uuid");
             std::optional<lfs::core::Uuid> reference;
             if (ref_text) {
                 reference = lfs::core::Uuid::from_string(*ref_text);
@@ -1423,17 +1422,16 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::vector<ProvenanceRecord>> ProjectChapter::provenance() const {
-        auto uuids = dom_.array_uuids("provenance");
-        if (!uuids) {
-            return std::move(uuids).error();
+        auto items = dom_.array_items("provenance");
+        if (!items) {
+            return std::move(items).error();
         }
         std::vector<ProvenanceRecord> result;
-        result.reserve(uuids->size());
-        for (const std::string& id : *uuids) {
-            auto element = dom_.array_find("provenance", id);
+        result.reserve(items->size());
+        for (const auto& [id, element] : *items) {
             auto uuid = lfs::core::Uuid::from_string(id);
-            auto kind = element->get<std::string>("kind");
-            auto value = element->get<std::string>("value");
+            auto kind = JsonChapterDom::read<std::string>(element, "kind");
+            auto value = JsonChapterDom::read<std::string>(element, "value");
             if (!uuid || !kind || kind->empty() || !value) {
                 return fail<std::vector<ProvenanceRecord>>(
                     lfs::ErrorCode::DataLoss,
@@ -1465,16 +1463,15 @@ namespace lfs::io::project {
 
     lfs::Result<std::vector<EmbeddedPayloadProvenance>>
     ProjectChapter::embedded_payload_provenance() const {
-        auto uuids = dom_.array_uuids("embedded_payloads");
-        if (!uuids) {
-            return std::move(uuids).error();
+        auto items = dom_.array_items("embedded_payloads");
+        if (!items) {
+            return std::move(items).error();
         }
         std::vector<EmbeddedPayloadProvenance> result;
-        result.reserve(uuids->size());
-        for (const std::string& id : *uuids) {
-            auto element = dom_.array_find("embedded_payloads", id);
+        result.reserve(items->size());
+        for (const auto& [id, element] : *items) {
             auto uuid = lfs::core::Uuid::from_string(id);
-            const auto node_value = element->get_json("node_uuid");
+            const auto node_value = JsonChapterDom::read_json(element, "node_uuid");
             auto node = node_value ? parse_uuid(*node_value, "PROJ",
                                                 "embedded_payloads.node_uuid")
                                    : fail<lfs::core::Uuid>(
@@ -1482,11 +1479,11 @@ namespace lfs::io::project {
                                          "Embedded payload provenance is incomplete.",
                                          "node_uuid is missing", "PROJ",
                                          "embedded_payloads.node_uuid");
-            auto fourcc = element->get<std::string>("fourcc");
-            const auto locator_value = element->get_json("import_locator");
+            auto fourcc = JsonChapterDom::read<std::string>(element, "fourcc");
+            const auto locator_value = JsonChapterDom::read_json(element, "import_locator");
             const auto fingerprint_value =
-                element->get_json("import_fingerprint");
-            auto hash_text = element->get<std::string>("content_xxh3_128");
+                JsonChapterDom::read_json(element, "import_fingerprint");
+            auto hash_text = JsonChapterDom::read<std::string>(element, "content_xxh3_128");
             if (!uuid || !node || !fourcc || fourcc->size() != 4 ||
                 !locator_value || !fingerprint_value || !hash_text) {
                 return fail<std::vector<EmbeddedPayloadProvenance>>(
@@ -1586,21 +1583,20 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::vector<ReferenceRecord>> ReferencesChapter::records() const {
-        auto uuids = dom_.array_uuids("references");
-        if (!uuids) {
-            return std::move(uuids).error();
+        auto items = dom_.array_items("references");
+        if (!items) {
+            return std::move(items).error();
         }
         std::vector<ReferenceRecord> result;
-        result.reserve(uuids->size());
+        result.reserve(items->size());
         std::unordered_set<std::string> keys;
-        for (const std::string& id : *uuids) {
-            auto element = dom_.array_find("references", id);
+        for (const auto& [id, element] : *items) {
             auto uuid = lfs::core::Uuid::from_string(id);
-            auto key = element->get<std::string>("key");
-            auto kind = element->get<std::string>("kind");
-            auto unresolved = element->get<bool>("unresolved");
-            const auto locator_value = element->get_json("locator");
-            const auto fingerprint_value = element->get_json("fingerprint");
+            auto key = JsonChapterDom::read<std::string>(element, "key");
+            auto kind = JsonChapterDom::read<std::string>(element, "kind");
+            auto unresolved = JsonChapterDom::read<bool>(element, "unresolved");
+            const auto locator_value = JsonChapterDom::read_json(element, "locator");
+            const auto fingerprint_value = JsonChapterDom::read_json(element, "fingerprint");
             if (!uuid || !key || key->empty() || !kind || kind->empty() ||
                 !unresolved || !locator_value || !fingerprint_value ||
                 !keys.insert(*key).second) {
@@ -2354,11 +2350,10 @@ namespace lfs::io::project {
         }
 
         lfs::Result<SceneNodeRecord> parse_scene_node(
-            const JsonChapterDom::ConstElement& element,
-            const lfs::core::Uuid& uuid) {
-            auto type = element.get<std::string>("type");
-            auto name = element.get<std::string>("name");
-            auto parent_value = element.get_json("parent_uuid");
+            const Json& element, const lfs::core::Uuid& uuid) {
+            auto type = JsonChapterDom::read<std::string>(element, "type");
+            auto name = JsonChapterDom::read<std::string>(element, "name");
+            auto parent_value = JsonChapterDom::read_json(element, "parent_uuid");
             std::optional<lfs::core::Uuid> parent;
             if (parent_value && !parent_value->is_null()) {
                 auto parsed = parse_uuid(*parent_value, "SCNG", "nodes.parent_uuid");
@@ -2367,12 +2362,12 @@ namespace lfs::io::project {
                 }
                 parent = *parsed;
             }
-            auto order = element.get<std::uint32_t>("child_order");
-            const auto transform_value = element.get_json("local_transform");
-            auto visible = element.get<bool>("visible");
-            auto locked = element.get<bool>("locked");
-            auto training = element.get<bool>("training_enabled");
-            auto diverged = element.get<bool>("payload_diverged");
+            auto order = JsonChapterDom::read<std::uint32_t>(element, "child_order");
+            const auto transform_value = JsonChapterDom::read_json(element, "local_transform");
+            auto visible = JsonChapterDom::read<bool>(element, "visible");
+            auto locked = JsonChapterDom::read<bool>(element, "locked");
+            auto training = JsonChapterDom::read<bool>(element, "training_enabled");
+            auto diverged = JsonChapterDom::read<bool>(element, "payload_diverged");
             if (!type || type->empty() || !name || name->empty() || !order ||
                 !transform_value || !visible || !locked || !training || !diverged) {
                 return fail<SceneNodeRecord>(
@@ -2404,7 +2399,7 @@ namespace lfs::io::project {
                 .camera = std::nullopt,
             };
 
-            if (const auto pose = element.get_json("georef_pose"); pose) {
+            if (const auto pose = JsonChapterDom::read_json(element, "georef_pose"); pose) {
                 if (auto valid = require_object(*pose, "SCNG", "nodes.georef_pose");
                     !valid) {
                     return std::move(valid).error();
@@ -2440,28 +2435,28 @@ namespace lfs::io::project {
                 }
                 result.georef_pose = GeorefPose{*r, *t};
             }
-            if (const auto payload = element.get_json("payload"); payload) {
+            if (const auto payload = JsonChapterDom::read_json(element, "payload"); payload) {
                 auto parsed = parse_payload_binding(*payload, "nodes.payload");
                 if (!parsed) {
                     return std::move(parsed).error();
                 }
                 result.payload = std::move(*parsed);
             }
-            if (const auto cropbox = element.get_json("cropbox"); cropbox) {
+            if (const auto cropbox = JsonChapterDom::read_json(element, "cropbox"); cropbox) {
                 auto parsed = parse_cropbox(*cropbox, "nodes.cropbox");
                 if (!parsed) {
                     return std::move(parsed).error();
                 }
                 result.cropbox = std::move(*parsed);
             }
-            if (const auto ellipsoid = element.get_json("ellipsoid"); ellipsoid) {
+            if (const auto ellipsoid = JsonChapterDom::read_json(element, "ellipsoid"); ellipsoid) {
                 auto parsed = parse_ellipsoid(*ellipsoid, "nodes.ellipsoid");
                 if (!parsed) {
                     return std::move(parsed).error();
                 }
                 result.ellipsoid = std::move(*parsed);
             }
-            if (const auto camera = element.get_json("camera"); camera) {
+            if (const auto camera = JsonChapterDom::read_json(element, "camera"); camera) {
                 auto parsed = parse_camera(*camera, "nodes.camera");
                 if (!parsed) {
                     return std::move(parsed).error();
@@ -2469,15 +2464,6 @@ namespace lfs::io::project {
                 result.camera = std::move(*parsed);
             }
             return result;
-        }
-
-        lfs::Result<void> remove_optional(
-            JsonChapterDom::Element& element, const std::string_view path) {
-            auto removed = element.remove(path);
-            if (!removed) {
-                return lfs::Result<void>::failure(std::move(removed).error());
-            }
-            return {};
         }
 
     } // namespace
@@ -2540,22 +2526,21 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::vector<SceneNodeRecord>> SceneGraphChapter::nodes() const {
-        auto uuids = dom_.array_uuids("nodes");
-        if (!uuids) {
-            return std::move(uuids).error();
+        auto items = dom_.array_items("nodes");
+        if (!items) {
+            return std::move(items).error();
         }
         std::vector<SceneNodeRecord> result;
-        result.reserve(uuids->size());
-        for (const std::string& id : *uuids) {
+        result.reserve(items->size());
+        for (const auto& [id, element] : *items) {
             const auto uuid = lfs::core::Uuid::from_string(id);
-            const auto element = dom_.array_find("nodes", id);
-            if (!uuid || !element) {
+            if (!uuid) {
                 return fail<std::vector<SceneNodeRecord>>(
                     lfs::ErrorCode::DataLoss, "A scene node UUID is invalid.",
                     std::format("SCNG node UUID '{}' cannot be decoded", id), "SCNG",
                     "nodes.uuid");
             }
-            auto parsed = parse_scene_node(*element, *uuid);
+            auto parsed = parse_scene_node(element, *uuid);
             if (!parsed) {
                 return std::move(parsed).error();
             }
@@ -2571,7 +2556,7 @@ namespace lfs::io::project {
                 lfs::ErrorCode::InvalidArgument, "The scene node UUID cannot be null.",
                 "SCNG lookup UUID must be non-null", "SCNG", "nodes.uuid");
         }
-        const auto element = dom_.array_find("nodes", uuid.to_string());
+        const auto element = dom_.array_get("nodes", uuid.to_string());
         if (!element) {
             return std::optional<SceneNodeRecord>{};
         }
@@ -2606,54 +2591,6 @@ namespace lfs::io::project {
                 "Payload fourcc, UUID, source kind, and reference must be valid", "SCNG",
                 "nodes.payload");
         }
-        auto element = dom_.array_upsert("nodes", value.uuid.to_string());
-        if (!element) {
-            return lfs::Result<void>::failure(std::move(element).error());
-        }
-        if (auto result = element->set("type", value.type); !result) {
-            return result;
-        }
-        if (auto result = element->set("name", value.name); !result) {
-            return result;
-        }
-        if (auto result = value.parent_uuid
-                              ? element->set("parent_uuid",
-                                             value.parent_uuid->to_string())
-                              : element->set_json("parent_uuid", nullptr);
-            !result) {
-            return result;
-        }
-        if (auto result = element->set("child_order", value.child_order); !result) {
-            return result;
-        }
-        if (auto result =
-                element->set_json("local_transform", json_array(value.local_transform));
-            !result) {
-            return result;
-        }
-        if (auto result = element->set("visible", value.visible); !result) {
-            return result;
-        }
-        if (auto result = element->set("locked", value.locked); !result) {
-            return result;
-        }
-        if (auto result =
-                element->set("training_enabled", value.training_enabled);
-            !result) {
-            return result;
-        }
-        if (auto result =
-                element->set("payload_diverged", value.payload_diverged);
-            !result) {
-            return result;
-        }
-
-        const auto set_or_remove =
-            [&](const std::string_view path, const std::optional<Json>& json)
-            -> lfs::Result<void> {
-            return json ? element->set_json(path, *json)
-                        : remove_optional(*element, path);
-        };
         std::optional<Json> pose;
         if (value.georef_pose) {
             const double norm = std::sqrt(
@@ -2674,39 +2611,48 @@ namespace lfs::io::project {
                 {"translation", json_array(value.georef_pose->translation)},
             };
         }
-        if (auto result = set_or_remove("georef_pose", pose); !result) {
-            return result;
+
+        const std::string uuid = value.uuid.to_string();
+        Json element = dom_.array_get("nodes", uuid).value_or(Json{{"uuid", uuid}});
+        element["type"] = value.type;
+        element["name"] = value.name;
+        if (value.parent_uuid) {
+            element["parent_uuid"] = value.parent_uuid->to_string();
+        } else {
+            element["parent_uuid"] = nullptr;
         }
-        if (auto result =
-                set_or_remove("payload",
-                              value.payload
-                                  ? std::optional<Json>(
-                                        payload_binding_json(*value.payload))
-                                  : std::nullopt);
-            !result) {
-            return result;
+        element["child_order"] = value.child_order;
+        element["local_transform"] = json_array(value.local_transform);
+        element["visible"] = value.visible;
+        element["locked"] = value.locked;
+        element["training_enabled"] = value.training_enabled;
+        element["payload_diverged"] = value.payload_diverged;
+        if (pose) {
+            element["georef_pose"] = std::move(*pose);
+        } else {
+            element.erase("georef_pose");
         }
-        if (auto result =
-                set_or_remove("cropbox",
-                              value.cropbox
-                                  ? std::optional<Json>(cropbox_json(*value.cropbox))
-                                  : std::nullopt);
-            !result) {
-            return result;
+        if (value.payload) {
+            element["payload"] = payload_binding_json(*value.payload);
+        } else {
+            element.erase("payload");
         }
-        if (auto result =
-                set_or_remove("ellipsoid",
-                              value.ellipsoid
-                                  ? std::optional<Json>(
-                                        ellipsoid_json(*value.ellipsoid))
-                                  : std::nullopt);
-            !result) {
-            return result;
+        if (value.cropbox) {
+            element["cropbox"] = cropbox_json(*value.cropbox);
+        } else {
+            element.erase("cropbox");
         }
-        return set_or_remove(
-            "camera", value.camera
-                          ? std::optional<Json>(camera_json(*value.camera))
-                          : std::nullopt);
+        if (value.ellipsoid) {
+            element["ellipsoid"] = ellipsoid_json(*value.ellipsoid);
+        } else {
+            element.erase("ellipsoid");
+        }
+        if (value.camera) {
+            element["camera"] = camera_json(*value.camera);
+        } else {
+            element.erase("camera");
+        }
+        return dom_.array_put("nodes", uuid, std::move(element));
     }
 
     lfs::Result<bool> SceneGraphChapter::remove_node(
