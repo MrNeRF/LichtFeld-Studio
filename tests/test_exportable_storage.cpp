@@ -5,6 +5,7 @@
 #include "core/cuda_error.hpp"
 #include "core/exportable_storage.hpp"
 #include "core/parameters.hpp"
+#include "core/point_cloud.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
@@ -895,6 +896,94 @@ TEST(SplatExportableStorageTest, MigratePreservesCapacityEnsureUnderMaxCap) {
     EXPECT_GE(ensure_calls, 1);
     EXPECT_GE(model.means_raw().capacity(), kNeed);
     EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+}
+
+// SH1/SH3 float-swizzled shN at live-N == capacity exceeds the pad-dropped
+// q16 region (12 vs 9 / 48 vs 45 cells per primitive); migrate used to abort
+// with "shape for 'SplatData.shN' needs ... bytes". It must fall back to the
+// float workspace and land q16-encoded.
+TEST(SplatExportableStorageTest, MigrateFloatSwizzledShNFallsBackToQ16AtFullCapacity) {
+    require_cuda();
+
+    constexpr std::size_t kCap = 1000;
+
+    for (int sh_degree : {1, 2, 3}) {
+        auto storage_result = SplatExportableStorage::create(kCap, sh_degree, 0, kCap);
+        if (!storage_result) {
+            FAIL() << storage_result.error();
+        }
+        auto storage = std::move(*storage_result);
+
+        const auto rest = sh_rest_coefficients_for_degree(sh_degree);
+        Tensor means = Tensor::zeros({kCap, 3}, Device::CUDA);
+        Tensor sh0 = Tensor::zeros({kCap, 1, 3}, Device::CUDA);
+        Tensor scaling = Tensor::zeros({kCap, 3}, Device::CUDA);
+        Tensor rotation = Tensor::zeros({kCap, 4}, Device::CUDA);
+        Tensor opacity = Tensor::zeros({kCap, 1}, Device::CUDA);
+        Tensor shN = Tensor::zeros_direct(
+            TensorShape({sh_swizzled_float_count(kCap, rest)}),
+            sh_swizzled_float_count(kCap, rest),
+            Device::CUDA);
+
+        SplatData model(sh_degree,
+                        std::move(means),
+                        std::move(sh0),
+                        std::move(shN),
+                        std::move(scaling),
+                        std::move(rotation),
+                        std::move(opacity),
+                        1.0f,
+                        SplatData::ShNLayout::Swizzled);
+
+        lfs::core::param::TrainingParameters params;
+        params.optimization.sh_degree = sh_degree;
+        params.optimization.max_cap = static_cast<int>(kCap);
+
+        auto result = lfs::training::migrateTrainingModelToAllocator(
+            params, model, storage.make_allocator());
+        ASSERT_TRUE(result.has_value()) << result.error() << " sh_degree=" << sh_degree;
+        EXPECT_TRUE(model.shN_value_quantized());
+        EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+        EXPECT_EQ(static_cast<std::size_t>(model.shN_raw().capacity()),
+                  sh_value_quant::sh_value_u16_count(kCap, rest));
+    }
+}
+
+// The reported failure: dataset init with init_points > 0.75 x max_cap and
+// SH degree 1 threw from the exportable allocator inside
+// init_model_from_pointcloud. The float shN must come back as an
+// out-of-block workspace instead.
+TEST(SplatExportableStorageTest, InitModelFromPointcloudSucceedsAtFullExportableCapacitySh1) {
+    require_cuda();
+
+    constexpr std::size_t kCap = 1000;
+
+    auto storage_result = SplatExportableStorage::create(kCap, /*sh_degree=*/1, 0, kCap);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+
+    Tensor means = Tensor::rand({kCap, 3}, Device::CPU);
+    Tensor colors = Tensor::zeros({kCap, 3}, Device::CPU, DataType::UInt8);
+    PointCloud pcd(std::move(means), std::move(colors));
+
+    lfs::core::param::TrainingParameters params;
+    params.optimization.sh_degree = 1;
+    params.optimization.max_cap = static_cast<int>(kCap);
+    params.optimization.random = false;
+
+    auto model = init_model_from_pointcloud(params,
+                                            Tensor::zeros({3}, Device::CPU),
+                                            pcd,
+                                            static_cast<int>(kCap),
+                                            storage.make_allocator());
+    ASSERT_TRUE(model.has_value()) << model.error();
+    EXPECT_EQ(model->size(), kCap);
+    EXPECT_EQ(model->shN_raw().dtype(), DataType::Float32);
+    EXPECT_EQ(static_cast<std::size_t>(model->shN_raw().numel()),
+              sh_swizzled_float_count(kCap, sh_rest_coefficients_for_degree(1)));
+    EXPECT_EQ(model->means_raw().external_storage_kind(), "splat.exportable");
 }
 
 // A failed capacity ensure must abort before mutation and leave all parameter
