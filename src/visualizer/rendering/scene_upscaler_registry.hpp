@@ -23,23 +23,6 @@ namespace lfs::vis {
         RuntimeUnavailable,
     };
 
-    struct SceneUpscalerRequirements {
-        bool depth = false;
-        bool motion_vectors = false;
-        bool jitter = false;
-        bool history = false;
-        bool reactive_mask = false;
-        bool exposure = false;
-
-        [[nodiscard]] constexpr bool any() const noexcept {
-            return depth || motion_vectors || jitter || history || reactive_mask || exposure;
-        }
-
-        [[nodiscard]] constexpr bool temporal() const noexcept {
-            return motion_vectors || jitter || history;
-        }
-    };
-
     struct SceneUpscalerPreset {
         std::string_view id;
         std::string_view label_key;
@@ -50,9 +33,7 @@ namespace lfs::vis {
         SceneUpscalerBackend backend = SceneUpscalerBackend::Native;
         std::string_view id;
         std::string_view label_key;
-        SceneUpscalerRequirements requirements;
         std::span<const SceneUpscalerPreset> presets;
-        bool built_in = true;
     };
 
     struct SceneUpscalerSelection {

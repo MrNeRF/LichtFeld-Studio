@@ -37,13 +37,6 @@ namespace lfs::vis {
         EXPECT_FALSE(sceneUpscalerPreset(SceneUpscalerBackend::Native, "balanced").has_value());
     }
 
-    TEST(SceneUpscalerRegistry, BuiltInSpatialRequiresNoTemporalInputs) {
-        const auto& spatial = sceneUpscalerDescriptor(SceneUpscalerBackend::Spatial);
-        EXPECT_TRUE(spatial.built_in);
-        EXPECT_FALSE(spatial.requirements.any());
-        EXPECT_FALSE(spatial.requirements.temporal());
-    }
-
     TEST(SceneUpscalerRegistry, ReportsRequestedEffectiveAndFallbackSeparately) {
         const auto spatial = resolveSceneUpscalerSelection(SceneUpscalerBackend::Spatial, true);
         EXPECT_EQ(spatial.requested, SceneUpscalerBackend::Spatial);

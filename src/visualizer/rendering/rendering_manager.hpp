@@ -19,6 +19,7 @@
 #include "render_animation_state.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
 #include "rendering_types.hpp"
 #include "spark_lod_controller.hpp"
 #include "split_view_service.hpp"
@@ -251,6 +252,11 @@ namespace lfs::vis {
         void updateSettings(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings, DirtyMask dirty_flags);
         RenderSettings getSettings() const;
+        // The presentation pass reports its actual runtime choice after pipeline
+        // preparation. Rendering uses this feedback on the next frame so a failed
+        // reconstruction pipeline never receives a reduced-resolution image.
+        void reportSceneUpscalerRuntimeSelection(SceneUpscalerSelection selection);
+        [[nodiscard]] SceneUpscalerSelection sceneUpscalerRuntimeSelection() const;
 
         // Toggle orthographic mode, calculating ortho_scale to preserve size at pivot
         void setOrthographic(bool enabled, float viewport_height, float distance_to_pivot);
@@ -858,6 +864,7 @@ namespace lfs::vis {
 
         // Settings
         RenderSettings settings_;
+        SceneUpscalerSelection scene_upscaler_runtime_selection_{};
         std::array<int, 2> panel_grid_planes_{{1, 1}};
         mutable std::mutex settings_mutex_;
         mutable std::mutex camera_metrics_mutex_;

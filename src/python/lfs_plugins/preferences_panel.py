@@ -33,17 +33,6 @@ class PreferencesPanel(Panel):
         (2.0, "200%"),
     )
 
-    SCENE_UPSCALER_OPTIONS = (
-        ("native", "preferences.scene_reconstruction_off"),
-        ("spatial", "preferences.scene_reconstruction_spatial"),
-    )
-
-    SPATIAL_PRESET_OPTIONS = (
-        ("quality", "preferences.scene_reconstruction_quality"),
-        ("balanced", "preferences.scene_reconstruction_balanced"),
-        ("performance", "preferences.scene_reconstruction_performance"),
-    )
-
     NAVIGATION_OPTIONS = (
         ("orbit", "preferences.navigation_orbit"),
         ("trackball", "preferences.navigation_trackball"),
@@ -63,11 +52,8 @@ class PreferencesPanel(Panel):
 
     def __init__(self):
         self._handle = None
-        self._scene_upscaler_catalog = list(self.SCENE_UPSCALER_OPTIONS)
-        self._scene_upscaler_presets = {
-            "native": (("native", "preferences.scene_reconstruction_off"),),
-            "spatial": self.SPATIAL_PRESET_OPTIONS,
-        }
+        self._scene_upscaler_catalog = []
+        self._scene_upscaler_presets = {}
         self._theme_catalog = []
         self._language_catalog = []
         self._last_state = None
@@ -296,25 +282,21 @@ class PreferencesPanel(Panel):
         )
 
     def _sync_scene_reconstruction_catalog(self):
-        try:
-            records = lf.ui.get_scene_reconstruction_options()
-            backends = []
-            presets = {}
-            for record in records:
-                backend_id = str(record["id"])
-                label_key = str(record["label_key"])
-                backend_presets = tuple(
-                    (str(preset["id"]), str(preset["label_key"]))
-                    for preset in record.get("presets", ())
-                )
-                if backend_id and label_key and backend_presets:
-                    backends.append((backend_id, label_key))
-                    presets[backend_id] = backend_presets
-            if backends:
-                self._scene_upscaler_catalog = backends
-                self._scene_upscaler_presets = presets
-        except (AttributeError, KeyError, TypeError):
-            pass
+        records = lf.ui.get_scene_reconstruction_options()
+        backends = []
+        presets = {}
+        for record in records:
+            backend_id = str(record["id"])
+            label_key = str(record["label_key"])
+            backend_presets = tuple(
+                (str(preset["id"]), str(preset["label_key"]))
+                for preset in record.get("presets", ())
+            )
+            if backend_id and label_key and backend_presets:
+                backends.append((backend_id, label_key))
+                presets[backend_id] = backend_presets
+        self._scene_upscaler_catalog = backends
+        self._scene_upscaler_presets = presets
 
     def _sync_scene_upscaler_preset_records(self):
         if not self._handle:
@@ -769,6 +751,7 @@ class PreferencesPanel(Panel):
             if settings is not None:
                 settings.scene_upscaler = "native"
                 settings.scene_upscaler_preset = "native"
+                self._sync_scene_upscaler_preset_records()
         elif section == "input":
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)

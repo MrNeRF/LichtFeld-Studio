@@ -752,13 +752,31 @@ namespace lfs::vis {
                     }
                     const float panel_v = panel.flip_y ? 1.0f - v : v;
                     const std::size_t idx = static_cast<std::size_t>(y) * width + x;
-                    write(idx,
-                          {sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                  panel_u, panel_v, 0),
-                           sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                  panel_u, panel_v, 1),
-                           sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                  panel_u, panel_v, 2)});
+                    const auto sample_color = [&](const float sample_u, const float sample_v) {
+                        return glm::vec3{
+                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                   sample_u, sample_v, 0),
+                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                   sample_u, sample_v, 1),
+                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                   sample_u, sample_v, 2)};
+                    };
+                    glm::vec3 color = sample_color(panel_u, panel_v);
+                    if (panel.spatial_filter) {
+                        constexpr float kSpatialSharpenStrength = 0.18f;
+                        const float texel_x = 1.0f / static_cast<float>(std::max(std::get<1>(data), 1));
+                        const float texel_y = 1.0f / static_cast<float>(std::max(std::get<2>(data), 1));
+                        const glm::vec3 left = sample_color(panel_u - texel_x, panel_v);
+                        const glm::vec3 right = sample_color(panel_u + texel_x, panel_v);
+                        const glm::vec3 up = sample_color(panel_u, panel_v - texel_y);
+                        const glm::vec3 down = sample_color(panel_u, panel_v + texel_y);
+                        const glm::vec3 sharpened = color * (1.0f + 4.0f * kSpatialSharpenStrength) -
+                                                    (left + right + up + down) * kSpatialSharpenStrength;
+                        color = glm::clamp(sharpened,
+                                           glm::min(color, glm::min(glm::min(left, right), glm::min(up, down))),
+                                           glm::max(color, glm::max(glm::max(left, right), glm::max(up, down))));
+                    }
+                    write(idx, color);
 
                     const float dist_from_split = std::abs(static_cast<float>(x) + 0.5f - split_x);
                     if (dist_from_split < kMinBarWidthPx * 0.5f) {
@@ -1592,10 +1610,15 @@ namespace lfs::vis {
         const bool resize_deferring = frame_lifecycle_service_.isResizeDeferring();
         const auto requested_upscaler = sceneUpscalerBackendFromId(frame_settings.scene_upscaler)
                                             .value_or(SceneUpscalerBackend::Native);
+        const auto reported_upscaler = sceneUpscalerRuntimeSelection();
+        const bool spatial_runtime_ready =
+            reported_upscaler.requested == requested_upscaler &&
+            reported_upscaler.effective == SceneUpscalerBackend::Spatial &&
+            !reported_upscaler.fellBack();
         float scale = effectiveSceneRenderScale(
             frame_settings.render_scale,
             frame_settings.scene_upscaler_scale,
-            requested_upscaler != SceneUpscalerBackend::Native);
+            spatial_runtime_ready);
         if (resize_result.render_interactive_frame) {
             scale = std::min(scale, kInteractiveResizeRenderScale);
         }
@@ -1613,7 +1636,7 @@ namespace lfs::vis {
                                      effectiveSceneRenderScale(frame_settings.render_scale, 1.0f, false));
         resolution_profiler.setGauge(
             "viewer.resolution.scene.reconstruction_scale",
-            requested_upscaler == SceneUpscalerBackend::Native
+            !spatial_runtime_ready
                 ? 1.0
                 : frame_settings.scene_upscaler_scale);
         resolution_profiler.setGauge("viewer.resolution.scene.effective_scale", scale);
@@ -3055,6 +3078,13 @@ namespace lfs::vis {
         }
 
         if (pending_split_view.enabled) {
+            // Ground-truth comparisons deliberately preserve the reference image.
+            // Other split panels use the reconstruction filter only after the
+            // presentation pass confirmed that spatial reconstruction is active.
+            const bool filter_reconstructed_panels =
+                spatial_runtime_ready && !rendered_image_contains_ground_truth;
+            pending_split_view.left.spatial_filter = filter_reconstructed_panels;
+            pending_split_view.right.spatial_filter = filter_reconstructed_panels;
             pending_split_view.coordinate_extent = render_size;
         }
 

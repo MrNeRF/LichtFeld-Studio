@@ -4819,7 +4819,6 @@ namespace lfs::python {
                     nb::dict backend;
                     backend["id"] = std::string(descriptor.id);
                     backend["label_key"] = std::string(descriptor.label_key);
-                    backend["built_in"] = descriptor.built_in;
                     nb::list presets;
                     for (const auto& preset : descriptor.presets) {
                         nb::dict item;

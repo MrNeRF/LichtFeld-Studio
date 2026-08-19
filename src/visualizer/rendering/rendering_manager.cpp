@@ -524,6 +524,17 @@ namespace lfs::vis {
         return settings_;
     }
 
+    void RenderingManager::reportSceneUpscalerRuntimeSelection(
+        const SceneUpscalerSelection selection) {
+        std::lock_guard lock(settings_mutex_);
+        scene_upscaler_runtime_selection_ = selection;
+    }
+
+    SceneUpscalerSelection RenderingManager::sceneUpscalerRuntimeSelection() const {
+        std::lock_guard lock(settings_mutex_);
+        return scene_upscaler_runtime_selection_;
+    }
+
     void RenderingManager::setOrthographic(const bool enabled, const float viewport_height, const float distance_to_pivot) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
 

@@ -474,17 +474,6 @@ def test_preferences_content_scrolls_without_overlapping_the_fixed_footer():
     assert "padding-right: 6dp;" in content_rule
 
 
-def test_scene_reconstruction_catalog_comes_from_the_native_registry():
-    project_root = Path(__file__).parent.parent.parent
-    source = (project_root / "src" / "python" / "lfs" / "py_ui.cpp").read_text(
-        encoding="utf-8"
-    )
-
-    assert '"get_scene_reconstruction_options"' in source
-    assert "sceneUpscalerDescriptors()" in source
-    assert '"get_scene_reconstruction_preset_preference"' in source
-
-
 def test_mcp_python_bindings_release_the_gil_around_native_work():
     project_root = Path(__file__).parent.parent.parent
     source = (project_root / "src" / "python" / "lfs" / "py_ui.cpp").read_text(

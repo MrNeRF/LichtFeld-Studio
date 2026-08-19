@@ -181,6 +181,7 @@ namespace lfs::vis {
         void record(VkCommandBuffer command_buffer,
                     VkExtent2D framebuffer_extent,
                     const VulkanViewportPassParams& params);
+        [[nodiscard]] SceneUpscalerSelection sceneUpscalerSelection() const;
         void shutdown();
 
     private:

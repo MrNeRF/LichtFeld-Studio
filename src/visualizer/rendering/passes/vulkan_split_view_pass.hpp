@@ -30,6 +30,9 @@ namespace lfs::vis {
         // Valid-region UV for padded panel textures (default identity).
         glm::vec2 uv_scale{1.0f, 1.0f};
         glm::vec2 uv_clamp_max{1.0f, 1.0f};
+        // Set only for a panel rendered at the reconstruction input resolution.
+        // Reference and ground-truth panels must remain unfiltered.
+        bool spatial_filter = false;
     };
 
     struct VulkanSplitViewParams {
@@ -39,7 +42,6 @@ namespace lfs::vis {
         float split_position = 0.5f;
         glm::ivec4 content_rect{0, 0, 0, 0}; // x, y, w, h (letterboxed)
         glm::ivec2 coordinate_extent{0, 0};
-        bool spatial_filter = false;
         glm::vec3 background{0.0f};
     };
 

@@ -819,6 +819,8 @@ namespace lfs::app {
                                  {"mip_filter", settings.mip_filter},
                                  {"sh_degree", settings.sh_degree},
                                  {"render_scale", settings.render_scale},
+                                 {"scene_upscaler", settings.scene_upscaler},
+                                 {"scene_upscaler_preset", settings.scene_upscaler_preset},
                                  {"show_crop_box", settings.show_crop_box},
                                  {"use_crop_box", settings.use_crop_box},
                                  {"show_ellipsoid", settings.show_ellipsoid},
@@ -981,6 +983,8 @@ namespace lfs::app {
             set_bool("mip_filter", settings.mip_filter);
             set_int("sh_degree", settings.sh_degree);
             set_float("render_scale", settings.render_scale);
+            set_string("scene_upscaler", settings.scene_upscaler);
+            set_string("scene_upscaler_preset", settings.scene_upscaler_preset);
             set_bool("show_crop_box", settings.show_crop_box);
             set_bool("use_crop_box", settings.use_crop_box);
             set_bool("show_ellipsoid", settings.show_ellipsoid);
@@ -2848,6 +2852,8 @@ namespace lfs::app {
                     .properties = json{
                         {"focal_length_mm", json{{"type", "number"}}},
                         {"render_scale", json{{"type", "number"}}},
+                        {"scene_upscaler", json{{"type", "string"}}},
+                        {"scene_upscaler_preset", json{{"type", "string"}}},
                         {"background_color", json{{"type", "array"}, {"items", json{{"type", "number"}}}}},
                         {"environment_mode", json{{"type", "integer"}}},
                         {"environment_map_path", json{{"type", "string"}}},

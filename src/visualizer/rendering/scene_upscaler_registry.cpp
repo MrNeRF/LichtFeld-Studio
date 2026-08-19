@@ -38,17 +38,13 @@ namespace lfs::vis {
                 .backend = SceneUpscalerBackend::Native,
                 .id = "native",
                 .label_key = "preferences.scene_reconstruction_off",
-                .requirements = {},
                 .presets = NATIVE_PRESETS,
-                .built_in = true,
             },
             SceneUpscalerDescriptor{
                 .backend = SceneUpscalerBackend::Spatial,
                 .id = "spatial",
                 .label_key = "preferences.scene_reconstruction_spatial",
-                .requirements = {},
                 .presets = SPATIAL_PRESETS,
-                .built_in = true,
             },
         };
     } // namespace
