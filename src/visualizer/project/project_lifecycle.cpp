@@ -482,6 +482,17 @@ namespace lfs::vis::project {
                     "Checkpoint trainer install was rejected");
                 return;
             }
+            if (auto* trainer =
+                    trainer_manager->getTrainer()) {
+                // The user opened this project; trainer
+                // runs continue publishing generations
+                // into it.
+                trainer->set_trainer_project_save_policy({
+                    .on_completion = true,
+                    .on_stop_or_error = false,
+                    .at_step_boundaries = true,
+                });
+            }
             LOG_INFO(
                 "Project trainer restored at iteration {} (dataset={})",
                 installed->iteration,
