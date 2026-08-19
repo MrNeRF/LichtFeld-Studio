@@ -608,6 +608,7 @@ namespace lfs::vis {
             if (state == TrainingState::Paused && trainer_) {
                 trainer_->request_resume();
             }
+            suppressCompletionNotification();
             stopTraining();
         }
 

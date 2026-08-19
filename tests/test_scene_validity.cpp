@@ -75,6 +75,9 @@ namespace lfs::python {
         private:
             std::filesystem::path path_;
         };
+
+        bool transition_trainer_manager_for_test(lfs::vis::TrainerManager& trainer_manager,
+                                                 lfs::vis::TrainingState state);
     } // namespace
 
     TEST(TrainingStateMachineTest, PublishesFinishReasonBeforeFinishedCallback) {
@@ -349,6 +352,36 @@ namespace lfs::python {
         EXPECT_EQ(manager.splatExportableStorage(), nullptr);
         EXPECT_EQ(after.allocated_bytes, before.allocated_bytes);
         EXPECT_EQ(after.cached_bytes, 0u);
+    }
+
+    TEST(TrainerConstructionTest, ClearTrainerSuppressesStoppedNotificationForPausedTrainer) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        manager.setTrainer(std::make_unique<training::Trainer>(scene));
+
+        ASSERT_TRUE(transition_trainer_manager_for_test(manager, lfs::vis::TrainingState::Running));
+        ASSERT_TRUE(transition_trainer_manager_for_test(manager, lfs::vis::TrainingState::Paused));
+
+        int completions = 0;
+        bool user_stopped = false;
+        bool suppress_notification = false;
+        const auto id = lfs::core::events::state::TrainingCompleted::when([&](const auto& e) {
+            ++completions;
+            user_stopped = e.user_stopped;
+            suppress_notification = e.suppress_notification;
+        });
+
+        ASSERT_TRUE(manager.clearTrainer());
+        EXPECT_EQ(completions, 1);
+        EXPECT_TRUE(user_stopped);
+        EXPECT_TRUE(suppress_notification);
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Idle);
+
+        lfs::event::EventBridge::instance().unsubscribe(
+            typeid(lfs::core::events::state::TrainingCompleted), id);
     }
 
     namespace {
