@@ -362,7 +362,11 @@ namespace {
                                           allocator,
                                           name,
                                           DataType::Float32);
-            } catch (const std::exception&) {
+            } catch (const std::exception& error) {
+                LOG_DEBUG("allocate_swizzled_shN: allocator rejected float topology "
+                          "for '{}' ({}); using zeros_direct workspace",
+                          name,
+                          error.what());
             }
             if (t.is_valid() && t.dtype() == DataType::Float32 &&
                 t.capacity() >= capacity_floats) {

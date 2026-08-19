@@ -435,10 +435,13 @@ namespace lfs::training {
                                                          float_cap,
                                                          lfs::core::DataType::Float32,
                                                          "SplatData.shN");
-                        } catch (const std::exception&) {
+                        } catch (const std::exception& error) {
                             // Exportable q16 region rejects the swizzled float shape when
                             // live-N cells exceed the pad-dropped capacity; same fallback
                             // as the Float16/clamp detection below.
+                            LOG_DEBUG("Float shN install rejected by allocator ({}); "
+                                      "re-encoding to q16 instead",
+                                      error.what());
                         }
                         const bool landed_in_q16_exportable =
                             !installed.is_valid() ||
