@@ -78,7 +78,6 @@ namespace lfs::python {
         SetPlaybackSpeedCallback g_set_playback_speed_cb = nullptr;
 
         // Menu bar UI callbacks
-        ShowInputSettingsCallback g_show_input_settings_cb = nullptr;
         ShowPythonConsoleCallback g_show_python_console_cb = nullptr;
         SceneGenerationCallback g_scene_generation_cb = nullptr;
 
@@ -569,17 +568,8 @@ namespace lfs::python {
             g_set_playback_speed_cb(speed);
     }
 
-    void set_show_input_settings_callback(ShowInputSettingsCallback cb) {
-        g_show_input_settings_cb = cb;
-    }
-
     void set_show_python_console_callback(ShowPythonConsoleCallback cb) {
         g_show_python_console_cb = cb;
-    }
-
-    void show_input_settings() {
-        if (g_show_input_settings_cb)
-            g_show_input_settings_cb();
     }
 
     void show_python_console() {

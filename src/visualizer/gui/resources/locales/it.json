@@ -26,7 +26,6 @@
     "file.mesh_to_splat": "Mesh a Splat...",
     "file.exit": "Esci",
     "edit": "Modifica",
-    "edit.input_settings": "Impostazioni di Input...",
     "select": "Selezione",
     "select.copy_selection": "Copia selezione",
     "select.cut_selection": "Taglia selezione",
@@ -56,7 +55,6 @@
     "view.debug_info": "Info di Debug..."
   },
   "window": {
-    "input_settings": "Impostazioni di Input",
     "export": "Esporta",
     "scene": "Scena",
     "rendering": "Rendering",
@@ -777,6 +775,7 @@
     "general": "Generale",
     "appearance": "Aspetto",
     "input": "Input",
+    "key_bindings": "Associazioni tasti",
     "camera_navigation": "Navigazione della camera",
     "navigation_mode": "Modalità di navigazione",
     "camera_view_snap": "Aggancia alle viste assiali",
@@ -1296,13 +1295,11 @@
     "status_label": "Stato: %s"
   },
   "input_settings": {
-    "title": "IMPOSTAZIONI INPUT",
     "active_profile": "Profilo Attivo:",
     "save_current_profile": "Salva Profilo Corrente",
     "reset_to_default": "Ripristina Predefinito",
     "export": "Esporta...",
     "import": "Importa...",
-    "action": "Azione",
     "rebind": "Riassocia",
     "cancel": "Annulla",
     "replace": "Sostituisci",
@@ -1323,7 +1320,6 @@
     "click_again_double": "Clicca di nuovo per doppio clic...",
     "tool_mode": "MODALITÀ STRUMENTO",
     "select_tool_mode": "Seleziona modalità strumento per visualizzare/modificare le associazioni",
-    "current_bindings": "ASSOCIAZIONI CORRENTI",
     "global_bindings_hint": "Le associazioni globali si applicano ovunque a meno che non vengano sovrascritte",
     "tool_bindings_hint": "Le associazioni specifiche degli strumenti sovrascrivono le associazioni globali",
     "section.navigation": "NAVIGAZIONE",
@@ -1428,8 +1424,7 @@
     "trigger.drag": " Trascina",
     "trigger.scroll": "Scorri",
     "trigger.unknown": "Sconosciuto",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "Associazione"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "Cancella Cronologia",

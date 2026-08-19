@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Regression tests for application preferences behavior."""
 
+from enum import IntEnum
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -86,9 +87,52 @@ def preferences_panel_module(monkeypatch):
         take_preferences_section_request=take_preferences_section_request,
         tr=lambda key: key,
     )
+    tool_mode = IntEnum(
+        "ToolMode",
+        {
+            name: index
+            for index, name in enumerate(
+                ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX")
+            )
+        },
+    )
+
+    class _Action:
+        def __getattr__(self, name):
+            value = SimpleNamespace(name=name, value=abs(hash(name)) % 100000)
+            setattr(self, name, value)
+            return value
+
+    lf_stub.keymap = SimpleNamespace(
+        ToolMode=tool_mode,
+        Action=_Action(),
+        get_available_profiles=lambda: ["Default"],
+        get_current_profile=lambda: "Default",
+        get_tool_mode_name=lambda mode: str(mode),
+        get_action_name=lambda value: str(value),
+        get_trigger=lambda *_a, **_k: None,
+        set_trigger_binding=lambda *_a, **_k: True,
+        find_conflict_for_action=lambda *_a, **_k: None,
+        get_allowed_trigger_kinds=lambda *_a, **_k: ["key"],
+        is_capturing=lambda: False,
+        is_waiting_for_double_click=lambda: False,
+        load_profile=lambda _name: None,
+        save_profile=lambda _name: None,
+        reset_to_default=lambda: None,
+        export_profile=lambda _path: None,
+        import_profile=lambda _path: None,
+        start_capture=lambda *_a, **_k: None,
+        cancel_capture=lambda: None,
+        clear_binding=lambda *_a, **_k: None,
+        get_captured_trigger=lambda: None,
+        get_trigger_description=lambda *_a, **_k: "",
+    )
+    lf_stub.get_camera_navigation_mode = lambda: "orbit"
+    lf_stub.get_camera_view_snap_enabled = lambda: False
 
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     sys.modules.pop("lfs_plugins.preferences_panel", None)
+    sys.modules.pop("lfs_plugins.keymap_bindings", None)
     sys.modules.pop("lfs_plugins", None)
     module = import_module("lfs_plugins.preferences_panel")
     return module, state

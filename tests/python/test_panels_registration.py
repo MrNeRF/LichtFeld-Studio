@@ -305,12 +305,12 @@ def test_isolation_mid_step_failure_still_registers_later_panels(panels_module, 
     def build_with_broken_mid(lf):
         steps = original_build(lf)
         names = [name for name, _ in steps]
-        broken_name = "input_settings_panel"
+        broken_name = "preferences_panel"
         assert broken_name in names, f"expected {broken_name} in {names}"
         broken_index = names.index(broken_name)
 
         def boom():
-            raise AttributeError("simulated input_settings_panel failure")
+            raise AttributeError("simulated preferences_panel failure")
 
         steps[broken_index] = (broken_name, boom)
         return steps
@@ -326,15 +326,15 @@ def test_isolation_mid_step_failure_still_registers_later_panels(panels_module, 
     assert "AssetManagerPanel" in state.registered
     assert any(effect[0] == "hook" for effect in state.side_effects)
 
-    # Broken step did not register InputSettingsPanel.
-    assert "InputSettingsPanel" not in state.registered
+    # Broken step did not register PreferencesPanel.
+    assert "PreferencesPanel" not in state.registered
 
     # Earlier step still registered.
     assert "RenderingPanel" in state.registered
 
     # Failures are routed through lf.log.error (not bare print).
     assert any(
-        "input_settings_panel" in msg and "failed" in msg for msg in state.log_errors
+        "preferences_panel" in msg and "failed" in msg for msg in state.log_errors
     ), state.log_errors
     assert any("step(s) failed" in msg for msg in state.log_errors), state.log_errors
     assert any("Traceback" in msg for msg in state.log_errors), state.log_errors
@@ -364,7 +364,7 @@ def test_all_good_registers_in_order_with_rendering_first(panels_module):
         "ImagePreviewPanel",
         "HistogramPanel",
         "ScriptsPanel",
-        "InputSettingsPanel",
+        "PreferencesPanel",
         "Mesh2SplatPanel",
         "PluginMarketplacePanel",
         "AssetManagerPanel",

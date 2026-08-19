@@ -26,7 +26,6 @@
     "file.mesh_to_splat": "Mesh a Splat...",
     "file.exit": "Salir",
     "edit": "Editar",
-    "edit.input_settings": "Configuración de Entrada...",
     "select": "Selección",
     "select.copy_selection": "Copiar selección",
     "select.cut_selection": "Cortar selección",
@@ -56,7 +55,6 @@
     "view.debug_info": "Información de Depuración..."
   },
   "window": {
-    "input_settings": "Configuración de Entrada",
     "export": "Exportar",
     "scene": "Escena",
     "rendering": "Renderizado",
@@ -777,6 +775,7 @@
     "general": "General",
     "appearance": "Apariencia",
     "input": "Entrada",
+    "key_bindings": "Asignaciones de teclas",
     "camera_navigation": "Navegación de cámara",
     "navigation_mode": "Modo de navegación",
     "camera_view_snap": "Ajustar vistas de ejes",
@@ -1296,13 +1295,11 @@
     "status_label": "Estado: %s"
   },
   "input_settings": {
-    "title": "AJUSTES DE ENTRADA",
     "active_profile": "Perfil Activo:",
     "save_current_profile": "Guardar el Perfil Actual",
     "reset_to_default": "Restablecer a Predeterminado",
     "export": "Exportar...",
     "import": "Importar...",
-    "action": "Acción",
     "rebind": "Reasignar",
     "cancel": "Cancelar",
     "replace": "Reemplazar",
@@ -1323,7 +1320,6 @@
     "click_again_double": "Haz clic de nuevo para el doble clic...",
     "tool_mode": "MODO HERRAMIENTA",
     "select_tool_mode": "Selecciona el modo de herramienta para ver/editar las asignaciones",
-    "current_bindings": "ASIGNACIONES ACTUALES",
     "global_bindings_hint": "Las asignaciones globales se aplican en todas partes salvo que se sobrescriban",
     "tool_bindings_hint": "Las asignaciones específicas de la herramienta sobrescriben las asignaciones globales",
     "section.navigation": "NAVEGACIÓN",
@@ -1428,8 +1424,7 @@
     "trigger.drag": " Arrastrar",
     "trigger.scroll": "Rueda",
     "trigger.unknown": "Desconocido",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "Asignación"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "Borrar el Historial",

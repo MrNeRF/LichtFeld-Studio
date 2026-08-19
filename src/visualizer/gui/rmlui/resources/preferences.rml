@@ -82,6 +82,52 @@
             <input type="checkbox" data-checked="remember_view_snap" />
           </div>
         </div>
+
+        <div class="section-header text-accent" data-class-is-expanded="key_bindings_expanded" data-event-click="toggle_section('key_bindings')">
+          <span class="section-arrow text-accent" data-class-is-expanded="key_bindings_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.key_bindings</span>
+        </div>
+        <div class="section-content" data-if="key_bindings_expanded">
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:input_settings.active_profile</span>
+            <select id="profile-select" class="preferences-select" data-value="profile_idx"
+                    data-class-preferences-capture-disabled="is_capturing">
+              <option data-for="profile : profiles" data-attr-value="profile.index">{{ profile.label }}</option>
+            </select>
+          </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:input_settings.tool_mode</span>
+            <select id="mode-select" class="preferences-select" data-value="mode_idx"
+                    data-class-preferences-capture-disabled="is_capturing">
+              <option data-for="mode : tool_modes" data-attr-value="mode.index">{{ mode.label }}</option>
+            </select>
+          </div>
+          <span class="preferences-description">@tr:input_settings.select_tool_mode</span>
+          <span class="preferences-description" id="bindings-hint">{{bindings_hint}}</span>
+          <div id="bindings-table" class="preferences-bindings-table">
+            <div data-for="row : binding_rows">
+              <span class="preferences-binding-section" data-if="row.is_section">{{ row.section_title }}</span>
+              <div class="preferences-binding-row" data-if="!row.is_section">
+                <span class="preferences-action-name">{{ row.action_name }}</span>
+                <span data-attr-class="row.desc_class">{{ row.desc_text }}</span>
+                <button data-attr-class="'btn ' + row.button_class + ' preferences-rebind-btn'"
+                        data-attr-data-btn-action="row.button_action"
+                        data-attr-data-action-id="row.action_id"
+                        data-attr-data-mode-id="row.mode_id">{{ row.button_label }}</button>
+              </div>
+            </div>
+          </div>
+          <div class="preferences-inline-actions">
+            <button class="btn btn--success" data-event-click="save_profile">@tr:input_settings.save_current_profile</button>
+            <button class="btn btn--error" data-event-click="reset_default">@tr:input_settings.reset_to_default</button>
+          </div>
+          <div class="preferences-inline-actions">
+            <button class="btn btn--secondary" data-event-click="export_profile">@tr:input_settings.export</button>
+            <button class="btn btn--secondary" data-event-click="import_profile">@tr:input_settings.import</button>
+          </div>
+          <span class="preferences-description">@tr:input_settings.save_hint</span>
+          <span class="preferences-description">@tr:input_settings.double_click_hint</span>
+        </div>
       </div>
 
       <div class="preferences-section" data-if="show_interface">
@@ -154,6 +200,18 @@
       <span class="preferences-actions-spacer"></span>
       <button class="btn btn--warning" data-event-click="reset_all_settings">@tr:preferences.reset_all_settings</button>
       <button class="btn btn--primary" data-event-click="accept_and_close">@tr:common.ok</button>
+    </div>
+  </div>
+
+  <div id="binding-conflict-overlay" class="preferences-conflict-overlay hidden">
+    <div class="preferences-conflict-dialog">
+      <span class="preferences-conflict-title">@tr:input_settings.conflict_title</span>
+      <span id="binding-conflict-message" class="preferences-conflict-message"></span>
+      <div class="separator"></div>
+      <div class="preferences-conflict-buttons">
+        <button class="btn btn--secondary" data-event-click="cancel_conflict">@tr:input_settings.cancel</button>
+        <button class="btn btn--error" data-event-click="replace_conflict">@tr:input_settings.replace</button>
+      </div>
     </div>
   </div>
 </body>

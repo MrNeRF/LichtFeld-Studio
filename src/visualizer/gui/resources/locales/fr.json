@@ -26,7 +26,7 @@
     "file.mesh_to_splat": "Mesh vers Splat...",
     "file.exit": "Quitter",
     "edit": "Édition",
-    "edit.input_settings": "Paramètres d'Entrée...",
+
     "select": "Sélection",
     "select.copy_selection": "Copier la sélection",
     "select.cut_selection": "Couper la sélection",
@@ -56,7 +56,6 @@
     "view.debug_info": "Infos de Débogage..."
   },
   "window": {
-    "input_settings": "Paramètres d'Entrée",
     "export": "Exporter",
     "scene": "Scène",
     "rendering": "Rendu",
@@ -777,6 +776,7 @@
     "general": "Général",
     "appearance": "Apparence",
     "input": "Entrée",
+    "key_bindings": "Liaisons de touches",
     "camera_navigation": "Navigation de la caméra",
     "navigation_mode": "Mode de navigation",
     "camera_view_snap": "Aligner les vues d'axe",
@@ -1296,13 +1296,11 @@
     "status_label": "Statut : %s"
   },
   "input_settings": {
-    "title": "PARAMÈTRES D'ENTRÉE",
     "active_profile": "Profil Actif :",
     "save_current_profile": "Sauvegarder le Profil Actuel",
     "reset_to_default": "Réinitialiser par Défaut",
     "export": "Exporter...",
     "import": "Importer...",
-    "action": "Action",
     "rebind": "Réassigner",
     "cancel": "Annuler",
     "replace": "Remplacer",
@@ -1323,7 +1321,6 @@
     "click_again_double": "Cliquez à nouveau pour double-clic...",
     "tool_mode": "MODE OUTIL",
     "select_tool_mode": "Sélectionnez le mode outil pour voir/éditer les liaisons",
-    "current_bindings": "LIAISONS ACTUELLES",
     "global_bindings_hint": "Les liaisons globales s'appliquent partout sauf si remplacées",
     "tool_bindings_hint": "Les liaisons spécifiques aux outils remplacent les liaisons globales",
     "section.navigation": "NAVIGATION",
@@ -1428,8 +1425,7 @@
     "trigger.drag": " Glisser",
     "trigger.scroll": "Défilement",
     "trigger.unknown": "Inconnu",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "Liaison"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "Effacer l'Historique",

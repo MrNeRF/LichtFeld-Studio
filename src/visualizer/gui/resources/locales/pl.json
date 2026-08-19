@@ -26,7 +26,6 @@
     "file.mesh_to_splat": "Mesh na Splat...",
     "file.exit": "Zakończ",
     "edit": "Edycja",
-    "edit.input_settings": "Ustawienia Wejścia...",
     "select": "Zaznaczenie",
     "select.copy_selection": "Kopiuj zaznaczenie",
     "select.cut_selection": "Wytnij zaznaczenie",
@@ -56,7 +55,6 @@
     "view.debug_info": "Informacje Debugowania..."
   },
   "window": {
-    "input_settings": "Ustawienia Wejścia",
     "export": "Eksportuj",
     "scene": "Scena",
     "rendering": "Renderowanie",
@@ -777,6 +775,7 @@
     "general": "Ogólne",
     "appearance": "Wygląd",
     "input": "Sterowanie",
+    "key_bindings": "Przypisania klawiszy",
     "camera_navigation": "Nawigacja kamery",
     "navigation_mode": "Tryb nawigacji",
     "camera_view_snap": "Przyciągaj widoki osi",
@@ -1296,13 +1295,11 @@
     "status_label": "Stan: %s"
   },
   "input_settings": {
-    "title": "USTAWIENIA WEJŚCIA",
     "active_profile": "Aktywny Profil:",
     "save_current_profile": "Zapisz Bieżący Profil",
     "reset_to_default": "Resetuj do Domyślnych",
     "export": "Eksportuj...",
     "import": "Importuj...",
-    "action": "Akcja",
     "rebind": "Przypisz Ponownie",
     "cancel": "Anuluj",
     "replace": "Zastąp",
@@ -1323,7 +1320,6 @@
     "click_again_double": "Kliknij ponownie dla podwójnego kliknięcia...",
     "tool_mode": "TRYB NARZĘDZIA",
     "select_tool_mode": "Wybierz tryb narzędzia, aby wyświetlić/edytować przypisania",
-    "current_bindings": "BIEŻĄCE PRZYPISANIA",
     "global_bindings_hint": "Przypisania globalne obowiązują wszędzie, chyba że zostaną nadpisane",
     "tool_bindings_hint": "Przypisania specyficzne dla narzędzi nadpisują przypisania globalne",
     "section.navigation": "NAWIGACJA",
@@ -1428,8 +1424,7 @@
     "trigger.drag": " Przeciągnięcie",
     "trigger.scroll": "Przewijanie",
     "trigger.unknown": "Nieznane",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "Przypisanie"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "Wyczyść Historię",

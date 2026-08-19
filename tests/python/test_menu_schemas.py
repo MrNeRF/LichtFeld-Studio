@@ -75,6 +75,7 @@ def _install_lichtfeld_stub(monkeypatch):
             INVERT_SELECTION="invert_selection",
             SELECT_ALL="select_all",
             DESELECT_ALL="deselect_all",
+            OPEN_PREFERENCES="open_preferences",
         ),
         ToolMode=SimpleNamespace(GLOBAL="global"),
         is_bound=lambda _action, _mode: True,
@@ -87,6 +88,7 @@ def _install_lichtfeld_stub(monkeypatch):
             "invert_selection": "Ctrl+I",
             "select_all": "Ctrl+A",
             "deselect_all": "Ctrl+D",
+            "open_preferences": "Ctrl+,",
         }.get(action, "Unbound"),
     )
 
@@ -144,7 +146,7 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert edit_items[1]["label"] == "Redo"
     assert edit_items[1]["enabled"] is False
     assert edit_items[2]["type"] == "separator"
-    assert edit_items[3]["label"] == "tr:menu.edit.input_settings"
+    assert edit_items[3]["label"] == "tr:menu.edit.preferences"
 
     assert edit_mod.EditMenu.order < select_mod.SelectMenu.order < tools_mod.ToolsMenu.order
 

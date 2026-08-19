@@ -1,28 +1,12 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Input settings panel for keyboard/mouse binding configuration."""
-
-import threading
+"""Key-binding editor hosted by the Preferences Input section."""
 
 import lichtfeld as lf
-from . import rml_widgets as w
-from .types import Panel
-from .ui import RuntimeState
-
-__lfs_panel_classes__ = ["InputSettingsPanel"]
-__lfs_panel_ids__ = ["lfs.input_settings"]
 
 
-class InputSettingsPanel(Panel):
-    id = "lfs.input_settings"
-    label = "Input Settings"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 100
-    template = "rmlui/input_settings.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (500, 0)
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_policy = "dirty"
+class KeymapBindingsSection:
+    """Retained key-binding editor bound onto the Preferences data model."""
 
     TOOL_MODES = [
         lf.keymap.ToolMode.GLOBAL,
@@ -157,20 +141,11 @@ class InputSettingsPanel(Panel):
         self._last_state_key = None
         self._last_lang = ""
         self._last_current_profile = ""
-        self._last_display_h = 0
         self._last_capturing = None
-        self._reactive_unsubscribers = []
-        self._model_update_scheduled = False
-        self._capture_poll_timer = None
 
     # ── Data model ────────────────────────────────────────────
 
-    def on_bind_model(self, ctx):
-        model = ctx.create_data_model("input_settings")
-        if model is None:
-            return
-
-        model.bind_func("panel_label", lambda: lf.ui.tr("input_settings.title"))
+    def bind(self, model):
         model.bind_func("bindings_hint", self._get_bindings_hint)
         model.bind_func("is_capturing", lambda: lf.keymap.is_capturing())
 
@@ -212,7 +187,7 @@ class InputSettingsPanel(Panel):
             self._clear_pending_conflict()
             lf.keymap.load_profile(profiles[idx])
             self._last_state_key = None
-            self._request_model_update()
+            self._dirty_owned()
 
     def _set_mode_idx(self, v):
         try:
@@ -222,7 +197,7 @@ class InputSettingsPanel(Panel):
         if 0 <= idx < len(self.TOOL_MODES) and idx != self._selected_mode_idx:
             self._selected_mode_idx = idx
             self._last_state_key = None
-            self._request_model_update()
+            self._dirty_owned()
 
     # ── Events ────────────────────────────────────────────────
 
@@ -233,7 +208,7 @@ class InputSettingsPanel(Panel):
         self._clear_pending_conflict()
         lf.keymap.reset_to_default()
         self._last_state_key = None
-        self._request_model_update()
+        self._dirty_owned()
 
     def _on_export_profile(self, _handle, _ev, _args):
         tr = lf.ui.tr
@@ -248,7 +223,7 @@ class InputSettingsPanel(Panel):
             self._clear_pending_conflict()
             lf.keymap.import_profile(path)
             self._last_state_key = None
-            self._request_model_update()
+            self._dirty_owned()
 
     def _on_replace_conflict(self, _handle, _ev, _args):
         if not self._pending_conflict:
@@ -259,7 +234,7 @@ class InputSettingsPanel(Panel):
         self._clear_pending_conflict()
         self._last_state_key = None
         self._rebuild_binding_rows(self.TOOL_MODES[self._selected_mode_idx])
-        self._request_model_update()
+        self._dirty_owned()
 
     def _on_cancel_conflict(self, _handle, _ev, _args):
         if not self._pending_conflict:
@@ -273,12 +248,11 @@ class InputSettingsPanel(Panel):
         self._clear_pending_conflict()
         self._last_state_key = None
         self._rebuild_binding_rows(self.TOOL_MODES[self._selected_mode_idx])
-        self._request_model_update()
+        self._dirty_owned()
 
     # ── Lifecycle ─────────────────────────────────────────────
 
     def on_mount(self, doc):
-        super().on_mount(doc)
         self._doc = doc
         self._last_lang = lf.ui.get_current_language()
         self._last_current_profile = lf.keymap.get_current_profile()
@@ -291,88 +265,13 @@ class InputSettingsPanel(Panel):
         if table_el:
             table_el.add_event_listener("click", self._on_table_click)
         self._hide_conflict_overlay()
-        self._subscribe_reactive_state()
 
-    def on_unmount(self, doc):
-        self._unsubscribe_reactive_state()
-        self._cancel_capture_poll()
+    def on_unmount(self):
         self._doc = None
         self._handle = None
-        doc.remove_data_model("input_settings")
-
-    def _subscribe_reactive_state(self):
-        if self._reactive_unsubscribers:
-            return
-
-        self._reactive_unsubscribers = [
-            RuntimeState.language_generation.subscribe(lambda _value: self._schedule_model_update()),
-        ]
-
-    def _unsubscribe_reactive_state(self):
-        for unsubscribe in self._reactive_unsubscribers:
-            try:
-                unsubscribe()
-            except Exception:
-                pass
-        self._reactive_unsubscribers = []
-
-    def _request_model_update(self):
-        if self._handle:
-            w.request_model_update(self._handle)
-
-    def _schedule_model_update(self):
-        if self._model_update_scheduled:
-            return
-        self._model_update_scheduled = True
-
-        def run_update():
-            self._model_update_scheduled = False
-            self._request_model_update()
-
-        scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
-        if not callable(scheduler):
-            scheduler = getattr(lf.ui, "_run_on_ui_thread", None)
-
-        if callable(scheduler):
-            try:
-                scheduler(run_update)
-                return
-            except Exception:
-                pass
-
-        self._model_update_scheduled = False
-        if threading.current_thread() is threading.main_thread():
-            run_update()
-            return
-
-        request_redraw = getattr(lf.ui, "request_redraw", None)
-        if callable(request_redraw):
-            try:
-                request_redraw()
-            except Exception:
-                pass
-
-    def _schedule_capture_poll(self):
-        if self._capture_poll_timer is not None:
-            return
-
-        def tick():
-            self._capture_poll_timer = None
-            self._schedule_model_update()
-
-        self._capture_poll_timer = threading.Timer(0.05, tick)
-        self._capture_poll_timer.daemon = True
-        self._capture_poll_timer.start()
-
-    def _cancel_capture_poll(self):
-        timer = self._capture_poll_timer
-        self._capture_poll_timer = None
-        if timer is not None:
-            timer.cancel()
 
     def on_update(self, doc):
         self._doc = doc
-        self._update_max_height(doc)
 
         current_lang = lf.ui.get_current_language()
         profiles = lf.keymap.get_available_profiles()
@@ -438,24 +337,6 @@ class InputSettingsPanel(Panel):
             self._last_capturing = is_capturing
             self._dirty_model("is_capturing")
 
-        if self._rebinding_action is not None or is_capturing:
-            self._schedule_capture_poll()
-        else:
-            self._cancel_capture_poll()
-
-    def _update_max_height(self, doc):
-        try:
-            _, display_h = lf.ui.get_display_size()
-        except (RuntimeError, AttributeError):
-            return
-        if display_h == self._last_display_h:
-            return
-        self._last_display_h = display_h
-        max_h = int(display_h * 2 / 3)
-        wrap = doc.get_element_by_id("content-wrap")
-        if wrap:
-            wrap.set_property("max-height", f"{max_h}dp")
-
     # ── Retained model updates ────────────────────────────────
 
     def _dirty_model(self, *fields):
@@ -466,6 +347,9 @@ class InputSettingsPanel(Panel):
             return
         for field in fields:
             self._handle.dirty(field)
+
+    def _dirty_owned(self):
+        self._dirty_model("profile_idx", "mode_idx", "is_capturing", "bindings_hint")
 
     def _clear_pending_conflict(self):
         self._pending_conflict = None
@@ -630,13 +514,13 @@ class InputSettingsPanel(Panel):
                 desc_text = tr("input_settings.click_again_double")
             else:
                 desc_text = self._capture_prompt(action)
-            desc_class = "is-binding-desc is-capturing"
+            desc_class = "preferences-binding-desc preferences-capturing"
             button_action = "cancel"
             button_label = tr("input_settings.cancel")
             button_class = "btn--error"
         else:
             desc_text = lf.keymap.get_trigger_description(action, mode)
-            desc_class = "is-binding-desc"
+            desc_class = "preferences-binding-desc"
             conflict = lf.keymap.find_conflict_for_action(mode, action)
             if conflict is not None:
                 other_name = lf.keymap.get_action_name(conflict["other_action"])
@@ -644,7 +528,7 @@ class InputSettingsPanel(Panel):
                     binding=desc_text,
                     action=other_name,
                 )
-                desc_class = "is-binding-desc is-conflict"
+                desc_class = "preferences-binding-desc preferences-conflict"
             button_action = "rebind"
             button_label = tr("input_settings.rebind")
             button_class = "btn--primary"
@@ -714,16 +598,14 @@ class InputSettingsPanel(Panel):
             self._previous_trigger = lf.keymap.get_trigger(action, mode)
             lf.keymap.start_capture(mode, action)
             self._last_state_key = None
-            self._request_model_update()
-            self._schedule_capture_poll()
+            self._dirty_owned()
         elif btn_action == "cancel":
             lf.keymap.cancel_capture()
             self._rebinding_action = None
             self._rebinding_mode = None
             self._previous_trigger = None
             self._last_state_key = None
-            self._cancel_capture_poll()
-            self._request_model_update()
+            self._dirty_owned()
 
     def _find_btn_action(self, element):
         while element is not None:

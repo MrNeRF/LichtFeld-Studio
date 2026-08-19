@@ -26,7 +26,6 @@
     "file.mesh_to_splat": "メッシュをスプラットに変換...",
     "file.exit": "終了",
     "edit": "編集",
-    "edit.input_settings": "入力設定...",
     "select": "選択",
     "select.copy_selection": "選択をコピー",
     "select.cut_selection": "選択を切り取り",
@@ -56,7 +55,6 @@
     "view.debug_info": "デバッグ情報..."
   },
   "window": {
-    "input_settings": "入力設定",
     "export": "エクスポート",
     "scene": "シーン",
     "rendering": "レンダリング",
@@ -777,6 +775,7 @@
     "general": "一般",
     "appearance": "外観",
     "input": "入力",
+    "key_bindings": "キー割り当て",
     "camera_navigation": "カメラ操作",
     "navigation_mode": "ナビゲーションモード",
     "camera_view_snap": "軸ビューにスナップ",
@@ -1296,13 +1295,11 @@
     "status_label": "ステータス: %s"
   },
   "input_settings": {
-    "title": "入力設定",
     "active_profile": "アクティブプロファイル:",
     "save_current_profile": "現在のプロファイルを保存",
     "reset_to_default": "デフォルトにリセット",
     "export": "エクスポート...",
     "import": "インポート...",
-    "action": "アクション",
     "rebind": "再割り当て",
     "cancel": "キャンセル",
     "replace": "置き換え",
@@ -1323,7 +1320,6 @@
     "click_again_double": "ダブルクリックにするにはもう一度クリック...",
     "tool_mode": "ツールモード",
     "select_tool_mode": "ツールモードを選択して割り当てを表示/編集",
-    "current_bindings": "現在の割り当て",
     "global_bindings_hint": "グローバル割り当ては上書きされない限りどこでも適用されます",
     "tool_bindings_hint": "ツール固有の割り当てはグローバル割り当てを上書きします",
     "section.navigation": "ナビゲーション",
@@ -1428,8 +1424,7 @@
     "trigger.drag": " ドラッグ",
     "trigger.scroll": "スクロール",
     "trigger.unknown": "不明",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "割り当て"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "履歴をクリア",

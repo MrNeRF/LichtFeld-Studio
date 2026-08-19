@@ -26,7 +26,6 @@
     "file.mesh_to_splat": "Mesh to Splat...",
     "file.exit": "Exit",
     "edit": "Edit",
-    "edit.input_settings": "Input Settings...",
     "select": "Select",
     "select.copy_selection": "Copy Selection",
     "select.cut_selection": "Cut Selection",
@@ -56,7 +55,6 @@
     "view.debug_info": "Debug Info..."
   },
   "window": {
-    "input_settings": "Input Settings",
     "export": "Export",
     "scene": "Scene",
     "rendering": "Rendering",
@@ -777,6 +775,7 @@
     "general": "General",
     "appearance": "Appearance",
     "input": "Input",
+    "key_bindings": "Key Bindings",
     "camera_navigation": "Camera Navigation",
     "navigation_mode": "Navigation Mode",
     "camera_view_snap": "Snap Axis Views",
@@ -1296,13 +1295,11 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
-    "title": "INPUT SETTINGS",
     "active_profile": "Active Profile:",
     "save_current_profile": "Save Current Profile",
     "reset_to_default": "Reset to Default",
     "export": "Export...",
     "import": "Import...",
-    "action": "Action",
     "rebind": "Rebind",
     "cancel": "Cancel",
     "replace": "Replace",
@@ -1323,7 +1320,6 @@
     "click_again_double": "Click again for double-click...",
     "tool_mode": "TOOL MODE",
     "select_tool_mode": "Select tool mode to view/edit bindings",
-    "current_bindings": "CURRENT BINDINGS",
     "global_bindings_hint": "Global bindings apply everywhere unless overridden",
     "tool_bindings_hint": "Tool-specific bindings override global bindings",
     "section.navigation": "NAVIGATION",
@@ -1428,8 +1424,7 @@
     "trigger.drag": " Drag",
     "trigger.scroll": "Scroll",
     "trigger.unknown": "Unknown",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "Binding"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "Clear History",

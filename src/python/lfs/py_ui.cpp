@@ -5020,7 +5020,6 @@ namespace lfs::python {
             nb::arg("key"), "Translate a string key");
 
         // Menu bar UI functions (for Python-driven menus)
-        m.def("show_input_settings", &show_input_settings, "No-op stub; open input settings via lfs.input_settings panel");
         m.def("show_python_console", &show_python_console, "Show Python console");
         m.def(
             "get_time",

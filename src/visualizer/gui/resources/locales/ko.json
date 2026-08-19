@@ -26,7 +26,6 @@
     "file.mesh_to_splat": "메시를 스플랫으로 변환...",
     "file.exit": "종료",
     "edit": "편집",
-    "edit.input_settings": "입력 설정...",
     "select": "선택",
     "select.copy_selection": "선택 복사",
     "select.cut_selection": "선택 잘라내기",
@@ -56,7 +55,6 @@
     "view.debug_info": "디버그 정보..."
   },
   "window": {
-    "input_settings": "입력 설정",
     "export": "내보내기",
     "scene": "씬",
     "rendering": "렌더링",
@@ -777,6 +775,7 @@
     "general": "일반",
     "appearance": "모양",
     "input": "입력",
+    "key_bindings": "키 바인딩",
     "camera_navigation": "카메라 탐색",
     "navigation_mode": "탐색 모드",
     "camera_view_snap": "축 보기 스냅",
@@ -1296,13 +1295,11 @@
     "status_label": "상태: %s"
   },
   "input_settings": {
-    "title": "입력 설정",
     "active_profile": "활성 프로필:",
     "save_current_profile": "현재 프로필 저장",
     "reset_to_default": "기본값으로 재설정",
     "export": "내보내기...",
     "import": "가져오기...",
-    "action": "동작",
     "rebind": "다시 바인딩",
     "cancel": "취소",
     "replace": "교체",
@@ -1323,7 +1320,6 @@
     "click_again_double": "더블 클릭하려면 다시 클릭...",
     "tool_mode": "도구 모드",
     "select_tool_mode": "바인딩을 보거나 편집하려면 도구 모드 선택",
-    "current_bindings": "현재 바인딩",
     "global_bindings_hint": "전역 바인딩은 재정의되지 않는 한 모든 곳에 적용됩니다",
     "tool_bindings_hint": "도구별 바인딩은 전역 바인딩을 재정의합니다",
     "section.navigation": "내비게이션",
@@ -1428,8 +1424,7 @@
     "trigger.drag": " 드래그",
     "trigger.scroll": "스크롤",
     "trigger.unknown": "알 수 없음",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "바인딩"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "기록 지우기",
