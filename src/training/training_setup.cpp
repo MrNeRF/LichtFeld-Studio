@@ -1173,4 +1173,21 @@ namespace lfs::training {
         };
     }
 
+    void grant_headless_project_saves(
+        Trainer& trainer,
+        const lfs::core::param::TrainingParameters& params) {
+        if (params.dataset.output_path.empty()) {
+            LOG_WARN(
+                "Headless project saves not granted: no output path is set");
+            return;
+        }
+        trainer.set_live_project_snapshot(
+            params.dataset.output_path / "project.licht");
+        trainer.set_trainer_project_save_policy({
+            .on_completion = true,
+            .on_stop_or_error = true,
+            .at_step_boundaries = true,
+        });
+    }
+
 } // namespace lfs::training

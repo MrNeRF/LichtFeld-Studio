@@ -190,6 +190,10 @@ namespace lfs::vis {
         [[nodiscard]] virtual bool acceptsPostedWork() const { return true; }
         virtual void setShutdownRequestedCallback(std::function<void()> callback) = 0;
         virtual std::expected<void, std::string> startTraining() = 0;
+        [[nodiscard]] virtual std::optional<int>
+        trainingStartOverwriteConflict() {
+            return std::nullopt;
+        }
         virtual lfs::Result<void>
         projectSave(bool regenerate_preview = true) = 0;
         virtual lfs::Result<void>

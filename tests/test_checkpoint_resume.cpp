@@ -28,6 +28,7 @@
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "core/uuid.hpp"
 #include "io/loader.hpp"
 #include "io/loaders/checkpoint_loader.hpp"
 #include "io/project_document.hpp"
@@ -1401,6 +1402,7 @@ namespace {
             auto trainer = std::make_unique<lfs::training::Trainer>(scene);
             auto init_result = trainer->initialize(params);
             ASSERT_TRUE(init_result.has_value()) << "Failed to init trainer: " << init_result.error();
+            lfs::training::grant_headless_project_saves(*trainer, params);
 
             auto train_result = trainer->train();
             ASSERT_TRUE(train_result.has_value())
@@ -1422,7 +1424,18 @@ namespace {
         }
         EXPECT_EQ(resume_file_count, 0u);
 
-        std::uint64_t phase_one_generation = 0;
+        lfs::core::Uuid phase_one_project_uuid;
+        {
+            auto phase_one_reader =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(phase_one_reader)
+                << lfs::format_for_developer(
+                       phase_one_reader.error());
+            phase_one_project_uuid =
+                phase_one_reader->superblock()
+                    .project_uuid;
+        }
 
         // Phase 2: Hydrate the display shell, stream the embedded CKPT into
         // the trainer, and continue into a second project generation.
@@ -1431,7 +1444,6 @@ namespace {
                 lfs::io::project::ProjectDocument::open(project_path);
             ASSERT_TRUE(document)
                 << lfs::format_for_developer(document.error());
-            phase_one_generation = document->generation();
             const auto checkpoint_uuids =
                 document->checkpoint_uuids();
             ASSERT_EQ(checkpoint_uuids.size(), 1u);
@@ -1535,6 +1547,8 @@ namespace {
                 .set_optimization_params(
                     resumed_params.optimization);
             trainer->setParams(resumed_params);
+            lfs::training::grant_headless_project_saves(
+                *trainer, resumed_params);
 
             EXPECT_EQ(
                 trainer->getParams()
@@ -1558,9 +1572,45 @@ namespace {
             lfs::io::project::ProjectDocument::open(project_path);
         ASSERT_TRUE(continued)
             << lfs::format_for_developer(continued.error());
-        EXPECT_EQ(
-            continued->generation(),
-            phase_one_generation + 1);
+        {
+            auto continued_reader =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(continued_reader)
+                << lfs::format_for_developer(
+                       continued_reader.error());
+            EXPECT_EQ(
+                continued_reader->superblock()
+                    .project_uuid,
+                phase_one_project_uuid);
+        }
+        const auto continued_checkpoints =
+            continued->checkpoint_uuids();
+        ASSERT_EQ(continued_checkpoints.size(), 1u);
+        const auto* continued_checkpoint =
+            continued->find_checkpoint(
+                continued_checkpoints.front());
+        ASSERT_NE(continued_checkpoint, nullptr);
+        std::optional<int> continued_iteration;
+        const auto continued_header =
+            continued_checkpoint->visit_stream(
+                [&](std::istream& source,
+                    const std::uint64_t bytes)
+                    -> lfs::Result<void> {
+                    auto header =
+                        lfs::core::load_checkpoint_header(
+                            source, bytes);
+                    if (header) {
+                        continued_iteration =
+                            header->iteration;
+                    }
+                    return {};
+                });
+        ASSERT_TRUE(continued_header)
+            << lfs::format_for_developer(
+                   continued_header.error());
+        ASSERT_TRUE(continued_iteration.has_value());
+        EXPECT_EQ(*continued_iteration, total_iter);
 
         LOG_INFO(
             "Project resume test passed: strategy={}, sh_degree={}",
@@ -1640,6 +1690,8 @@ namespace {
             ASSERT_TRUE(init)
                 << "Failed to init trainer: "
                 << init.error();
+            lfs::training::grant_headless_project_saves(
+                *trainer, params);
             auto train = trainer->train();
             ASSERT_TRUE(train)
                 << "seed train failed: "
@@ -1793,6 +1845,8 @@ namespace {
             ASSERT_TRUE(init)
                 << "Failed to init trainer: "
                 << init.error();
+            lfs::training::grant_headless_project_saves(
+                *trainer, params);
             auto train = trainer->train();
             ASSERT_TRUE(train)
                 << "seed train failed: "
@@ -1862,6 +1916,282 @@ namespace {
         EXPECT_EQ(
             scene.getNodes().size(),
             node_count_before);
+
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    lfs::core::param::TrainingParameters make_tiny_headless_params(
+        const std::filesystem::path& output_path,
+        const int iterations) {
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path =
+            std::filesystem::path(TEST_DATA_DIR) / "bicycle";
+        params.dataset.images = TEST_IMAGES;
+        params.dataset.output_path = output_path;
+        params.optimization.iterations = iterations;
+        params.optimization.strategy = "mcmc";
+        params.optimization.sh_degree = 0;
+        params.optimization.headless = true;
+        params.optimization.max_cap = 100000;
+        params.optimization.refine_every = 100;
+        const size_t stop_refine =
+            static_cast<size_t>(iterations);
+        params.optimization.start_refine =
+            std::min<size_t>(500, stop_refine);
+        params.optimization.stop_refine = stop_refine;
+        return params;
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           UngrantedTrainerNeverWritesProjectFiles) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_ungranted_never_writes";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        constexpr int iterations = 3;
+        auto params = make_tiny_headless_params(
+            output_path, iterations);
+        params.optimization.save_steps = {1, 2};
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(
+            lfs::training::loadTrainingDataIntoScene(
+                params, scene))
+            << "load training data failed";
+        ASSERT_TRUE(
+            lfs::training::initializeTrainingModel(
+                params, scene))
+            << "init model failed";
+        auto trainer =
+            std::make_unique<lfs::training::Trainer>(
+                scene);
+        auto init = trainer->initialize(params);
+        ASSERT_TRUE(init)
+            << "Failed to init trainer: " << init.error();
+        auto train = trainer->train();
+        ASSERT_TRUE(train)
+            << "ungranted train failed: "
+            << lfs::format_for_developer(train.error());
+        trainer->shutdown();
+
+        EXPECT_FALSE(std::filesystem::exists(
+            output_path / "project.licht"));
+        bool found_licht = false;
+        for (const auto& entry :
+             std::filesystem::recursive_directory_iterator(
+                 output_path)) {
+            if (entry.path().extension() == ".licht") {
+                found_licht = true;
+                break;
+            }
+        }
+        EXPECT_FALSE(found_licht)
+            << "ungranted trainer wrote a .licht file under "
+            << output_path;
+
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           UngrantedTrainerStillHonorsExplicitSave) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_ungranted_explicit_save";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        constexpr int iterations = 3;
+        auto params = make_tiny_headless_params(
+            output_path, iterations);
+        params.optimization.save_steps = {1};
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(
+            lfs::training::loadTrainingDataIntoScene(
+                params, scene))
+            << "load training data failed";
+        ASSERT_TRUE(
+            lfs::training::initializeTrainingModel(
+                params, scene))
+            << "init model failed";
+        auto trainer =
+            std::make_unique<lfs::training::Trainer>(
+                scene);
+        auto init = trainer->initialize(params);
+        ASSERT_TRUE(init)
+            << "Failed to init trainer: " << init.error();
+        auto train = trainer->train();
+        ASSERT_TRUE(train)
+            << "ungranted train failed: "
+            << lfs::format_for_developer(train.error());
+
+        EXPECT_FALSE(std::filesystem::exists(
+            output_path / "project.licht"));
+        const auto explicit_path =
+            output_path / "explicit.licht";
+        auto saved = trainer->save_project_to(
+            explicit_path,
+            trainer->get_current_iteration());
+        ASSERT_TRUE(saved) << saved.error();
+        EXPECT_TRUE(std::filesystem::is_regular_file(
+            explicit_path));
+        trainer->shutdown();
+
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           RequestProjectSaveWithoutDestinationFails) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_request_save_no_dest";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        constexpr int iterations = 3;
+        auto params = make_tiny_headless_params(
+            output_path, iterations);
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(
+            lfs::training::loadTrainingDataIntoScene(
+                params, scene))
+            << "load training data failed";
+        ASSERT_TRUE(
+            lfs::training::initializeTrainingModel(
+                params, scene))
+            << "init model failed";
+        auto trainer =
+            std::make_unique<lfs::training::Trainer>(
+                scene);
+        auto init = trainer->initialize(params);
+        ASSERT_TRUE(init)
+            << "Failed to init trainer: " << init.error();
+
+        const auto request_id =
+            trainer->request_project_save();
+        ASSERT_NE(request_id, 0u);
+        const auto metrics =
+            trainer->get_project_snapshot_metrics();
+        EXPECT_EQ(metrics.last_failed_request_id,
+                  request_id);
+        EXPECT_NE(
+            metrics.last_writer_error.find(
+                "No project destination is bound"),
+            std::string::npos)
+            << metrics.last_writer_error;
+        trainer->shutdown();
+
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           SecondRunCompactsLeftoverProjectFile) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_second_run_compacts_leftover";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        constexpr int iterations = 3;
+        auto params = make_tiny_headless_params(
+            output_path, iterations);
+        params.optimization.save_steps = {1};
+
+        const auto project_path =
+            output_path / "project.licht";
+
+        {
+            lfs::core::Scene scene;
+            ASSERT_TRUE(
+                lfs::training::loadTrainingDataIntoScene(
+                    params, scene))
+                << "load training data failed";
+            ASSERT_TRUE(
+                lfs::training::initializeTrainingModel(
+                    params, scene))
+                << "init model failed";
+            auto trainer =
+                std::make_unique<lfs::training::Trainer>(
+                    scene);
+            auto init = trainer->initialize(params);
+            ASSERT_TRUE(init)
+                << "Failed to init trainer: "
+                << init.error();
+            lfs::training::grant_headless_project_saves(
+                *trainer, params);
+            auto train = trainer->train();
+            ASSERT_TRUE(train)
+                << "run A train failed: "
+                << lfs::format_for_developer(
+                       train.error());
+            trainer->shutdown();
+        }
+
+        ASSERT_TRUE(std::filesystem::is_regular_file(
+            project_path));
+        const auto s1 =
+            std::filesystem::file_size(project_path);
+        ASSERT_GT(s1, 0u);
+        lfs::core::Uuid project_uuid;
+        {
+            auto run_a_reader =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(run_a_reader)
+                << lfs::format_for_developer(
+                       run_a_reader.error());
+            project_uuid =
+                run_a_reader->superblock().project_uuid;
+        }
+
+        {
+            lfs::core::Scene scene;
+            ASSERT_TRUE(
+                lfs::training::loadTrainingDataIntoScene(
+                    params, scene))
+                << "load training data failed";
+            ASSERT_TRUE(
+                lfs::training::initializeTrainingModel(
+                    params, scene))
+                << "init model failed";
+            auto trainer =
+                std::make_unique<lfs::training::Trainer>(
+                    scene);
+            auto init = trainer->initialize(params);
+            ASSERT_TRUE(init)
+                << "Failed to init trainer: "
+                << init.error();
+            lfs::training::grant_headless_project_saves(
+                *trainer, params);
+            auto train = trainer->train();
+            ASSERT_TRUE(train)
+                << "run B train failed: "
+                << lfs::format_for_developer(
+                       train.error());
+            trainer->shutdown();
+        }
+
+        ASSERT_TRUE(std::filesystem::is_regular_file(
+            project_path));
+        const auto s2 =
+            std::filesystem::file_size(project_path);
+        auto run_b_reader =
+            lfs::io::project::ProjectReader::open(
+                project_path);
+        ASSERT_TRUE(run_b_reader)
+            << lfs::format_for_developer(
+                   run_b_reader.error());
+        EXPECT_EQ(
+            run_b_reader->superblock().project_uuid,
+            project_uuid);
+        EXPECT_LT(s2, s1 + s1 / 2);
 
         std::filesystem::remove_all(output_path, ec);
     }

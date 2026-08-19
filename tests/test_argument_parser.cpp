@@ -102,6 +102,64 @@ TEST(ArgumentParserTest, HeadlessResumeSelectsEmbeddedCheckpointFlow) {
     EXPECT_FALSE((*parsed)->project_path);
 }
 
+TEST(ArgumentParserTest,
+     TrainingSaveProjectAtIterDefaultsToOutputProjectLicht) {
+    const auto data_path =
+        make_test_path("lfs_arg_parser_save_project_data");
+    const auto output_path =
+        make_test_path("lfs_arg_parser_save_project_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--save-project-at-iter",
+        "7000",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_EQ(
+        (*parsed)->save_project_at_iteration,
+        std::optional<size_t>(7000));
+    EXPECT_EQ(
+        (*parsed)->save_project_path,
+        std::filesystem::path(output_path) / "project.licht");
+}
+
+TEST(ArgumentParserTest,
+     ResumeSaveProjectAtIterLeavesPathEmptyWithoutOutput) {
+    const auto directory = make_test_path(
+        "lfs_arg_parser_resume_save_project");
+    const auto project =
+        std::filesystem::path(directory) / "x.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--resume",
+        project_text.c_str(),
+        "--headless",
+        "--save-project-at-iter",
+        "7000",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_EQ(
+        (*parsed)->save_project_at_iteration,
+        std::optional<size_t>(7000));
+    EXPECT_TRUE((*parsed)->save_project_path.empty());
+    EXPECT_NE(
+        (*parsed)->save_project_path,
+        std::filesystem::path("project.licht"));
+}
+
 TEST(ArgumentParserTest, RemovedProjectAndRecoverFlagsAreUnknown) {
     const auto directory =
         make_test_path(

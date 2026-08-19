@@ -1302,6 +1302,13 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     apply_step_scaling(*params);
     apply_ppisp_defaults(*params);
 
+    if (params->save_project_at_iteration &&
+        params->save_project_path.empty() &&
+        !params->dataset.output_path.empty()) {
+        params->save_project_path =
+            params->dataset.output_path / "project.licht";
+    }
+
     if (auto error = params->validate(); !error.empty())
         return std::unexpected("ERROR: " + error);
 

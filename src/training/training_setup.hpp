@@ -34,6 +34,12 @@ namespace lfs::training {
         int iteration = 0;
     };
 
+    // Headless sessions have no project lifecycle; the application grants the
+    // trainer its standing save destination and triggers here.
+    void grant_headless_project_saves(
+        Trainer& trainer,
+        const lfs::core::param::TrainingParameters& params);
+
     /// Construct + initialize Trainer on the live scene, then stream the
     /// document's CKPT payload via load_checkpoint(istream). Does not clear
     /// the scene and does not install into TrainerManager.

@@ -87,6 +87,8 @@ namespace lfs::vis {
         }
         void setShutdownRequestedCallback(std::function<void()> callback) override;
         std::expected<void, std::string> startTraining() override;
+        [[nodiscard]] std::optional<int>
+        trainingStartOverwriteConflict() override;
         lfs::Result<void>
         projectSave(bool regenerate_preview = true) override;
         lfs::Result<void>
@@ -263,6 +265,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
         friend class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
         friend class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+        friend class VisualizerImplResetTest_StartTrainingPreparesProjectAndGrantsSaves_Test;
+        friend class VisualizerImplResetTest_StartConflictSeesDiskCheckpointAfterTrainerReplacement_Test;
         friend class VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
         friend class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;

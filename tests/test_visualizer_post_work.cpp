@@ -4562,9 +4562,11 @@ namespace lfs::vis {
                     lfs::training::Trainer>(scene));
             auto* const trainer = viewer.getTrainer();
             ASSERT_NE(trainer, nullptr);
+            const auto bound =
+                trainer->bound_project_path();
+            ASSERT_TRUE(bound.has_value());
             EXPECT_EQ(
-                trainer->live_or_default_project_path()
-                    .lexically_normal(),
+                bound->lexically_normal(),
                 project_path.lexically_normal());
             const auto request_id =
                 trainer->request_project_save();
@@ -4583,6 +4585,241 @@ namespace lfs::vis {
                         ->filename(),
                     project_path.filename());
             }
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StartTrainingPreparesProjectAndGrantsSaves) {
+        const auto& temporary = temporary_.path;
+        const auto output_path =
+            temporary / "train-start-out";
+        std::filesystem::create_directories(output_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_FALSE(lifecycle->hasSourcePath());
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            auto params = trainer->getParams();
+            params.dataset.output_path = output_path;
+            trainer->setParams(params);
+
+            auto prepared =
+                lifecycle->prepareTrainingStartProject();
+            ASSERT_TRUE(prepared)
+                << lfs::format_for_developer(
+                       prepared.error());
+            ASSERT_TRUE(lifecycle->hasSourcePath());
+            ASSERT_TRUE(
+                lifecycle->document_ &&
+                lifecycle->document_->source_path());
+            EXPECT_EQ(
+                lifecycle->document_->source_path()
+                    ->filename(),
+                "project.licht");
+            const auto bound =
+                trainer->bound_project_path();
+            ASSERT_TRUE(bound.has_value());
+            EXPECT_EQ(
+                bound->lexically_normal(),
+                lifecycle->document_->source_path()
+                    ->lexically_normal());
+            const auto policy =
+                trainer->trainer_project_save_policy();
+            EXPECT_TRUE(policy.on_completion);
+            EXPECT_TRUE(policy.at_step_boundaries);
+            EXPECT_FALSE(policy.on_stop_or_error);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StartConflictSeesDiskCheckpointAfterTrainerReplacement) {
+        // Reset Training replaces the trainer, so snapshot
+        // adoption via metrics is gone while the master
+        // still holds a checkpoint the next start would
+        // overwrite.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "start-conflict-disk.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Train model");
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            const auto bound =
+                trainer->bound_project_path();
+            ASSERT_TRUE(bound.has_value());
+            EXPECT_EQ(
+                bound->lexically_normal(),
+                project_path.lexically_normal());
+            const auto request_id =
+                trainer->request_project_save();
+            ASSERT_NE(request_id, 0u);
+            {
+                std::lock_guard lock(
+                    trainer->project_snapshot_mutex_);
+                ASSERT_TRUE(
+                    trainer->requested_project_path_);
+                EXPECT_EQ(
+                    trainer->requested_project_path_
+                        ->lexically_normal(),
+                    project_path.lexically_normal());
+            }
+
+            // Write a bound CKPT onto the titled master without
+            // adopting it into the live document. SCNG must bind
+            // the chapter and commit.snapshot_uuid must match the
+            // checkpoint UUID or save refuses.
+            const auto checkpoint_uuid =
+                lfs::core::generate_uuid_v4();
+            const auto training_uuid =
+                lfs::core::generate_uuid_v4();
+            const auto root_uuid =
+                lfs::core::generate_uuid_v4();
+            {
+                auto on_disk =
+                    lfs::test::licht::require_result_ptr(
+                        lfs::io::project::
+                            ProjectDocument::open(
+                                *bound,
+                                {
+                                    .reader = {},
+                                    .geometry = {},
+                                    .defer_geometry_payloads =
+                                        true,
+                                }));
+                lfs::test::licht::require_status(
+                    on_disk->edit_scene_graph()
+                        .upsert_node(
+                            lfs::io::project::
+                                SceneNodeRecord{
+                                    .uuid = root_uuid,
+                                    .type = "group",
+                                    .name = "Root",
+                                    .child_order = 0,
+                                }));
+                lfs::test::licht::require_status(
+                    on_disk->edit_scene_graph()
+                        .upsert_node(
+                            lfs::io::project::
+                                SceneNodeRecord{
+                                    .uuid = training_uuid,
+                                    .type = "splat",
+                                    .name = "Training",
+                                    .parent_uuid = root_uuid,
+                                    .child_order = 0,
+                                    .payload =
+                                        lfs::io::project::
+                                            PayloadBinding{
+                                                .fourcc =
+                                                    "CKPT",
+                                                .instance_uuid =
+                                                    checkpoint_uuid,
+                                                .source_kind =
+                                                    "training",
+                                            },
+                                }));
+                lfs::test::licht::require_status(
+                    on_disk->edit_scene_graph()
+                        .set_training_model_uuid(
+                            training_uuid));
+                lfs::test::licht::require_status(
+                    on_disk->set_checkpoint(
+                        checkpoint_uuid,
+                        make_training_autosave_checkpoint_payload(
+                            checkpoint_uuid)));
+                auto save_options =
+                    lfs::test::licht::
+                        deterministic_document_save_options(
+                            0x76000021, 2, 3);
+                save_options.commit.snapshot_uuid =
+                    checkpoint_uuid;
+                (void)lfs::test::licht::require_result(
+                    on_disk->save(
+                        *bound, save_options));
+            }
+
+            ASSERT_NE(lifecycle->document_, nullptr);
+            EXPECT_TRUE(
+                lifecycle->document_->checkpoint_uuids()
+                    .empty());
+
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            ASSERT_NE(viewer.getTrainer(), nullptr);
+            EXPECT_EQ(
+                viewer.getTrainer()
+                    ->get_current_iteration(),
+                0);
+            EXPECT_TRUE(
+                lifecycle->document_->checkpoint_uuids()
+                    .empty());
+
+            const auto conflict =
+                lifecycle->trainingStartOverwriteConflict();
+            ASSERT_TRUE(conflict.has_value());
+            EXPECT_GE(*conflict, -1);
+            EXPECT_EQ(*conflict, 11);
         }
     }
 
@@ -5658,9 +5895,10 @@ namespace lfs::vis {
             ASSERT_TRUE(viewer.pending_close_save_path_);
             EXPECT_EQ(
                 *viewer.pending_close_save_path_, chosen);
-            EXPECT_EQ(
-                trainer->live_or_default_project_path(),
-                chosen);
+            const auto bound =
+                trainer->bound_project_path();
+            ASSERT_TRUE(bound.has_value());
+            EXPECT_EQ(*bound, chosen);
         }
     }
 

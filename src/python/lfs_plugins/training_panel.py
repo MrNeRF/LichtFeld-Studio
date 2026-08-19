@@ -2207,6 +2207,15 @@ class TrainingPanel(Panel):
         if params and params.has_params() and params.enable_eval:
             self._sync_eval_steps_with_save_steps(params)
 
+        conflict = lf.training_start_overwrite_conflict()
+        if conflict is not None:
+            self._show_overwrite_dialog(int(conflict))
+            return
+
+        self._start_after_consent()
+
+    def _start_after_consent(self):
+        params = lf.optimization_params()
         error = params.validate() if params and params.has_params() else ""
         if error:
             btn_mcmc = tr("training.conflict.btn_use_mcmc")
@@ -2232,6 +2241,28 @@ class TrainingPanel(Panel):
             self._show_save_pc_dialog()
         else:
             lf.start_training()
+
+    def _show_overwrite_dialog(self, conflict):
+        btn_overwrite = tr("training.overwrite.btn_overwrite_start")
+        btn_cancel = tr("training.conflict.btn_cancel")
+
+        def _on_result(button, _o=btn_overwrite):
+            if button == _o:
+                self._start_after_consent()
+
+        if conflict >= 0:
+            title = tr("training.overwrite.title")
+            message = tr("training.overwrite.message").format(iteration=conflict)
+        else:
+            title = tr("training.overwrite.existing_title")
+            message = tr("training.overwrite.existing_message")
+
+        lf.ui.confirm_dialog(
+            title,
+            message,
+            [btn_overwrite, btn_cancel],
+            _on_result,
+        )
 
     def _should_offer_pc_save(self):
         scene = lf.get_scene()

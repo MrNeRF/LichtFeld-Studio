@@ -76,7 +76,7 @@ namespace lfs::python {
 
             auto message = e.user_stopped
                                ? std::format("Training stopped by user at iteration {}.\n\n"
-                                             "Checkpoint saved; resume is available from the training panel.",
+                                             "Resume is available from the training panel. Save the project to keep this state.",
                                              e.iteration)
                                : std::format("Training completed successfully.\n\n"
                                              "{} iterations | loss {:.6f} | {}",

@@ -50,6 +50,8 @@ namespace lfs::vis {
     class VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
     class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
     class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+    class VisualizerImplResetTest_StartTrainingPreparesProjectAndGrantsSaves_Test;
+    class VisualizerImplResetTest_StartConflictSeesDiskCheckpointAfterTrainerReplacement_Test;
     class VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
@@ -193,6 +195,14 @@ namespace lfs::vis::project {
                 std::nullopt,
             bool allow_existing_destination_replacement = false);
         [[nodiscard]] lfs::Result<void>
+        prepareTrainingStartProject();
+        // Returns the blocking conflict a fresh training start would overwrite, if any:
+        // the bound checkpoint iteration of the open project (in memory or on the
+        // titled master), or -1 when an untitled session's default destination file
+        // already exists or an existing master is unreadable (contents unknown).
+        [[nodiscard]] std::optional<int>
+        trainingStartOverwriteConflict();
+        [[nodiscard]] lfs::Result<void>
         prepareForEditModeTransition();
 
         [[nodiscard]] std::optional<std::filesystem::path>
@@ -225,6 +235,8 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
         friend class lfs::vis::VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartTrainingPreparesProjectAndGrantsSaves_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartConflictSeesDiskCheckpointAfterTrainerReplacement_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;

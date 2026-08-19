@@ -49,12 +49,14 @@
 #include <chrono>
 #include <cstring>
 #include <cwctype>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <istream>
 #include <ranges>
 #include <span>
+#include <system_error>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -111,6 +113,34 @@ namespace lfs::vis::project {
                     code, std::move(message),
                     std::move(detail), field);
             }
+        }
+
+        [[nodiscard]] std::optional<int>
+        readBoundCheckpointHeaderIteration(
+            const lfs::io::project::LazyChunkValue&
+                checkpoint) {
+            std::optional<int> stored_iteration;
+            auto visited = checkpoint.visit_stream(
+                [&](std::istream& source,
+                    const std::uint64_t bytes)
+                    -> lfs::Result<void> {
+                    auto header =
+                        lfs::core::load_checkpoint_header(
+                            source, bytes);
+                    if (!header) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            "Could not read the bound checkpoint header.",
+                            header.error(),
+                            "CKPT.header");
+                    }
+                    stored_iteration = header->iteration;
+                    return {};
+                });
+            if (!visited || !stored_iteration) {
+                return std::nullopt;
+            }
+            return stored_iteration;
         }
 
         [[nodiscard]] std::string developerError(
@@ -2555,6 +2585,163 @@ namespace lfs::vis::project {
             });
     }
 
+    lfs::Result<void>
+    ProjectLifecycle::prepareTrainingStartProject() {
+        auto* trainer = viewer_.getTrainer();
+        if (!trainer) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Training cannot start without a trainer.",
+                "A trainer must be installed before a project can be prepared",
+                "project.training");
+        }
+
+        std::filesystem::path destination;
+        if (document_ && document_->source_path()) {
+            destination = recovered_master_path_.value_or(
+                *document_->source_path());
+        } else {
+            const auto output =
+                trainer->getParams().dataset.output_path;
+            if (output.empty()) {
+                return fail<void>(
+                    lfs::ErrorCode::InvalidArgument,
+                    "Training cannot create a project without an output path.",
+                    "dataset.output_path is empty",
+                    "dataset.output_path");
+            }
+            destination = output / "project.licht";
+        }
+
+        if (!hasSourcePath()) {
+            if (auto saved = saveAs(
+                    destination, /*regenerate_preview=*/false, true);
+                !saved) {
+                return saved;
+            }
+            // saveAs publishes on a worker. Join the
+            // untitled create so the document has a
+            // source path before the trainer is bound
+            // and training starts.
+            if (project_write_purpose_ ==
+                    ProjectWritePurpose::SaveAs &&
+                project_write_thread_.joinable()) {
+                project_write_thread_.join();
+                settleProjectWrite();
+            }
+            if (!hasSourcePath()) {
+                return fail<void>(
+                    lfs::ErrorCode::Unavailable,
+                    "The training project could not be created.",
+                    last_project_write_error_.empty()
+                        ? "Untitled saveAs did not bind a source path"
+                        : last_project_write_error_,
+                    "project.training");
+            }
+        }
+
+        bindTrainerSnapshotTarget();
+        trainer->set_trainer_project_save_policy({
+            .on_completion = true,
+            .on_stop_or_error = false,
+            .at_step_boundaries = true,
+        });
+        return {};
+    }
+
+    std::optional<int>
+    ProjectLifecycle::trainingStartOverwriteConflict() {
+        static_cast<void>(adoptCompletedTrainingSnapshot());
+        auto* trainer = viewer_.getTrainer();
+        if (!trainer) {
+            return std::nullopt;
+        }
+        if (trainer->get_current_iteration() > 0) {
+            return std::nullopt;
+        }
+        if (hasSourcePath() && document_) {
+            const auto uuids =
+                document_->checkpoint_uuids();
+            if (!uuids.empty()) {
+                if (cached_bound_checkpoint_iteration_) {
+                    return *cached_bound_checkpoint_iteration_;
+                }
+                const auto* checkpoint =
+                    document_->find_checkpoint(uuids.front());
+                if (!checkpoint) {
+                    return std::nullopt;
+                }
+                const auto stored_iteration =
+                    readBoundCheckpointHeaderIteration(
+                        *checkpoint);
+                if (!stored_iteration) {
+                    return std::nullopt;
+                }
+                cached_bound_checkpoint_iteration_ =
+                    stored_iteration;
+                return stored_iteration;
+            }
+
+            const auto master_path =
+                recovered_master_path_.value_or(
+                    *document_->source_path());
+            try {
+                auto opened = ProjectDocument::open(
+                    master_path,
+                    {
+                        .reader = {},
+                        .geometry = {},
+                        .defer_geometry_payloads = true,
+                    });
+                if (!opened) {
+                    return -1;
+                }
+                const auto disk_uuids =
+                    opened->checkpoint_uuids();
+                if (disk_uuids.empty()) {
+                    return std::nullopt;
+                }
+                const auto* checkpoint =
+                    opened->find_checkpoint(
+                        disk_uuids.front());
+                if (!checkpoint) {
+                    return -1;
+                }
+                const auto stored_iteration =
+                    readBoundCheckpointHeaderIteration(
+                        *checkpoint);
+                if (!stored_iteration) {
+                    return -1;
+                }
+                return stored_iteration;
+            } catch (const lfs::Exception& exception) {
+                LOG_WARN(
+                    "Training start overwrite probe failed to inspect {}: {}",
+                    lfs::core::path_to_utf8(master_path),
+                    developerError(exception.error()));
+                return -1;
+            } catch (const std::exception& exception) {
+                LOG_WARN(
+                    "Training start overwrite probe failed to inspect {}: {}",
+                    lfs::core::path_to_utf8(master_path),
+                    exception.what());
+                return -1;
+            }
+        }
+
+        const auto output =
+            trainer->getParams().dataset.output_path;
+        if (output.empty()) {
+            return std::nullopt;
+        }
+        std::error_code ec;
+        if (std::filesystem::exists(
+                output / "project.licht", ec)) {
+            return -1;
+        }
+        return std::nullopt;
+    }
+
     bool ProjectLifecycle::isTrainingCheckpointStale()
         const {
         auto* trainer = viewer_.getTrainer();
@@ -2574,25 +2761,9 @@ namespace lfs::vis::project {
         if (!checkpoint) {
             return true;
         }
-        std::optional<int> stored_iteration;
-        auto visited = checkpoint->visit_stream(
-            [&](std::istream& source,
-                const std::uint64_t bytes)
-                -> lfs::Result<void> {
-                auto header =
-                    lfs::core::load_checkpoint_header(
-                        source, bytes);
-                if (!header) {
-                    return fail<void>(
-                        lfs::ErrorCode::DataLoss,
-                        "Could not read the bound checkpoint header.",
-                        header.error(),
-                        "CKPT.header");
-                }
-                stored_iteration = header->iteration;
-                return {};
-            });
-        if (!visited || !stored_iteration) {
+        const auto stored_iteration =
+            readBoundCheckpointHeaderIteration(*checkpoint);
+        if (!stored_iteration) {
             return true;
         }
         cached_bound_checkpoint_iteration_ =

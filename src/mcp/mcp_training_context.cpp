@@ -138,6 +138,7 @@ namespace lfs::mcp {
             scene_.reset();
             return std::unexpected(result.error());
         }
+        training::grant_headless_project_saves(*trainer_, params_);
 
         LOG_INFO("MCP: Loaded dataset from {}", core::path_to_utf8(path));
         return {};
@@ -178,6 +179,7 @@ namespace lfs::mcp {
             scene_.reset();
             return std::unexpected(result.error());
         }
+        training::grant_headless_project_saves(*trainer_, params_);
 
         LOG_INFO("MCP: Loaded checkpoint from {}", core::path_to_utf8(path));
         return {};

@@ -248,6 +248,9 @@ def prepare_training_from_scene() -> None:
 def start_training() -> None:
     """Start training with current parameters"""
 
+def training_start_overwrite_conflict() -> int | None:
+    """Return the blocking training-start overwrite conflict, if any"""
+
 def pause_training() -> None:
     """Pause the current training run"""
 

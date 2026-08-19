@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "training/training_manager.hpp"
+#include "core/error.hpp"
 #include "core/error_envelope.hpp"
 #include "core/error_reporter.hpp"
 #include "core/events.hpp"
@@ -1091,15 +1092,36 @@ namespace lfs::vis {
         }
     }
 
-    void TrainerManager::requestSaveProject() {
-        if (trainer_ && isTrainingActive()) {
+    bool TrainerManager::requestSaveProject() {
+        if (viewer_) {
+            const bool dispatched = viewer_->postWork({
+                .run = [viewer = viewer_] {
+                    if (auto saved = viewer->projectSave(true);
+                        !saved) {
+                        LOG_ERROR(
+                            "Project save failed: {}",
+                            lfs::format_for_developer(
+                                saved.error()));
+                    }
+                },
+                .cancel = {},
+            });
+            if (!dispatched) {
+                LOG_WARN("Project save request dropped during viewer shutdown");
+            }
+            return dispatched;
+        }
+
+        if (trainer_ && isTrainingActive() &&
+            trainer_->bound_project_path()) {
             static_cast<void>(
                 trainer_
                     ->request_project_save());
             LOG_INFO("Project save requested at iteration {}", getCurrentIteration());
-        } else {
-            LOG_WARN("Cannot save project snapshot - training not active");
+            return true;
         }
+        LOG_WARN("Cannot save project snapshot - training not active or no project destination is bound");
+        return false;
     }
 
     bool TrainerManager::waitForCompletion() {
@@ -1785,6 +1807,15 @@ namespace lfs::vis {
 
         // Training control commands
         cmd::StartTraining::when([this](const auto&) {
+            if (viewer_) {
+                if (auto result = viewer_->startTraining();
+                    !result) {
+                    LOG_ERROR(
+                        "Failed to start training: {}",
+                        result.error());
+                }
+                return;
+            }
             startTraining();
         });
 

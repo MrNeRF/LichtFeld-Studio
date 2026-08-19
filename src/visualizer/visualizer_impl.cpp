@@ -2993,9 +2993,28 @@ namespace lfs::vis {
             trainer_manager_->resumeTraining();
             return {};
         }
+        if (project_lifecycle_) {
+            if (auto prepared =
+                    project_lifecycle_
+                        ->prepareTrainingStartProject();
+                !prepared) {
+                return std::unexpected(
+                    lfs::format_for_developer(
+                        prepared.error()));
+            }
+        }
         if (!trainer_manager_->startTraining())
             return std::unexpected("Failed to start training");
         return {};
+    }
+
+    std::optional<int>
+    VisualizerImpl::trainingStartOverwriteConflict() {
+        if (!project_lifecycle_) {
+            return std::nullopt;
+        }
+        return project_lifecycle_
+            ->trainingStartOverwriteConflict();
     }
 
     lfs::Result<void>

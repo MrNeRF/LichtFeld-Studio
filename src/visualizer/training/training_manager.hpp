@@ -72,7 +72,7 @@ namespace lfs::vis {
         void pauseTraining();
         void resumeTraining();
         void stopTraining();
-        void requestSaveProject();
+        bool requestSaveProject();
         // Suppress the completion notification modal for the next TrainingCompleted
         // dispatch (stop initiated by New Project / app close / reset, issue #1604).
         void suppressCompletionNotification() { suppress_completion_notification_.store(true, std::memory_order_relaxed); }

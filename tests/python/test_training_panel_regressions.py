@@ -32,6 +32,8 @@ def _install_lf_stub(monkeypatch):
     lf_stub.optimization_params = lambda: None
     lf_stub.dataset_params = lambda: None
     lf_stub.get_scene = lambda: None
+    lf_stub.start_training = lambda: None
+    lf_stub.training_start_overwrite_conflict = lambda: None
     lf_stub.loss_buffer = lambda: []
     lf_stub.push_loss_to_element = lambda _element, _data: (0.0, 0.0)
     lf_stub.get_render_settings = lambda: None

@@ -348,6 +348,11 @@ namespace lfs::app {
                 cli_params.save_project_at_iteration;
             checkpoint_params.save_project_path =
                 cli_params.save_project_path;
+            if (checkpoint_params.save_project_at_iteration &&
+                checkpoint_params.save_project_path.empty()) {
+                checkpoint_params.save_project_path =
+                    checkpoint_params.dataset.output_path / "project.licht";
+            }
             checkpoint_params.cli_iterations_set =
                 cli_params.cli_iterations_set;
 
@@ -490,6 +495,9 @@ namespace lfs::app {
                                 installed.error());
                             return 1;
                         }
+                        training::grant_headless_project_saves(
+                            *installed->trainer,
+                            effective_params);
                         manager->setTrainer(
                             std::move(installed->trainer));
                     } else {
@@ -504,6 +512,8 @@ namespace lfs::app {
                                     .python_scripts);
                         }
                         trainer->setParams(effective_params);
+                        training::grant_headless_project_saves(
+                            *trainer, effective_params);
                         manager->setTrainer(std::move(trainer));
                     }
                 }
@@ -701,6 +711,8 @@ namespace lfs::app {
                     }
                     auto trainer =
                         std::move(installed->trainer);
+                    training::grant_headless_project_saves(
+                        *trainer, project->params);
                     LOG_INFO(
                         "Project display hydration complete; full "
                         "trainer state restored at iteration {}",
@@ -754,6 +766,8 @@ namespace lfs::app {
                         LOG_ERROR("Failed to initialize trainer: {}", result.error());
                         return 1;
                     }
+                    training::grant_headless_project_saves(
+                        *trainer, *ckpt_params_result);
 
                     const auto ckpt_result = trainer->load_checkpoint(*params->resume_checkpoint);
                     if (!ckpt_result) {
@@ -804,6 +818,8 @@ namespace lfs::app {
                         LOG_ERROR("Failed to initialize trainer: {}", result.error());
                         return 1;
                     }
+                    training::grant_headless_project_saves(
+                        *trainer, *params);
 
                     core::Tensor::trim_memory_pool();
 
