@@ -15,6 +15,11 @@
     "file.recent_missing_message": "プロジェクトファイルが見つかりません:\n{path}",
     "file.remove_from_recent": "最近使ったプロジェクトから削除",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "インポート",
+    "file.import_failed": "インポートに失敗しました",
+    "file.import_failed_message": "インポートできませんでした:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "選択したフォルダーは対応データセットとして認識されませんでした:\n{path}",
+    "file.checkpoint_not_recognized": "選択したファイルは有効なチェックポイントとして認識されませんでした:\n{path}",
     "file.import_dataset": "データセットをインポート",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USDをインポート",
     "file.import_mesh": "メッシュをインポート",
@@ -1263,7 +1268,11 @@
     "min_track_length": "最小トラック長",
     "min_track_length_hint": "少なくともこの枚数の画像で観測された Sparse 点を保持します。0 でフィルタリングを無効にします。",
     "min_track_length_init_warning": "初期化 PLY が設定されている間は無視されます。",
-    "apply_auto_crop": "自動クロップを適用"
+    "apply_auto_crop": "自動クロップを適用",
+    "save_title": "プロジェクトを保存しますか？",
+    "save_message": "新しいデータセットを読み込む前に、現在のプロジェクトを保存しますか？",
+    "save_and_load": "保存して読み込む",
+    "load_without_saving": "保存せずに読み込む"
   },
   "notification": {
     "dropped_not_recognized": "ドロップされた",
@@ -2393,6 +2402,14 @@
       "title": "トレーナーを復元できませんでした",
       "message": "プロジェクトモデルは表示できますが、学習を再開できませんでした。データセットのパスとログを確認してください。"
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio が予期せず終了しました",
+    "body": "{} の復旧ファイルが見つかりました。（保存日時 {}）",
+    "unsaved_session": "未保存のセッション",
+    "recover": "復旧",
+    "open_saved": "保存済みを開く",
+    "skip": "スキップして新規作成"
   },
   "startup_recent": {
     "title": "最近のプロジェクト",

@@ -15,6 +15,11 @@
     "file.recent_missing_message": "No se encontró el archivo de proyecto:\n{path}",
     "file.remove_from_recent": "Eliminar de recientes",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Importar",
+    "file.import_failed": "Error de importación",
+    "file.import_failed_message": "No se pudo importar:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "La carpeta seleccionada no se reconoce como un dataset compatible:\n{path}",
+    "file.checkpoint_not_recognized": "El archivo seleccionado no se reconoce como un checkpoint válido:\n{path}",
     "file.import_dataset": "Importar Dataset",
     "file.import_ply": "Importar PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Importar Mesh",
@@ -1263,7 +1268,11 @@
     "min_track_length": "Longitud mínima de pista",
     "min_track_length_hint": "Conserva los puntos Sparse observados en al menos este número de imágenes. 0 desactiva el filtrado.",
     "min_track_length_init_warning": "Se ignora mientras se haya definido Init PLY.",
-    "apply_auto_crop": "Aplicar Recorte Automático"
+    "apply_auto_crop": "Aplicar Recorte Automático",
+    "save_title": "¿Guardar el proyecto?",
+    "save_message": "¿Guardar el proyecto actual antes de cargar el nuevo dataset?",
+    "save_and_load": "Guardar y cargar",
+    "load_without_saving": "Cargar sin guardar"
   },
   "notification": {
     "dropped_not_recognized": "El elemento soltado",
@@ -2393,6 +2402,14 @@
       "title": "Entrenador no restaurado",
       "message": "El modelo del proyecto está disponible para visualización, pero no se pudo reanudar el entrenamiento. Compruebe la ruta del conjunto de datos y los registros."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio se cerró inesperadamente",
+    "body": "Se encontró un archivo de recuperación para {}. (guardado {})",
+    "unsaved_session": "una sesión sin guardar",
+    "recover": "Recuperar",
+    "open_saved": "Abrir guardado",
+    "skip": "Omitir y crear nuevo"
   },
   "startup_recent": {
     "title": "Proyectos recientes",

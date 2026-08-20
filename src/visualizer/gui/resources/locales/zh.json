@@ -15,6 +15,11 @@
     "file.recent_missing_message": "找不到项目文件：\n{path}",
     "file.remove_from_recent": "从最近打开中移除",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "导入",
+    "file.import_failed": "导入失败",
+    "file.import_failed_message": "无法导入：\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "所选文件夹未被识别为受支持的数据集：\n{path}",
+    "file.checkpoint_not_recognized": "所选文件未被识别为有效检查点：\n{path}",
     "file.import_dataset": "导入数据集",
     "file.import_ply": "导入PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "导入网格",
@@ -1263,7 +1268,11 @@
     "min_track_length": "最小轨迹长度",
     "min_track_length_hint": "保留至少在这么多图像中观测到的 Sparse 点。0 可禁用筛选。",
     "min_track_length_init_warning": "设置初始 PLY 时将被忽略。",
-    "apply_auto_crop": "应用自动裁剪"
+    "apply_auto_crop": "应用自动裁剪",
+    "save_title": "保存项目？",
+    "save_message": "加载新数据集前要保存当前项目吗？",
+    "save_and_load": "保存并加载",
+    "load_without_saving": "不保存并加载"
   },
   "notification": {
     "dropped_not_recognized": "拖放的",
@@ -2393,6 +2402,14 @@
       "title": "未能恢复训练器",
       "message": "项目模型可供查看，但无法恢复训练。请检查数据集路径和日志。"
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio 意外关闭",
+    "body": "找到了 {} 的恢复文件。（保存于 {}）",
+    "unsaved_session": "未保存的会话",
+    "recover": "恢复",
+    "open_saved": "打开已保存",
+    "skip": "跳过并新建"
   },
   "startup_recent": {
     "title": "最近的项目",

@@ -353,6 +353,10 @@ namespace lfs::io::project {
         std::string depth_path;
         std::string normal_path;
         bool has_alpha = false;
+        // Load-time image presence (#1713). Independent of the node-level
+        // training_enabled flag (user disable, #1716). Absent in older SCNG
+        // camera objects; parsers default this to true.
+        bool has_image = true;
         std::string split = "train";
 
         friend bool operator==(const CameraRecord&, const CameraRecord&) = default;

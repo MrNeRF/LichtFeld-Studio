@@ -1310,9 +1310,12 @@ namespace lfs::app {
             mcp::setActiveMcpHttpServer(nullptr);
             mcp_http.stop();
 
-            python::finalize();
-
+            // GuiManager drains scheduled Python UI work while tearing down the
+            // viewer. Keep the runtime/GIL available until that work and the
+            // Python-backed UI resources have been released.
             viewer.reset();
+
+            python::finalize();
 
             core::teardown_gpu_before_exit();
 

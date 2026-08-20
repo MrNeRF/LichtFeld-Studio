@@ -388,6 +388,10 @@ namespace lfs::core {
         // unclassifiable Float16 storage). Internal maintenance helper.
         void verify_or_resize_non_q16_shN(size_t n, size_t cap, uint32_t layout_rest);
         void set_active_sh_degree(int sh_degree);
+        // Attach optional q16 bounds, then set the active SH degree.
+        // Reconstruct/migrate paths that copy pad-dropped codes must pass the
+        // bounds so the tripwire never sees codes without them (#1616, #1678).
+        void set_active_sh_degree(int sh_degree, Tensor shN_value_bounds);
         void set_max_sh_degree(int sh_degree);
         bool set_sh_degree(int sh_degree);
 

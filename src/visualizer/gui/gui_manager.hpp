@@ -62,6 +62,9 @@ namespace lfs::vis {
     class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
     class VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
     class VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+    class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+    class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
+    class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
 
     namespace gui {
         class NativeScenePanel;
@@ -209,6 +212,9 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
             friend class lfs::vis::VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
             friend class lfs::vis::VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
             [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;
@@ -382,6 +388,7 @@ namespace lfs::vis {
             // Native panel wrapper storage (registered with PanelRegistry)
             std::vector<std::shared_ptr<IPanel>> native_panel_storage_;
             std::shared_ptr<NativeScenePanel> native_scene_panel_;
+            SceneTreeSessionChrome pending_scene_tree_chrome_;
             uint64_t panel_frame_serial_ = 0;
             uint8_t ui_layout_settle_frames_ = 0;
             EditorContextUpdateStamp last_editor_context_update_stamp_;

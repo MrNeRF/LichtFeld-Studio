@@ -32,6 +32,9 @@ namespace lfs::io::project {
             selected_path;
         std::uint64_t autosave_sequence = 0;
         lfs::core::Uuid snapshot_uuid;
+        lfs::core::Uuid commit_uuid;
+        std::uint64_t wallclock_unix_ns = 0;
+        bool untitled_scratch = false;
         std::vector<std::filesystem::path>
             deleted_paths;
         std::vector<std::string> diagnostics;
@@ -113,6 +116,16 @@ namespace lfs::io::project {
         const std::filesystem::path& master_path);
 
     [[nodiscard]] LFS_IO_API std::filesystem::path
+    scratch_autosave_path(
+        const std::filesystem::path& recovery_directory,
+        const lfs::core::Uuid& session_uuid);
+
+    [[nodiscard]] LFS_IO_API bool
+    is_scratch_autosave_path(
+        const std::filesystem::path& path,
+        const std::filesystem::path& recovery_directory);
+
+    [[nodiscard]] LFS_IO_API std::filesystem::path
     recovery_session_temp_path(
         const std::filesystem::path& master_path);
 
@@ -154,6 +167,20 @@ namespace lfs::io::project {
     LFS_IO_API void sweep_stale_licht_artifacts_for_known_masters(
         const std::vector<std::filesystem::path>& master_paths);
 
+    // Startup hygiene for app-private untitled crash files. A live session's
+    // writer lock is left untouched. Unreadable or empty unlocked files
+    // (no scene nodes and no payload chapters) are removed. Valid unlocked
+    // files with recoverable content are left for `scan_scratch_autosaves`.
+    LFS_IO_API void sweep_stale_scratch_autosaves(
+        const std::filesystem::path& recovery_directory);
+
+    // Best-effort delete of one scratch autosave and its `.lock` sibling.
+    // No-ops when the path is empty. Fails with Unavailable when the file
+    // is still held by a live session.
+    [[nodiscard]] LFS_IO_API lfs::Result<void>
+    remove_scratch_autosave(
+        const std::filesystem::path& scratch_path);
+
     // Acquires the master writer lock, validates every stable/temp/backup
     // sidecar candidate, deletes stale candidates, and applies the exact
     // §9 predicate. It also removes orphan compaction temps after the master
@@ -163,6 +190,23 @@ namespace lfs::io::project {
         inspect_autosave_recovery(
             const std::filesystem::path& master_path,
             const ReaderOptions& master_reader_options = {});
+
+    // Lock-probes `scratch_path`. Unavailable means a live session still
+    // holds it. A complete master with recoverable content becomes Offer
+    // with untitled_scratch. An empty master (no scene nodes / no payload
+    // chapters) is Invalid so sweep/scan can delete it.
+    [[nodiscard]] LFS_IO_API
+        lfs::Result<RecoveryInspection>
+        inspect_scratch_autosave(
+            const std::filesystem::path& scratch_path);
+
+    // Directory scan used at startup: MRU does not know these files.
+    // Live (locked) files are omitted. Invalid or empty unlocked files
+    // are deleted as part of the scan.
+    [[nodiscard]] LFS_IO_API
+        std::vector<RecoveryInspection>
+        scan_scratch_autosaves(
+            const std::filesystem::path& recovery_directory);
 
     // Acquires and retains the original master's OS writer lock, then
     // revalidates the selected complete bound sidecar under that lock.

@@ -15,6 +15,11 @@
     "file.recent_missing_message": "프로젝트 파일을 찾을 수 없습니다:\n{path}",
     "file.remove_from_recent": "최근 프로젝트에서 제거",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "가져오기",
+    "file.import_failed": "가져오기 실패",
+    "file.import_failed_message": "가져올 수 없습니다:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "선택한 폴더가 지원되는 데이터셋으로 인식되지 않습니다:\n{path}",
+    "file.checkpoint_not_recognized": "선택한 파일이 유효한 체크포인트로 인식되지 않습니다:\n{path}",
     "file.import_dataset": "데이터셋 가져오기",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USD 가져오기",
     "file.import_mesh": "메시 가져오기",
@@ -1263,7 +1268,11 @@
     "min_track_length": "최소 트랙 길이",
     "min_track_length_hint": "최소 이 수의 이미지에서 관측된 Sparse 점을 유지합니다. 0이면 필터링을 비활성화합니다.",
     "min_track_length_init_warning": "초기화 PLY가 설정된 동안에는 무시됩니다.",
-    "apply_auto_crop": "자동 자르기 적용"
+    "apply_auto_crop": "자동 자르기 적용",
+    "save_title": "프로젝트를 저장할까요?",
+    "save_message": "새 데이터셋을 불러오기 전에 현재 프로젝트를 저장할까요?",
+    "save_and_load": "저장하고 불러오기",
+    "load_without_saving": "저장하지 않고 불러오기"
   },
   "notification": {
     "dropped_not_recognized": "드롭된",
@@ -2393,6 +2402,14 @@
       "title": "트레이너를 복원하지 못함",
       "message": "프로젝트 모델은 볼 수 있지만 학습을 재개할 수 없습니다. 데이터세트 경로와 로그를 확인하세요."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio가 예기치 않게 종료되었습니다",
+    "body": "{}의 복구 파일이 있습니다. (저장 시각 {})",
+    "unsaved_session": "저장되지 않은 세션",
+    "recover": "복구",
+    "open_saved": "저장된 파일 열기",
+    "skip": "건너뛰고 새로 만들기"
   },
   "startup_recent": {
     "title": "최근 프로젝트",

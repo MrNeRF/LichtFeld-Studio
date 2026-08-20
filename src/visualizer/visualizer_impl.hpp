@@ -33,6 +33,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -97,6 +98,11 @@ namespace lfs::vis {
         lfs::Result<void> projectSaveAsExplicit(
             const std::filesystem::path& path,
             bool regenerate_preview = true);
+        // Interactive dataset LoadFile with stop_training: wait for the
+        // trainer, then replay the load. Returns true when the caller
+        // must not start the import now.
+        bool deferDatasetLoadForTraining(
+            const lfs::core::events::cmd::LoadFile& cmd);
         lfs::Result<ProjectOpenOutcome>
         projectOpen(
             const std::filesystem::path& path,
@@ -158,7 +164,9 @@ namespace lfs::vis {
             lfs::io::project::ReferencesChapter*
                 references = nullptr,
             const std::filesystem::path& project_root =
-                {}) const;
+                {},
+            std::span<const lfs::core::Uuid>
+                omit_node_uuids = {}) const;
         [[nodiscard]] project::GuiSessionRestoreTicket
         stagePreparedProjectSessionRestore(
             project::PreparedGuiSessionRestore prepared);
@@ -309,7 +317,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_RelocateCheckpointProjectDatasetRestoresTrainerFromNewRoot_Test;
         friend class VisualizerImplResetTest_DatasetProjectWithoutReferenceIsNotRecoveredFromContainingDirectory_Test;
         friend class VisualizerImplResetTest_NonDatasetProjectInsideDatasetRootIsNotReimported_Test;
-        friend class VisualizerImplResetTest_OpeningAnotherProjectCancelsPendingDatasetRestoreImport_Test;
+        friend class VisualizerImplResetTest_OpeningAnotherProjectAfterHydratedCameraRestoreReplacesTrainer_Test;
         friend class VisualizerImplResetTest_NonDatasetSaveDoesNotBindStaleDatasetPath_Test;
         friend class VisualizerImplResetTest_TrainingCheckpointReopenRestoresPausedResumableState_Test;
         friend class VisualizerImplResetTest_ErrorFinishedCheckpointProjectReopensPausedAndResumable_Test;
@@ -324,6 +332,18 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_NewProjectDiscardDeletesAutosaveSidecar_Test;
         friend class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
         friend class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
+        friend class VisualizerImplResetTest_UntitledDirtySessionAutosavesToScratch_Test;
+        friend class VisualizerImplResetTest_BlankUntitledSessionUpdateMaintenanceWritesNoScratch_Test;
+        friend class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
+        friend class VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
+        friend class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+        friend class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
+        friend class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
+        friend class VisualizerImplResetTest_LoadFileStopTrainingDefersDatasetLoad_Test;
+        friend class VisualizerImplResetTest_LoadDatasetApiDoesNotDeferOrPrompt_Test;
+        friend class VisualizerImplResetTest_PreTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
+        friend class VisualizerImplResetTest_PostTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
+        friend class VisualizerImplResetTest_CaptureOmitsPlySequenceClipAndCollapsedUuid_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;
@@ -516,6 +536,7 @@ namespace lfs::vis {
             Reset,
             NewProject,
             OpenProject,
+            LoadDataset,
             CloseSave,
             CloseDiscard,
         };
@@ -528,6 +549,8 @@ namespace lfs::vis {
         ProjectSwitchDisposition
             pending_open_disposition_ =
                 ProjectSwitchDisposition::RequireClean;
+        std::optional<lfs::core::events::cmd::LoadFile>
+            pending_load_file_;
         int pending_training_completion_refresh_frames_ = 0;
         bool gui_frame_rendered_ = false;
         bool startup_plugin_preload_started_ = false;

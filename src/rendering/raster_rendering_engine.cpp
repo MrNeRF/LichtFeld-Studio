@@ -308,9 +308,13 @@ namespace lfs::rendering {
             const glm::mat4& visualizer_camera_to_world,
             const float scale) {
             std::vector<glm::vec3> points;
-            const int image_width = camera.image_width() > 0 ? camera.image_width() : camera.camera_width();
-            const int image_height = camera.image_height() > 0 ? camera.image_height() : camera.camera_height();
-            if (image_width <= 0 || image_height <= 0 || scale <= 0.0f) {
+            // Picking must follow the calibrated frustum, not the resolution
+            // selected for loading training images. Undistortion updates these
+            // calibration dimensions and FoVy together; training downscaling
+            // only changes the operational decode dimensions.
+            const int calibration_width = camera.camera_width();
+            const int calibration_height = camera.camera_height();
+            if (calibration_width <= 0 || calibration_height <= 0 || scale <= 0.0f) {
                 return points;
             }
 
@@ -338,12 +342,13 @@ namespace lfs::rendering {
                 return points;
             }
 
-            if (camera.focal_y() <= 0.0f) {
+            if (camera.FoVy() <= 0.0f) {
                 return points;
             }
 
-            const float aspect = static_cast<float>(image_width) / static_cast<float>(image_height);
-            const float fov_y = lfs::core::focal2fov(camera.focal_y(), image_height);
+            const float aspect = static_cast<float>(calibration_width) /
+                                 static_cast<float>(calibration_height);
+            const float fov_y = camera.FoVy();
             const float half_height = std::tan(fov_y * 0.5f) * scale;
             const float half_width = half_height * aspect;
 

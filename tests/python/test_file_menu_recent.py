@@ -33,6 +33,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     removed = []
     confirm_dialogs = []
     message_dialogs = []
+    warnings = []
     training_active = False
 
     def project_open(path, discard=False, stop_training=False):
@@ -56,7 +57,13 @@ def _load_file_menu(monkeypatch, recent_paths=()):
         tr=tr,
         confirm_dialog=confirm_dialog,
         message_dialog=message_dialog,
+        open_dataset_folder_dialog=lambda: "",
+        open_ply_file_dialog=lambda _path: "",
+        open_mesh_file_dialog=lambda _path: "",
+        open_checkpoint_file_dialog=lambda: "",
+        open_json_file_dialog=lambda: "",
     )
+    lf_stub.log = SimpleNamespace(warn=warnings.append)
     lf_stub.project_recent_files = lambda: list(recent_paths)
     lf_stub.project_clear_recent_files = lambda: None
     lf_stub.project_auto_save_on_close_enabled = lambda: False
@@ -72,6 +79,12 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.project_remove_recent_file_calls = removed
     lf_stub.confirm_dialogs = confirm_dialogs
     lf_stub.message_dialogs = message_dialogs
+    lf_stub.warning_messages = warnings
+    lf_stub.load_file = lambda *_args, **_kwargs: None
+    lf_stub.load_config_file = lambda *_args, **_kwargs: None
+    lf_stub.is_dataset_path = lambda _path: True
+    lf_stub.read_checkpoint_header = lambda _path: object()
+    lf_stub.read_checkpoint_params = lambda _path: object()
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
     class Operator:
@@ -92,8 +105,8 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     )
 
     imports_stub = ModuleType("lfs_plugins.import_panels")
-    imports_stub.open_dataset_import_panel = lambda _path: None
-    imports_stub.open_resume_checkpoint_panel = lambda _path: None
+    imports_stub.open_dataset_import_panel = lambda _path: True
+    imports_stub.open_resume_checkpoint_panel = lambda _path: True
     monkeypatch.setitem(sys.modules, "lfs_plugins.import_panels", imports_stub)
 
     return import_module("lfs_plugins.file_menu")
@@ -257,6 +270,117 @@ def test_compact_project_enabled_only_with_durable_path(monkeypatch):
     file_menu.lf.project_has_path = raise_missing
     guarded = _compact_project_item(file_menu)
     assert guarded["enabled"] is False
+
+
+def test_imports_are_grouped_before_exports(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    items = file_menu.FileMenu().menu_items()
+
+    import_index = next(
+        index
+        for index, item in enumerate(items)
+        if item.get("type") == "submenu"
+        and item.get("label") == "tr:menu.file.import"
+    )
+    import_items = items[import_index]["items"]
+    operator_names = [
+        item["operator_id"].rsplit(".", 1)[-1]
+        for item in import_items
+        if item.get("type") == "operator"
+    ]
+
+    assert operator_names == [
+        "ImportDatasetOperator",
+        "ImportPlyOperator",
+        "ImportMeshOperator",
+        "ImportCheckpointOperator",
+        "ImportConfigOperator",
+    ]
+    assert import_items[-2]["type"] == "separator"
+    assert items[import_index + 1]["operator_id"].endswith("ExportOperator")
+    assert items[import_index + 2]["operator_id"].endswith(
+        "ExportConfigOperator"
+    )
+
+
+def test_unrecognized_dataset_reports_modal_and_warning(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    selected = "/tmp/not-a-dataset"
+    file_menu.lf.ui.open_dataset_folder_dialog = lambda: selected
+    file_menu.lf.is_dataset_path = lambda _path: False
+
+    result = file_menu.ImportDatasetOperator().execute(None)
+
+    assert result == {"CANCELLED"}
+    assert len(file_menu.lf.message_dialogs) == 1
+    title, message, style = file_menu.lf.message_dialogs[0]
+    assert title == "tr:menu.file.import_failed"
+    assert message == "tr:menu.file.dataset_not_recognized"
+    assert style == "error"
+    assert file_menu.lf.warning_messages == [
+        "Import rejected: path='/tmp/not-a-dataset', "
+        "reason='dataset format was not recognized'"
+    ]
+
+
+def test_unrecognized_checkpoint_reports_modal_and_warning(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    selected = "/tmp/not-a-checkpoint.ckpt"
+    file_menu.lf.ui.open_checkpoint_file_dialog = lambda: selected
+    file_menu.lf.read_checkpoint_header = lambda _path: None
+
+    result = file_menu.ImportCheckpointOperator().execute(None)
+
+    assert result == {"CANCELLED"}
+    assert len(file_menu.lf.message_dialogs) == 1
+    title, message, style = file_menu.lf.message_dialogs[0]
+    assert title == "tr:menu.file.import_failed"
+    assert message == "tr:menu.file.checkpoint_not_recognized"
+    assert style == "error"
+    assert "checkpoint format was not recognized" in (
+        file_menu.lf.warning_messages[0]
+    )
+
+
+def test_checkpoint_preflight_reads_only_the_header(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    selected = "/tmp/large.resume"
+    header_reads = []
+    file_menu.lf.ui.open_checkpoint_file_dialog = lambda: selected
+    file_menu.lf.read_checkpoint_header = lambda path: header_reads.append(path) or object()
+
+    def unexpected_parameter_read(_path):
+        raise AssertionError("checkpoint parameters belong to the retained import panel")
+
+    file_menu.lf.read_checkpoint_params = unexpected_parameter_read
+
+    result = file_menu.ImportCheckpointOperator().execute(None)
+
+    assert result == {"FINISHED"}
+    assert header_reads == [selected]
+    assert file_menu.lf.message_dialogs == []
+    assert file_menu.lf.warning_messages == []
+
+
+def test_immediate_import_error_reports_reason(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    selected = "/tmp/broken.ply"
+    file_menu.lf.ui.open_ply_file_dialog = lambda _path: selected
+
+    def fail_registration(*_args, **_kwargs):
+        raise RuntimeError("catalog unavailable")
+
+    file_menu.register_catalog_asset_path = fail_registration
+
+    result = file_menu.ImportPlyOperator().execute(None)
+
+    assert result == {"CANCELLED"}
+    assert len(file_menu.lf.message_dialogs) == 1
+    title, message, style = file_menu.lf.message_dialogs[0]
+    assert title == "tr:menu.file.import_failed"
+    assert message == "tr:menu.file.import_failed_message"
+    assert style == "error"
+    assert "catalog unavailable" in file_menu.lf.warning_messages[0]
 
 
 def test_new_project_while_training_prompts_instead_of_switching(monkeypatch):

@@ -6,6 +6,7 @@
 #include "io/scene_chapter_adapter.hpp"
 
 #include "core/path_utils.hpp"
+#include "io/capture_omit_filter.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -203,6 +204,7 @@ namespace lfs::io::project {
             result.depth_path = lfs::core::path_to_utf8(camera.depth_path());
             result.normal_path = lfs::core::path_to_utf8(camera.normal_path());
             result.has_alpha = camera.has_alpha();
+            result.has_image = camera.has_image();
             result.split =
                 camera.split() == lfs::core::CameraSplit::Train ? "train" : "eval";
             return result;
@@ -406,6 +408,7 @@ namespace lfs::io::project {
                 lfs::core::utf8_to_path(value.normal_path));
             camera->set_image_dimensions(value.image_width, value.image_height);
             camera->set_has_alpha(value.has_alpha);
+            camera->set_has_image(value.has_image);
             camera->set_split(value.split == "train" ? lfs::core::CameraSplit::Train
                                                      : lfs::core::CameraSplit::Eval);
             return camera;
@@ -424,10 +427,9 @@ namespace lfs::io::project {
         const std::span<const lfs::core::Uuid> omit_node_uuids) {
         CapturedSceneGraphState result;
         const lfs::core::Uuid training_uuid = scene.getTrainingModelNodeUuid();
-        std::unordered_set<lfs::core::Uuid> omitted(
-            omit_node_uuids.begin(), omit_node_uuids.end());
+        const CaptureOmitFilter omit_filter(scene, omit_node_uuids);
         result.training_model_uuid =
-            training_uuid.is_nil() || omitted.contains(training_uuid)
+            training_uuid.is_nil() || omit_filter.omits(training_uuid)
                 ? std::optional<lfs::core::Uuid>{}
                 : std::optional<lfs::core::Uuid>{training_uuid};
 
@@ -437,7 +439,7 @@ namespace lfs::io::project {
         for (const lfs::core::SceneNode* node : all_nodes) {
             if (node->type == lfs::core::NodeType::KEYFRAME ||
                 node->type == lfs::core::NodeType::KEYFRAME_GROUP ||
-                omitted.contains(node->uuid)) {
+                omit_filter.omits(node->uuid)) {
                 excluded.insert(node->id);
             }
         }

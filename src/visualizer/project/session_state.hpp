@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -164,7 +165,9 @@ namespace lfs::vis {
                     CameraBookmarkProjectState>& bookmarks,
                 lfs::io::project::ReferencesChapter* references =
                     nullptr,
-                const std::filesystem::path& project_root = {});
+                const std::filesystem::path& project_root = {},
+                std::span<const lfs::core::Uuid> omit_node_uuids =
+                    {});
 
         LFS_VIS_API void applyGuiSession(
             VisualizerImpl& viewer,

@@ -89,6 +89,8 @@ namespace lfs::core {
         [[nodiscard]] std::filesystem::path presetDir() const;
         [[nodiscard]] std::filesystem::path assetLibraryDir() const;
         [[nodiscard]] std::filesystem::path backupDir() const;
+        /** App-private crash-recovery files: `<root>/recovery`. */
+        [[nodiscard]] std::filesystem::path recoveryDir() const;
         [[nodiscard]] std::filesystem::path mcpLogDir() const;
         /** Append one complete JSONL record to an MCP session log below logs/mcp. */
         [[nodiscard]] lfs::Status

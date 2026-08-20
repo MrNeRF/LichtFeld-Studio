@@ -58,7 +58,7 @@ namespace lfs::core {
             EVENT(ResumeTraining, );
             EVENT(StopTraining, );
             EVENT(ResetTraining, );
-            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false;);
+            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false; bool stop_training = false;);
             EVENT(LoadCheckpointForTraining, std::filesystem::path checkpoint_path; std::filesystem::path dataset_path; std::filesystem::path output_path;);
             EVENT(ImportColmapCameras, std::filesystem::path sparse_path;);
             EVENT(LoadConfigFile, std::filesystem::path path;);
@@ -66,7 +66,7 @@ namespace lfs::core {
             EVENT(ShowVideoExtractor, std::filesystem::path video_path;);
             EVENT(ShowResumeCheckpointPopup, std::filesystem::path checkpoint_path;);
             EVENT(NewProject, bool discard_changes = false; bool stop_training = false;);
-            EVENT(ProjectSave, );
+            EVENT(ProjectSave, bool regenerate_preview = true;);
             EVENT(ProjectSaveAs, std::filesystem::path path;);
             EVENT(ProjectOpen, std::filesystem::path path; bool discard_changes = false; bool stop_training = false;);
             EVENT(ProjectCompact, );

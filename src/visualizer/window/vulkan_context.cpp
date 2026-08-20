@@ -769,7 +769,7 @@ namespace lfs::vis {
         frame_timeline_waits_valid_ = true;
         {
             const std::lock_guard lock(timeline_value_tracker_mutex_);
-            last_frame_timeline_wait_values_.clear();
+            frame_timeline_wait_cursors_.clear();
             last_immediate_timeline_wait_values_.clear();
             last_immediate_timeline_signal_values_.clear();
         }
@@ -1019,6 +1019,12 @@ namespace lfs::vis {
                 active_frame_index_,
                 active_image_index_,
                 active_acquire_index_));
+        }
+        {
+            const std::lock_guard lock(timeline_value_tracker_mutex_);
+            for (auto& entry : frame_timeline_wait_cursors_) {
+                entry.second.submit_rejected();
+            }
         }
         frame_timeline_waits_.clear();
         frame_timeline_waits_valid_ = true;
@@ -1629,6 +1635,12 @@ namespace lfs::vis {
                  swapchain_extent_.height);
         // Counter retained until next prepareFrame reset so mid-frame readers still see it.
         result = vkQueueSubmit(graphics_queue_, 1, &submit_info, frame_fence);
+        if (result == VK_SUCCESS) {
+            const std::lock_guard lock(timeline_value_tracker_mutex_);
+            for (const auto& wait : frame_timeline_waits_) {
+                frame_timeline_wait_cursors_[wait.semaphore].submit_accepted();
+            }
+        }
         frame_timeline_waits_.clear();
         if (result != VK_SUCCESS) {
             frame_active_ = false;
@@ -2073,20 +2085,12 @@ namespace lfs::vis {
             return false;
         }
         const std::lock_guard lock(timeline_value_tracker_mutex_);
-        const std::uint64_t previous = last_frame_timeline_wait_values_[semaphore];
-        if (value <= previous) {
-            frame_timeline_waits_valid_ = false;
-            fail(std::format(
-                "Frame timeline waits must increase strictly (semaphore={:#x}, requested_value={}, previous_value={}, wait_stage={:#x}, frame_slot={}, image_index={})",
-                vkHandleValue(semaphore),
-                value,
-                previous,
-                static_cast<std::uint64_t>(wait_stage),
-                active_frame_index_,
-                active_image_index_));
-            return false;
+        auto& cursor = frame_timeline_wait_cursors_[semaphore];
+        if (cursor.note(value) == lfs::rendering::FrameTimelineWaitAction::AlreadySatisfied) {
+            // Timeline waits are satisfied at counter >= value. Re-requesting a
+            // value already queued this frame or submitted earlier is a no-op.
+            return true;
         }
-        last_frame_timeline_wait_values_[semaphore] = value;
         frame_timeline_waits_.push_back(FrameTimelineWait{
             .semaphore = semaphore,
             .value = value,
@@ -3606,8 +3610,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;
@@ -3782,7 +3786,7 @@ namespace lfs::vis {
         }
         {
             const std::lock_guard lock(timeline_value_tracker_mutex_);
-            last_frame_timeline_wait_values_.erase(out.semaphore);
+            frame_timeline_wait_cursors_.erase(out.semaphore);
             last_immediate_timeline_wait_values_.erase(out.semaphore);
             last_immediate_timeline_signal_values_.erase(out.semaphore);
         }
@@ -3835,7 +3839,7 @@ namespace lfs::vis {
         const std::string scope = semaphore.diagnostic_scope;
         if (semaphore.semaphore != VK_NULL_HANDLE) {
             const std::lock_guard lock(timeline_value_tracker_mutex_);
-            last_frame_timeline_wait_values_.erase(semaphore.semaphore);
+            frame_timeline_wait_cursors_.erase(semaphore.semaphore);
             last_immediate_timeline_wait_values_.erase(semaphore.semaphore);
             last_immediate_timeline_signal_values_.erase(semaphore.semaphore);
             if (device_) {
