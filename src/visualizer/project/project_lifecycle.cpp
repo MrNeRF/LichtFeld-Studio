@@ -502,6 +502,103 @@ namespace lfs::vis::project {
                 lfs::core::path_to_utf8(dataset_root));
         }
 
+        // Pre-training (and relocated-dataset) projects have cameras in
+        // the already-hydrated SCNG. Do not LoadFile/re-import: that
+        // rebuilds cameras from the folder and drops node-level
+        // training_enabled / visible. Missing-image cameras stay
+        // Camera::has_image, never a user disable.
+        void installTrainerFromHydratedDatasetScene(
+            VisualizerImpl& viewer,
+            SceneManager& scene_manager,
+            const std::filesystem::path& dataset_root,
+            const std::filesystem::path& output_path,
+            const std::filesystem::path& rebase_from =
+                {}) {
+            if (!rebase_from.empty() &&
+                rebase_from.lexically_normal() !=
+                    dataset_root.lexically_normal()) {
+                const auto rebased =
+                    scene_manager.getScene()
+                        .rebaseCameraAssetPaths(
+                            rebase_from, dataset_root);
+                LOG_INFO(
+                    "Rebased {} camera asset path(s) from {} to {}",
+                    rebased,
+                    lfs::core::path_to_utf8(
+                        rebase_from),
+                    lfs::core::path_to_utf8(
+                        dataset_root));
+            }
+
+            auto* const parameter_manager =
+                viewer.getParameterManager();
+            auto* const trainer_manager =
+                viewer.getTrainerManager();
+            auto* const data_loader =
+                viewer.getDataLoader();
+            if (!parameter_manager ||
+                !trainer_manager) {
+                notifyTrainerRestoreFailure(
+                    viewer,
+                    "Project has no trainer manager or parameter manager");
+                return;
+            }
+            if (!data_loader) {
+                notifyTrainerRestoreFailure(
+                    viewer,
+                    "Project dataset loader is unavailable");
+                return;
+            }
+            if (!scene_manager.getScene()
+                     .hasTrainingData()) {
+                notifyTrainerRestoreFailure(
+                    viewer,
+                    "Hydrated scene has no cameras");
+                return;
+            }
+            if (trainer_manager->hasTrainer()) {
+                if (!trainer_manager->clearTrainer()) {
+                    notifyTrainerRestoreFailure(
+                        viewer,
+                        "Previous training worker is still stopping");
+                    return;
+                }
+            }
+
+            auto params =
+                parameter_manager->createForDataset(
+                    dataset_root, output_path);
+            data_loader->setParameters(params);
+            scene_manager.setDatasetPath(dataset_root);
+            parameter_manager->getDatasetConfig()
+                .data_path = dataset_root;
+
+            try {
+                auto trainer = std::make_unique<
+                    lfs::training::Trainer>(
+                    scene_manager.getScene());
+                trainer->setParams(params);
+                trainer_manager->setScene(
+                    &scene_manager.getScene());
+                trainer_manager->setTrainer(
+                    std::move(trainer));
+            } catch (const std::exception& error) {
+                notifyTrainerRestoreFailure(
+                    viewer, error.what());
+                return;
+            }
+            if (!trainer_manager->hasTrainer()) {
+                notifyTrainerRestoreFailure(
+                    viewer,
+                    "Hydrated dataset trainer install was rejected");
+                return;
+            }
+            LOG_INFO(
+                "Project trainer restored from hydrated scene cameras (dataset={})",
+                lfs::core::path_to_utf8(
+                    dataset_root));
+        }
+
     } // namespace
 
     // After display hydration, stream CKPT into a
@@ -566,27 +663,10 @@ namespace lfs::vis::project {
                 return;
             }
 
-            auto* const data_loader = viewer_.getDataLoader();
-            if (!data_loader) {
-                notifyTrainerRestoreFailure(
-                    viewer_,
-                    "Project dataset loader is unavailable");
-                return;
-            }
-            auto params = parameter_manager->createForDataset(
-                *dataset_root,
-                report.pending_parameters.dataset.output_path);
-            data_loader->setParameters(params);
-            scene_manager.setDatasetPath(*dataset_root);
-            lfs::core::events::cmd::LoadFile{
-                .path = *dataset_root,
-                .is_dataset = true,
-                .output_path = params.dataset.output_path,
-            }
-                .emit();
-            LOG_INFO(
-                "Queued project dataset reload for trainer restoration; the hydrated scene will be rebuilt from the dataset (dataset={})",
-                lfs::core::path_to_utf8(*dataset_root));
+            installTrainerFromHydratedDatasetScene(
+                viewer_, scene_manager, *dataset_root,
+                report.pending_parameters.dataset
+                    .output_path);
             return;
         }
         if (report.checkpoint_header->iteration < 0) {
@@ -1808,58 +1888,37 @@ namespace lfs::vis::project {
         std::filesystem::path output_path) {
         const auto epoch =
             epoch_.load(std::memory_order_acquire);
+        const auto old_root = missing_path;
         beginPendingDatasetRelocation(
             std::move(missing_path),
             [this, epoch,
-             output_path = std::move(output_path)](
+             output_path = std::move(output_path),
+             old_root](
                 const std::filesystem::path& new_root) {
                 if (!viewer_.postWork({
                         .run =
                             [this, epoch, output_path,
-                             new_root] {
+                             old_root, new_root] {
                                 if (epoch_.load(
                                         std::memory_order_acquire) !=
                                     epoch) {
                                     return;
                                 }
-                                auto* parameter_manager =
-                                    viewer_
-                                        .getParameterManager();
-                                auto* data_loader =
-                                    viewer_.getDataLoader();
                                 auto* scene_manager =
                                     viewer_
                                         .getSceneManager();
-                                if (!parameter_manager ||
-                                    !data_loader ||
-                                    !scene_manager) {
+                                if (!scene_manager) {
                                     notifyTrainerRestoreFailure(
                                         viewer_,
                                         "Project dataset loader is unavailable");
                                     return;
                                 }
-                                auto params =
-                                    parameter_manager
-                                        ->createForDataset(
-                                            new_root,
-                                            output_path);
-                                data_loader->setParameters(
-                                    params);
-                                scene_manager->setDatasetPath(
-                                    new_root);
-                                lfs::core::events::cmd::
-                                    LoadFile{
-                                        .path = new_root,
-                                        .is_dataset = true,
-                                        .output_path =
-                                            params.dataset
-                                                .output_path,
-                                    }
-                                        .emit();
-                                LOG_INFO(
-                                    "Queued project dataset reload for trainer restoration; the hydrated scene will be rebuilt from the dataset (dataset={})",
-                                    lfs::core::path_to_utf8(
-                                        new_root));
+                                installTrainerFromHydratedDatasetScene(
+                                    viewer_,
+                                    *scene_manager,
+                                    new_root,
+                                    output_path,
+                                    old_root);
                             },
                         .cancel = {},
                     })) {

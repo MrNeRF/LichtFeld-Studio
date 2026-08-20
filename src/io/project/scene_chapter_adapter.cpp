@@ -203,6 +203,7 @@ namespace lfs::io::project {
             result.depth_path = lfs::core::path_to_utf8(camera.depth_path());
             result.normal_path = lfs::core::path_to_utf8(camera.normal_path());
             result.has_alpha = camera.has_alpha();
+            result.has_image = camera.has_image();
             result.split =
                 camera.split() == lfs::core::CameraSplit::Train ? "train" : "eval";
             return result;
@@ -406,6 +407,7 @@ namespace lfs::io::project {
                 lfs::core::utf8_to_path(value.normal_path));
             camera->set_image_dimensions(value.image_width, value.image_height);
             camera->set_has_alpha(value.has_alpha);
+            camera->set_has_image(value.has_image);
             camera->set_split(value.split == "train" ? lfs::core::CameraSplit::Train
                                                      : lfs::core::CameraSplit::Eval);
             return camera;

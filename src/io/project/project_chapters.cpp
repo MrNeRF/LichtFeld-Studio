@@ -2266,6 +2266,8 @@ namespace lfs::io::project {
             auto normal_path =
                 required<std::string>(value, "normal_path", "SCNG", field);
             auto has_alpha = required<bool>(value, "has_alpha", "SCNG", field);
+            auto has_image =
+                optional<bool>(value, "has_image", "SCNG", field);
             auto split = required<std::string>(value, "split", "SCNG", field);
             if (!rotation) {
                 return std::move(rotation).error();
@@ -2283,7 +2285,8 @@ namespace lfs::io::project {
                     first_error(uid, camera_id, focal_x, focal_y, center_x, center_y,
                                 model, camera_width, camera_height, image_width,
                                 image_height, image_name, image_path, mask_path,
-                                depth_path, normal_path, has_alpha, split)) {
+                                depth_path, normal_path, has_alpha, has_image,
+                                split)) {
                 return std::move(*error);
             }
             if (*camera_width < 0 || *camera_height < 0 || *image_width < 0 ||
@@ -2318,6 +2321,7 @@ namespace lfs::io::project {
                 .depth_path = std::move(*depth_path),
                 .normal_path = std::move(*normal_path),
                 .has_alpha = *has_alpha,
+                .has_image = has_image->value_or(true),
                 .split = std::move(*split),
             };
         }
@@ -2345,6 +2349,7 @@ namespace lfs::io::project {
                 {"depth_path", value.depth_path},
                 {"normal_path", value.normal_path},
                 {"has_alpha", value.has_alpha},
+                {"has_image", value.has_image},
                 {"split", value.split},
             };
         }

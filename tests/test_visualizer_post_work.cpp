@@ -43,6 +43,7 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <future>
 #include <gtest/gtest.h>
@@ -334,7 +335,9 @@ namespace {
 
     std::shared_ptr<lfs::core::Camera>
     make_project_request_test_camera(
-        const std::filesystem::path& image_path = {}) {
+        const std::filesystem::path& image_path = {},
+        const int uid = 0,
+        const std::string& image_name = "camera.png") {
         const auto empty_distortion =
             lfs::core::Tensor::zeros(
                 {0}, lfs::core::Device::CPU,
@@ -347,8 +350,8 @@ namespace {
             100.0F, 100.0F, 32.0F, 32.0F,
             empty_distortion, empty_distortion,
             lfs::core::CameraModelType::PINHOLE,
-            "camera.png", image_path,
-            std::filesystem::path{}, 64, 64, 0);
+            image_name, image_path,
+            std::filesystem::path{}, 64, 64, uid);
     }
 
     bool arm_running_trainer(lfs::vis::VisualizerImpl& viewer) {
@@ -381,11 +384,35 @@ namespace {
                trainer_manager->isTrainingActive();
     }
 
-    void write_minimal_transforms_dataset(const std::filesystem::path& dataset_path) {
+    void write_transforms_dataset_with_cameras(
+        const std::filesystem::path& dataset_path,
+        const int camera_count) {
         std::filesystem::create_directories(dataset_path);
         const auto png = lfs::test::licht::one_pixel_png();
-        lfs::test::licht::write_file_bytes(dataset_path / "frame_0001.png", png);
-        const auto transforms = lfs::test::licht::byte_vector(R"({
+        std::string frames;
+        for (int i = 0; i < camera_count; ++i) {
+            const auto name =
+                std::format("frame_{:04}.png", i + 1);
+            lfs::test::licht::write_file_bytes(
+                dataset_path / name, png);
+            if (i != 0) {
+                frames += ",\n";
+            }
+            frames += std::format(
+                R"(    {{
+      "file_path": "{}",
+      "transform_matrix": [
+        [1.0, 0.0, 0.0, {}],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0]
+      ]
+    }})",
+                name, static_cast<float>(i));
+        }
+        const auto transforms =
+            lfs::test::licht::byte_vector(std::format(
+                R"({{
   "fl_x": 1.0,
   "fl_y": 1.0,
   "cx": 0.5,
@@ -393,20 +420,19 @@ namespace {
   "w": 1,
   "h": 1,
   "frames": [
-    {
-      "file_path": "frame_0001.png",
-      "transform_matrix": [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0]
-      ]
-    }
+{}
   ]
-}
-)");
+}}
+)",
+                frames));
         lfs::test::licht::write_file_bytes(
             dataset_path / "transforms.json", transforms);
+    }
+
+    void write_minimal_transforms_dataset(
+        const std::filesystem::path& dataset_path) {
+        write_transforms_dataset_with_cameras(
+            dataset_path, 1);
     }
 
     void write_dataset_project_without_checkpoint(
@@ -629,6 +655,149 @@ namespace {
             lfs::test::licht::
                 deterministic_document_save_options(
                     0x76000010, 1, 2);
+        options.commit.snapshot_uuid = checkpoint_uuid;
+        (void)lfs::test::licht::require_result(
+            document->save(path, options));
+    }
+
+    const lfs::core::SceneNode*
+    camera_node_by_uid(const lfs::core::Scene& scene,
+                       const int uid) {
+        for (const auto* node : scene.getNodes()) {
+            if (node &&
+                node->type == lfs::core::NodeType::CAMERA &&
+                node->camera &&
+                node->camera->uid() == uid) {
+                return node;
+            }
+        }
+        return nullptr;
+    }
+
+    void expect_first_disabled_third_hidden(
+        const lfs::core::Scene& scene) {
+        const auto* first = camera_node_by_uid(scene, 0);
+        const auto* second = camera_node_by_uid(scene, 1);
+        const auto* third = camera_node_by_uid(scene, 2);
+        ASSERT_NE(first, nullptr);
+        ASSERT_NE(second, nullptr);
+        ASSERT_NE(third, nullptr);
+        EXPECT_FALSE(first->training_enabled);
+        EXPECT_TRUE(first->visible.get());
+        EXPECT_TRUE(second->training_enabled);
+        EXPECT_TRUE(second->visible.get());
+        EXPECT_TRUE(third->training_enabled);
+        EXPECT_FALSE(third->visible.get());
+
+        const auto disabled =
+            scene.getTrainingDisabledCameraUids();
+        EXPECT_TRUE(disabled.contains(0));
+        EXPECT_FALSE(disabled.contains(1));
+        EXPECT_FALSE(disabled.contains(2));
+
+        const auto active = scene.getActiveCameras();
+        EXPECT_TRUE(std::ranges::none_of(
+            active, [](const auto& camera) {
+                return camera && camera->uid() == 0;
+            }));
+        EXPECT_TRUE(std::ranges::any_of(
+            active, [](const auto& camera) {
+                return camera && camera->uid() == 1;
+            }));
+        EXPECT_TRUE(std::ranges::any_of(
+            active, [](const auto& camera) {
+                return camera && camera->uid() == 2;
+            }));
+    }
+
+    void add_flagged_training_cameras(
+        lfs::core::Scene& scene,
+        const lfs::core::NodeId parent,
+        const std::filesystem::path& dataset_path) {
+        const auto cameras = scene.addCameraGroup(
+            "Training cameras", parent, 3);
+        if (cameras == lfs::core::NULL_NODE) {
+            throw std::runtime_error(
+                "failed to create camera group");
+        }
+        for (int i = 0; i < 3; ++i) {
+            const auto name =
+                std::format("frame_{:04}.png", i + 1);
+            const auto id = scene.addCamera(
+                name, cameras,
+                make_project_request_test_camera(
+                    dataset_path / name, i, name));
+            if (id == lfs::core::NULL_NODE) {
+                throw std::runtime_error(
+                    "failed to create camera node");
+            }
+        }
+        const auto* first = camera_node_by_uid(scene, 0);
+        const auto* third = camera_node_by_uid(scene, 2);
+        if (!first || !third) {
+            throw std::runtime_error(
+                "failed to resolve flagged cameras");
+        }
+        scene.setCameraTrainingEnabled(first->id, false);
+        scene.setNodeVisibility(third->id, false);
+    }
+
+    void write_resumable_flagged_three_camera_project(
+        const std::filesystem::path& path,
+        const lfs::core::Uuid& training_uuid,
+        const lfs::core::Uuid& checkpoint_uuid,
+        const std::filesystem::path& dataset_path) {
+        auto document = lfs::test::licht::make_empty_document(
+            lfs::core::generate_uuid_v4(), 1);
+        lfs::core::Scene source;
+        const auto root = source.addDataset("Dataset");
+        add_flagged_training_cameras(
+            source, root, dataset_path);
+        const auto training = source.restoreNodeWithUuid(
+            lfs::core::Scene::RestoreNodeDesc{
+                .uuid = training_uuid,
+                .type = lfs::core::NodeType::SPLAT,
+                .name = "Training",
+                .parent = root,
+                .gaussian_count = 2,
+                .model = lfs::test::licht::make_splat(2),
+            });
+        if (training == lfs::core::NULL_NODE) {
+            throw std::runtime_error(
+                "failed to create training fixture node");
+        }
+        source.setTrainingModelNode(training);
+        auto scene_chapter = lfs::test::licht::require_result(
+            lfs::io::project::capture_scene_graph(
+                source,
+                lfs::io::project::ScenePayloadBindings{
+                    {training_uuid,
+                     lfs::io::project::PayloadBinding{
+                         .fourcc = "CKPT",
+                         .instance_uuid = checkpoint_uuid,
+                         .source_kind = "training",
+                     }},
+                }));
+        document->edit_scene_graph() =
+            std::move(scene_chapter);
+        lfs::test::licht::require_status(
+            document->set_checkpoint(
+                checkpoint_uuid,
+                make_training_autosave_checkpoint_payload(
+                    checkpoint_uuid, dataset_path)));
+        const auto reference =
+            lfs::test::licht::require_result(
+                lfs::io::project::upsert_path_reference(
+                    document->edit_references(),
+                    path.parent_path(), dataset_path,
+                    "dataset", "dataset"));
+        lfs::test::licht::require_status(
+            document->edit_project().set_dataset_reference(
+                reference));
+        auto options =
+            lfs::test::licht::
+                deterministic_document_save_options(
+                    0x76000011, 1, 2);
         options.commit.snapshot_uuid = checkpoint_uuid;
         (void)lfs::test::licht::require_result(
             document->save(path, options));
@@ -8360,22 +8529,27 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
-           OpeningAnotherProjectCancelsPendingDatasetRestoreImport) {
+           OpeningAnotherProjectAfterHydratedCameraRestoreReplacesTrainer) {
+        // Pre-training open used to queue a dataset re-import
+        // that a later open had to cancel. Hydrated SCNG is now
+        // the source of truth, so the first open installs a Ready
+        // trainer synchronously. Opening another project must still
+        // complete hydration and replace that trainer.
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
         const auto dataset_path =
             temporary_.path /
-            "dataset-pending-restore-import";
+            "dataset-hydrated-restore-switch";
         write_minimal_transforms_dataset(dataset_path);
         const auto project_a =
             temporary_.path /
-            "dataset-pending-restore-a.licht";
+            "dataset-hydrated-restore-a.licht";
         write_dataset_project_without_checkpoint(
             project_a, dataset_path);
         const auto project_b =
             temporary_.path /
-            "ply-only-pending-restore-b.licht";
+            "ply-only-hydrated-restore-b.licht";
         write_non_dataset_project_with_stale_dataset_params(
             project_b, dataset_path);
 
@@ -8398,9 +8572,18 @@ namespace lfs::vis {
                 return info &&
                        info->hydration_state ==
                            "complete" &&
-                       viewer.jobs().anyRunning(
-                           JobType::Import);
+                       viewer.getTrainerManager()
+                           ->hasTrainer() &&
+                       !viewer.jobs().anyRunning(
+                           JobType::Import) &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen);
             }));
+
+        EXPECT_FALSE(viewer.jobs().anyRunning(
+            JobType::Import));
+        EXPECT_TRUE(
+            viewer.getTrainerManager()->hasTrainer());
 
         auto opened_b = viewer.projectOpen(
             project_b,
@@ -8420,7 +8603,9 @@ namespace lfs::vis {
                        info->hydration_state ==
                            "complete" &&
                        !viewer.jobs().anyRunning(
-                           JobType::Import);
+                           JobType::Import) &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen);
             }));
 
         EXPECT_NE(
@@ -8854,6 +9039,181 @@ namespace lfs::vis {
             EXPECT_TRUE(
                 combined->has_tensor_allocator());
         }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           PreTrainingProjectSaveRestoresCameraEnabledAndHidden) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path /
+            "pre-train-camera-flags.licht";
+        const auto dataset_path =
+            temporary_.path /
+            "pre-train-camera-flags-dataset";
+        write_transforms_dataset_with_cameras(
+            dataset_path, 3);
+
+        {
+            auto options = projectOptions();
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto untitled = viewer.projectGetInfo();
+            ASSERT_TRUE(untitled);
+            ASSERT_FALSE(untitled->path.has_value());
+
+            auto& scene = viewer.getScene();
+            const auto dataset = scene.addDataset("Dataset");
+            ASSERT_NE(dataset, lfs::core::NULL_NODE);
+            add_flagged_training_cameras(
+                scene, dataset, dataset_path);
+            viewer.getSceneManager()->changeContentType(
+                SceneManager::ContentType::Dataset);
+            viewer.getSceneManager()->setDatasetPath(
+                dataset_path);
+            expect_first_disabled_third_hidden(scene);
+
+            auto saved = viewer.projectSaveAs(
+                project_path, false);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_, [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    project_path));
+        }
+
+        {
+            auto saved =
+                lfs::test::licht::require_result_ptr(
+                    lfs::io::project::ProjectDocument::
+                        open(project_path));
+            auto nodes = saved->scene_graph().nodes();
+            ASSERT_TRUE(nodes)
+                << lfs::format_for_developer(
+                       nodes.error());
+            EXPECT_TRUE(std::ranges::any_of(
+                *nodes, [](const auto& node) {
+                    return node.type == "camera" &&
+                           !node.training_enabled;
+                }));
+            EXPECT_TRUE(std::ranges::any_of(
+                *nodes, [](const auto& node) {
+                    return node.type == "camera" &&
+                           !node.visible;
+                }));
+        }
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                viewer.getGuiManager()
+                    ->asyncTasks()
+                    .pollImportCompletion();
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       viewer.getTrainerManager()
+                           ->hasTrainer() &&
+                       !viewer.jobs().anyRunning(
+                           JobType::Import);
+            }));
+
+        EXPECT_FALSE(viewer.jobs().anyRunning(
+            JobType::Import));
+        expect_first_disabled_third_hidden(
+            viewer.getScene());
+        ASSERT_NE(viewer.getTrainer(), nullptr);
+        ASSERT_NE(viewer.getTrainer()->getScene(),
+                  nullptr);
+        expect_first_disabled_third_hidden(
+            *viewer.getTrainer()->getScene());
+        EXPECT_EQ(
+            viewer.getScene().getActiveCameras().size(),
+            2u);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           PostTrainingProjectSaveRestoresCameraEnabledAndHidden) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path /
+            "post-train-camera-flags.licht";
+        const auto dataset_path =
+            temporary_.path /
+            "post-train-camera-flags-dataset";
+        write_transforms_dataset_with_cameras(
+            dataset_path, 3);
+        write_resumable_flagged_three_camera_project(
+            project_path,
+            lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(),
+            dataset_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       viewer.getTrainerManager()
+                           ->hasTrainer();
+            }));
+
+        auto* const manager = viewer.getTrainerManager();
+        ASSERT_NE(manager, nullptr);
+        EXPECT_TRUE(manager->isPaused());
+        expect_first_disabled_third_hidden(
+            viewer.getScene());
+        ASSERT_NE(viewer.getTrainer(), nullptr);
+        ASSERT_NE(viewer.getTrainer()->getScene(),
+                  nullptr);
+        expect_first_disabled_third_hidden(
+            *viewer.getTrainer()->getScene());
+        EXPECT_EQ(
+            viewer.getScene().getActiveCameras().size(),
+            2u);
+        EXPECT_TRUE(viewer.getTrainer()->isInitialized());
     }
 
 } // namespace lfs::vis

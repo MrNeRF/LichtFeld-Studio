@@ -314,7 +314,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_RelocateCheckpointProjectDatasetRestoresTrainerFromNewRoot_Test;
         friend class VisualizerImplResetTest_DatasetProjectWithoutReferenceIsNotRecoveredFromContainingDirectory_Test;
         friend class VisualizerImplResetTest_NonDatasetProjectInsideDatasetRootIsNotReimported_Test;
-        friend class VisualizerImplResetTest_OpeningAnotherProjectCancelsPendingDatasetRestoreImport_Test;
+        friend class VisualizerImplResetTest_OpeningAnotherProjectAfterHydratedCameraRestoreReplacesTrainer_Test;
         friend class VisualizerImplResetTest_NonDatasetSaveDoesNotBindStaleDatasetPath_Test;
         friend class VisualizerImplResetTest_TrainingCheckpointReopenRestoresPausedResumableState_Test;
         friend class VisualizerImplResetTest_ErrorFinishedCheckpointProjectReopensPausedAndResumable_Test;
@@ -338,6 +338,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         friend class VisualizerImplResetTest_LoadFileStopTrainingDefersDatasetLoad_Test;
         friend class VisualizerImplResetTest_LoadDatasetApiDoesNotDeferOrPrompt_Test;
+        friend class VisualizerImplResetTest_PreTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
+        friend class VisualizerImplResetTest_PostTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;
