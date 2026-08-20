@@ -865,10 +865,7 @@ namespace lfs::core {
                               std::move(opacity),
                               scene_scale,
                               SplatData::ShNLayout::Swizzled);
-            if (shN_bounds.is_valid()) {
-                rebound.shN_value_bounds() = std::move(shN_bounds);
-            }
-            rebound.set_active_sh_degree(active_sh);
+            rebound.set_active_sh_degree(active_sh, std::move(shN_bounds));
             if (deleted.is_valid()) {
                 rebound.deleted() = std::move(deleted);
                 // Preserve soft-delete content across exportable rebind; force a

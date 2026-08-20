@@ -118,15 +118,6 @@ namespace lfs::vis {
             return name;
         }
 
-        // Codes and bounds are one declared representation; install before degree validation.
-        void installShNValueBounds(lfs::core::SplatData& dst, lfs::core::Tensor bounds) {
-            dst.shN_value_bounds() = std::move(bounds);
-            auto& shN = dst.shN_raw();
-            if (shN.is_valid() && shN.shape().rank() > 0 && shN.capacity() < shN.shape()[0]) {
-                shN.reserve(shN.shape()[0]);
-            }
-        }
-
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData> cloneSplatDataToCpu(
             const lfs::core::SplatData& src) {
             auto shN = src.clone_shN_storage();
@@ -144,9 +135,9 @@ namespace lfs::vis {
                 src.opacity_raw().cpu(),
                 src.get_scene_scale(),
                 lfs::core::SplatData::ShNLayout::Swizzled);
-            if (src.shN_value_quantized())
-                installShNValueBounds(*result, src.shN_value_bounds().cpu());
-            result->set_active_sh_degree(src.get_active_sh_degree());
+            result->set_active_sh_degree(
+                src.get_active_sh_degree(),
+                src.shN_value_quantized() ? src.shN_value_bounds().cpu() : lfs::core::Tensor{});
             return result;
         }
 
@@ -4693,9 +4684,9 @@ namespace lfs::vis {
             src.scaling_raw().cuda(), src.rotation_raw().cuda(), src.opacity_raw().cuda(),
             src.get_scene_scale(),
             lfs::core::SplatData::ShNLayout::Swizzled);
-        if (src.shN_value_quantized())
-            installShNValueBounds(*data, src.shN_value_bounds().cuda());
-        data->set_active_sh_degree(src.get_active_sh_degree());
+        data->set_active_sh_degree(
+            src.get_active_sh_degree(),
+            src.shN_value_quantized() ? src.shN_value_bounds().cuda() : lfs::core::Tensor{});
 
         const std::string name = makeUniqueCounterNodeName(scene_, "Selection", clipboard_counter_);
         if (auto allocator = makeExternalSplatAllocator()) {
@@ -4845,9 +4836,10 @@ namespace lfs::vis {
                     entry.data->scaling_raw().cuda(), entry.data->rotation_raw().cuda(), entry.data->opacity_raw().cuda(),
                     entry.data->get_scene_scale(),
                     lfs::core::SplatData::ShNLayout::Swizzled);
-                if (entry.data->shN_value_quantized())
-                    installShNValueBounds(*paste_data, entry.data->shN_value_bounds().cuda());
-                paste_data->set_active_sh_degree(entry.data->get_active_sh_degree());
+                paste_data->set_active_sh_degree(
+                    entry.data->get_active_sh_degree(),
+                    entry.data->shN_value_quantized() ? entry.data->shN_value_bounds().cuda()
+                                                      : lfs::core::Tensor{});
 
                 if (auto allocator = makeExternalSplatAllocator()) {
                     if (auto migrated = lfs::io::migrateSplatTensorsToAllocator(*paste_data, allocator);
