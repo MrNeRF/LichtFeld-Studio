@@ -67,6 +67,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/passes/vulkan_viewport_pass.cpp
         rendering/passes/vulkan_mesh_pass.cpp
         rendering/passes/vulkan_scene_motion_pass.cpp
+        rendering/passes/vulkan_scene_depth_history_pass.cpp
         rendering/passes/vulkan_scene_temporal_resolve_pass.cpp
         rendering/passes/vulkan_environment_pass.cpp
         rendering/passes/vulkan_depth_blit_pass.cpp

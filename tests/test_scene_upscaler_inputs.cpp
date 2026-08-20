@@ -220,6 +220,11 @@ namespace lfs::vis {
                                               false);
         EXPECT_TRUE(canRecordVulkanSceneDepthHistory(params));
         EXPECT_EQ(sceneDepthHistoryEncodingCode(params.depth), 1u);
+        const auto history = makeVulkanSceneDepthHistoryContract(params);
+        EXPECT_TRUE(history.valid());
+        EXPECT_EQ(history.encoding, SceneDepthEncoding::LinearView);
+        EXPECT_EQ(history.storage, SceneDepthStorage::VulkanImage);
+        EXPECT_FALSE(history.flip_y);
         params.depth.encoding = SceneDepthEncoding::VulkanNdc;
         EXPECT_TRUE(canRecordVulkanSceneDepthHistory(params));
         EXPECT_EQ(sceneDepthHistoryEncodingCode(params.depth), 2u);

@@ -68,4 +68,19 @@ namespace lfs::vis {
         };
     }
 
+    [[nodiscard]] inline SceneDepthContract makeVulkanSceneDepthHistoryContract(
+        const VulkanSceneDepthHistoryParams& params) noexcept {
+        if (!canRecordVulkanSceneDepthHistory(params)) {
+            return {};
+        }
+        return makeSceneDepthContract(true,
+                                      SceneDepthStorage::VulkanImage,
+                                      SceneDepthEncoding::LinearView,
+                                      {params.depth.width, params.depth.height},
+                                      params.depth.near_plane,
+                                      params.depth.far_plane,
+                                      params.depth.orthographic,
+                                      false);
+    }
+
 } // namespace lfs::vis
