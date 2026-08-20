@@ -198,6 +198,13 @@ namespace lfs::vis::tools {
         }
     }
 
+    void SelectionTool::adjustWindowScale(const float factor) {
+        window_scale_ = std::clamp(window_scale_ * factor, 0.05f, 1.0f);
+        if (tool_context_ && isEnabled() && depth_filter_enabled_) {
+            applySelectionFilterSettings(*tool_context_);
+        }
+    }
+
     void SelectionTool::syncDepthFilterToCamera(const Viewport& viewport) {
         if (!tool_context_ || !isEnabled() || !depth_filter_enabled_) {
             return;
@@ -215,6 +222,9 @@ namespace lfs::vis::tools {
             settings.show_ellipsoid = true;
         }
         settings.depth_filter_enabled = depth_filter_enabled_;
+        settings.depth_filter_scale = window_scale_;
+        settings.depth_filter_offset_x = window_offset_x_;
+        settings.depth_filter_offset_y = window_offset_y_;
         const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
         const float half_height = depthBoxHalfHeight(*tool_context_, frustum_half_width_);
         settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);
@@ -245,6 +255,9 @@ namespace lfs::vis::tools {
             settings.show_ellipsoid = true;
         }
         settings.depth_filter_enabled = depth_filter_enabled_;
+        settings.depth_filter_scale = window_scale_;
+        settings.depth_filter_offset_x = window_offset_x_;
+        settings.depth_filter_offset_y = window_offset_y_;
         if (depth_filter_enabled_) {
             const auto& viewport = selectionFilterViewport(ctx);
             const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);

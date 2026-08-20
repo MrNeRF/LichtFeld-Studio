@@ -27,6 +27,29 @@
 namespace lfs::vis {
 
     namespace {
+        // Sanitizes only the screen-window fields. Near/far normalization is
+        // deferred until the screen-window path owns depth_filter_min/max: the
+        // legacy tool and GUI bindings rewrite those values per frame, and a
+        // sanitizer in that loop shifts its equilibrium.
+        void sanitizeSelectionWindowSettings(RenderSettings& settings) {
+            constexpr float kDefaultScale = 0.35f;
+            constexpr float kDefaultOffset = 0.0f;
+
+            if (!std::isfinite(settings.depth_filter_scale)) {
+                settings.depth_filter_scale = kDefaultScale;
+            }
+            if (!std::isfinite(settings.depth_filter_offset_x)) {
+                settings.depth_filter_offset_x = kDefaultOffset;
+            }
+            if (!std::isfinite(settings.depth_filter_offset_y)) {
+                settings.depth_filter_offset_y = kDefaultOffset;
+            }
+            settings.depth_filter_scale = std::clamp(settings.depth_filter_scale, 0.05f, 1.0f);
+            settings.depth_filter_offset_x = std::clamp(settings.depth_filter_offset_x, -1.0f, 1.0f);
+            settings.depth_filter_offset_y = std::clamp(settings.depth_filter_offset_y, -1.0f, 1.0f);
+            settings.depth_filter_viz_mode = std::clamp(settings.depth_filter_viz_mode, 0, 2);
+        }
+
         [[nodiscard]] bool shouldRefreshCameraMetricsForSettings(
             const RenderSettings& old_settings,
             const RenderSettings& new_settings) {
@@ -527,6 +550,7 @@ namespace lfs::vis {
             enforceProjectionBackend(settings_);
             sanitizeDepthViewSettings(settings_);
             sanitizeGTComparisonSettings(settings_);
+            sanitizeSelectionWindowSettings(settings_);
             settings_.grid_plane = clampGridPlane(settings_.grid_plane);
             if (split_view_service_.isIndependentDualActive(settings_)) {
                 if (grid_plane_changed) {
