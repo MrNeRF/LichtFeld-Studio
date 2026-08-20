@@ -125,9 +125,10 @@ namespace lfs::training {
         void set_phase(TrainingPhase phase);
 
         void update_snapshot(const HookContext& ctx, int max_iterations, bool is_paused, bool is_running, bool stop_requested, TrainingPhase phase);
-        void apply_training_paused(int iteration);
         LFS_BRIDGE_API void bind_state_events();
         void clear_snapshot(const Trainer* trainer);
+        // Drop trainer-owned snapshot fields after teardown (no trainer loaded).
+        void reset_snapshot();
 
         [[nodiscard]] TrainingSnapshot snapshot() const;
         [[nodiscard]] std::vector<LossHistoryPoint> loss_history() const;
@@ -156,6 +157,8 @@ namespace lfs::training {
         static std::expected<void, std::string> apply_clamp(core::Tensor& tensor, const core::Tensor& mask_rows, const std::optional<double>& minv, const std::optional<double>& maxv);
 
         static std::expected<core::Tensor*, std::string> resolve_attribute(lfs::core::SplatData& model, const std::string& name, size_t& row_dim_out);
+
+        void reset_snapshot_locked();
 
         // Registry
         std::vector<OperationInfo> ops_;
