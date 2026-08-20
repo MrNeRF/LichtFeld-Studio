@@ -4161,7 +4161,8 @@ namespace lfs::vis::project {
         auto captured_selection =
             lfs::io::project::
                 capture_selection_chapter(
-                    scene, selected);
+                    scene, selected,
+                    omit_unbound_training);
         if (!captured_selection) {
             return lfs::Status::failure(
                 std::move(captured_selection).error());

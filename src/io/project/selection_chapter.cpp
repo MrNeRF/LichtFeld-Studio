@@ -1060,7 +1060,33 @@ namespace lfs::io::project {
     lfs::Result<CapturedSelectionState> capture_selection_state(
         const lfs::core::Scene& scene,
         const std::span<const lfs::core::Uuid>
-            selected_node_uuids) {
+            selected_node_uuids,
+        const std::span<const lfs::core::Uuid>
+            omit_node_uuids) {
+        std::unordered_set<lfs::core::Uuid> omitted(
+            omit_node_uuids.begin(), omit_node_uuids.end());
+        const auto collect_descendants =
+            [&](const lfs::core::SceneNode& node,
+                const auto& self) -> void {
+            for (const lfs::core::NodeId child_id :
+                 node.children) {
+                const lfs::core::SceneNode* child =
+                    scene.getNodeById(child_id);
+                if (child == nullptr) {
+                    continue;
+                }
+                omitted.insert(child->uuid);
+                self(*child, self);
+            }
+        };
+        for (const auto& uuid : omit_node_uuids) {
+            const auto* node = scene.getNodeByUuid(uuid);
+            if (node == nullptr) {
+                continue;
+            }
+            collect_descendants(*node, collect_descendants);
+        }
+
         CapturedSelectionState state;
         const auto metadata =
             scene.captureSelectionStateMetadata();
@@ -1077,6 +1103,9 @@ namespace lfs::io::project {
             const auto slices =
                 scene.capturePerNodeSelectionSlices(domain);
             for (const auto& [uuid, tensor] : slices) {
+                if (omitted.contains(uuid)) {
+                    continue;
+                }
                 if (!tensor.is_valid() ||
                     tensor.ndim() != 1) {
                     return selection_error(
@@ -1118,6 +1147,9 @@ namespace lfs::io::project {
                  node->type == lfs::core::NodeType::KEYFRAME_GROUP)) {
                 continue;
             }
+            if (omitted.contains(uuid)) {
+                continue;
+            }
             state.selected_node_uuids.push_back(uuid);
         }
         return state;
@@ -1155,10 +1187,13 @@ namespace lfs::io::project {
     lfs::Result<SelectionChapter> capture_selection_chapter(
         const lfs::core::Scene& scene,
         const std::span<const lfs::core::Uuid>
-            selected_node_uuids) {
+            selected_node_uuids,
+        const std::span<const lfs::core::Uuid>
+            omit_node_uuids) {
         auto state =
             capture_selection_state(
-                scene, selected_node_uuids);
+                scene, selected_node_uuids,
+                omit_node_uuids);
         if (!state) {
             return std::move(state).error();
         }

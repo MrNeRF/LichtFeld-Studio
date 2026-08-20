@@ -100,10 +100,13 @@ namespace lfs::io::project {
         std::vector<lfs::core::Uuid> selected_node_uuids;
     };
 
+    // The omit list prunes each listed node and its whole subtree,
+    // matching capture_scene_graph.
     [[nodiscard]] LFS_IO_API lfs::Result<CapturedSelectionState>
     capture_selection_state(
         const lfs::core::Scene& scene,
-        std::span<const lfs::core::Uuid> selected_node_uuids);
+        std::span<const lfs::core::Uuid> selected_node_uuids,
+        std::span<const lfs::core::Uuid> omit_node_uuids = {});
 
     [[nodiscard]] LFS_IO_API lfs::Result<SelectionChapter>
     materialize_selection_chapter(CapturedSelectionState state);
@@ -114,10 +117,13 @@ namespace lfs::io::project {
     [[nodiscard]] LFS_IO_API lfs::Result<SelectionChapter>
     decode_selection_chapter(std::span<const std::byte> payload);
 
+    // The omit list prunes each listed node and its whole subtree,
+    // matching capture_scene_graph.
     [[nodiscard]] LFS_IO_API lfs::Result<SelectionChapter>
     capture_selection_chapter(
         const lfs::core::Scene& scene,
-        std::span<const lfs::core::Uuid> selected_node_uuids);
+        std::span<const lfs::core::Uuid> selected_node_uuids,
+        std::span<const lfs::core::Uuid> omit_node_uuids = {});
 
     // Phase-A API. Every slice is validated against topology and copied into
     // its final contiguous CPU tensor. topology is not mutated.
