@@ -346,7 +346,10 @@ namespace lfs::vis {
                                 params.depth.encoding == SceneDepthEncoding::LinearView
                                     ? (params.depth.orthographic ? 2 : 1)
                                     : 0},
-                .depth_info = {params.depth.near_plane, params.depth.far_plane, 0.0f, 0.0f},
+                .depth_info = {params.depth.near_plane,
+                               params.depth.far_plane,
+                               params.depth.flip_y ? 1.0f : 0.0f,
+                               0.0f},
             };
             void* mapped = nullptr;
             if (!vk_try_bool(vmaMapMemory(allocator, frame.uniform_allocation, &mapped),

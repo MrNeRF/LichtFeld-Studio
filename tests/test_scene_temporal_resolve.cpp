@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "visualizer/rendering/passes/vulkan_scene_temporal_pipeline.hpp"
 #include "visualizer/rendering/passes/vulkan_scene_temporal_resolve_pass.hpp"
 #include "visualizer/rendering/scene_temporal_resolve.hpp"
 
@@ -25,6 +26,38 @@ namespace lfs::vis {
                 .history_valid = true,
                 .depth_available = true,
             };
+        }
+
+        VulkanSceneTemporalPipelineRequest pipelineRequest() {
+            VulkanSceneTemporalPipelineRequest request;
+            request.temporal.requirements = {
+                .depth = true,
+                .motion = true,
+                .jitter = true,
+                .history_color = true,
+                .history_depth = true};
+            request.temporal.render_extent = {640, 360};
+            request.temporal.output_extent = {1280, 720};
+            request.motion.enabled = true;
+            request.motion.depth_view = reinterpret_cast<VkImageView>(1);
+            request.motion.depth = makeSceneDepthContract(true,
+                                                          SceneDepthStorage::VulkanImage,
+                                                          SceneDepthEncoding::VulkanNdc,
+                                                          {640, 360},
+                                                          0.1f,
+                                                          1000.0f,
+                                                          false,
+                                                          false);
+            request.motion.render_extent = {640, 360};
+            request.motion.includes_jitter = true;
+            request.resolve.enabled = true;
+            request.resolve.current_color_view = reinterpret_cast<VkImageView>(2);
+            request.resolve.render_extent = {640, 360};
+            request.resolve.output_extent = {1280, 720};
+            request.resolve.current_depth.enabled = true;
+            request.resolve.current_depth.current_depth_view = request.motion.depth_view;
+            request.resolve.current_depth.depth = request.motion.depth;
+            return request;
         }
     } // namespace
 
@@ -196,6 +229,41 @@ namespace lfs::vis {
         EXPECT_EQ(temporalDepthHistoryResourceSlot(TemporalViewId::SplitRight, 1), 5u);
         EXPECT_FALSE(temporalDepthHistoryResourceSlot(TemporalViewId::Main, 2));
         EXPECT_FALSE(temporalDepthHistoryResourceSlot(TemporalViewId::Count, 0));
+    }
+
+    TEST(VulkanSceneTemporalPipelineContract, RequiresCoherentViewsExtentsAndInputs) {
+        auto request = pipelineRequest();
+        EXPECT_TRUE(validVulkanSceneTemporalPipelineRequest(request));
+        request.resolve.output_extent.x += 1;
+        EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
+        request = pipelineRequest();
+        request.resolve.view = TemporalViewId::SplitLeft;
+        EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
+        request = pipelineRequest();
+        request.resolve.motion_view = reinterpret_cast<VkImageView>(3);
+        EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
+        request = pipelineRequest();
+        request.resolve.current_depth.current_depth_view = reinterpret_cast<VkImageView>(4);
+        EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
+    }
+
+    TEST(VulkanSceneTemporalPipelineContract, DepthHistoryRequirementMatchesOwnership) {
+        auto request = pipelineRequest();
+        EXPECT_TRUE(validVulkanSceneTemporalPipelineRequest(request));
+        request.resolve.current_depth.enabled = false;
+        EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
+        request.temporal.requirements.history_depth = false;
+        EXPECT_TRUE(validVulkanSceneTemporalPipelineRequest(request));
+        request = pipelineRequest();
+        request.motion.includes_jitter = false;
+        EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
+    }
+
+    TEST(VulkanSceneTemporalPipelineContract, InactiveRequestRemainsZeroCost) {
+        VulkanSceneTemporalPipelineRequest request;
+        EXPECT_TRUE(validVulkanSceneTemporalPipelineRequest(request));
+        request.temporal.render_extent = {640, 360};
+        EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
     }
 
 } // namespace lfs::vis

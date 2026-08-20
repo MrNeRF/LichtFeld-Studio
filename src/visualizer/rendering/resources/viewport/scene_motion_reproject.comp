@@ -12,7 +12,7 @@ layout(set = 0, binding = 2, std140) uniform ReprojectionParams {
     mat4 inverse_current_view_projection;
     mat4 previous_view_projection;
     ivec4 render_info; // xy = extent, z = flip_y, w = 0 NDC, 1 perspective linear, 2 ortho linear
-    vec4 depth_info;   // x = near plane, y = far plane
+    vec4 depth_info;   // x = near plane, y = far plane, z = source depth flip y
 } params;
 
 float view_depth_to_ndc(float view_depth) {
@@ -34,7 +34,11 @@ void main() {
         return;
     }
 
-    float depth = texelFetch(u_depth, pixel, 0).r;
+    ivec2 depth_pixel = pixel;
+    if (params.depth_info.z > 0.5) {
+        depth_pixel.y = params.render_info.y - 1 - depth_pixel.y;
+    }
+    float depth = texelFetch(u_depth, depth_pixel, 0).r;
     if (params.render_info.w != 0) {
         depth = view_depth_to_ndc(depth);
     }
