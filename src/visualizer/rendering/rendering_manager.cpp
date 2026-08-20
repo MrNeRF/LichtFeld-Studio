@@ -233,8 +233,10 @@ namespace lfs::vis {
         requestRenderFollowUp();
     }
 
-    void RenderingManager::setViewportResizeActive(bool active) {
-        if (const DirtyMask dirty = frame_lifecycle_service_.setViewportResizeActive(active); dirty) {
+    void RenderingManager::setViewportResizeActive(
+        const bool active,
+        const ViewportResizeRenderPolicy render_policy) {
+        if (const DirtyMask dirty = frame_lifecycle_service_.setViewportResizeActive(active, render_policy); dirty) {
             markDirty(dirty);
             std::function<void()> wake_callback;
             {
@@ -393,6 +395,7 @@ namespace lfs::vis {
         viewport_artifact_service_.clearViewportOutput();
         invalidateGTComparisonImageCache();
         clearVulkanViewportImageState();
+        vulkan_viewport_coordinate_size_ = {0, 0};
         last_logged_vksplat_render_error_.clear();
         vulkan_viewport_image_generation_ = 0;
         split_view_image_generation_ = 0;

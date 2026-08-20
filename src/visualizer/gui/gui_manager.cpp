@@ -3904,6 +3904,14 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::shutdown() {
+        if (ui_visibility_resize_active_) {
+            ui_visibility_resize_active_ = false;
+            ui_visibility_layout_committed_ = false;
+            ui_visibility_target_ready_ = false;
+            if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+                rendering->setViewportResizeActive(false);
+            }
+        }
         endInteractiveTransitionGuard();
         ui_toggle_pending_ = false;
         fullscreen_toggle_pending_ = false;
@@ -4394,7 +4402,11 @@ namespace lfs::vis::gui {
         }
 
         ui_toggle_pending_ = false;
-        beginInteractiveTransitionGuard();
+        // This is a viewport-layout resize, not a window-mode transition. Keep
+        // training on the normal non-blocking viewer path: Vulkan work is still
+        // drained below and the renderer's resize contract quiesces/recreates its
+        // output without changing the training schedule.
+        beginInteractiveTransitionGuard(InteractiveTransitionTrainingPolicy::KeepRunning);
         if (!drainVulkanFramesForInteractiveTransition(*wm, "UI visibility")) {
             ui_toggle_pending_ = true;
             ui_toggle_next_allowed_at_ = now + kInteractiveTrainingToggleMinInterval;
@@ -4410,13 +4422,51 @@ namespace lfs::vis::gui {
 
         auto* const trainer = viewer_ ? viewer_->getTrainerManager() : nullptr;
         const bool training_active = trainer && trainer->isRunning();
-        ui_hidden_ = !ui_hidden_;
+        ui_visibility_target_hidden_ = !ui_hidden_;
+        if (auto* const rendering = viewer_->getRenderingManager()) {
+            // Hiding the editor chrome changes the viewport extent without an SDL
+            // window-resize event. Use the same begin/end resize contract as dock
+            // splitters so cached single and dual-view output is retired only after
+            // the guarded layout transition has settled.
+            rendering->setViewportResizeActive(
+                true, ViewportResizeRenderPolicy::FullResolution);
+            ui_visibility_resize_active_ = true;
+            ui_visibility_layout_committed_ = false;
+            ui_visibility_target_ready_ = false;
+
+            // The scene render runs before the GUI layout pass. Prepare the target
+            // rectangle without publishing it to presentation yet. The main loop
+            // commits target layout and fresh scene image atomically; until then the
+            // previous layout continues to display the matching previous image.
+            if (last_ui_layout_work_size_.x > 0.0f &&
+                last_ui_layout_work_size_.y > 0.0f) {
+                ScreenState transition_screen;
+                transition_screen.work_pos = last_ui_layout_work_pos_;
+                transition_screen.work_size = last_ui_layout_work_size_;
+                panel_layout_.enforceWidthConstraints(
+                    show_main_panel_, ui_visibility_target_hidden_, transition_screen);
+                ui_visibility_target_layout_ = panel_layout_.computeViewportLayout(
+                    show_main_panel_, ui_visibility_target_hidden_, window_states_["python_console"],
+                    transition_screen);
+                ui_visibility_target_ready_ =
+                    ui_visibility_target_layout_.size.x > 0.0f &&
+                    ui_visibility_target_layout_.size.y > 0.0f;
+            }
+        }
+
+        if (!ui_visibility_target_ready_) {
+            // Startup/no-layout fallback: there is no prior scene rectangle to
+            // preserve, so commit directly and let the normal layout pass resolve it.
+            ui_hidden_ = ui_visibility_target_hidden_;
+            ui_visibility_layout_committed_ = true;
+        }
 
         applyInteractiveTransitionCooldown(ui_toggle_next_allowed_at_,
                                            std::chrono::steady_clock::now(),
                                            training_active);
-        LOG_DEBUG("UI visibility transition applied: ui_hidden_after={}, training_active={}, next_allowed_in_ms={}",
-                  ui_hidden_,
+        LOG_DEBUG("UI visibility transition prepared: target_hidden={}, committed={}, training_active={}, next_allowed_in_ms={}",
+                  ui_visibility_target_hidden_,
+                  ui_visibility_layout_committed_,
                   training_active,
                   (training_active ? kInteractiveTrainingToggleMinInterval
                                    : kInteractiveIdleToggleMinInterval)
@@ -4493,7 +4543,7 @@ namespace lfs::vis::gui {
             return;
         }
 
-        beginInteractiveTransitionGuard();
+        beginInteractiveTransitionGuard(InteractiveTransitionTrainingPolicy::PauseAndResume);
         if (!drainVulkanFramesForInteractiveTransition(*wm, "fullscreen")) {
             fullscreen_toggle_pending_ = true;
             fullscreen_toggle_next_allowed_at_ = now + kInteractiveTrainingToggleMinInterval;
@@ -4523,12 +4573,14 @@ namespace lfs::vis::gui {
                       .count());
     }
 
-    void GuiManager::beginInteractiveTransitionGuard() {
+    void GuiManager::beginInteractiveTransitionGuard(
+        const InteractiveTransitionTrainingPolicy training_policy) {
         const auto now = std::chrono::steady_clock::now();
         interactive_transition_guard_until_ =
             now + kInteractiveTransitionGuardDuration;
 
-        if (interactive_transition_resume_training_) {
+        if (training_policy == InteractiveTransitionTrainingPolicy::KeepRunning ||
+            interactive_transition_resume_training_) {
             return;
         }
 
@@ -4545,12 +4597,24 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::updateInteractiveTransitionGuard() {
-        if (!interactive_transition_resume_training_) {
-            return;
-        }
         const auto now = std::chrono::steady_clock::now();
         if (now < interactive_transition_guard_until_) {
             return;
+        }
+
+        if (ui_visibility_resize_active_) {
+            if (ui_visibility_target_ready_ && !ui_visibility_layout_committed_) {
+                // A failed or unavailable renderer must not leave the UI transition
+                // half-applied. Retain the old, correctly matched layout and allow an
+                // explicit retry instead of stretching its cached image.
+                LOG_WARN("UI visibility transition timed out before a fresh viewport frame; retaining the previous layout");
+                ui_visibility_target_ready_ = false;
+            }
+            ui_visibility_resize_active_ = false;
+            ui_visibility_layout_committed_ = false;
+            if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+                rendering->setViewportResizeActive(false);
+            }
         }
 
         endInteractiveTransitionGuard();
@@ -4576,7 +4640,11 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isInteractiveTransitionSettling() const {
-        return std::chrono::steady_clock::now() < interactive_transition_guard_until_;
+        const bool guard_active = std::chrono::steady_clock::now() < interactive_transition_guard_until_;
+        const bool ui_resize_ready = ui_visibility_resize_active_ &&
+                                     (ui_visibility_target_ready_ ||
+                                      ui_visibility_layout_committed_);
+        return guard_active && !ui_resize_ready;
     }
 
     void GuiManager::render() {
@@ -4983,6 +5051,12 @@ namespace lfs::vis::gui {
         if (ui_layout_changed) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.layout_state_update", 0.25);
             ui_layout_settle_frames_ = kUiLayoutSettleFrames;
+            if (ui_visibility_resize_active_ &&
+                ui_hidden_ != last_ui_layout_ui_hidden_) {
+                // The next frame may render against the new viewport extent while
+                // the broader Vulkan transition guard remains active.
+                ui_visibility_layout_committed_ = true;
+            }
             last_ui_layout_work_pos_ = screen.work_pos;
             last_ui_layout_work_size_ = screen.work_size;
             last_ui_layout_right_panel_w_ = panel_layout_.getRightPanelWidth();
@@ -6324,6 +6398,32 @@ namespace lfs::vis::gui {
 
     glm::vec2 GuiManager::getViewportSize() const {
         return viewport_layout_.size;
+    }
+
+    glm::vec2 GuiManager::getSceneRenderViewportPos() const {
+        return ui_visibility_target_ready_ && !ui_visibility_layout_committed_
+                   ? ui_visibility_target_layout_.pos
+                   : viewport_layout_.pos;
+    }
+
+    glm::vec2 GuiManager::getSceneRenderViewportSize() const {
+        return ui_visibility_target_ready_ && !ui_visibility_layout_committed_
+                   ? ui_visibility_target_layout_.size
+                   : viewport_layout_.size;
+    }
+
+    void GuiManager::commitUiVisibilityTransitionIfFrameReady(const bool frame_ready) {
+        if (!frame_ready || !ui_visibility_resize_active_ ||
+            !ui_visibility_target_ready_ || ui_visibility_layout_committed_) {
+            return;
+        }
+
+        ui_hidden_ = ui_visibility_target_hidden_;
+        viewport_layout_ = ui_visibility_target_layout_;
+        ui_visibility_layout_committed_ = true;
+        ui_visibility_target_ready_ = false;
+        LOG_DEBUG("UI visibility transition committed with a matching viewport frame: ui_hidden={}",
+                  ui_hidden_);
     }
 
     bool GuiManager::isViewportFocused() const {

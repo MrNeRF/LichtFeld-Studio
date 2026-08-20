@@ -118,6 +118,9 @@ namespace lfs::vis {
             // Viewport region access
             glm::vec2 getViewportPos() const;
             glm::vec2 getViewportSize() const;
+            glm::vec2 getSceneRenderViewportPos() const;
+            glm::vec2 getSceneRenderViewportSize() const;
+            void commitUiVisibilityTransitionIfFrameReady(bool frame_ready);
             bool isViewportFocused() const;
             bool isPositionInViewport(double x, double y) const;
             bool isPositionOverFloatingPanel(double x, double y) const;
@@ -254,7 +257,11 @@ namespace lfs::vis {
             void queueFullscreenToggle();
             void requestFullscreenToggle();
             void updateFullscreenTransition();
-            void beginInteractiveTransitionGuard();
+            enum class InteractiveTransitionTrainingPolicy {
+                KeepRunning,
+                PauseAndResume,
+            };
+            void beginInteractiveTransitionGuard(InteractiveTransitionTrainingPolicy training_policy);
             void updateInteractiveTransitionGuard();
             void endInteractiveTransitionGuard();
 
@@ -293,6 +300,11 @@ namespace lfs::vis {
             PerfSampler perf_sampler_;
             std::chrono::steady_clock::time_point ui_toggle_next_allowed_at_{};
             bool ui_toggle_pending_ = false;
+            bool ui_visibility_resize_active_ = false;
+            bool ui_visibility_layout_committed_ = false;
+            bool ui_visibility_target_ready_ = false;
+            bool ui_visibility_target_hidden_ = false;
+            ViewportLayout ui_visibility_target_layout_{};
             std::chrono::steady_clock::time_point fullscreen_toggle_next_allowed_at_{};
             std::chrono::steady_clock::time_point interactive_transition_guard_until_{};
             bool fullscreen_toggle_pending_ = false;
