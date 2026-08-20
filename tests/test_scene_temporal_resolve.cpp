@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "visualizer/rendering/passes/vulkan_scene_temporal_resolve_pass.hpp"
 #include "visualizer/rendering/scene_temporal_resolve.hpp"
 
 #include <gtest/gtest.h>
@@ -126,6 +127,25 @@ namespace lfs::vis {
         stable.history.x = std::numeric_limits<float>::infinity();
         EXPECT_EQ(resolveSceneTemporalSample(stable).rejection,
                   SceneHistoryRejection::InvalidHistory);
+    }
+
+    TEST(VulkanSceneTemporalResolveContract, PingPongSelectionIsDeterministic) {
+        EXPECT_TRUE(validTemporalViewId(TemporalViewId::Main));
+        EXPECT_TRUE(validTemporalViewId(TemporalViewId::SplitRight));
+        EXPECT_FALSE(validTemporalViewId(TemporalViewId::Count));
+        EXPECT_EQ(nextTemporalHistoryWriteIndex(false, 0), 0u);
+        EXPECT_EQ(nextTemporalHistoryWriteIndex(true, 0), 1u);
+        EXPECT_EQ(nextTemporalHistoryWriteIndex(true, 1), 0u);
+        EXPECT_EQ(nextTemporalHistoryWriteIndex(true, 99), 0u);
+    }
+
+    TEST(VulkanSceneTemporalResolveContract, PaddedCurrentUvNeverSamplesOutsideValidRegion) {
+        const auto transform = temporalCurrentUvTransform({1100, 738}, {1152, 768});
+        EXPECT_NEAR(transform.x, 1100.0f / 1152.0f, 1e-6f);
+        EXPECT_NEAR(transform.y, 738.0f / 768.0f, 1e-6f);
+        EXPECT_LT(transform.z, transform.x);
+        EXPECT_LT(transform.w, transform.y);
+        EXPECT_EQ(temporalCurrentUvTransform({1200, 738}, {1152, 768}), glm::vec4(0.0f));
     }
 
 } // namespace lfs::vis
