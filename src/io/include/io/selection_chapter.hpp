@@ -100,6 +100,8 @@ namespace lfs::io::project {
         std::vector<lfs::core::Uuid> selected_node_uuids;
     };
 
+    // The omit list prunes each listed node and its whole subtree,
+    // matching capture_scene_graph.
     [[nodiscard]] LFS_IO_API lfs::Result<CapturedSelectionState>
     capture_selection_state(
         const lfs::core::Scene& scene,
@@ -115,6 +117,8 @@ namespace lfs::io::project {
     [[nodiscard]] LFS_IO_API lfs::Result<SelectionChapter>
     decode_selection_chapter(std::span<const std::byte> payload);
 
+    // The omit list prunes each listed node and its whole subtree,
+    // matching capture_scene_graph.
     [[nodiscard]] LFS_IO_API lfs::Result<SelectionChapter>
     capture_selection_chapter(
         const lfs::core::Scene& scene,
