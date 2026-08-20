@@ -50,6 +50,7 @@ namespace lfs::vis {
                    request.temporal.output_extent == glm::ivec2(0) &&
                    !request.motion.enabled && !request.resolve.enabled;
         if (!plan.valid() || !validTemporalViewId(request.temporal.view) ||
+            request.temporal.frame.view.size != request.temporal.render_extent ||
             !sameExtents(request) || !sameView(request) || !sameDepthSource(request))
             return false;
         if (!request.temporal.requirements.depth || !request.temporal.requirements.motion ||

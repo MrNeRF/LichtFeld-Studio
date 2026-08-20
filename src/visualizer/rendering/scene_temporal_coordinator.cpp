@@ -31,12 +31,11 @@ namespace lfs::vis {
             return prepared;
         }
 
-        prepared.frame = frames_.prepare(request.view, request.frame);
-        if (hasTemporalResetReason(prepared.frame.reset_reasons,
-                                   TemporalResetReason::InvalidInput)) {
+        if (!validTemporalFrameInput(request.frame)) {
             reset(request.view, TemporalResetReason::InvalidInput);
             return prepared;
         }
+        prepared.frame = frames_.prepare(request.view, request.frame);
         prepared.history = histories_.prepare(request.view, prepared.plan, prepared.frame);
         prepared.ticket = nextTicket();
         pending = PendingFrame{

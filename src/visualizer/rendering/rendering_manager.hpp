@@ -18,8 +18,10 @@
 #include "passes/vulkan_split_view_pass.hpp"
 #include "render_animation_state.hpp"
 #include "rendering/rendering.hpp"
+#include "rendering/scene_temporal_resolve.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
+#include "rendering/temporal_frame_tracker.hpp"
 #include "rendering_types.hpp"
 #include "spark_lod_controller.hpp"
 #include "split_view_service.hpp"
@@ -511,6 +513,11 @@ namespace lfs::vis {
         // Vulkan mesh frame — populated by `renderVulkanFrame` when there are meshes in
         // the scene, consumed by gui_manager to feed `vulkan_viewport_pass.mesh_items`.
         struct VulkanMeshFrame {
+            struct TemporalFrame {
+                TemporalFrameInput input;
+                SceneTemporalResolveSettings resolve_settings;
+            };
+
             glm::mat4 view_projection{1.0f};
             glm::vec3 camera_position{0.0f};
             std::vector<lfs::vis::VulkanMeshDrawItem> items;
@@ -518,6 +525,7 @@ namespace lfs::vis {
             lfs::vis::VulkanEnvironmentParams environment;
             lfs::vis::VulkanDepthBlitParams depth_blit;
             lfs::vis::VulkanSplitViewParams split_view;
+            std::optional<TemporalFrame> temporal;
         };
         void setVulkanMeshFrame(VulkanMeshFrame frame) {
             std::lock_guard lock(vulkan_mesh_frame_mutex_);
@@ -716,6 +724,7 @@ namespace lfs::vis {
         void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
         void requestRenderFollowUp();
+        void requestTemporalFollowUp();
         void notifyAsyncLodResultsReady();
         void requestResizeTrainingPause(TrainerManager* trainer_manager);
         void releaseResizeTrainingPause();
@@ -767,6 +776,11 @@ namespace lfs::vis {
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
         std::uint64_t viewport_projection_generation_ = 1;
+        std::uint64_t temporal_scene_revision_ = 1;
+        TemporalConvergenceController temporal_convergence_;
+        bool scene_reconstruction_request_logged_ = false;
+        std::string last_scene_reconstruction_backend_;
+        std::string last_scene_reconstruction_preset_;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
         std::unique_ptr<SparkLodController> lod_controller_;

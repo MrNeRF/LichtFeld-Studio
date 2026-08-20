@@ -224,6 +224,7 @@ namespace lfs::vis {
             VkDescriptorSet frustum_descriptor_set = VK_NULL_HANDLE;
             VkDescriptorSet shape_overlay_descriptor_set = VK_NULL_HANDLE;
             VkImageView bound_shape_overlay_depth_view = VK_NULL_HANDLE;
+            bool temporal_presentation = false;
         };
         std::vector<FrameResources> frame_resources;
 
@@ -259,6 +260,7 @@ namespace lfs::vis {
         bool scene_spatial_pipeline_failed = false;
         SceneUpscalerSelection scene_upscaler_selection{};
         std::optional<SceneUpscalerSelection> logged_scene_upscaler_selection;
+        std::string temporal_failure;
         VkPipelineLayout vignette_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline vignette_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout grid_pipeline_layout = VK_NULL_HANDLE;
@@ -2037,6 +2039,40 @@ namespace lfs::vis {
             }
         }
 
+        void reportTemporalFailure(std::string reason) {
+            if (temporal_failure == reason)
+                return;
+            temporal_failure = std::move(reason);
+            LOG_WARN("Temporal reconstruction unavailable: {}", temporal_failure);
+        }
+
+        void clearTemporalFailure() {
+            temporal_failure.clear();
+        }
+
+        [[nodiscard]] static std::string_view temporalStatusName(
+            const VulkanSceneTemporalPipelineStatus status) {
+            switch (status) {
+            case VulkanSceneTemporalPipelineStatus::Inactive:
+                return "inactive";
+            case VulkanSceneTemporalPipelineStatus::Resolved:
+                return "resolved";
+            case VulkanSceneTemporalPipelineStatus::InvalidRequest:
+                return "invalid-request";
+            case VulkanSceneTemporalPipelineStatus::MotionUnavailable:
+                return "motion-unavailable";
+            case VulkanSceneTemporalPipelineStatus::MotionFailure:
+                return "motion-failure";
+            case VulkanSceneTemporalPipelineStatus::ResolveUnavailable:
+                return "resolve-unavailable";
+            case VulkanSceneTemporalPipelineStatus::ResolveFailure:
+                return "resolve-failure";
+            case VulkanSceneTemporalPipelineStatus::CommitFailure:
+                return "commit-failure";
+            }
+            return "unknown";
+        }
+
         [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const {
             return params.scene_upscaler == SceneUpscalerBackend::Temporal &&
                    params.temporal.has_value() &&
@@ -2054,12 +2090,14 @@ namespace lfs::vis {
                 temporal_pipeline_initialized = temporal_pipeline.init(*context);
             }
             if (!temporal_pipeline_initialized) {
+                reportTemporalFailure("pipeline initialization failed");
                 updateSceneUpscalerSelection(params.scene_upscaler, false);
                 return false;
             }
 
             const auto result = temporal_pipeline.record(command_buffer, *params.temporal);
             if (!result.resolved()) {
+                reportTemporalFailure(std::format("pipeline status {}", temporalStatusName(result.status)));
                 updateSceneUpscalerSelection(params.scene_upscaler, false);
                 return false;
             }
@@ -2068,9 +2106,12 @@ namespace lfs::vis {
                                                            result.output_view,
                                                            VK_IMAGE_LAYOUT_GENERAL)) {
                 temporal_pipeline.reset(result.view, TemporalResetReason::ResolveFailure);
+                reportTemporalFailure("presentation descriptor bind failed");
                 updateSceneUpscalerSelection(params.scene_upscaler, false);
                 return false;
             }
+            frame.temporal_presentation = true;
+            clearTemporalFailure();
             updateSceneUpscalerSelection(params.scene_upscaler, true);
             return true;
         }
@@ -2082,6 +2123,7 @@ namespace lfs::vis {
                 static_cast<void>(ensureSpatialScenePipeline());
             }
             auto& frame = resourcesForFrame(params.frame_slot);
+            frame.temporal_presentation = false;
             updateQuadBuffer(params.scene_image_flip_y);
             updateGridUniforms(params);
             updateFrustumInstances(params);
@@ -2117,7 +2159,12 @@ namespace lfs::vis {
             split_view_pass.prepare(params.split_view, params.frame_slot);
             if (params.scene_upscaler == SceneUpscalerBackend::Temporal &&
                 !hasPreRenderWork(params)) {
-                temporal_pipeline.resetAll(TemporalResetReason::InvalidInput);
+                reportTemporalFailure(params.temporal.has_value()
+                                          ? "request contract is invalid"
+                                          : "frame resources are not paired yet");
+                temporal_pipeline.resetAll(params.temporal.has_value()
+                                               ? TemporalResetReason::InvalidInput
+                                               : TemporalResetReason::RuntimeUnavailable);
                 updateSceneUpscalerSelection(params.scene_upscaler, false);
                 return;
             }
@@ -2359,10 +2406,12 @@ namespace lfs::vis {
                     params.scene_image_alloc_size.x > 0 && params.scene_image_alloc_size.y > 0
                         ? params.scene_image_alloc_size
                         : valid;
-                const ScenePush scene_push{
-                    .uv_scale = outputUvScale(valid, alloc),
-                    .uv_clamp_max = outputUvClampMax(valid, alloc),
-                };
+                const ScenePush scene_push = frame.temporal_presentation
+                                                 ? ScenePush{}
+                                                 : ScenePush{
+                                                       .uv_scale = outputUvScale(valid, alloc),
+                                                       .uv_clamp_max = outputUvClampMax(valid, alloc),
+                                                   };
                 vkCmdPushConstants(command_buffer,
                                    selected_layout,
                                    VK_SHADER_STAGE_FRAGMENT_BIT,

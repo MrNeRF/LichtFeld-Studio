@@ -38,6 +38,7 @@ namespace lfs::vis {
                 .history_depth = true};
             request.temporal.render_extent = {640, 360};
             request.temporal.output_extent = {1280, 720};
+            request.temporal.frame.view.size = request.temporal.render_extent;
             request.motion.enabled = true;
             request.motion.depth_view = reinterpret_cast<VkImageView>(1);
             request.motion.depth = makeSceneDepthContract(true,
@@ -244,6 +245,9 @@ namespace lfs::vis {
         EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
         request = pipelineRequest();
         request.resolve.current_depth.current_depth_view = reinterpret_cast<VkImageView>(4);
+        EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
+        request = pipelineRequest();
+        request.temporal.frame.view.size.x -= 1;
         EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
     }
 

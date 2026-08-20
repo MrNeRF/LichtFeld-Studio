@@ -67,6 +67,9 @@ namespace lfs::vis {
         bool camera_cut = false;
     };
 
+    [[nodiscard]] LFS_VIS_API bool validTemporalFrameInput(
+        const TemporalFrameInput& input) noexcept;
+
     [[nodiscard]] LFS_VIS_API glm::vec2 temporalJitterPixels(std::uint64_t sequence);
     [[nodiscard]] LFS_VIS_API glm::vec2 temporalJitterNdc(std::uint64_t sequence,
                                                           glm::ivec2 render_size);

@@ -82,10 +82,29 @@ namespace lfs::vis {
                                         SceneHistoryStorage::None));
 
         const auto retry = coordinator.prepare(requestFor());
+        EXPECT_TRUE(retry.active());
         EXPECT_EQ(retry.frame.sequence, 0u);
         EXPECT_FALSE(retry.frame.history_valid);
         EXPECT_TRUE(hasTemporalResetReason(retry.frame.reset_reasons,
                                            TemporalResetReason::InvalidInput));
+        EXPECT_TRUE(commitComplete(coordinator, retry));
+    }
+
+    TEST(SceneTemporalCoordinator, ValidFrameRecoversFromPendingInvalidInputReset) {
+        SceneTemporalCoordinator coordinator;
+        coordinator.resetAll(TemporalResetReason::InvalidInput);
+
+        const auto recovered = coordinator.prepare(requestFor());
+        EXPECT_TRUE(recovered.active());
+        EXPECT_FALSE(recovered.frame.history_valid);
+        EXPECT_TRUE(hasTemporalResetReason(recovered.frame.reset_reasons,
+                                           TemporalResetReason::InvalidInput));
+        EXPECT_TRUE(commitComplete(coordinator, recovered));
+
+        const auto next = coordinator.prepare(requestFor());
+        EXPECT_TRUE(next.active());
+        EXPECT_TRUE(next.frame.history_valid);
+        EXPECT_EQ(next.frame.reset_reasons, TemporalResetReason::None);
     }
 
     TEST(SceneTemporalCoordinator, DiscardInvalidatesOnlyMatchingPendingFrame) {

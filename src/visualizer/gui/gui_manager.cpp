@@ -4149,6 +4149,7 @@ namespace lfs::vis::gui {
             // Pull GPU mesh / environment frame populated by renderVulkanFrame.
             // vulkan_viewport_pass rasterizes these on the GPU.
             auto mesh_frame = rendering_manager->getVulkanMeshFrame();
+            auto temporal_frame = std::move(mesh_frame.temporal);
             params.mesh_view_projection = mesh_frame.view_projection;
             params.mesh_camera_position = mesh_frame.camera_position;
             params.mesh_items = std::move(mesh_frame.items);
@@ -4160,6 +4161,88 @@ namespace lfs::vis::gui {
             // run after params.split_view is populated (split stitching is gated on
             // params.split_view.enabled).
             rendering_manager->bindViewportInteropParams(params, frame_slot, export_locked);
+
+            const float temporal_render_scale = temporal_frame &&
+                                                        std::isfinite(temporal_frame->input.render_scale) &&
+                                                        temporal_frame->input.render_scale > 0.0f
+                                                    ? temporal_frame->input.render_scale
+                                                    : 1.0f;
+            const glm::ivec2 output_extent{
+                std::max(1, static_cast<int>(std::lround(
+                                static_cast<float>(params.scene_image_size.x) /
+                                temporal_render_scale))),
+                std::max(1, static_cast<int>(std::lround(
+                                static_cast<float>(params.scene_image_size.y) /
+                                temporal_render_scale)))};
+            const bool temporal_inputs_match =
+                temporal_frame.has_value() && !params.split_view.enabled &&
+                params.external_scene_image_view != VK_NULL_HANDLE &&
+                params.depth_blit.external_image_view != VK_NULL_HANDLE &&
+                params.scene_image_size.x > 0 && params.scene_image_size.y > 0 &&
+                temporal_frame->input.view.size == params.scene_image_size;
+            if (temporal_inputs_match) {
+                const glm::ivec2 allocation_extent =
+                    params.scene_image_alloc_size.x >= params.scene_image_size.x &&
+                            params.scene_image_alloc_size.y >= params.scene_image_size.y
+                        ? params.scene_image_alloc_size
+                        : params.scene_image_size;
+                const SceneDepthContract depth = makeSceneDepthContract(
+                    true,
+                    SceneDepthStorage::VulkanImage,
+                    params.depth_blit.depth_is_ndc ? SceneDepthEncoding::VulkanNdc
+                                                   : SceneDepthEncoding::LinearView,
+                    params.scene_image_size,
+                    params.depth_blit.near_plane,
+                    params.depth_blit.far_plane,
+                    temporal_frame->input.view.orthographic,
+                    params.depth_blit.flip_y);
+                params.temporal = VulkanSceneTemporalPipelineRequest{
+                    .temporal = {
+                        .view = TemporalViewId::Main,
+                        .requirements = {
+                            .depth = true,
+                            .motion = true,
+                            .jitter = true,
+                            .history_color = true,
+                            .history_depth = true,
+                        },
+                        .frame = temporal_frame->input,
+                        .render_extent = params.scene_image_size,
+                        .output_extent = output_extent,
+                    },
+                    .motion = {
+                        .enabled = true,
+                        .depth_view = params.depth_blit.external_image_view,
+                        .depth_generation = params.depth_blit.external_image_generation,
+                        .depth = depth,
+                        .render_extent = params.scene_image_size,
+                        .includes_jitter = true,
+                        .flip_y = params.scene_image_flip_y,
+                    },
+                    .resolve = {
+                        .enabled = true,
+                        .view = TemporalViewId::Main,
+                        .current_color_view = params.external_scene_image_view,
+                        .current_color_layout = params.external_scene_image_layout,
+                        .render_extent = params.scene_image_size,
+                        .output_extent = output_extent,
+                        .current_allocation_extent = allocation_extent,
+                        .history_weight = temporal_frame->resolve_settings.history_weight,
+                        .motion_rejection_pixels = temporal_frame->resolve_settings.motion_rejection_pixels,
+                        .current_depth = {
+                            .enabled = true,
+                            .view = TemporalViewId::Main,
+                            .current_depth_view = params.depth_blit.external_image_view,
+                            .current_depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            .depth = depth,
+                            .allocation_extent = allocation_extent,
+                        },
+                        .depth_relative_threshold = temporal_frame->resolve_settings.depth_relative_threshold,
+                        .depth_absolute_threshold = temporal_frame->resolve_settings.depth_absolute_threshold,
+                    },
+                    .frame_slot = frame_slot,
+                };
+            }
         }
 
         // Sample mouse pos with SDL_GetGlobalMouseState here, after all panel/tool overlay

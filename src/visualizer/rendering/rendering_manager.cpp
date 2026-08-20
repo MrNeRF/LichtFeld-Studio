@@ -229,6 +229,19 @@ namespace lfs::vis {
         }
     }
 
+    void RenderingManager::requestTemporalFollowUp() {
+        dirty_mask_.fetch_or(DirtyFlag::TEMPORAL, std::memory_order_relaxed);
+
+        std::function<void()> wake_callback;
+        {
+            std::scoped_lock lock(wake_callback_mutex_);
+            wake_callback = wake_callback_;
+        }
+        if (wake_callback) {
+            wake_callback();
+        }
+    }
+
     void RenderingManager::notifyAsyncLodResultsReady() {
         requestRenderFollowUp();
     }
@@ -531,8 +544,20 @@ namespace lfs::vis {
 
     void RenderingManager::reportSceneUpscalerRuntimeSelection(
         const SceneUpscalerSelection selection) {
-        std::lock_guard lock(settings_mutex_);
-        scene_upscaler_runtime_selection_ = selection;
+        bool changed = false;
+        {
+            std::lock_guard lock(settings_mutex_);
+            changed = scene_upscaler_runtime_selection_ != selection;
+            scene_upscaler_runtime_selection_ = selection;
+        }
+        // The renderer chooses its source resolution before the presentation pass
+        // proves whether reconstruction is available. A real active/fallback
+        // transition therefore needs one feedback frame: active may adopt the
+        // preset scale, while fallback must replace any cached reduced source with
+        // a full-resolution native frame. TEMPORAL deliberately avoids restarting
+        // the convergence sequence as CAMERA would.
+        if (changed)
+            requestTemporalFollowUp();
     }
 
     SceneUpscalerSelection RenderingManager::sceneUpscalerRuntimeSelection() const {

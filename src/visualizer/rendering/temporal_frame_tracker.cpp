@@ -10,8 +10,9 @@ namespace lfs::vis {
     namespace {
         constexpr float EPSILON = 1e-6f;
 
-        bool finite(const lfs::rendering::FrameView& view, const glm::vec2 jitter,
-                    const float scale) {
+        bool finiteFrameView(const lfs::rendering::FrameView& view,
+                             const glm::vec2 jitter,
+                             const float scale) {
             const auto finite_vec3 = [](const glm::vec3& value) {
                 return std::isfinite(value.x) && std::isfinite(value.y) &&
                        std::isfinite(value.z);
@@ -58,6 +59,10 @@ namespace lfs::vis {
             return result;
         }
     } // namespace
+
+    bool validTemporalFrameInput(const TemporalFrameInput& input) noexcept {
+        return finiteFrameView(input.view, input.jitter, input.render_scale);
+    }
 
     glm::vec2 temporalJitterPixels(const std::uint64_t sequence) {
         const std::uint64_t sample = sequence + 1;
@@ -195,7 +200,7 @@ namespace lfs::vis {
                                   .previous_jitter = input.jitter,
                                   .sequence = entry.sequence,
                                   .reset_reasons = entry.pending_reset};
-        if (!finite(input.view, input.jitter, input.render_scale)) {
+        if (!validTemporalFrameInput(input)) {
             result.reset_reasons |= TemporalResetReason::InvalidInput;
             return result;
         }
@@ -229,7 +234,7 @@ namespace lfs::vis {
 
     void TemporalFrameTracker::commit(const TemporalViewId id, const TemporalFrameInput& input) {
         auto& entry = entries_.at(index(id));
-        if (!finite(input.view, input.jitter, input.render_scale)) {
+        if (!validTemporalFrameInput(input)) {
             entry.committed.reset();
             entry.pending_reset = TemporalResetReason::InvalidInput;
             return;

@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_request_builder.hpp"
+
 #include "scene/scene_manager.hpp"
+#include "temporal_frame_tracker.hpp"
 
 namespace lfs::vis {
 
@@ -282,7 +284,8 @@ namespace lfs::vis {
                                                                      const Viewport* const source_viewport,
                                                                      const std::optional<SplitViewPanelId> render_panel) {
         const Viewport& viewport = source_viewport ? *source_viewport : ctx.viewport;
-        const auto frame_view = ctx.makeFrameView(viewport, render_size);
+        const auto frame_view = applySceneViewJitter(
+            ctx.makeFrameView(viewport, render_size), ctx.scene_jitter_pixels);
         const bool selection_overlay_enabled = !ctx.training_active;
         const bool overlay_visible =
             selection_overlay_enabled && panelMatches(ctx.cursor_preview.panel, render_panel);
