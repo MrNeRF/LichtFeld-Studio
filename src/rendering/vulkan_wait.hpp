@@ -88,6 +88,50 @@ namespace lfs::rendering {
                                 std::uint64_t candidate_timeline = 0) noexcept;
 
     // ---------------------------------------------------------------------------
+    // GUI-frame timeline wait accounting (#1721)
+    //
+    // A Vulkan timeline wait is satisfied when the counter is >= the requested
+    // value, so repeating an already-covered wait is a no-op. The GUI present
+    // path re-requests the last VkSplat completion on frames that did not bump
+    // the timeline. Treating that as a contract violation made endFrame refuse
+    // submit, set framebuffer_resized_, and never recover.
+    //
+    // committed: last value included in a successful graphics-queue submit.
+    // pending:   max value queued on the current unsubmitted frame.
+    // ---------------------------------------------------------------------------
+
+    enum class FrameTimelineWaitAction : std::uint8_t {
+        Queue,            // requested > covered; add to this frame's submit
+        AlreadySatisfied, // requested <= covered; skip the wait
+    };
+
+    struct FrameTimelineWaitCursor {
+        std::uint64_t committed = 0;
+        std::uint64_t pending = 0;
+
+        [[nodiscard]] constexpr std::uint64_t covered() const noexcept {
+            return committed > pending ? committed : pending;
+        }
+
+        constexpr FrameTimelineWaitAction note(const std::uint64_t value) noexcept {
+            if (value <= covered()) {
+                return FrameTimelineWaitAction::AlreadySatisfied;
+            }
+            pending = value;
+            return FrameTimelineWaitAction::Queue;
+        }
+
+        constexpr void submit_accepted() noexcept {
+            if (pending > committed) {
+                committed = pending;
+            }
+            pending = 0;
+        }
+
+        constexpr void submit_rejected() noexcept { pending = 0; }
+    };
+
+    // ---------------------------------------------------------------------------
     // Vulkan PFN dispatch seam (Amendment 2: every begin→submit path call)
     // ---------------------------------------------------------------------------
 
