@@ -5716,6 +5716,10 @@ namespace lfs::vis::gui {
         } else if (auto* const wm = viewer_->getWindowManager()) {
             wm->refreshResizeCursor();
         }
+        // Re-sample after every Rml surface has processed input so the next
+        // SDL key (handleKey) sees text focus even when GUI frames are idle.
+        if (rmlui_manager_.wantsTextInput())
+            guiFocusState().want_text_input = true;
         syncWindowTextInput(viewer_->getWindow());
 
         if (vulkan_gui_) {
