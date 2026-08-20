@@ -2214,14 +2214,16 @@ namespace lfs::vis {
             const bool is_equirect =
                 node->camera->camera_model_type() == core::CameraModelType::EQUIRECTANGULAR;
             if (camera_frustum_scale > 0.0f &&
-                node->camera->image_width() > 0 &&
-                node->camera->image_height() > 0 &&
-                (is_equirect || node->camera->focal_y() > 0.0f)) {
-                const float aspect = static_cast<float>(node->camera->image_width()) /
-                                     static_cast<float>(node->camera->image_height());
+                node->camera->camera_width() > 0 &&
+                node->camera->camera_height() > 0 &&
+                (is_equirect || node->camera->FoVy() > 0.0f)) {
+                // Match selection bounds to the calibrated (or rectified)
+                // frustum independently of the training image resolution.
+                const float aspect = static_cast<float>(node->camera->camera_width()) /
+                                     static_cast<float>(node->camera->camera_height());
                 const float fov_y = is_equirect
                                         ? glm::radians(60.0f)
-                                        : core::focal2fov(node->camera->focal_y(), node->camera->image_height());
+                                        : node->camera->FoVy();
                 const float half_height = std::tan(fov_y * 0.5f);
                 const float half_width = half_height * aspect;
 

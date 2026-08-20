@@ -2231,23 +2231,28 @@ namespace lfs::vis::gui {
             const lfs::core::Camera& camera,
             const glm::mat4& visualizer_camera_to_world,
             const float scale) {
-            const int image_width = camera.image_width() > 0 ? camera.image_width() : camera.camera_width();
-            const int image_height = camera.image_height() > 0 ? camera.image_height() : camera.camera_height();
-            if (image_width <= 0 || image_height <= 0 || scale <= 0.0f) {
+            // The frustum represents the calibrated camera rather than the
+            // resolution selected for loading training images. Undistortion
+            // updates these calibration dimensions and FoVy together, while
+            // training downscaling only changes operational decode dimensions.
+            const int calibration_width = camera.camera_width();
+            const int calibration_height = camera.camera_height();
+            if (calibration_width <= 0 || calibration_height <= 0 || scale <= 0.0f) {
                 return std::nullopt;
             }
 
             constexpr float kEquirectangularDisplayFov = 1.0472f;
             const bool equirectangular =
                 camera.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
-            if (!equirectangular && camera.focal_y() <= 0.0f) {
+            if (!equirectangular && camera.FoVy() <= 0.0f) {
                 return std::nullopt;
             }
 
-            const float aspect = static_cast<float>(image_width) / static_cast<float>(image_height);
+            const float aspect = static_cast<float>(calibration_width) /
+                                 static_cast<float>(calibration_height);
             const float fov_y = equirectangular
                                     ? kEquirectangularDisplayFov
-                                    : lfs::core::focal2fov(camera.focal_y(), image_height);
+                                    : camera.FoVy();
             const float half_height = std::tan(fov_y * 0.5f);
             const float half_width = half_height * aspect;
 
