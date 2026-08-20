@@ -2016,7 +2016,8 @@ namespace lfs::vis {
         }
 
         void updateSceneUpscalerSelection(const SceneUpscalerBackend requested,
-                                          const bool runtime_available) {
+                                          const bool runtime_available,
+                                          const bool log_fallback_transition = true) {
             scene_upscaler_selection = resolveSceneUpscalerSelection(requested, runtime_available);
             auto& profiler = lfs::diagnostics::VramProfiler::instance();
             profiler.setGauge("viewer.upscaler.requested",
@@ -2028,10 +2029,10 @@ namespace lfs::vis {
             profiler.setGauge("viewer.upscaler.runtime_ready", runtime_available ? 1.0 : 0.0);
             if (!logged_scene_upscaler_selection ||
                 *logged_scene_upscaler_selection != scene_upscaler_selection) {
-                if (scene_upscaler_selection.fellBack()) {
+                if (scene_upscaler_selection.fellBack() && log_fallback_transition) {
                     LOG_WARN("Scene reconstruction '{}' unavailable; using native presentation",
                              sceneUpscalerBackendId(scene_upscaler_selection.requested));
-                } else {
+                } else if (!scene_upscaler_selection.fellBack()) {
                     LOG_INFO("Scene reconstruction active: {}",
                              sceneUpscalerBackendId(scene_upscaler_selection.effective));
                 }
@@ -2159,13 +2160,18 @@ namespace lfs::vis {
             split_view_pass.prepare(params.split_view, params.frame_slot);
             if (params.scene_upscaler == SceneUpscalerBackend::Temporal &&
                 !hasPreRenderWork(params)) {
-                reportTemporalFailure(params.temporal.has_value()
-                                          ? "request contract is invalid"
-                                          : "frame resources are not paired yet");
-                temporal_pipeline.resetAll(params.temporal.has_value()
+                const bool invalid_request = params.temporal.has_value();
+                if (invalid_request) {
+                    reportTemporalFailure("request contract is invalid");
+                }
+                temporal_pipeline.resetAll(invalid_request
                                                ? TemporalResetReason::InvalidInput
                                                : TemporalResetReason::RuntimeUnavailable);
-                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                // A temporal request can legitimately precede the first paired color/depth
+                // frame (at startup and for one frame after a backend transition). Keep the
+                // effective native fallback observable without reporting expected warm-up as
+                // an unavailable backend. Invalid requests and pipeline failures remain noisy.
+                updateSceneUpscalerSelection(params.scene_upscaler, false, invalid_request);
                 return;
             }
             const auto runtime_available = [&]() -> std::optional<bool> {
