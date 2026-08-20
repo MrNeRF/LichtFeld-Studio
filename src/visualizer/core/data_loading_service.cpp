@@ -97,6 +97,10 @@ namespace lfs::vis {
         LOG_INFO("Loading checkpoint for training: {}", lfs::core::path_to_utf8(checkpoint_path));
         if (auto result = loadCheckpointForTraining(checkpoint_path, dataset_path, output_path); !result) {
             LOG_ERROR("Failed to load checkpoint for training: {}", result.error());
+            lfs::core::events::state::SplatFileLoadFailed{
+                .path = checkpoint_path,
+                .error = result.error()}
+                .emit();
         }
     }
 

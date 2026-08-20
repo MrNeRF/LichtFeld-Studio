@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """File menu implementation using Blender-style operators."""
 
+import logging
 from pathlib import Path, PureWindowsPath
 
 import lichtfeld as lf
@@ -18,6 +19,68 @@ from .layouts.menus import (
 from .import_panels import open_dataset_import_panel, open_resume_checkpoint_panel
 
 __lfs_menu_classes__ = ["FileMenu"]
+
+_logger = logging.getLogger(__name__)
+
+
+class _ImportRejected(RuntimeError):
+    def __init__(self, reason: str, message_key: str):
+        super().__init__(reason)
+        self.message_key = message_key
+
+
+def _warn_import_failure(path: str, reason: str) -> None:
+    message = f"Import rejected: path='{path}', reason='{reason}'"
+    try:
+        lf.log.warn(message)
+    except Exception:
+        _logger.warning(message)
+
+
+def _show_import_failure(path: str, reason: str, message_key: str) -> None:
+    _warn_import_failure(path, reason)
+    message = lf.ui.tr(message_key).format(path=path, reason=reason)
+    lf.ui.message_dialog(
+        lf.ui.tr("menu.file.import_failed"), message, "error"
+    )
+
+
+def _run_import(path: str, callback) -> bool:
+    try:
+        callback()
+        return True
+    except Exception as exc:
+        reason = str(exc).strip() or exc.__class__.__name__
+        _show_import_failure(
+            path,
+            reason,
+            getattr(
+                exc,
+                "message_key",
+                "menu.file.import_failed_message",
+            ),
+        )
+        return False
+
+
+def _open_dataset_import_checked(path: str) -> None:
+    if not lf.is_dataset_path(path):
+        raise _ImportRejected(
+            "dataset format was not recognized",
+            "menu.file.dataset_not_recognized",
+        )
+    if not open_dataset_import_panel(path):
+        raise RuntimeError("dataset import dialog is unavailable")
+
+
+def _open_checkpoint_import_checked(path: str) -> None:
+    if not lf.read_checkpoint_header(path) or not lf.read_checkpoint_params(path):
+        raise _ImportRejected(
+            "checkpoint format was not recognized",
+            "menu.file.checkpoint_not_recognized",
+        )
+    if not open_resume_checkpoint_panel(path):
+        raise RuntimeError("checkpoint import dialog is unavailable")
 
 
 def _training_is_active() -> bool:
@@ -205,8 +268,10 @@ class ImportDatasetOperator(Operator):
 
     def execute(self, context) -> set:
         path = lf.ui.open_dataset_folder_dialog()
-        if path:
-            open_dataset_import_panel(path)
+        if path and not _run_import(
+            path, lambda: _open_dataset_import_checked(path)
+        ):
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -217,8 +282,12 @@ class ImportPlyOperator(Operator):
     def execute(self, context) -> set:
         path = lf.ui.open_ply_file_dialog("")
         if path:
-            register_catalog_asset_path(path, select=True)
-            lf.load_file(path, is_dataset=False)
+            def _load() -> None:
+                register_catalog_asset_path(path, select=True)
+                lf.load_file(path, is_dataset=False)
+
+            if not _run_import(path, _load):
+                return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -229,13 +298,17 @@ class ImportMeshOperator(Operator):
     def execute(self, context) -> set:
         path = lf.ui.open_mesh_file_dialog("")
         if path:
-            register_catalog_asset_path(
-                path,
-                asset_type="mesh",
-                role="reference",
-                select=True,
-            )
-            lf.load_file(path, is_dataset=False)
+            def _load() -> None:
+                register_catalog_asset_path(
+                    path,
+                    asset_type="mesh",
+                    role="reference",
+                    select=True,
+                )
+                lf.load_file(path, is_dataset=False)
+
+            if not _run_import(path, _load):
+                return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -245,8 +318,10 @@ class ImportCheckpointOperator(Operator):
 
     def execute(self, context) -> set:
         path = lf.ui.open_checkpoint_file_dialog()
-        if path:
-            open_resume_checkpoint_panel(path)
+        if path and not _run_import(
+            path, lambda: _open_checkpoint_import_checked(path)
+        ):
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -256,8 +331,8 @@ class ImportConfigOperator(Operator):
 
     def execute(self, context) -> set:
         path = lf.ui.open_json_file_dialog()
-        if path:
-            lf.load_config_file(path)
+        if path and not _run_import(path, lambda: lf.load_config_file(path)):
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -476,12 +551,17 @@ class FileMenu:
                 lf.project_auto_save_on_close_enabled(),
             ),
             menu_separator(),
-            menu_operator(ImportDatasetOperator),
-            menu_operator(ImportPlyOperator),
-            menu_operator(ImportMeshOperator),
-            menu_operator(ImportCheckpointOperator),
-            menu_operator(ImportConfigOperator),
-            menu_separator(),
+            menu_submenu(
+                lf.ui.tr("menu.file.import"),
+                [
+                    menu_operator(ImportDatasetOperator),
+                    menu_operator(ImportPlyOperator),
+                    menu_operator(ImportMeshOperator),
+                    menu_operator(ImportCheckpointOperator),
+                    menu_separator(),
+                    menu_operator(ImportConfigOperator),
+                ],
+            ),
             menu_operator(ExportOperator),
             menu_operator(ExportConfigOperator),
             menu_separator(),
