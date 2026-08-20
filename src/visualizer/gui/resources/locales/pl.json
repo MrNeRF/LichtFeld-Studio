@@ -1464,6 +1464,7 @@
     "action.depth_adjust_near": "Dostosuj pudełko głębi",
     "action.depth_adjust_far": "Dostosuj pudełko głębi",
     "action.depth_adjust_side": "Dostosuj pudełko głębi",
+    "action.depth_adjust_size": "Dostosuj rozmiar okna",
     "action.toggle_selection_depth_filter": "Przełącz pudełko głębi",
     "action.toggle_selection_crop_filter": "Przełącz filtr przycinania zaznaczenia",
     "action.brush_resize": "Zmień rozmiar pędzla",

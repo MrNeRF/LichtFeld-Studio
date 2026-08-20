@@ -1464,6 +1464,7 @@
     "action.depth_adjust_near": "Regola box di profondità",
     "action.depth_adjust_far": "Regola box di profondità",
     "action.depth_adjust_side": "Regola box di profondità",
+    "action.depth_adjust_size": "Regola dimensione finestra",
     "action.toggle_selection_depth_filter": "Attiva box di profondità",
     "action.toggle_selection_crop_filter": "Attiva filtro di ritaglio selezione",
     "action.brush_resize": "Ridimensiona pennello",

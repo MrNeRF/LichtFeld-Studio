@@ -1464,6 +1464,7 @@
     "action.depth_adjust_near": "Ajustar caja de profundidad",
     "action.depth_adjust_far": "Ajustar caja de profundidad",
     "action.depth_adjust_side": "Ajustar caja de profundidad",
+    "action.depth_adjust_size": "Ajustar tamaño de ventana",
     "action.toggle_selection_depth_filter": "Alternar caja de profundidad",
     "action.toggle_selection_crop_filter": "Alternar filtro de recorte de selección",
     "action.brush_resize": "Redimensionar pincel",

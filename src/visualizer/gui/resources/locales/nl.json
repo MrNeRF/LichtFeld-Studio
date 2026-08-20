@@ -1464,6 +1464,7 @@
     "action.depth_adjust_near": "Diepteboog aanpassen",
     "action.depth_adjust_far": "Diepteboog aanpassen",
     "action.depth_adjust_side": "Diepteboog aanpassen",
+    "action.depth_adjust_size": "Venstergrootte aanpassen",
     "action.toggle_selection_depth_filter": "Diepteboog omschakelen",
     "action.toggle_selection_crop_filter": "Bijsnijfilter selectie omschakelen",
     "action.brush_resize": "Penseelgrootte aanpassen",
