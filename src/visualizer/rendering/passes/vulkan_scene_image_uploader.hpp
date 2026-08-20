@@ -24,6 +24,9 @@ namespace lfs::vis {
         [[nodiscard]] bool init(VulkanContext& context, VkSampler scene_sampler);
         void shutdown();
         void upload(const VulkanViewportPassParams& params, VkDescriptorSet scene_descriptor_set);
+        [[nodiscard]] bool bindPresentationView(VkDescriptorSet scene_descriptor_set,
+                                                VkImageView image_view,
+                                                VkImageLayout image_layout);
         [[nodiscard]] bool hasImage() const;
 
     private:

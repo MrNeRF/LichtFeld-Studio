@@ -235,6 +235,8 @@ namespace lfs::vis {
         VulkanEnvironmentPass environment_pass;
         VulkanDepthBlitPass depth_blit_pass;
         VulkanSplitViewPass split_view_pass;
+        VulkanSceneTemporalPipeline temporal_pipeline;
+        bool temporal_pipeline_initialized = false;
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
@@ -2011,6 +2013,68 @@ namespace lfs::vis {
             scene_image_uploader.upload(params, frame.scene_descriptor_set);
         }
 
+        void updateSceneUpscalerSelection(const SceneUpscalerBackend requested,
+                                          const bool runtime_available) {
+            scene_upscaler_selection = resolveSceneUpscalerSelection(requested, runtime_available);
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.setGauge("viewer.upscaler.requested",
+                              static_cast<double>(scene_upscaler_selection.requested));
+            profiler.setGauge("viewer.upscaler.effective",
+                              static_cast<double>(scene_upscaler_selection.effective));
+            profiler.setGauge("viewer.upscaler.fallback",
+                              scene_upscaler_selection.fellBack() ? 1.0 : 0.0);
+            profiler.setGauge("viewer.upscaler.runtime_ready", runtime_available ? 1.0 : 0.0);
+            if (!logged_scene_upscaler_selection ||
+                *logged_scene_upscaler_selection != scene_upscaler_selection) {
+                if (scene_upscaler_selection.fellBack()) {
+                    LOG_WARN("Scene reconstruction '{}' unavailable; using native presentation",
+                             sceneUpscalerBackendId(scene_upscaler_selection.requested));
+                } else {
+                    LOG_INFO("Scene reconstruction active: {}",
+                             sceneUpscalerBackendId(scene_upscaler_selection.effective));
+                }
+                logged_scene_upscaler_selection = scene_upscaler_selection;
+            }
+        }
+
+        [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const {
+            return params.scene_upscaler == SceneUpscalerBackend::Temporal &&
+                   params.temporal.has_value() &&
+                   validVulkanSceneTemporalPipelineRequest(*params.temporal);
+        }
+
+        [[nodiscard]] bool recordPreRenderWork(const VkCommandBuffer command_buffer,
+                                               const VulkanViewportPassParams& params) {
+            if (!hasPreRenderWork(params)) {
+                temporal_pipeline.resetAll(TemporalResetReason::InvalidInput);
+                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                return false;
+            }
+            if (!temporal_pipeline_initialized) {
+                temporal_pipeline_initialized = temporal_pipeline.init(*context);
+            }
+            if (!temporal_pipeline_initialized) {
+                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                return false;
+            }
+
+            const auto result = temporal_pipeline.record(command_buffer, *params.temporal);
+            if (!result.resolved()) {
+                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                return false;
+            }
+            auto& frame = resourcesForFrame(params.frame_slot);
+            if (!scene_image_uploader.bindPresentationView(frame.scene_descriptor_set,
+                                                           result.output_view,
+                                                           VK_IMAGE_LAYOUT_GENERAL)) {
+                temporal_pipeline.reset(result.view, TemporalResetReason::ResolveFailure);
+                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                return false;
+            }
+            updateSceneUpscalerSelection(params.scene_upscaler, true);
+            return true;
+        }
+
         void prepare(const VulkanViewportPassParams& params) {
             if (params.scene_upscaler == SceneUpscalerBackend::Native) {
                 scene_spatial_pipeline_failed = false;
@@ -2051,7 +2115,13 @@ namespace lfs::vis {
             environment_pass.prepare(params.environment, params.frame_slot);
             depth_blit_pass.prepare(params.depth_blit, params.frame_slot);
             split_view_pass.prepare(params.split_view, params.frame_slot);
-            const bool runtime_available = [&] {
+            if (params.scene_upscaler == SceneUpscalerBackend::Temporal &&
+                !hasPreRenderWork(params)) {
+                temporal_pipeline.resetAll(TemporalResetReason::InvalidInput);
+                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                return;
+            }
+            const auto runtime_available = [&]() -> std::optional<bool> {
                 switch (params.scene_upscaler) {
                 case SceneUpscalerBackend::Native:
                     return true;
@@ -2060,30 +2130,15 @@ namespace lfs::vis {
                                ? split_view_pass.available()
                                : scene_spatial_pipeline != VK_NULL_HANDLE;
                 case SceneUpscalerBackend::Temporal:
-                    return false;
+                    return std::nullopt;
                 }
                 return false;
             }();
-            scene_upscaler_selection = resolveSceneUpscalerSelection(
-                params.scene_upscaler, runtime_available);
-            auto& profiler = lfs::diagnostics::VramProfiler::instance();
-            profiler.setGauge("viewer.upscaler.requested",
-                              static_cast<double>(scene_upscaler_selection.requested));
-            profiler.setGauge("viewer.upscaler.effective",
-                              static_cast<double>(scene_upscaler_selection.effective));
-            profiler.setGauge("viewer.upscaler.fallback",
-                              scene_upscaler_selection.fellBack() ? 1.0 : 0.0);
-            profiler.setGauge("viewer.upscaler.runtime_ready", runtime_available ? 1.0 : 0.0);
-            if (!logged_scene_upscaler_selection ||
-                *logged_scene_upscaler_selection != scene_upscaler_selection) {
-                if (scene_upscaler_selection.fellBack()) {
-                    LOG_WARN("Scene reconstruction '{}' unavailable; using native presentation",
-                             sceneUpscalerBackendId(scene_upscaler_selection.requested));
-                } else {
-                    LOG_INFO("Scene reconstruction active: {}",
-                             sceneUpscalerBackendId(scene_upscaler_selection.effective));
+            if (runtime_available.has_value()) {
+                if (scene_upscaler_selection.requested == SceneUpscalerBackend::Temporal) {
+                    temporal_pipeline.resetAll(TemporalResetReason::Backend);
                 }
-                logged_scene_upscaler_selection = scene_upscaler_selection;
+                updateSceneUpscalerSelection(params.scene_upscaler, *runtime_available);
             }
         }
 
@@ -2687,6 +2742,7 @@ namespace lfs::vis {
                     LOG_WARN("Vulkan viewport pass shutdown could not wait for submitted frames: {}",
                              context->lastError());
                 }
+                temporal_pipeline.shutdown();
                 scene_image_uploader.shutdown();
                 mesh_pass.shutdown();
                 environment_pass.shutdown();
@@ -2793,6 +2849,16 @@ namespace lfs::vis {
             return;
         }
         impl_->prepare(params);
+    }
+
+    bool VulkanViewportPass::hasPreRenderWork(const VulkanViewportPassParams& params) const {
+        return impl_ && impl_->hasPreRenderWork(params);
+    }
+
+    bool VulkanViewportPass::recordPreRenderWork(
+        const VkCommandBuffer command_buffer,
+        const VulkanViewportPassParams& params) {
+        return impl_ && impl_->recordPreRenderWork(command_buffer, params);
     }
 
     void VulkanViewportPass::record(VkCommandBuffer command_buffer,
