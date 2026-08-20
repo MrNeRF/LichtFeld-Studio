@@ -14,11 +14,27 @@ body {
     flex-grow: 1;
     padding: 6dp;
     overflow-x: hidden;
-    overflow-y: auto;
+    overflow-y: hidden;
 }
 
 #content {
     min-width: 0;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.training-panel-layout {
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+#controls {
+    flex-shrink: 0;
 }
 
 .training-search-row {
@@ -26,6 +42,26 @@ body {
     align-items: center;
     gap: 4dp;
     margin: 6dp 0 2dp;
+    flex-shrink: 0;
+}
+
+.training-scroll-region {
+    min-width: 0;
+    min-height: 0;
+    height: 0;
+    flex-grow: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+/* Keep wheel and trackpad scrolling without reserving a visible scrollbar lane. */
+.training-scroll-region scrollbarvertical {
+    width: 0dp;
+}
+
+.training-telemetry {
+    min-width: 0;
+    flex-shrink: 0;
 }
 
 .training-search-input {

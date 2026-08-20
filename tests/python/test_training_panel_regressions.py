@@ -892,6 +892,30 @@ def test_training_rml_exposes_mrnf_grow_until_iter():
     assert 'data-event-mousedown="pv_step(row.id, -1)"' in content
 
 
+def test_training_panel_keeps_controls_and_search_outside_scroll_region():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    rml = (resources / "training.rml").read_text()
+    rcss = (resources / "training.rcss").read_text()
+
+    controls = rml.index('id="controls"')
+    search = rml.index('class="training-search-row"')
+    telemetry = rml.index('class="section-gap training-telemetry"')
+    scroll_start = rml.index('class="training-scroll-region"')
+    parameters = rml.index('class="training-panel-title"')
+    scroll_end = rml.index("<!-- /training-scroll-region -->")
+    color_picker = rml.index('id="color-picker-popup"')
+
+    assert controls < search < telemetry < scroll_start < parameters < scroll_end < color_picker
+    assert 'class="section-gap training-telemetry" data-if="show_progress"' in rml
+    assert ".training-panel-layout" in rcss
+    assert ".training-scroll-region" in rcss
+    assert ".training-telemetry" in rcss
+    assert "overflow-y: auto" in rcss
+    assert ".training-scroll-region scrollbarvertical" in rcss
+    assert "width: 0dp" in rcss
+
+
 def test_set_bool_prop_hasattr_guard(training_panel_module, monkeypatch):
     """Issue #972: _set_bool_prop must not crash on missing attributes."""
     panel = training_panel_module.TrainingPanel()
