@@ -54,7 +54,7 @@ namespace lfs::vis {
             !sameExtents(request) || !sameView(request) || !sameDepthSource(request))
             return false;
         if (!request.temporal.requirements.depth || !request.temporal.requirements.motion ||
-            !request.temporal.requirements.jitter || !request.motion.includes_jitter ||
+            request.temporal.requirements.jitter != request.motion.includes_jitter ||
             !request.temporal.requirements.history_color || !request.motion.enabled ||
             !canRecordVulkanSceneMotion(request.motion) ||
             request.resolve.current_color_view == VK_NULL_HANDLE ||

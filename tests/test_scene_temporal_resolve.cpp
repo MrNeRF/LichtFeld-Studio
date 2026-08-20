@@ -263,6 +263,17 @@ namespace lfs::vis {
         EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
     }
 
+    TEST(VulkanSceneTemporalPipelineContract, JitterRequirementMatchesRenderedInput) {
+        auto request = pipelineRequest();
+        request.temporal.requirements.jitter = false;
+        request.motion.includes_jitter = false;
+        request.temporal.frame.jitter = {0.0f, 0.0f};
+        EXPECT_TRUE(validVulkanSceneTemporalPipelineRequest(request));
+
+        request.motion.includes_jitter = true;
+        EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
+    }
+
     TEST(VulkanSceneTemporalPipelineContract, InactiveRequestRemainsZeroCost) {
         VulkanSceneTemporalPipelineRequest request;
         EXPECT_TRUE(validVulkanSceneTemporalPipelineRequest(request));

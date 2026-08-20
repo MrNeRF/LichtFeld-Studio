@@ -4183,6 +4183,7 @@ namespace lfs::vis::gui {
                 params.scene_image_size.x > 0 && params.scene_image_size.y > 0 &&
                 temporal_frame->input.view.size == params.scene_image_size;
             if (temporal_inputs_match) {
+                const bool jitter_enabled = !temporal_frame->input.view.orthographic;
                 const glm::ivec2 allocation_extent =
                     params.scene_image_alloc_size.x >= params.scene_image_size.x &&
                             params.scene_image_alloc_size.y >= params.scene_image_size.y
@@ -4204,7 +4205,7 @@ namespace lfs::vis::gui {
                         .requirements = {
                             .depth = true,
                             .motion = true,
-                            .jitter = true,
+                            .jitter = jitter_enabled,
                             .history_color = true,
                             .history_depth = true,
                         },
@@ -4218,7 +4219,7 @@ namespace lfs::vis::gui {
                         .depth_generation = params.depth_blit.external_image_generation,
                         .depth = depth,
                         .render_extent = params.scene_image_size,
-                        .includes_jitter = true,
+                        .includes_jitter = jitter_enabled,
                         .flip_y = params.scene_image_flip_y,
                     },
                     .resolve = {
@@ -4244,6 +4245,96 @@ namespace lfs::vis::gui {
                     },
                     .frame_slot = frame_slot,
                 };
+            }
+
+            if (params.split_view.enabled) {
+                const auto make_split_temporal_request =
+                    [frame_slot](const VulkanSplitViewPanel& panel,
+                                 const TemporalViewId view)
+                    -> std::optional<VulkanSceneTemporalPipelineRequest> {
+                    if (!panel.temporal_input ||
+                        panel.external_image_view == VK_NULL_HANDLE ||
+                        panel.depth_image_view == VK_NULL_HANDLE ||
+                        panel.image_size.x <= 0 || panel.image_size.y <= 0 ||
+                        panel.temporal_input->view.size != panel.image_size) {
+                        return std::nullopt;
+                    }
+                    const float render_scale =
+                        std::isfinite(panel.temporal_input->render_scale) &&
+                                panel.temporal_input->render_scale > 0.0f
+                            ? panel.temporal_input->render_scale
+                            : 1.0f;
+                    const glm::ivec2 output_extent{
+                        std::max(1, static_cast<int>(std::lround(
+                                        static_cast<float>(panel.image_size.x) / render_scale))),
+                        std::max(1, static_cast<int>(std::lround(
+                                        static_cast<float>(panel.image_size.y) / render_scale)))};
+                    const glm::ivec2 allocation_extent =
+                        panel.allocation_size.x >= panel.image_size.x &&
+                                panel.allocation_size.y >= panel.image_size.y
+                            ? panel.allocation_size
+                            : panel.image_size;
+                    const bool jitter_enabled = !panel.temporal_input->view.orthographic;
+                    const SceneDepthContract depth = makeSceneDepthContract(
+                        true,
+                        SceneDepthStorage::VulkanImage,
+                        SceneDepthEncoding::LinearView,
+                        panel.image_size,
+                        panel.temporal_input->view.near_plane,
+                        panel.temporal_input->view.far_plane,
+                        panel.temporal_input->view.orthographic,
+                        panel.flip_y);
+                    return VulkanSceneTemporalPipelineRequest{
+                        .temporal = {
+                            .view = view,
+                            .requirements = {
+                                .depth = true,
+                                .motion = true,
+                                .jitter = jitter_enabled,
+                                .history_color = true,
+                                .history_depth = true,
+                            },
+                            .frame = *panel.temporal_input,
+                            .render_extent = panel.image_size,
+                            .output_extent = output_extent,
+                        },
+                        .motion = {
+                            .enabled = true,
+                            .depth_view = panel.depth_image_view,
+                            .depth_generation = panel.depth_image_generation,
+                            .depth = depth,
+                            .render_extent = panel.image_size,
+                            .includes_jitter = jitter_enabled,
+                            .flip_y = panel.flip_y,
+                        },
+                        .resolve = {
+                            .enabled = true,
+                            .view = view,
+                            .current_color_view = panel.external_image_view,
+                            .current_color_layout = panel.external_image_layout,
+                            .render_extent = panel.image_size,
+                            .output_extent = output_extent,
+                            .current_allocation_extent = allocation_extent,
+                            .history_weight = panel.temporal_settings.history_weight,
+                            .motion_rejection_pixels = panel.temporal_settings.motion_rejection_pixels,
+                            .current_depth = {
+                                .enabled = true,
+                                .view = view,
+                                .current_depth_view = panel.depth_image_view,
+                                .current_depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                .depth = depth,
+                                .allocation_extent = allocation_extent,
+                            },
+                            .depth_relative_threshold = panel.temporal_settings.depth_relative_threshold,
+                            .depth_absolute_threshold = panel.temporal_settings.depth_absolute_threshold,
+                        },
+                        .frame_slot = frame_slot,
+                    };
+                };
+                params.split_temporal[0] = make_split_temporal_request(
+                    params.split_view.left, TemporalViewId::SplitLeft);
+                params.split_temporal[1] = make_split_temporal_request(
+                    params.split_view.right, TemporalViewId::SplitRight);
             }
         }
 

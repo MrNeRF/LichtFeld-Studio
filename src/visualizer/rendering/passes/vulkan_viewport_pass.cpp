@@ -225,6 +225,8 @@ namespace lfs::vis {
             VkDescriptorSet shape_overlay_descriptor_set = VK_NULL_HANDLE;
             VkImageView bound_shape_overlay_depth_view = VK_NULL_HANDLE;
             bool temporal_presentation = false;
+            bool temporal_split_presentation = false;
+            VulkanSplitViewParams effective_split_view;
         };
         std::vector<FrameResources> frame_resources;
 
@@ -2075,8 +2077,15 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const {
-            return params.scene_upscaler == SceneUpscalerBackend::Temporal &&
-                   params.temporal.has_value() &&
+            if (params.scene_upscaler != SceneUpscalerBackend::Temporal)
+                return false;
+            if (params.split_view.enabled) {
+                return params.split_temporal[0].has_value() &&
+                       params.split_temporal[1].has_value() &&
+                       validVulkanSceneTemporalPipelineRequest(*params.split_temporal[0]) &&
+                       validVulkanSceneTemporalPipelineRequest(*params.split_temporal[1]);
+            }
+            return params.temporal.has_value() &&
                    validVulkanSceneTemporalPipelineRequest(*params.temporal);
         }
 
@@ -2096,13 +2105,48 @@ namespace lfs::vis {
                 return false;
             }
 
+            auto& frame = resourcesForFrame(params.frame_slot);
+            if (params.split_view.enabled) {
+                const auto left = temporal_pipeline.record(command_buffer, *params.split_temporal[0]);
+                const auto right = temporal_pipeline.record(command_buffer, *params.split_temporal[1]);
+                if (!left.resolved() || !right.resolved()) {
+                    temporal_pipeline.reset(TemporalViewId::SplitLeft,
+                                            TemporalResetReason::ResolveFailure);
+                    temporal_pipeline.reset(TemporalViewId::SplitRight,
+                                            TemporalResetReason::ResolveFailure);
+                    reportTemporalFailure(std::format(
+                        "split pipeline status left={} right={}",
+                        temporalStatusName(left.status),
+                        temporalStatusName(right.status)));
+                    updateSceneUpscalerSelection(params.scene_upscaler, false);
+                    return false;
+                }
+                frame.effective_split_view = params.split_view;
+                frame.effective_split_view.left.external_image_view = left.output_view;
+                frame.effective_split_view.left.external_image_layout = VK_IMAGE_LAYOUT_GENERAL;
+                frame.effective_split_view.left.external_image_generation = left.sequence;
+                frame.effective_split_view.left.uv_scale = {1.0f, 1.0f};
+                frame.effective_split_view.left.uv_clamp_max = {1.0f, 1.0f};
+                frame.effective_split_view.left.spatial_filter = false;
+                frame.effective_split_view.right.external_image_view = right.output_view;
+                frame.effective_split_view.right.external_image_layout = VK_IMAGE_LAYOUT_GENERAL;
+                frame.effective_split_view.right.external_image_generation = right.sequence;
+                frame.effective_split_view.right.uv_scale = {1.0f, 1.0f};
+                frame.effective_split_view.right.uv_clamp_max = {1.0f, 1.0f};
+                frame.effective_split_view.right.spatial_filter = false;
+                split_view_pass.prepare(frame.effective_split_view, params.frame_slot);
+                frame.temporal_split_presentation = true;
+                clearTemporalFailure();
+                updateSceneUpscalerSelection(params.scene_upscaler, true);
+                return true;
+            }
+
             const auto result = temporal_pipeline.record(command_buffer, *params.temporal);
             if (!result.resolved()) {
                 reportTemporalFailure(std::format("pipeline status {}", temporalStatusName(result.status)));
                 updateSceneUpscalerSelection(params.scene_upscaler, false);
                 return false;
             }
-            auto& frame = resourcesForFrame(params.frame_slot);
             if (!scene_image_uploader.bindPresentationView(frame.scene_descriptor_set,
                                                            result.output_view,
                                                            VK_IMAGE_LAYOUT_GENERAL)) {
@@ -2125,6 +2169,8 @@ namespace lfs::vis {
             }
             auto& frame = resourcesForFrame(params.frame_slot);
             frame.temporal_presentation = false;
+            frame.temporal_split_presentation = false;
+            frame.effective_split_view = params.split_view;
             updateQuadBuffer(params.scene_image_flip_y);
             updateGridUniforms(params);
             updateFrustumInstances(params);
@@ -2369,7 +2415,10 @@ namespace lfs::vis {
             if (split_active) {
                 // content_rect arrives panel-local; lift it into framebuffer
                 // coords so the shader's letterbox check matches gl_FragCoord.
-                VulkanSplitViewParams adjusted = params.split_view;
+                const auto& source_split = frame.temporal_split_presentation
+                                               ? frame.effective_split_view
+                                               : params.split_view;
+                VulkanSplitViewParams adjusted = source_split;
                 if (adjusted.coordinate_extent.x > 0 && adjusted.coordinate_extent.y > 0) {
                     const float scale_x = static_cast<float>(rect.width) /
                                           static_cast<float>(adjusted.coordinate_extent.x);

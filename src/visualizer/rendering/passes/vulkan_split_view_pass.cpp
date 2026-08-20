@@ -149,6 +149,8 @@ namespace lfs::vis {
             VkImageView right_view = VK_NULL_HANDLE;
             std::uint64_t left_generation = 0;
             std::uint64_t right_generation = 0;
+            VkImageLayout left_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VkImageLayout right_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             bool ready = false;
         };
         std::vector<FrameDescriptor> frame_descriptors;
@@ -1062,20 +1064,28 @@ namespace lfs::vis {
                 left_spec.external_image_view != VK_NULL_HANDLE ? left_spec.external_image_generation : 0;
             const std::uint64_t right_generation =
                 right_spec.external_image_view != VK_NULL_HANDLE ? right_spec.external_image_generation : 0;
+            const VkImageLayout left_layout = left_spec.external_image_view != VK_NULL_HANDLE
+                                                  ? left_spec.external_image_layout
+                                                  : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            const VkImageLayout right_layout = right_spec.external_image_view != VK_NULL_HANDLE
+                                                   ? right_spec.external_image_layout
+                                                   : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             const bool changed =
                 left_view != descriptor.left_view ||
                 right_view != descriptor.right_view ||
                 left_generation != descriptor.left_generation ||
-                right_generation != descriptor.right_generation;
+                right_generation != descriptor.right_generation ||
+                left_layout != descriptor.left_layout ||
+                right_layout != descriptor.right_layout;
             if (!changed) {
                 descriptor.ready = true;
                 return true;
             }
             std::array<VkDescriptorImageInfo, 2> infos{};
-            infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            infos[0].imageLayout = left_layout;
             infos[0].imageView = left_view;
             infos[0].sampler = sampler;
-            infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            infos[1].imageLayout = right_layout;
             infos[1].imageView = right_view;
             infos[1].sampler = sampler;
             std::array<VkWriteDescriptorSet, 2> writes{};
@@ -1093,6 +1103,8 @@ namespace lfs::vis {
             descriptor.left_generation = left_generation;
             descriptor.right_view = right_view;
             descriptor.right_generation = right_generation;
+            descriptor.left_layout = left_layout;
+            descriptor.right_layout = right_layout;
             descriptor.ready = true;
             return true;
         }

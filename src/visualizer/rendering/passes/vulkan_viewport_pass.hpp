@@ -122,6 +122,7 @@ namespace lfs::vis {
         bool preserve_scene_image_binding = false;
         SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
         std::optional<VulkanSceneTemporalPipelineRequest> temporal;
+        std::array<std::optional<VulkanSceneTemporalPipelineRequest>, 2> split_temporal;
 
         bool grid_enabled = false;
         glm::mat4 grid_view{1.0f};
