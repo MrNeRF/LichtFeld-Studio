@@ -2522,7 +2522,7 @@ namespace lfs::vis {
                     bool gt_loading = false;
 
                     if (gt_mode == GTComparisonMode::RGB) {
-                        if (camera->image_path().empty()) {
+                        if (camera->image_path().empty() || !camera->has_image()) {
                             gt_error = "RGB GT comparison requires a source image";
                         } else {
                             const bool undistort_requested =

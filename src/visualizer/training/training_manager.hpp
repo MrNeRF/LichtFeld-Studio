@@ -33,6 +33,7 @@ namespace lfs::vis {
     // Forward declarations
     class VisualizerImpl;
     class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
+    class VisualizerImplResetTest_NewProjectWhileCompletionPendingStillErrors_Test;
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
     class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
@@ -210,6 +211,7 @@ namespace lfs::vis {
         };
 
         friend class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
+        friend class VisualizerImplResetTest_NewProjectWhileCompletionPendingStillErrors_Test;
         friend class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
         friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;

@@ -255,6 +255,8 @@ namespace lfs::python {
         lfs::event::HandlerId g_request_exit_handler_id = 0;
         nb::object
             g_project_switch_confirmation_callback;
+        nb::object
+            g_stop_training_confirmation_callback;
         nb::object g_open_camera_preview_callback;
         nb::object g_save_asset_callback;
 
@@ -3696,6 +3698,39 @@ namespace lfs::python {
             "Register callback for a dirty project-switch decision");
 
         m.def(
+            "on_stop_training_confirmation",
+            [](nb::object callback) {
+                g_stop_training_confirmation_callback =
+                    callback;
+                lfs::core::events::cmd::
+                    ShowStopTrainingConfirmation::
+                        when([](const auto& event) {
+                            if (g_stop_training_confirmation_callback &&
+                                !g_stop_training_confirmation_callback
+                                     .is_none()) {
+                                nb::gil_scoped_acquire
+                                    guard;
+                                try {
+                                    g_stop_training_confirmation_callback(
+                                        event.new_project,
+                                        lfs::core::
+                                            path_to_utf8(
+                                                event.path),
+                                        event.discard_changes);
+                                } catch (
+                                    const std::
+                                        exception& error) {
+                                    LOG_ERROR(
+                                        "Stop-training confirmation callback error: {}",
+                                        error.what());
+                                }
+                            }
+                        });
+            },
+            nb::arg("callback"),
+            "Register callback for a stop-training project-switch decision");
+
+        m.def(
             "on_open_camera_preview",
             [](nb::object callback) {
                 g_open_camera_preview_callback = callback;
@@ -5158,6 +5193,8 @@ namespace lfs::python {
                 g_request_exit_handler_id = 0;
             }
             g_project_switch_confirmation_callback =
+                nb::object();
+            g_stop_training_confirmation_callback =
                 nb::object();
             g_open_camera_preview_callback = nb::object();
         };

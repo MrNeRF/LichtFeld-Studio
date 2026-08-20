@@ -1539,7 +1539,8 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::preflightSwitch(
-        const ProjectSwitchDisposition disposition) {
+        const ProjectSwitchDisposition disposition,
+        const bool allow_active_training) {
         if (close_save_state_.load(
                 std::memory_order_acquire) ==
             CloseSaveState::Saving) {
@@ -1559,14 +1560,21 @@ namespace lfs::vis::project {
         }
         if (const auto* trainer =
                 viewer_.getTrainerManager();
-            trainer &&
-            (trainer->isTrainingActive() ||
-             trainer->isCompletionPending())) {
-            return fail<void>(
-                lfs::ErrorCode::FailedPrecondition,
-                "Stop training before switching projects.",
-                "Project switching is blocked while training is active",
-                "project.training");
+            trainer) {
+            const bool publish_in_flight =
+                trainer->isCompletionPending() &&
+                !trainer->isTrainingActive();
+            const bool training_active =
+                trainer->isTrainingActive();
+            if (publish_in_flight ||
+                (training_active &&
+                 !allow_active_training)) {
+                return fail<void>(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "Stop training before switching projects.",
+                    "Project switching is blocked while training is active",
+                    "project.training");
+            }
         }
         if (disposition ==
                 ProjectSwitchDisposition::RequireClean &&
@@ -2870,6 +2878,18 @@ namespace lfs::vis::project {
                 JobType::ProjectWrite)) {
             return {};
         }
+        if (auto* trainer = viewer_.getTrainer();
+            trainer &&
+            trainer->get_project_snapshot_metrics()
+                .writer_in_flight) {
+            // Sidecar create requires the on-disk master
+            // commit to match the held source UUID.return {};
+        }
+        if (auto adopted =
+                adoptSettledTrainerPublishOntoCurrentMaster();
+            !adopted) {
+            return adopted;
+        }
         const auto hydration = hydration_.load(
             std::memory_order_acquire);
         if (hydration != Hydration::Empty &&
@@ -3270,6 +3290,20 @@ namespace lfs::vis::project {
             }
         }
         if (error.empty() &&
+            project_write_purpose_ ==
+                ProjectWritePurpose::
+                    TrainingAutosave) {
+            if (auto adopted =
+                    adoptSettledTrainerPublishOntoCurrentMaster();
+                !adopted) {
+                last_project_write_error_code_ =
+                    adopted.error().code();
+                error =
+                    developerError(
+                        adopted.error());
+            }
+        }
+        if (error.empty() &&
             (project_write_purpose_ ==
                  ProjectWritePurpose::
                      ExplicitSave ||
@@ -3535,6 +3569,23 @@ namespace lfs::vis::project {
 
     void ProjectLifecycle::updateMaintenance() {
         settleProjectWrite();
+        if (!viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
+            if (auto adopted =
+                    adoptSettledTrainerPublishOntoCurrentMaster();
+                !adopted) {
+                const auto warning =
+                    developerError(adopted.error());
+                if (warning !=
+                    last_unadoptable_training_snapshot_warning_) {
+                    last_unadoptable_training_snapshot_warning_ =
+                        warning;
+                    LOG_WARN(
+                        "Could not adopt the settled training project generation: {}",
+                        warning);
+                }
+            }
+        }
         if (!document_ ||
             viewer_.jobs().anyRunning(
                 JobType::ProjectWrite)) {
@@ -3796,6 +3847,37 @@ namespace lfs::vis::project {
                 metrics.last_path));
         bindTrainerSnapshotTarget();
         return {};
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::
+        adoptSettledTrainerPublishOntoCurrentMaster() {
+        // Step-boundary / sparsity publishes complete on the
+        // trainer writer, not through TrainingExplicitSave.
+        // Rebase only a successful append onto the bound master;
+        // Save As already rebinds via adopt(true) on settlement.
+        auto* trainer = viewer_.getTrainer();
+        if (!trainer || !document_ ||
+            !document_->source_path()) {
+            return {};
+        }
+        const auto metrics =
+            trainer->get_project_snapshot_metrics();
+        if (metrics.writer_in_flight ||
+            metrics.last_path.empty() ||
+            !metrics.last_writer_error.empty()) {
+            return {};
+        }
+        if (metrics.capture.completed_snapshots <=
+            adopted_training_snapshot_count_) {
+            return {};
+        }
+        if (document_->source_path()
+                ->lexically_normal() !=
+            metrics.last_path.lexically_normal()) {
+            return {};
+        }
+        return adoptCompletedTrainingSnapshot();
     }
 
     lfs::Result<void>

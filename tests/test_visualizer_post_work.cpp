@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 
 #include "core/checkpoint_format.hpp"
+#include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
@@ -60,6 +61,23 @@ namespace {
         [[nodiscard]] std::string name()
             const override {
             return "test.noop";
+        }
+    };
+
+    class CapturingErrorConsumer final
+        : public lfs::NativeErrorConsumer {
+    public:
+        std::vector<std::string> user_messages;
+
+        void on_error(
+            const lfs::ErrorNotification& notification,
+            const lfs::ErrorDeliveryInfo&) noexcept override {
+            try {
+                user_messages.emplace_back(
+                    std::string(
+                        notification.error.user_message()));
+            } catch (...) {
+            }
         }
     };
 
@@ -329,6 +347,36 @@ namespace {
             lfs::core::CameraModelType::PINHOLE,
             "camera.png", image_path,
             std::filesystem::path{}, 64, 64, 0);
+    }
+
+    bool arm_running_trainer(lfs::vis::VisualizerImpl& viewer) {
+        auto& scene = viewer.getScene();
+        const auto cameras =
+            scene.addGroup("Train cameras");
+        scene.addCamera(
+            "camera.png", cameras,
+            make_project_request_test_camera());
+        auto* const trainer_manager =
+            viewer.getTrainerManager();
+        if (!trainer_manager) {
+            return false;
+        }
+        trainer_manager->setTrainer(
+            std::make_unique<lfs::training::Trainer>(
+                scene));
+        auto& state_machine =
+            const_cast<lfs::vis::TrainingStateMachine&>(
+                trainer_manager->getStateMachine());
+        if (state_machine.getState() ==
+            lfs::vis::TrainingState::Idle) {
+            if (!state_machine.transitionTo(
+                    lfs::vis::TrainingState::Ready)) {
+                return false;
+            }
+        }
+        return state_machine.transitionTo(
+                   lfs::vis::TrainingState::Running) &&
+               trainer_manager->isTrainingActive();
     }
 
     void write_minimal_transforms_dataset(const std::filesystem::path& dataset_path) {
@@ -2507,6 +2555,388 @@ namespace lfs::vis {
             EXPECT_EQ(
                 viewer.getScene().getNodeCount(),
                 0u);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           NewProjectWhileTrainingPromptsInsteadOfErroring) {
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Keep while training"),
+                lfs::core::NULL_NODE);
+
+            CapturingErrorConsumer consumer;
+            auto subscription =
+                lfs::ErrorBus::instance().subscribe(
+                    consumer);
+            bool prompted = false;
+            lfs::core::events::cmd::
+                ShowStopTrainingConfirmation::
+                    when([&](const auto& event) {
+                        prompted = true;
+                        EXPECT_TRUE(event.new_project);
+                        EXPECT_TRUE(
+                            event.discard_changes);
+                    });
+
+            lfs::core::events::cmd::NewProject{
+                .discard_changes = true}
+                .emit();
+
+            EXPECT_TRUE(prompted);
+            EXPECT_TRUE(
+                std::none_of(
+                    consumer.user_messages.begin(),
+                    consumer.user_messages.end(),
+                    [](const std::string& message) {
+                        return message ==
+                               "Stop training before switching projects.";
+                    }));
+            EXPECT_TRUE(
+                viewer.getTrainerManager()
+                    ->isTrainingActive());
+            EXPECT_NE(
+                viewer.getScene().getNode(
+                    "Keep while training"),
+                nullptr);
+            EXPECT_EQ(
+                viewer.pending_training_action_,
+                VisualizerImpl::PendingTrainingAction::
+                    None);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           NewProjectStopTrainingThenSwitchWritesNoProject) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "stop-then-new.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Cleared after stop"),
+                lfs::core::NULL_NODE);
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            EXPECT_FALSE(
+                trainer->trainer_project_save_policy()
+                    .on_stop_or_error);
+            const auto write_time_before =
+                std::filesystem::last_write_time(
+                    project_path);
+
+            lfs::core::events::cmd::NewProject{
+                .discard_changes = true,
+                .stop_training = true}
+                .emit();
+            EXPECT_EQ(
+                viewer.pending_training_action_,
+                VisualizerImpl::PendingTrainingAction::
+                    NewProject);
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return viewer.getScene().getNode(
+                               "Cleared after stop") ==
+                               nullptr &&
+                           !viewer.getTrainerManager()
+                                ->isTrainingActive() &&
+                           !viewer.getTrainerManager()
+                                ->isCompletionPending();
+                }));
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_EQ(
+                std::filesystem::last_write_time(
+                    project_path),
+                write_time_before);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           OpenProjectWhileTrainingPromptsInsteadOfErroring) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "open-while-training.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Keep while training"),
+                lfs::core::NULL_NODE);
+
+            CapturingErrorConsumer consumer;
+            auto subscription =
+                lfs::ErrorBus::instance().subscribe(
+                    consumer);
+            bool prompted = false;
+            std::filesystem::path prompted_path;
+            lfs::core::events::cmd::
+                ShowStopTrainingConfirmation::
+                    when([&](const auto& event) {
+                        prompted = true;
+                        prompted_path = event.path;
+                        EXPECT_FALSE(event.new_project);
+                        EXPECT_TRUE(
+                            event.discard_changes);
+                    });
+
+            lfs::core::events::cmd::ProjectOpen{
+                .path = project_path,
+                .discard_changes = true}
+                .emit();
+
+            EXPECT_TRUE(prompted);
+            EXPECT_EQ(prompted_path, project_path);
+            EXPECT_TRUE(
+                std::none_of(
+                    consumer.user_messages.begin(),
+                    consumer.user_messages.end(),
+                    [](const std::string& message) {
+                        return message ==
+                               "Stop training before switching projects.";
+                    }));
+            EXPECT_TRUE(
+                viewer.getTrainerManager()
+                    ->isTrainingActive());
+            EXPECT_NE(
+                viewer.getScene().getNode(
+                    "Keep while training"),
+                nullptr);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           OpenProjectStopTrainingThenSwitchWritesNoProject) {
+        const auto& temporary = temporary_.path;
+        const auto current_path =
+            temporary / "open-stop-current.licht";
+        const auto target_path =
+            temporary / "open-stop-target.licht";
+        write_empty_project(current_path);
+        write_empty_project(target_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(viewer.projectOpen(
+                current_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Cleared after open"),
+                lfs::core::NULL_NODE);
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            EXPECT_FALSE(
+                trainer->trainer_project_save_policy()
+                    .on_stop_or_error);
+            const auto write_time_before =
+                std::filesystem::last_write_time(
+                    current_path);
+
+            lfs::core::events::cmd::ProjectOpen{
+                .path = target_path,
+                .discard_changes = true,
+                .stop_training = true}
+                .emit();
+            EXPECT_EQ(
+                viewer.pending_training_action_,
+                VisualizerImpl::PendingTrainingAction::
+                    OpenProject);
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return viewer.getScene().getNode(
+                               "Cleared after open") ==
+                               nullptr &&
+                           !viewer.getTrainerManager()
+                                ->isTrainingActive() &&
+                           !viewer.getTrainerManager()
+                                ->isCompletionPending();
+                }));
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_EQ(
+                std::filesystem::last_write_time(
+                    current_path),
+                write_time_before);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ProjectOpenApiWhileTrainingStillErrors) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "api-while-training.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            ASSERT_TRUE(arm_running_trainer(viewer));
+
+            CapturingErrorConsumer consumer;
+            auto subscription =
+                lfs::ErrorBus::instance().subscribe(
+                    consumer);
+            bool prompted = false;
+            lfs::core::events::cmd::
+                ShowStopTrainingConfirmation::
+                    when([&](const auto&) {
+                        prompted = true;
+                    });
+
+            const auto blocked = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_FALSE(blocked);
+            EXPECT_EQ(
+                blocked.error().code(),
+                lfs::ErrorCode::FailedPrecondition);
+            EXPECT_EQ(
+                blocked.error().user_message(),
+                "Stop training before switching projects.");
+            EXPECT_FALSE(prompted);
+            EXPECT_TRUE(consumer.user_messages.empty());
+            EXPECT_TRUE(
+                viewer.getTrainerManager()
+                    ->isTrainingActive());
+
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            const auto new_blocked =
+                lifecycle->newProject(
+                    ProjectSwitchDisposition::
+                        DiscardChanges);
+            ASSERT_FALSE(new_blocked);
+            EXPECT_EQ(
+                new_blocked.error().user_message(),
+                "Stop training before switching projects.");
+            EXPECT_TRUE(
+                viewer.getTrainerManager()
+                    ->isTrainingActive());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           NewProjectWhileCompletionPendingStillErrors) {
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            auto* const trainer_manager =
+                viewer.getTrainerManager();
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    trainer_manager->getStateMachine());
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Stopping));
+            ASSERT_FALSE(
+                trainer_manager->isTrainingActive());
+            trainer_manager->completion_pending_.store(
+                true, std::memory_order_release);
+            trainer_manager->training_joined_ = false;
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Keep while publishing"),
+                lfs::core::NULL_NODE);
+
+            CapturingErrorConsumer consumer;
+            auto subscription =
+                lfs::ErrorBus::instance().subscribe(
+                    consumer);
+            bool prompted = false;
+            lfs::core::events::cmd::
+                ShowStopTrainingConfirmation::
+                    when([&](const auto&) {
+                        prompted = true;
+                    });
+
+            lfs::core::events::cmd::NewProject{
+                .discard_changes = true}
+                .emit();
+
+            EXPECT_FALSE(prompted);
+            EXPECT_TRUE(
+                std::any_of(
+                    consumer.user_messages.begin(),
+                    consumer.user_messages.end(),
+                    [](const std::string& message) {
+                        return message ==
+                               "Stop training before switching projects.";
+                    }));
+            EXPECT_NE(
+                viewer.getScene().getNode(
+                    "Keep while publishing"),
+                nullptr);
+
+            trainer_manager->completion_pending_.store(
+                false, std::memory_order_release);
+            trainer_manager->training_joined_ = true;
         }
     }
 
@@ -5747,6 +6177,284 @@ namespace lfs::vis {
             ASSERT_TRUE(adopted)
                 << lfs::format_for_developer(
                        adopted.error());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           AdoptedStepBoundaryPublishRebasesAutosaveBase) {
+        // Trainer step-boundary appends advance the on-disk
+        // master without rebasing the GUI document. Settlement
+        // must adopt so the next autosave binds the new commit.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "step-boundary-adopt.licht";
+        const auto sidecar =
+            lfs::io::project::autosave_sidecar_path(
+                project_path);
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_NE(lifecycle->document_, nullptr);
+            const auto stale_commit =
+                lifecycle->document_
+                    ->source_commit_uuid();
+            ASSERT_TRUE(stale_commit.has_value());
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Train model");
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            trainer->set_trainer_project_save_policy({
+                .on_completion = true,
+                .on_stop_or_error = false,
+                .at_step_boundaries = true,
+            });
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    viewer.getTrainerManager()
+                        ->getStateMachine());
+            if (state_machine.getState() ==
+                TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Running));
+
+            const auto checkpoint_uuid =
+                lfs::core::generate_uuid_v4();
+            const auto training_uuid =
+                lfs::core::generate_uuid_v4();
+            const auto root_uuid =
+                lfs::core::generate_uuid_v4();
+            {
+                auto on_disk =
+                    lfs::test::licht::require_result_ptr(
+                        lfs::io::project::
+                            ProjectDocument::open(
+                                project_path,
+                                {
+                                    .reader = {},
+                                    .geometry = {},
+                                    .defer_geometry_payloads =
+                                        true,
+                                }));
+                lfs::test::licht::require_status(
+                    on_disk->edit_scene_graph()
+                        .upsert_node(
+                            lfs::io::project::
+                                SceneNodeRecord{
+                                    .uuid = root_uuid,
+                                    .type = "group",
+                                    .name = "Root",
+                                    .child_order = 0,
+                                }));
+                lfs::test::licht::require_status(
+                    on_disk->edit_scene_graph()
+                        .upsert_node(
+                            lfs::io::project::
+                                SceneNodeRecord{
+                                    .uuid = training_uuid,
+                                    .type = "splat",
+                                    .name = "Training",
+                                    .parent_uuid = root_uuid,
+                                    .child_order = 0,
+                                    .payload =
+                                        lfs::io::project::
+                                            PayloadBinding{
+                                                .fourcc =
+                                                    "CKPT",
+                                                .instance_uuid =
+                                                    checkpoint_uuid,
+                                                .source_kind =
+                                                    "training",
+                                            },
+                                }));
+                lfs::test::licht::require_status(
+                    on_disk->edit_scene_graph()
+                        .set_training_model_uuid(
+                            training_uuid));
+                lfs::test::licht::require_status(
+                    on_disk->set_checkpoint(
+                        checkpoint_uuid,
+                        make_training_autosave_checkpoint_payload(
+                            checkpoint_uuid)));
+                lfs::test::licht::require_status(
+                    on_disk->edit_view().dom().set(
+                        "step_boundary_marker",
+                        std::string{"appended"}));
+                auto save_options =
+                    lfs::test::licht::
+                        deterministic_document_save_options(
+                            0x76000030, 2, 3);
+                save_options.commit.snapshot_uuid =
+                    checkpoint_uuid;
+                (void)lfs::test::licht::require_result(
+                    on_disk->save(
+                        project_path, save_options));
+            }
+
+            auto disk =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(disk)
+                << lfs::format_for_developer(
+                       disk.error());
+            const auto published_commit =
+                disk->commit().commit_uuid;
+            EXPECT_NE(
+                published_commit, *stale_commit);
+            EXPECT_EQ(
+                *lifecycle->document_
+                     ->source_commit_uuid(),
+                *stale_commit);
+            EXPECT_TRUE(
+                lifecycle->document_->checkpoint_uuids()
+                    .empty());
+            auto premature =
+                lifecycle->document_->save_autosave(
+                    sidecar,
+                    lfs::io::project::
+                        ProjectDocumentAutosaveOptions{
+                            .file_uuid =
+                                lfs::core::
+                                    generate_uuid_v4(),
+                            .base_explicit_commit_uuid =
+                                *stale_commit,
+                            .autosave_sequence = 1,
+                            .snapshot_uuid = {},
+                            .index_compression =
+                                lfs::io::project::
+                                    IndexCompression::
+                                        StoredForDeterministicTests,
+                            .disk_reserve_bytes = 0,
+                        });
+            ASSERT_FALSE(premature);
+            EXPECT_EQ(
+                premature.error().code(),
+                lfs::ErrorCode::FailedPrecondition);
+
+            ASSERT_NE(
+                trainer->project_snapshot_service_,
+                nullptr);
+            const auto bound_master =
+                *lifecycle->document_->source_path();
+            trainer->last_project_snapshot_path_ =
+                bound_master;
+            trainer->last_project_writer_error_
+                .clear();
+            trainer->project_snapshot_service_
+                ->testing_advance_completed_snapshots(
+                    1);
+            constexpr std::uint64_t request_id = 1;
+            {
+                std::lock_guard lock(
+                    trainer->project_snapshot_mutex_);
+                trainer->last_completed_project_request_id_ =
+                    request_id;
+            }
+
+            auto started = lifecycle->startTrainingWrite(
+                project::ProjectLifecycle::
+                    ProjectWritePurpose::
+                        TrainingAutosave,
+                request_id, bound_master,
+                lifecycle->document_->dirty_epoch(),
+                1);
+            ASSERT_TRUE(started)
+                << lfs::format_for_developer(
+                       started.error());
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+
+            ASSERT_NE(lifecycle->document_, nullptr);
+            ASSERT_TRUE(
+                lifecycle->document_
+                    ->source_commit_uuid());
+            EXPECT_EQ(
+                *lifecycle->document_
+                     ->source_commit_uuid(),
+                published_commit);
+            EXPECT_FALSE(
+                lifecycle->document_->checkpoint_uuids()
+                    .empty());
+            const auto marker =
+                lifecycle->document_->view()
+                    .dom()
+                    .get_json("step_boundary_marker");
+            ASSERT_TRUE(marker.has_value());
+            EXPECT_EQ(*marker, "appended");
+
+            lfs::test::licht::require_status(
+                lifecycle->document_->edit_view()
+                    .dom()
+                    .set(
+                        "light_after_adopt",
+                        std::string{"dirty"}));
+            auto saved =
+                lifecycle->document_->save_autosave(
+                    sidecar,
+                    lfs::io::project::
+                        ProjectDocumentAutosaveOptions{
+                            .file_uuid =
+                                lfs::core::
+                                    generate_uuid_v4(),
+                            .base_explicit_commit_uuid =
+                                published_commit,
+                            .autosave_sequence = 1,
+                            .snapshot_uuid = {},
+                            .index_compression =
+                                lfs::io::project::
+                                    IndexCompression::
+                                        StoredForDeterministicTests,
+                            .disk_reserve_bytes = 0,
+                        });
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
         }
     }
 

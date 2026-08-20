@@ -28,12 +28,19 @@ def _load_file_menu(monkeypatch, recent_paths=()):
         return f"tr:{key}"
 
     opened = []
+    opened_stop_training = []
+    new_projects = []
     removed = []
     confirm_dialogs = []
     message_dialogs = []
+    training_active = False
 
-    def project_open(path, discard=False):
+    def project_open(path, discard=False, stop_training=False):
         opened.append((path, discard))
+        opened_stop_training.append(stop_training)
+
+    def new_project(discard=False, stop_training=False):
+        new_projects.append((discard, stop_training))
 
     def project_remove_recent_file(path):
         removed.append(path)
@@ -56,8 +63,12 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.project_is_dirty = lambda: False
     lf_stub.project_has_path = lambda: False
     lf_stub.project_open = project_open
+    lf_stub.new_project = new_project
+    lf_stub.is_training_active = lambda: training_active
     lf_stub.project_remove_recent_file = project_remove_recent_file
     lf_stub.project_open_calls = opened
+    lf_stub.project_open_stop_training = opened_stop_training
+    lf_stub.new_project_calls = new_projects
     lf_stub.project_remove_recent_file_calls = removed
     lf_stub.confirm_dialogs = confirm_dialogs
     lf_stub.message_dialogs = message_dialogs
@@ -246,4 +257,74 @@ def test_compact_project_enabled_only_with_durable_path(monkeypatch):
     file_menu.lf.project_has_path = raise_missing
     guarded = _compact_project_item(file_menu)
     assert guarded["enabled"] is False
+
+
+def test_new_project_while_training_prompts_instead_of_switching(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.is_training_active = lambda: True
+
+    file_menu.NewProjectOperator().execute(None)
+
+    assert file_menu.lf.new_project_calls == []
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:project_switch.stop_training_title"
+    assert message == "tr:project_switch.stop_training_message"
+    assert buttons == ["tr:common.yes", "tr:common.no"]
+
+    callback("tr:common.no")
+    assert file_menu.lf.new_project_calls == []
+
+    callback("tr:common.yes")
+    assert file_menu.lf.new_project_calls == [(True, True)]
+
+
+def test_open_recent_while_training_prompts_instead_of_opening(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "training.licht"
+    project.write_bytes(b"")
+    path = str(project)
+    file_menu = _load_file_menu(monkeypatch, [path])
+    file_menu.lf.is_training_active = lambda: True
+
+    _recent_item_callback(file_menu)()
+
+    assert file_menu.lf.project_open_calls == []
+    assert file_menu.lf.message_dialogs == []
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, _message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:project_switch.stop_training_title"
+    assert buttons == ["tr:common.yes", "tr:common.no"]
+
+    callback("tr:common.no")
+    assert file_menu.lf.project_open_calls == []
+    assert file_menu.lf.project_open_stop_training == []
+
+    callback("tr:common.yes")
+    assert file_menu.lf.project_open_calls == [(path, True)]
+    assert file_menu.lf.project_open_stop_training == [True]
+
+
+def test_stop_training_confirmation_yes_retries_with_stop_flag(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+
+    file_menu._show_stop_training_confirmation(True, "", True)
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    _title, _message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert buttons == ["tr:common.yes", "tr:common.no"]
+
+    callback("tr:common.no")
+    assert file_menu.lf.new_project_calls == []
+
+    callback("tr:common.yes")
+    assert file_menu.lf.new_project_calls == [(True, True)]
+
+    file_menu._show_stop_training_confirmation(
+        False, "/tmp/other.licht", False
+    )
+    _title, _message, _buttons, open_callback = file_menu.lf.confirm_dialogs[1]
+    open_callback("tr:common.yes")
+    assert file_menu.lf.project_open_calls == [("/tmp/other.licht", False)]
+    assert file_menu.lf.project_open_stop_training == [True]
 

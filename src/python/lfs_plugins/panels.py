@@ -230,23 +230,16 @@ def register_builtin_panels():
                 step()
             except Exception as e:
                 lf.log.error(
-                    "register_builtin_panels: step '%s' failed: %s\n%s",
-                    name,
-                    e,
-                    traceback.format_exc(),
+                    f"register_builtin_panels: step '{name}' failed: {e}\n{traceback.format_exc()}"
                 )
                 failed.append(name)
         if failed:
             lf.log.error(
-                "register_builtin_panels: %d step(s) failed: %s",
-                len(failed),
-                ", ".join(failed),
+                f"register_builtin_panels: {len(failed)} step(s) failed: {', '.join(failed)}"
             )
         return True
     except Exception as e:
         lf.log.error(
-            "register_builtin_panels failed: %s\n%s",
-            e,
-            traceback.format_exc(),
+            f"register_builtin_panels failed: {e}\n{traceback.format_exc()}"
         )
         return False

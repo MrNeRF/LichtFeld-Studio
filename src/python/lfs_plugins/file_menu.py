@@ -20,6 +20,37 @@ from .import_panels import open_dataset_import_panel, open_resume_checkpoint_pan
 __lfs_menu_classes__ = ["FileMenu"]
 
 
+def _training_is_active() -> bool:
+    probe = getattr(lf, "is_training_active", None)
+    if not callable(probe):
+        return False
+    try:
+        return bool(probe())
+    except Exception:
+        return False
+
+
+def _confirm_stop_training_then(callback) -> None:
+    if not _training_is_active():
+        callback(False)
+        return
+
+    tr = lf.ui.tr
+    yes_label = tr("common.yes")
+    no_label = tr("common.no")
+
+    def _on_result(button):
+        if button == yes_label:
+            callback(True)
+
+    lf.ui.confirm_dialog(
+        tr("project_switch.stop_training_title"),
+        tr("project_switch.stop_training_message"),
+        [yes_label, no_label],
+        _on_result,
+    )
+
+
 def _confirm_discard_then(title: str, callback) -> None:
     if not lf.project_is_dirty():
         callback()
@@ -40,6 +71,13 @@ def _confirm_discard_then(title: str, callback) -> None:
     )
 
 
+def _confirm_switch_then(title: str, callback) -> None:
+    _confirm_discard_then(
+        title,
+        lambda: _confirm_stop_training_then(callback),
+    )
+
+
 def _offer_remove_missing_recent(path: str) -> None:
     tr = lf.ui.tr
     remove_label = tr("menu.file.remove_from_recent")
@@ -56,9 +94,21 @@ def _offer_remove_missing_recent(path: str) -> None:
     )
 
 
-def _open_recent_checked(path: str) -> None:
+def _open_project(path: str, discard_changes: bool, stop_training: bool = False):
+    if stop_training:
+        return lf.project_open(path, discard_changes, True)
+    return lf.project_open(path, discard_changes)
+
+
+def _new_project(discard_changes: bool, stop_training: bool = False):
+    if stop_training:
+        return lf.new_project(discard_changes, True)
+    return lf.new_project(discard_changes)
+
+
+def _open_recent_checked(path: str, stop_training: bool = False) -> None:
     try:
-        lf.project_open(path, True)
+        _open_project(path, True, stop_training)
     except FileNotFoundError:
         # NotFoundError subclasses FileNotFoundError (see startup_recent_panel).
         _offer_remove_missing_recent(path)
@@ -75,9 +125,9 @@ def _open_recent_project(path: str) -> None:
     if not Path(path).is_file():
         _offer_remove_missing_recent(path)
         return
-    _confirm_discard_then(
+    _confirm_switch_then(
         lf.ui.tr("menu.file.open_project"),
-        lambda: _open_recent_checked(path),
+        lambda stop_training: _open_recent_checked(path, stop_training),
     )
 
 
@@ -103,9 +153,9 @@ class NewProjectOperator(Operator):
     description = "Clear the scene to start a new project"
 
     def execute(self, context) -> set:
-        _confirm_discard_then(
+        _confirm_switch_then(
             lf.ui.tr("menu.file.new_project"),
-            lambda: lf.new_project(True),
+            lambda stop_training: _new_project(True, stop_training),
         )
         return {"FINISHED"}
 
@@ -115,9 +165,9 @@ class OpenProjectOperator(Operator):
     description = "Open a LichtFeld project"
 
     def execute(self, context) -> set:
-        _confirm_discard_then(
+        _confirm_switch_then(
             lf.ui.tr("menu.file.open_project"),
-            lambda: lf.project_open("", True),
+            lambda stop_training: _open_project("", True, stop_training),
         )
         return {"FINISHED"}
 
@@ -317,11 +367,36 @@ def _show_project_switch_confirmation(
 ) -> None:
     if new_project:
         title = lf.ui.tr("menu.file.new_project")
-        callback = lambda: lf.new_project(True)
+        callback = lambda stop_training: _new_project(True, stop_training)
     else:
         title = lf.ui.tr("menu.file.open_project")
-        callback = lambda: lf.project_open(path, True)
-    _confirm_discard_then(title, callback)
+        callback = lambda stop_training: _open_project(
+            path, True, stop_training
+        )
+    _confirm_switch_then(title, callback)
+
+
+def _show_stop_training_confirmation(
+    new_project: bool, path: str, discard_changes: bool = False
+) -> None:
+    tr = lf.ui.tr
+    yes_label = tr("common.yes")
+    no_label = tr("common.no")
+
+    def _on_result(button):
+        if button != yes_label:
+            return
+        if new_project:
+            _new_project(discard_changes, True)
+        else:
+            _open_project(path, discard_changes, True)
+
+    lf.ui.confirm_dialog(
+        tr("project_switch.stop_training_title"),
+        tr("project_switch.stop_training_message"),
+        [yes_label, no_label],
+        _on_result,
+    )
 
 
 def _on_show_dataset_load_popup(path: str):
@@ -445,6 +520,9 @@ def register():
     lf.ui.on_request_exit(_show_exit_confirmation)
     lf.ui.on_project_switch_confirmation(
         _show_project_switch_confirmation
+    )
+    lf.ui.on_stop_training_confirmation(
+        _show_stop_training_confirmation
     )
 
 

@@ -252,6 +252,9 @@ namespace lfs::training {
             indices_.clear();
             if (included_images.has_value()) {
                 for (size_t i = 0; i < cameras_.size(); ++i) {
+                    if (!cameras_[i]->has_image()) {
+                        continue;
+                    }
                     // Simple filename matching without extension
                     auto img_name = cameras_[i]->image_name();
                     // Remove extension
@@ -267,6 +270,9 @@ namespace lfs::training {
                 }
             } else {
                 for (size_t i = 0; i < cameras_.size(); ++i) {
+                    if (!cameras_[i]->has_image()) {
+                        continue;
+                    }
                     const bool is_test = (i % config.test_every) == 0;
 
                     if (split_ == Split::ALL || (split_ == Split::TRAIN && !is_test) ||
@@ -329,6 +335,9 @@ namespace lfs::training {
             }
             size_t total_bytes = 0;
             for (const auto& cam : cameras_) {
+                if (!cam->has_image()) {
+                    continue;
+                }
                 total_bytes +=
                     cam->get_num_bytes_from_file(config_.resize_factor, config_.max_width);
             }

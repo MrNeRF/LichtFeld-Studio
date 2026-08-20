@@ -178,6 +178,8 @@ def _install_recording_lf(monkeypatch):
         on_show_dataset_load_popup=lambda cb: None,
         on_show_resume_checkpoint_popup=lambda cb: None,
         on_request_exit=lambda cb: None,
+        on_project_switch_confirmation=lambda cb: None,
+        on_stop_training_confirmation=lambda cb: None,
         set_cancel_operator_callback=lambda cb: None,
         set_save_asset_callback=lambda cb: None,
         ops=SimpleNamespace(cancel_modal=lambda: None),

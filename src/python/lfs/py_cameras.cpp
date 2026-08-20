@@ -95,6 +95,7 @@ namespace lfs::python {
     std::string PyCamera::depth_path() const { return lfs::core::path_to_utf8(cam_->depth_path()); }
     bool PyCamera::has_mask() const { return cam_->has_mask(); }
     bool PyCamera::has_depth() const { return cam_->has_depth(); }
+    bool PyCamera::has_image() const { return cam_->has_image(); }
     int PyCamera::uid() const { return cam_->uid(); }
 
     PyTensor PyCamera::rotation() const {
@@ -179,6 +180,7 @@ namespace lfs::python {
             .def_prop_ro("depth_path", &PyCamera::depth_path, "Full path to depth map file")
             .def_prop_ro("has_mask", &PyCamera::has_mask, "Whether a mask file exists")
             .def_prop_ro("has_depth", &PyCamera::has_depth, "Whether a depth map file exists")
+            .def_prop_ro("has_image", &PyCamera::has_image, "Whether the bound dataset image file exists")
             .def_prop_ro("uid", &PyCamera::uid, "Unique camera identifier")
             // Visualizer-space camera pose, directly compatible with render_view().
             .def_prop_ro("rotation", &PyCamera::rotation,

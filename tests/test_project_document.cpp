@@ -2995,6 +2995,105 @@ namespace {
         EXPECT_FALSE(fs::exists(sidecar));
     }
 
+    TEST(ProjectDocumentTest,
+         AutosaveSidecarCreateRejectsStaleBaseAndAcceptsRefreshedBase) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "stale-base.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(master);
+        write_phase_a_fixture(master);
+
+        auto held = require_result_ptr(
+            ProjectDocument::open(master));
+        ASSERT_TRUE(held->source_commit_uuid());
+        const auto stale_base =
+            *held->source_commit_uuid();
+        require_status(
+            held->edit_view().dom().set(
+                "stale_base_marker",
+                std::string{"held"}));
+
+        {
+            auto advanced = require_result_ptr(
+                ProjectDocument::open(master));
+            require_status(
+                advanced->edit_view().dom().set(
+                    "trainer_append_marker",
+                    std::string{"generation-2"}));
+            auto advanced_save = advanced->save(
+                master, save_options(9970, 1600));
+            ASSERT_TRUE(advanced_save)
+                << lfs::format_for_developer(
+                       advanced_save.error());
+        }
+        ProjectReader disk =
+            require_result(ProjectReader::open(master));
+        EXPECT_NE(
+            disk.commit().commit_uuid, stale_base);
+        EXPECT_EQ(
+            *held->source_commit_uuid(), stale_base);
+
+        auto stale = held->save_autosave(
+            sidecar,
+            ProjectDocumentAutosaveOptions{
+                .file_uuid = fixed_uuid(9971),
+                .base_explicit_commit_uuid =
+                    stale_base,
+                .autosave_sequence = 1,
+                .snapshot_uuid = fixed_uuid(9972),
+                .index_compression =
+                    IndexCompression::
+                        StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_FALSE(stale);
+        EXPECT_EQ(
+            stale.error().code(),
+            lfs::ErrorCode::FailedPrecondition);
+        const auto stale_formatted =
+            lfs::format_for_developer(stale.error());
+        EXPECT_NE(
+            stale_formatted.find(
+                "The autosave base changed before publication."),
+            std::string::npos)
+            << stale_formatted;
+
+        auto refreshed = require_result_ptr(
+            ProjectDocument::open(master));
+        ASSERT_TRUE(refreshed->source_commit_uuid());
+        EXPECT_EQ(
+            *refreshed->source_commit_uuid(),
+            disk.commit().commit_uuid);
+        require_status(
+            refreshed->edit_view().dom().set(
+                "refreshed_base_marker",
+                std::string{"ok"}));
+        auto published = refreshed->save_autosave(
+            sidecar,
+            ProjectDocumentAutosaveOptions{
+                .file_uuid = fixed_uuid(9973),
+                .base_explicit_commit_uuid =
+                    *refreshed->source_commit_uuid(),
+                .autosave_sequence = 1,
+                .snapshot_uuid = fixed_uuid(9974),
+                .index_compression =
+                    IndexCompression::
+                        StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(published)
+            << lfs::format_for_developer(
+                   published.error());
+        EXPECT_TRUE(fs::is_regular_file(sidecar));
+        ProjectReader overlay =
+            require_result(ProjectReader::open(sidecar));
+        EXPECT_EQ(
+            overlay.superblock()
+                .base_explicit_commit_uuid,
+            disk.commit().commit_uuid);
+    }
+
     LazyChunkValue make_autosave_checkpoint_payload(
         const Uuid& checkpoint_uuid) {
         auto model = make_splat(2);
