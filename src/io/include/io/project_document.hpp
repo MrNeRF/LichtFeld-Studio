@@ -103,6 +103,9 @@ namespace lfs::io::project {
         // Terminal training writes wait out a transient in-process lock
         // holder instead of dropping the generation.
         std::chrono::milliseconds writer_lock_wait{0};
+        // Untitled crash-protection writes a complete master without binding
+        // the live document to that app-private path.
+        bool leave_unbound = false;
     };
 
     struct ProjectDocumentAutosaveOptions {
@@ -196,6 +199,8 @@ namespace lfs::io::project {
 
         [[nodiscard]] const std::optional<std::filesystem::path>&
         source_path() const noexcept;
+        // Keep the source reader for lazy payloads, but report no user path.
+        void forget_source_path() noexcept;
         [[nodiscard]] const ProjectReader* source_reader() const noexcept;
         [[nodiscard]] std::optional<lfs::core::Uuid>
         source_commit_uuid() const noexcept;

@@ -2398,6 +2398,14 @@
       "message": "Das Projektmodell ist zum Anzeigen verfügbar, aber das Training konnte nicht fortgesetzt werden. Prüfen Sie den Dataset-Pfad und die Protokolle."
     }
   },
+  "recovery": {
+    "crash_title": "LichtFeld Studio wurde unerwartet beendet",
+    "body": "Es wurde eine Wiederherstellungsdatei für {} gefunden. (gespeichert {})",
+    "unsaved_session": "eine ungespeicherte Sitzung",
+    "recover": "Wiederherstellen",
+    "open_saved": "Gespeicherte Datei öffnen",
+    "skip": "Überspringen und neu erstellen"
+  },
   "startup_recent": {
     "title": "Zuletzt verwendete Projekte",
     "open": "Öffnen",

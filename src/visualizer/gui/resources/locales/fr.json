@@ -2399,6 +2399,14 @@
       "message": "Le modèle du projet est disponible pour la visualisation, mais l'entraînement n'a pas pu être repris. Vérifiez le chemin du jeu de données et les journaux."
     }
   },
+  "recovery": {
+    "crash_title": "LichtFeld Studio s'est fermé de façon inattendue",
+    "body": "Un fichier de récupération a été trouvé pour {}. (enregistré {})",
+    "unsaved_session": "une session non enregistrée",
+    "recover": "Récupérer",
+    "open_saved": "Ouvrir l'enregistrement",
+    "skip": "Ignorer et créer un nouveau"
+  },
   "startup_recent": {
     "title": "Projets récents",
     "open": "Ouvrir",

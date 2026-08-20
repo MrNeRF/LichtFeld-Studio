@@ -2398,6 +2398,14 @@
       "message": "프로젝트 모델은 볼 수 있지만 학습을 재개할 수 없습니다. 데이터세트 경로와 로그를 확인하세요."
     }
   },
+  "recovery": {
+    "crash_title": "LichtFeld Studio가 예기치 않게 종료되었습니다",
+    "body": "{}의 복구 파일이 있습니다. (저장 시각 {})",
+    "unsaved_session": "저장되지 않은 세션",
+    "recover": "복구",
+    "open_saved": "저장된 파일 열기",
+    "skip": "건너뛰고 새로 만들기"
+  },
   "startup_recent": {
     "title": "최근 프로젝트",
     "open": "열기",

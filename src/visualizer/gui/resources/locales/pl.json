@@ -2398,6 +2398,14 @@
       "message": "Model projektu jest dostępny do podglądu, ale nie udało się wznowić treningu. Sprawdź ścieżkę zestawu danych i logi."
     }
   },
+  "recovery": {
+    "crash_title": "LichtFeld Studio zostało nieoczekiwanie zamknięte",
+    "body": "Znaleziono plik odzyskiwania dla {}. (zapisano {})",
+    "unsaved_session": "niezapisana sesja",
+    "recover": "Odzyskaj",
+    "open_saved": "Otwórz zapisany",
+    "skip": "Pomiń i utwórz nowy"
+  },
   "startup_recent": {
     "title": "Ostatnie projekty",
     "open": "Otwórz",

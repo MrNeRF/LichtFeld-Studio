@@ -1960,6 +1960,12 @@ namespace lfs::io::project {
         return impl_->source_path;
     }
 
+    void ProjectDocument::forget_source_path() noexcept {
+        if (impl_) {
+            impl_->source_path.reset();
+        }
+    }
+
     const ProjectReader* ProjectDocument::source_reader() const noexcept {
         return impl_->source_reader.get();
     }
@@ -3344,12 +3350,16 @@ namespace lfs::io::project {
         }
         writer.reset();
 
-        if (is_autosave) {
+        if (is_autosave || options.leave_unbound) {
+            ReaderOptions reader_options;
+            if (impl_->source_reader) {
+                reader_options =
+                    impl_->source_reader
+                        ->reader_options();
+            }
             auto reader =
                 ProjectReader::open(
-                    *normalized,
-                    impl_->source_reader
-                        ->reader_options());
+                    *normalized, reader_options);
             if (!reader) {
                 return std::move(reader).error();
             }

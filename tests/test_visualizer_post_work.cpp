@@ -6,12 +6,14 @@
 #include "core/checkpoint_format.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/guarded_task.hpp"
 #include "core/main_loop.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
+#include "gui/string_keys.hpp"
 #include "input/input_controller.hpp"
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
@@ -894,7 +896,7 @@ namespace lfs::vis {
                 gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
             ASSERT_EQ(
                 request.title,
-                "Recover Autosaved Project?");
+                LOC(lichtfeld::Strings::Recovery::CRASH_TITLE));
             ASSERT_TRUE(request.on_cancel);
             request.on_cancel();
             EXPECT_TRUE(
@@ -918,26 +920,20 @@ namespace lfs::vis {
                           RecoveryPromptPending);
             request = takeModalRequest(
                 gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
+            ASSERT_EQ(request.buttons.size(), 3u);
+            EXPECT_EQ(
+                request.buttons[0].label,
+                LOC(lichtfeld::Strings::Recovery::RECOVER));
+            EXPECT_EQ(
+                request.buttons[1].label,
+                LOC(lichtfeld::Strings::Recovery::OPEN_SAVED));
+            EXPECT_EQ(
+                request.buttons[2].label,
+                LOC(lichtfeld::Strings::Recovery::SKIP));
             ASSERT_TRUE(request.on_cancel);
             request.on_cancel();
             EXPECT_FALSE(viewer.project_lifecycle_
                              ->recovery_prompt_pending_);
-
-            pending = viewer.projectOpen(
-                project_path,
-                ProjectSwitchDisposition::
-                    DiscardChanges);
-            ASSERT_TRUE(pending);
-            EXPECT_EQ(*pending,
-                      ProjectOpenOutcome::
-                          RecoveryPromptPending);
-            request = takeModalRequest(
-                gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
-            ASSERT_TRUE(request.on_result);
-            request.on_result(
-                lfs::core::ModalResult{
-                    .button_label =
-                        "Open Saved"});
             EXPECT_TRUE(
                 std::filesystem::is_regular_file(
                     sidecar));
@@ -1081,7 +1077,9 @@ namespace lfs::vis {
             ASSERT_TRUE(request.on_result);
             request.on_result(
                 lfs::core::ModalResult{
-                    .button_label = "Recover"});
+                    .button_label = LOC(
+                        lichtfeld::Strings::Recovery::
+                            RECOVER)});
             auto info = viewer.projectGetInfo();
             ASSERT_TRUE(info);
             EXPECT_TRUE(info->recovery_session);
@@ -1154,7 +1152,8 @@ namespace lfs::vis {
                           RecoveryPromptPending);
             auto request = takeModalRequest(
                 gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
-            request.on_result({.button_label = "Recover"});
+            request.on_result({.button_label = LOC(
+                                   lichtfeld::Strings::Recovery::RECOVER)});
             ASSERT_TRUE(viewer.project_lifecycle_
                             ->recovery_session_path_);
             const auto recovery_temp =
@@ -1230,7 +1229,8 @@ namespace lfs::vis {
                           RecoveryPromptPending);
             auto request = takeModalRequest(
                 gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
-            request.on_result({.button_label = "Recover"});
+            request.on_result({.button_label = LOC(
+                                   lichtfeld::Strings::Recovery::RECOVER)});
             const auto recovery_temp =
                 *viewer.project_lifecycle_
                      ->recovery_session_path_;
@@ -1288,7 +1288,8 @@ namespace lfs::vis {
                           RecoveryPromptPending);
             auto request = takeModalRequest(
                 gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
-            request.on_result({.button_label = "Recover"});
+            request.on_result({.button_label = LOC(
+                                   lichtfeld::Strings::Recovery::RECOVER)});
             recovery_temp =
                 *viewer.project_lifecycle_
                      ->recovery_session_path_;
@@ -1323,10 +1324,15 @@ namespace lfs::vis {
             ASSERT_EQ(untitled->hydration_state,
                       "empty");
             ASSERT_FALSE(untitled->path.has_value());
-            ASSERT_TRUE(viewer.project_lifecycle_
-                            ->startAutosave());
-            EXPECT_FALSE(viewer.jobs().anyRunning(
-                JobType::ProjectWrite));
+            auto first_autosave =
+                viewer.project_lifecycle_
+                    ->startAutosave();
+            ASSERT_TRUE(first_autosave)
+                << lfs::format_for_developer(
+                       first_autosave.error());
+            // Untitled scratch autosave may occupy the
+            // exclusive ProjectWrite slot. Save As below
+            // must wait that write out rather than refuse.
             EXPECT_EQ(viewer.project_lifecycle_
                           ->autosave_sequence_,
                       0u);
@@ -1841,8 +1847,9 @@ namespace lfs::vis {
                 gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
             EXPECT_EQ(
                 request.title,
-                "Recover Autosaved Project?");
-            request.on_result({.button_label = "Recover"});
+                LOC(lichtfeld::Strings::Recovery::CRASH_TITLE));
+            request.on_result({.button_label = LOC(
+                                   lichtfeld::Strings::Recovery::RECOVER)});
             ASSERT_TRUE(viewer.project_lifecycle_
                             ->recovery_session_);
             ASSERT_TRUE(viewer.project_lifecycle_
@@ -1901,6 +1908,452 @@ namespace lfs::vis {
             }
             EXPECT_FALSE(viewer.project_lifecycle_
                              ->document_->source_path());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           UntitledDirtySessionAutosavesToScratch) {
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Untitled dirty"),
+                lfs::core::NULL_NODE);
+            auto started = viewer.project_lifecycle_
+                               ->startAutosave();
+            ASSERT_TRUE(started)
+                << lfs::format_for_developer(
+                       started.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            const auto scratch =
+                lfs::io::project::scratch_autosave_path(
+                    viewer.project_lifecycle_
+                        ->recovery_directory_,
+                    viewer.project_lifecycle_
+                        ->document_->project_uuid());
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    scratch));
+            EXPECT_FALSE(
+                viewer.project_lifecycle_
+                    ->document_->source_path());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           BlankUntitledSessionUpdateMaintenanceWritesNoScratch) {
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(lifecycle->document_);
+            EXPECT_TRUE(
+                lifecycle->isBlankUntitledSession());
+            lifecycle->settings_
+                .autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosaved_dirty_epoch_ =
+                0;
+            lifecycle->last_autosaved_scene_serial_ =
+                0;
+            lifecycle->last_autosave_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
+            lifecycle->updateMaintenance();
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            const auto scratch =
+                lfs::io::project::scratch_autosave_path(
+                    lifecycle->recovery_directory_,
+                    lifecycle->document_->project_uuid());
+            EXPECT_FALSE(
+                std::filesystem::exists(scratch));
+            auto lock_path = scratch;
+            lock_path += ".lock";
+            EXPECT_FALSE(
+                std::filesystem::exists(lock_path));
+            EXPECT_FALSE(
+                lifecycle->scratch_autosave_path_);
+            EXPECT_FALSE(lifecycle->scratch_lock_);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           DirtyUntitledSessionUpdateMaintenanceWritesScratch) {
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Untitled dirty maintenance"),
+                lfs::core::NULL_NODE);
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            EXPECT_FALSE(
+                lifecycle->isBlankUntitledSession());
+            lifecycle->settings_
+                .autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosaved_dirty_epoch_ =
+                0;
+            lifecycle->last_autosaved_scene_serial_ =
+                0;
+            lifecycle->last_autosave_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
+            lifecycle->updateMaintenance();
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            const auto scratch =
+                lfs::io::project::scratch_autosave_path(
+                    lifecycle->recovery_directory_,
+                    lifecycle->document_->project_uuid());
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    scratch));
+            EXPECT_FALSE(
+                lifecycle->document_->source_path());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           SaveAsMigratesScratchAutosaveToSidecar) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "migrated.licht";
+        const auto sidecar =
+            lfs::io::project::autosave_sidecar_path(
+                project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Untitled before save as"),
+                lfs::core::NULL_NODE);
+            auto started = viewer.project_lifecycle_
+                               ->startAutosave();
+            ASSERT_TRUE(started)
+                << lfs::format_for_developer(
+                       started.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            const auto scratch =
+                lfs::io::project::scratch_autosave_path(
+                    viewer.project_lifecycle_
+                        ->recovery_directory_,
+                    viewer.project_lifecycle_
+                        ->document_->project_uuid());
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    scratch));
+            auto saved = viewer.projectSaveAs(
+                project_path, false);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            EXPECT_FALSE(std::filesystem::exists(scratch));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Dirty after save as"),
+                lfs::core::NULL_NODE);
+            auto sidecar_autosave =
+                viewer.project_lifecycle_
+                    ->startAutosave();
+            ASSERT_TRUE(sidecar_autosave)
+                << lfs::format_for_developer(
+                       sidecar_autosave.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RecoveryDismissalPersistsAndNewerCandidateIsOffered) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "dismiss.licht";
+        write_recoverable_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(
+                gui->rml_modal_overlay_,
+                gui->rmlui_manager_);
+            auto pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(pending);
+            EXPECT_EQ(
+                *pending,
+                ProjectOpenOutcome::
+                    RecoveryPromptPending);
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_,
+                gui->rml_modal_overlay_->queue_);
+            ASSERT_TRUE(request.on_cancel);
+            request.on_cancel();
+        }
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(
+                gui->rml_modal_overlay_,
+                gui->rmlui_manager_);
+            auto opened = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            EXPECT_EQ(*opened, ProjectOpenOutcome::Opened);
+            {
+                auto& overlay =
+                    *gui->rml_modal_overlay_;
+                std::lock_guard lock(
+                    overlay.queue_mutex_);
+                EXPECT_TRUE(overlay.queue_.empty());
+            }
+        }
+        auto document =
+            lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(
+                    project_path));
+        const auto base =
+            lfs::test::licht::require_result(
+                lfs::io::project::ProjectReader::open(
+                    project_path));
+        lfs::test::licht::require_status(
+            document->edit_view().dom().set(
+                "recovery_marker", "newer"));
+        (void)lfs::test::licht::require_result(
+            document->save_autosave(
+                lfs::io::project::
+                    autosave_sidecar_path(project_path),
+                {
+                    .file_uuid =
+                        lfs::core::generate_uuid_v4(),
+                    .base_explicit_commit_uuid =
+                        base.commit().commit_uuid,
+                    .autosave_sequence = 2,
+                    .snapshot_uuid =
+                        lfs::core::generate_uuid_v4(),
+                    .index_compression =
+                        lfs::io::project::
+                            IndexCompression::
+                                StoredForDeterministicTests,
+                    .disk_reserve_bytes = 0,
+                }));
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(
+                gui->rml_modal_overlay_,
+                gui->rmlui_manager_);
+            auto pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(pending);
+            EXPECT_EQ(
+                *pending,
+                ProjectOpenOutcome::
+                    RecoveryPromptPending);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StartupOffersScratchRecoveryAsUntitled) {
+        auto options = projectOptions();
+        std::filesystem::path scratch;
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Crash untitled"),
+                lfs::core::NULL_NODE);
+            auto started = viewer.project_lifecycle_
+                               ->startAutosave();
+            ASSERT_TRUE(started)
+                << lfs::format_for_developer(
+                       started.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            scratch =
+                lfs::io::project::scratch_autosave_path(
+                    viewer.project_lifecycle_
+                        ->recovery_directory_,
+                    viewer.project_lifecycle_
+                        ->document_->project_uuid());
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    scratch));
+        }
+        ASSERT_TRUE(std::filesystem::is_regular_file(scratch));
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(
+                gui->rml_modal_overlay_,
+                gui->rmlui_manager_);
+            viewer.project_lifecycle_
+                ->openStartupProject(std::nullopt);
+            EXPECT_TRUE(viewer.project_lifecycle_
+                            ->recovery_prompt_pending_);
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_,
+                gui->rml_modal_overlay_->queue_);
+            EXPECT_EQ(
+                request.title,
+                LOC(lichtfeld::Strings::Recovery::
+                        CRASH_TITLE));
+            ASSERT_EQ(request.buttons.size(), 2u);
+            EXPECT_EQ(
+                request.buttons[0].label,
+                LOC(lichtfeld::Strings::Recovery::RECOVER));
+            EXPECT_EQ(
+                request.buttons[1].label,
+                LOC(lichtfeld::Strings::Recovery::SKIP));
+            request.on_result({.button_label = LOC(
+                                   lichtfeld::Strings::Recovery::RECOVER)});
+            ASSERT_TRUE(viewer.project_lifecycle_->document_);
+            EXPECT_FALSE(
+                viewer.project_lifecycle_->document_
+                    ->source_path());
+            EXPECT_TRUE(
+                viewer.project_lifecycle_->document_
+                    ->dirty());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StartupSweepsEmptyScratchAndDoesNotOffer) {
+        auto options = projectOptions();
+        const auto recovery_dir =
+            temporary_.path / "recovery";
+        std::filesystem::create_directories(recovery_dir);
+        const auto empty_scratch =
+            lfs::io::project::scratch_autosave_path(
+                recovery_dir,
+                lfs::core::generate_uuid_v4());
+        write_empty_project(empty_scratch);
+        ASSERT_TRUE(std::filesystem::is_regular_file(
+            empty_scratch));
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(
+                gui->rml_modal_overlay_,
+                gui->rmlui_manager_);
+            viewer.project_lifecycle_
+                ->openStartupProject(std::nullopt);
+            EXPECT_FALSE(viewer.project_lifecycle_
+                             ->recovery_prompt_pending_);
+            {
+                auto& overlay =
+                    *gui->rml_modal_overlay_;
+                std::lock_guard lock(
+                    overlay.queue_mutex_);
+                EXPECT_TRUE(overlay.queue_.empty());
+            }
+            EXPECT_FALSE(
+                std::filesystem::exists(empty_scratch));
         }
     }
 

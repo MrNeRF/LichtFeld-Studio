@@ -24,6 +24,7 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/loader.hpp"
+#include "io/project_container.hpp"
 #include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
@@ -47,7 +48,9 @@
 #include <array>
 #include <cctype>
 #include <chrono>
+#include <cstddef>
 #include <cstring>
+#include <ctime>
 #include <cwctype>
 #include <exception>
 #include <filesystem>
@@ -1024,6 +1027,63 @@ namespace lfs::vis::project {
             return false;
         }
 
+        [[nodiscard]] bool hasUntitledCrashDirtyChapters(
+            const lfs::io::project::ProjectDocument&
+                document) {
+            for (const auto& chapter :
+                 document.dirty_chapters()) {
+                if (!isSessionSoftDirtyChapter(chapter)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [[nodiscard]] std::string formatRecoverySavedTime(
+            const std::uint64_t wallclock_unix_ns,
+            const std::filesystem::path& path) {
+            std::time_t unix_seconds = 0;
+            if (wallclock_unix_ns != 0) {
+                unix_seconds = static_cast<std::time_t>(
+                    wallclock_unix_ns / 1'000'000'000ull);
+            } else {
+                std::error_code error;
+                const auto file_time =
+                    std::filesystem::last_write_time(
+                        path, error);
+                if (!error) {
+                    const auto system_time =
+                        std::chrono::clock_cast<
+                            std::chrono::system_clock>(
+                            file_time);
+                    unix_seconds =
+                        std::chrono::system_clock::to_time_t(
+                            system_time);
+                }
+            }
+            if (unix_seconds == 0) {
+                return "—";
+            }
+            std::tm local{};
+#ifdef _WIN32
+            if (localtime_s(&local, &unix_seconds) != 0) {
+                return "—";
+            }
+#else
+            if (localtime_r(&unix_seconds, &local) ==
+                nullptr) {
+                return "—";
+            }
+#endif
+            char buffer[32];
+            if (std::strftime(
+                    buffer, sizeof(buffer),
+                    "%Y-%m-%d %H:%M", &local) == 0) {
+                return "—";
+            }
+            return buffer;
+        }
+
         [[nodiscard]] bool hasSessionSoftDirtyChapters(
             const lfs::io::project::ProjectDocument&
                 document) {
@@ -1253,6 +1313,48 @@ namespace lfs::vis::project {
                     });
                 }
             }
+            const auto dismissed =
+                json.find("dismissed_recovery");
+            if (dismissed != json.end()) {
+                if (!dismissed->is_array()) {
+                    return fail<ProjectLifecycleSettings>(
+                        lfs::ErrorCode::DataLoss,
+                        "The dismissed-recovery list is invalid.",
+                        "dismissed_recovery must be an array",
+                        "settings.dismissed_recovery");
+                }
+                for (const auto& entry : *dismissed) {
+                    if (!entry.is_object()) {
+                        continue;
+                    }
+                    const auto path_text =
+                        entry.value(
+                            "sidecar_path",
+                            std::string{});
+                    if (path_text.empty()) {
+                        continue;
+                    }
+                    DismissedRecoveryEntry item;
+                    item.sidecar_path =
+                        lfs::core::utf8_to_path(
+                            path_text)
+                            .lexically_normal();
+                    item.autosave_sequence =
+                        entry.value(
+                            "autosave_sequence",
+                            std::uint64_t{0});
+                    if (const auto commit =
+                            lfs::core::Uuid::from_string(
+                                entry.value(
+                                    "commit_uuid",
+                                    std::string{}));
+                        commit) {
+                        item.commit_uuid = *commit;
+                    }
+                    settings.dismissed_recovery.push_back(
+                        std::move(item));
+                }
+            }
             return settings;
         } catch (const std::exception& exception) {
             // LFS-CENSUS-OK(empty-catch): JSON exceptions are converted to a typed settings error.
@@ -1278,6 +1380,19 @@ namespace lfs::vis::project {
                          entry.last_known_path)},
                 });
             }
+            Json dismissed = Json::array();
+            for (const auto& entry :
+                 settings.dismissed_recovery) {
+                dismissed.push_back({
+                    {"sidecar_path",
+                     lfs::core::path_to_utf8(
+                         entry.sidecar_path)},
+                    {"autosave_sequence",
+                     entry.autosave_sequence},
+                    {"commit_uuid",
+                     entry.commit_uuid.to_string()},
+                });
+            }
             const Json json{
                 {"version", 2},
                 {"reopen_last_project",
@@ -1294,6 +1409,8 @@ namespace lfs::vis::project {
                  settings
                      .compaction_idle_seconds},
                 {"mru", std::move(entries)},
+                {"dismissed_recovery",
+                 std::move(dismissed)},
             };
             if (const auto written = lfs::core::writeTextFileAtomically(
                     path, json.dump(2) + '\n');
@@ -1418,6 +1535,16 @@ namespace lfs::vis::project {
               }
               return paths->projectLifecycleFile();
           }()),
+          recovery_directory_([&settings_path] {
+              if (settings_path)
+                  return settings_path->parent_path() /
+                         "recovery";
+              const auto paths = lfs::core::UserPaths::resolve();
+              if (!paths) {
+                  return std::filesystem::path{};
+              }
+              return paths->recoveryDir();
+          }()),
           settings_persistence_enabled_(
               !lfs::core::environment::flag("LFS_SAFE_MODE", false) &&
               !settings_path_.empty()) {
@@ -1481,6 +1608,9 @@ namespace lfs::vis::project {
         if (discard_master) {
             removeDiscardedAutosaveArtifacts(
                 *discard_master);
+        }
+        if (close_discard_requested_) {
+            removeScratchAutosave();
         }
     }
 
@@ -2157,6 +2287,31 @@ namespace lfs::vis::project {
         if (project_write_thread_.joinable()) {
             project_write_thread_.request_stop();
         }
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::
+        waitOutBackgroundAutosaveForExplicitSave() {
+        if (!viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
+            return {};
+        }
+        if (project_write_purpose_ !=
+                ProjectWritePurpose::Autosave &&
+            project_write_purpose_ !=
+                ProjectWritePurpose::
+                    TrainingAutosave) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "A project write is already in progress.",
+                "Manual save, autosave, and compaction share one exclusive job slot",
+                "project.job");
+        }
+        // Autosave occupies the exclusive ProjectWrite
+        // slot. Join and settle it so a user Save / Save
+        // As never loses the slot to a background write.
+        joinPendingWrite();
+        return {};
     }
 
     void ProjectLifecycle::cleanupRecoverySession() {
@@ -2870,10 +3025,11 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::startAutosave() {
-        if (!document_ ||
-            !document_->source_path()) {
+        if (!document_) {
             return {};
         }
+        const bool untitled =
+            !document_->source_path();
         if (viewer_.jobs().anyRunning(
                 JobType::ProjectWrite)) {
             return {};
@@ -2883,7 +3039,8 @@ namespace lfs::vis::project {
             trainer->get_project_snapshot_metrics()
                 .writer_in_flight) {
             // Sidecar create requires the on-disk master
-            // commit to match the held source UUID.return {};
+            // commit to match the held source UUID.
+            return {};
         }
         if (auto adopted =
                 adoptSettledTrainerPublishOntoCurrentMaster();
@@ -2894,6 +3051,11 @@ namespace lfs::vis::project {
             std::memory_order_acquire);
         if (hydration != Hydration::Empty &&
             hydration != Hydration::Complete) {
+            return {};
+        }
+        if (untitled && isBlankUntitledSession()) {
+            last_autosave_at_ =
+                std::chrono::steady_clock::now();
             return {};
         }
 
@@ -2912,7 +3074,17 @@ namespace lfs::vis::project {
             !synchronized) {
             return synchronized;
         }
-        if (!hasHardDirtyChapters(*document_)) {
+        const bool untitled_crash_dirty =
+            untitled &&
+            (hasUntitledCrashDirtyChapters(
+                 *document_) ||
+             scene_dirty_.load(
+                 std::memory_order_acquire) ||
+             payload_dirty_.load(
+                 std::memory_order_acquire));
+        if (untitled ? !untitled_crash_dirty
+                     : !hasHardDirtyChapters(
+                           *document_)) {
             last_autosave_at_ =
                 std::chrono::steady_clock::now();
             return {};
@@ -2920,6 +3092,53 @@ namespace lfs::vis::project {
         if (training) {
             LOG_INFO(
                 "Training-time autosave is light-only (no checkpoint capture)");
+        }
+
+        const auto sequence =
+            autosave_sequence_ + 1;
+        const auto dirty_epoch =
+            document_->dirty_epoch();
+        const auto scene_serial =
+            scene_mutation_serial_.load(
+                std::memory_order_acquire);
+
+        if (untitled) {
+            if (auto locked = lockScratchAutosave();
+                !locked) {
+                return locked;
+            }
+            lfs::io::project::
+                ProjectDocumentSaveOptions options;
+            options.commit.kind =
+                lfs::io::project::CommitKind::
+                    Explicit;
+            options.commit.commit_uuid =
+                lfs::core::generate_uuid_v4();
+            options.file_uuid =
+                lfs::core::generate_uuid_v4();
+            options.index_compression =
+                lfs::io::project::
+                    IndexCompression::Zstd;
+            options.disk_reserve_bytes =
+                64ull * 1024 * 1024;
+            options.allow_existing_destination_replacement =
+                true;
+            options.leave_unbound = true;
+            options.writer_lock_lease = scratch_lock_;
+            auto started = startDocumentWrite(
+                ProjectWritePurpose::Autosave,
+                document_, *scratch_autosave_path_,
+                std::move(options));
+            if (!started) {
+                return started;
+            }
+            project_write_autosave_sequence_ =
+                sequence;
+            project_write_dirty_epoch_ =
+                dirty_epoch;
+            project_write_scene_serial_ =
+                scene_serial;
+            return {};
         }
 
         const auto base_commit_uuid =
@@ -2944,13 +3163,6 @@ namespace lfs::vis::project {
                     : "The master path disappeared after the project was opened",
                 "project.source_path");
         }
-        const auto sequence =
-            autosave_sequence_ + 1;
-        const auto dirty_epoch =
-            document_->dirty_epoch();
-        const auto scene_serial =
-            scene_mutation_serial_.load(
-                std::memory_order_acquire);
         const auto sidecar =
             lfs::io::project::
                 autosave_sidecar_path(
@@ -3344,6 +3556,7 @@ namespace lfs::vis::project {
                     developerError(
                         removed.error());
             }
+            removeScratchAutosave();
             declined_recovery_.reset();
             if (!cleanup_warning.empty()) {
                 LOG_WARN(
@@ -3591,6 +3804,9 @@ namespace lfs::vis::project {
                 JobType::ProjectWrite)) {
             return;
         }
+        if (isBlankUntitledSession()) {
+            return;
+        }
         const auto now =
             std::chrono::steady_clock::now();
         const bool training =
@@ -3622,8 +3838,7 @@ namespace lfs::vis::project {
             }
             return;
         }
-        if (!document_->source_path() ||
-            recovered_master_path_) {
+        if (recovered_master_path_) {
             return;
         }
         const auto scene_serial =
@@ -4672,13 +4887,10 @@ namespace lfs::vis::project {
                 "Only one project save may run at a time",
                 "project.save");
         }
-        if (viewer_.jobs().anyRunning(
-                JobType::ProjectWrite)) {
-            return fail<void>(
-                lfs::ErrorCode::FailedPrecondition,
-                "A project write is already in progress.",
-                "Manual save, autosave, and compaction share one exclusive job slot",
-                "project.job");
+        if (auto waited =
+                waitOutBackgroundAutosaveForExplicitSave();
+            !waited) {
+            return waited;
         }
         if (auto adopted =
                 adoptCompletedTrainingSnapshot();
@@ -4809,13 +5021,10 @@ namespace lfs::vis::project {
                 "Only one project save may run at a time",
                 "project.save");
         }
-        if (viewer_.jobs().anyRunning(
-                JobType::ProjectWrite)) {
-            return fail<void>(
-                lfs::ErrorCode::FailedPrecondition,
-                "A project write is already in progress.",
-                "Manual save, autosave, and compaction share one exclusive job slot",
-                "project.job");
+        if (auto waited =
+                waitOutBackgroundAutosaveForExplicitSave();
+            !waited) {
+            return waited;
         }
         if (auto adopted =
                 adoptCompletedTrainingSnapshot();
@@ -5004,10 +5213,17 @@ namespace lfs::vis::project {
         }
         const auto normalized_at =
             std::chrono::steady_clock::now();
+        const bool opening_scratch =
+            lfs::io::project::is_scratch_autosave_path(
+                *normalized, recovery_directory_);
         auto inspection =
-            lfs::io::project::
-                inspect_autosave_recovery(
-                    *normalized);
+            opening_scratch
+                ? lfs::io::project::
+                      inspect_scratch_autosave(
+                          *normalized)
+                : lfs::io::project::
+                      inspect_autosave_recovery(
+                          *normalized);
         if (!inspection) {
             return std::move(inspection).error();
         }
@@ -5024,18 +5240,40 @@ namespace lfs::vis::project {
                 lfs::io::project::
                     RecoveryDisposition::Offer &&
             inspection->selected_path) {
+            RecoveryCandidate candidate{
+                .master_path =
+                    opening_scratch
+                        ? std::filesystem::path{}
+                        : *normalized,
+                .selected_path =
+                    inspection->selected_path
+                        ->lexically_normal(),
+                .autosave_sequence =
+                    inspection->autosave_sequence,
+                .commit_uuid =
+                    inspection->commit_uuid,
+                .snapshot_uuid =
+                    inspection->snapshot_uuid,
+                .wallclock_unix_ns =
+                    inspection->wallclock_unix_ns,
+                .untitled_scratch = opening_scratch ||
+                                    inspection
+                                        ->untitled_scratch,
+            };
             const DeclinedRecoveryIdentity
                 offered_identity{
                     .sidecar_path =
-                        inspection->selected_path
-                            ->lexically_normal(),
+                        candidate.selected_path,
                     .autosave_sequence =
-                        inspection->autosave_sequence,
-                    .snapshot_uuid =
-                        inspection->snapshot_uuid,
+                        candidate.autosave_sequence,
+                    .commit_uuid =
+                        candidate.commit_uuid,
                 };
-            if (declined_recovery_ ==
-                offered_identity) {
+            if (isRecoveryDismissed(
+                    offered_identity)) {
+                if (candidate.untitled_scratch) {
+                    return ProjectOpenOutcome::Opened;
+                }
                 auto opened = openMaster(
                     *normalized, disposition);
                 if (!opened) {
@@ -5056,7 +5294,8 @@ namespace lfs::vis::project {
                     : (document_
                            ? document_->source_path()
                            : std::nullopt);
-            if (disposition ==
+            if (!candidate.untitled_scratch &&
+                disposition ==
                     ProjectSwitchDisposition::
                         DiscardChanges &&
                 current_master &&
@@ -5079,85 +5318,10 @@ namespace lfs::vis::project {
                     "Headless project resume performs recovery automatically",
                     "project.recovery");
             }
-            recovery_prompt_pending_ = true;
-            const auto master =
-                *normalized;
-            const auto sidecar =
-                *inspection->selected_path;
-            const auto prompt_epoch =
-                epoch_.load(std::memory_order_acquire);
-            const auto prompt_generation =
-                ++recovery_prompt_generation_;
-            lfs::core::ModalRequest request;
-            request.title =
-                "Recover Autosaved Project?";
-            request.body_rml =
-                "<p>A newer autosaved state is available for this project.</p>"
-                "<p>Recover it, or open the last explicitly saved state.</p>";
-            request.style =
-                lfs::core::ModalStyle::Warning;
-            request.width_dp = 500;
-            request.buttons = {
-                {"Recover", "primary"},
-                {"Open Saved", "secondary"},
-            };
-            request.on_result =
-                [this, master, sidecar,
-                 offered_identity,
-                 disposition, prompt_epoch,
-                 prompt_generation](
-                    const lfs::core::
-                        ModalResult& result) {
-                    if (epoch_.load(
-                            std::memory_order_acquire) !=
-                            prompt_epoch ||
-                        recovery_prompt_generation_ !=
-                            prompt_generation) {
-                        return;
-                    }
-                    recovery_prompt_pending_ =
-                        false;
-                    lfs::Result<void> opened;
-                    if (result.button_label ==
-                        "Recover") {
-                        opened = openRecovered(
-                            master, sidecar,
-                            disposition);
-                    } else {
-                        declined_recovery_ =
-                            offered_identity;
-                        opened = openMaster(
-                            master, disposition);
-                    }
-                    if (!opened) {
-                        LOG_ERROR(
-                            "Recovery decision failed: {}",
-                            developerError(
-                                opened.error()));
-                        publishProjectToast(
-                            opened.error(),
-                            gui::error_op::kOpenProject);
-                    }
-                };
-            request.on_cancel =
-                [this,
-                 previous_autosave_sequence,
-                 prompt_epoch,
-                 prompt_generation] {
-                    if (epoch_.load(
-                            std::memory_order_acquire) !=
-                            prompt_epoch ||
-                        recovery_prompt_generation_ !=
-                            prompt_generation) {
-                        return;
-                    }
-                    recovery_prompt_pending_ =
-                        false;
-                    autosave_sequence_ =
-                        previous_autosave_sequence;
-                };
-            gui->enqueueModal(
-                std::move(request));
+            enqueueRecoveryPrompt(
+                std::move(candidate),
+                disposition,
+                previous_autosave_sequence);
             return ProjectOpenOutcome::
                 RecoveryPromptPending;
         }
@@ -5461,7 +5625,11 @@ namespace lfs::vis::project {
                 std::memory_order_acquire);
         const auto shell_selected_nodes =
             selectedNodeUuids(viewer_);
-        {
+        const bool opened_scratch =
+            lfs::io::project::is_scratch_autosave_path(
+                *normalized, recovery_directory_);
+        if (!opened_scratch) {
+            removeScratchAutosave();
             const std::lock_guard lock(
                 settings_mutex_);
             rememberProject(
@@ -5469,11 +5637,13 @@ namespace lfs::vis::project {
                 candidate->project_uuid(),
                 *normalized);
         }
-        if (auto persisted = persistSettings();
-            !persisted) {
-            LOG_WARN(
-                "Project opened, but MRU settings failed: {}",
-                developerError(persisted.error()));
+        if (!opened_scratch) {
+            if (auto persisted = persistSettings();
+                !persisted) {
+                LOG_WARN(
+                    "Project opened, but MRU settings failed: {}",
+                    developerError(persisted.error()));
+            }
         }
         const auto lifecycle_installed_at =
             std::chrono::steady_clock::now();
@@ -6045,6 +6215,7 @@ namespace lfs::vis::project {
             removeDiscardedAutosaveArtifacts(
                 *discard_master);
         }
+        removeScratchAutosave();
         adopted_training_snapshot_count_ = 0;
         application_close_pending_ = false;
         suppress_training_adoption_ = false;
@@ -6129,20 +6300,7 @@ namespace lfs::vis::project {
                  ->isPausedAtCheckpointBaseline()) {
             return true;
         }
-        const auto* manager =
-            viewer_.getSceneManager();
-        const bool blank_untitled =
-            !document_->source_path() &&
-            hydration_.load(
-                std::memory_order_acquire) ==
-                Hydration::Empty &&
-            manager &&
-            manager->getScene().getNodes().empty() &&
-            !scene_dirty_.load(
-                std::memory_order_acquire) &&
-            !payload_dirty_.load(
-                std::memory_order_acquire);
-        if (blank_untitled) {
+        if (isBlankUntitledSession()) {
             return false;
         }
         if (scene_dirty_.load(
@@ -6195,6 +6353,19 @@ namespace lfs::vis::project {
         }
 
         if (!hasDirtyProject()) {
+            // Window-close X / File-Exit of a clean session: Skip any
+            // unanswered recovery offer and drop the untitled scratch.
+            // Emergency ForceExit never reaches this function, so crash
+            // files survive an X11/interrupt teardown.
+            if (recovery_prompt_pending_ &&
+                pending_recovery_candidate_) {
+                ++recovery_prompt_generation_;
+                const auto candidate =
+                    *pending_recovery_candidate_;
+                handleRecoverySkip(candidate);
+                recovery_prompt_pending_ = false;
+            }
+            removeScratchAutosave();
             return CloseSaveStatus::NotDirty;
         }
         if (viewer_.jobs().anyRunning(
@@ -6508,19 +6679,10 @@ namespace lfs::vis::project {
             last_unadoptable_training_snapshot_warning_
                 .clear();
         }
+        const bool blank_untitled =
+            isBlankUntitledSession();
         const auto* manager =
             viewer_.getSceneManager();
-        const bool blank_untitled =
-            !document_->source_path() &&
-            hydration_.load(
-                std::memory_order_acquire) ==
-                Hydration::Empty &&
-            manager &&
-            manager->getScene().getNodes().empty() &&
-            !scene_dirty_.load(
-                std::memory_order_acquire) &&
-            !payload_dirty_.load(
-                std::memory_order_acquire);
         const auto* trainer_manager =
             viewer_.getTrainerManager();
         const bool training_active =
@@ -6694,6 +6856,8 @@ namespace lfs::vis::project {
         lfs::io::project::
             sweep_stale_licht_artifacts_for_known_masters(
                 known);
+        lfs::io::project::sweep_stale_scratch_autosaves(
+            recovery_directory_);
 
         // Never auto-restore from MRU. Startup without an
         // explicit CLI project path leaves a blank session
@@ -6721,55 +6885,477 @@ namespace lfs::vis::project {
     }
 
     void ProjectLifecycle::offerStartupCrashRecovery() {
-        // Intentional closes remove the sidecar (#1652),
+        // Intentional closes remove crash files (#1652),
         // so an Offer here implies the previous session
-        // ended uncleanly. The yes/no decision stays with
-        // the existing Recover Autosaved Project? modal.
-        std::filesystem::path path;
-        {
-            const std::lock_guard lock(
-                settings_mutex_);
-            if (settings_.mru.empty()) {
-                return;
-            }
-            path = resolveProjectMruPath(
-                settings_.mru.front()
-                    .last_known_path);
-        }
-        std::error_code ec;
-        if (!std::filesystem::is_regular_file(
-                path, ec) ||
-            ec) {
-            return;
-        }
-        auto inspection =
-            lfs::io::project::
-                inspect_autosave_recovery(path);
-        if (!inspection) {
-            LOG_WARN(
-                "Startup recovery scan skipped for {}: {}",
-                lfs::core::path_to_utf8(path),
-                developerError(
-                    inspection.error()));
-            return;
-        }
-        if (inspection->disposition !=
-            lfs::io::project::
-                RecoveryDisposition::Offer) {
+        // ended uncleanly.
+        auto candidate = selectStartupRecoveryCandidate();
+        if (!candidate) {
             return;
         }
         LOG_INFO(
             "Unclean shutdown left a recoverable autosave for {}; offering recovery",
-            lfs::core::path_to_utf8(path));
-        if (auto opened = open(path); !opened) {
-            LOG_ERROR(
-                "Startup recovery open failed for {}: {}",
-                lfs::core::path_to_utf8(path),
-                developerError(
-                    opened.error()));
-        } else if (auto* gui = viewer_.getGuiManager()) {
-            gui->dismissStartupOverlay();
+            lfs::core::path_to_utf8(
+                candidate->untitled_scratch
+                    ? candidate->selected_path
+                    : candidate->master_path));
+        auto* gui = viewer_.getGuiManager();
+        if (!gui) {
+            return;
         }
+        const auto previous_autosave_sequence =
+            autosave_sequence_;
+        autosave_sequence_ = std::max(
+            autosave_sequence_,
+            candidate->autosave_sequence);
+        enqueueRecoveryPrompt(
+            std::move(*candidate),
+            ProjectSwitchDisposition::RequireClean,
+            previous_autosave_sequence);
+        gui->dismissStartupOverlay();
+    }
+
+    std::optional<ProjectLifecycle::RecoveryCandidate>
+    ProjectLifecycle::selectStartupRecoveryCandidate() {
+        std::vector<RecoveryCandidate> offers;
+        std::filesystem::path mru_path;
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            if (!settings_.mru.empty()) {
+                mru_path = resolveProjectMruPath(
+                    settings_.mru.front()
+                        .last_known_path);
+            }
+        }
+        std::error_code ec;
+        if (!mru_path.empty() &&
+            std::filesystem::is_regular_file(
+                mru_path, ec) &&
+            !ec) {
+            auto inspection =
+                lfs::io::project::
+                    inspect_autosave_recovery(
+                        mru_path);
+            if (!inspection) {
+                LOG_WARN(
+                    "Startup recovery scan skipped for {}: {}",
+                    lfs::core::path_to_utf8(mru_path),
+                    developerError(
+                        inspection.error()));
+            } else if (
+                inspection->disposition ==
+                    lfs::io::project::
+                        RecoveryDisposition::Offer &&
+                inspection->selected_path) {
+                offers.push_back(RecoveryCandidate{
+                    .master_path = mru_path,
+                    .selected_path =
+                        inspection->selected_path
+                            ->lexically_normal(),
+                    .autosave_sequence =
+                        inspection->autosave_sequence,
+                    .commit_uuid =
+                        inspection->commit_uuid,
+                    .snapshot_uuid =
+                        inspection->snapshot_uuid,
+                    .wallclock_unix_ns =
+                        inspection->wallclock_unix_ns,
+                    .untitled_scratch = false,
+                });
+            }
+        }
+        for (auto& inspection :
+             lfs::io::project::scan_scratch_autosaves(
+                 recovery_directory_)) {
+            if (inspection.disposition !=
+                    lfs::io::project::
+                        RecoveryDisposition::Offer ||
+                !inspection.selected_path) {
+                continue;
+            }
+            offers.push_back(RecoveryCandidate{
+                .master_path = {},
+                .selected_path =
+                    inspection.selected_path
+                        ->lexically_normal(),
+                .autosave_sequence =
+                    inspection.autosave_sequence,
+                .commit_uuid = inspection.commit_uuid,
+                .snapshot_uuid =
+                    inspection.snapshot_uuid,
+                .wallclock_unix_ns =
+                    inspection.wallclock_unix_ns,
+                .untitled_scratch = true,
+            });
+        }
+        offers.erase(
+            std::remove_if(
+                offers.begin(), offers.end(),
+                [this](const RecoveryCandidate& candidate) {
+                    return isRecoveryDismissed(
+                        DeclinedRecoveryIdentity{
+                            .sidecar_path =
+                                candidate.selected_path,
+                            .autosave_sequence =
+                                candidate.autosave_sequence,
+                            .commit_uuid =
+                                candidate.commit_uuid,
+                        });
+                }),
+            offers.end());
+        if (offers.empty()) {
+            return std::nullopt;
+        }
+        return *std::ranges::max_element(
+            offers,
+            [](const RecoveryCandidate& lhs,
+               const RecoveryCandidate& rhs) {
+                if (lhs.wallclock_unix_ns !=
+                    rhs.wallclock_unix_ns) {
+                    return lhs.wallclock_unix_ns <
+                           rhs.wallclock_unix_ns;
+                }
+                return lhs.selected_path.generic_string() <
+                       rhs.selected_path.generic_string();
+            });
+    }
+
+    void ProjectLifecycle::enqueueRecoveryPrompt(
+        RecoveryCandidate candidate,
+        const ProjectSwitchDisposition disposition,
+        const std::uint64_t previous_autosave_sequence) {
+        auto* gui = viewer_.getGuiManager();
+        if (!gui) {
+            return;
+        }
+        recovery_prompt_pending_ = true;
+        pending_recovery_candidate_ = candidate;
+        const auto prompt_epoch =
+            epoch_.load(std::memory_order_acquire);
+        const auto prompt_generation =
+            ++recovery_prompt_generation_;
+        namespace Keys = lichtfeld::Strings::Recovery;
+        const auto display_name =
+            candidate.untitled_scratch
+                ? std::string(LOC(Keys::UNSAVED_SESSION))
+                : candidate.master_path.stem().string();
+        const auto saved_at = formatRecoverySavedTime(
+            candidate.wallclock_unix_ns,
+            candidate.selected_path);
+        const auto body = LOCF(
+            Keys::BODY, display_name, saved_at);
+        lfs::core::ModalRequest request;
+        request.title = LOC(Keys::CRASH_TITLE);
+        request.body_rml = std::format(
+            "<p>{}</p>",
+            lfs::vis::gui::escapeRmlText(body));
+        request.style = lfs::core::ModalStyle::Warning;
+        request.width_dp = 500;
+        request.buttons = {
+            {LOC(Keys::RECOVER), "primary"},
+        };
+        if (!candidate.untitled_scratch) {
+            request.buttons.push_back(
+                {LOC(Keys::OPEN_SAVED), "secondary"});
+        }
+        request.buttons.push_back(
+            {LOC(Keys::SKIP), "secondary"});
+        request.on_result =
+            [this, candidate, disposition,
+             previous_autosave_sequence, prompt_epoch,
+             prompt_generation](
+                const lfs::core::ModalResult& result) {
+                if (epoch_.load(
+                        std::memory_order_acquire) !=
+                        prompt_epoch ||
+                    recovery_prompt_generation_ !=
+                        prompt_generation) {
+                    return;
+                }
+                recovery_prompt_pending_ = false;
+                pending_recovery_candidate_.reset();
+                namespace ResultKeys =
+                    lichtfeld::Strings::Recovery;
+                lfs::Result<void> opened;
+                if (result.button_label ==
+                    LOC(ResultKeys::RECOVER)) {
+                    opened =
+                        candidate.untitled_scratch
+                            ? openScratchRecovered(
+                                  candidate.selected_path,
+                                  disposition)
+                            : openRecovered(
+                                  candidate.master_path,
+                                  candidate.selected_path,
+                                  disposition);
+                } else if (
+                    !candidate.untitled_scratch &&
+                    result.button_label ==
+                        LOC(ResultKeys::OPEN_SAVED)) {
+                    persistRecoveryDismissal(
+                        DeclinedRecoveryIdentity{
+                            .sidecar_path =
+                                candidate.selected_path,
+                            .autosave_sequence =
+                                candidate.autosave_sequence,
+                            .commit_uuid =
+                                candidate.commit_uuid,
+                        });
+                    opened = openMaster(
+                        candidate.master_path,
+                        disposition);
+                } else {
+                    handleRecoverySkip(candidate);
+                    autosave_sequence_ =
+                        previous_autosave_sequence;
+                    return;
+                }
+                if (!opened) {
+                    LOG_ERROR(
+                        "Recovery decision failed: {}",
+                        developerError(
+                            opened.error()));
+                    publishProjectToast(
+                        opened.error(),
+                        gui::error_op::kOpenProject);
+                }
+            };
+        request.on_cancel =
+            [this, candidate,
+             previous_autosave_sequence, prompt_epoch,
+             prompt_generation] {
+                if (epoch_.load(
+                        std::memory_order_acquire) !=
+                        prompt_epoch ||
+                    recovery_prompt_generation_ !=
+                        prompt_generation) {
+                    return;
+                }
+                recovery_prompt_pending_ = false;
+                pending_recovery_candidate_.reset();
+                handleRecoverySkip(candidate);
+                autosave_sequence_ =
+                    previous_autosave_sequence;
+            };
+        gui->enqueueModal(std::move(request));
+    }
+
+    void ProjectLifecycle::handleRecoverySkip(
+        const RecoveryCandidate& candidate) {
+        persistRecoveryDismissal(
+            DeclinedRecoveryIdentity{
+                .sidecar_path = candidate.selected_path,
+                .autosave_sequence =
+                    candidate.autosave_sequence,
+                .commit_uuid = candidate.commit_uuid,
+            });
+        if (candidate.untitled_scratch &&
+            !candidate.selected_path.empty()) {
+            if (auto removed =
+                    lfs::io::project::
+                        remove_scratch_autosave(
+                            candidate.selected_path);
+                !removed) {
+                LOG_WARN(
+                    "Could not remove skipped scratch autosave {}: {}",
+                    lfs::core::path_to_utf8(
+                        candidate.selected_path),
+                    developerError(removed.error()));
+            }
+        }
+        pending_recovery_candidate_.reset();
+    }
+
+    bool ProjectLifecycle::isRecoveryDismissed(
+        const DeclinedRecoveryIdentity& identity) const {
+        const auto matches =
+            [&identity](
+                const DismissedRecoveryEntry& stored) {
+                if (stored.sidecar_path.lexically_normal() !=
+                    identity.sidecar_path
+                        .lexically_normal()) {
+                    return false;
+                }
+                if (stored.autosave_sequence !=
+                    identity.autosave_sequence) {
+                    return false;
+                }
+                if (!stored.commit_uuid.is_nil() &&
+                    !identity.commit_uuid.is_nil()) {
+                    return stored.commit_uuid ==
+                           identity.commit_uuid;
+                }
+                return true;
+            };
+        if (declined_recovery_ &&
+            matches(*declined_recovery_)) {
+            return true;
+        }
+        const std::lock_guard lock(settings_mutex_);
+        return std::ranges::any_of(
+            settings_.dismissed_recovery, matches);
+    }
+
+    void ProjectLifecycle::persistRecoveryDismissal(
+        const DeclinedRecoveryIdentity& identity) {
+        declined_recovery_ = identity;
+        {
+            const std::lock_guard lock(settings_mutex_);
+            auto& entries = settings_.dismissed_recovery;
+            std::erase_if(
+                entries,
+                [&identity](
+                    const DismissedRecoveryEntry& stored) {
+                    return stored.sidecar_path
+                                   .lexically_normal() ==
+                               identity.sidecar_path
+                                   .lexically_normal() &&
+                           stored.autosave_sequence ==
+                               identity.autosave_sequence &&
+                           (stored.commit_uuid.is_nil() ||
+                            identity.commit_uuid.is_nil() ||
+                            stored.commit_uuid ==
+                                identity.commit_uuid);
+                });
+            entries.push_back(identity);
+            constexpr std::size_t kMaxDismissed = 64;
+            if (entries.size() > kMaxDismissed) {
+                entries.erase(
+                    entries.begin(),
+                    entries.begin() +
+                        static_cast<std::ptrdiff_t>(
+                            entries.size() -
+                            kMaxDismissed));
+            }
+        }
+        if (auto persisted = persistSettings();
+            !persisted) {
+            LOG_WARN(
+                "Could not persist recovery dismissal: {}",
+                developerError(persisted.error()));
+        }
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::openScratchRecovered(
+        const std::filesystem::path& scratch_path,
+        const ProjectSwitchDisposition disposition) {
+        auto opened = openMaster(
+            scratch_path, disposition);
+        if (!opened) {
+            return opened;
+        }
+        if (document_) {
+            document_->forget_source_path();
+            [[maybe_unused]] auto& project =
+                document_->edit_project();
+        }
+        scene_dirty_.store(
+            true, std::memory_order_release);
+        if (auto locked = lockScratchAutosave();
+            !locked) {
+            LOG_WARN(
+                "Recovered untitled session could not rebind scratch autosave: {}",
+                developerError(locked.error()));
+        }
+        return {};
+    }
+
+    std::filesystem::path
+    ProjectLifecycle::scratchAutosaveDirectory() const {
+        return recovery_directory_;
+    }
+
+    void ProjectLifecycle::removeScratchAutosave() {
+        const auto path = scratch_autosave_path_;
+        scratch_lock_.reset();
+        scratch_autosave_path_.reset();
+        if (!path || path->empty()) {
+            return;
+        }
+        if (auto removed =
+                lfs::io::project::remove_scratch_autosave(
+                    *path);
+            !removed) {
+            LOG_WARN(
+                "Could not remove scratch autosave {}: {}",
+                lfs::core::path_to_utf8(*path),
+                developerError(removed.error()));
+        }
+    }
+
+    bool ProjectLifecycle::isBlankUntitledSession()
+        const {
+        if (!document_ || document_->source_path()) {
+            return false;
+        }
+        if (hydration_.load(
+                std::memory_order_acquire) !=
+            Hydration::Empty) {
+            return false;
+        }
+        const auto* manager =
+            viewer_.getSceneManager();
+        if (!manager ||
+            !manager->getScene().getNodes().empty()) {
+            return false;
+        }
+        return !scene_dirty_.load(
+                   std::memory_order_acquire) &&
+               !payload_dirty_.load(
+                   std::memory_order_acquire);
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::ensureScratchAutosaveBinding() {
+        if (!document_) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Untitled autosave has no document.",
+                "scratch binding requires a live project document",
+                "project.document");
+        }
+        if (recovery_directory_.empty()) {
+            return fail<void>(
+                lfs::ErrorCode::Unavailable,
+                "Untitled crash recovery has no storage location.",
+                "the user-storage recovery directory could not be resolved",
+                "project.recovery_directory");
+        }
+        const auto destination =
+            lfs::io::project::scratch_autosave_path(
+                recovery_directory_,
+                document_->project_uuid());
+        if (scratch_autosave_path_ &&
+            scratch_autosave_path_->lexically_normal() ==
+                destination.lexically_normal()) {
+            return {};
+        }
+        scratch_lock_.reset();
+        scratch_autosave_path_ = destination;
+        return {};
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::lockScratchAutosave() {
+        if (auto bound = ensureScratchAutosaveBinding();
+            !bound) {
+            return bound;
+        }
+        if (scratch_lock_ &&
+            scratch_lock_->owns(*scratch_autosave_path_)) {
+            return {};
+        }
+        scratch_lock_.reset();
+        auto lease =
+            lfs::io::project::WriterLockLease::acquire(
+                *scratch_autosave_path_);
+        if (!lease) {
+            return lfs::Result<void>::failure(
+                std::move(lease).error());
+        }
+        scratch_lock_ = std::move(*lease);
+        return {};
     }
 
 } // namespace lfs::vis::project

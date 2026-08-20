@@ -2398,6 +2398,14 @@
       "message": "项目模型可供查看，但无法恢复训练。请检查数据集路径和日志。"
     }
   },
+  "recovery": {
+    "crash_title": "LichtFeld Studio 意外关闭",
+    "body": "找到了 {} 的恢复文件。（保存于 {}）",
+    "unsaved_session": "未保存的会话",
+    "recover": "恢复",
+    "open_saved": "打开已保存",
+    "skip": "跳过并新建"
+  },
   "startup_recent": {
     "title": "最近的项目",
     "open": "打开",

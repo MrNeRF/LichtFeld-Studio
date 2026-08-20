@@ -2398,6 +2398,14 @@
       "message": "Het projectmodel is beschikbaar om te bekijken, maar training kon niet worden hervat. Controleer het datasetpad en de logboeken."
     }
   },
+  "recovery": {
+    "crash_title": "LichtFeld Studio is onverwacht afgesloten",
+    "body": "Er is een herstelbestand gevonden voor {}. (opgeslagen {})",
+    "unsaved_session": "een niet-opgeslagen sessie",
+    "recover": "Herstellen",
+    "open_saved": "Opgeslagen openen",
+    "skip": "Overslaan en nieuw maken"
+  },
   "startup_recent": {
     "title": "Recente projecten",
     "open": "Openen",

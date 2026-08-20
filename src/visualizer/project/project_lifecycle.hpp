@@ -79,6 +79,13 @@ namespace lfs::vis {
     class VisualizerImplResetTest_NewProjectDiscardDeletesAutosaveSidecar_Test;
     class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
     class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
+    class VisualizerImplResetTest_UntitledDirtySessionAutosavesToScratch_Test;
+    class VisualizerImplResetTest_BlankUntitledSessionUpdateMaintenanceWritesNoScratch_Test;
+    class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
+    class VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
+    class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+    class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
+    class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -91,6 +98,15 @@ namespace lfs::vis::project {
                                const ProjectMruEntry&) = default;
     };
 
+    struct DismissedRecoveryEntry {
+        std::filesystem::path sidecar_path;
+        std::uint64_t autosave_sequence = 0;
+        lfs::core::Uuid commit_uuid;
+
+        friend bool operator==(const DismissedRecoveryEntry&,
+                               const DismissedRecoveryEntry&) = default;
+    };
+
     struct ProjectLifecycleSettings {
         bool reopen_last_project = true;
         bool auto_save_on_close = false;
@@ -98,6 +114,7 @@ namespace lfs::vis::project {
         std::uint64_t autosave_dirty_epoch_threshold = 20;
         std::uint64_t compaction_idle_seconds = 30;
         std::vector<ProjectMruEntry> mru;
+        std::vector<DismissedRecoveryEntry> dismissed_recovery;
 
         friend bool operator==(const ProjectLifecycleSettings&,
                                const ProjectLifecycleSettings&) = default;
@@ -268,6 +285,13 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_NewProjectDiscardDeletesAutosaveSidecar_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
+        friend class lfs::vis::VisualizerImplResetTest_UntitledDirtySessionAutosavesToScratch_Test;
+        friend class lfs::vis::VisualizerImplResetTest_BlankUntitledSessionUpdateMaintenanceWritesNoScratch_Test;
+        friend class lfs::vis::VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         enum class Hydration {
             Empty,
             ShellReady,
@@ -295,15 +319,16 @@ namespace lfs::vis::project {
             TrainingCloseSave,
         };
 
-        struct DeclinedRecoveryIdentity {
-            std::filesystem::path sidecar_path;
-            std::uint64_t autosave_sequence = 0;
-            lfs::core::Uuid snapshot_uuid;
+        using DeclinedRecoveryIdentity = DismissedRecoveryEntry;
 
-            friend bool operator==(
-                const DeclinedRecoveryIdentity&,
-                const DeclinedRecoveryIdentity&) =
-                default;
+        struct RecoveryCandidate {
+            std::filesystem::path master_path;
+            std::filesystem::path selected_path;
+            std::uint64_t autosave_sequence = 0;
+            lfs::core::Uuid commit_uuid;
+            lfs::core::Uuid snapshot_uuid;
+            std::uint64_t wallclock_unix_ns = 0;
+            bool untitled_scratch = false;
         };
 
         enum class DocumentSyncMode {
@@ -312,6 +337,30 @@ namespace lfs::vis::project {
         };
 
         void offerStartupCrashRecovery();
+        [[nodiscard]] std::optional<RecoveryCandidate>
+        selectStartupRecoveryCandidate();
+        void enqueueRecoveryPrompt(
+            RecoveryCandidate candidate,
+            ProjectSwitchDisposition disposition,
+            std::uint64_t previous_autosave_sequence);
+        void handleRecoverySkip(
+            const RecoveryCandidate& candidate);
+        [[nodiscard]] bool isRecoveryDismissed(
+            const DeclinedRecoveryIdentity& identity) const;
+        void persistRecoveryDismissal(
+            const DeclinedRecoveryIdentity& identity);
+        [[nodiscard]] lfs::Result<void>
+        openScratchRecovered(
+            const std::filesystem::path& scratch_path,
+            ProjectSwitchDisposition disposition);
+        [[nodiscard]] std::filesystem::path
+        scratchAutosaveDirectory() const;
+        void removeScratchAutosave();
+        [[nodiscard]] bool isBlankUntitledSession() const;
+        [[nodiscard]] lfs::Result<void>
+        ensureScratchAutosaveBinding();
+        [[nodiscard]] lfs::Result<void>
+        lockScratchAutosave();
         [[nodiscard]] lfs::Result<void>
         synchronizeDocumentFromViewer();
         [[nodiscard]] lfs::Result<void>
@@ -369,6 +418,8 @@ namespace lfs::vis::project {
         [[nodiscard]] bool
         isTrainingWriteWindowOpen() const;
         void cancelBackgroundAutosaveIfRunning();
+        [[nodiscard]] lfs::Result<void>
+        waitOutBackgroundAutosaveForExplicitSave();
         void cleanupRecoverySession();
         void removeDiscardedAutosaveArtifacts(
             const std::filesystem::path& master);
@@ -438,6 +489,7 @@ namespace lfs::vis::project {
         ProjectLifecycleSettings settings_;
         mutable std::mutex settings_mutex_;
         std::filesystem::path settings_path_;
+        std::filesystem::path recovery_directory_;
         bool settings_persistence_enabled_ = true;
         std::atomic<std::uint64_t> epoch_{0};
         std::atomic<std::uint64_t> scene_mutation_serial_{0};
@@ -505,8 +557,15 @@ namespace lfs::vis::project {
             recovery_session_;
         bool recovery_prompt_pending_ = false;
         std::uint64_t recovery_prompt_generation_ = 0;
+        std::optional<RecoveryCandidate>
+            pending_recovery_candidate_;
         std::optional<DeclinedRecoveryIdentity>
             declined_recovery_;
+        std::optional<std::filesystem::path>
+            scratch_autosave_path_;
+        std::optional<
+            lfs::io::project::WriterLockLease>
+            scratch_lock_;
         mutable std::mutex
             document_access_mutex_;
         std::optional<ProjectInfo>

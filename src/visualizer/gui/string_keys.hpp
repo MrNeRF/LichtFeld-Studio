@@ -784,6 +784,15 @@ namespace lichtfeld::Strings {
         inline constexpr const char* EDIT_DELTA = "sequencer.edit_delta";
     } // namespace Sequencer
 
+    namespace Recovery {
+        inline constexpr const char* CRASH_TITLE = "recovery.crash_title";
+        inline constexpr const char* BODY = "recovery.body";
+        inline constexpr const char* UNSAVED_SESSION = "recovery.unsaved_session";
+        inline constexpr const char* RECOVER = "recovery.recover";
+        inline constexpr const char* OPEN_SAVED = "recovery.open_saved";
+        inline constexpr const char* SKIP = "recovery.skip";
+    } // namespace Recovery
+
     namespace DatasetRelocate {
         inline constexpr const char* TITLE = "dataset_relocate.title";
         inline constexpr const char* MESSAGE = "dataset_relocate.message";

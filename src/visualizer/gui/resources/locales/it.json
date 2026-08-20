@@ -2398,6 +2398,14 @@
       "message": "Il modello del progetto è disponibile per la visualizzazione, ma non è stato possibile riprendere l'addestramento. Controlla il percorso del dataset e i log."
     }
   },
+  "recovery": {
+    "crash_title": "LichtFeld Studio si è chiuso inaspettatamente",
+    "body": "È stato trovato un file di ripristino per {}. (salvato {})",
+    "unsaved_session": "una sessione non salvata",
+    "recover": "Ripristina",
+    "open_saved": "Apri salvato",
+    "skip": "Salta e crea nuovo"
+  },
   "startup_recent": {
     "title": "Progetti recenti",
     "open": "Apri",

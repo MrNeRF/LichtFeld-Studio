@@ -2398,6 +2398,14 @@
       "message": "El modelo del proyecto está disponible para visualización, pero no se pudo reanudar el entrenamiento. Compruebe la ruta del conjunto de datos y los registros."
     }
   },
+  "recovery": {
+    "crash_title": "LichtFeld Studio se cerró inesperadamente",
+    "body": "Se encontró un archivo de recuperación para {}. (guardado {})",
+    "unsaved_session": "una sesión sin guardar",
+    "recover": "Recuperar",
+    "open_saved": "Abrir guardado",
+    "skip": "Omitir y crear nuevo"
+  },
   "startup_recent": {
     "title": "Proyectos recientes",
     "open": "Abrir",

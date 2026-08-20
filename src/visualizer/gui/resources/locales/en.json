@@ -2398,6 +2398,14 @@
       "message": "The project model is available for viewing, but training could not be resumed. Check the dataset path and logs."
     }
   },
+  "recovery": {
+    "crash_title": "LichtFeld Studio closed unexpectedly",
+    "body": "A recovery file was found for {}. (saved {})",
+    "unsaved_session": "an unsaved session",
+    "recover": "Recover",
+    "open_saved": "Open saved",
+    "skip": "Skip and create new"
+  },
   "startup_recent": {
     "title": "Recent Projects",
     "open": "Open",

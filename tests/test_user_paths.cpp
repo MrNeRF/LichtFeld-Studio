@@ -98,6 +98,8 @@ namespace {
         EXPECT_TRUE(fs::is_directory(paths.venvDir()));
         EXPECT_EQ(paths.uiPreferencesFile(), paths.configDir() / "ui_preferences.json");
         EXPECT_EQ(paths.projectLifecycleFile(), paths.configDir() / "project_lifecycle.json");
+        EXPECT_EQ(paths.recoveryDir(), paths.configDir().parent_path() / "recovery");
+        EXPECT_TRUE(fs::is_directory(paths.recoveryDir()));
         EXPECT_FALSE(fs::exists(root_ / "LichtFeldStudio"));
     }
 

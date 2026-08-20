@@ -2398,6 +2398,14 @@
       "message": "プロジェクトモデルは表示できますが、学習を再開できませんでした。データセットのパスとログを確認してください。"
     }
   },
+  "recovery": {
+    "crash_title": "LichtFeld Studio が予期せず終了しました",
+    "body": "{} の復旧ファイルが見つかりました。（保存日時 {}）",
+    "unsaved_session": "未保存のセッション",
+    "recover": "復旧",
+    "open_saved": "保存済みを開く",
+    "skip": "スキップして新規作成"
+  },
   "startup_recent": {
     "title": "最近のプロジェクト",
     "open": "開く",
