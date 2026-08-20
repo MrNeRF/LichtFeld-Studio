@@ -2014,7 +2014,7 @@ namespace lfs::vis {
         void prepare(const VulkanViewportPassParams& params) {
             if (params.scene_upscaler == SceneUpscalerBackend::Native) {
                 scene_spatial_pipeline_failed = false;
-            } else {
+            } else if (params.scene_upscaler == SceneUpscalerBackend::Spatial) {
                 static_cast<void>(ensureSpatialScenePipeline());
             }
             auto& frame = resourcesForFrame(params.frame_slot);
@@ -2051,9 +2051,19 @@ namespace lfs::vis {
             environment_pass.prepare(params.environment, params.frame_slot);
             depth_blit_pass.prepare(params.depth_blit, params.frame_slot);
             split_view_pass.prepare(params.split_view, params.frame_slot);
-            const bool runtime_available = params.split_view.enabled
-                                               ? split_view_pass.available()
-                                               : scene_spatial_pipeline != VK_NULL_HANDLE;
+            const bool runtime_available = [&] {
+                switch (params.scene_upscaler) {
+                case SceneUpscalerBackend::Native:
+                    return true;
+                case SceneUpscalerBackend::Spatial:
+                    return params.split_view.enabled
+                               ? split_view_pass.available()
+                               : scene_spatial_pipeline != VK_NULL_HANDLE;
+                case SceneUpscalerBackend::Temporal:
+                    return false;
+                }
+                return false;
+            }();
             scene_upscaler_selection = resolveSceneUpscalerSelection(
                 params.scene_upscaler, runtime_available);
             auto& profiler = lfs::diagnostics::VramProfiler::instance();

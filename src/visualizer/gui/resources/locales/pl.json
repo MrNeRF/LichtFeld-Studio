@@ -784,6 +784,7 @@
     "scene_reconstruction": "Rekonstrukcja sceny",
     "scene_reconstruction_off": "Wyłączona",
     "scene_reconstruction_spatial": "Przestrzenna",
+    "scene_reconstruction_temporal": "Czasowa",
     "scene_reconstruction_preset": "Ustawienie przestrzenne",
     "scene_reconstruction_quality": "Jakość",
     "scene_reconstruction_balanced": "Zrównoważone",

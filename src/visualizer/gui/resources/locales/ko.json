@@ -784,6 +784,7 @@
     "scene_reconstruction": "장면 재구성",
     "scene_reconstruction_off": "끄기",
     "scene_reconstruction_spatial": "공간",
+    "scene_reconstruction_temporal": "시간",
     "scene_reconstruction_preset": "공간 프리셋",
     "scene_reconstruction_quality": "품질",
     "scene_reconstruction_balanced": "균형",

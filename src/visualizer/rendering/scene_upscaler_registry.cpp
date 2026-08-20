@@ -33,6 +33,23 @@ namespace lfs::vis {
                 .input_scale = 0.50f,
             },
         };
+        constexpr std::array TEMPORAL_PRESETS{
+            SceneUpscalerPreset{
+                .id = "quality",
+                .label_key = "preferences.scene_reconstruction_quality",
+                .input_scale = 0.75f,
+            },
+            SceneUpscalerPreset{
+                .id = "balanced",
+                .label_key = "preferences.scene_reconstruction_balanced",
+                .input_scale = 0.67f,
+            },
+            SceneUpscalerPreset{
+                .id = "performance",
+                .label_key = "preferences.scene_reconstruction_performance",
+                .input_scale = 0.50f,
+            },
+        };
         constexpr std::array DESCRIPTORS{
             SceneUpscalerDescriptor{
                 .backend = SceneUpscalerBackend::Native,
@@ -45,6 +62,12 @@ namespace lfs::vis {
                 .id = "spatial",
                 .label_key = "preferences.scene_reconstruction_spatial",
                 .presets = SPATIAL_PRESETS,
+            },
+            SceneUpscalerDescriptor{
+                .backend = SceneUpscalerBackend::Temporal,
+                .id = "temporal",
+                .label_key = "preferences.scene_reconstruction_temporal",
+                .presets = TEMPORAL_PRESETS,
             },
         };
     } // namespace

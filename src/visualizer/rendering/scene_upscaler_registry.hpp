@@ -16,6 +16,7 @@ namespace lfs::vis {
     enum class SceneUpscalerBackend : std::uint8_t {
         Native = 0,
         Spatial,
+        Temporal,
     };
 
     enum class SceneUpscalerFallback : std::uint8_t {

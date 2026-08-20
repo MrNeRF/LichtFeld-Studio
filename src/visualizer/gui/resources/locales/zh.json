@@ -784,6 +784,7 @@
     "scene_reconstruction": "场景重建",
     "scene_reconstruction_off": "关闭",
     "scene_reconstruction_spatial": "空间",
+    "scene_reconstruction_temporal": "时间",
     "scene_reconstruction_preset": "空间预设",
     "scene_reconstruction_quality": "质量",
     "scene_reconstruction_balanced": "均衡",

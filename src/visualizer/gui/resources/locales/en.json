@@ -784,6 +784,7 @@
     "scene_reconstruction": "Scene Reconstruction",
     "scene_reconstruction_off": "Off",
     "scene_reconstruction_spatial": "Spatial",
+    "scene_reconstruction_temporal": "Temporal",
     "scene_reconstruction_preset": "Spatial Preset",
     "scene_reconstruction_quality": "Quality",
     "scene_reconstruction_balanced": "Balanced",

@@ -784,6 +784,7 @@
     "scene_reconstruction": "Scènereconstructie",
     "scene_reconstruction_off": "Uit",
     "scene_reconstruction_spatial": "Ruimtelijk",
+    "scene_reconstruction_temporal": "Temporeel",
     "scene_reconstruction_preset": "Ruimtelijke voorinstelling",
     "scene_reconstruction_quality": "Kwaliteit",
     "scene_reconstruction_balanced": "Gebalanceerd",

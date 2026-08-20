@@ -784,6 +784,7 @@
     "scene_reconstruction": "シーン再構成",
     "scene_reconstruction_off": "オフ",
     "scene_reconstruction_spatial": "空間",
+    "scene_reconstruction_temporal": "時間",
     "scene_reconstruction_preset": "空間プリセット",
     "scene_reconstruction_quality": "品質",
     "scene_reconstruction_balanced": "バランス",
