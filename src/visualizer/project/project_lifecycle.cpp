@@ -583,6 +583,7 @@ namespace lfs::vis::project {
                 trainer_manager->setTrainer(
                     std::move(trainer));
             } catch (const std::exception& error) {
+                // LFS-CENSUS-OK(empty-catch): trainer-restore failure is notified; the hydrated display model is kept.
                 notifyTrainerRestoreFailure(
                     viewer, error.what());
                 return;
@@ -6180,6 +6181,7 @@ namespace lfs::vis::project {
                 "Project hydration could not start.",
                 error.what(), "hydrate.thread");
         } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): mark hydration Failed and return a typed error.
             hydration_.store(
                 Hydration::Failed,
                 std::memory_order_release);
@@ -6188,6 +6190,7 @@ namespace lfs::vis::project {
                 "Project hydration could not start.",
                 error.what(), "hydrate.thread");
         } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): mark hydration Failed and return a typed error.
             hydration_.store(
                 Hydration::Failed,
                 std::memory_order_release);
