@@ -233,6 +233,12 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_ResetTrainingPreservesExplicitInitPath_Test;
         friend class VisualizerImplResetTest_DirtyProjectSwitchRequiresExplicitDiscardAuthorization_Test;
         friend class VisualizerImplResetTest_NewProjectDirtyGateRunsBelowEveryCommandEntry_Test;
+        friend class VisualizerImplResetTest_NewProjectWhileTrainingPromptsInsteadOfErroring_Test;
+        friend class VisualizerImplResetTest_NewProjectStopTrainingThenSwitchWritesNoProject_Test;
+        friend class VisualizerImplResetTest_OpenProjectWhileTrainingPromptsInsteadOfErroring_Test;
+        friend class VisualizerImplResetTest_OpenProjectStopTrainingThenSwitchWritesNoProject_Test;
+        friend class VisualizerImplResetTest_NewProjectWhileCompletionPendingStillErrors_Test;
+        friend class VisualizerImplResetTest_ProjectOpenApiWhileTrainingStillErrors_Test;
         friend class VisualizerImplResetTest_FileExitWithDefaultSettingsNeedsPrompt_Test;
         friend class VisualizerImplResetTest_FileExitRoutesThroughCloseSaveWhenAutoSaveOnCloseEnabled_Test;
         friend class VisualizerImplResetTest_CloseSavePendingActionSkipsPreviewRegen_Test;
@@ -365,9 +371,20 @@ namespace lfs::vis {
         void handleTrainingCompleted(const lfs::core::events::state::TrainingCompleted& event);
         void handleLoadConfigFile(const std::filesystem::path& path);
         void handleNewProject(
-            ProjectSwitchDisposition disposition);
+            ProjectSwitchDisposition disposition,
+            bool stop_training = false);
         void performNewProject(
             ProjectSwitchDisposition disposition);
+        void handleOpenProject(
+            const std::filesystem::path& path,
+            ProjectSwitchDisposition disposition,
+            bool stop_training = false);
+        void performOpenProject(
+            const std::filesystem::path& path,
+            ProjectSwitchDisposition disposition);
+        [[nodiscard]] bool
+        shouldDeferProjectSwitchForTraining() const;
+        void requestStopThenPendingAction();
         void schedulePendingTrainingAction();
         void performPendingTrainingAction();
         void requestApplicationClose();
@@ -497,6 +514,7 @@ namespace lfs::vis {
             None,
             Reset,
             NewProject,
+            OpenProject,
             CloseSave,
             CloseDiscard,
         };
@@ -504,6 +522,10 @@ namespace lfs::vis {
         bool pending_training_action_posted_ = false;
         ProjectSwitchDisposition
             pending_new_project_disposition_ =
+                ProjectSwitchDisposition::RequireClean;
+        std::filesystem::path pending_open_path_;
+        ProjectSwitchDisposition
+            pending_open_disposition_ =
                 ProjectSwitchDisposition::RequireClean;
         int pending_training_completion_refresh_frames_ = 0;
         bool gui_frame_rendered_ = false;

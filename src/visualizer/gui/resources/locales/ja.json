@@ -733,7 +733,9 @@
     "undo": "元に戻す",
     "redo": "やり直す",
     "edit": "編集",
-    "double_click_reset": "ダブルクリックでリセット"
+    "double_click_reset": "ダブルクリックでリセット",
+    "yes": "はい",
+    "no": "いいえ"
   },
   "status": {
     "ready": "準備完了",
@@ -1236,6 +1238,10 @@
     "stop_and_save": "停止して保存",
     "discard_and_exit": "破棄して終了",
     "exit": "終了"
+  },
+  "project_switch": {
+    "stop_training_title": "トレーニングを停止しますか？",
+    "stop_training_message": "プロジェクトを切り替える前にトレーニングを停止する必要があります。現在のセッションを停止しますか？"
   },
   "load_dataset_popup": {
     "title": "データセットを読み込む",

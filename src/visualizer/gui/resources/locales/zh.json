@@ -733,7 +733,9 @@
     "undo": "撤销",
     "redo": "重做",
     "edit": "编辑",
-    "double_click_reset": "双击重置"
+    "double_click_reset": "双击重置",
+    "yes": "是",
+    "no": "否"
   },
   "status": {
     "ready": "就绪",
@@ -1236,6 +1238,10 @@
     "stop_and_save": "停止并保存",
     "discard_and_exit": "丢弃并退出",
     "exit": "退出"
+  },
+  "project_switch": {
+    "stop_training_title": "停止训练？",
+    "stop_training_message": "切换项目前必须停止训练。是否停止当前会话？"
   },
   "load_dataset_popup": {
     "title": "加载数据集",

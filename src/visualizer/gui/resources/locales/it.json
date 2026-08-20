@@ -733,7 +733,9 @@
     "undo": "Annulla",
     "redo": "Ripeti",
     "edit": "Modifica",
-    "double_click_reset": "doppio clic per resettare"
+    "double_click_reset": "doppio clic per resettare",
+    "yes": "Sì",
+    "no": "No"
   },
   "status": {
     "ready": "Pronto",
@@ -1236,6 +1238,10 @@
     "stop_and_save": "Interrompi e salva",
     "discard_and_exit": "Scarta ed esci",
     "exit": "Esci"
+  },
+  "project_switch": {
+    "stop_training_title": "Interrompere l'addestramento?",
+    "stop_training_message": "L'addestramento deve essere interrotto prima di cambiare progetto. Interrompere la sessione corrente?"
   },
   "load_dataset_popup": {
     "title": "Carica Dataset",

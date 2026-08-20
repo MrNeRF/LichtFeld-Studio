@@ -161,7 +161,8 @@ namespace lfs::vis::project {
         [[nodiscard]] ProjectMenuInfo menuInfo() const;
         [[nodiscard]] lfs::Result<void>
         preflightSwitch(
-            ProjectSwitchDisposition disposition);
+            ProjectSwitchDisposition disposition,
+            bool allow_active_training = false);
 
         void openStartupProject(
             const std::optional<std::filesystem::path>& explicit_path);

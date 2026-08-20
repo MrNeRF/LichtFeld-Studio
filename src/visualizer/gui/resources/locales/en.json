@@ -733,7 +733,9 @@
     "undo": "Undo",
     "redo": "Redo",
     "edit": "Edit",
-    "double_click_reset": "dbl-click reset"
+    "double_click_reset": "dbl-click reset",
+    "yes": "Yes",
+    "no": "No"
   },
   "status": {
     "ready": "Ready",
@@ -1236,6 +1238,10 @@
     "stop_and_save": "Stop & Save",
     "discard_and_exit": "Discard & Exit",
     "exit": "Exit"
+  },
+  "project_switch": {
+    "stop_training_title": "Stop Training?",
+    "stop_training_message": "Training must be stopped before switching projects. Stop the current session?"
   },
   "load_dataset_popup": {
     "title": "Load Dataset",

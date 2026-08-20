@@ -65,12 +65,13 @@ namespace lfs::core {
             EVENT(ShowDatasetLoadPopup, std::filesystem::path dataset_path;);
             EVENT(ShowVideoExtractor, std::filesystem::path video_path;);
             EVENT(ShowResumeCheckpointPopup, std::filesystem::path checkpoint_path;);
-            EVENT(NewProject, bool discard_changes = false;);
+            EVENT(NewProject, bool discard_changes = false; bool stop_training = false;);
             EVENT(ProjectSave, );
             EVENT(ProjectSaveAs, std::filesystem::path path;);
-            EVENT(ProjectOpen, std::filesystem::path path; bool discard_changes = false;);
+            EVENT(ProjectOpen, std::filesystem::path path; bool discard_changes = false; bool stop_training = false;);
             EVENT(ProjectCompact, );
             EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path;);
+            EVENT(ShowStopTrainingConfirmation, bool new_project = false; std::filesystem::path path; bool discard_changes = false;);
             EVENT(SetReopenLastProject, bool enabled;);
             EVENT(SetAutoSaveOnClose, bool enabled;);
             EVENT(SetProjectAutosaveInterval, std::uint64_t seconds;);

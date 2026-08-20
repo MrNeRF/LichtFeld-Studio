@@ -733,7 +733,9 @@
     "undo": "실행 취소",
     "redo": "다시 실행",
     "edit": "편집",
-    "double_click_reset": "더블클릭하여 재설정"
+    "double_click_reset": "더블클릭하여 재설정",
+    "yes": "예",
+    "no": "아니요"
   },
   "status": {
     "ready": "준비됨",
@@ -1236,6 +1238,10 @@
     "stop_and_save": "중지 및 저장",
     "discard_and_exit": "폐기 후 종료",
     "exit": "종료"
+  },
+  "project_switch": {
+    "stop_training_title": "훈련을 중단할까요?",
+    "stop_training_message": "프로젝트를 전환하려면 훈련을 먼저 중단해야 합니다. 현재 세션을 중단할까요?"
   },
   "load_dataset_popup": {
     "title": "데이터셋 불러오기",

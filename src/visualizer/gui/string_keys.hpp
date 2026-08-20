@@ -287,6 +287,8 @@ namespace lichtfeld::Strings {
 
     namespace Common {
         inline constexpr const char* OK = "common.ok";
+        inline constexpr const char* YES = "common.yes";
+        inline constexpr const char* NO = "common.no";
         inline constexpr const char* CANCEL = "common.cancel";
         inline constexpr const char* CLOSE = "common.close";
         inline constexpr const char* SAVE = "common.save";

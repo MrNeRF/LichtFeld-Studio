@@ -261,7 +261,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -917,18 +917,29 @@ NB_MODULE(lichtfeld, m) {
         },
         "Reset training state to initial");
     m.def(
-        "new_project", [](const bool discard_changes) {
+        "is_training_active",
+        []() {
+            const auto* trainer_manager =
+                lfs::python::get_trainer_manager();
+            return trainer_manager &&
+                   trainer_manager->isTrainingActive();
+        },
+        "Whether training is running or paused");
+    m.def(
+        "new_project", [](const bool discard_changes, const bool stop_training) {
             nb::gil_scoped_release release;
             emit_project_cmd_marshaled(
                 "python.new_project",
-                [discard_changes] {
+                [discard_changes, stop_training] {
                     lfs::core::events::cmd::NewProject{
                         .discard_changes =
-                            discard_changes}
+                            discard_changes,
+                        .stop_training =
+                            stop_training}
                         .emit();
                 });
         },
-        nb::arg("discard_changes") = false, "Clear all project state and start a new project");
+        nb::arg("discard_changes") = false, nb::arg("stop_training") = false, "Clear all project state and start a new project");
     m.def(
         "project_save", []() {
             nb::gil_scoped_release release;
@@ -996,19 +1007,25 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "project_open",
         [](const std::string& path,
-           const bool discard_changes) {
+           const bool discard_changes,
+           const bool stop_training) {
             const auto project_path =
                 python_utf8_path(path);
-            if (project_path.empty()) {
+            if (project_path.empty() || stop_training) {
                 nb::gil_scoped_release release;
                 emit_project_cmd_marshaled(
-                    "python.project_open_dialog",
-                    [discard_changes] {
+                    project_path.empty()
+                        ? "python.project_open_dialog"
+                        : "python.project_open",
+                    [project_path, discard_changes,
+                     stop_training] {
                         lfs::core::events::cmd::
                             ProjectOpen{
-                                .path = {},
+                                .path = project_path,
                                 .discard_changes =
-                                    discard_changes}
+                                    discard_changes,
+                                .stop_training =
+                                    stop_training}
                                 .emit();
                     });
                 return lfs::vis::
@@ -1037,6 +1054,7 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("path") = "",
         nb::arg("discard_changes") = false,
+        nb::arg("stop_training") = false,
         "Open a .licht project");
     m.def(
         "project_compact", []() {

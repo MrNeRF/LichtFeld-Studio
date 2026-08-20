@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 
 #include "core/checkpoint_format.hpp"
+#include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
@@ -60,6 +61,23 @@ namespace {
         [[nodiscard]] std::string name()
             const override {
             return "test.noop";
+        }
+    };
+
+    class CapturingErrorConsumer final
+        : public lfs::NativeErrorConsumer {
+    public:
+        std::vector<std::string> user_messages;
+
+        void on_error(
+            const lfs::ErrorNotification& notification,
+            const lfs::ErrorDeliveryInfo&) noexcept override {
+            try {
+                user_messages.emplace_back(
+                    std::string(
+                        notification.error.user_message()));
+            } catch (...) {
+            }
         }
     };
 
@@ -329,6 +347,36 @@ namespace {
             lfs::core::CameraModelType::PINHOLE,
             "camera.png", image_path,
             std::filesystem::path{}, 64, 64, 0);
+    }
+
+    bool arm_running_trainer(lfs::vis::VisualizerImpl& viewer) {
+        auto& scene = viewer.getScene();
+        const auto cameras =
+            scene.addGroup("Train cameras");
+        scene.addCamera(
+            "camera.png", cameras,
+            make_project_request_test_camera());
+        auto* const trainer_manager =
+            viewer.getTrainerManager();
+        if (!trainer_manager) {
+            return false;
+        }
+        trainer_manager->setTrainer(
+            std::make_unique<lfs::training::Trainer>(
+                scene));
+        auto& state_machine =
+            const_cast<lfs::vis::TrainingStateMachine&>(
+                trainer_manager->getStateMachine());
+        if (state_machine.getState() ==
+            lfs::vis::TrainingState::Idle) {
+            if (!state_machine.transitionTo(
+                    lfs::vis::TrainingState::Ready)) {
+                return false;
+            }
+        }
+        return state_machine.transitionTo(
+                   lfs::vis::TrainingState::Running) &&
+               trainer_manager->isTrainingActive();
     }
 
     void write_minimal_transforms_dataset(const std::filesystem::path& dataset_path) {
@@ -2507,6 +2555,388 @@ namespace lfs::vis {
             EXPECT_EQ(
                 viewer.getScene().getNodeCount(),
                 0u);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           NewProjectWhileTrainingPromptsInsteadOfErroring) {
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Keep while training"),
+                lfs::core::NULL_NODE);
+
+            CapturingErrorConsumer consumer;
+            auto subscription =
+                lfs::ErrorBus::instance().subscribe(
+                    consumer);
+            bool prompted = false;
+            lfs::core::events::cmd::
+                ShowStopTrainingConfirmation::
+                    when([&](const auto& event) {
+                        prompted = true;
+                        EXPECT_TRUE(event.new_project);
+                        EXPECT_TRUE(
+                            event.discard_changes);
+                    });
+
+            lfs::core::events::cmd::NewProject{
+                .discard_changes = true}
+                .emit();
+
+            EXPECT_TRUE(prompted);
+            EXPECT_TRUE(
+                std::none_of(
+                    consumer.user_messages.begin(),
+                    consumer.user_messages.end(),
+                    [](const std::string& message) {
+                        return message ==
+                               "Stop training before switching projects.";
+                    }));
+            EXPECT_TRUE(
+                viewer.getTrainerManager()
+                    ->isTrainingActive());
+            EXPECT_NE(
+                viewer.getScene().getNode(
+                    "Keep while training"),
+                nullptr);
+            EXPECT_EQ(
+                viewer.pending_training_action_,
+                VisualizerImpl::PendingTrainingAction::
+                    None);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           NewProjectStopTrainingThenSwitchWritesNoProject) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "stop-then-new.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Cleared after stop"),
+                lfs::core::NULL_NODE);
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            EXPECT_FALSE(
+                trainer->trainer_project_save_policy()
+                    .on_stop_or_error);
+            const auto write_time_before =
+                std::filesystem::last_write_time(
+                    project_path);
+
+            lfs::core::events::cmd::NewProject{
+                .discard_changes = true,
+                .stop_training = true}
+                .emit();
+            EXPECT_EQ(
+                viewer.pending_training_action_,
+                VisualizerImpl::PendingTrainingAction::
+                    NewProject);
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return viewer.getScene().getNode(
+                               "Cleared after stop") ==
+                               nullptr &&
+                           !viewer.getTrainerManager()
+                                ->isTrainingActive() &&
+                           !viewer.getTrainerManager()
+                                ->isCompletionPending();
+                }));
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_EQ(
+                std::filesystem::last_write_time(
+                    project_path),
+                write_time_before);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           OpenProjectWhileTrainingPromptsInsteadOfErroring) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "open-while-training.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Keep while training"),
+                lfs::core::NULL_NODE);
+
+            CapturingErrorConsumer consumer;
+            auto subscription =
+                lfs::ErrorBus::instance().subscribe(
+                    consumer);
+            bool prompted = false;
+            std::filesystem::path prompted_path;
+            lfs::core::events::cmd::
+                ShowStopTrainingConfirmation::
+                    when([&](const auto& event) {
+                        prompted = true;
+                        prompted_path = event.path;
+                        EXPECT_FALSE(event.new_project);
+                        EXPECT_TRUE(
+                            event.discard_changes);
+                    });
+
+            lfs::core::events::cmd::ProjectOpen{
+                .path = project_path,
+                .discard_changes = true}
+                .emit();
+
+            EXPECT_TRUE(prompted);
+            EXPECT_EQ(prompted_path, project_path);
+            EXPECT_TRUE(
+                std::none_of(
+                    consumer.user_messages.begin(),
+                    consumer.user_messages.end(),
+                    [](const std::string& message) {
+                        return message ==
+                               "Stop training before switching projects.";
+                    }));
+            EXPECT_TRUE(
+                viewer.getTrainerManager()
+                    ->isTrainingActive());
+            EXPECT_NE(
+                viewer.getScene().getNode(
+                    "Keep while training"),
+                nullptr);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           OpenProjectStopTrainingThenSwitchWritesNoProject) {
+        const auto& temporary = temporary_.path;
+        const auto current_path =
+            temporary / "open-stop-current.licht";
+        const auto target_path =
+            temporary / "open-stop-target.licht";
+        write_empty_project(current_path);
+        write_empty_project(target_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(viewer.projectOpen(
+                current_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Cleared after open"),
+                lfs::core::NULL_NODE);
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            EXPECT_FALSE(
+                trainer->trainer_project_save_policy()
+                    .on_stop_or_error);
+            const auto write_time_before =
+                std::filesystem::last_write_time(
+                    current_path);
+
+            lfs::core::events::cmd::ProjectOpen{
+                .path = target_path,
+                .discard_changes = true,
+                .stop_training = true}
+                .emit();
+            EXPECT_EQ(
+                viewer.pending_training_action_,
+                VisualizerImpl::PendingTrainingAction::
+                    OpenProject);
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return viewer.getScene().getNode(
+                               "Cleared after open") ==
+                               nullptr &&
+                           !viewer.getTrainerManager()
+                                ->isTrainingActive() &&
+                           !viewer.getTrainerManager()
+                                ->isCompletionPending();
+                }));
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_EQ(
+                std::filesystem::last_write_time(
+                    current_path),
+                write_time_before);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ProjectOpenApiWhileTrainingStillErrors) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "api-while-training.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            ASSERT_TRUE(arm_running_trainer(viewer));
+
+            CapturingErrorConsumer consumer;
+            auto subscription =
+                lfs::ErrorBus::instance().subscribe(
+                    consumer);
+            bool prompted = false;
+            lfs::core::events::cmd::
+                ShowStopTrainingConfirmation::
+                    when([&](const auto&) {
+                        prompted = true;
+                    });
+
+            const auto blocked = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_FALSE(blocked);
+            EXPECT_EQ(
+                blocked.error().code(),
+                lfs::ErrorCode::FailedPrecondition);
+            EXPECT_EQ(
+                blocked.error().user_message(),
+                "Stop training before switching projects.");
+            EXPECT_FALSE(prompted);
+            EXPECT_TRUE(consumer.user_messages.empty());
+            EXPECT_TRUE(
+                viewer.getTrainerManager()
+                    ->isTrainingActive());
+
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            const auto new_blocked =
+                lifecycle->newProject(
+                    ProjectSwitchDisposition::
+                        DiscardChanges);
+            ASSERT_FALSE(new_blocked);
+            EXPECT_EQ(
+                new_blocked.error().user_message(),
+                "Stop training before switching projects.");
+            EXPECT_TRUE(
+                viewer.getTrainerManager()
+                    ->isTrainingActive());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           NewProjectWhileCompletionPendingStillErrors) {
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            auto* const trainer_manager =
+                viewer.getTrainerManager();
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    trainer_manager->getStateMachine());
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Stopping));
+            ASSERT_FALSE(
+                trainer_manager->isTrainingActive());
+            trainer_manager->completion_pending_.store(
+                true, std::memory_order_release);
+            trainer_manager->training_joined_ = false;
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Keep while publishing"),
+                lfs::core::NULL_NODE);
+
+            CapturingErrorConsumer consumer;
+            auto subscription =
+                lfs::ErrorBus::instance().subscribe(
+                    consumer);
+            bool prompted = false;
+            lfs::core::events::cmd::
+                ShowStopTrainingConfirmation::
+                    when([&](const auto&) {
+                        prompted = true;
+                    });
+
+            lfs::core::events::cmd::NewProject{
+                .discard_changes = true}
+                .emit();
+
+            EXPECT_FALSE(prompted);
+            EXPECT_TRUE(
+                std::any_of(
+                    consumer.user_messages.begin(),
+                    consumer.user_messages.end(),
+                    [](const std::string& message) {
+                        return message ==
+                               "Stop training before switching projects.";
+                    }));
+            EXPECT_NE(
+                viewer.getScene().getNode(
+                    "Keep while publishing"),
+                nullptr);
+
+            trainer_manager->completion_pending_.store(
+                false, std::memory_order_release);
+            trainer_manager->training_joined_ = true;
         }
     }
 

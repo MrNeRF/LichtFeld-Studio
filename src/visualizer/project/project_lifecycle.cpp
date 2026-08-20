@@ -1539,7 +1539,8 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::preflightSwitch(
-        const ProjectSwitchDisposition disposition) {
+        const ProjectSwitchDisposition disposition,
+        const bool allow_active_training) {
         if (close_save_state_.load(
                 std::memory_order_acquire) ==
             CloseSaveState::Saving) {
@@ -1559,14 +1560,21 @@ namespace lfs::vis::project {
         }
         if (const auto* trainer =
                 viewer_.getTrainerManager();
-            trainer &&
-            (trainer->isTrainingActive() ||
-             trainer->isCompletionPending())) {
-            return fail<void>(
-                lfs::ErrorCode::FailedPrecondition,
-                "Stop training before switching projects.",
-                "Project switching is blocked while training is active",
-                "project.training");
+            trainer) {
+            const bool publish_in_flight =
+                trainer->isCompletionPending() &&
+                !trainer->isTrainingActive();
+            const bool training_active =
+                trainer->isTrainingActive();
+            if (publish_in_flight ||
+                (training_active &&
+                 !allow_active_training)) {
+                return fail<void>(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "Stop training before switching projects.",
+                    "Project switching is blocked while training is active",
+                    "project.training");
+            }
         }
         if (disposition ==
                 ProjectSwitchDisposition::RequireClean &&

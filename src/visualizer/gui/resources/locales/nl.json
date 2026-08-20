@@ -733,7 +733,9 @@
     "undo": "Ongedaan maken",
     "redo": "Opnieuw uitvoeren",
     "edit": "Bewerken",
-    "double_click_reset": "dubbelklik om te resetten"
+    "double_click_reset": "dubbelklik om te resetten",
+    "yes": "Ja",
+    "no": "Nee"
   },
   "status": {
     "ready": "Gereed",
@@ -1236,6 +1238,10 @@
     "stop_and_save": "Stoppen en opslaan",
     "discard_and_exit": "Verwerpen en afsluiten",
     "exit": "Afsluiten"
+  },
+  "project_switch": {
+    "stop_training_title": "Training stoppen?",
+    "stop_training_message": "De training moet worden gestopt voordat u van project wisselt. Huidige sessie stoppen?"
   },
   "load_dataset_popup": {
     "title": "Dataset Laden",

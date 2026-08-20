@@ -733,7 +733,9 @@
     "undo": "Rückgängig",
     "redo": "Wiederholen",
     "edit": "Bearbeiten",
-    "double_click_reset": "Doppelklick zum Zurücksetzen"
+    "double_click_reset": "Doppelklick zum Zurücksetzen",
+    "yes": "Ja",
+    "no": "Nein"
   },
   "status": {
     "ready": "Bereit",
@@ -1236,6 +1238,10 @@
     "stop_and_save": "Stoppen & Speichern",
     "discard_and_exit": "Verwerfen & Beenden",
     "exit": "Beenden"
+  },
+  "project_switch": {
+    "stop_training_title": "Training beenden?",
+    "stop_training_message": "Das Training muss beendet werden, bevor das Projekt gewechselt werden kann. Aktuelle Sitzung beenden?"
   },
   "load_dataset_popup": {
     "title": "Datensatz laden",
