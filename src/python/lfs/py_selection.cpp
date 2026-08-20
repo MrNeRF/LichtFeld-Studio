@@ -67,8 +67,8 @@ namespace lfs::python {
             const float clamped_width = std::max(frustum_half_width, 0.05f);
 
             settings.depth_filter_enabled = enabled;
-            settings.depth_filter_min = glm::vec3(-clamped_width, -DEPTH_FILTER_HALF_HEIGHT, clamped_near);
-            settings.depth_filter_max = glm::vec3(clamped_width, DEPTH_FILTER_HALF_HEIGHT, clamped_far);
+            settings.depth_filter_min = glm::vec3(-clamped_width, -DEPTH_FILTER_HALF_HEIGHT, -clamped_far);
+            settings.depth_filter_max = glm::vec3(clamped_width, DEPTH_FILTER_HALF_HEIGHT, -clamped_near);
 
             if (!enabled) {
                 return;
@@ -88,6 +88,12 @@ namespace lfs::python {
                               view_info->translation[1],
                               view_info->translation[2]));
             }
+        }
+
+        [[nodiscard]] std::tuple<float, float> fallback_depth_near_far(const vis::RenderSettings& settings) {
+            const float depth_near = std::max(-settings.depth_filter_max.z, 0.0f);
+            const float depth_far = std::max(-settings.depth_filter_min.z, depth_near);
+            return {depth_near, depth_far};
         }
     } // namespace
 
@@ -335,7 +341,9 @@ namespace lfs::python {
                 if (!rm)
                     return {false, 100.0f, 50.0f};
                 const auto& settings = rm->getSettings();
-                return {settings.depth_filter_enabled, settings.depth_filter_max.z,
+                const auto [depth_near, depth_far] = fallback_depth_near_far(settings);
+                (void)depth_near;
+                return {settings.depth_filter_enabled, depth_far,
                         settings.depth_filter_max.x};
             },
             "Get depth filter state: (enabled, depth_far, frustum_half_width).");
@@ -358,9 +366,10 @@ namespace lfs::python {
                 if (!rm)
                     return {false, 0.0f, 100.0f, 50.0f};
                 const auto& settings = rm->getSettings();
+                const auto [depth_near, depth_far] = fallback_depth_near_far(settings);
                 return {settings.depth_filter_enabled,
-                        std::max(settings.depth_filter_min.z, 0.0f),
-                        settings.depth_filter_max.z,
+                        depth_near,
+                        depth_far,
                         settings.depth_filter_max.x};
             },
             "Get selection depth filter state: (enabled, depth_near, depth_far, frustum_half_width).");
