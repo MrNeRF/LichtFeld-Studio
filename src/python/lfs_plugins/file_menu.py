@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """File menu implementation using Blender-style operators."""
 
-import logging
 from pathlib import Path, PureWindowsPath
 
 import lichtfeld as lf
@@ -20,9 +19,6 @@ from .import_panels import open_dataset_import_panel, open_resume_checkpoint_pan
 
 __lfs_menu_classes__ = ["FileMenu"]
 
-_logger = logging.getLogger(__name__)
-
-
 class _ImportRejected(RuntimeError):
     def __init__(self, reason: str, message_key: str):
         super().__init__(reason)
@@ -31,10 +27,7 @@ class _ImportRejected(RuntimeError):
 
 def _warn_import_failure(path: str, reason: str) -> None:
     message = f"Import rejected: path='{path}', reason='{reason}'"
-    try:
-        lf.log.warn(message)
-    except Exception:
-        _logger.warning(message)
+    lf.log.warn(message)
 
 
 def _show_import_failure(path: str, reason: str, message_key: str) -> None:
@@ -74,7 +67,7 @@ def _open_dataset_import_checked(path: str) -> None:
 
 
 def _open_checkpoint_import_checked(path: str) -> None:
-    if not lf.read_checkpoint_header(path) or not lf.read_checkpoint_params(path):
+    if not lf.read_checkpoint_header(path):
         raise _ImportRejected(
             "checkpoint format was not recognized",
             "menu.file.checkpoint_not_recognized",

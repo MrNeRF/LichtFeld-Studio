@@ -342,6 +342,26 @@ def test_unrecognized_checkpoint_reports_modal_and_warning(monkeypatch):
     )
 
 
+def test_checkpoint_preflight_reads_only_the_header(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    selected = "/tmp/large.resume"
+    header_reads = []
+    file_menu.lf.ui.open_checkpoint_file_dialog = lambda: selected
+    file_menu.lf.read_checkpoint_header = lambda path: header_reads.append(path) or object()
+
+    def unexpected_parameter_read(_path):
+        raise AssertionError("checkpoint parameters belong to the retained import panel")
+
+    file_menu.lf.read_checkpoint_params = unexpected_parameter_read
+
+    result = file_menu.ImportCheckpointOperator().execute(None)
+
+    assert result == {"FINISHED"}
+    assert header_reads == [selected]
+    assert file_menu.lf.message_dialogs == []
+    assert file_menu.lf.warning_messages == []
+
+
 def test_immediate_import_error_reports_reason(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
     selected = "/tmp/broken.ply"
