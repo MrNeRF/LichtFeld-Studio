@@ -483,7 +483,7 @@ namespace {
                 {"save-project-at-iter"});
             ::args::ValueFlag<std::string> save_project_path(
                 output_group, "path",
-                "Destination for --save-project-at-iter (default: <output>/project.licht)",
+                "Destination for --save-project-at-iter. If omitted, the bound project path is used",
                 {"save-project-path"});
 
             // =============================================================================
@@ -1301,13 +1301,6 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     }
     apply_step_scaling(*params);
     apply_ppisp_defaults(*params);
-
-    if (params->save_project_at_iteration &&
-        params->save_project_path.empty() &&
-        !params->dataset.output_path.empty()) {
-        params->save_project_path =
-            params->dataset.output_path / "project.licht";
-    }
 
     if (auto error = params->validate(); !error.empty())
         return std::unexpected("ERROR: " + error);

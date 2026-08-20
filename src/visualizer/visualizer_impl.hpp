@@ -266,9 +266,12 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
         friend class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
         friend class VisualizerImplResetTest_StartTrainingPreparesProjectAndGrantsSaves_Test;
+        friend class VisualizerImplResetTest_PausedUngrantedStartTrainingGrantsAndBinds_Test;
+        friend class VisualizerImplResetTest_PausedGrantedStartTrainingDoesNotRecreateProject_Test;
         friend class VisualizerImplResetTest_StartConflictSeesDiskCheckpointAfterTrainerReplacement_Test;
         friend class VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
         friend class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+        friend class VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
         friend class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
         friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;

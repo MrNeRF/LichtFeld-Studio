@@ -2428,10 +2428,12 @@ namespace lfs::app {
                 return trainer_manager ? trainer_manager->lastTrainingError() : std::nullopt;
             }});
 
-        // CommandCenter's generated session.resume only sets the trainer flag. A
-        // checkpoint-installed trainer has no worker yet, so route GUI MCP session
-        // controls through TrainerManager to keep the state machine and worker
-        // flags in sync.
+        // CommandCenter's generated session.pause/stop only set trainer flags. A
+        // checkpoint-installed trainer has no worker yet, so route GUI MCP pause
+        // and stop through TrainerManager. session.resume keeps the canResume()
+        // guard (resume-only; training.start starts a fresh run) then goes through
+        // VisualizerImpl::startTraining so a paused ungranted trainer shares the
+        // training.start save-grant gate.
         registry.register_tool(
             McpTool{
                 .name = "session.pause",
@@ -2478,8 +2480,7 @@ namespace lfs::app {
                     if (!trainer_manager->canResume())
                         return std::unexpected(std::string(trainer_manager->getActionBlockedReason(
                             vis::TrainingAction::Resume)));
-                    trainer_manager->resumeTraining();
-                    return {};
+                    return viewer_impl->startTraining();
                 });
                 if (!result)
                     return json{{"error", result.error()}};

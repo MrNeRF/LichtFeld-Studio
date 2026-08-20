@@ -348,11 +348,6 @@ namespace lfs::app {
                 cli_params.save_project_at_iteration;
             checkpoint_params.save_project_path =
                 cli_params.save_project_path;
-            if (checkpoint_params.save_project_at_iteration &&
-                checkpoint_params.save_project_path.empty()) {
-                checkpoint_params.save_project_path =
-                    checkpoint_params.dataset.output_path / "project.licht";
-            }
             checkpoint_params.cli_iterations_set =
                 cli_params.cli_iterations_set;
 
@@ -497,7 +492,8 @@ namespace lfs::app {
                         }
                         training::grant_headless_project_saves(
                             *installed->trainer,
-                            effective_params);
+                            effective_params,
+                            *params->resume_project);
                         manager->setTrainer(
                             std::move(installed->trainer));
                     } else {
@@ -712,7 +708,8 @@ namespace lfs::app {
                     auto trainer =
                         std::move(installed->trainer);
                     training::grant_headless_project_saves(
-                        *trainer, project->params);
+                        *trainer, project->params,
+                        *params->resume_project);
                     LOG_INFO(
                         "Project display hydration complete; full "
                         "trainer state restored at iteration {}",

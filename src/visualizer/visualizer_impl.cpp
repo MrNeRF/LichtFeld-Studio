@@ -3013,6 +3013,24 @@ namespace lfs::vis {
         if (!trainer_manager_)
             return std::unexpected("Trainer manager not initialized");
         if (trainer_manager_->isPaused()) {
+            if (project_lifecycle_) {
+                if (auto* const trainer = getTrainer()) {
+                    const auto policy =
+                        trainer->trainer_project_save_policy();
+                    if (!policy.on_completion &&
+                        !policy.on_stop_or_error &&
+                        !policy.at_step_boundaries) {
+                        if (auto prepared =
+                                project_lifecycle_
+                                    ->prepareTrainingStartProject();
+                            !prepared) {
+                            return std::unexpected(
+                                lfs::format_for_developer(
+                                    prepared.error()));
+                        }
+                    }
+                }
+            }
             trainer_manager_->resumeTraining();
             return {};
         }

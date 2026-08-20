@@ -360,9 +360,8 @@ namespace lfs::core {
             std::optional<std::filesystem::path> resume_project = std::nullopt;
 
             // Headless/integration-test trigger for the production training
-            // snapshot path. When --save-project-at-iter is set and this path
-            // is empty, the argument parser materializes
-            // <output>/project.licht.
+            // snapshot path. Empty unless the user passed --save-project-path;
+            // the trainer then falls back to the bound project destination.
             std::optional<size_t> save_project_at_iteration = std::nullopt;
             std::filesystem::path save_project_path;
 

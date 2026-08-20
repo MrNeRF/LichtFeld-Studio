@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -12,9 +13,11 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1641,6 +1644,22 @@ namespace {
             lfs::training::TrainingSnapshotService::
                 reset_process_pinned_d2h_calibration_for_testing();
         }
+
+        template <typename Predicate>
+        [[nodiscard]] bool waitUntil(
+            Predicate&& condition,
+            const std::chrono::milliseconds timeout =
+                std::chrono::seconds(10)) {
+            const auto deadline =
+                std::chrono::steady_clock::now() + timeout;
+            while (!condition() &&
+                   std::chrono::steady_clock::now() <
+                       deadline) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            return condition();
+        }
     };
 
     TEST_F(ProjectCheckpointTrainerInstall,
@@ -1920,6 +1939,18 @@ namespace {
         std::filesystem::remove_all(output_path, ec);
     }
 
+    std::shared_ptr<lfs::core::Camera> make_grant_test_camera() {
+        return std::make_shared<lfs::core::Camera>(
+            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros(
+                {3}, lfs::core::Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            lfs::core::Tensor(), lfs::core::Tensor(),
+            lfs::core::CameraModelType::PINHOLE,
+            "camera.png", std::filesystem::path{},
+            std::filesystem::path{}, 64, 64, 0);
+    }
+
     lfs::core::param::TrainingParameters make_tiny_headless_params(
         const std::filesystem::path& output_path,
         const int iterations) {
@@ -1955,6 +1986,7 @@ namespace {
         auto params = make_tiny_headless_params(
             output_path, iterations);
         params.optimization.save_steps = {1, 2};
+        params.save_project_at_iteration = 2;
 
         lfs::core::Scene scene;
         ASSERT_TRUE(
@@ -1991,6 +2023,70 @@ namespace {
         EXPECT_FALSE(found_licht)
             << "ungranted trainer wrote a .licht file under "
             << output_path;
+
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           GrantedTrainerSaveAtIterWithoutPathWritesBoundFile) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_granted_save_at_iter_bound";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        constexpr int iterations = 3;
+        auto params = make_tiny_headless_params(
+            output_path, iterations);
+        params.optimization.save_steps = {};
+        params.save_project_at_iteration = 2;
+        ASSERT_TRUE(params.save_project_path.empty());
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(
+            lfs::training::loadTrainingDataIntoScene(
+                params, scene))
+            << "load training data failed";
+        ASSERT_TRUE(
+            lfs::training::initializeTrainingModel(
+                params, scene))
+            << "init model failed";
+        auto trainer =
+            std::make_unique<lfs::training::Trainer>(
+                scene);
+        auto init = trainer->initialize(params);
+        ASSERT_TRUE(init)
+            << "Failed to init trainer: " << init.error();
+        const auto bound_path =
+            output_path / "project.licht";
+        trainer->set_live_project_snapshot(bound_path);
+        trainer->set_trainer_project_save_policy({
+            .on_completion = false,
+            .on_stop_or_error = false,
+            .at_step_boundaries = true,
+        });
+        auto train = trainer->train();
+        ASSERT_TRUE(train)
+            << "granted save-at-iter train failed: "
+            << lfs::format_for_developer(train.error());
+        ASSERT_TRUE(waitUntil([&] {
+            const auto metrics =
+                trainer->get_project_snapshot_metrics();
+            return !metrics.writer_in_flight &&
+                   std::filesystem::is_regular_file(
+                       bound_path) &&
+                   metrics.last_path.lexically_normal() ==
+                       bound_path.lexically_normal();
+        })) << "timed out waiting for trainer project publish to "
+            << bound_path;
+        trainer->shutdown();
+        EXPECT_TRUE(std::filesystem::is_regular_file(
+            bound_path));
+        EXPECT_EQ(
+            trainer->get_project_snapshot_metrics()
+                .last_path.lexically_normal(),
+            bound_path.lexically_normal());
 
         std::filesystem::remove_all(output_path, ec);
     }
@@ -2087,6 +2183,65 @@ namespace {
             << metrics.last_writer_error;
         trainer->shutdown();
 
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           GrantHeadlessProjectSavesBindsOverrideAndFallback) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_grant_headless_bind";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        lfs::core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        scene.addCamera(
+            "camera.png", cameras, make_grant_test_camera());
+        auto trainer =
+            std::make_unique<lfs::training::Trainer>(
+                scene);
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = output_path;
+        lfs::training::grant_headless_project_saves(
+            *trainer, params);
+        {
+            const auto bound = trainer->bound_project_path();
+            ASSERT_TRUE(bound.has_value());
+            EXPECT_EQ(
+                bound->lexically_normal(),
+                (output_path / "project.licht")
+                    .lexically_normal());
+        }
+
+        const auto override_path =
+            output_path / "resumed.licht";
+        lfs::training::grant_headless_project_saves(
+            *trainer, params, override_path);
+        {
+            const auto bound = trainer->bound_project_path();
+            ASSERT_TRUE(bound.has_value());
+            EXPECT_EQ(
+                bound->lexically_normal(),
+                override_path.lexically_normal());
+        }
+
+        trainer->set_live_project_snapshot(std::nullopt);
+        trainer->set_trainer_project_save_policy({});
+        params.dataset.output_path.clear();
+        lfs::training::grant_headless_project_saves(
+            *trainer, params);
+        EXPECT_FALSE(
+            trainer->bound_project_path().has_value());
+        const auto policy =
+            trainer->trainer_project_save_policy();
+        EXPECT_FALSE(policy.on_completion);
+        EXPECT_FALSE(policy.on_stop_or_error);
+        EXPECT_FALSE(policy.at_step_boundaries);
+
+        trainer->shutdown();
         std::filesystem::remove_all(output_path, ec);
     }
 

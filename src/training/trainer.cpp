@@ -7573,25 +7573,55 @@ namespace lfs::training {
                         static_cast<std::size_t>(
                             std::numeric_limits<int>::
                                 max())) {
+                    TrainerProjectSavePolicy policy;
+                    std::optional<std::filesystem::path> bound;
+                    {
+                        std::lock_guard lock(project_snapshot_mutex_);
+                        policy = trainer_project_save_policy_;
+                        if (live_project_path_ && !live_project_path_->empty())
+                            bound = *live_project_path_;
+                    }
                     const int target =
                         static_cast<int>(
                             *project_hook);
-                    if (iter + 1 == target &&
-                        !prepared_project_snapshot_) {
-                        prepare_project_snapshot_at_safe_point(
-                            target,
+                    std::filesystem::path
+                        project_hook_destination =
                             getParams()
-                                .save_project_path);
+                                .save_project_path;
+                    if (project_hook_destination
+                            .empty() &&
+                        bound) {
+                        project_hook_destination =
+                            *bound;
                     }
-                    if (iter == target) {
-                        if (!prepared_project_snapshot_) {
-                            prepare_project_snapshot_at_safe_point(
-                                iter,
-                                getParams()
-                                    .save_project_path);
+                    const bool may_save_at_project_hook =
+                        policy
+                            .at_step_boundaries &&
+                        !project_hook_destination
+                             .empty();
+                    if (!may_save_at_project_hook) {
+                        if (iter + 1 == target ||
+                            iter == target) {
+                            LOG_DEBUG(
+                                "Skipping save-project-at-iter project save at iteration {}: trainer-initiated saves are not authorized",
+                                iter);
                         }
-                        capture_project_snapshot_at_safe_point(
-                            iter);
+                    } else {
+                        if (iter + 1 == target &&
+                            !prepared_project_snapshot_) {
+                            prepare_project_snapshot_at_safe_point(
+                                target,
+                                project_hook_destination);
+                        }
+                        if (iter == target) {
+                            if (!prepared_project_snapshot_) {
+                                prepare_project_snapshot_at_safe_point(
+                                    iter,
+                                    project_hook_destination);
+                            }
+                            capture_project_snapshot_at_safe_point(
+                                iter);
+                        }
                     }
                 }
 

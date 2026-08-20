@@ -10,6 +10,7 @@
 #include "io/loader.hpp"
 #include "io/project_recovery.hpp"
 #include <expected>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -38,7 +39,8 @@ namespace lfs::training {
     // trainer its standing save destination and triggers here.
     void grant_headless_project_saves(
         Trainer& trainer,
-        const lfs::core::param::TrainingParameters& params);
+        const lfs::core::param::TrainingParameters& params,
+        const std::filesystem::path& destination = {});
 
     /// Construct + initialize Trainer on the live scene, then stream the
     /// document's CKPT payload via load_checkpoint(istream). Does not clear

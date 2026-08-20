@@ -4652,6 +4652,178 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           PausedUngrantedStartTrainingGrantsAndBinds) {
+        const auto& temporary = temporary_.path;
+        const auto output_path =
+            temporary / "paused-ungranted-out";
+        std::filesystem::create_directories(output_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_FALSE(lifecycle->hasSourcePath());
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Train model");
+            scene.setTrainingModelNode(model);
+            auto* const trainer_manager =
+                viewer.getTrainerManager();
+            ASSERT_NE(trainer_manager, nullptr);
+            trainer_manager->setTrainerFromCheckpoint(
+                std::make_unique<
+                    lfs::training::Trainer>(scene),
+                0);
+            ASSERT_TRUE(trainer_manager->isPaused());
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            auto params = trainer->getParams();
+            params.dataset.output_path = output_path;
+            trainer->setParams(params);
+            const auto ungranted =
+                trainer->trainer_project_save_policy();
+            EXPECT_FALSE(ungranted.on_completion);
+            EXPECT_FALSE(ungranted.on_stop_or_error);
+            EXPECT_FALSE(ungranted.at_step_boundaries);
+
+            auto started = viewer.startTraining();
+            ASSERT_TRUE(started)
+                << started.error();
+            EXPECT_FALSE(trainer_manager->isPaused());
+            const auto policy =
+                trainer->trainer_project_save_policy();
+            EXPECT_TRUE(policy.on_completion);
+            EXPECT_TRUE(policy.at_step_boundaries);
+            EXPECT_FALSE(policy.on_stop_or_error);
+            ASSERT_TRUE(lifecycle->hasSourcePath());
+            const auto bound =
+                trainer->bound_project_path();
+            ASSERT_TRUE(bound.has_value());
+            EXPECT_EQ(
+                bound->lexically_normal(),
+                (output_path / "project.licht")
+                    .lexically_normal());
+
+            if (trainer_manager->canStop()) {
+                trainer_manager->stopTraining();
+            }
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !trainer_manager
+                                ->isCompletionPending();
+                }));
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           PausedGrantedStartTrainingDoesNotRecreateProject) {
+        const auto& temporary = temporary_.path;
+        const auto output_path =
+            temporary / "paused-granted-out";
+        std::filesystem::create_directories(output_path);
+        const auto already_bound =
+            temporary / "already-bound.licht";
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_FALSE(lifecycle->hasSourcePath());
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Train model");
+            scene.setTrainingModelNode(model);
+            auto* const trainer_manager =
+                viewer.getTrainerManager();
+            ASSERT_NE(trainer_manager, nullptr);
+            trainer_manager->setTrainerFromCheckpoint(
+                std::make_unique<
+                    lfs::training::Trainer>(scene),
+                0);
+            ASSERT_TRUE(trainer_manager->isPaused());
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            auto params = trainer->getParams();
+            params.dataset.output_path = output_path;
+            trainer->setParams(params);
+            const lfs::training::Trainer::
+                TrainerProjectSavePolicy granted{
+                    .on_completion = true,
+                    .on_stop_or_error = false,
+                    .at_step_boundaries = true,
+                };
+            trainer->set_trainer_project_save_policy(
+                granted);
+            trainer->set_live_project_snapshot(
+                already_bound);
+
+            auto started = viewer.startTraining();
+            ASSERT_TRUE(started)
+                << started.error();
+            EXPECT_FALSE(trainer_manager->isPaused());
+            const auto policy =
+                trainer->trainer_project_save_policy();
+            EXPECT_EQ(
+                policy.on_completion,
+                granted.on_completion);
+            EXPECT_EQ(
+                policy.on_stop_or_error,
+                granted.on_stop_or_error);
+            EXPECT_EQ(
+                policy.at_step_boundaries,
+                granted.at_step_boundaries);
+            EXPECT_FALSE(lifecycle->hasSourcePath());
+            const auto bound =
+                trainer->bound_project_path();
+            ASSERT_TRUE(bound.has_value());
+            EXPECT_EQ(
+                bound->lexically_normal(),
+                already_bound.lexically_normal());
+            EXPECT_FALSE(std::filesystem::exists(
+                output_path / "project.licht"));
+
+            if (trainer_manager->canStop()) {
+                trainer_manager->stopTraining();
+            }
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !trainer_manager
+                                ->isCompletionPending();
+                }));
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
            StartConflictSeesDiskCheckpointAfterTrainerReplacement) {
         // Reset Training replaces the trainer, so snapshot
         // adoption via metrics is gone while the master
@@ -4906,13 +5078,13 @@ namespace lfs::vis {
             {
                 std::lock_guard lock(
                     trainer->project_snapshot_mutex_);
-                ASSERT_TRUE(
+                EXPECT_FALSE(
                     trainer->requested_project_path_);
-                EXPECT_EQ(
-                    trainer->requested_project_path_
-                        ->lexically_normal(),
-                    destination.lexically_normal());
             }
+            const auto metrics =
+                trainer->get_project_snapshot_metrics();
+            EXPECT_GT(
+                metrics.last_failed_request_id, 0u);
         }
     }
 
@@ -5016,6 +5188,126 @@ namespace lfs::vis {
             trainer_manager->completion_pending_.store(
                 false, std::memory_order_release);
             trainer_manager->training_joined_ = true;
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           SaveWhilePausedNoWorkerTrainerCompletes) {
+        // Checkpoint-installed paused trainers have
+        // has_active_train_loop() true with no worker
+        // thread. File Save must still route through the
+        // trainer, inline-flush, and finish the
+        // ProjectWrite job.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "paused-no-worker-save.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model = scene.addSplat(
+                "Train model",
+                lfs::test::licht::make_splat(2));
+            ASSERT_NE(model, lfs::core::NULL_NODE);
+            scene.setTrainingModelNode(model);
+            auto* const trainer_manager =
+                viewer.getTrainerManager();
+            ASSERT_NE(trainer_manager, nullptr);
+            trainer_manager->setTrainerFromCheckpoint(
+                std::make_unique<
+                    lfs::training::Trainer>(scene),
+                0);
+            ASSERT_TRUE(trainer_manager->isPaused());
+            ASSERT_FALSE(
+                trainer_manager
+                    ->hasLiveTrainingThread());
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            auto* const scene_splat =
+                scene.getTrainingModel();
+            ASSERT_NE(scene_splat, nullptr);
+            trainer->strategy_ =
+                std::make_unique<lfs::training::MCMC>(
+                    *scene_splat);
+            auto opt =
+                lfs::core::param::
+                    OptimizationParameters::
+                        mcmc_defaults();
+            opt.max_cap = 2;
+            opt.sh_degree = 0;
+            trainer->strategy_->initialize(opt);
+            auto snapshot_ready =
+                trainer
+                    ->initialize_project_snapshot_service();
+            ASSERT_TRUE(snapshot_ready)
+                << lfs::format_for_developer(
+                       snapshot_ready.error());
+            trainer->is_paused_.store(true);
+            ASSERT_TRUE(
+                trainer->has_active_train_loop());
+            ASSERT_TRUE(
+                trainer->can_flush_project_snapshot());
+
+            auto saved = lifecycle->save(false);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            EXPECT_EQ(
+                lifecycle->project_write_purpose_,
+                project::ProjectLifecycle::
+                    ProjectWritePurpose::
+                        TrainingExplicitSave);
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_TRUE(std::filesystem::is_regular_file(
+                project_path));
+            const auto metrics =
+                trainer->get_project_snapshot_metrics();
+            EXPECT_GT(
+                metrics.last_completed_request_id, 0u);
+            EXPECT_EQ(
+                metrics.last_path.lexically_normal(),
+                project_path.lexically_normal());
         }
     }
 
@@ -5291,13 +5583,13 @@ namespace lfs::vis {
             {
                 std::lock_guard lock(
                     trainer->project_snapshot_mutex_);
-                ASSERT_TRUE(
+                EXPECT_FALSE(
                     trainer->requested_project_path_);
-                EXPECT_EQ(
-                    trainer->requested_project_path_
-                        ->lexically_normal(),
-                    destination.lexically_normal());
             }
+            const auto metrics =
+                trainer->get_project_snapshot_metrics();
+            EXPECT_GT(
+                metrics.last_failed_request_id, 0u);
         }
     }
 
