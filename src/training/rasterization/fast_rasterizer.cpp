@@ -228,7 +228,8 @@ namespace lfs::training {
             // - near_plane, far_plane: Clipping planes
             // - *_shape: Shape of each tensor for verification
             std::ofstream params_file;
-            if (lfs::core::open_file_for_write(std::filesystem::path(dump_dir) / "params.json", params_file)) {
+            if (lfs::core::open_file_for_write(std::filesystem::path(dump_dir) / "params.json",
+                                               std::ios::out | std::ios::binary, params_file)) {
                 params_file << "{\n";
                 params_file << "  \"error\": \"" << error_msg << "\",\n";
                 params_file << "  \"n_primitives\": " << n_primitives << ",\n";

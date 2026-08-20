@@ -1990,48 +1990,6 @@ namespace lfs::vis::input {
 
     ShortcutScope shortcutScopeForAction(const Action action) {
         switch (action) {
-        case Action::TOOL_SELECT:
-        case Action::TOOL_TRANSLATE:
-        case Action::TOOL_ROTATE:
-        case Action::TOOL_SCALE:
-        case Action::TOOL_MIRROR:
-        case Action::TOOL_ALIGN:
-        case Action::TOGGLE_UI:
-        case Action::TOGGLE_FULLSCREEN:
-        case Action::TOGGLE_PERFORMANCE_HUD:
-        case Action::OPEN_PREFERENCES:
-        case Action::SELECT_MODE_CENTERS:
-        case Action::SELECT_MODE_RECTANGLE:
-        case Action::SELECT_MODE_POLYGON:
-        case Action::SELECT_MODE_LASSO:
-        case Action::SELECT_MODE_RINGS:
-        case Action::SELECT_MODE_COLOR:
-        case Action::SELECT_MODE_BOX:
-        case Action::SELECT_MODE_SPHERE:
-        case Action::UNDO:
-        case Action::REDO:
-        case Action::DELETE_SELECTED:
-        case Action::DELETE_NODE:
-        case Action::INVERT_SELECTION:
-        case Action::DESELECT_ALL:
-        case Action::SELECT_ALL:
-        case Action::COPY_SELECTION:
-        case Action::CUT_SELECTION:
-        case Action::PASTE_SELECTION:
-        case Action::TOGGLE_DEPTH_MODE:
-        case Action::TOGGLE_SELECTION_DEPTH_FILTER:
-        case Action::TOGGLE_SELECTION_CROP_FILTER:
-        case Action::SEQUENCER_ADD_KEYFRAME:
-        case Action::SEQUENCER_UPDATE_KEYFRAME:
-        case Action::SEQUENCER_PLAY_PAUSE:
-        case Action::TOGGLE_SPLIT_VIEW:
-        case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
-        case Action::TOGGLE_GT_COMPARISON:
-        case Action::TOGGLE_CAMERA_FRUSTUMS:
-        case Action::TOGGLE_GRID:
-        case Action::CYCLE_SELECTION_VIS:
-            return ShortcutScope::GlobalWhenNotTextEditing;
-
         case Action::TOGGLE_MCP_SERVER:
         case Action::TOGGLE_MCP_BINDING:
             return ShortcutScope::Global;
@@ -2056,7 +2014,8 @@ namespace lfs::vis::input {
             return ShortcutScope::Viewport;
 
         default:
-            return ShortcutScope::Global;
+            // Scene, tool, and edit key shortcuts yield to a focused text widget.
+            return ShortcutScope::GlobalWhenNotTextEditing;
         }
     }
 

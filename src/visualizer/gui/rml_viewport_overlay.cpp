@@ -7,6 +7,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
+#include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -73,6 +74,17 @@ namespace lfs::vis::gui {
                     return true;
             }
             return false;
+        }
+
+        // Keep guiFocusState in sync with the overlay's live RmlUi focus so
+        // InputController shortcut dispatch sees text editing on the next key.
+        bool publishOverlayTextFocus(Rml::Element* focused) {
+            if (!rml_input::wantsTextInput(focused))
+                return false;
+            auto& focus = guiFocusState();
+            focus.want_capture_keyboard = true;
+            focus.want_text_input = true;
+            return true;
         }
 
     } // namespace
@@ -722,10 +734,7 @@ namespace lfs::vis::gui {
             !input.text_inputs.empty() || input.has_text_editing;
         const bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
         auto* const focused_before = rml_context_->GetFocusElement();
-        const bool focused_text_target =
-            focused_before &&
-            (focused_before->GetTagName() == "input" ||
-             focused_before->GetTagName() == "textarea");
+        const bool focused_text_target = rml_input::wantsTextInput(focused_before);
         if (mouse_pos_valid_ && !mouse_moved && !pointer_event && !pointer_drag &&
             !keyboard_event && !vram_drag_capture) {
             wants_input_ = hovered_interactive_ || focused_text_target;
@@ -738,8 +747,7 @@ namespace lfs::vis::gui {
             } else {
                 tooltip_.setHover({}, nullptr);
             }
-            if (focused_text_target)
-                guiFocusState().want_capture_keyboard = true;
+            publishOverlayTextFocus(focused_before);
             return;
         }
         auto* const point_element = is_inside
@@ -838,11 +846,8 @@ namespace lfs::vis::gui {
         // (e.g. the Annotations / Drill-down filter <input>). This must run regardless of
         // over_interactive, because a text input keeps focus even when the mouse roams away.
         if (auto* focused = rml_context_->GetFocusElement()) {
-            const auto tag = focused->GetTagName();
-            const bool is_text_target = tag == "input" || tag == "textarea";
-            if (is_text_target) {
+            if (publishOverlayTextFocus(focused)) {
                 wants_input_ = true;
-                guiFocusState().want_capture_keyboard = true;
                 // Numpad digit and period scancodes must be suppressed from
                 // ProcessKeyDown / ProcessKeyUp when a text input is focused,
                 // otherwise RmlUi treats them as navigation keys (Home, End,

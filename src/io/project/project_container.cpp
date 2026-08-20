@@ -4101,6 +4101,8 @@ namespace lfs::io::project {
                 }
                 std::streamsize delivered = 0;
                 if (gptr() < egptr()) {
+                    // Leftover is window-relative (prepare_* caps the get area
+                    // at kMaxGetAreaBytes), so gbump's int count cannot overflow.
                     const auto available =
                         static_cast<std::streamsize>(egptr() - gptr());
                     const auto take = std::min(available, count);
@@ -4188,6 +4190,10 @@ namespace lfs::io::project {
         private:
             static constexpr std::size_t kNpos = static_cast<std::size_t>(-1);
             static constexpr std::size_t kShuffleWindowBytes = 8ull * 1024 * 1024;
+            // Get-area windows stay at most INT_MAX bytes because MSVC stores
+            // the get-area length as int.
+            static constexpr std::size_t kMaxGetAreaBytes =
+                static_cast<std::size_t>(std::numeric_limits<int>::max());
             // Bulk decode cap: 8 records × 64MiB target ≈ 512MiB decoded
             // resident at once beyond the caller's destination buffer.
             static constexpr std::size_t kMaxResidentDecodeRecords = 8;
@@ -4969,15 +4975,19 @@ namespace lfs::io::project {
                     cached->bytes.size() != records_[index].ub) {
                     return false;
                 }
-                const auto offset =
-                    static_cast<std::ptrdiff_t>(position_ - records_[index].uo);
-                if (offset < 0 ||
-                    static_cast<std::size_t>(offset) >= cached->bytes.size()) {
+                const auto frame_off = position_ - records_[index].uo;
+                if (frame_off >=
+                    static_cast<std::uint64_t>(cached->bytes.size())) {
                     return false;
                 }
-                buffer_start_ = records_[index].uo;
-                setg(cached->bytes.data(), cached->bytes.data() + offset,
-                     cached->bytes.data() + cached->bytes.size());
+                const auto remaining =
+                    static_cast<std::uint64_t>(cached->bytes.size()) - frame_off;
+                const auto count = std::min(
+                    remaining, static_cast<std::uint64_t>(kMaxGetAreaBytes));
+                buffer_start_ = position_;
+                char* const first =
+                    cached->bytes.data() + static_cast<std::size_t>(frame_off);
+                setg(first, first, first + static_cast<std::ptrdiff_t>(count));
                 return true;
             }
 

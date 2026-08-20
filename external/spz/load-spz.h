@@ -24,10 +24,14 @@ SOFTWARE.
 */
 
 #pragma once
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <limits>
+#include <streambuf>
 #include <string>
 #include <vector>
 
@@ -213,6 +217,144 @@ namespace spz {
 
     // Loads Gaussian splat data in .ply format
     GaussianCloud loadSplatFromPly(const std::string& filename, const UnpackOptions& options);
+
+    // LichtFeld patch: windowed read-only streambuf over a contiguous byte
+    // range. Get-area windows stay at most INT_MAX bytes because MSVC stores
+    // the get-area length as int (LichtFeld #1697). deserializePackedGaussians
+    // seeks (tellg / seekg-end / restore), so seeking is implemented with
+    // 64-bit math. window_bytes is a defaulted constructor argument so tests
+    // can install a tiny window.
+    class membuf : public std::streambuf {
+    public:
+        membuf(const uint8_t* data, size_t size,
+               size_t window_bytes = static_cast<size_t>(std::numeric_limits<int>::max()))
+            : data_(data == nullptr
+                        ? nullptr
+                        : reinterpret_cast<char*>(const_cast<uint8_t*>(data))),
+              size_(data == nullptr ? 0 : static_cast<uint64_t>(size)),
+              window_bytes_(std::clamp(
+                  window_bytes, size_t{1},
+                  static_cast<size_t>(std::numeric_limits<int>::max()))) {
+            set_window(0);
+        }
+
+    protected:
+        int_type underflow() override {
+            if (gptr() < egptr()) {
+                return traits_type::to_int_type(*gptr());
+            }
+            const uint64_t pos = logical_position();
+            if (pos >= size_) {
+                return traits_type::eof();
+            }
+            set_window(pos);
+            if (gptr() < egptr()) {
+                return traits_type::to_int_type(*gptr());
+            }
+            return traits_type::eof();
+        }
+
+        std::streamsize xsgetn(char* s, std::streamsize count) override {
+            if (s == nullptr || count <= 0) {
+                return 0;
+            }
+            const uint64_t pos = logical_position();
+            if (pos >= size_) {
+                return 0;
+            }
+            const uint64_t want = static_cast<uint64_t>(count);
+            const uint64_t take = std::min(want, size_ - pos);
+            std::memcpy(s, data_ + pos, static_cast<size_t>(take));
+            set_window(pos + take);
+            return static_cast<std::streamsize>(take);
+        }
+
+        pos_type seekoff(off_type offset, std::ios_base::seekdir direction,
+                         std::ios_base::openmode mode) override {
+            if ((mode & std::ios_base::in) == 0) {
+                return pos_type(off_type(-1));
+            }
+            uint64_t base = 0;
+            if (direction == std::ios_base::beg) {
+                base = 0;
+            } else if (direction == std::ios_base::cur) {
+                base = logical_position();
+            } else if (direction == std::ios_base::end) {
+                base = size_;
+            } else {
+                return pos_type(off_type(-1));
+            }
+
+            uint64_t target = 0;
+            if (offset >= 0) {
+                const uint64_t add = static_cast<uint64_t>(offset);
+                if (add > size_ - base) {
+                    return pos_type(off_type(-1));
+                }
+                target = base + add;
+            } else {
+                uint64_t mag = 0;
+                if (offset == std::numeric_limits<off_type>::min()) {
+                    mag = static_cast<uint64_t>(std::numeric_limits<off_type>::max()) + 1;
+                } else {
+                    mag = static_cast<uint64_t>(-offset);
+                }
+                if (mag > base) {
+                    return pos_type(off_type(-1));
+                }
+                target = base - mag;
+            }
+
+            const uint64_t window_len =
+                (eback() != nullptr && egptr() != nullptr)
+                    ? static_cast<uint64_t>(egptr() - eback())
+                    : 0;
+            if (eback() != nullptr && target >= window_start_ &&
+                target <= window_start_ + window_len) {
+                setg(eback(),
+                     eback() + static_cast<std::ptrdiff_t>(target - window_start_),
+                     egptr());
+            } else {
+                set_window(target);
+            }
+            return pos_type(static_cast<off_type>(target));
+        }
+
+        pos_type seekpos(pos_type position, std::ios_base::openmode mode) override {
+            return seekoff(static_cast<off_type>(position), std::ios_base::beg, mode);
+        }
+
+    private:
+        uint64_t logical_position() const {
+            if (eback() == nullptr || gptr() == nullptr) {
+                return window_start_;
+            }
+            return window_start_ + static_cast<uint64_t>(gptr() - eback());
+        }
+
+        void set_window(uint64_t pos) {
+            window_start_ = pos > size_ ? size_ : pos;
+            if (data_ == nullptr || window_start_ >= size_) {
+                if (data_ == nullptr) {
+                    setg(nullptr, nullptr, nullptr);
+                    return;
+                }
+                char* const first = data_ + static_cast<size_t>(window_start_);
+                setg(first, first, first);
+                return;
+            }
+            const uint64_t remaining = size_ - window_start_;
+            const uint64_t count =
+                std::min(remaining, static_cast<uint64_t>(window_bytes_));
+            char* const first = data_ + static_cast<size_t>(window_start_);
+            setg(first, first, first + static_cast<std::ptrdiff_t>(count));
+        }
+
+        char* data_ = nullptr;
+        uint64_t size_ = 0;
+        uint64_t window_start_ = 0;
+        size_t window_bytes_ = 1;
+    };
 
     void serializePackedGaussians(const PackedGaussians& packed, std::ostream* out);
 

@@ -818,6 +818,35 @@ namespace {
               Compression::ByteShuffleZstdFramed);
     }
 
+    // 7-byte chunked drain of a framed payload. Get-area windows default to
+    // INT_MAX, so this exercises underflow / leftover-get-area drain rather than
+    // an INT_MAX split. Multi-record coverage is BoundedStreamMatchesReadChunkForFramedPayloads.
+    TEST(ProjectContainerReader, BoundedStreamChunkedReadsOnFramedPayload) {
+        const auto payload = patterned_payload(4096);
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "framed-chunked.licht";
+        write_framed_fixture(path, FOURCC_SPLT, 851, payload, Compression::ZstdFramed,
+                             true, false, 851);
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        const ChunkInfo& chunk = reader.chunks().front();
+        auto bounded = reader.open_bounded_stream(chunk);
+        ASSERT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
+        auto& stream = bounded->stream();
+        std::vector<std::byte> got;
+        got.reserve(payload.size());
+        while (stream) {
+            std::array<char, 7> buf{};
+            stream.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+            const auto n = stream.gcount();
+            if (n <= 0) {
+                break;
+            }
+            const auto* begin = reinterpret_cast<const std::byte*>(buf.data());
+            got.insert(got.end(), begin, begin + static_cast<std::size_t>(n));
+        }
+        EXPECT_EQ(got, payload);
+    }
+
     TEST(ProjectContainerReader, BoundedStreamReadsPayloadClassBeyondMaterializeCap) {
         TemporaryDirectory temporary;
         const fs::path path = temporary.path / "cap-stream.licht";
@@ -3221,6 +3250,36 @@ namespace {
         write_file_bytes(saveas, byte_vector("stale saveas staging"));
         write_file_bytes(saveas_lock, byte_vector("stale saveas lock"));
 
+        const fs::path other_master =
+            temporary.path / "other.licht";
+        write_file_bytes(other_master, byte_vector("foreign master"));
+        const fs::path foreign =
+            temporary.path / ".other.licht.saveas-bbbb.tmp";
+        write_file_bytes(foreign, byte_vector("foreign saveas staging"));
+        const fs::path foreign_compact =
+            temporary.path / "other.compact.1.2.3.tmp.licht";
+        write_file_bytes(foreign_compact, byte_vector("foreign compact"));
+
+        const fs::path ghost =
+            temporary.path / ".ghost.licht.saveas-xxxx.tmp";
+        auto ghost_lock = ghost;
+        ghost_lock += ".lock";
+        write_file_bytes(ghost, byte_vector("unreferenced saveas staging"));
+        write_file_bytes(ghost_lock, byte_vector("unreferenced saveas lock"));
+        const fs::path ghost_compact =
+            temporary.path / "ghost.compact.1.2.3.tmp.licht";
+        write_file_bytes(ghost_compact, byte_vector("unreferenced compact"));
+
+        const fs::path held_ghost =
+            temporary.path / ".ghost.licht.saveas-held.tmp";
+        auto held_ghost_lock = held_ghost;
+        held_ghost_lock += ".lock";
+        write_file_bytes(held_ghost, byte_vector("held ghost staging"));
+        write_file_bytes(held_ghost_lock, byte_vector("held ghost lock"));
+        auto held_ghost_lease = WriterLockLease::acquire(held_ghost);
+        ASSERT_TRUE(held_ghost_lease)
+            << lfs::format_for_developer(held_ghost_lease.error());
+
         const fs::path held_master =
             temporary.path / "startup-held.licht";
         create_single_chunk_fixture(
@@ -3240,6 +3299,14 @@ namespace {
         EXPECT_FALSE(fs::exists(master_lock));
         EXPECT_FALSE(fs::exists(saveas));
         EXPECT_FALSE(fs::exists(saveas_lock));
+        EXPECT_FALSE(fs::exists(ghost));
+        EXPECT_FALSE(fs::exists(ghost_lock));
+        EXPECT_FALSE(fs::exists(ghost_compact));
+        EXPECT_TRUE(fs::exists(other_master));
+        EXPECT_TRUE(fs::exists(foreign));
+        EXPECT_TRUE(fs::exists(foreign_compact));
+        EXPECT_TRUE(fs::exists(held_ghost));
+        EXPECT_TRUE(fs::exists(held_ghost_lock));
         EXPECT_TRUE(fs::exists(held_lock));
         EXPECT_FALSE(fs::exists(missing));
     }

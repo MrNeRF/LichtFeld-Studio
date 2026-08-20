@@ -1169,7 +1169,7 @@ namespace lfs::vis::project {
             return settings;
         }
         try {
-            std::ifstream stream(path);
+            std::ifstream stream(path, std::ios::binary);
             if (!stream) {
                 return fail<ProjectLifecycleSettings>(
                     lfs::ErrorCode::PermissionDenied,

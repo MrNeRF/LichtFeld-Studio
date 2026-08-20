@@ -2290,7 +2290,7 @@ namespace lfs::io {
 
                         const std::filesystem::path meta_path =
                             params.output_dir / "extraction_metadata.json";
-                        std::ofstream meta_file(meta_path);
+                        std::ofstream meta_file(meta_path, std::ios::binary);
                         if (meta_file) {
                             meta_file << root.dump(2);
                         }
