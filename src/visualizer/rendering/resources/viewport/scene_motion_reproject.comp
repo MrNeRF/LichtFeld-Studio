@@ -1,0 +1,51 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_depth;
+layout(set = 0, binding = 1, rg16f) uniform writeonly image2D u_motion;
+layout(set = 0, binding = 2, std140) uniform ReprojectionParams {
+    mat4 inverse_current_view_projection;
+    mat4 previous_view_projection;
+    ivec4 render_info; // xy = extent, z = flip_y
+} params;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, params.render_info.xy))) {
+        return;
+    }
+
+    float depth = texelFetch(u_depth, pixel, 0).r;
+    if (isnan(depth) || isinf(depth) || depth < 0.0 || depth >= 1.0) {
+        imageStore(u_motion, pixel, vec4(0.0));
+        return;
+    }
+
+    vec2 extent = vec2(params.render_info.xy);
+    vec2 current_ndc = 2.0 * (vec2(pixel) + vec2(0.5)) / extent - 1.0;
+    vec4 world = params.inverse_current_view_projection * vec4(current_ndc, depth, 1.0);
+    if (isnan(world.w) || isinf(world.w) || abs(world.w) <= 1e-7) {
+        imageStore(u_motion, pixel, vec4(0.0));
+        return;
+    }
+    world /= world.w;
+
+    vec4 previous_clip = params.previous_view_projection * world;
+    if (any(isnan(previous_clip.xyw)) || any(isinf(previous_clip.xyw)) ||
+        abs(previous_clip.w) <= 1e-7) {
+        imageStore(u_motion, pixel, vec4(0.0));
+        return;
+    }
+
+    vec2 previous_ndc = previous_clip.xy / previous_clip.w;
+    vec2 motion_pixels = (previous_ndc - current_ndc) * 0.5 * extent;
+    if (params.render_info.z != 0) {
+        motion_pixels.y = -motion_pixels.y;
+    }
+    imageStore(u_motion, pixel, vec4(motion_pixels, 0.0, 0.0));
+}
