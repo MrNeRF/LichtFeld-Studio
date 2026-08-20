@@ -3538,6 +3538,19 @@ namespace lfs::io::project {
                             ++iterator;
                             continue;
                         }
+                        // File-backed lazy values share a ProjectReader on
+                        // the current source. After save() onto the Save As
+                        // staging temp, originally dirty CKPT/PPIS rows are
+                        // clean refs whose reader still owns that temp.
+                        // Extracting them pins the replacement file through
+                        // atomic_replace (ReplaceFileW error 32). Owned
+                        // in-memory payloads have no reader and must still
+                        // be extracted so refresh_source_rows cannot drop
+                        // them.
+                        if (iterator->second.impl_->reader) {
+                            ++iterator;
+                            continue;
+                        }
                         auto node = from.extract(iterator++);
                         to.insert(std::move(node));
                     }

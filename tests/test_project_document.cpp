@@ -3322,6 +3322,83 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
+         SaveAsToExistingForeignProjectSucceedsWithDirtyCheckpoint) {
+        TemporaryDirectory temporary;
+        const fs::path source =
+            temporary.path / "saveas-dirty-ckpt-source.licht";
+        const fs::path destination =
+            temporary.path / "saveas-dirty-ckpt-dest.licht";
+        const Uuid checkpoint_uuid = fixed_uuid(9981);
+        write_phase_a_fixture(source);
+
+        auto foreign = make_empty_document(fixed_uuid(9982), 100);
+        ASSERT_TRUE(foreign->save(
+            destination, save_options(9983, 400)));
+
+        auto document =
+            require_result_ptr(ProjectDocument::open(source));
+        for (const auto& uuid : document->checkpoint_uuids()) {
+            EXPECT_TRUE(document->remove_checkpoint(uuid));
+        }
+        install_bound_autosave_checkpoint(
+            *document, fixed_uuid(9980), checkpoint_uuid);
+        const auto* checkpoint =
+            document->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(checkpoint, nullptr);
+        EXPECT_FALSE(checkpoint->is_clean_reference());
+        std::vector<std::byte> expected(
+            static_cast<std::size_t>(checkpoint->size()));
+        require_status(checkpoint->read_at(0, expected));
+        EXPECT_TRUE(document->dirty());
+
+        auto options = save_options(9984, 500);
+        options.commit.snapshot_uuid = checkpoint_uuid;
+        auto saved = document->save_as(destination, options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        EXPECT_FALSE(document->dirty());
+        ASSERT_TRUE(document->source_path());
+        EXPECT_EQ(
+            *document->source_path(),
+            std::filesystem::absolute(destination)
+                .lexically_normal());
+
+        for (const auto& entry :
+             fs::directory_iterator(temporary.path)) {
+            const auto name =
+                entry.path().filename().string();
+            EXPECT_EQ(name.find(".saveas-"), std::string::npos)
+                << name;
+        }
+
+        auto published =
+            require_result(ProjectReader::open(destination));
+        require_status(published.verify_all());
+        EXPECT_EQ(
+            published.superblock().project_uuid,
+            fixed_uuid(950));
+        EXPECT_NE(
+            published.find(FOURCC_CKPT, checkpoint_uuid),
+            nullptr);
+
+        const auto* rebound =
+            document->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(rebound, nullptr);
+        EXPECT_TRUE(rebound->is_clean_reference());
+        std::vector<std::byte> actual(
+            static_cast<std::size_t>(rebound->size()));
+        require_status(rebound->read_at(0, actual));
+        EXPECT_EQ(actual, expected);
+
+        auto append_options = save_options(9985, 600);
+        append_options.commit.snapshot_uuid = checkpoint_uuid;
+        auto appended =
+            document->save(destination, append_options);
+        ASSERT_TRUE(appended)
+            << lfs::format_for_developer(appended.error());
+    }
+
+    TEST(ProjectDocumentTest,
          SaveAsFailureRemovesStagingTempAndLock) {
         TemporaryDirectory temporary;
         const fs::path source =
