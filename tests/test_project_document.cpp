@@ -42,6 +42,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <unordered_set>
 #include <vector>
 
 #include <cuda_runtime.h>
@@ -3405,6 +3406,110 @@ namespace {
         EXPECT_EQ(
             saved->snapshot_uuid,
             overlay.commit().snapshot_uuid);
+    }
+
+    TEST(ProjectDocumentTest,
+         UnboundCheckpointIsRemovedWhenCapturedSceneHasNoBinding) {
+        const auto training_uuid = fixed_uuid(9970);
+        const auto checkpoint_uuid = fixed_uuid(9971);
+        auto document = make_empty_document(fixed_uuid(9972), 100);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "splat",
+                .name = "Training",
+                .child_order = 0,
+                .payload = PayloadBinding{
+                    .fourcc = "CKPT",
+                    .instance_uuid = checkpoint_uuid,
+                    .source_kind = "training",
+                },
+            }));
+        require_status(
+            document->edit_scene_graph().set_training_model_uuid(
+                training_uuid));
+        require_status(document->set_checkpoint(
+            checkpoint_uuid,
+            make_autosave_checkpoint_payload(checkpoint_uuid)));
+        ASSERT_EQ(document->checkpoint_uuids().size(), 1u);
+
+        document->edit_scene_graph() = SceneGraphChapter{};
+        Scene live;
+        auto before_prune = document->stage_hydration(live);
+        ASSERT_FALSE(before_prune);
+        EXPECT_EQ(
+            before_prune.error().code(), lfs::ErrorCode::DataLoss);
+
+        std::unordered_set<Uuid> bound;
+        if (const auto nodes = document->scene_graph().nodes();
+            nodes) {
+            for (const auto& node : *nodes) {
+                if (node.payload && node.payload->fourcc == "CKPT") {
+                    bound.insert(node.payload->instance_uuid);
+                }
+            }
+        }
+        for (const auto& uuid : document->checkpoint_uuids()) {
+            if (!bound.contains(uuid)) {
+                EXPECT_TRUE(document->remove_checkpoint(uuid));
+            }
+        }
+        EXPECT_TRUE(document->checkpoint_uuids().empty());
+
+        Scene after_scene;
+        auto after_prune = document->stage_hydration(after_scene);
+        ASSERT_TRUE(after_prune)
+            << lfs::format_for_developer(after_prune.error());
+
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "ckpt-omit-prune.licht";
+        (void)require_result(
+            document->save(path, save_options(9973, 200)));
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        EXPECT_TRUE(reopened->checkpoint_uuids().empty());
+    }
+
+    TEST(ProjectDocumentTest,
+         BoundCheckpointSurvivesWhenCapturedSceneStillBindsIt) {
+        const auto training_uuid = fixed_uuid(9974);
+        const auto checkpoint_uuid = fixed_uuid(9975);
+        auto document = make_empty_document(fixed_uuid(9976), 100);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "splat",
+                .name = "Training",
+                .child_order = 0,
+                .payload = PayloadBinding{
+                    .fourcc = "CKPT",
+                    .instance_uuid = checkpoint_uuid,
+                    .source_kind = "training",
+                },
+            }));
+        require_status(
+            document->edit_scene_graph().set_training_model_uuid(
+                training_uuid));
+        require_status(document->set_checkpoint(
+            checkpoint_uuid,
+            make_autosave_checkpoint_payload(checkpoint_uuid)));
+
+        std::unordered_set<Uuid> bound;
+        if (const auto nodes = document->scene_graph().nodes();
+            nodes) {
+            for (const auto& node : *nodes) {
+                if (node.payload && node.payload->fourcc == "CKPT") {
+                    bound.insert(node.payload->instance_uuid);
+                }
+            }
+        }
+        for (const auto& uuid : document->checkpoint_uuids()) {
+            if (!bound.contains(uuid)) {
+                static_cast<void>(document->remove_checkpoint(uuid));
+            }
+        }
+        ASSERT_EQ(document->checkpoint_uuids().size(), 1u);
+        EXPECT_EQ(document->checkpoint_uuids().front(), checkpoint_uuid);
     }
 
     TEST(ProjectDocumentTest,

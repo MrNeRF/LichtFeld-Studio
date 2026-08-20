@@ -4300,6 +4300,17 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(captured_scene).error());
         }
+        std::unordered_set<lfs::core::Uuid>
+            captured_scene_uuids;
+        if (const auto captured_nodes =
+                captured_scene->nodes();
+            captured_nodes) {
+            captured_scene_uuids.reserve(
+                captured_nodes->size());
+            for (const auto& node : *captured_nodes) {
+                captured_scene_uuids.insert(node.uuid);
+            }
+        }
         const auto old_scene_bytes =
             document_->scene_graph().to_bytes();
         const auto new_scene_bytes =
@@ -4323,6 +4334,41 @@ namespace lfs::vis::project {
                     document_->remove_checkpoint(uuid));
             }
             if (!checkpoint_uuids.empty()) {
+                cached_bound_checkpoint_iteration_.reset();
+            }
+        }
+        // Light autosave omits the unbound live training
+        // node from SCNG. Drop CKPT chapters that node no
+        // longer binds; otherwise V21 rejects the sidecar.
+        if (mode ==
+                DocumentSyncMode::
+                    LightTrainingAutosave &&
+            !omit_unbound_training.empty()) {
+            std::unordered_set<lfs::core::Uuid>
+                bound_checkpoints;
+            if (const auto nodes =
+                    document_->scene_graph().nodes();
+                nodes) {
+                for (const auto& node : *nodes) {
+                    if (node.payload &&
+                        node.payload->fourcc == "CKPT") {
+                        bound_checkpoints.insert(
+                            node.payload->instance_uuid);
+                    }
+                }
+            }
+            const auto checkpoint_uuids =
+                document_->checkpoint_uuids();
+            bool removed_any = false;
+            for (const auto& uuid : checkpoint_uuids) {
+                if (!bound_checkpoints.contains(uuid)) {
+                    static_cast<void>(
+                        document_->remove_checkpoint(
+                            uuid));
+                    removed_any = true;
+                }
+            }
+            if (removed_any) {
                 cached_bound_checkpoint_iteration_.reset();
             }
         }
@@ -4565,8 +4611,6 @@ namespace lfs::vis::project {
                 return selected_result;
             }
 
-            std::unordered_set<lfs::core::Uuid>
-                live_geometry;
             for (const auto* node :
                  scene.getNodes()) {
                 if (!node) {
@@ -4583,7 +4627,6 @@ namespace lfs::vis::project {
                 if (!geometry) {
                     continue;
                 }
-                live_geometry.insert(node->uuid);
                 if (node->payload_hydration !=
                     lfs::core::
                         PayloadHydrationState::
@@ -4618,7 +4661,7 @@ namespace lfs::vis::project {
                 selection.slices();
             for (const auto& slice :
                  old_slices) {
-                if (!live_geometry.contains(
+                if (!captured_scene_uuids.contains(
                         slice.node_uuid)) {
                     static_cast<void>(
                         selection.remove_slice(
@@ -4744,7 +4787,8 @@ namespace lfs::vis::project {
         if (!viewer_.isProjectSessionRestorePending()) {
             auto session =
                 viewer_.captureProjectSession(
-                    &staged_references, project_root);
+                    &staged_references, project_root,
+                    omit_unbound_training);
             if (!session) {
                 return lfs::Status::failure(
                     std::move(session).error());

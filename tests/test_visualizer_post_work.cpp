@@ -13,6 +13,7 @@
 #include "core/main_loop.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
+#include "gui/scene_tree_session.hpp"
 #include "gui/string_keys.hpp"
 #include "input/input_controller.hpp"
 #include "io/project_chapters.hpp"
@@ -20,6 +21,7 @@
 #include "io/project_document.hpp"
 #include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
+#include "io/session_chapters.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "python/python_runtime.hpp"
@@ -36,6 +38,7 @@
 #include "visualizer/visualizer_impl.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -989,6 +992,151 @@ namespace lfs::vis {
         EXPECT_EQ(lfs::event::EventBridge::instance().handler_count(
                       typeid(lfs::core::events::cmd::ResetTraining)),
                   0u);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           CaptureOmitsPlySequenceClipAndCollapsedUuid) {
+        using Json = lfs::io::JsonChapterDom::Json;
+        using namespace lfs::io::project;
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_NE(viewer.getGuiManager(), nullptr);
+        ASSERT_NE(viewer.getRenderingManager(), nullptr);
+        viewer.input_controller_ =
+            std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        ASSERT_NE(viewer.getInputController(), nullptr);
+
+        const auto kept_id =
+            viewer.getScene().addGroup("kept");
+        const auto omitted_id =
+            viewer.getScene().addGroup("omitted");
+        ASSERT_NE(kept_id, lfs::core::NULL_NODE);
+        ASSERT_NE(omitted_id, lfs::core::NULL_NODE);
+        const auto kept_uuid =
+            viewer.getScene().getNodeUuid(kept_id);
+        const auto omitted_uuid =
+            viewer.getScene().getNodeUuid(omitted_id);
+
+        viewer.getGuiManager()->sequencer().setPlySequence(
+            temporary_.path / "frames",
+            "omitted",
+            {temporary_.path / "frames" / "frame_0001.ply"},
+            {"frame_0001"},
+            24.0f,
+            omitted_uuid,
+            {omitted_uuid});
+        gui::SceneTreeSessionChrome chrome;
+        chrome.collapsed_uuids = {
+            omitted_uuid.to_string(),
+            kept_uuid.to_string(),
+        };
+        viewer.getGuiManager()->applySceneTreeChrome(
+            chrome);
+
+        const auto collapsed_from =
+            [](const GuiLayoutChapter& chapter) {
+                Json root = lfs::test::licht::json_root(
+                    chapter.dom());
+                std::vector<std::string> collapsed;
+                for_each_fixed_arrangement_payload(
+                    root, [&](const Json& payload) {
+                        const auto tree =
+                            payload.find("scene_tree");
+                        if (tree == payload.end() ||
+                            !tree->is_object()) {
+                            return;
+                        }
+                        const auto uuids =
+                            tree->find("collapsed_uuids");
+                        if (uuids == tree->end() ||
+                            !uuids->is_array()) {
+                            return;
+                        }
+                        collapsed = uuids->get<
+                            std::vector<std::string>>();
+                    });
+                return collapsed;
+            };
+
+        auto full = viewer.captureProjectSession();
+        ASSERT_TRUE(full)
+            << lfs::format_for_developer(full.error());
+        const Json full_seq =
+            lfs::test::licht::json_root(
+                full->sequencer.dom());
+        ASSERT_EQ(full_seq["ply_sequences"].size(), 1u);
+        EXPECT_EQ(
+            full_seq["ply_sequences"][0]["node_uuid"],
+            omitted_uuid.to_string());
+        const auto full_collapsed =
+            collapsed_from(full->gui_layout);
+        EXPECT_NE(
+            std::ranges::find(
+                full_collapsed, omitted_uuid.to_string()),
+            full_collapsed.end());
+        EXPECT_NE(
+            std::ranges::find(
+                full_collapsed, kept_uuid.to_string()),
+            full_collapsed.end());
+
+        const std::array omit = {omitted_uuid};
+        auto omitted = viewer.captureProjectSession(
+            nullptr, {}, omit);
+        ASSERT_TRUE(omitted)
+            << lfs::format_for_developer(
+                   omitted.error());
+        const Json omitted_seq =
+            lfs::test::licht::json_root(
+                omitted->sequencer.dom());
+        EXPECT_TRUE(omitted_seq["ply_sequences"].empty());
+        const auto omitted_collapsed =
+            collapsed_from(omitted->gui_layout);
+        EXPECT_EQ(
+            std::ranges::find(
+                omitted_collapsed,
+                omitted_uuid.to_string()),
+            omitted_collapsed.end());
+        EXPECT_NE(
+            std::ranges::find(
+                omitted_collapsed,
+                kept_uuid.to_string()),
+            omitted_collapsed.end());
+
+        auto document = ProjectDocument::create(
+            lfs::core::generate_uuid_v4(), 100);
+        ASSERT_TRUE(document);
+        lfs::test::licht::require_status(
+            document->edit_scene_graph().upsert_node(
+                SceneNodeRecord{
+                    .uuid = kept_uuid,
+                    .type = "group",
+                    .name = "kept",
+                    .child_order = 0,
+                }));
+        document->edit_sequencer() =
+            std::move(omitted->sequencer);
+        document->edit_gui_layout() =
+            std::move(omitted->gui_layout);
+        const auto path =
+            temporary_.path / "filtered-session.licht";
+        auto saved = document->save(
+            path,
+            ProjectDocumentSaveOptions{
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        auto reopened = ProjectDocument::open(path);
+        ASSERT_TRUE(reopened)
+            << lfs::format_for_developer(
+                   reopened.error());
+        EXPECT_EQ(
+            std::ranges::find(
+                reopened->degraded_states(),
+                ProjectDocumentDegradedState::
+                    MissingPlySequenceNode),
+            reopened->degraded_states().end());
     }
 
     TEST_F(VisualizerImplResetTest,

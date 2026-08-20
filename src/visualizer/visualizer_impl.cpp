@@ -3046,12 +3046,13 @@ namespace lfs::vis {
         lfs::io::project::ProjectSessionChapters>
     VisualizerImpl::captureProjectSession(
         lfs::io::project::ReferencesChapter* references,
-        const std::filesystem::path& project_root)
-        const {
+        const std::filesystem::path& project_root,
+        const std::span<const lfs::core::Uuid>
+            omit_node_uuids) const {
         return project::captureGuiSession(
             *this, retained_project_session_,
             camera_bookmarks_, references,
-            project_root);
+            project_root, omit_node_uuids);
     }
 
     project::GuiSessionRestoreTicket VisualizerImpl::

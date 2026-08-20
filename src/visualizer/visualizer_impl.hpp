@@ -33,6 +33,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -163,7 +164,9 @@ namespace lfs::vis {
             lfs::io::project::ReferencesChapter*
                 references = nullptr,
             const std::filesystem::path& project_root =
-                {}) const;
+                {},
+            std::span<const lfs::core::Uuid>
+                omit_node_uuids = {}) const;
         [[nodiscard]] project::GuiSessionRestoreTicket
         stagePreparedProjectSessionRestore(
             project::PreparedGuiSessionRestore prepared);
@@ -340,6 +343,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_LoadDatasetApiDoesNotDeferOrPrompt_Test;
         friend class VisualizerImplResetTest_PreTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
         friend class VisualizerImplResetTest_PostTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
+        friend class VisualizerImplResetTest_CaptureOmitsPlySequenceClipAndCollapsedUuid_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;

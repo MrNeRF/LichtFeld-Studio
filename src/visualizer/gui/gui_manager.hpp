@@ -371,6 +371,7 @@ namespace lfs::vis {
             // Native panel wrapper storage (registered with PanelRegistry)
             std::vector<std::shared_ptr<IPanel>> native_panel_storage_;
             std::shared_ptr<NativeScenePanel> native_scene_panel_;
+            SceneTreeSessionChrome pending_scene_tree_chrome_;
             uint64_t panel_frame_serial_ = 0;
             uint8_t ui_layout_settle_frames_ = 0;
             EditorContextUpdateStamp last_editor_context_update_stamp_;

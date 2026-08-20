@@ -132,6 +132,7 @@ namespace lfs::io::project {
 
     enum class ProjectDocumentDegradedState : std::uint8_t {
         MissingActiveCamera = 1,
+        MissingPlySequenceNode = 2,
     };
 
     struct ProjectDocumentSaveReport {

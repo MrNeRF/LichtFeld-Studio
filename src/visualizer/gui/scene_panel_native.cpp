@@ -1179,6 +1179,8 @@ namespace lfs::vis::gui {
                 collapsedUuidsFromIds(scene, tree_el_->collapsedIds());
             chrome.models_collapsed = tree_el_->modelsCollapsed();
             chrome.filter_text = tree_el_->filterText();
+        } else if (pending_tree_chrome_) {
+            chrome = *pending_tree_chrome_;
         }
         if (filter_input_el_) {
             chrome.filter_text =

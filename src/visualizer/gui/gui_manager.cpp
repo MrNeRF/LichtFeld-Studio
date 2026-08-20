@@ -3194,18 +3194,20 @@ namespace lfs::vis::gui {
 
     SceneTreeSessionChrome GuiManager::captureSceneTreeChrome(
         const lfs::core::Scene& scene) const {
-        return native_scene_panel_
-                   ? native_scene_panel_->captureTreeChrome(scene)
-                   : SceneTreeSessionChrome{};
+        if (native_scene_panel_)
+            return native_scene_panel_->captureTreeChrome(scene);
+        return pending_scene_tree_chrome_;
     }
 
     void GuiManager::applySceneTreeChrome(
         const SceneTreeSessionChrome& chrome) {
+        pending_scene_tree_chrome_ = chrome;
         if (native_scene_panel_)
             native_scene_panel_->applyTreeChrome(chrome);
     }
 
     void GuiManager::resetSceneTreeChrome() {
+        pending_scene_tree_chrome_ = {};
         if (native_scene_panel_)
             native_scene_panel_->resetTreeChrome();
     }

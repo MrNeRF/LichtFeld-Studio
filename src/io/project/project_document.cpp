@@ -979,6 +979,35 @@ namespace lfs::io::project {
                     }
                 }
             }
+
+            bool missing_ply_owner = false;
+            if (const auto clips =
+                    sequencer.dom().get_json("ply_sequences");
+                clips && clips->is_array()) {
+                for (const auto& clip : *clips) {
+                    if (!clip.is_object()) {
+                        continue;
+                    }
+                    const auto owner = clip.find("node_uuid");
+                    if (owner == clip.end() || owner->is_null()) {
+                        continue;
+                    }
+                    auto uuid = parse_session_uuid(
+                        *owner, "SEQR.ply_sequences.node_uuid");
+                    if (!uuid) {
+                        return lfs::Result<void>::failure(
+                            std::move(uuid).error());
+                    }
+                    if (!nodes_by_uuid.contains(*uuid)) {
+                        missing_ply_owner = true;
+                    }
+                }
+            }
+            if (missing_ply_owner) {
+                degraded_states.push_back(
+                    ProjectDocumentDegradedState::MissingPlySequenceNode);
+            }
+
             for (const auto& selected : selection.selected_node_uuids()) {
                 if (!nodes_by_uuid.contains(selected)) {
                     return fail<void>(
