@@ -485,6 +485,7 @@
     "overwrite.existing_title": "既存のプロジェクトを上書きしますか？",
     "overwrite.existing_message": "トレーニング出力先にプロジェクトファイルが既に存在します。トレーニングを開始すると上書きされます。",
     "overwrite.btn_overwrite_start": "上書きして開始",
+    "overwrite.btn_save_as_start": "名前を付けて保存…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "不透明度の正則化:",
     "losses.scale_reg": "スケールの正則化:",

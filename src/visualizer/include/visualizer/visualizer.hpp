@@ -216,6 +216,12 @@ namespace lfs::vis {
         projectPollWrite() {
             return ProjectWritePoll{};
         }
+        // True when the last ProjectSaveAs command started a write.
+        // Empty-path Save As that the user cancelled returns false.
+        [[nodiscard]] virtual bool consumeProjectSaveAsStarted() {
+            return false;
+        }
+        virtual void projectWaitWrite() {}
         virtual lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() {
             auto info = projectGetInfo();

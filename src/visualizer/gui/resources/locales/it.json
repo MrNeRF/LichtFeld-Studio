@@ -485,6 +485,7 @@
     "overwrite.existing_title": "Sovrascrivere il progetto esistente?",
     "overwrite.existing_message": "Un file di progetto esiste già nella destinazione di output dell'addestramento. Avviare l'addestramento lo sovrascriverà.",
     "overwrite.btn_overwrite_start": "Sovrascrivi e avvia",
+    "overwrite.btn_save_as_start": "Salva con nome…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Regolarizzazione opacità:",
     "losses.scale_reg": "Regolarizzazione scala:",

@@ -3187,6 +3187,14 @@ namespace lfs::vis::project {
         return startCompaction(false);
     }
 
+    void ProjectLifecycle::joinPendingWrite() {
+        // Blocks until the in-flight project write settles.
+        if (project_write_thread_.joinable()) {
+            project_write_thread_.join();
+        }
+        settleProjectWrite();
+    }
+
     void ProjectLifecycle::queueProjectWriteSettlement(
         const JobHandle handle) {
         const auto settle =

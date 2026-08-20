@@ -485,6 +485,7 @@
     "overwrite.existing_title": "Bestaand project overschrijven?",
     "overwrite.existing_message": "Er bestaat al een projectbestand op de trainingsuitvoerlocatie. Training starten overschrijft het.",
     "overwrite.btn_overwrite_start": "Overschrijven en starten",
+    "overwrite.btn_save_as_start": "Opslaan als…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Opaciteitsreg.:",
     "losses.scale_reg": "Schaalreg.:",

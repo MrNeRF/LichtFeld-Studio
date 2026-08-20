@@ -191,6 +191,7 @@ class TrainingPanel(Panel):
         self._step_repeat_last = 0.0
         self._text_bufs = {}
         self._last_project_saved_visible = False
+        self._save_as_start_generation = 0
         self._last_loss_signature = None
         self._psnr_graph_el = None
         self._last_psnr_signature = None
@@ -2237,11 +2238,14 @@ class TrainingPanel(Panel):
 
     def _show_overwrite_dialog(self, conflict):
         btn_overwrite = tr("training.overwrite.btn_overwrite_start")
+        btn_save_as = tr("training.overwrite.btn_save_as_start")
         btn_cancel = tr("training.conflict.btn_cancel")
 
-        def _on_result(button, _o=btn_overwrite):
+        def _on_result(button, _o=btn_overwrite, _s=btn_save_as):
             if button == _o:
                 self._start_after_consent()
+            elif button == _s:
+                self._save_as_then_start()
 
         if conflict >= 0:
             title = tr("training.overwrite.title")
@@ -2253,9 +2257,46 @@ class TrainingPanel(Panel):
         lf.ui.confirm_dialog(
             title,
             message,
-            [btn_overwrite, btn_cancel],
+            [btn_overwrite, btn_save_as, btn_cancel],
             _on_result,
         )
+
+    def _project_is_bound(self):
+        has_path = getattr(lf, "project_has_path", None)
+        return bool(has_path()) if callable(has_path) else False
+
+    def _invoke_project_save_as(self):
+        save_as = getattr(lf, "project_save_as", None)
+        if not callable(save_as):
+            return False
+        try:
+            return save_as("", wait=True)
+        except TypeError:
+            return save_as("")
+
+    def _save_as_then_start(self):
+        accepted = self._invoke_project_save_as()
+        if accepted is False:
+            return
+        if self._project_is_bound():
+            self._start_after_consent()
+            return
+        self._schedule_start_once_project_bound()
+
+    def _schedule_start_once_project_bound(self):
+        scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+        if not callable(scheduler):
+            return
+        self._save_as_start_generation += 1
+        generation = self._save_as_start_generation
+
+        def _on_ui():
+            if self._save_as_start_generation != generation:
+                return
+            if self._project_is_bound():
+                self._start_after_consent()
+
+        scheduler(_on_ui)
 
     def _should_offer_pc_save(self):
         scene = lf.get_scene()

@@ -486,6 +486,7 @@
     "overwrite.existing_title": "Écraser le projet existant ?",
     "overwrite.existing_message": "Un fichier projet existe déjà à l'emplacement de sortie de l'entraînement. Démarrer l'entraînement l'écrasera.",
     "overwrite.btn_overwrite_start": "Écraser et démarrer",
+    "overwrite.btn_save_as_start": "Enregistrer sous…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Rég. d'opacité :",
     "losses.scale_reg": "Rég. d'échelle :",

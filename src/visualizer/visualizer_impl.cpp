@@ -1373,6 +1373,7 @@ namespace lfs::vis {
         cmd::ProjectSaveAs::when(
             [this, publish_project_error](
                 const auto& command) {
+                project_save_as_started_ = false;
                 auto path = command.path;
                 if (path.empty()) {
                     std::string default_name =
@@ -1403,7 +1404,9 @@ namespace lfs::vis {
                         "Save Project As",
                         saved.error(),
                         gui::error_op::kSave);
+                    return;
                 }
+                project_save_as_started_ = true;
             });
 
         cmd::ProjectOpen::when(
@@ -3274,6 +3277,19 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->pollWrite();
+    }
+
+    bool VisualizerImpl::consumeProjectSaveAsStarted() {
+        const bool started = project_save_as_started_;
+        project_save_as_started_ = false;
+        return started;
+    }
+
+    void VisualizerImpl::projectWaitWrite() {
+        if (!project_lifecycle_) {
+            return;
+        }
+        project_lifecycle_->joinPendingWrite();
     }
 
     lfs::Result<ProjectMenuInfo>

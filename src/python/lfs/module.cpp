@@ -261,7 +261,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -940,7 +940,8 @@ NB_MODULE(lichtfeld, m) {
         },
         "Save the active .licht project, prompting for a path when needed");
     m.def(
-        "project_save_as", [](const std::string& path) {
+        "project_save_as",
+        [](const std::string& path, bool wait) {
             nb::gil_scoped_release release;
             const auto project_path =
                 python_utf8_path(path);
@@ -951,8 +952,47 @@ NB_MODULE(lichtfeld, m) {
                         .path = project_path}
                         .emit();
                 });
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return false;
+            }
+            const bool started =
+                viewer->consumeProjectSaveAsStarted();
+            if (!started || !wait) {
+                return started;
+            }
+            const lfs::core::TaskContext context{
+                .name =
+                    "python.project_save_as.wait",
+                .domain = lfs::ErrorDomain::Python,
+                .operation_id =
+                    lfs::OperationId::generate(),
+                .site = LFS_SOURCE_SITE_CURRENT(),
+            };
+            if (auto posted =
+                    lfs::vis::post_guarded_and_wait<
+                        void>(
+                        *viewer, context,
+                        [viewer]()
+                            -> lfs::Result<void> {
+                            viewer
+                                ->projectWaitWrite();
+                            return {};
+                        },
+                        python_viewer_shutdown_error());
+                !posted) {
+                throw std::runtime_error(
+                    std::format(
+                        "python.project_save_as.wait failed: {}",
+                        lfs::format_for_developer(
+                            posted.error())));
+            }
+            return started;
         },
-        nb::arg("path") = "", "Save the active project to a new .licht path");
+        nb::arg("path") = "",
+        nb::arg("wait") = false,
+        "Save the active project to a new .licht path");
     m.def(
         "project_open",
         [](const std::string& path,

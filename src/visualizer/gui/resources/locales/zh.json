@@ -485,6 +485,7 @@
     "overwrite.existing_title": "覆盖现有项目？",
     "overwrite.existing_message": "训练输出位置已存在项目文件。开始训练将覆盖它。",
     "overwrite.btn_overwrite_start": "覆盖并开始",
+    "overwrite.btn_save_as_start": "另存为…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "不透明度正则化:",
     "losses.scale_reg": "缩放正则化:",

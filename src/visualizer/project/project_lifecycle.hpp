@@ -157,6 +157,7 @@ namespace lfs::vis::project {
         [[nodiscard]] bool hasSourcePath() const;
         [[nodiscard]] lfs::Result<ProjectInfo> info();
         [[nodiscard]] ProjectWritePoll pollWrite();
+        void joinPendingWrite();
         [[nodiscard]] ProjectMenuInfo menuInfo() const;
         [[nodiscard]] lfs::Result<void>
         preflightSwitch(
