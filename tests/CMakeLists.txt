@@ -406,6 +406,7 @@ set(TEST_FILES
     test_render_settings_defaults.cpp
     test_scene_upscaler_registry.cpp
     test_scene_motion_contract.cpp
+    test_scene_temporal_coordinator.cpp
     test_scene_temporal_plan.cpp
     test_temporal_frame_tracker.cpp
     test_selection_rasterization_ops.cpp
