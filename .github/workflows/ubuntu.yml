@@ -203,6 +203,9 @@ jobs:
       - name: Enforce no-new-error-debt baseline
         run: python3 tools/error_debt_census.py --baseline tools/error_debt_baseline.json
 
+      - name: Enforce I/O discipline
+        run: python3 tools/check_io_discipline.py
+
       - name: Upload error-debt census
         if: always()
         uses: actions/upload-artifact@v4

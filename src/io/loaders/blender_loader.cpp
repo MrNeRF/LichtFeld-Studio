@@ -81,7 +81,7 @@ namespace lfs::io {
             LOG_DEBUG("Validation only mode for Blender/NeRF: {}", lfs::core::path_to_utf8(transforms_file));
             // Check if the transforms file is valid JSON
             std::ifstream file;
-            if (!lfs::core::open_file_for_read(transforms_file, file)) {
+            if (!lfs::core::open_file_for_read(transforms_file, std::ios::in | std::ios::binary, file)) {
                 return make_error(ErrorCode::PERMISSION_DENIED,
                                   "Cannot open transforms file for reading", transforms_file);
             }
@@ -297,7 +297,7 @@ namespace lfs::io {
 
             // Check ply_file_path in transforms.json (nerfstudio format), fallback to pointcloud.ply
             std::filesystem::path pointcloud_path;
-            if (std::ifstream file; lfs::core::open_file_for_read(transforms_file, file)) {
+            if (std::ifstream file; lfs::core::open_file_for_read(transforms_file, std::ios::in | std::ios::binary, file)) {
                 try {
                     if (const auto json = nlohmann::json::parse(file, nullptr, true, true);
                         json.contains("ply_file_path")) {

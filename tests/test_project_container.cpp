@@ -818,6 +818,35 @@ namespace {
               Compression::ByteShuffleZstdFramed);
     }
 
+    // 7-byte chunked drain of a framed payload. Get-area windows default to
+    // INT_MAX, so this exercises underflow / leftover-get-area drain rather than
+    // an INT_MAX split. Multi-record coverage is BoundedStreamMatchesReadChunkForFramedPayloads.
+    TEST(ProjectContainerReader, BoundedStreamChunkedReadsOnFramedPayload) {
+        const auto payload = patterned_payload(4096);
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "framed-chunked.licht";
+        write_framed_fixture(path, FOURCC_SPLT, 851, payload, Compression::ZstdFramed,
+                             true, false, 851);
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        const ChunkInfo& chunk = reader.chunks().front();
+        auto bounded = reader.open_bounded_stream(chunk);
+        ASSERT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
+        auto& stream = bounded->stream();
+        std::vector<std::byte> got;
+        got.reserve(payload.size());
+        while (stream) {
+            std::array<char, 7> buf{};
+            stream.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+            const auto n = stream.gcount();
+            if (n <= 0) {
+                break;
+            }
+            const auto* begin = reinterpret_cast<const std::byte*>(buf.data());
+            got.insert(got.end(), begin, begin + static_cast<std::size_t>(n));
+        }
+        EXPECT_EQ(got, payload);
+    }
+
     TEST(ProjectContainerReader, BoundedStreamReadsPayloadClassBeyondMaterializeCap) {
         TemporaryDirectory temporary;
         const fs::path path = temporary.path / "cap-stream.licht";

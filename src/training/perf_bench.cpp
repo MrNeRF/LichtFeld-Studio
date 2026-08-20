@@ -868,7 +868,7 @@ namespace lfs::training {
         std::error_code ec;
         std::filesystem::create_directories(path.parent_path(), ec);
 
-        std::ofstream out(path);
+        std::ofstream out(path, std::ios::binary);
         if (!out) {
             LOG_ERROR("PerfBench: failed to write {}", path.string());
             return;

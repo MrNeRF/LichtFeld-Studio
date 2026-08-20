@@ -14,11 +14,13 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <gtest/gtest.h>
+#include <istream>
 #include <memory>
 #include <string>
 #include <system_error>
 #include <vector>
+
+#include <gtest/gtest.h>
 
 #include "coordinate-system-adobe.h"
 #include "core/splat_data.hpp"
@@ -786,4 +788,55 @@ TEST_F(SpzFormatTest, V3ExportCarriesNoExtensions) {
     const auto loaded = load_spz(path);
     ASSERT_TRUE(loaded.has_value()) << loaded.error();
     EXPECT_EQ(loaded->size(), original.size());
+}
+
+// Tiny-window membuf: byte reads, bulk reads that cross window boundaries, EOF.
+// deserializePackedGaussians seeks (tellg / end / restore); that path is covered
+// by the seekg(0) reset and the size probe below.
+TEST(SpzMembufTest, TinyWindowByteAndBulkReads) {
+    constexpr std::size_t n = 50;
+    std::vector<uint8_t> pattern(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        pattern[i] = static_cast<uint8_t>((i * 131u) & 0xffu);
+    }
+    spz::membuf buffer(pattern.data(), pattern.size(), 7);
+    std::istream stream(&buffer);
+
+    for (std::size_t i = 0; i < n; ++i) {
+        const int ch = stream.get();
+        ASSERT_NE(ch, std::char_traits<char>::eof()) << i;
+        EXPECT_EQ(static_cast<unsigned char>(ch), pattern[i]) << i;
+    }
+    EXPECT_EQ(stream.get(), std::char_traits<char>::eof());
+
+    stream.clear();
+    stream.seekg(0);
+    ASSERT_TRUE(stream);
+    std::array<char, 20> chunk{};
+    stream.read(chunk.data(), 20);
+    ASSERT_EQ(stream.gcount(), 20);
+    ASSERT_TRUE(stream);
+    for (std::size_t i = 0; i < chunk.size(); ++i) {
+        EXPECT_EQ(static_cast<unsigned char>(chunk[i]), pattern[i]) << i;
+    }
+
+    stream.clear();
+    const std::streampos cur = stream.tellg();
+    ASSERT_NE(cur, std::streampos(-1));
+    stream.seekg(0, std::ios::end);
+    const std::streampos end = stream.tellg();
+    ASSERT_EQ(end, std::streampos(static_cast<std::streamoff>(n)));
+    stream.seekg(cur);
+    ASSERT_TRUE(stream);
+
+    stream.clear();
+    stream.seekg(static_cast<std::streamoff>(n - 5));
+    ASSERT_TRUE(stream);
+    std::array<char, 16> tail{};
+    stream.read(tail.data(), 16);
+    EXPECT_EQ(stream.gcount(), 5);
+    EXPECT_TRUE(stream.eof());
+    for (std::size_t i = 0; i < 5; ++i) {
+        EXPECT_EQ(static_cast<unsigned char>(tail[i]), pattern[n - 5 + i]) << i;
+    }
 }
