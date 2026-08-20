@@ -485,6 +485,7 @@
     "overwrite.existing_title": "Vorhandenes Projekt überschreiben?",
     "overwrite.existing_message": "Am Trainings-Ausgabeort existiert bereits eine Projektdatei. Das Starten des Trainings überschreibt sie.",
     "overwrite.btn_overwrite_start": "Überschreiben und starten",
+    "overwrite.btn_save_as_start": "Speichern unter…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Opazitätsreg.:",
     "losses.scale_reg": "Skalierungsreg.:",

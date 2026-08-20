@@ -2633,9 +2633,18 @@ namespace lfs::vis::project {
             // saveAs publishes on a worker. Join the
             // untitled create so the document has a
             // source path before the trainer is bound
-            // and training starts.
-            if (project_write_purpose_ ==
-                    ProjectWritePurpose::SaveAs &&
+            // and training starts. When the trainer is
+            // training-active (including a paused
+            // checkpoint-installed trainer), saveAs
+            // routes through startTrainingWrite with
+            // TrainingExplicitSave. jobs() exclusivity
+            // means the saveAs we just issued is the
+            // only write that can be running.
+            if ((project_write_purpose_ ==
+                     ProjectWritePurpose::SaveAs ||
+                 project_write_purpose_ ==
+                     ProjectWritePurpose::
+                         TrainingExplicitSave) &&
                 project_write_thread_.joinable()) {
                 project_write_thread_.join();
                 settleProjectWrite();
@@ -2838,7 +2847,8 @@ namespace lfs::vis::project {
             trainer->request_project_save(
                 destination, std::move(preview),
                 std::move(*context));
-        if (!trainer->has_active_train_loop() &&
+        auto* const manager = viewer_.getTrainerManager();
+        if (manager && !manager->hasLiveTrainingThread() &&
             trainer->can_flush_project_snapshot()) {
             trainer->consume_requested_project_snapshot(
                 trainer->project_snapshot_iteration());
@@ -3175,6 +3185,14 @@ namespace lfs::vis::project {
     lfs::Result<void>
     ProjectLifecycle::compact() {
         return startCompaction(false);
+    }
+
+    void ProjectLifecycle::joinPendingWrite() {
+        // Blocks until the in-flight project write settles.
+        if (project_write_thread_.joinable()) {
+            project_write_thread_.join();
+        }
+        settleProjectWrite();
     }
 
     void ProjectLifecycle::queueProjectWriteSettlement(
@@ -4603,6 +4621,8 @@ namespace lfs::vis::project {
         if (auto* trainer = viewer_.getTrainer();
             trainer &&
             viewer_.getTrainerManager() &&
+            (viewer_.getTrainerManager()->hasLiveTrainingThread() ||
+             trainer->can_flush_project_snapshot()) &&
             (viewer_.getTrainerManager()->isTrainingActive() ||
              viewer_.getTrainerManager()->isCompletionPending())) {
             if (viewer_.getTrainerManager()->isPublishingFinalSnapshot()) {
@@ -4736,6 +4756,8 @@ namespace lfs::vis::project {
         if (auto* trainer = viewer_.getTrainer();
             trainer &&
             viewer_.getTrainerManager() &&
+            (viewer_.getTrainerManager()->hasLiveTrainingThread() ||
+             trainer->can_flush_project_snapshot()) &&
             (viewer_.getTrainerManager()->isTrainingActive() ||
              viewer_.getTrainerManager()->isCompletionPending() ||
              canFlushFinishedTrainerSnapshot())) {
@@ -4785,7 +4807,8 @@ namespace lfs::vis::project {
                         *normalized,
                         std::move(preview),
                         std::move(*context));
-            if (!trainer->has_active_train_loop() &&
+            if (!viewer_.getTrainerManager()
+                     ->hasLiveTrainingThread() &&
                 trainer->can_flush_project_snapshot()) {
                 trainer
                     ->consume_requested_project_snapshot(
@@ -6575,6 +6598,21 @@ namespace lfs::vis::project {
     void ProjectLifecycle::openStartupProject(
         const std::optional<
             std::filesystem::path>& explicit_path) {
+        std::vector<std::filesystem::path> known;
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            known.reserve(settings_.mru.size());
+            for (const auto& entry : settings_.mru) {
+                known.push_back(
+                    resolveProjectMruPath(
+                        entry.last_known_path));
+            }
+        }
+        lfs::io::project::
+            sweep_stale_licht_artifacts_for_known_masters(
+                known);
+
         // Never auto-restore from MRU. Startup without an
         // explicit CLI project path leaves a blank session
         // after a clean previous session; the

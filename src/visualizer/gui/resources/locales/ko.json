@@ -485,6 +485,7 @@
     "overwrite.existing_title": "기존 프로젝트를 덮어쓸까요?",
     "overwrite.existing_message": "학습 출력 위치에 프로젝트 파일이 이미 있습니다. 학습을 시작하면 덮어씁니다.",
     "overwrite.btn_overwrite_start": "덮어쓰고 시작",
+    "overwrite.btn_save_as_start": "다른 이름으로 저장…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "불투명도 정규화:",
     "losses.scale_reg": "스케일 정규화:",

@@ -650,6 +650,13 @@ namespace lfs::vis {
         return true;
     }
 
+    bool TrainerManager::hasLiveTrainingThread() const {
+        // stopTraining's no-thread branch uses this same flag: the reaper
+        // steals training_thread_ immediately, so joinable() is not the
+        // live-worker signal.
+        return isCompletionPending();
+    }
+
     bool TrainerManager::isPausedAtCheckpointBaseline() const {
         if (!trainer_ || !checkpoint_baseline_iteration_) {
             return false;

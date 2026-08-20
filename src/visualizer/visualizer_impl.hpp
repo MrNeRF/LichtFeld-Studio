@@ -112,6 +112,8 @@ namespace lfs::vis {
         projectGetInfo() override;
         lfs::Result<ProjectWritePoll>
         projectPollWrite() override;
+        bool consumeProjectSaveAsStarted() override;
+        void projectWaitWrite() override;
         lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() override;
         lfs::Result<void>
@@ -266,9 +268,12 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
         friend class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
         friend class VisualizerImplResetTest_StartTrainingPreparesProjectAndGrantsSaves_Test;
+        friend class VisualizerImplResetTest_PausedUngrantedStartTrainingGrantsAndBinds_Test;
+        friend class VisualizerImplResetTest_PausedGrantedStartTrainingDoesNotRecreateProject_Test;
         friend class VisualizerImplResetTest_StartConflictSeesDiskCheckpointAfterTrainerReplacement_Test;
         friend class VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
         friend class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+        friend class VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
         friend class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
         friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
@@ -505,6 +510,7 @@ namespace lfs::vis {
         bool startup_plugin_preload_started_ = false;
         bool startup_project_open_attempted_ = false;
         bool close_save_notice_posted_ = false;
+        bool project_save_as_started_ = false;
         std::optional<std::filesystem::path>
             pending_close_save_path_;
         std::jthread force_exit_completion_watcher_;

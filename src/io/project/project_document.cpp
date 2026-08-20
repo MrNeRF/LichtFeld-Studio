@@ -7,6 +7,7 @@
 
 #include "core/logger.hpp"
 #include "io/loader.hpp"
+#include "io/project_recovery.hpp"
 #include "project_container_internal.hpp"
 #include "project_framing.hpp"
 #include "span_streambuf.hpp"
@@ -1950,6 +1951,7 @@ namespace lfs::io::project {
                 chapter_scan_finished,
                 open_finished),
             milliseconds(open_started, open_finished));
+        sweep_stale_licht_artifacts(*normalized, false);
         return ProjectDocument(std::move(impl));
     }
 
@@ -3461,8 +3463,18 @@ namespace lfs::io::project {
                         lfs::core::generate_uuid_v4().to_string());
 
         const auto remove_temporary = [&temporary] {
-            std::error_code ignored;
-            std::filesystem::remove(temporary, ignored);
+            std::error_code error;
+            if (!std::filesystem::remove(temporary, error) &&
+                error) {
+                LOG_WARN(
+                    "Could not remove Save As staging file {}: {}",
+                    temporary.string(),
+                    error.message());
+            }
+            auto lock_path = temporary;
+            lock_path += ".lock";
+            std::error_code lock_error;
+            std::filesystem::remove(lock_path, lock_error);
         };
         if (!std::filesystem::copy_file(
                 original_path, temporary,
@@ -3605,41 +3617,36 @@ namespace lfs::io::project {
         }
 
         lfs::core::Uuid expected_commit_uuid;
+        std::optional<lfs::Error> staged_failure;
         {
             auto staged_reader =
                 ProjectReader::open(temporary);
             if (!staged_reader) {
-                auto cause =
+                staged_failure =
                     std::move(staged_reader).error();
-                auto restored =
-                    rebind_preserving_dirty_lazy(
-                        original_path);
-                remove_temporary();
-                if (!restored) {
-                    return std::move(cause)
-                        .with_suppressed(
-                            std::move(restored).error());
-                }
-                return cause;
-            }
-            if (auto verified =
+            } else if (
+                auto verified =
                     staged_reader->verify_all();
                 !verified) {
-                auto cause =
+                staged_failure =
                     std::move(verified).error();
-                auto restored =
-                    rebind_preserving_dirty_lazy(
-                        original_path);
-                remove_temporary();
-                if (!restored) {
-                    return std::move(cause)
-                        .with_suppressed(
-                            std::move(restored).error());
-                }
-                return cause;
+            } else {
+                expected_commit_uuid =
+                    staged_reader->commit()
+                        .commit_uuid;
             }
-            expected_commit_uuid =
-                staged_reader->commit().commit_uuid;
+        }
+        if (staged_failure) {
+            auto restored =
+                rebind_preserving_dirty_lazy(
+                    original_path);
+            remove_temporary();
+            if (!restored) {
+                return std::move(*staged_failure)
+                    .with_suppressed(
+                        std::move(restored).error());
+            }
+            return std::move(*staged_failure);
         }
 
         auto post_save_dirty = impl_->dirty;

@@ -103,7 +103,7 @@ TEST(ArgumentParserTest, HeadlessResumeSelectsEmbeddedCheckpointFlow) {
 }
 
 TEST(ArgumentParserTest,
-     TrainingSaveProjectAtIterDefaultsToOutputProjectLicht) {
+     TrainingSaveProjectAtIterLeavesPathEmptyWithoutSaveProjectPath) {
     const auto data_path =
         make_test_path("lfs_arg_parser_save_project_data");
     const auto output_path =
@@ -125,9 +125,7 @@ TEST(ArgumentParserTest,
     EXPECT_EQ(
         (*parsed)->save_project_at_iteration,
         std::optional<size_t>(7000));
-    EXPECT_EQ(
-        (*parsed)->save_project_path,
-        std::filesystem::path(output_path) / "project.licht");
+    EXPECT_TRUE((*parsed)->save_project_path.empty());
 }
 
 TEST(ArgumentParserTest,

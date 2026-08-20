@@ -2081,7 +2081,9 @@ namespace {
             ASSERT_FALSE(second);
             EXPECT_EQ(second.error().code(), lfs::ErrorCode::Unavailable);
         }
-        EXPECT_TRUE(fs::exists(fs::path(path.string() + ".lock")));
+        const auto lock_path = fs::path(path.string() + ".lock");
+        EXPECT_FALSE(fs::exists(lock_path));
+        write_file_bytes(lock_path, byte_vector("stale lock is not authority"));
 
         ProjectWriter writer = require_result(ProjectWriter::create(
             path, fixture_create_options(403)));
@@ -3144,7 +3146,8 @@ namespace {
     }
 
     TEST(ProjectContainerWriter, InspectLeavesMasterLockFile) {
-        // Would fail if sweep started unlinking .lock siblings (O7).
+        // Would fail if inspect left a permanent {master}.lock after
+        // releasing the writer lock (O7: sweep still skips a held lock).
         TemporaryDirectory temporary;
         const fs::path master = temporary.path / "keep-lock.licht";
         create_single_chunk_fixture(
@@ -3155,7 +3158,90 @@ namespace {
             << lfs::format_for_developer(inspection.error());
         auto lock_path = master;
         lock_path += ".lock";
+        EXPECT_FALSE(fs::exists(lock_path));
+    }
+
+    TEST(ProjectContainerWriter, WriterLockReleaseDeletesLockFile) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "lock-hygiene.licht";
+        auto lock_path = path;
+        lock_path += ".lock";
+        {
+            auto lock = detail::WriterLock::acquire(path);
+            ASSERT_TRUE(lock)
+                << lfs::format_for_developer(lock.error());
+            EXPECT_TRUE(fs::exists(lock_path));
+        }
+        EXPECT_FALSE(fs::exists(lock_path));
+    }
+
+    TEST(ProjectContainerWriter,
+         WriterLockContentionLoserErrorsWinnerReleaseDeletes) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "lock-contend.licht";
+        auto lock_path = path;
+        lock_path += ".lock";
+        std::optional<detail::WriterLock> winner;
+        {
+            auto acquired = detail::WriterLock::acquire(path);
+            ASSERT_TRUE(acquired)
+                << lfs::format_for_developer(acquired.error());
+            winner.emplace(std::move(*acquired));
+        }
+        auto loser = detail::WriterLock::acquire(path);
+        ASSERT_FALSE(loser);
+        EXPECT_EQ(loser.error().code(), lfs::ErrorCode::Unavailable);
         EXPECT_TRUE(fs::exists(lock_path));
+        winner.reset();
+        EXPECT_FALSE(fs::exists(lock_path));
+        {
+            auto reacquired = detail::WriterLock::acquire(path);
+            ASSERT_TRUE(reacquired)
+                << lfs::format_for_developer(reacquired.error());
+        }
+        EXPECT_FALSE(fs::exists(lock_path));
+    }
+
+    TEST(ProjectContainerWriter,
+         StartupSweepRemovesStaleMasterLockAndSaveasTemp) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "startup-hygiene.licht";
+        create_single_chunk_fixture(
+            master, 1101, 1102, 1103, fixed_key("PROJ", 1104),
+            R"({"master":"startup-hygiene"})");
+        auto master_lock = master;
+        master_lock += ".lock";
+        write_file_bytes(master_lock, byte_vector("stale master lock"));
+        const fs::path saveas =
+            temporary.path /
+            ".startup-hygiene.licht.saveas-deadbeef.tmp";
+        auto saveas_lock = saveas;
+        saveas_lock += ".lock";
+        write_file_bytes(saveas, byte_vector("stale saveas staging"));
+        write_file_bytes(saveas_lock, byte_vector("stale saveas lock"));
+
+        const fs::path held_master =
+            temporary.path / "startup-held.licht";
+        create_single_chunk_fixture(
+            held_master, 1105, 1106, 1107, fixed_key("PROJ", 1108),
+            R"({"master":"startup-held"})");
+        auto held = WriterLockLease::acquire(held_master);
+        ASSERT_TRUE(held)
+            << lfs::format_for_developer(held.error());
+        auto held_lock = held_master;
+        held_lock += ".lock";
+        EXPECT_TRUE(fs::exists(held_lock));
+
+        const fs::path missing = temporary.path / "missing.licht";
+        sweep_stale_licht_artifacts_for_known_masters(
+            {master, held_master, missing});
+
+        EXPECT_FALSE(fs::exists(master_lock));
+        EXPECT_FALSE(fs::exists(saveas));
+        EXPECT_FALSE(fs::exists(saveas_lock));
+        EXPECT_TRUE(fs::exists(held_lock));
+        EXPECT_FALSE(fs::exists(missing));
     }
 
     TEST(ProjectContainerWriter,

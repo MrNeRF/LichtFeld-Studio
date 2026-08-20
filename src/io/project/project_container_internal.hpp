@@ -113,7 +113,7 @@ namespace lfs::io::project::detail {
         WriterLock& operator=(const WriterLock&) = delete;
         WriterLock(WriterLock&& other) noexcept;
         WriterLock& operator=(WriterLock&& other) noexcept;
-        ~WriterLock();
+        ~WriterLock() noexcept;
 
         [[nodiscard]] static lfs::Result<WriterLock>
         acquire(const std::filesystem::path& project_path);

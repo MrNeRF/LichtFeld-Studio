@@ -1373,6 +1373,7 @@ namespace lfs::vis {
         cmd::ProjectSaveAs::when(
             [this, publish_project_error](
                 const auto& command) {
+                project_save_as_started_ = false;
                 auto path = command.path;
                 if (path.empty()) {
                     std::string default_name =
@@ -1403,7 +1404,9 @@ namespace lfs::vis {
                         "Save Project As",
                         saved.error(),
                         gui::error_op::kSave);
+                    return;
                 }
+                project_save_as_started_ = true;
             });
 
         cmd::ProjectOpen::when(
@@ -3013,6 +3016,24 @@ namespace lfs::vis {
         if (!trainer_manager_)
             return std::unexpected("Trainer manager not initialized");
         if (trainer_manager_->isPaused()) {
+            if (project_lifecycle_) {
+                if (auto* const trainer = getTrainer()) {
+                    const auto policy =
+                        trainer->trainer_project_save_policy();
+                    if (!policy.on_completion &&
+                        !policy.on_stop_or_error &&
+                        !policy.at_step_boundaries) {
+                        if (auto prepared =
+                                project_lifecycle_
+                                    ->prepareTrainingStartProject();
+                            !prepared) {
+                            return std::unexpected(
+                                lfs::format_for_developer(
+                                    prepared.error()));
+                        }
+                    }
+                }
+            }
             trainer_manager_->resumeTraining();
             return {};
         }
@@ -3256,6 +3277,19 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->pollWrite();
+    }
+
+    bool VisualizerImpl::consumeProjectSaveAsStarted() {
+        const bool started = project_save_as_started_;
+        project_save_as_started_ = false;
+        return started;
+    }
+
+    void VisualizerImpl::projectWaitWrite() {
+        if (!project_lifecycle_) {
+            return;
+        }
+        project_lifecycle_->joinPendingWrite();
     }
 
     lfs::Result<ProjectMenuInfo>

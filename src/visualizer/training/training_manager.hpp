@@ -108,6 +108,9 @@ namespace lfs::vis {
         [[nodiscard]] bool isCompletionPending() const {
             return completion_pending_.load(std::memory_order_acquire);
         }
+        // True while a training worker exists (running or paused mid-run).
+        // Checkpoint-installed paused trainers have no worker.
+        [[nodiscard]] bool hasLiveTrainingThread() const;
         [[nodiscard]] bool isPublishingFinalSnapshot() const {
             return isCompletionPending() && !isTrainingActive();
         }

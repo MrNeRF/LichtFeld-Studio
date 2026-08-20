@@ -50,6 +50,7 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         assert data["training"]["options.strategy.igs_plus"] == "IGS+"
         assert "refinement.grow_until_iter" in data["training"]
         assert "tooltip.grow_until_iter" in data["training"]
+        assert data["training"]["overwrite.btn_save_as_start"]
         assert data["training_panel"]["color_red_prefix"] == "R:"
         assert data["training_panel"]["color_green_prefix"] == "G:"
         assert data["training_panel"]["color_blue_prefix"] == "B:"
@@ -979,3 +980,223 @@ def test_save_steps_editable_in_active_trainer_states(training_panel_module):
     finally:
         runtime.iteration._fallback = 0
         runtime.training_state._fallback = "idle"
+
+
+OVERWRITE_BTN = "training.overwrite.btn_overwrite_start"
+SAVE_AS_BTN = "training.overwrite.btn_save_as_start"
+CANCEL_BTN = "training.conflict.btn_cancel"
+
+
+def _overwrite_dialog_harness(training_panel_module, monkeypatch):
+    dialogs = []
+    starts = []
+    save_as_calls = []
+    scheduled = []
+    state = SimpleNamespace(has_path=False, save_as_result=True)
+
+    def confirm_dialog(title, message, buttons, callback=None):
+        dialogs.append((title, message, list(buttons), callback))
+
+    def project_save_as(path="", wait=False):
+        save_as_calls.append((path, wait))
+        return state.save_as_result
+
+    monkeypatch.setattr(
+        training_panel_module.lf.ui, "confirm_dialog", confirm_dialog, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "schedule_on_ui_thread",
+        scheduled.append,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_save_as", project_save_as, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "project_has_path",
+        lambda: state.has_path,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "start_training", lambda: starts.append(True)
+    )
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: None)
+    monkeypatch.setattr(training_panel_module.lf, "get_scene", lambda: None)
+
+    panel = training_panel_module.TrainingPanel()
+    return panel, dialogs, starts, save_as_calls, scheduled, state
+
+
+@pytest.mark.parametrize("conflict", [7000, -1])
+def test_overwrite_dialog_offers_save_as_between_overwrite_and_cancel(
+    training_panel_module, monkeypatch, conflict
+):
+    panel, dialogs, _starts, _save_as_calls, _scheduled, _state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+
+    panel._show_overwrite_dialog(conflict)
+
+    assert len(dialogs) == 1
+    title, _message, buttons, _callback = dialogs[0]
+    assert buttons == [OVERWRITE_BTN, SAVE_AS_BTN, CANCEL_BTN]
+    if conflict >= 0:
+        assert title == "training.overwrite.title"
+    else:
+        assert title == "training.overwrite.existing_title"
+
+
+def test_overwrite_save_as_routes_through_project_save_as_and_starts_after_bind(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, scheduled, state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    panel._show_overwrite_dialog(12)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    state.save_as_result = True
+    state.has_path = True
+    callback(SAVE_AS_BTN)
+
+    assert save_as_calls == [("", True)]
+    assert starts == [True]
+    assert scheduled == []
+
+
+def test_overwrite_save_as_waits_for_fire_and_forget_save_to_bind(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, scheduled, state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    panel._show_overwrite_dialog(-1)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    state.save_as_result = True
+    state.has_path = False
+    callback(SAVE_AS_BTN)
+
+    assert save_as_calls == [("", True)]
+    assert starts == []
+    assert len(scheduled) == 1
+
+    state.has_path = True
+    scheduled[0]()
+    assert starts == [True]
+
+
+def test_overwrite_save_as_native_dialog_cancel_starts_nothing(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, scheduled, state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    panel._show_overwrite_dialog(3)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    state.save_as_result = False
+    state.has_path = False
+    callback(SAVE_AS_BTN)
+
+    assert save_as_calls == [("", True)]
+    assert starts == []
+    assert scheduled == []
+
+
+def test_overwrite_save_as_native_cancel_on_titled_project_starts_nothing(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, scheduled, state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    panel._show_overwrite_dialog(4000)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    state.save_as_result = False
+    state.has_path = True
+    callback(SAVE_AS_BTN)
+
+    assert save_as_calls == [("", True)]
+    assert starts == []
+    assert scheduled == []
+
+
+def test_overwrite_save_as_accepts_path_only_save_as_stub(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, _scheduled, state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    path_only_calls = []
+
+    def project_save_as(path=""):
+        path_only_calls.append(path)
+        return True
+
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_save_as", project_save_as, raising=False
+    )
+    panel._show_overwrite_dialog(-1)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    state.has_path = True
+    callback(SAVE_AS_BTN)
+
+    assert path_only_calls == [""]
+    assert save_as_calls == []
+    assert starts == [True]
+
+
+def test_overwrite_dialog_cancel_button_starts_nothing(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, _scheduled, _state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    panel._show_overwrite_dialog(-1)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    callback(CANCEL_BTN)
+    callback("")
+
+    assert save_as_calls == []
+    assert starts == []
+
+
+def test_overwrite_and_start_still_starts_without_save_as(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, _scheduled, _state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    panel._show_overwrite_dialog(9)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    callback(OVERWRITE_BTN)
+
+    assert save_as_calls == []
+    assert starts == [True]
+
+
+def test_action_start_opens_overwrite_dialog_instead_of_starting(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, _scheduled, _state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "training_start_overwrite_conflict",
+        lambda: 12,
+    )
+
+    panel._action_start()
+
+    assert len(dialogs) == 1
+    _title, _message, buttons, _callback = dialogs[0]
+    assert buttons == [OVERWRITE_BTN, SAVE_AS_BTN, CANCEL_BTN]
+    assert save_as_calls == []
+    assert starts == []

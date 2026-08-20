@@ -485,6 +485,7 @@
     "overwrite.existing_title": "Nadpisać istniejący projekt?",
     "overwrite.existing_message": "W lokalizacji wyjściowej treningu istnieje już plik projektu. Rozpoczęcie treningu go nadpisze.",
     "overwrite.btn_overwrite_start": "Nadpisz i rozpocznij",
+    "overwrite.btn_save_as_start": "Zapisz jako…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Reg. nieprzezroczystości:",
     "losses.scale_reg": "Reg. skali:",
