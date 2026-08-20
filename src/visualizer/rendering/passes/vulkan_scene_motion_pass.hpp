@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "rendering/scene_depth_contract.hpp"
 #include "rendering/scene_motion_contract.hpp"
 #include "rendering/temporal_frame_tracker.hpp"
 
@@ -23,6 +24,7 @@ namespace lfs::vis {
         bool enabled = false;
         VkImageView depth_view = VK_NULL_HANDLE;
         std::uint64_t depth_generation = 0;
+        SceneDepthContract depth;
         glm::mat4 inverse_current_view_projection{1.0f};
         glm::mat4 previous_view_projection{1.0f};
         glm::ivec2 render_extent{0, 0};
@@ -30,10 +32,12 @@ namespace lfs::vis {
         bool flip_y = false;
     };
 
-    [[nodiscard]] constexpr bool needsVulkanSceneMotionPreRender(
-        const VulkanSceneMotionParams& params, const bool depth_available) {
-        return params.enabled && depth_available && params.render_extent.x > 0 &&
-               params.render_extent.y > 0;
+    [[nodiscard]] inline bool canRecordVulkanSceneMotion(
+        const VulkanSceneMotionParams& params) noexcept {
+        return params.enabled && params.depth_view != VK_NULL_HANDLE && params.depth.available() &&
+               params.depth.valid() && params.depth.storage == SceneDepthStorage::VulkanImage &&
+               params.depth.encoding == SceneDepthEncoding::VulkanNdc &&
+               params.depth.matchesRenderExtent(params.render_extent);
     }
 
     [[nodiscard]] constexpr std::optional<std::size_t> temporalMotionResourceSlot(

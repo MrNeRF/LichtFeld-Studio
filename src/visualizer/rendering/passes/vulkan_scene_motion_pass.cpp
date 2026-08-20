@@ -374,7 +374,7 @@ namespace lfs::vis {
                 .render_extent = params.render_extent,
                 .flip_y = params.flip_y,
             };
-            if (command_buffer == VK_NULL_HANDLE || params.depth_view == VK_NULL_HANDLE ||
+            if (command_buffer == VK_NULL_HANDLE || !canRecordVulkanSceneMotion(params) ||
                 !reprojection.valid()) {
                 return false;
             }

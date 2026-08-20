@@ -194,12 +194,24 @@ namespace lfs::vis {
     TEST(VulkanSceneMotionContract, DisabledOrIncompleteRequestsRemainZeroCost) {
         VulkanSceneMotionParams params;
         params.render_extent = {1280, 720};
-        EXPECT_FALSE(needsVulkanSceneMotionPreRender(params, true));
+        EXPECT_FALSE(canRecordVulkanSceneMotion(params));
         params.enabled = true;
-        EXPECT_FALSE(needsVulkanSceneMotionPreRender(params, false));
-        EXPECT_TRUE(needsVulkanSceneMotionPreRender(params, true));
+        EXPECT_FALSE(canRecordVulkanSceneMotion(params));
+        params.depth_view = reinterpret_cast<VkImageView>(static_cast<std::uintptr_t>(1));
+        params.depth = makeSceneDepthContract(true,
+                                              SceneDepthStorage::VulkanImage,
+                                              SceneDepthEncoding::VulkanNdc,
+                                              params.render_extent,
+                                              0.1f,
+                                              1000.0f,
+                                              false,
+                                              false);
+        EXPECT_TRUE(canRecordVulkanSceneMotion(params));
+        params.depth.encoding = SceneDepthEncoding::LinearView;
+        EXPECT_FALSE(canRecordVulkanSceneMotion(params));
+        params.depth.encoding = SceneDepthEncoding::VulkanNdc;
         params.render_extent = {0, 720};
-        EXPECT_FALSE(needsVulkanSceneMotionPreRender(params, true));
+        EXPECT_FALSE(canRecordVulkanSceneMotion(params));
     }
 
     TEST(VulkanSceneMotionContract, ResourceSlotsAreUniquePerFrameAndView) {
