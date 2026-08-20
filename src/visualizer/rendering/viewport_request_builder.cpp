@@ -250,7 +250,12 @@ namespace lfs::vis {
                 .min = ctx.settings.depth_filter_min,
                 .max = ctx.settings.depth_filter_max,
                 .transform = ctx.settings.depth_filter_transform.inv().toMat4()};
+            filters.screen_window = lfs::rendering::SelectionScreenWindow{
+                .scale = ctx.settings.depth_filter_scale,
+                .offset_x = ctx.settings.depth_filter_offset_x,
+                .offset_y = ctx.settings.depth_filter_offset_y};
             filters.cull_outside_view_volume = ctx.settings.hide_outside_depth_box;
+            filters.dim_outside_view_volume = ctx.settings.depth_filter_viz_mode == 1;
         }
 
         void populateSelectionColors(

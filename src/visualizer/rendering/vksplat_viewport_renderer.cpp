@@ -1495,14 +1495,21 @@ namespace lfs::vis {
                 }
 
                 if (request.filters.view_volume) {
+                    const auto& screen_window = request.filters.screen_window;
                     writeVec4(dst,
                               ViewFlags,
-                              glm::vec4(1.0f,
+                              glm::vec4(screen_window ? 1.0f : 0.0f,
                                         request.filters.cull_outside_view_volume ? 1.0f : 0.0f,
-                                        0.0f,
-                                        0.0f));
-                    writeVec4(dst, ViewMin, glm::vec4(request.filters.view_volume->min, 0.0f));
-                    writeVec4(dst, ViewMax, glm::vec4(request.filters.view_volume->max, 0.0f));
+                                        request.filters.dim_outside_view_volume ? 1.0f : 0.0f,
+                                        screen_window ? screen_window->scale : 0.0f));
+                    writeVec4(dst,
+                              ViewMin,
+                              glm::vec4(request.filters.view_volume->min,
+                                        screen_window ? screen_window->offset_x : 0.0f));
+                    writeVec4(dst,
+                              ViewMax,
+                              glm::vec4(request.filters.view_volume->max,
+                                        screen_window ? screen_window->offset_y : 0.0f));
                     writeMat4Rows(dst, ViewTransform, request.filters.view_volume->transform);
                 }
 
@@ -4193,11 +4200,14 @@ namespace lfs::vis {
             request.filters.crop_region.has_value() && request.filters.crop_region->desaturate;
         const bool ellipsoid_dims =
             request.filters.ellipsoid_region.has_value() && request.filters.ellipsoid_region->desaturate;
+        const bool view_volume_dims =
+            request.filters.view_volume.has_value() && request.filters.dim_outside_view_volume;
         const bool raster_overlays_active =
             selection_enabled ||
             preview_enabled ||
             crop_dims ||
             ellipsoid_dims ||
+            view_volume_dims ||
             emphasis.dim_non_emphasized ||
             emphasis.flash_intensity > 0.0f ||
             emphasis.focused_gaussian_id >= 0 ||
