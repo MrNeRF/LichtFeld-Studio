@@ -51,6 +51,7 @@ namespace lfs::vis {
         const SceneTemporalResolveSettings& settings) noexcept {
         SceneTemporalResolveResult result{.color = sample.current};
         if (!finite(sample.current) || !finite(sample.current_pixel_center) ||
+            sample.motion_extent.x <= 0 || sample.motion_extent.y <= 0 ||
             sample.output_extent.x <= 0 || sample.output_extent.y <= 0) {
             result.color = {};
             result.rejection = SceneHistoryRejection::InvalidCurrent;
@@ -72,16 +73,18 @@ namespace lfs::vis {
             return result;
         }
 
-        const glm::vec2 previous_center = sample.current_pixel_center +
-                                          sample.current_to_previous_pixels;
-        const glm::vec2 maximum_center = glm::vec2(sample.output_extent) - glm::vec2(0.5f);
-        if (!finite(previous_center) || previous_center.x < 0.5f ||
-            previous_center.y < 0.5f || previous_center.x > maximum_center.x ||
-            previous_center.y > maximum_center.y) {
+        const glm::vec2 current_uv = sample.current_pixel_center /
+                                     glm::vec2(sample.output_extent);
+        result.previous_uv = current_uv + sample.current_to_previous_pixels /
+                                              glm::vec2(sample.motion_extent);
+        const glm::vec2 minimum_uv = 0.5f / glm::vec2(sample.output_extent);
+        const glm::vec2 maximum_uv = 1.0f - minimum_uv;
+        if (!finite(result.previous_uv) || result.previous_uv.x < minimum_uv.x ||
+            result.previous_uv.y < minimum_uv.y || result.previous_uv.x > maximum_uv.x ||
+            result.previous_uv.y > maximum_uv.y) {
             result.rejection = SceneHistoryRejection::OutsideHistory;
             return result;
         }
-        result.previous_uv = previous_center / glm::vec2(sample.output_extent);
 
         if (sample.depth_available) {
             if (!std::isfinite(sample.current_linear_depth) ||

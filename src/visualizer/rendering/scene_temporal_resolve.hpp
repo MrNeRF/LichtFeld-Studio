@@ -45,6 +45,7 @@ namespace lfs::vis {
         glm::vec3 neighborhood_max{1.0f};
         glm::vec2 current_pixel_center{0.0f};
         glm::vec2 current_to_previous_pixels{0.0f};
+        glm::ivec2 motion_extent{0, 0};
         glm::ivec2 output_extent{0, 0};
         float current_linear_depth = 0.0f;
         float history_linear_depth = 0.0f;

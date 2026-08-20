@@ -17,6 +17,7 @@ namespace lfs::vis {
                 .neighborhood_max = {0.7f, 0.8f, 0.9f},
                 .current_pixel_center = {639.5f, 359.5f},
                 .current_to_previous_pixels = {0.0f, 0.0f},
+                .motion_extent = {1280, 720},
                 .output_extent = {1280, 720},
                 .current_linear_depth = 10.0f,
                 .history_linear_depth = 10.0f,
@@ -93,6 +94,22 @@ namespace lfs::vis {
         moving.current_to_previous_pixels = {129.0f, 0.0f};
         EXPECT_EQ(resolveSceneTemporalSample(moving).rejection,
                   SceneHistoryRejection::InvalidMotion);
+    }
+
+    TEST(SceneTemporalResolve, RenderPixelMotionIsNormalizedBeforeOutputHistoryLookup) {
+        auto scaled = sample();
+        scaled.motion_extent = {640, 360};
+        scaled.output_extent = {1280, 720};
+        scaled.current_pixel_center = {639.5f, 359.5f};
+        scaled.current_to_previous_pixels = {32.0f, 18.0f};
+        const auto result = resolveSceneTemporalSample(scaled);
+        ASSERT_TRUE(result.usedHistory());
+        EXPECT_NEAR(result.previous_uv.x,
+                    639.5f / 1280.0f + 32.0f / 640.0f,
+                    1e-6f);
+        EXPECT_NEAR(result.previous_uv.y,
+                    359.5f / 720.0f + 18.0f / 360.0f,
+                    1e-6f);
     }
 
     TEST(SceneTemporalResolve, SanitizesWeightsAndRejectsNonFiniteData) {
