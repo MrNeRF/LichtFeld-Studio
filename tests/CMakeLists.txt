@@ -448,6 +448,7 @@ set(TEST_FILES
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp
+    test_missing_dataset_images.cpp
     test_colmap_points3d_text.cpp
     test_colmap_binary_error_taxonomy.cpp
     test_splat_simplify.cpp

@@ -571,6 +571,7 @@ end_header
 
 TEST_F(PythonIOTest, LoadTransformsDatasetCanBeCancelled) {
     const fs::path dataset_dir = temp_dir / "cancelled_transforms_dataset";
+    write_png(dataset_dir / "frame_0001.png");
     write_text_file(
         dataset_dir / "transforms_train.json",
         R"json({

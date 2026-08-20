@@ -104,6 +104,11 @@ namespace lfs::io {
         return fs::is_directory(path, ec);
     }
 
+    inline bool safe_is_regular_file(const fs::path& path) {
+        std::error_code ec;
+        return fs::is_regular_file(path, ec);
+    }
+
     // Case-insensitive file finding
     inline fs::path find_file_ci(const fs::path& dir, const std::string& target) {
         if (!safe_exists(dir) || !safe_is_directory(dir))

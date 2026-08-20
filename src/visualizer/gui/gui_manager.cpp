@@ -2484,11 +2484,13 @@ namespace lfs::vis::gui {
                         corner_depths[corner] = settings.equirectangular ? glm::length(view) : -view.z;
                     }
                     quad_visible = quad_visible && projectedQuadVisible(screen_points, panel);
-                    if (quad_visible) {
-                        thumbnail_cache.request(*camera);
-                    } else if (background_thumbnail_requests < kBackgroundThumbnailRequestsPerFrame &&
-                               thumbnail_cache.request(*camera)) {
-                        ++background_thumbnail_requests;
+                    if (camera->has_image()) {
+                        if (quad_visible) {
+                            thumbnail_cache.request(*camera);
+                        } else if (background_thumbnail_requests < kBackgroundThumbnailRequestsPerFrame &&
+                                   thumbnail_cache.request(*camera)) {
+                            ++background_thumbnail_requests;
+                        }
                     }
 
                     const auto placement = thumbnail_cache.placement(camera->uid());

@@ -44,6 +44,7 @@ namespace lfs::io {
         float _center_y = 0.f;
         std::string _image_name;
         std::filesystem::path _image_path;
+        bool _has_image = true;
         lfs::core::CameraModelType _camera_model_type = lfs::core::CameraModelType::PINHOLE;
         int _width = 0;
         int _height = 0;

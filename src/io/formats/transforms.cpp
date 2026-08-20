@@ -290,6 +290,10 @@ namespace lfs::io {
                 h = global_h;
             } else {
                 const auto image_path = GetTransformImagePath(dir_path, file_path);
+                std::error_code exists_error;
+                if (!std::filesystem::is_regular_file(image_path, exists_error)) {
+                    return {1, 1};
+                }
                 const auto info = lfs::core::get_image_info(image_path);
                 w = std::get<0>(info);
                 h = std::get<1>(info);
@@ -581,6 +585,10 @@ namespace lfs::io {
                 lfs::core::Tensor T = w2c.slice(0, 0, 3).slice(1, 3, 4).squeeze(1);
 
                 camdata._image_path = GetTransformImagePath(dir_path, frame.file_path);
+                camdata._has_image = [&] {
+                    std::error_code exists_error;
+                    return std::filesystem::is_regular_file(camdata._image_path, exists_error);
+                }();
 
                 camdata._image_name = lfs::core::path_to_utf8(camdata._image_path.filename());
 

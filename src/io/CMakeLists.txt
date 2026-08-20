@@ -222,6 +222,7 @@ add_library(lfs_io STATIC
 
         # Concrete loader implementations
         loaders/loader_utils.hpp
+        loaders/missing_dataset_images.hpp
         loaders/ply_loader.hpp
         loaders/ply_loader.cpp
         loaders/colmap_loader.hpp

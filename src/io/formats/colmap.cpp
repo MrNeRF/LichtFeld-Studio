@@ -9,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "io/atomic_output.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/loaders/missing_dataset_images.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -924,6 +925,7 @@ namespace lfs::io {
 
         std::unordered_map<std::string, size_t> basename_only_metadata_counts;
         basename_only_metadata_counts.reserve(images.size());
+        std::vector<std::string> missing_images;
 
         for (size_t i = 0; i < images.size(); ++i) {
             if (should_poll_cancel(i)) {
@@ -971,13 +973,17 @@ namespace lfs::io {
             } else if (image_lookup.ambiguous()) {
                 return make_ambiguous_image_reference_error(images_path, image.name);
             } else {
-                return make_error(
-                    ErrorCode::PATH_NOT_FOUND,
-                    std::format("Image '{}' was not found under '{}'",
-                                image.name,
-                                lfs::core::path_to_utf8(images_path)),
-                    images_path / image_rel_path);
+                missing_images.push_back(image.name);
             }
+        }
+
+        if (!images.empty() && missing_images.size() == images.size()) {
+            return make_error(
+                ErrorCode::EMPTY_DATASET,
+                format_all_dataset_images_missing_message(
+                    missing_images,
+                    lfs::core::path_to_utf8(images_path)),
+                images_path);
         }
 
         return {};
@@ -2278,6 +2284,7 @@ namespace lfs::io {
         std::vector<std::shared_ptr<Camera>> cameras;
         cameras.reserve(images.size());
         SkipTally image_tally;
+        std::vector<std::string> missing_images;
 
         RecursiveFileCache image_cache(images_path, options.cancel_requested);
         MaskDirCache mask_cache(base_path, options.cancel_requested);
@@ -2311,14 +2318,10 @@ namespace lfs::io {
                     image_path = std::move(image_lookup.path);
                 } else if (image_lookup.ambiguous()) {
                     return make_ambiguous_image_reference_error(images_path, img.name);
-                } else {
-                    return make_error(ErrorCode::PATH_NOT_FOUND,
-                                      std::format("Image '{}' was not found under '{}'",
-                                                  img.name,
-                                                  lfs::core::path_to_utf8(images_path)),
-                                      image_path);
                 }
             }
+
+            const bool image_file_present = safe_is_regular_file(image_path);
 
             auto it = cam_map.find(img.camera_id);
             if (it == cam_map.end()) {
@@ -2541,7 +2544,7 @@ namespace lfs::io {
                 }
                 return *image_info;
             };
-            if (options.load_masks && !mask_path.empty()) {
+            if (image_file_present && options.load_masks && !mask_path.empty()) {
                 auto [img_w, img_h, img_c] = get_image_info_cached();
                 auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
                 if (img_w != mask_w || img_h != mask_h) {
@@ -2552,7 +2555,7 @@ namespace lfs::io {
                                       mask_path);
                 }
             }
-            if (options.load_depths && !depth_path.empty()) {
+            if (image_file_present && options.load_depths && !depth_path.empty()) {
                 auto [img_w, img_h, img_c] = get_image_info_cached();
                 auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
                 if (!sidecar_dimensions_match_contract(depth_w,
@@ -2568,7 +2571,7 @@ namespace lfs::io {
                                       depth_path);
                 }
             }
-            if (options.load_normals && !normal_path.empty()) {
+            if (image_file_present && options.load_normals && !normal_path.empty()) {
                 auto [img_w, img_h, img_c] = get_image_info_cached();
                 auto [normal_w, normal_h, normal_c] = lfs::core::get_image_info(normal_path);
                 if (!sidecar_dimensions_match_contract(normal_w,
@@ -2605,6 +2608,10 @@ namespace lfs::io {
                 normal_path);
 
             camera->precompute_undistortion();
+            if (!image_file_present) {
+                camera->set_has_image(false);
+                missing_images.push_back(img.name);
+            }
 
             cameras.push_back(std::move(camera));
         }
@@ -2615,11 +2622,26 @@ namespace lfs::io {
                               base_path);
         }
 
+        const bool any_present_image = std::any_of(
+            cameras.begin(), cameras.end(), [](const auto& camera) { return camera->has_image(); });
+        if (!any_present_image) {
+            return make_error(
+                ErrorCode::EMPTY_DATASET,
+                format_all_dataset_images_missing_message(
+                    missing_images,
+                    lfs::core::path_to_utf8(images_path)),
+                images_path);
+        }
+
         // Compute scene center as mean of camera positions
         Tensor scene_center_tensor = Tensor::from_vector(camera_positions, {cameras.size(), 3}, Device::CPU);
         Tensor scene_center = scene_center_tensor.mean({0}, false);
 
-        LOG_INFO("Training with {} images", cameras.size());
+        const size_t training_image_count = static_cast<size_t>(
+            std::count_if(cameras.begin(), cameras.end(), [](const auto& camera) {
+                return camera->has_image();
+            }));
+        LOG_INFO("Training with {} images ({} camera records)", training_image_count, cameras.size());
         if (depth_cache.has_depth_dirs()) {
             if (depth_matched_count == 0) {
                 LOG_WARN("Depth folder found but no depth map matched any of the {} images. "
@@ -2643,6 +2665,10 @@ namespace lfs::io {
         if (auto diagnostic = image_tally.to_diagnostic(
                 lfs::ErrorCode::DataLoss, "image(s) with an unusable camera")) {
             warnings.push_back(std::move(*diagnostic));
+        }
+        if (!missing_images.empty()) {
+            warnings.push_back(missing_dataset_images_diagnostic(missing_images));
+            notify_missing_dataset_images(missing_images);
         }
         return LoadOutcome<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>{
             std::make_tuple(std::move(cameras), scene_center), std::move(warnings)};

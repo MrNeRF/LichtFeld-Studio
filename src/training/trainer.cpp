@@ -2759,6 +2759,13 @@ namespace lfs::training {
                 if (source_cameras.empty()) {
                     return std::unexpected("Scene has no active cameras enabled for training");
                 }
+                std::erase_if(source_cameras, [](const auto& camera) {
+                    return !camera || !camera->has_image();
+                });
+                if (source_cameras.empty()) {
+                    return std::unexpected(
+                        "Scene has no cameras with image files available for training");
+                }
 
                 if (params.optimization.enable_eval) {
                     for (const auto& camera : source_cameras) {
@@ -2778,6 +2785,13 @@ namespace lfs::training {
                 }
             } else if (base_dataset_) {
                 source_cameras = base_dataset_->get_cameras();
+                std::erase_if(source_cameras, [](const auto& camera) {
+                    return !camera || !camera->has_image();
+                });
+                if (source_cameras.empty()) {
+                    return std::unexpected(
+                        "Dataset has no cameras with image files available for training");
+                }
             } else {
                 return std::unexpected("No camera source available");
             }
