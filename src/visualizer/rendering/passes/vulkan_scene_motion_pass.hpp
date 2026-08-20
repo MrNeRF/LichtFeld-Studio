@@ -36,7 +36,8 @@ namespace lfs::vis {
         const VulkanSceneMotionParams& params) noexcept {
         return params.enabled && params.depth_view != VK_NULL_HANDLE && params.depth.available() &&
                params.depth.valid() && params.depth.storage == SceneDepthStorage::VulkanImage &&
-               params.depth.encoding == SceneDepthEncoding::VulkanNdc &&
+               (params.depth.encoding == SceneDepthEncoding::VulkanNdc ||
+                params.depth.encoding == SceneDepthEncoding::LinearView) &&
                params.depth.matchesRenderExtent(params.render_extent);
     }
 

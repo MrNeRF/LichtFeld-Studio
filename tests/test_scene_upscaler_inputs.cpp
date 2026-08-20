@@ -108,6 +108,30 @@ namespace lfs::vis {
                          .valid());
     }
 
+    TEST(SceneDepthContract, ConvertsLinearPerspectiveAndOrthographicDepthToVulkanNdc) {
+        auto depth = makeSceneDepthContract(true,
+                                            SceneDepthStorage::VulkanImage,
+                                            SceneDepthEncoding::LinearView,
+                                            {1280, 720},
+                                            0.1f,
+                                            1000.0f,
+                                            false,
+                                            false);
+        const auto perspective = sceneDepthToVulkanNdc(10.0f, depth);
+        ASSERT_TRUE(perspective.has_value());
+        EXPECT_NEAR(*perspective, 1000.0f / 999.9f * 0.99f, 1e-6f);
+
+        depth.orthographic = true;
+        const auto orthographic = sceneDepthToVulkanNdc(500.05f, depth);
+        ASSERT_TRUE(orthographic.has_value());
+        EXPECT_NEAR(*orthographic, 0.5f, 1e-6f);
+        EXPECT_FALSE(sceneDepthToVulkanNdc(0.0f, depth).has_value());
+
+        depth.encoding = SceneDepthEncoding::VulkanNdc;
+        EXPECT_EQ(sceneDepthToVulkanNdc(0.25f, depth), 0.25f);
+        EXPECT_FALSE(sceneDepthToVulkanNdc(1.0f, depth).has_value());
+    }
+
     TEST(SceneUpscalerInputs, ZeroCostPlanRequiresNoResources) {
         EXPECT_TRUE(validateSceneUpscalerInputs(makeSceneTemporalPlan({}, {}, {}), {}).valid());
     }

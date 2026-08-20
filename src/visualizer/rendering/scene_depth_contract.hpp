@@ -6,8 +6,10 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 
 namespace lfs::vis {
 
@@ -79,6 +81,29 @@ namespace lfs::vis {
             .orthographic = orthographic,
             .flip_y = flip_y,
         };
+    }
+
+    [[nodiscard]] inline std::optional<float> sceneDepthToVulkanNdc(
+        const float depth, const SceneDepthContract& contract) noexcept {
+        if (!contract.available() || !contract.valid() || !std::isfinite(depth)) {
+            return std::nullopt;
+        }
+        if (contract.encoding == SceneDepthEncoding::VulkanNdc) {
+            return depth >= 0.0f && depth < 1.0f ? std::optional<float>(depth) : std::nullopt;
+        }
+        if (depth <= 0.0f) {
+            return std::nullopt;
+        }
+        const float ndc = contract.orthographic
+                              ? (depth - contract.near_plane) /
+                                    (contract.far_plane - contract.near_plane)
+                              : contract.far_plane /
+                                    (contract.far_plane - contract.near_plane) *
+                                    (1.0f - contract.near_plane /
+                                                std::max(depth, contract.near_plane));
+        return std::isfinite(ndc) && ndc >= 0.0f && ndc < 1.0f
+                   ? std::optional<float>(ndc)
+                   : std::nullopt;
     }
 
 } // namespace lfs::vis

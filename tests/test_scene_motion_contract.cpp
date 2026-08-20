@@ -208,7 +208,7 @@ namespace lfs::vis {
                                               false);
         EXPECT_TRUE(canRecordVulkanSceneMotion(params));
         params.depth.encoding = SceneDepthEncoding::LinearView;
-        EXPECT_FALSE(canRecordVulkanSceneMotion(params));
+        EXPECT_TRUE(canRecordVulkanSceneMotion(params));
         params.depth.encoding = SceneDepthEncoding::VulkanNdc;
         params.render_extent = {0, 720};
         EXPECT_FALSE(canRecordVulkanSceneMotion(params));

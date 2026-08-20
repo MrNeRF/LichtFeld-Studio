@@ -27,8 +27,9 @@ namespace lfs::vis {
             glm::mat4 inverse_current_view_projection{1.0f};
             glm::mat4 previous_view_projection{1.0f};
             glm::ivec4 render_info{0};
+            glm::vec4 depth_info{0.0f};
         };
-        static_assert(sizeof(MotionUniform) == 144);
+        static_assert(sizeof(MotionUniform) == 160);
     } // namespace
 
     struct VulkanSceneMotionPass::Impl {
@@ -342,7 +343,10 @@ namespace lfs::vis {
                 .render_info = {params.render_extent.x,
                                 params.render_extent.y,
                                 params.flip_y ? 1 : 0,
-                                0},
+                                params.depth.encoding == SceneDepthEncoding::LinearView
+                                    ? (params.depth.orthographic ? 2 : 1)
+                                    : 0},
+                .depth_info = {params.depth.near_plane, params.depth.far_plane, 0.0f, 0.0f},
             };
             void* mapped = nullptr;
             if (!vk_try_bool(vmaMapMemory(allocator, frame.uniform_allocation, &mapped),
