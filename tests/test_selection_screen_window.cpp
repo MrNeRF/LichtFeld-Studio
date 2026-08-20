@@ -135,9 +135,11 @@ namespace {
         const float width = static_cast<float>(config.width);
         const float height = static_cast<float>(config.height);
 
-        // KEEP IN SYNC: the screen-window formula lives in three places — this CPU
-        // reference, vertex_shader.slang compute_splat_active_state, and
-        // filterSelectionByScreenWindowKernel (selection_ops.cu).
+        // KEEP IN SYNC: the screen-window formula lives in four places — this CPU
+        // reference, vertex_shader.slang compute_splat_active_state,
+        // filterSelectionByScreenWindowKernel (selection_ops.cu), and (rect only,
+        // no depth test) the 2D overlay in gui_manager.cpp
+        // appendCropAndFilterOverlays.
         const float half_w = 0.5f * config.scale * width;
         const float half_h = 0.5f * config.scale * height;
         const float cx = 0.5f * width + config.offset_x * (0.5f * width - half_w);

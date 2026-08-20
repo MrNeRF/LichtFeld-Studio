@@ -764,9 +764,11 @@ namespace lfs::rendering {
                 }
             }
 
-            // KEEP IN SYNC: the screen-window formula lives in three places — this
-            // kernel, vertex_shader.slang compute_splat_active_state, and the CPU
-            // reference in tests/test_selection_screen_window.cpp.
+            // KEEP IN SYNC: the screen-window formula lives in four places — this
+            // kernel, vertex_shader.slang compute_splat_active_state, the CPU
+            // reference in tests/test_selection_screen_window.cpp, and (rect only,
+            // no depth test) the 2D overlay in gui_manager.cpp
+            // appendCropAndFilterOverlays.
             // The transform/projection above is mathematically equivalent to
             // projectScreenPositionsKernel in this file; conventions differ because
             // that kernel keeps visualizer view Y and flips its sign at the

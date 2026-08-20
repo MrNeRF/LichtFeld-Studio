@@ -2594,25 +2594,35 @@ namespace lfs::vis::gui {
                                          const SceneManager* scene_manager,
                                          const GizmoState& gizmo) {
             if (settings.depth_filter_enabled) {
-                const glm::mat4 filter_to_world = settings.depth_filter_transform.toMat4();
-                appendProjectedBox(params, panel, settings,
-                                   settings.depth_filter_min,
-                                   settings.depth_filter_max,
-                                   filter_to_world,
-                                   glm::vec4(0.0f, 0.0f, 0.0f, 0.85f),
-                                   9.0f);
-                appendProjectedBox(params, panel, settings,
-                                   settings.depth_filter_min,
-                                   settings.depth_filter_max,
-                                   filter_to_world,
-                                   glm::vec4(1.0f, 1.0f, 1.0f, 0.90f),
-                                   6.0f);
-                appendProjectedBox(params, panel, settings,
-                                   settings.depth_filter_min,
-                                   settings.depth_filter_max,
-                                   filter_to_world,
-                                   glm::vec4(1.0f, 1.0f, 1.0f, 1.0f),
-                                   4.5f);
+                // KEEP IN SYNC: the screen-window formula lives in four places —
+                // this overlay (rect only, no depth test),
+                // vertex_shader.slang compute_splat_active_state,
+                // filterSelectionByScreenWindowKernel (selection_ops.cu), and the
+                // CPU reference in tests/test_selection_screen_window.cpp.
+                const float W = static_cast<float>(std::max(panel.render_size.x, 1));
+                const float H = static_cast<float>(std::max(panel.render_size.y, 1));
+                const float scale = settings.depth_filter_scale;
+                const float half_w = 0.5f * scale * W;
+                const float half_h = 0.5f * scale * H;
+                const float cx = 0.5f * W + settings.depth_filter_offset_x * (0.5f * W - half_w);
+                const float cy = 0.5f * H + settings.depth_filter_offset_y * (0.5f * H - half_h);
+                const glm::vec2 min_screen =
+                    renderToPanelScreen(panel, glm::vec2(cx - half_w, cy - half_h));
+                const glm::vec2 max_screen =
+                    renderToPanelScreen(panel, glm::vec2(cx + half_w, cy + half_h));
+                const glm::vec2 tl{min_screen.x, min_screen.y};
+                const glm::vec2 tr{max_screen.x, min_screen.y};
+                const glm::vec2 br{max_screen.x, max_screen.y};
+                const glm::vec2 bl{min_screen.x, max_screen.y};
+                const auto append_rect = [&](const glm::vec4& color, const float thickness) {
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles, params, tl, tr, color, thickness);
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles, params, tr, br, color, thickness);
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles, params, br, bl, color, thickness);
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles, params, bl, tl, color, thickness);
+                };
+                append_rect(glm::vec4(0.0f, 0.0f, 0.0f, 0.85f), 9.0f);
+                append_rect(glm::vec4(1.0f, 1.0f, 1.0f, 0.90f), 6.0f);
+                append_rect(glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), 4.5f);
             }
 
             const auto selected_cropbox_is_visible = [&]() {

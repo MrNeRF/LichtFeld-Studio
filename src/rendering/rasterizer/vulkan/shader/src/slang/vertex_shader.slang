@@ -340,9 +340,11 @@ SplatActiveState compute_splat_active_state(
     float3 projected_center = project_point(mean_ws, cam);
     float4 view_flags = overlay_params[OVERLAY_PARAM_VIEW_FLAGS];
     if (active && overlay_enabled(view_flags.x)) {
-        // KEEP IN SYNC: the screen-window formula lives in three places —
+        // KEEP IN SYNC: the screen-window formula lives in four places —
         // this block, filterSelectionByScreenWindowKernel (selection_ops.cu),
-        // and the CPU reference in tests/test_selection_screen_window.cpp.
+        // the CPU reference in tests/test_selection_screen_window.cpp, and
+        // (rect only, no depth test) the 2D overlay in gui_manager.cpp
+        // appendCropAndFilterOverlays.
         float4 vmin = overlay_params[OVERLAY_PARAM_VIEW_MIN];
         float4 vmax = overlay_params[OVERLAY_PARAM_VIEW_MAX];
         float half_w = 0.5f * view_flags.w * float(cam.W);
