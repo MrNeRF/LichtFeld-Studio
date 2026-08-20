@@ -246,6 +246,70 @@ namespace {
             restored.captureSelectionStateMetadata();
         EXPECT_EQ(metadata.next_group_id, 2);
     }
+
+    TEST(SelectionChapterTest,
+         CaptureOmitsRequestedNodesFromSelectionAndSlices) {
+        const Uuid node_a = fixed_uuid(41);
+        const Uuid node_b = fixed_uuid(42);
+        Scene scene;
+        add_splat_placeholder(
+            scene, node_a, 3, "splat a");
+        add_splat_placeholder(
+            scene, node_b, 4, "splat b");
+        scene.applyPerNodeSelectionSlices(
+            SelectionDomain::Splat,
+            {
+                {node_a, mask_tensor({1, 0, 1})},
+                {node_b, mask_tensor({0, 1, 0, 1})},
+            });
+
+        const std::array selected = {node_a, node_b};
+        auto full =
+            lfs::io::project::capture_selection_chapter(
+                scene, selected);
+        ASSERT_TRUE(full)
+            << lfs::format_for_developer(full.error());
+
+        const std::array omit = {node_b};
+        auto omitted =
+            lfs::io::project::capture_selection_chapter(
+                scene, selected, omit);
+        ASSERT_TRUE(omitted)
+            << lfs::format_for_developer(omitted.error());
+        ASSERT_EQ(omitted->slices().size(), 1);
+        EXPECT_EQ(
+            omitted->slices()[0].node_uuid, node_a);
+        EXPECT_EQ(
+            omitted->selected_node_uuids(),
+            (std::vector<Uuid>{node_a}));
+        ASSERT_EQ(
+            omitted->groups().size(),
+            full->groups().size());
+        for (std::size_t i = 0;
+             i < omitted->groups().size(); ++i) {
+            EXPECT_EQ(
+                omitted->groups()[i].id,
+                full->groups()[i].id);
+            EXPECT_EQ(
+                omitted->groups()[i].name,
+                full->groups()[i].name);
+            EXPECT_EQ(
+                omitted->groups()[i].count,
+                full->groups()[i].count);
+            EXPECT_EQ(
+                omitted->groups()[i].locked,
+                full->groups()[i].locked);
+            EXPECT_EQ(
+                omitted->groups()[i].color,
+                full->groups()[i].color);
+        }
+        EXPECT_EQ(
+            omitted->active_group_id(),
+            full->active_group_id());
+        EXPECT_EQ(
+            omitted->next_group_id(),
+            full->next_group_id());
+    }
 #endif
 
     TEST(SelectionChapterTest,

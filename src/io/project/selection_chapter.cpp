@@ -1060,7 +1060,9 @@ namespace lfs::io::project {
     lfs::Result<CapturedSelectionState> capture_selection_state(
         const lfs::core::Scene& scene,
         const std::span<const lfs::core::Uuid>
-            selected_node_uuids) {
+            selected_node_uuids,
+        const std::span<const lfs::core::Uuid>
+            omit_node_uuids) {
         CapturedSelectionState state;
         const auto metadata =
             scene.captureSelectionStateMetadata();
@@ -1077,6 +1079,11 @@ namespace lfs::io::project {
             const auto slices =
                 scene.capturePerNodeSelectionSlices(domain);
             for (const auto& [uuid, tensor] : slices) {
+                if (std::ranges::find(
+                        omit_node_uuids, uuid) !=
+                    omit_node_uuids.end()) {
+                    continue;
+                }
                 if (!tensor.is_valid() ||
                     tensor.ndim() != 1) {
                     return selection_error(
@@ -1118,6 +1125,11 @@ namespace lfs::io::project {
                  node->type == lfs::core::NodeType::KEYFRAME_GROUP)) {
                 continue;
             }
+            if (std::ranges::find(
+                    omit_node_uuids, uuid) !=
+                omit_node_uuids.end()) {
+                continue;
+            }
             state.selected_node_uuids.push_back(uuid);
         }
         return state;
@@ -1155,10 +1167,13 @@ namespace lfs::io::project {
     lfs::Result<SelectionChapter> capture_selection_chapter(
         const lfs::core::Scene& scene,
         const std::span<const lfs::core::Uuid>
-            selected_node_uuids) {
+            selected_node_uuids,
+        const std::span<const lfs::core::Uuid>
+            omit_node_uuids) {
         auto state =
             capture_selection_state(
-                scene, selected_node_uuids);
+                scene, selected_node_uuids,
+                omit_node_uuids);
         if (!state) {
             return std::move(state).error();
         }
