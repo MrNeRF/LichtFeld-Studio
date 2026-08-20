@@ -53,8 +53,12 @@ namespace lfs::vis {
         TemporalViewId view = TemporalViewId::Main;
         VkImageView current_color_view = VK_NULL_HANDLE;
         VkImageView motion_view = VK_NULL_HANDLE;
+        VkImageView current_linear_depth_view = VK_NULL_HANDLE;
+        VkImageView history_linear_depth_view = VK_NULL_HANDLE;
         VkImageLayout current_color_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         VkImageLayout motion_layout = VK_IMAGE_LAYOUT_GENERAL;
+        VkImageLayout current_depth_layout = VK_IMAGE_LAYOUT_GENERAL;
+        VkImageLayout history_depth_layout = VK_IMAGE_LAYOUT_GENERAL;
         glm::ivec2 render_extent{0, 0};
         glm::ivec2 output_extent{0, 0};
         glm::ivec2 current_allocation_extent{0, 0};
@@ -62,7 +66,22 @@ namespace lfs::vis {
         bool history_valid = false;
         float history_weight = 0.9f;
         float motion_rejection_pixels = 128.0f;
+        bool depth_available = false;
+        float depth_relative_threshold = 0.01f;
+        float depth_absolute_threshold = 1e-4f;
     };
+
+    [[nodiscard]] constexpr bool validTemporalDepthInputs(
+        const VulkanSceneTemporalResolveParams& params) noexcept {
+        return !params.depth_available ||
+               (params.current_linear_depth_view != VK_NULL_HANDLE &&
+                params.history_linear_depth_view != VK_NULL_HANDLE &&
+                params.render_extent.x > 0 && params.render_extent.y > 0 &&
+                (params.current_depth_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
+                 params.current_depth_layout == VK_IMAGE_LAYOUT_GENERAL) &&
+                (params.history_depth_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
+                 params.history_depth_layout == VK_IMAGE_LAYOUT_GENERAL));
+    }
 
     class VulkanSceneTemporalResolvePass {
     public:

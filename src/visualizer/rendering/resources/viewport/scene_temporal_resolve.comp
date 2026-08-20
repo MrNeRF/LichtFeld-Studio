@@ -9,12 +9,15 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 0) uniform sampler2D u_current;
 layout(set = 0, binding = 1) uniform sampler2D u_history;
 layout(set = 0, binding = 2) uniform sampler2D u_motion;
-layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D u_output;
+layout(set = 0, binding = 3) uniform sampler2D u_current_depth;
+layout(set = 0, binding = 4) uniform sampler2D u_history_depth;
+layout(set = 0, binding = 5, rgba16f) uniform writeonly image2D u_output;
 
 layout(push_constant) uniform ResolveParams {
     ivec4 extents;       // xy = render, zw = output
     vec4 control;        // x = history valid, y = weight, z = motion rejection pixels
     vec4 current_uv;     // xy = scale, zw = clamp max
+    vec4 depth_control;  // x = enabled, y = relative threshold, z = absolute threshold
 } params;
 
 bool finite2(vec2 value) {
@@ -47,6 +50,19 @@ void main() {
         any(greaterThan(previous_uv, vec2(1.0) - history_half_texel))) {
         imageStore(u_output, pixel, current);
         return;
+    }
+
+    if (params.depth_control.x > 0.5) {
+        float current_depth = texture(u_current_depth, output_uv).r;
+        float history_depth = texture(u_history_depth, previous_uv).r;
+        float threshold = max(params.depth_control.z,
+                              params.depth_control.y * current_depth);
+        if (isnan(current_depth) || isinf(current_depth) || !(current_depth > 0.0) ||
+            isnan(history_depth) || isinf(history_depth) || !(history_depth > 0.0) ||
+            abs(current_depth - history_depth) > threshold) {
+            imageStore(u_output, pixel, current);
+            return;
+        }
     }
 
     vec3 neighborhood_min = current.rgb;

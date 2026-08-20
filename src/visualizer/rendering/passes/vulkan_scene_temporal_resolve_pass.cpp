@@ -24,8 +24,9 @@ namespace lfs::vis {
             glm::ivec4 extents{0};
             glm::vec4 control{0.0f};
             glm::vec4 current_uv{1.0f};
+            glm::vec4 depth_control{0.0f};
         };
-        static_assert(sizeof(ResolvePush) == 48);
+        static_assert(sizeof(ResolvePush) == 64);
 
         constexpr std::size_t viewIndex(const TemporalViewId view) {
             return static_cast<std::size_t>(view);
@@ -152,12 +153,12 @@ namespace lfs::vis {
                              "Scene temporal sampler creation failed"))
                 return false;
 
-            std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
-            for (std::uint32_t index = 0; index < 3; ++index) {
+            std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
+            for (std::uint32_t index = 0; index < 5; ++index) {
                 bindings[index] = {index, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
             }
-            bindings[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
+            bindings[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
                            VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
             VkDescriptorSetLayoutCreateInfo descriptor_info{};
             descriptor_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -312,6 +313,7 @@ namespace lfs::vis {
                 params.motion_view == VK_NULL_HANDLE || params.render_extent.x <= 0 ||
                 params.render_extent.y <= 0 || params.output_extent.x <= 0 ||
                 params.output_extent.y <= 0 || current_uv == glm::vec4(0.0f) ||
+                !validTemporalDepthInputs(params) ||
                 !createStaticResources() ||
                 !ensureView(params.view, params.output_extent))
                 return false;
@@ -342,15 +344,27 @@ namespace lfs::vis {
                                                resource.has_history ? VK_IMAGE_LAYOUT_GENERAL
                                                                     : params.current_color_layout};
             VkDescriptorImageInfo motion_info{sampler, params.motion_view, params.motion_layout};
+            VkDescriptorImageInfo current_depth_info{
+                sampler,
+                params.depth_available ? params.current_linear_depth_view : params.current_color_view,
+                params.depth_available ? params.current_depth_layout : params.current_color_layout};
+            VkDescriptorImageInfo history_depth_info{
+                sampler,
+                params.depth_available ? params.history_linear_depth_view : params.current_color_view,
+                params.depth_available ? params.history_depth_layout : params.current_color_layout};
             VkDescriptorImageInfo output_info{VK_NULL_HANDLE, output.view, VK_IMAGE_LAYOUT_GENERAL};
-            std::array<VkDescriptorImageInfo*, 4> infos{
-                &current_info, &history_info, &motion_info, &output_info};
-            std::array<VkWriteDescriptorSet, 4> writes{};
+            std::array<VkDescriptorImageInfo*, 6> infos{&current_info,
+                                                        &history_info,
+                                                        &motion_info,
+                                                        &current_depth_info,
+                                                        &history_depth_info,
+                                                        &output_info};
+            std::array<VkWriteDescriptorSet, 6> writes{};
             for (std::uint32_t index = 0; index < writes.size(); ++index) {
                 writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 writes[index].dstBinding = index;
                 writes[index].descriptorCount = 1;
-                writes[index].descriptorType = index == 3
+                writes[index].descriptorType = index == 5
                                                    ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
                                                    : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 writes[index].pImageInfo = infos[index];
@@ -365,6 +379,13 @@ namespace lfs::vis {
                             std::max(0.0f, params.motion_rejection_pixels),
                             0.0f},
                 .current_uv = current_uv,
+                .depth_control = {
+                    params.depth_available && resource.has_history && params.history_valid
+                        ? 1.0f
+                        : 0.0f,
+                    std::max(0.0f, params.depth_relative_threshold),
+                    std::max(0.0f, params.depth_absolute_threshold),
+                    0.0f},
             };
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             context->vkCmdPushDescriptorSet()(command_buffer,
