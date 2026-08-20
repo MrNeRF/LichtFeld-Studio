@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "visualizer/rendering/passes/vulkan_scene_depth_history_contract.hpp"
 #include "visualizer/rendering/scene_upscaler_inputs.hpp"
 
 #include <gtest/gtest.h>
@@ -183,6 +184,59 @@ namespace lfs::vis {
             result.issues, SceneUpscalerInputIssue::MotionJitterMismatch));
         EXPECT_TRUE(hasSceneUpscalerInputIssue(result.issues,
                                                SceneUpscalerInputIssue::HistoryExtent));
+    }
+
+    TEST(VulkanSceneDepthHistoryContract, DisabledAndMalformedRequestsRemainZeroCost) {
+        VulkanSceneDepthHistoryParams params;
+        EXPECT_FALSE(canRecordVulkanSceneDepthHistory(params));
+        params.enabled = true;
+        params.current_depth_view =
+            reinterpret_cast<VkImageView>(static_cast<std::uintptr_t>(1));
+        params.depth = makeSceneDepthContract(true,
+                                              SceneDepthStorage::VulkanImage,
+                                              SceneDepthEncoding::LinearView,
+                                              {1280, 720},
+                                              0.1f,
+                                              1000.0f,
+                                              false,
+                                              false);
+        EXPECT_TRUE(canRecordVulkanSceneDepthHistory(params));
+        params.view = TemporalViewId::Count;
+        EXPECT_FALSE(canRecordVulkanSceneDepthHistory(params));
+    }
+
+    TEST(VulkanSceneDepthHistoryContract, AcceptsLinearAndNdcVulkanDepthOnly) {
+        VulkanSceneDepthHistoryParams params;
+        params.enabled = true;
+        params.current_depth_view =
+            reinterpret_cast<VkImageView>(static_cast<std::uintptr_t>(1));
+        params.depth = makeSceneDepthContract(true,
+                                              SceneDepthStorage::VulkanImage,
+                                              SceneDepthEncoding::LinearView,
+                                              {1280, 720},
+                                              0.1f,
+                                              1000.0f,
+                                              false,
+                                              false);
+        EXPECT_TRUE(canRecordVulkanSceneDepthHistory(params));
+        EXPECT_EQ(sceneDepthHistoryEncodingCode(params.depth), 1u);
+        params.depth.encoding = SceneDepthEncoding::VulkanNdc;
+        EXPECT_TRUE(canRecordVulkanSceneDepthHistory(params));
+        EXPECT_EQ(sceneDepthHistoryEncodingCode(params.depth), 2u);
+        params.depth.orthographic = true;
+        EXPECT_EQ(sceneDepthHistoryEncodingCode(params.depth), 3u);
+        params.depth.storage = SceneDepthStorage::Tensor;
+        EXPECT_FALSE(canRecordVulkanSceneDepthHistory(params));
+    }
+
+    TEST(VulkanSceneDepthHistoryContract, PaddedUvTransformIsBoundedAndRejectsOverflow) {
+        const auto transform = sceneDepthHistoryUvTransform({1100, 738}, {1152, 768});
+        ASSERT_TRUE(transform.has_value());
+        EXPECT_NEAR(transform->x, 1100.0f / 1152.0f, 1e-6f);
+        EXPECT_NEAR(transform->y, 738.0f / 768.0f, 1e-6f);
+        EXPECT_LT(transform->z, transform->x);
+        EXPECT_LT(transform->w, transform->y);
+        EXPECT_FALSE(sceneDepthHistoryUvTransform({1200, 738}, {1152, 768}).has_value());
     }
 
 } // namespace lfs::vis
