@@ -1263,7 +1263,11 @@
     "min_track_length": "Minimale spoorlengte",
     "min_track_length_hint": "Behoudt Sparse-punten die in minstens zoveel afbeeldingen zijn waargenomen. 0 schakelt de filtering uit.",
     "min_track_length_init_warning": "Wordt genegeerd zolang Init PLY is ingesteld.",
-    "apply_auto_crop": "Automatisch bijsnijden toepassen"
+    "apply_auto_crop": "Automatisch bijsnijden toepassen",
+    "save_title": "Project opslaan?",
+    "save_message": "Het huidige project opslaan voordat de nieuwe dataset wordt geladen?",
+    "save_and_load": "Opslaan en laden",
+    "load_without_saving": "Laden zonder opslaan"
   },
   "notification": {
     "dropped_not_recognized": "Het gesleepte",

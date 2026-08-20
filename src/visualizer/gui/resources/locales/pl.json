@@ -1263,7 +1263,11 @@
     "min_track_length": "Minimalna długość ścieżki",
     "min_track_length_hint": "Zachowuje punkty Sparse obserwowane w co najmniej tylu obrazach. 0 wyłącza filtrowanie.",
     "min_track_length_init_warning": "Ignorowane, gdy ustawiono Init PLY.",
-    "apply_auto_crop": "Zastosuj automatyczne kadrowanie"
+    "apply_auto_crop": "Zastosuj automatyczne kadrowanie",
+    "save_title": "Zapisać projekt?",
+    "save_message": "Zapisać bieżący projekt przed wczytaniem nowego zbioru danych?",
+    "save_and_load": "Zapisz i wczytaj",
+    "load_without_saving": "Wczytaj bez zapisywania"
   },
   "notification": {
     "dropped_not_recognized": "Upuszczony",

@@ -2817,6 +2817,141 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           LoadFileStopTrainingDefersDatasetLoad) {
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Keep until dataset load"),
+                lfs::core::NULL_NODE);
+
+            bool stop_prompted = false;
+            bool switch_prompted = false;
+            lfs::core::events::cmd::
+                ShowStopTrainingConfirmation::
+                    when([&](const auto&) {
+                        stop_prompted = true;
+                    });
+            lfs::core::events::cmd::
+                ShowProjectSwitchConfirmation::
+                    when([&](const auto&) {
+                        switch_prompted = true;
+                    });
+
+            const auto dataset_path =
+                temporary_.path / "deferred-dataset";
+            lfs::core::events::cmd::LoadFile{
+                .path = dataset_path,
+                .is_dataset = true}
+                .emit();
+            EXPECT_EQ(
+                viewer.pending_training_action_,
+                VisualizerImpl::PendingTrainingAction::
+                    None);
+
+            lfs::core::events::cmd::LoadFile{
+                .path = dataset_path,
+                .is_dataset = true,
+                .stop_training = true}
+                .emit();
+
+            EXPECT_FALSE(stop_prompted);
+            EXPECT_FALSE(switch_prompted);
+            EXPECT_EQ(
+                viewer.pending_training_action_,
+                VisualizerImpl::PendingTrainingAction::
+                    LoadDataset);
+            ASSERT_TRUE(viewer.pending_load_file_);
+            EXPECT_EQ(
+                viewer.pending_load_file_->path,
+                dataset_path);
+            EXPECT_FALSE(
+                viewer.pending_load_file_
+                    ->stop_training);
+            EXPECT_NE(
+                viewer.getScene().getNode(
+                    "Keep until dataset load"),
+                nullptr);
+
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    gui->asyncTasks()
+                        .pollImportCompletion();
+                    return viewer.pending_training_action_ ==
+                               VisualizerImpl::PendingTrainingAction::
+                                   None &&
+                           !viewer.pending_load_file_ &&
+                           !viewer.getTrainerManager()
+                                ->isTrainingActive() &&
+                           !viewer.getTrainerManager()
+                                ->isCompletionPending() &&
+                           !viewer.jobs().anyRunning(
+                               JobType::Import);
+                }));
+            EXPECT_EQ(
+                gui->asyncTasks().getImportPath(),
+                dataset_path.filename().string());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           LoadDatasetApiDoesNotDeferOrPrompt) {
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Keep on mcp load"),
+                lfs::core::NULL_NODE);
+
+            bool stop_prompted = false;
+            bool switch_prompted = false;
+            lfs::core::events::cmd::
+                ShowStopTrainingConfirmation::
+                    when([&](const auto&) {
+                        stop_prompted = true;
+                    });
+            lfs::core::events::cmd::
+                ShowProjectSwitchConfirmation::
+                    when([&](const auto&) {
+                        switch_prompted = true;
+                    });
+
+            const auto blocked = viewer.loadDataset(
+                temporary_.path / "mcp-dataset");
+            ASSERT_FALSE(blocked);
+            EXPECT_FALSE(stop_prompted);
+            EXPECT_FALSE(switch_prompted);
+            EXPECT_EQ(
+                viewer.pending_training_action_,
+                VisualizerImpl::PendingTrainingAction::
+                    None);
+            EXPECT_FALSE(viewer.pending_load_file_);
+            EXPECT_NE(
+                viewer.getScene().getNode(
+                    "Keep on mcp load"),
+                nullptr);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
            ProjectOpenApiWhileTrainingStillErrors) {
         const auto& temporary = temporary_.path;
         const auto project_path =

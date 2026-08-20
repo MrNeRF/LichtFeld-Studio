@@ -1263,7 +1263,11 @@
     "min_track_length": "Minimale Spurlänge",
     "min_track_length_hint": "Behält Sparse-Punkte, die in mindestens so vielen Bildern beobachtet wurden. 0 deaktiviert die Filterung.",
     "min_track_length_init_warning": "Wird ignoriert, solange Init PLY gesetzt ist.",
-    "apply_auto_crop": "Auto-Zuschnitt anwenden"
+    "apply_auto_crop": "Auto-Zuschnitt anwenden",
+    "save_title": "Projekt speichern?",
+    "save_message": "Aktuelles Projekt speichern, bevor der neue Datensatz geladen wird?",
+    "save_and_load": "Speichern und laden",
+    "load_without_saving": "Laden ohne Speichern"
   },
   "notification": {
     "dropped_not_recognized": "Das abgelegte",

@@ -1296,6 +1296,10 @@ namespace lfs::vis {
                 command.stop_training);
         });
 
+        cmd::LoadFile::when([this](const auto& command) {
+            deferDatasetLoadForTraining(command);
+        });
+
         const auto publish_project_error =
             [](std::string action, const auto& value,
                const char* operation) {
@@ -1347,7 +1351,8 @@ namespace lfs::vis {
             });
 
         cmd::ProjectSave::when(
-            [this, publish_project_error](const auto&) {
+            [this, publish_project_error](const auto& command) {
+                project_save_as_started_ = false;
                 auto has_path = projectHasPath();
                 if (!has_path) {
                     publish_project_error(
@@ -1363,22 +1368,29 @@ namespace lfs::vis {
                         return;
                     }
                     if (auto saved =
-                            projectSaveAsFromDialog(path, true);
+                            projectSaveAsFromDialog(
+                                path,
+                                command.regenerate_preview);
                         !saved) {
                         publish_project_error(
                             "Save Project",
                             saved.error(),
                             gui::error_op::kSave);
+                        return;
                     }
+                    project_save_as_started_ = true;
                     return;
                 }
-                if (auto saved = projectSave(true);
+                if (auto saved = projectSave(
+                        command.regenerate_preview);
                     !saved) {
                     publish_project_error(
                         "Save Project",
                         saved.error(),
                         gui::error_op::kSave);
+                    return;
                 }
+                project_save_as_started_ = true;
             });
 
         cmd::ProjectSaveAs::when(
@@ -2771,6 +2783,28 @@ namespace lfs::vis {
         }
     }
 
+    bool VisualizerImpl::deferDatasetLoadForTraining(
+        const lfs::core::events::cmd::LoadFile& cmd) {
+        if (!cmd.is_dataset || !cmd.stop_training) {
+            return false;
+        }
+        if (pending_training_action_ ==
+                PendingTrainingAction::CloseSave ||
+            pending_training_action_ ==
+                PendingTrainingAction::CloseDiscard) {
+            return true;
+        }
+        if (!shouldDeferProjectSwitchForTraining()) {
+            return false;
+        }
+        pending_load_file_ = cmd;
+        pending_load_file_->stop_training = false;
+        pending_training_action_ =
+            PendingTrainingAction::LoadDataset;
+        requestStopThenPendingAction();
+        return true;
+    }
+
     void VisualizerImpl::handleNewProject(
         const ProjectSwitchDisposition disposition,
         const bool stop_training) {
@@ -2996,6 +3030,7 @@ namespace lfs::vis {
         pending_open_path_.clear();
         pending_open_disposition_ =
             ProjectSwitchDisposition::RequireClean;
+        pending_load_file_.reset();
         gui_session_restore_.clear();
         pending_project_tools_restore_.reset();
         hydration_terminal_restore_ticket_.reset();
@@ -3619,6 +3654,17 @@ namespace lfs::vis {
             if (!path.empty()) {
                 performOpenProject(
                     path, disposition);
+            }
+            break;
+        }
+        case PendingTrainingAction::LoadDataset: {
+            auto command =
+                std::exchange(
+                    pending_load_file_,
+                    std::nullopt);
+            if (command) {
+                command->stop_training = false;
+                command->emit();
             }
             break;
         }

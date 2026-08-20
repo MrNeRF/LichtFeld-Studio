@@ -1263,7 +1263,11 @@
     "min_track_length": "최소 트랙 길이",
     "min_track_length_hint": "최소 이 수의 이미지에서 관측된 Sparse 점을 유지합니다. 0이면 필터링을 비활성화합니다.",
     "min_track_length_init_warning": "초기화 PLY가 설정된 동안에는 무시됩니다.",
-    "apply_auto_crop": "자동 자르기 적용"
+    "apply_auto_crop": "자동 자르기 적용",
+    "save_title": "프로젝트를 저장할까요?",
+    "save_message": "새 데이터셋을 불러오기 전에 현재 프로젝트를 저장할까요?",
+    "save_and_load": "저장하고 불러오기",
+    "load_without_saving": "저장하지 않고 불러오기"
   },
   "notification": {
     "dropped_not_recognized": "드롭된",

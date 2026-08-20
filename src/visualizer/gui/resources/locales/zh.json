@@ -1263,7 +1263,11 @@
     "min_track_length": "最小轨迹长度",
     "min_track_length_hint": "保留至少在这么多图像中观测到的 Sparse 点。0 可禁用筛选。",
     "min_track_length_init_warning": "设置初始 PLY 时将被忽略。",
-    "apply_auto_crop": "应用自动裁剪"
+    "apply_auto_crop": "应用自动裁剪",
+    "save_title": "保存项目？",
+    "save_message": "加载新数据集前要保存当前项目吗？",
+    "save_and_load": "保存并加载",
+    "load_without_saving": "不保存并加载"
   },
   "notification": {
     "dropped_not_recognized": "拖放的",

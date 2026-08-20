@@ -1263,7 +1263,11 @@
     "min_track_length": "Longitud mínima de pista",
     "min_track_length_hint": "Conserva los puntos Sparse observados en al menos este número de imágenes. 0 desactiva el filtrado.",
     "min_track_length_init_warning": "Se ignora mientras se haya definido Init PLY.",
-    "apply_auto_crop": "Aplicar Recorte Automático"
+    "apply_auto_crop": "Aplicar Recorte Automático",
+    "save_title": "¿Guardar el proyecto?",
+    "save_message": "¿Guardar el proyecto actual antes de cargar el nuevo dataset?",
+    "save_and_load": "Guardar y cargar",
+    "load_without_saving": "Cargar sin guardar"
   },
   "notification": {
     "dropped_not_recognized": "El elemento soltado",

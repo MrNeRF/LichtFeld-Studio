@@ -1263,7 +1263,11 @@
     "min_track_length": "最小トラック長",
     "min_track_length_hint": "少なくともこの枚数の画像で観測された Sparse 点を保持します。0 でフィルタリングを無効にします。",
     "min_track_length_init_warning": "初期化 PLY が設定されている間は無視されます。",
-    "apply_auto_crop": "自動クロップを適用"
+    "apply_auto_crop": "自動クロップを適用",
+    "save_title": "プロジェクトを保存しますか？",
+    "save_message": "新しいデータセットを読み込む前に、現在のプロジェクトを保存しますか？",
+    "save_and_load": "保存して読み込む",
+    "load_without_saving": "保存せずに読み込む"
   },
   "notification": {
     "dropped_not_recognized": "ドロップされた",

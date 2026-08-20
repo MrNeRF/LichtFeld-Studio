@@ -272,6 +272,83 @@ def _load_watch_dirs_dialog_state(folder_id: str) -> bool:
     return True
 
 
+def _training_is_active() -> bool:
+    probe = getattr(lf, "is_training_active", None)
+    if not callable(probe):
+        return False
+    try:
+        return bool(probe())
+    except Exception:
+        return False
+
+
+def _project_is_dirty() -> bool:
+    probe = getattr(lf, "project_is_dirty", None)
+    if not callable(probe):
+        return False
+    try:
+        return bool(probe())
+    except Exception:
+        return False
+
+
+def _confirm_stop_training_then(callback) -> None:
+    if not _training_is_active():
+        callback(False)
+        return
+
+    tr = lf.ui.tr
+    yes_label = tr("common.yes")
+    no_label = tr("common.no")
+
+    def _on_result(button):
+        if button == yes_label:
+            callback(True)
+
+    lf.ui.confirm_dialog(
+        tr("project_switch.stop_training_title"),
+        tr("project_switch.stop_training_message"),
+        [yes_label, no_label],
+        _on_result,
+    )
+
+
+def _save_current_project_like_close() -> bool:
+    save = getattr(lf, "project_save", None)
+    if not callable(save):
+        return False
+    try:
+        result = save(True, False)
+    except TypeError:
+        try:
+            result = save()
+        except Exception:
+            return False
+    except Exception:
+        return False
+    return result is not False
+
+
+def _confirm_save_before_dataset_load(on_save, on_discard) -> None:
+    tr = lf.ui.tr
+    save_label = tr("load_dataset_popup.save_and_load")
+    discard_label = tr("load_dataset_popup.load_without_saving")
+    cancel_label = tr("common.cancel")
+
+    def _on_result(button):
+        if button == save_label:
+            on_save()
+        elif button == discard_label:
+            on_discard()
+
+    lf.ui.confirm_dialog(
+        tr("load_dataset_popup.save_title"),
+        tr("load_dataset_popup.save_message"),
+        [save_label, discard_label, cancel_label],
+        _on_result,
+    )
+
+
 def _tr(key: str) -> str:
     return lf.ui.tr(key)
 
@@ -1185,30 +1262,54 @@ class DatasetImportPanel(_ImportDialogPanel):
         init_path = self._init_path.strip()
         ppisp_sidecar_path = self._ppisp_sidecar_path.strip()
         centralize_dataset = self._centralize_dataset
-
-        params = lf.optimization_params()
-        if params and params.has_params():
-            params.ppisp_sidecar_path = ppisp_sidecar_path
-            params.ppisp_freeze_from_sidecar = bool(ppisp_sidecar_path)
-            if ppisp_sidecar_path:
-                params.ppisp = True
-
-        lf.ui.set_panel_enabled(self.id, False)
-        register_catalog_asset_path(dataset_path, is_dataset=True, select=True)
+        output_path = self._output_path.strip()
+        max_width = self._max_width
+        apply_auto_crop = self._apply_auto_crop
+        min_track_length = self._min_track_length
         clear_scene_on_load = self._clear_scene_on_load
-        self._clear_scene_on_load = False
-        if clear_scene_on_load:
-            lf.clear_scene()
-        lf.load_file(
-            dataset_path,
-            is_dataset=True,
-            output_path=self._output_path.strip(),
-            init_path=init_path,
-            centralize_dataset=centralize_dataset,
-            max_width=self._max_width,
-            apply_auto_crop=self._apply_auto_crop,
-            min_track_length=self._min_track_length,
-        )
+
+        def _commit(stop_training: bool) -> None:
+            params = lf.optimization_params()
+            if params and params.has_params():
+                params.ppisp_sidecar_path = ppisp_sidecar_path
+                params.ppisp_freeze_from_sidecar = bool(ppisp_sidecar_path)
+                if ppisp_sidecar_path:
+                    params.ppisp = True
+
+            self._clear_scene_on_load = False
+            lf.ui.set_panel_enabled(self.id, False)
+            register_catalog_asset_path(dataset_path, is_dataset=True, select=True)
+            if clear_scene_on_load:
+                lf.clear_scene()
+            load_kwargs = {
+                "path": dataset_path,
+                "is_dataset": True,
+                "output_path": output_path,
+                "init_path": init_path,
+                "centralize_dataset": centralize_dataset,
+                "max_width": max_width,
+                "apply_auto_crop": apply_auto_crop,
+                "min_track_length": min_track_length,
+            }
+            if stop_training:
+                load_kwargs["stop_training"] = True
+            lf.load_file(**load_kwargs)
+
+        def _save_then_commit(stop_training: bool) -> None:
+            if not _save_current_project_like_close():
+                return
+            _commit(stop_training)
+
+        def _after_stop(stop_training: bool) -> None:
+            if not _project_is_dirty():
+                _commit(stop_training)
+                return
+            _confirm_save_before_dataset_load(
+                lambda: _save_then_commit(stop_training),
+                lambda: _commit(stop_training),
+            )
+
+        _confirm_stop_training_then(_after_stop)
 
     def _on_do_cancel(self, _handle=None, _ev=None, _args=None):
         self._clear_scene_on_load = False

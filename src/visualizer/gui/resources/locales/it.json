@@ -1263,7 +1263,11 @@
     "min_track_length": "Lunghezza minima traccia",
     "min_track_length_hint": "Mantiene i punti sparsi osservati in almeno questo numero di immagini. 0 disattiva il filtro.",
     "min_track_length_init_warning": "Ignorato quando è impostato Init PLY.",
-    "apply_auto_crop": "Applica ritaglio automatico"
+    "apply_auto_crop": "Applica ritaglio automatico",
+    "save_title": "Salvare il progetto?",
+    "save_message": "Salvare il progetto corrente prima di caricare il nuovo dataset?",
+    "save_and_load": "Salva e carica",
+    "load_without_saving": "Carica senza salvare"
   },
   "notification": {
     "dropped_not_recognized": "L'elemento trascinato",

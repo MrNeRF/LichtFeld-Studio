@@ -941,14 +941,60 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("discard_changes") = false, nb::arg("stop_training") = false, "Clear all project state and start a new project");
     m.def(
-        "project_save", []() {
+        "project_save",
+        [](const bool wait, const bool regenerate_preview) {
             nb::gil_scoped_release release;
             emit_project_cmd_marshaled(
-                "python.project_save", [] {
-                    lfs::core::events::cmd::ProjectSave{}
+                "python.project_save",
+                [regenerate_preview] {
+                    lfs::core::events::cmd::ProjectSave{
+                        .regenerate_preview =
+                            regenerate_preview}
                         .emit();
                 });
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return false;
+            }
+            const bool started =
+                viewer->consumeProjectSaveAsStarted();
+            if (!started || !wait) {
+                return started;
+            }
+            const lfs::core::TaskContext context{
+                .name = "python.project_save.wait",
+                .domain = lfs::ErrorDomain::Python,
+                .operation_id =
+                    lfs::OperationId::generate(),
+                .site = LFS_SOURCE_SITE_CURRENT(),
+            };
+            if (auto posted =
+                    lfs::vis::post_guarded_and_wait<
+                        void>(
+                        *viewer, context,
+                        [viewer]()
+                            -> lfs::Result<void> {
+                            viewer
+                                ->projectWaitWrite();
+                            return {};
+                        },
+                        python_viewer_shutdown_error());
+                !posted) {
+                throw std::runtime_error(
+                    std::format(
+                        "python.project_save.wait failed: {}",
+                        lfs::format_for_developer(
+                            posted.error())));
+            }
+            auto poll = viewer->projectPollWrite();
+            if (!poll) {
+                return false;
+            }
+            return poll->error.empty();
         },
+        nb::arg("wait") = false,
+        nb::arg("regenerate_preview") = true,
         "Save the active .licht project, prompting for a path when needed");
     m.def(
         "project_save_as",
@@ -1309,7 +1355,8 @@ NB_MODULE(lichtfeld, m) {
            const std::string& centralize_dataset,
            std::optional<int> max_width,
            bool apply_auto_crop,
-           std::optional<int> min_track_length) {
+           std::optional<int> min_track_length,
+           bool stop_training) {
             nb::gil_scoped_release release;
             lfs::core::events::cmd::LoadFile{
                 .path = python_utf8_path(path),
@@ -1319,7 +1366,8 @@ NB_MODULE(lichtfeld, m) {
                 .centralize_dataset = centralize_dataset,
                 .max_width = max_width,
                 .min_track_length = min_track_length,
-                .apply_auto_crop = apply_auto_crop}
+                .apply_auto_crop = apply_auto_crop,
+                .stop_training = stop_training}
                 .emit();
         },
         nb::arg("path"), nb::arg("is_dataset") = false,
@@ -1328,6 +1376,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("max_width") = nb::none(),
         nb::arg("apply_auto_crop") = false,
         nb::arg("min_track_length") = nb::none(),
+        nb::arg("stop_training") = false,
         "Load a file (PLY, checkpoint) or dataset into the scene.");
 
     m.def(

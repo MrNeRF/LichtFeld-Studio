@@ -97,6 +97,11 @@ namespace lfs::vis {
         lfs::Result<void> projectSaveAsExplicit(
             const std::filesystem::path& path,
             bool regenerate_preview = true);
+        // Interactive dataset LoadFile with stop_training: wait for the
+        // trainer, then replay the load. Returns true when the caller
+        // must not start the import now.
+        bool deferDatasetLoadForTraining(
+            const lfs::core::events::cmd::LoadFile& cmd);
         lfs::Result<ProjectOpenOutcome>
         projectOpen(
             const std::filesystem::path& path,
@@ -324,6 +329,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_NewProjectDiscardDeletesAutosaveSidecar_Test;
         friend class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
         friend class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
+        friend class VisualizerImplResetTest_LoadFileStopTrainingDefersDatasetLoad_Test;
+        friend class VisualizerImplResetTest_LoadDatasetApiDoesNotDeferOrPrompt_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;
@@ -516,6 +523,7 @@ namespace lfs::vis {
             Reset,
             NewProject,
             OpenProject,
+            LoadDataset,
             CloseSave,
             CloseDiscard,
         };
@@ -528,6 +536,8 @@ namespace lfs::vis {
         ProjectSwitchDisposition
             pending_open_disposition_ =
                 ProjectSwitchDisposition::RequireClean;
+        std::optional<lfs::core::events::cmd::LoadFile>
+            pending_load_file_;
         int pending_training_completion_refresh_frames_ = 0;
         bool gui_frame_rendered_ = false;
         bool startup_plugin_preload_started_ = false;
