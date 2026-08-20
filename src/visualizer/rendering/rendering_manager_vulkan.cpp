@@ -1737,17 +1737,12 @@ namespace lfs::vis {
         // recreate waits ring watermarks only). pauseTrainingTemporary is not
         // used on this path — other interactive wait sites keep it.
 
-        // Passive training preview: try the step-boundary render lock so densify
-        // (exclusive) never stalls the UI frame. On contention, retain the last
-        // splat image and retry on the next cadence tick. First frame / no cache
-        // falls back to a blocking acquire below.
-        // Passive training previews never wait for the step boundary. A discrete
-        // layout transition is different: it must replace the old-size output
-        // before presentation, so wait for one safe read epoch rather than
-        // stretching a cached frame or pausing the trainer.
-        const bool training_try_lock =
-            is_training && !(resize_result.render_resized_frame &&
-                             resize_result.require_immediate_output_resize);
+        // Training previews never wait for a step-boundary read, including
+        // discrete layout resizes. On contention, retain the previous matching
+        // frame and retry on the next cadence tick; the GUI commits a staged
+        // layout only after matches_viewport_extent reports a fresh output.
+        // First frame / no cache still falls back to one blocking acquire below.
+        const bool training_try_lock = is_training;
         auto render_lock = acquireLiveModelRenderLock(scene_manager, training_try_lock);
         bool render_lock_contended = training_try_lock && !render_lock.has_value() &&
                                      scene_manager && scene_manager->getTrainerManager() &&

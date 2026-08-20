@@ -60,6 +60,8 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
     class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
     class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
+    class VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
+    class VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
 
     namespace gui {
         class NativeScenePanel;
@@ -205,6 +207,8 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
+            friend class lfs::vis::VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
+            friend class lfs::vis::VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
             [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;
@@ -254,6 +258,7 @@ namespace lfs::vis {
             void queueUiVisibilityToggle();
             void requestUiVisibilityToggle();
             void updateUiVisibilityTransition();
+            void commitUiVisibilityTransition(bool matched_frame);
             void queueFullscreenToggle();
             void requestFullscreenToggle();
             void updateFullscreenTransition();

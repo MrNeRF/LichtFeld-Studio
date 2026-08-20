@@ -4604,11 +4604,11 @@ namespace lfs::vis::gui {
 
         if (ui_visibility_resize_active_) {
             if (ui_visibility_target_ready_ && !ui_visibility_layout_committed_) {
-                // A failed or unavailable renderer must not leave the UI transition
-                // half-applied. Retain the old, correctly matched layout and allow an
-                // explicit retry instead of stretching its cached image.
-                LOG_WARN("UI visibility transition timed out before a fresh viewport frame; retaining the previous layout");
-                ui_visibility_target_ready_ = false;
+                // Do not silently discard a user toggle if rendering cannot
+                // produce a matching frame before the guard expires. Commit the
+                // requested layout and let the still-dirty scene render replace
+                // the cached image on its next regular non-blocking frame.
+                commitUiVisibilityTransition(false);
             }
             ui_visibility_resize_active_ = false;
             ui_visibility_layout_committed_ = false;
@@ -6418,12 +6418,21 @@ namespace lfs::vis::gui {
             return;
         }
 
+        commitUiVisibilityTransition(true);
+    }
+
+    void GuiManager::commitUiVisibilityTransition(const bool matched_frame) {
         ui_hidden_ = ui_visibility_target_hidden_;
         viewport_layout_ = ui_visibility_target_layout_;
         ui_visibility_layout_committed_ = true;
         ui_visibility_target_ready_ = false;
-        LOG_DEBUG("UI visibility transition committed with a matching viewport frame: ui_hidden={}",
-                  ui_hidden_);
+        if (matched_frame) {
+            LOG_DEBUG("UI visibility transition committed with a matching viewport frame: ui_hidden={}",
+                      ui_hidden_);
+        } else {
+            LOG_WARN("UI visibility transition timed out before a matching viewport frame; committed the requested layout and retained the pending scene render: ui_hidden={}",
+                     ui_hidden_);
+        }
     }
 
     bool GuiManager::isViewportFocused() const {

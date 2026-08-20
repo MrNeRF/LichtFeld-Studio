@@ -804,6 +804,90 @@ namespace {
 
 namespace lfs::vis {
 
+    TEST_F(VisualizerImplResetTest,
+           UiVisibilityWaitsForMatchingFrame) {
+        VisualizerImpl viewer(projectOptions());
+        auto* const gui = viewer.getGuiManager();
+        ASSERT_NE(gui, nullptr);
+
+        gui->ui_hidden_ = false;
+        gui->viewport_layout_.pos = {20.0f, 30.0f};
+        gui->viewport_layout_.size = {640.0f, 480.0f};
+        gui->ui_visibility_resize_active_ = true;
+        gui->ui_visibility_layout_committed_ = false;
+        gui->ui_visibility_target_ready_ = true;
+        gui->ui_visibility_target_hidden_ = true;
+        gui->ui_visibility_target_layout_.pos = {0.0f, 0.0f};
+        gui->ui_visibility_target_layout_.size = {960.0f, 540.0f};
+
+        gui->commitUiVisibilityTransitionIfFrameReady(false);
+        EXPECT_FALSE(gui->ui_hidden_);
+        EXPECT_EQ(gui->viewport_layout_.pos, glm::vec2(20.0f, 30.0f));
+        EXPECT_EQ(gui->viewport_layout_.size, glm::vec2(640.0f, 480.0f));
+        EXPECT_TRUE(gui->ui_visibility_target_ready_);
+        EXPECT_FALSE(gui->ui_visibility_layout_committed_);
+
+        gui->commitUiVisibilityTransitionIfFrameReady(true);
+        EXPECT_TRUE(gui->ui_hidden_);
+        EXPECT_EQ(gui->viewport_layout_.pos, glm::vec2(0.0f, 0.0f));
+        EXPECT_EQ(gui->viewport_layout_.size, glm::vec2(960.0f, 540.0f));
+        EXPECT_FALSE(gui->ui_visibility_target_ready_);
+        EXPECT_TRUE(gui->ui_visibility_layout_committed_);
+
+        gui->ui_visibility_resize_active_ = true;
+        gui->ui_visibility_layout_committed_ = false;
+        gui->ui_visibility_target_ready_ = true;
+        gui->ui_visibility_target_hidden_ = false;
+        gui->ui_visibility_target_layout_.pos = {20.0f, 30.0f};
+        gui->ui_visibility_target_layout_.size = {640.0f, 480.0f};
+
+        gui->commitUiVisibilityTransitionIfFrameReady(false);
+        EXPECT_TRUE(gui->ui_hidden_);
+        EXPECT_EQ(gui->viewport_layout_.pos, glm::vec2(0.0f, 0.0f));
+        EXPECT_EQ(gui->viewport_layout_.size, glm::vec2(960.0f, 540.0f));
+
+        gui->commitUiVisibilityTransitionIfFrameReady(true);
+        EXPECT_FALSE(gui->ui_hidden_);
+        EXPECT_EQ(gui->viewport_layout_.pos, glm::vec2(20.0f, 30.0f));
+        EXPECT_EQ(gui->viewport_layout_.size, glm::vec2(640.0f, 480.0f));
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           UiVisibilityTimeoutCommitsRequestedLayout) {
+        VisualizerImpl viewer(projectOptions());
+        auto* const gui = viewer.getGuiManager();
+        ASSERT_NE(gui, nullptr);
+        auto* const rendering = viewer.getRenderingManager();
+        ASSERT_NE(rendering, nullptr);
+
+        gui->ui_hidden_ = false;
+        gui->viewport_layout_.pos = {25.0f, 35.0f};
+        gui->viewport_layout_.size = {640.0f, 480.0f};
+        gui->ui_visibility_resize_active_ = true;
+        gui->ui_visibility_layout_committed_ = false;
+        gui->ui_visibility_target_ready_ = true;
+        gui->ui_visibility_target_hidden_ = true;
+        gui->ui_visibility_target_layout_.pos = {0.0f, 0.0f};
+        gui->ui_visibility_target_layout_.size = {960.0f, 540.0f};
+        gui->interactive_transition_guard_until_ =
+            std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
+        rendering->setViewportResizeActive(
+            true, ViewportResizeRenderPolicy::FullResolution);
+
+        gui->updateInteractiveTransitionGuard();
+
+        EXPECT_TRUE(gui->ui_hidden_);
+        EXPECT_EQ(gui->viewport_layout_.pos, glm::vec2(0.0f, 0.0f));
+        EXPECT_EQ(gui->viewport_layout_.size, glm::vec2(960.0f, 540.0f));
+        EXPECT_FALSE(gui->ui_visibility_target_ready_);
+        EXPECT_FALSE(gui->ui_visibility_resize_active_);
+        EXPECT_FALSE(gui->ui_visibility_layout_committed_);
+        // Ending an active resize deliberately enters the short settle/debounce
+        // phase before the full viewport refresh is considered complete.
+        EXPECT_TRUE(rendering->isViewportResizeDeferring());
+        EXPECT_TRUE(rendering->hasPendingViewportResizeSettle());
+    }
+
     TEST_F(VisualizerImplResetTest, DestructorClearsSharedEventBridgeHandlers) {
         ViewerOptions options;
         options.show_startup_overlay = false;
