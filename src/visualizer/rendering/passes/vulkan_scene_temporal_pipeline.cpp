@@ -118,6 +118,12 @@ namespace lfs::vis {
                 return {.status = VulkanSceneTemporalPipelineStatus::Inactive,
                         .view = request.temporal.view};
             }
+            const auto view_projections = makeTemporalViewProjectionPair(prepared.frame);
+            if (!view_projections) {
+                return fail(prepared,
+                            VulkanSceneTemporalPipelineStatus::InvalidRequest,
+                            TemporalResetReason::Projection);
+            }
 
             if (!motion_initialized)
                 motion_initialized = motion.init(*context);
@@ -131,7 +137,11 @@ namespace lfs::vis {
                 return fail(prepared,
                             VulkanSceneTemporalPipelineStatus::InvalidRequest,
                             TemporalResetReason::InvalidInput);
-            if (!motion.record(command_buffer, request.motion, *motion_slot))
+            auto motion_params = request.motion;
+            motion_params.inverse_current_view_projection =
+                glm::inverse(view_projections->current);
+            motion_params.previous_view_projection = view_projections->previous;
+            if (!motion.record(command_buffer, motion_params, *motion_slot))
                 return fail(prepared,
                             VulkanSceneTemporalPipelineStatus::MotionFailure,
                             TemporalResetReason::ResolveFailure);

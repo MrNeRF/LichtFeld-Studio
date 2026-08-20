@@ -152,6 +152,36 @@ namespace lfs::vis {
         };
     }
 
+    std::optional<TemporalProjectionPair> makeTemporalViewProjectionPair(
+        const TemporalFrameState& state) {
+        const auto projection_for = [](const lfs::rendering::FrameView& view)
+            -> std::optional<glm::mat4> {
+            if (view.size.x <= 0 || view.size.y <= 0 || view.intrinsics_override.has_value() ||
+                !std::isfinite(view.near_plane) || !std::isfinite(view.far_plane) ||
+                view.near_plane <= 0.0f || view.far_plane <= view.near_plane) {
+                return std::nullopt;
+            }
+            return lfs::rendering::createProjectionMatrixFromFocal(
+                view.size,
+                view.focal_length_mm,
+                view.orthographic,
+                view.ortho_scale,
+                view.near_plane,
+                view.far_plane);
+        };
+        const auto current_projection = projection_for(state.current);
+        const auto previous_projection = projection_for(state.previous);
+        if (!current_projection || !previous_projection) {
+            return std::nullopt;
+        }
+        const auto projections = makeTemporalProjectionPair(
+            state, *current_projection, *previous_projection);
+        return TemporalProjectionPair{
+            .current = projections.current * state.current.getViewMatrix(),
+            .previous = projections.previous * state.previous.getViewMatrix(),
+        };
+    }
+
     std::size_t TemporalFrameTracker::index(const TemporalViewId id) {
         return static_cast<std::size_t>(id);
     }

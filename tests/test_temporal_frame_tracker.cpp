@@ -110,6 +110,42 @@ namespace lfs::vis {
         EXPECT_NEAR((pair.previous * point).x, -0.25f, 1e-6f);
     }
 
+    TEST(TemporalFrameTracker, ViewProjectionPairOwnsCameraMotionAndJitter) {
+        auto input = frameInput();
+        TemporalFrameTracker tracker;
+        tracker.commit(TemporalViewId::Main, input);
+
+        input.view.translation.x += 1.0f;
+        input.jitter = {0.125f, -0.25f};
+        const auto state = tracker.prepare(TemporalViewId::Main, input);
+        const auto pair = makeTemporalViewProjectionPair(state);
+
+        ASSERT_TRUE(pair.has_value());
+        const auto current_projection = lfs::rendering::createProjectionMatrixFromFocal(
+            state.current.size,
+            state.current.focal_length_mm,
+            state.current.orthographic,
+            state.current.ortho_scale,
+            state.current.near_plane,
+            state.current.far_plane);
+        const auto expected = applySceneProjectionJitter(current_projection, state.current_jitter) *
+                              state.current.getViewMatrix();
+        for (int column = 0; column < 4; ++column) {
+            for (int row = 0; row < 4; ++row) {
+                EXPECT_FLOAT_EQ((*pair).current[column][row], expected[column][row]);
+            }
+        }
+        EXPECT_NE((*pair).current[3][0], (*pair).previous[3][0]);
+    }
+
+    TEST(TemporalFrameTracker, ViewProjectionPairRejectsUnsupportedIntrinsics) {
+        auto input = frameInput();
+        input.view.intrinsics_override = lfs::rendering::CameraIntrinsics{};
+        TemporalFrameTracker tracker;
+        const auto state = tracker.prepare(TemporalViewId::Main, input);
+        EXPECT_FALSE(makeTemporalViewProjectionPair(state).has_value());
+    }
+
     TEST(TemporalFrameTracker, SceneViewJitterPreservesExplicitFocalLength) {
         auto input = frameInput();
         input.view.intrinsics_override = lfs::rendering::CameraIntrinsics{

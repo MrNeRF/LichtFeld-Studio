@@ -111,6 +111,8 @@ namespace lfs::vis {
         const TemporalFrameState& state,
         const glm::mat4& current_projection,
         const glm::mat4& previous_projection);
+    [[nodiscard]] LFS_VIS_API std::optional<TemporalProjectionPair>
+    makeTemporalViewProjectionPair(const TemporalFrameState& state);
 
     class LFS_VIS_API TemporalFrameTracker {
     public:
