@@ -163,6 +163,7 @@ namespace lfs::io::project {
                 {"desaturate_unselected", false},
                 {"desaturate_cropping", false},
                 {"hide_outside_depth_box", false},
+                {"depth_filter_viz_mode", 1},
                 {"crop_filter_for_selection", false},
                 {"apply_appearance_correction", false},
                 {"ppisp_mode", 1},

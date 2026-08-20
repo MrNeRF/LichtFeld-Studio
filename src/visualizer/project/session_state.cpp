@@ -616,7 +616,52 @@ namespace lfs::vis::project {
                 required_field("use_ellipsoid", &RenderSettings::use_ellipsoid),
                 required_field("desaturate_unselected", &RenderSettings::desaturate_unselected),
                 required_field("desaturate_cropping", &RenderSettings::desaturate_cropping),
-                required_field("hide_outside_depth_box", &RenderSettings::hide_outside_depth_box),
+                custom_field<RenderSettings>(
+                    "hide_outside_depth_box",
+                    [](const RenderSettings& settings) {
+                        return Json(settings.depth_filter_viz_mode == 2);
+                    },
+                    [](const Json& json, RenderSettings& settings,
+                       std::string_view prefix, std::string_view field) {
+                        if (json.contains("depth_filter_viz_mode")) {
+                            return lfs::Result<void>{};
+                        }
+                        bool value = false;
+                        if (auto status = assign_required(json, field, value, prefix); !status) {
+                            return status;
+                        }
+                        settings.depth_filter_viz_mode = value ? 2 : 0;
+                        return lfs::Result<void>{};
+                    }),
+                custom_field<RenderSettings>(
+                    "depth_filter_viz_mode",
+                    [](const RenderSettings& settings) {
+                        return Json(settings.depth_filter_viz_mode);
+                    },
+                    [](const Json& json, RenderSettings& settings,
+                       std::string_view prefix, std::string_view field) {
+                        if (!json.contains(field)) {
+                            if (json.contains("hide_outside_depth_box")) {
+                                return lfs::Result<void>{};
+                            }
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "VIEW depth-filter visualization mode is missing",
+                                std::string(prefix) + "." + std::string(field));
+                        }
+                        int value = 0;
+                        if (auto status = assign_required(json, field, value, prefix); !status) {
+                            return status;
+                        }
+                        if (value < 0 || value > 2) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "Unsupported depth-filter visualization mode",
+                                std::string(prefix) + "." + std::string(field));
+                        }
+                        settings.depth_filter_viz_mode = value;
+                        return lfs::Result<void>{};
+                    }),
                 required_field("crop_filter_for_selection", &RenderSettings::crop_filter_for_selection),
                 required_field("apply_appearance_correction", &RenderSettings::apply_appearance_correction),
                 enum_field("ppisp_mode", &RenderSettings::ppisp_mode,

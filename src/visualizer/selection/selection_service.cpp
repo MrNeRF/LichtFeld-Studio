@@ -3270,18 +3270,23 @@ namespace lfs::vis {
             return;
         }
 
+        const ViewerViewportContext* viewport_context =
+            interactive_selection_.active && interactive_selection_.viewport_context
+                ? &*interactive_selection_.viewport_context
+                : nullptr;
+        std::optional<ViewerViewportContext> focused_context;
+        if (!viewport_context || !viewport_context->valid()) {
+            focused_context = resolveViewerViewportContext();
+            viewport_context = focused_context ? &*focused_context : nullptr;
+        }
+        if (!viewport_context || !viewport_context->valid()) {
+            return;
+        }
+
         const auto& means = model->means();
         if (!means.is_valid() || means.size(0) != selection.size(0)) {
             return;
         }
-
-        const glm::mat4 world_to_filter = settings.depth_filter_transform.inv().toMat4();
-        const float* const t_ptr = glm::value_ptr(world_to_filter);
-        const auto depth_t = core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
-        const auto depth_min = core::Tensor::from_vector(
-            {settings.depth_filter_min.x, settings.depth_filter_min.y, settings.depth_filter_min.z}, {3});
-        const auto depth_max = core::Tensor::from_vector(
-            {settings.depth_filter_max.x, settings.depth_filter_max.y, settings.depth_filter_max.z}, {3});
 
         const auto render_state = [&] {
             LOG_TIMER("applyDepthFilter.buildRenderState");
@@ -3309,11 +3314,48 @@ namespace lfs::vis {
         }
 
         {
-            LOG_TIMER("applyDepthFilter.filter_selection_by_crop");
-            rendering::filter_selection_by_crop(
-                selection, means,
-                &depth_t, &depth_min, &depth_max, false,
-                nullptr, nullptr, false,
+            LOG_TIMER("applyDepthFilter.filter_selection_by_screen_window");
+            const auto& viewport = *viewport_context->viewport;
+            const auto [pixel_focal_x, pixel_focal_y] = rendering::computePixelFocalLengths(
+                {viewport_context->info.render_width, viewport_context->info.render_height},
+                settings.focal_length_mm);
+            const std::array<float, 9> view_rotation_rows{
+                viewport.camera.R[0].x,
+                viewport.camera.R[0].y,
+                viewport.camera.R[0].z,
+                viewport.camera.R[1].x,
+                viewport.camera.R[1].y,
+                viewport.camera.R[1].z,
+                viewport.camera.R[2].x,
+                viewport.camera.R[2].y,
+                viewport.camera.R[2].z,
+            };
+            const std::array<float, 3> translation{
+                viewport.camera.t.x,
+                viewport.camera.t.y,
+                viewport.camera.t.z,
+            };
+            const auto camera_model = settings.equirectangular
+                                          ? rendering::ScreenWindowCameraModel::Equirectangular
+                                      : settings.orthographic
+                                          ? rendering::ScreenWindowCameraModel::Orthographic
+                                          : rendering::ScreenWindowCameraModel::Pinhole;
+            rendering::filter_selection_by_screen_window(
+                selection,
+                means,
+                view_rotation_rows,
+                translation,
+                camera_model,
+                viewport_context->info.render_width,
+                viewport_context->info.render_height,
+                pixel_focal_x,
+                pixel_focal_y,
+                viewport.ortho_scale_override.value_or(settings.ortho_scale),
+                -settings.depth_filter_max.z,
+                -settings.depth_filter_min.z,
+                settings.depth_filter_scale,
+                settings.depth_filter_offset_x,
+                settings.depth_filter_offset_y,
                 model_transforms_ptr,
                 transform_indices_ptr);
         }

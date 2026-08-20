@@ -876,7 +876,8 @@ namespace lfs::app {
                                  {"use_ellipsoid", settings.use_ellipsoid},
                                  {"desaturate_unselected", settings.desaturate_unselected},
                                  {"desaturate_cropping", settings.desaturate_cropping},
-                                 {"hide_outside_depth_box", settings.hide_outside_depth_box},
+                                 {"hide_outside_depth_box", settings.depth_filter_viz_mode == 2},
+                                 {"depth_filter_viz_mode", settings.depth_filter_viz_mode},
                                  {"crop_filter_for_selection", settings.crop_filter_for_selection},
                                  {"apply_appearance_correction", settings.apply_appearance_correction},
                                  {"ppisp_mode", settings.ppisp_mode},
@@ -1080,7 +1081,11 @@ namespace lfs::app {
             set_bool("use_ellipsoid", settings.use_ellipsoid);
             set_bool("desaturate_unselected", settings.desaturate_unselected);
             set_bool("desaturate_cropping", settings.desaturate_cropping);
-            set_bool("hide_outside_depth_box", settings.hide_outside_depth_box);
+            if (args.contains("hide_outside_depth_box") && !args.contains("depth_filter_viz_mode")) {
+                settings.depth_filter_viz_mode = args["hide_outside_depth_box"].get<bool>() ? 2 : 0;
+                touched = true;
+            }
+            set_int("depth_filter_viz_mode", settings.depth_filter_viz_mode);
             set_bool("crop_filter_for_selection", settings.crop_filter_for_selection);
             set_bool("apply_appearance_correction", settings.apply_appearance_correction);
             set_int("ppisp_mode", settings.ppisp_mode);
@@ -3038,6 +3043,8 @@ namespace lfs::app {
                         {"use_crop_box", json{{"type", "boolean"}}},
                         {"show_ellipsoid", json{{"type", "boolean"}}},
                         {"use_ellipsoid", json{{"type", "boolean"}}},
+                        {"hide_outside_depth_box", json{{"type", "boolean"}}},
+                        {"depth_filter_viz_mode", json{{"type", "integer"}, {"minimum", 0}, {"maximum", 2}}},
                         {"ppisp_exposure", json{{"type", "number"}}},
                         {"ppisp", json{{"type", "object"}}}},
                     .required = {}}},

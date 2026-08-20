@@ -673,6 +673,25 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
+        auto add_int = [&](int Proxy::*member, const std::string& id, const std::string& name,
+                           const std::string& desc, int default_val, int min_val, int max_val) {
+            PropertyMeta meta;
+            meta.id = id;
+            meta.name = name;
+            meta.description = desc;
+            meta.type = PropType::Int;
+            meta.default_value = static_cast<int64_t>(default_val);
+            meta.min_value = static_cast<double>(min_val);
+            meta.max_value = static_cast<double>(max_val);
+            meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
+                return static_cast<const Proxy*>(ref.ptr)->*member;
+            };
+            meta.setter = [member](PropertyObjectRef& ref, const std::any& val) {
+                static_cast<Proxy*>(ref.ptr)->*member = std::any_cast<int>(val);
+            };
+            group.properties.push_back(std::move(meta));
+        };
+
         auto add_int_enum = [&](int Proxy::*member, const std::string& id, const std::string& name,
                                 const std::string& desc, std::vector<EnumItem> items, int default_idx) {
             PropertyMeta meta;
@@ -774,8 +793,24 @@ namespace lfs::python {
                  "Desaturate unselected PLYs when one is selected", false);
         add_bool(&Proxy::desaturate_cropping, "desaturate_cropping", "Desaturate Cropping",
                  "Dim outside crop area instead of hiding", false);
-        add_bool(&Proxy::hide_outside_depth_box, "hide_outside_depth_box", "Hide Outside Depth Box",
-                 "Hide Gaussians outside the selection depth box", false);
+        {
+            PropertyMeta meta;
+            meta.id = "hide_outside_depth_box";
+            meta.name = "Hide Outside Depth Box";
+            meta.description =
+                "Deprecated compatibility alias for depth_filter_viz_mode == 2; use depth_filter_viz_mode";
+            meta.type = PropType::Bool;
+            meta.default_value = false;
+            meta.getter = [](const PropertyObjectRef& ref) -> std::any {
+                return static_cast<const Proxy*>(ref.ptr)->depth_filter_viz_mode == 2;
+            };
+            meta.setter = [](PropertyObjectRef& ref, const std::any& val) {
+                static_cast<Proxy*>(ref.ptr)->depth_filter_viz_mode = std::any_cast<bool>(val) ? 2 : 0;
+            };
+            group.properties.push_back(std::move(meta));
+        }
+        add_int(&Proxy::depth_filter_viz_mode, "depth_filter_viz_mode", "Depth Filter Visualization",
+                "Selection depth-filter visualization mode (0 = off, 1 = dim, 2 = hide)", 1, 0, 2);
 
         // View Settings
         add_float(&Proxy::focal_length_mm, "focal_length_mm", "Focal Length", "Focal length in mm", 35.0, 10.0, 200.0);

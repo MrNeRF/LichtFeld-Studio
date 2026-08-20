@@ -254,7 +254,7 @@ namespace lfs::vis {
                 .scale = ctx.settings.depth_filter_scale,
                 .offset_x = ctx.settings.depth_filter_offset_x,
                 .offset_y = ctx.settings.depth_filter_offset_y};
-            filters.cull_outside_view_volume = ctx.settings.hide_outside_depth_box;
+            filters.cull_outside_view_volume = ctx.settings.depth_filter_viz_mode == 2;
             filters.dim_outside_view_volume = ctx.settings.depth_filter_viz_mode == 1;
         }
 

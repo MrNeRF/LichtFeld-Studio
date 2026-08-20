@@ -321,9 +321,15 @@ namespace lfs::python {
         sel.def(
             "get_depth_filter", []() -> std::tuple<bool, float, float> {
                 if (const auto* const tool = get_selection_tool()) {
+                    const auto* const rm = get_rm();
+                    const float informational_half_width = rm
+                                                               ? std::max(
+                                                                     std::abs(rm->getSettings().depth_filter_min.x),
+                                                                     std::abs(rm->getSettings().depth_filter_max.x))
+                                                               : 0.0f;
                     return {tool->isDepthFilterEnabled(),
                             tool->getDepthFar(),
-                            tool->getDepthFrustumHalfWidth()};
+                            informational_half_width};
                 }
                 auto* rm = get_rm();
                 if (!rm)
@@ -337,10 +343,16 @@ namespace lfs::python {
         sel.def(
             "get_depth_filter_range", []() -> std::tuple<bool, float, float, float> {
                 if (const auto* const tool = get_selection_tool()) {
+                    const auto* const rm = get_rm();
+                    const float informational_half_width = rm
+                                                               ? std::max(
+                                                                     std::abs(rm->getSettings().depth_filter_min.x),
+                                                                     std::abs(rm->getSettings().depth_filter_max.x))
+                                                               : 0.0f;
                     return {tool->isDepthFilterEnabled(),
                             tool->getDepthNear(),
                             tool->getDepthFar(),
-                            tool->getDepthFrustumHalfWidth()};
+                            informational_half_width};
                 }
                 auto* rm = get_rm();
                 if (!rm)

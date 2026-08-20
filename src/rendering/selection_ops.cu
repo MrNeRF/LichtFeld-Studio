@@ -5,6 +5,7 @@
 #include "selection_ops.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/logger.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 
 #include <algorithm>
@@ -683,6 +684,105 @@ namespace lfs::rendering {
                 }
             }
         }
+
+        __global__ void filterSelectionByScreenWindowKernel(
+            bool* __restrict__ selection,
+            const float3* __restrict__ means,
+            const float3 view_row0,
+            const float3 view_row1,
+            const float3 view_row2,
+            const float3 translation,
+            const std::uint32_t camera_model,
+            const int width,
+            const int height,
+            const float pixel_focal_x,
+            const float pixel_focal_y,
+            const float ortho_scale,
+            const float near_depth,
+            const float far_depth,
+            const float scale,
+            const float offset_x,
+            const float offset_y,
+            const float* __restrict__ model_transforms,
+            const int* __restrict__ transform_indices,
+            const int num_model_transforms,
+            const int n) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= n || !selection[idx]) {
+                return;
+            }
+
+            float3 pos = means[idx];
+            if (model_transforms != nullptr && num_model_transforms > 0) {
+                const int transform_idx = transform_indices != nullptr
+                                              ? min(max(transform_indices[idx], 0), num_model_transforms - 1)
+                                              : 0;
+                const float* const m = model_transforms + transform_idx * 16;
+                pos = make_float3(
+                    m[0] * pos.x + m[1] * pos.y + m[2] * pos.z + m[3],
+                    m[4] * pos.x + m[5] * pos.y + m[6] * pos.z + m[7],
+                    m[8] * pos.x + m[9] * pos.y + m[10] * pos.z + m[11]);
+            }
+
+            const float dx = pos.x - translation.x;
+            const float dy = pos.y - translation.y;
+            const float dz = pos.z - translation.z;
+            const float visualizer_x = view_row0.x * dx + view_row0.y * dy + view_row0.z * dz;
+            const float visualizer_y = view_row1.x * dx + view_row1.y * dy + view_row1.z * dz;
+            const float visualizer_z = view_row2.x * dx + view_row2.y * dy + view_row2.z * dz;
+
+            // VkSplat camera space is +X right, +Y down, +Z forward. The supplied
+            // visualizer camera pose is +X right, +Y up, -Z forward.
+            const float view_x = visualizer_x;
+            const float view_y = -visualizer_y;
+            const float view_z = -visualizer_z;
+
+            const float image_width = static_cast<float>(width);
+            const float image_height = static_cast<float>(height);
+            float px = 0.0f;
+            float py = 0.0f;
+            float depth = view_z;
+
+            if (camera_model == static_cast<std::uint32_t>(ScreenWindowCameraModel::Pinhole)) {
+                px = 0.5f * image_width + pixel_focal_x * view_x / view_z;
+                py = 0.5f * image_height + pixel_focal_y * view_y / view_z;
+            } else if (camera_model == static_cast<std::uint32_t>(ScreenWindowCameraModel::Orthographic)) {
+                px = 0.5f * image_width + ortho_scale * view_x;
+                py = 0.5f * image_height + ortho_scale * view_y;
+            } else {
+                const float len = sqrtf(view_x * view_x + view_y * view_y + view_z * view_z);
+                if (len <= 1.0e-6f || !isfinite(len)) {
+                    depth = -1.0f;
+                } else {
+                    const float dir_x = view_x / len;
+                    const float dir_y = view_y / len;
+                    const float dir_z = view_z / len;
+                    constexpr float pi = 3.14159265358979323846f;
+                    px = (atan2f(dir_x, dir_z) / (2.0f * pi) + 0.5f) * image_width;
+                    py = (asinf(fminf(fmaxf(dir_y, -1.0f), 1.0f)) / pi + 0.5f) * image_height;
+                    depth = len;
+                }
+            }
+
+            // KEEP IN SYNC: the screen-window formula lives in three places — this
+            // kernel, vertex_shader.slang compute_splat_active_state, and the CPU
+            // reference in tests/test_selection_screen_window.cpp.
+            // The transform/projection above is mathematically equivalent to
+            // projectScreenPositionsKernel in this file; conventions differ because
+            // that kernel keeps visualizer view Y and flips its sign at the
+            // principal point (cy - ...), negating only Z up front
+            // (depth = -view_z), while this one negates view_y and view_z up
+            // front so it can add, mirroring the slang formula verbatim.
+            const float half_w = 0.5f * scale * image_width;
+            const float half_h = 0.5f * scale * image_height;
+            const float cx = 0.5f * image_width + offset_x * (0.5f * image_width - half_w);
+            const float cy = 0.5f * image_height + offset_y * (0.5f * image_height - half_h);
+            const bool inside_rect = fabsf(px - cx) <= half_w && fabsf(py - cy) <= half_h;
+            const bool inside = inside_rect && depth >= near_depth && depth <= far_depth && depth > 0.0f;
+            if (!inside) {
+                selection[idx] = false;
+            }
+        }
     } // namespace
 
     void brush_select(
@@ -1326,6 +1426,78 @@ namespace lfs::rendering {
             prepared_transforms.count,
             n);
         LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(&selection), "render.selection.filter_crop");
+    }
+
+    void filter_selection_by_screen_window(
+        Tensor& selection,
+        const Tensor& means,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        const ScreenWindowCameraModel camera_model,
+        const int width,
+        const int height,
+        const float pixel_focal_x,
+        const float pixel_focal_y,
+        const float ortho_scale,
+        const float near_depth,
+        const float far_depth,
+        const float scale,
+        const float offset_x,
+        const float offset_y,
+        const Tensor* const model_transforms,
+        const Tensor* const transform_indices) {
+        const auto model = static_cast<std::uint32_t>(camera_model);
+        if (model != static_cast<std::uint32_t>(ScreenWindowCameraModel::Pinhole) &&
+            model != static_cast<std::uint32_t>(ScreenWindowCameraModel::Orthographic) &&
+            model != static_cast<std::uint32_t>(ScreenWindowCameraModel::Equirectangular)) {
+            LOG_WARN("filter_selection_by_screen_window: unsupported camera model {}; leaving selection unchanged",
+                     model);
+            return;
+        }
+        if (!selection.is_valid() || !means.is_valid() || width <= 0 || height <= 0) {
+            return;
+        }
+
+        const int n = checkedToInt(selection.size(0), "selection size exceeds int range");
+        if (means.size(0) != static_cast<std::size_t>(n)) {
+            return;
+        }
+
+        const auto prepared_transforms = PreparedModelTransforms::from(model_transforms);
+        Tensor transform_indices_contig;
+        const int* transform_indices_ptr = nullptr;
+        if (transform_indices != nullptr && transform_indices->is_valid() &&
+            transform_indices->numel() == static_cast<std::size_t>(n)) {
+            transform_indices_contig = transform_indices->is_contiguous()
+                                           ? *transform_indices
+                                           : transform_indices->contiguous();
+            transform_indices_ptr = transform_indices_contig.ptr<int>();
+        }
+
+        const int grid_size = (n + kBlockSize - 1) / kBlockSize;
+        filterSelectionByScreenWindowKernel<<<grid_size, kBlockSize, 0, currentSelectionStream(&selection)>>>(
+            selection.ptr<bool>(),
+            reinterpret_cast<const float3*>(means.ptr<float>()),
+            make_float3(view_rotation_rows[0], view_rotation_rows[1], view_rotation_rows[2]),
+            make_float3(view_rotation_rows[3], view_rotation_rows[4], view_rotation_rows[5]),
+            make_float3(view_rotation_rows[6], view_rotation_rows[7], view_rotation_rows[8]),
+            make_float3(translation[0], translation[1], translation[2]),
+            model,
+            width,
+            height,
+            pixel_focal_x,
+            pixel_focal_y,
+            ortho_scale,
+            near_depth,
+            far_depth,
+            scale,
+            offset_x,
+            offset_y,
+            prepared_transforms.ptr,
+            transform_indices_ptr,
+            prepared_transforms.count,
+            n);
+        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(&selection), "render.selection.filter_screen_window");
     }
 
     namespace config {

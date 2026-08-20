@@ -26,6 +26,12 @@ namespace lfs::rendering {
         size_t changed_count = 0;
     };
 
+    enum class ScreenWindowCameraModel : std::uint32_t {
+        Pinhole = 0,
+        Orthographic = 1,
+        Equirectangular = 3,
+    };
+
     void brush_select(
         const float2* screen_positions,
         float mouse_x,
@@ -174,6 +180,25 @@ namespace lfs::rendering {
         const Tensor* ellipsoid_transform,
         const Tensor* ellipsoid_radii,
         bool ellipsoid_inverse,
+        const Tensor* model_transforms = nullptr,
+        const Tensor* transform_indices = nullptr);
+
+    void filter_selection_by_screen_window(
+        Tensor& selection,
+        const Tensor& means,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        ScreenWindowCameraModel camera_model,
+        int width,
+        int height,
+        float pixel_focal_x,
+        float pixel_focal_y,
+        float ortho_scale,
+        float near_depth,
+        float far_depth,
+        float scale,
+        float offset_x,
+        float offset_y,
         const Tensor* model_transforms = nullptr,
         const Tensor* transform_indices = nullptr);
 
