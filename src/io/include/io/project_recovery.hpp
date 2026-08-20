@@ -136,6 +136,20 @@ namespace lfs::io::project {
         const std::filesystem::path& master_path,
         RecoveryInspection& into);
 
+    // Best-effort removal of crash leftovers for one published master:
+    // `.{master-filename}.saveas-*` staging files and this master's
+    // compact/project-write/replace-backup temps, plus their `.lock`
+    // siblings. Skips anything still held. Never deletes the master
+    // file. `{master}.lock` is reclaimed only when
+    // `reclaim_master_lock` is true and the probe acquire succeeds.
+    LFS_IO_API void sweep_stale_licht_artifacts(
+        const std::filesystem::path& master_path,
+        bool reclaim_master_lock = false);
+
+    // Startup entry: skip missing masters, never fails the caller.
+    LFS_IO_API void sweep_stale_licht_artifacts_for_known_masters(
+        const std::vector<std::filesystem::path>& master_paths);
+
     // Acquires the master writer lock, validates every stable/temp/backup
     // sidecar candidate, deletes stale candidates, and applies the exact
     // §9 predicate. It also removes orphan compaction temps after the master

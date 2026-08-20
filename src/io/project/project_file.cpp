@@ -22,11 +22,10 @@
 #include <utility>
 
 #ifdef _WIN32
-#include <fileapi.h>
-#include <handleapi.h>
-#include <ioapiset.h>
-#include <processthreadsapi.h>
-#include <synchapi.h>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #else
 #include <fcntl.h>
 #include <sys/file.h>
@@ -415,7 +414,7 @@ namespace lfs::io::project::detail {
         }
         return static_cast<std::uint64_t>(size.QuadPart);
 #else
-        struct stat status {};
+        struct stat status{};
         if (::fstat(fd_, &status) != 0 || status.st_size < 0) {
             const int error = errno;
             return project_error(native_error_code(error, false),
@@ -666,16 +665,24 @@ namespace lfs::io::project::detail {
         return *this;
     }
 
-    WriterLock::~WriterLock() {
+    WriterLock::~WriterLock() noexcept {
 #ifdef _WIN32
         if (handle_ != INVALID_HANDLE_VALUE) {
             UnlockFileEx(handle_, 0, 1, 0, &operation_);
             CloseHandle(handle_);
+            handle_ = INVALID_HANDLE_VALUE;
+            // Best-effort: a contender that still has a share-delete handle
+            // makes this fail, and that contender's release deletes the name.
+            DeleteFileW(path_.wstring().c_str());
         }
 #else
         if (fd_ >= 0) {
+            // Unlink while still holding flock so a waiter cannot bind a new
+            // inode until we drop the lock. acquire() retries on inode mismatch.
+            ::unlink(path_.c_str());
             ::flock(fd_, LOCK_UN);
             ::close(fd_);
+            fd_ = -1;
         }
 #endif
     }
@@ -686,57 +693,103 @@ namespace lfs::io::project::detail {
         if (auto parent = ensure_parent_directory(lock_path); !parent) {
             return std::move(parent).error();
         }
+        constexpr int kAcquireAttempts = 5;
 #ifdef _WIN32
-        HANDLE handle =
-            CreateFileW(lock_path.wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
-                        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, CREATE_NEW,
-                        FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (handle == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_EXISTS) {
-            handle = CreateFileW(lock_path.wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
-                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-                                 FILE_ATTRIBUTE_NORMAL, nullptr);
+        const DWORD share_mode =
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+        DWORD last_error = 0;
+        for (int attempt = 0; attempt < kAcquireAttempts; ++attempt) {
+            HANDLE handle = CreateFileW(lock_path.wstring().c_str(),
+                                        GENERIC_READ | GENERIC_WRITE, share_mode, nullptr,
+                                        CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (handle == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_EXISTS) {
+                handle = CreateFileW(lock_path.wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
+                                     share_mode, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                                     nullptr);
+            }
+            if (handle == INVALID_HANDLE_VALUE) {
+                last_error = GetLastError();
+                const bool retryable = last_error == ERROR_ACCESS_DENIED ||
+                                       last_error == ERROR_DELETE_PENDING ||
+                                       last_error == ERROR_FILE_NOT_FOUND;
+                if (retryable && attempt + 1 < kAcquireAttempts) {
+                    Sleep(1);
+                    continue;
+                }
+                return project_error(
+                    native_error_code(static_cast<int>(last_error), true),
+                    "The project writer lock could not be opened.",
+                    std::format("CreateFileW lockfile failed with Windows error {}", last_error),
+                    lock_path, std::nullopt, "writer_lock",
+                    static_cast<std::int64_t>(last_error), "Win32");
+            }
+            OVERLAPPED operation{};
+            const DWORD flags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY;
+            if (!LockFileEx(handle, flags, 0, 1, 0, &operation)) {
+                const DWORD error = GetLastError();
+                CloseHandle(handle);
+                return project_error(
+                    lfs::ErrorCode::Unavailable, "The project is already open for writing.",
+                    std::format("LockFileEx denied the held lock with Windows error {}", error),
+                    lock_path, std::nullopt, "writer_lock", static_cast<std::int64_t>(error),
+                    "Win32");
+            }
+            WriterLock result(lock_path, handle);
+            result.operation_ = operation;
+            return result;
         }
-        if (handle == INVALID_HANDLE_VALUE) {
-            const DWORD error = GetLastError();
-            return project_error(native_error_code(static_cast<int>(error), true),
-                                 "The project writer lock could not be opened.",
-                                 std::format("CreateFileW lockfile failed with Windows error {}",
-                                             error),
-                                 lock_path, std::nullopt, "writer_lock",
-                                 static_cast<std::int64_t>(error), "Win32");
-        }
-        WriterLock result(lock_path, handle);
-        const DWORD flags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY;
-        if (!LockFileEx(handle, flags, 0, 1, 0, &result.operation_)) {
-            const DWORD error = GetLastError();
-            return project_error(
-                lfs::ErrorCode::Unavailable, "The project is already open for writing.",
-                std::format("LockFileEx denied the held lock with Windows error {}", error),
-                lock_path, std::nullopt, "writer_lock", static_cast<std::int64_t>(error), "Win32");
-        }
-        return result;
+        return project_error(native_error_code(static_cast<int>(last_error), true),
+                             "The project writer lock could not be opened.",
+                             std::format("CreateFileW lockfile failed with Windows error {}",
+                                         last_error),
+                             lock_path, std::nullopt, "writer_lock",
+                             static_cast<std::int64_t>(last_error), "Win32");
 #else
-        int fd = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-        if (fd < 0 && errno == EEXIST) {
-            fd = ::open(lock_path.c_str(), O_RDWR | O_CLOEXEC);
+        for (int attempt = 0; attempt < kAcquireAttempts; ++attempt) {
+            int fd = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+            if (fd < 0 && errno == EEXIST) {
+                fd = ::open(lock_path.c_str(), O_RDWR | O_CLOEXEC);
+            }
+            if (fd < 0) {
+                const int error = errno;
+                if (error == ENOENT && attempt + 1 < kAcquireAttempts) {
+                    continue;
+                }
+                return project_error(
+                    native_error_code(error, true),
+                    "The project writer lock could not be opened.",
+                    std::format("lockfile open failed: {}", std::strerror(error)), lock_path,
+                    std::nullopt, "writer_lock", error, std::strerror(error));
+            }
+            if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+                const int error = errno;
+                ::close(fd);
+                return project_error(
+                    lfs::ErrorCode::Unavailable, "The project is already open for writing.",
+                    std::format("flock denied the held lock: {}", std::strerror(error)),
+                    lock_path, std::nullopt, "writer_lock", error, std::strerror(error));
+            }
+            struct stat fd_status{};
+            if (::fstat(fd, &fd_status) != 0) {
+                return WriterLock(lock_path, fd);
+            }
+            struct stat path_status{};
+            if (::stat(lock_path.c_str(), &path_status) != 0 ||
+                fd_status.st_dev != path_status.st_dev ||
+                fd_status.st_ino != path_status.st_ino) {
+                if (attempt + 1 < kAcquireAttempts) {
+                    ::flock(fd, LOCK_UN);
+                    ::close(fd);
+                    continue;
+                }
+                return WriterLock(lock_path, fd);
+            }
+            return WriterLock(lock_path, fd);
         }
-        if (fd < 0) {
-            const int error = errno;
-            return project_error(native_error_code(error, true),
-                                 "The project writer lock could not be opened.",
-                                 std::format("lockfile open failed: {}", std::strerror(error)),
-                                 lock_path, std::nullopt, "writer_lock", error,
-                                 std::strerror(error));
-        }
-        if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
-            const int error = errno;
-            ::close(fd);
-            return project_error(
-                lfs::ErrorCode::Unavailable, "The project is already open for writing.",
-                std::format("flock denied the held lock: {}", std::strerror(error)), lock_path,
-                std::nullopt, "writer_lock", error, std::strerror(error));
-        }
-        return WriterLock(lock_path, fd);
+        return project_error(lfs::ErrorCode::Unavailable,
+                             "The project writer lock could not be opened.",
+                             "lockfile open exhausted inode-mismatch retries", lock_path,
+                             std::nullopt, "writer_lock");
 #endif
     }
 

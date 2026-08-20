@@ -15,6 +15,7 @@
 #include <format>
 #include <limits>
 #include <map>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <type_traits>
@@ -498,6 +499,66 @@ namespace lfs::io::project {
             }
         }
 
+        [[nodiscard]] std::filesystem::path
+        path_without_lock_suffix(
+            const std::filesystem::path& path) {
+            const auto name =
+                path.filename().string();
+            constexpr std::string_view suffix =
+                ".lock";
+            if (name.size() > suffix.size() &&
+                name.ends_with(suffix)) {
+                return path.parent_path() /
+                       name.substr(
+                           0,
+                           name.size() -
+                               suffix.size());
+            }
+            return path;
+        }
+
+        void try_remove_unheld_artifact(
+            const std::filesystem::path& data_path,
+            const bool remove_data) {
+            auto lock_path = data_path;
+            lock_path += ".lock";
+            std::error_code exists_error;
+            const bool lock_existed =
+                std::filesystem::exists(
+                    lock_path, exists_error) &&
+                !exists_error;
+            {
+                auto lock =
+                    detail::WriterLock::acquire(
+                        data_path);
+                if (!lock) {
+                    return;
+                }
+                if (remove_data) {
+                    std::error_code error;
+                    if (std::filesystem::remove(
+                            data_path, error) &&
+                        !error) {
+                        LOG_INFO(
+                            "Removed stale project artifact {}",
+                            data_path.string());
+                    }
+                }
+            }
+            if (!lock_existed) {
+                return;
+            }
+            exists_error.clear();
+            if (std::filesystem::exists(
+                    lock_path, exists_error) &&
+                !exists_error) {
+                return;
+            }
+            LOG_INFO(
+                "Removed stale project artifact {}",
+                lock_path.string());
+        }
+
     } // namespace
 
     struct RecoverySession::State {
@@ -746,6 +807,133 @@ namespace lfs::io::project {
             into, std::move(corrupt_asides));
     }
 
+    void sweep_stale_licht_artifacts(
+        const std::filesystem::path& master_path,
+        const bool reclaim_master_lock) {
+        if (master_path.empty()) {
+            return;
+        }
+        const auto directory =
+            master_path.parent_path().empty()
+                ? std::filesystem::path{"."}
+                : master_path.parent_path();
+        const auto master_name =
+            master_path.filename().string();
+        const auto saveas_prefix =
+            "." + master_name + ".saveas-";
+        const auto stem =
+            master_path.stem().string();
+        const auto suffix =
+            ".tmp" + master_path.extension().string();
+        const auto master_lock_name =
+            master_name + ".lock";
+
+        std::vector<std::filesystem::path> saveas_data;
+        std::vector<std::filesystem::path> write_temp_data;
+        std::error_code error;
+        for (std::filesystem::directory_iterator
+                 iterator(directory, error),
+             end;
+             !error && iterator != end;
+             iterator.increment(error)) {
+            std::error_code type_error;
+            if (!iterator->is_regular_file(
+                    type_error) ||
+                type_error) {
+                continue;
+            }
+            const auto entry = iterator->path();
+            const auto filename =
+                entry.filename().string();
+            if (filename == master_lock_name) {
+                continue;
+            }
+            const auto data =
+                path_without_lock_suffix(entry);
+            const auto data_name =
+                data.filename().string();
+            if (data_name.starts_with(saveas_prefix)) {
+                saveas_data.push_back(data);
+                continue;
+            }
+            if (is_write_temp_name(
+                    data_name, stem, suffix)) {
+                write_temp_data.push_back(data);
+            }
+        }
+        const auto unique_sorted =
+            [](std::vector<std::filesystem::path>&
+                   paths) {
+                std::ranges::sort(paths);
+                paths.erase(
+                    std::unique(
+                        paths.begin(), paths.end()),
+                    paths.end());
+            };
+        unique_sorted(saveas_data);
+        unique_sorted(write_temp_data);
+
+        for (const auto& data : saveas_data) {
+            try_remove_unheld_artifact(data, true);
+        }
+
+        std::error_code lock_exists_error;
+        auto master_lock_path = master_path;
+        master_lock_path += ".lock";
+        const bool master_lock_existed =
+            reclaim_master_lock &&
+            std::filesystem::exists(
+                master_lock_path,
+                lock_exists_error) &&
+            !lock_exists_error;
+
+        std::optional<detail::WriterLock> master_guard;
+        if (reclaim_master_lock ||
+            !write_temp_data.empty()) {
+            auto acquired =
+                detail::WriterLock::acquire(
+                    master_path);
+            if (acquired) {
+                master_guard.emplace(
+                    std::move(*acquired));
+            }
+        }
+        if (master_guard) {
+            for (const auto& data : write_temp_data) {
+                try_remove_unheld_artifact(
+                    data, true);
+            }
+        }
+        master_guard.reset();
+        if (master_lock_existed) {
+            lock_exists_error.clear();
+            if (!std::filesystem::exists(
+                    master_lock_path,
+                    lock_exists_error) ||
+                lock_exists_error) {
+                LOG_INFO(
+                    "Removed stale project artifact {}",
+                    master_lock_path.string());
+            }
+        }
+    }
+
+    void sweep_stale_licht_artifacts_for_known_masters(
+        const std::vector<std::filesystem::path>&
+            master_paths) {
+        for (const auto& master_path : master_paths) {
+            std::error_code error;
+            if (master_path.empty() ||
+                !std::filesystem::is_regular_file(
+                    master_path, error) ||
+                error) {
+                continue;
+            }
+            sweep_stale_licht_artifacts(
+                master_path, true);
+        }
+    }
+
     namespace detail {
 
         lfs::Result<std::vector<ValidBoundAutosave>>
@@ -802,6 +990,8 @@ namespace lfs::io::project {
         RecoveryInspection result;
         sweep_orphan_project_artifacts(
             master_path, result);
+        sweep_stale_licht_artifacts(
+            master_path, false);
         for (const auto& temp :
              recovery_session_temps(master_path)) {
             best_effort_remove_into(result, temp);

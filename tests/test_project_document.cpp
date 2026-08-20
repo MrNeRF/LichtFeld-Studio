@@ -72,6 +72,7 @@ namespace {
     using lfs::test::licht::require_result_ptr;
     using lfs::test::licht::require_status;
     using lfs::test::licht::TemporaryDirectory;
+    using lfs::test::licht::write_file_bytes;
 
     Uuid fixed_uuid(const std::uint64_t tag) {
         return lfs::test::licht::fixed_uuid_in_namespace(0x70000000, tag);
@@ -3318,6 +3319,93 @@ namespace {
             document->save(destination, append_options);
         ASSERT_TRUE(appended)
             << lfs::format_for_developer(appended.error());
+    }
+
+    TEST(ProjectDocumentTest,
+         SaveAsFailureRemovesStagingTempAndLock) {
+        TemporaryDirectory temporary;
+        const fs::path source =
+            temporary.path / "saveas-fail-source.licht";
+        const fs::path destination =
+            temporary.path / "saveas-fail-dest.licht";
+        write_phase_a_fixture(source);
+        auto document =
+            require_result_ptr(ProjectDocument::open(source));
+        auto options = save_options(9970, 500);
+        options.disk_reserve_bytes =
+            std::numeric_limits<std::uint64_t>::max() / 2;
+        auto saved = document->save_as(destination, options);
+        ASSERT_FALSE(saved);
+        EXPECT_FALSE(fs::exists(destination));
+        auto destination_lock = destination;
+        destination_lock += ".lock";
+        EXPECT_FALSE(fs::exists(destination_lock));
+        for (const auto& entry :
+             fs::directory_iterator(temporary.path)) {
+            const auto name =
+                entry.path().filename().string();
+            EXPECT_EQ(name.find(".saveas-"), std::string::npos)
+                << name;
+            EXPECT_FALSE(name.ends_with(".lock")) << name;
+        }
+        EXPECT_TRUE(fs::is_regular_file(source));
+    }
+
+    TEST(ProjectDocumentTest,
+         OpenSweepsOwnedSaveasTempsAndSkipsForeignAndHeld) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "open-sweep.licht";
+        write_phase_a_fixture(master);
+
+        const fs::path owned =
+            temporary.path /
+            ".open-sweep.licht.saveas-aaaa.tmp";
+        auto owned_lock = owned;
+        owned_lock += ".lock";
+        const std::array<std::byte, 1> owned_bytes{std::byte{'o'}};
+        const std::array<std::byte, 1> owned_lock_bytes{std::byte{'l'}};
+        write_file_bytes(owned, owned_bytes);
+        write_file_bytes(owned_lock, owned_lock_bytes);
+
+        const fs::path compact =
+            temporary.path /
+            "open-sweep.compact.1.2.3.tmp.licht";
+        const std::array<std::byte, 1> compact_bytes{std::byte{'c'}};
+        write_file_bytes(compact, compact_bytes);
+
+        const fs::path foreign =
+            temporary.path /
+            ".other.licht.saveas-bbbb.tmp";
+        const std::array<std::byte, 1> foreign_bytes{std::byte{'f'}};
+        write_file_bytes(foreign, foreign_bytes);
+
+        const fs::path held =
+            temporary.path /
+            ".open-sweep.licht.saveas-held.tmp";
+        auto held_lock = held;
+        held_lock += ".lock";
+        const std::array<std::byte, 1> held_bytes{std::byte{'h'}};
+        const std::array<std::byte, 1> held_lock_bytes{std::byte{'k'}};
+        write_file_bytes(held, held_bytes);
+        write_file_bytes(held_lock, held_lock_bytes);
+        auto held_lease = WriterLockLease::acquire(held);
+        ASSERT_TRUE(held_lease)
+            << lfs::format_for_developer(held_lease.error());
+
+        auto opened =
+            require_result_ptr(ProjectDocument::open(master));
+        ASSERT_TRUE(opened->source_path());
+
+        EXPECT_FALSE(fs::exists(owned));
+        EXPECT_FALSE(fs::exists(owned_lock));
+        EXPECT_FALSE(fs::exists(compact));
+        EXPECT_TRUE(fs::exists(foreign));
+        EXPECT_TRUE(fs::exists(held));
+        EXPECT_TRUE(fs::exists(held_lock));
+        auto master_lock = master;
+        master_lock += ".lock";
+        EXPECT_FALSE(fs::exists(master_lock));
     }
 
     TEST(ProjectDocumentTest,

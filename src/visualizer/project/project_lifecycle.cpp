@@ -6574,6 +6574,21 @@ namespace lfs::vis::project {
     void ProjectLifecycle::openStartupProject(
         const std::optional<
             std::filesystem::path>& explicit_path) {
+        std::vector<std::filesystem::path> known;
+        {
+            const std::lock_guard lock(
+                settings_mutex_);
+            known.reserve(settings_.mru.size());
+            for (const auto& entry : settings_.mru) {
+                known.push_back(
+                    resolveProjectMruPath(
+                        entry.last_known_path));
+            }
+        }
+        lfs::io::project::
+            sweep_stale_licht_artifacts_for_known_masters(
+                known);
+
         // Never auto-restore from MRU. Startup without an
         // explicit CLI project path leaves a blank session
         // after a clean previous session; the
