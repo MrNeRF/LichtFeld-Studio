@@ -405,6 +405,7 @@ set(TEST_FILES
     test_uuid.cpp
     test_render_settings_defaults.cpp
     test_scene_upscaler_registry.cpp
+    test_scene_motion_contract.cpp
     test_temporal_frame_tracker.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
