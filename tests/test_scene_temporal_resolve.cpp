@@ -148,29 +148,54 @@ namespace lfs::vis {
         EXPECT_EQ(temporalCurrentUvTransform({1200, 738}, {1152, 768}), glm::vec4(0.0f));
     }
 
-    TEST(VulkanSceneTemporalResolveContract, DepthRejectionRequiresBothLinearInputs) {
+    TEST(VulkanSceneTemporalResolveContract, DepthRejectionRequiresOwnedCurrentDepth) {
         VulkanSceneTemporalResolveParams params;
         params.render_extent = {1280, 720};
         EXPECT_TRUE(validTemporalDepthInputs(params));
-        params.depth_available = true;
+        params.current_depth.enabled = true;
         EXPECT_FALSE(validTemporalDepthInputs(params));
-        params.current_linear_depth_view = reinterpret_cast<VkImageView>(1);
-        EXPECT_FALSE(validTemporalDepthInputs(params));
-        params.history_linear_depth_view = reinterpret_cast<VkImageView>(2);
+        params.current_depth.current_depth_view = reinterpret_cast<VkImageView>(1);
+        params.current_depth.depth = makeSceneDepthContract(true,
+                                                            SceneDepthStorage::VulkanImage,
+                                                            SceneDepthEncoding::LinearView,
+                                                            params.render_extent,
+                                                            0.1f,
+                                                            1000.0f,
+                                                            false,
+                                                            false);
         EXPECT_TRUE(validTemporalDepthInputs(params));
     }
 
     TEST(VulkanSceneTemporalResolveContract, DepthRejectionRejectsUndeclaredLayouts) {
         VulkanSceneTemporalResolveParams params;
-        params.depth_available = true;
         params.render_extent = {1280, 720};
-        params.current_linear_depth_view = reinterpret_cast<VkImageView>(1);
-        params.history_linear_depth_view = reinterpret_cast<VkImageView>(2);
-        params.current_depth_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        params.current_depth.enabled = true;
+        params.current_depth.current_depth_view = reinterpret_cast<VkImageView>(1);
+        params.current_depth.depth = makeSceneDepthContract(true,
+                                                            SceneDepthStorage::VulkanImage,
+                                                            SceneDepthEncoding::LinearView,
+                                                            params.render_extent,
+                                                            0.1f,
+                                                            1000.0f,
+                                                            false,
+                                                            false);
+        params.current_depth.current_depth_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         EXPECT_FALSE(validTemporalDepthInputs(params));
-        params.current_depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        params.history_depth_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        params.current_depth.current_depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        EXPECT_TRUE(validTemporalDepthInputs(params));
+        params.view = TemporalViewId::SplitLeft;
         EXPECT_FALSE(validTemporalDepthInputs(params));
+        params.current_depth.view = TemporalViewId::SplitLeft;
+        EXPECT_TRUE(validTemporalDepthInputs(params));
+    }
+
+    TEST(VulkanSceneTemporalResolveContract, DepthPingPongSlotsArePerViewAndBounded) {
+        EXPECT_EQ(temporalDepthHistoryResourceSlot(TemporalViewId::Main, 0), 0u);
+        EXPECT_EQ(temporalDepthHistoryResourceSlot(TemporalViewId::Main, 1), 1u);
+        EXPECT_EQ(temporalDepthHistoryResourceSlot(TemporalViewId::SplitLeft, 0), 2u);
+        EXPECT_EQ(temporalDepthHistoryResourceSlot(TemporalViewId::SplitRight, 1), 5u);
+        EXPECT_FALSE(temporalDepthHistoryResourceSlot(TemporalViewId::Main, 2));
+        EXPECT_FALSE(temporalDepthHistoryResourceSlot(TemporalViewId::Count, 0));
     }
 
 } // namespace lfs::vis

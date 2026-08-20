@@ -6,11 +6,13 @@
 
 #include "rendering/scene_temporal_plan.hpp"
 #include "rendering/temporal_frame_tracker.hpp"
+#include "vulkan_scene_depth_history_contract.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <vulkan/vulkan.h>
 
 namespace lfs::vis {
@@ -53,12 +55,8 @@ namespace lfs::vis {
         TemporalViewId view = TemporalViewId::Main;
         VkImageView current_color_view = VK_NULL_HANDLE;
         VkImageView motion_view = VK_NULL_HANDLE;
-        VkImageView current_linear_depth_view = VK_NULL_HANDLE;
-        VkImageView history_linear_depth_view = VK_NULL_HANDLE;
         VkImageLayout current_color_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         VkImageLayout motion_layout = VK_IMAGE_LAYOUT_GENERAL;
-        VkImageLayout current_depth_layout = VK_IMAGE_LAYOUT_GENERAL;
-        VkImageLayout history_depth_layout = VK_IMAGE_LAYOUT_GENERAL;
         glm::ivec2 render_extent{0, 0};
         glm::ivec2 output_extent{0, 0};
         glm::ivec2 current_allocation_extent{0, 0};
@@ -66,21 +64,24 @@ namespace lfs::vis {
         bool history_valid = false;
         float history_weight = 0.9f;
         float motion_rejection_pixels = 128.0f;
-        bool depth_available = false;
+        VulkanSceneDepthHistoryParams current_depth;
         float depth_relative_threshold = 0.01f;
         float depth_absolute_threshold = 1e-4f;
     };
 
-    [[nodiscard]] constexpr bool validTemporalDepthInputs(
+    [[nodiscard]] inline bool validTemporalDepthInputs(
         const VulkanSceneTemporalResolveParams& params) noexcept {
-        return !params.depth_available ||
-               (params.current_linear_depth_view != VK_NULL_HANDLE &&
-                params.history_linear_depth_view != VK_NULL_HANDLE &&
-                params.render_extent.x > 0 && params.render_extent.y > 0 &&
-                (params.current_depth_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
-                 params.current_depth_layout == VK_IMAGE_LAYOUT_GENERAL) &&
-                (params.history_depth_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
-                 params.history_depth_layout == VK_IMAGE_LAYOUT_GENERAL));
+        return !params.current_depth.enabled ||
+               (canRecordVulkanSceneDepthHistory(params.current_depth) &&
+                params.current_depth.view == params.view &&
+                params.current_depth.depth.matchesRenderExtent(params.render_extent));
+    }
+
+    [[nodiscard]] constexpr std::optional<std::size_t> temporalDepthHistoryResourceSlot(
+        const TemporalViewId view, const std::size_t ping_index) noexcept {
+        if (!validTemporalViewId(view) || ping_index > 1)
+            return std::nullopt;
+        return static_cast<std::size_t>(view) * 2 + ping_index;
     }
 
     class VulkanSceneTemporalResolvePass {

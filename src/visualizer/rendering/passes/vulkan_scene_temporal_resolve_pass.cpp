@@ -4,6 +4,8 @@
 
 #include "vulkan_scene_temporal_resolve_pass.hpp"
 
+#include "vulkan_scene_depth_history_pass.hpp"
+
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "window/vulkan_barrier2.hpp"
@@ -56,10 +58,13 @@ namespace lfs::vis {
         VmaAllocator allocator = VK_NULL_HANDLE;
         VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
         VkSampler sampler = VK_NULL_HANDLE;
+        VkSampler depth_sampler = VK_NULL_HANDLE;
         VkDescriptorSetLayout descriptor_layout = VK_NULL_HANDLE;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
         std::array<ViewResource, static_cast<std::size_t>(TemporalViewId::Count)> views;
+        VulkanSceneDepthHistoryPass depth_history;
+        bool depth_history_initialized = false;
         std::array<std::uint32_t, 3> max_group_count{};
 
         ~Impl() { destroy(); }
@@ -110,6 +115,10 @@ namespace lfs::vis {
             auto& resource = views[viewIndex(view)];
             resource.has_history = false;
             resource.contract = {};
+            for (std::size_t ping = 0; ping < 2; ++ping) {
+                if (const auto slot = temporalDepthHistoryResourceSlot(view, ping))
+                    depth_history.invalidate(*slot);
+            }
         }
 
         void destroy() {
@@ -127,10 +136,13 @@ namespace lfs::vis {
                 vkDestroyDescriptorSetLayout(device, descriptor_layout, nullptr);
             if (sampler != VK_NULL_HANDLE)
                 vkDestroySampler(device, sampler, nullptr);
+            if (depth_sampler != VK_NULL_HANDLE)
+                vkDestroySampler(device, depth_sampler, nullptr);
             pipeline = VK_NULL_HANDLE;
             pipeline_layout = VK_NULL_HANDLE;
             descriptor_layout = VK_NULL_HANDLE;
             sampler = VK_NULL_HANDLE;
+            depth_sampler = VK_NULL_HANDLE;
         }
 
         [[nodiscard]] bool createStaticResources() {
@@ -152,6 +164,18 @@ namespace lfs::vis {
                              "vkCreateSampler(scene_temporal)",
                              "Scene temporal sampler creation failed"))
                 return false;
+
+            sampler_info.magFilter = VK_FILTER_NEAREST;
+            sampler_info.minFilter = VK_FILTER_NEAREST;
+            if (!vk_try_bool(vkCreateSampler(device,
+                                             &sampler_info,
+                                             nullptr,
+                                             &depth_sampler),
+                             "vkCreateSampler(scene_temporal.depth)",
+                             "Scene temporal depth sampler creation failed")) {
+                destroyStaticResources();
+                return false;
+            }
 
             std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
             for (std::uint32_t index = 0; index < 5; ++index) {
@@ -323,6 +347,43 @@ namespace lfs::vis {
                 nextTemporalHistoryWriteIndex(resource.has_history, resource.read_index);
             auto& output = resource.images[write_index];
             auto& history = resource.images[resource.read_index];
+
+            VkImageView current_depth_view = params.current_color_view;
+            VkImageView history_depth_view = params.current_color_view;
+            VkImageLayout current_depth_layout = params.current_color_layout;
+            VkImageLayout history_depth_layout = params.current_color_layout;
+            bool depth_rejection = false;
+            if (params.current_depth.enabled) {
+                if (!depth_history_initialized) {
+                    depth_history_initialized = depth_history.init(*context);
+                }
+                const auto write_slot = temporalDepthHistoryResourceSlot(params.view, write_index);
+                const auto read_slot = temporalDepthHistoryResourceSlot(params.view,
+                                                                        resource.read_index);
+                if (!depth_history_initialized || !write_slot || !read_slot) {
+                    return false;
+                }
+                depth_history.invalidate(*write_slot);
+                if (!depth_history.record(command_buffer, params.current_depth, *write_slot))
+                    return false;
+                current_depth_view = depth_history.depthView(*write_slot);
+                current_depth_layout = VK_IMAGE_LAYOUT_GENERAL;
+                const auto previous_depth_contract = depth_history.contract(*read_slot);
+                depth_rejection = resource.has_history && params.history_valid &&
+                                  previous_depth_contract.valid();
+                if (depth_rejection) {
+                    history_depth_view = depth_history.depthView(*read_slot);
+                    history_depth_layout = VK_IMAGE_LAYOUT_GENERAL;
+                } else {
+                    history_depth_view = current_depth_view;
+                    history_depth_layout = current_depth_layout;
+                }
+            } else {
+                for (std::size_t ping = 0; ping < 2; ++ping) {
+                    if (const auto slot = temporalDepthHistoryResourceSlot(params.view, ping))
+                        depth_history.invalidate(*slot);
+                }
+            }
             cmdImageBarrier2(command_buffer,
                              output.image,
                              VK_IMAGE_ASPECT_COLOR_BIT,
@@ -345,13 +406,9 @@ namespace lfs::vis {
                                                                     : params.current_color_layout};
             VkDescriptorImageInfo motion_info{sampler, params.motion_view, params.motion_layout};
             VkDescriptorImageInfo current_depth_info{
-                sampler,
-                params.depth_available ? params.current_linear_depth_view : params.current_color_view,
-                params.depth_available ? params.current_depth_layout : params.current_color_layout};
+                depth_sampler, current_depth_view, current_depth_layout};
             VkDescriptorImageInfo history_depth_info{
-                sampler,
-                params.depth_available ? params.history_linear_depth_view : params.current_color_view,
-                params.depth_available ? params.history_depth_layout : params.current_color_layout};
+                depth_sampler, history_depth_view, history_depth_layout};
             VkDescriptorImageInfo output_info{VK_NULL_HANDLE, output.view, VK_IMAGE_LAYOUT_GENERAL};
             std::array<VkDescriptorImageInfo*, 6> infos{&current_info,
                                                         &history_info,
@@ -380,9 +437,7 @@ namespace lfs::vis {
                             0.0f},
                 .current_uv = current_uv,
                 .depth_control = {
-                    params.depth_available && resource.has_history && params.history_valid
-                        ? 1.0f
-                        : 0.0f,
+                    depth_rejection ? 1.0f : 0.0f,
                     std::max(0.0f, params.depth_relative_threshold),
                     std::max(0.0f, params.depth_absolute_threshold),
                     0.0f},
@@ -422,9 +477,12 @@ namespace lfs::vis {
             resource.has_history = true;
             resource.contract = {
                 .color_storage = SceneHistoryStorage::VulkanImage,
-                .depth_storage = SceneHistoryStorage::None,
+                .depth_storage = params.current_depth.enabled
+                                     ? SceneHistoryStorage::VulkanImage
+                                     : SceneHistoryStorage::None,
                 .color_extent = params.output_extent,
-                .depth_extent = {0, 0},
+                .depth_extent = params.current_depth.enabled ? params.render_extent
+                                                             : glm::ivec2(0),
                 .sequence = params.sequence + 1,
             };
             return resource.contract.valid();
