@@ -409,6 +409,7 @@ set(TEST_FILES
     test_scene_motion_contract.cpp
     test_scene_temporal_coordinator.cpp
     test_scene_temporal_plan.cpp
+    test_scene_temporal_resolve.cpp
     test_temporal_frame_tracker.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
