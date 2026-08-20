@@ -139,9 +139,13 @@ namespace lfs::io::project {
     // Best-effort removal of crash leftovers for one published master:
     // `.{master-filename}.saveas-*` staging files and this master's
     // compact/project-write/replace-backup temps, plus their `.lock`
-    // siblings. Skips anything still held. Never deletes the master
-    // file. `{master}.lock` is reclaimed only when
-    // `reclaim_master_lock` is true and the probe acquire succeeds.
+    // siblings. In the same directory, also considers those families
+    // when they name a master that is absent there (crashed Save As
+    // toward a never-created destination). Candidates whose master
+    // exists but is not this master are left to that master's sweep.
+    // Skips anything still held. Never deletes the master file.
+    // `{master}.lock` is reclaimed only when `reclaim_master_lock`
+    // is true and the probe acquire succeeds.
     LFS_IO_API void sweep_stale_licht_artifacts(
         const std::filesystem::path& master_path,
         bool reclaim_master_lock = false);

@@ -367,6 +367,95 @@ namespace lfs::io::project {
                        suffix);
         }
 
+        [[nodiscard]] std::optional<std::string>
+        referenced_saveas_master_name(
+            const std::string_view filename) {
+            if (!filename.starts_with('.')) {
+                return std::nullopt;
+            }
+            constexpr std::string_view marker =
+                ".saveas-";
+            const auto marker_at =
+                filename.rfind(marker);
+            if (marker_at == std::string_view::npos ||
+                marker_at < 2) {
+                return std::nullopt;
+            }
+            return std::string(
+                filename.substr(1, marker_at - 1));
+        }
+
+        [[nodiscard]] std::optional<std::string>
+        referenced_write_temp_master_name(
+            const std::string_view filename) {
+            constexpr std::string_view tags[] = {
+                ".project-write.",
+                ".compact.",
+                ".replace-backup.",
+            };
+            auto tag_at = std::string_view::npos;
+            std::size_t tag_size = 0;
+            for (const auto tag : tags) {
+                const auto found = filename.find(tag);
+                if (found != std::string_view::npos &&
+                    found > 0 &&
+                    found < tag_at) {
+                    tag_at = found;
+                    tag_size = tag.size();
+                }
+            }
+            if (tag_at == std::string_view::npos) {
+                return std::nullopt;
+            }
+            const auto after =
+                filename.substr(tag_at + tag_size);
+            constexpr std::string_view tmp_marker =
+                ".tmp";
+            const auto tmp_at =
+                after.rfind(tmp_marker);
+            if (tmp_at == std::string_view::npos) {
+                return std::nullopt;
+            }
+            const auto extension = after.substr(
+                tmp_at + tmp_marker.size());
+            if (extension.empty() ||
+                !extension.starts_with('.')) {
+                return std::nullopt;
+            }
+            const auto stem =
+                filename.substr(0, tag_at);
+            const auto suffix =
+                std::string(tmp_marker) +
+                std::string(extension);
+            if (!is_write_temp_name(
+                    filename, stem, suffix)) {
+                return std::nullopt;
+            }
+            return std::string(stem) +
+                   std::string(extension);
+        }
+
+        [[nodiscard]] bool master_file_is_absent(
+            const std::filesystem::path& directory,
+            const std::string_view master_name) {
+            if (master_name.empty() ||
+                master_name == "." ||
+                master_name == ".." ||
+                master_name.find('/') !=
+                    std::string_view::npos ||
+                master_name.find('\\') !=
+                    std::string_view::npos) {
+                return false;
+            }
+            std::error_code error;
+            const bool present =
+                std::filesystem::exists(
+                    directory /
+                        std::string(master_name),
+                    error);
+            return !error && !present;
+        }
+
         [[nodiscard]] bool is_master_corrupt_aside(
             const std::string_view filename,
             const std::filesystem::path& master_path) {
@@ -830,6 +919,10 @@ namespace lfs::io::project {
 
         std::vector<std::filesystem::path> saveas_data;
         std::vector<std::filesystem::path> write_temp_data;
+        std::map<
+            std::string,
+            std::vector<std::filesystem::path>>
+            unreferenced_write_temps;
         std::error_code error;
         for (std::filesystem::directory_iterator
                  iterator(directory, error),
@@ -859,6 +952,27 @@ namespace lfs::io::project {
             if (is_write_temp_name(
                     data_name, stem, suffix)) {
                 write_temp_data.push_back(data);
+                continue;
+            }
+            if (const auto referenced =
+                    referenced_saveas_master_name(
+                        data_name);
+                referenced &&
+                *referenced != master_name &&
+                master_file_is_absent(
+                    directory, *referenced)) {
+                saveas_data.push_back(data);
+                continue;
+            }
+            if (const auto referenced =
+                    referenced_write_temp_master_name(
+                        data_name);
+                referenced &&
+                *referenced != master_name &&
+                master_file_is_absent(
+                    directory, *referenced)) {
+                unreferenced_write_temps[*referenced]
+                    .push_back(data);
             }
         }
         const auto unique_sorted =
@@ -872,9 +986,26 @@ namespace lfs::io::project {
             };
         unique_sorted(saveas_data);
         unique_sorted(write_temp_data);
+        for (auto& [_, temps] :
+             unreferenced_write_temps) {
+            unique_sorted(temps);
+        }
 
         for (const auto& data : saveas_data) {
             try_remove_unheld_artifact(data, true);
+        }
+        for (const auto& [referenced_name, temps] :
+             unreferenced_write_temps) {
+            auto acquired =
+                detail::WriterLock::acquire(
+                    directory / referenced_name);
+            if (!acquired) {
+                continue;
+            }
+            for (const auto& data : temps) {
+                try_remove_unheld_artifact(
+                    data, true);
+            }
         }
 
         std::error_code lock_exists_error;

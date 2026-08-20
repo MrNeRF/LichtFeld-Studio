@@ -3221,6 +3221,36 @@ namespace {
         write_file_bytes(saveas, byte_vector("stale saveas staging"));
         write_file_bytes(saveas_lock, byte_vector("stale saveas lock"));
 
+        const fs::path other_master =
+            temporary.path / "other.licht";
+        write_file_bytes(other_master, byte_vector("foreign master"));
+        const fs::path foreign =
+            temporary.path / ".other.licht.saveas-bbbb.tmp";
+        write_file_bytes(foreign, byte_vector("foreign saveas staging"));
+        const fs::path foreign_compact =
+            temporary.path / "other.compact.1.2.3.tmp.licht";
+        write_file_bytes(foreign_compact, byte_vector("foreign compact"));
+
+        const fs::path ghost =
+            temporary.path / ".ghost.licht.saveas-xxxx.tmp";
+        auto ghost_lock = ghost;
+        ghost_lock += ".lock";
+        write_file_bytes(ghost, byte_vector("unreferenced saveas staging"));
+        write_file_bytes(ghost_lock, byte_vector("unreferenced saveas lock"));
+        const fs::path ghost_compact =
+            temporary.path / "ghost.compact.1.2.3.tmp.licht";
+        write_file_bytes(ghost_compact, byte_vector("unreferenced compact"));
+
+        const fs::path held_ghost =
+            temporary.path / ".ghost.licht.saveas-held.tmp";
+        auto held_ghost_lock = held_ghost;
+        held_ghost_lock += ".lock";
+        write_file_bytes(held_ghost, byte_vector("held ghost staging"));
+        write_file_bytes(held_ghost_lock, byte_vector("held ghost lock"));
+        auto held_ghost_lease = WriterLockLease::acquire(held_ghost);
+        ASSERT_TRUE(held_ghost_lease)
+            << lfs::format_for_developer(held_ghost_lease.error());
+
         const fs::path held_master =
             temporary.path / "startup-held.licht";
         create_single_chunk_fixture(
@@ -3240,6 +3270,14 @@ namespace {
         EXPECT_FALSE(fs::exists(master_lock));
         EXPECT_FALSE(fs::exists(saveas));
         EXPECT_FALSE(fs::exists(saveas_lock));
+        EXPECT_FALSE(fs::exists(ghost));
+        EXPECT_FALSE(fs::exists(ghost_lock));
+        EXPECT_FALSE(fs::exists(ghost_compact));
+        EXPECT_TRUE(fs::exists(other_master));
+        EXPECT_TRUE(fs::exists(foreign));
+        EXPECT_TRUE(fs::exists(foreign_compact));
+        EXPECT_TRUE(fs::exists(held_ghost));
+        EXPECT_TRUE(fs::exists(held_ghost_lock));
         EXPECT_TRUE(fs::exists(held_lock));
         EXPECT_FALSE(fs::exists(missing));
     }

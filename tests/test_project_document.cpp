@@ -3374,11 +3374,35 @@ namespace {
         const std::array<std::byte, 1> compact_bytes{std::byte{'c'}};
         write_file_bytes(compact, compact_bytes);
 
+        const fs::path other_master =
+            temporary.path / "other.licht";
+        const std::array<std::byte, 1> other_master_bytes{std::byte{'m'}};
+        write_file_bytes(other_master, other_master_bytes);
         const fs::path foreign =
             temporary.path /
             ".other.licht.saveas-bbbb.tmp";
         const std::array<std::byte, 1> foreign_bytes{std::byte{'f'}};
         write_file_bytes(foreign, foreign_bytes);
+        const fs::path foreign_compact =
+            temporary.path /
+            "other.compact.1.2.3.tmp.licht";
+        const std::array<std::byte, 1> foreign_compact_bytes{std::byte{'n'}};
+        write_file_bytes(foreign_compact, foreign_compact_bytes);
+
+        const fs::path ghost =
+            temporary.path /
+            ".ghost.licht.saveas-xxxx.tmp";
+        auto ghost_lock = ghost;
+        ghost_lock += ".lock";
+        const std::array<std::byte, 1> ghost_bytes{std::byte{'g'}};
+        const std::array<std::byte, 1> ghost_lock_bytes{std::byte{'q'}};
+        write_file_bytes(ghost, ghost_bytes);
+        write_file_bytes(ghost_lock, ghost_lock_bytes);
+        const fs::path ghost_compact =
+            temporary.path /
+            "ghost.compact.1.2.3.tmp.licht";
+        const std::array<std::byte, 1> ghost_compact_bytes{std::byte{'w'}};
+        write_file_bytes(ghost_compact, ghost_compact_bytes);
 
         const fs::path held =
             temporary.path /
@@ -3393,6 +3417,19 @@ namespace {
         ASSERT_TRUE(held_lease)
             << lfs::format_for_developer(held_lease.error());
 
+        const fs::path held_ghost =
+            temporary.path /
+            ".ghost.licht.saveas-held.tmp";
+        auto held_ghost_lock = held_ghost;
+        held_ghost_lock += ".lock";
+        const std::array<std::byte, 1> held_ghost_bytes{std::byte{'j'}};
+        const std::array<std::byte, 1> held_ghost_lock_bytes{std::byte{'p'}};
+        write_file_bytes(held_ghost, held_ghost_bytes);
+        write_file_bytes(held_ghost_lock, held_ghost_lock_bytes);
+        auto held_ghost_lease = WriterLockLease::acquire(held_ghost);
+        ASSERT_TRUE(held_ghost_lease)
+            << lfs::format_for_developer(held_ghost_lease.error());
+
         auto opened =
             require_result_ptr(ProjectDocument::open(master));
         ASSERT_TRUE(opened->source_path());
@@ -3400,9 +3437,16 @@ namespace {
         EXPECT_FALSE(fs::exists(owned));
         EXPECT_FALSE(fs::exists(owned_lock));
         EXPECT_FALSE(fs::exists(compact));
+        EXPECT_FALSE(fs::exists(ghost));
+        EXPECT_FALSE(fs::exists(ghost_lock));
+        EXPECT_FALSE(fs::exists(ghost_compact));
+        EXPECT_TRUE(fs::exists(other_master));
         EXPECT_TRUE(fs::exists(foreign));
+        EXPECT_TRUE(fs::exists(foreign_compact));
         EXPECT_TRUE(fs::exists(held));
         EXPECT_TRUE(fs::exists(held_lock));
+        EXPECT_TRUE(fs::exists(held_ghost));
+        EXPECT_TRUE(fs::exists(held_ghost_lock));
         auto master_lock = master;
         master_lock += ".lock";
         EXPECT_FALSE(fs::exists(master_lock));
