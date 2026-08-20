@@ -60,6 +60,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
+    class VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
     class VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
     class VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
     class VisualizerImplResetTest_CancelExitDuringCloseSaveDoesNotClose_Test;
@@ -247,6 +248,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
         friend class lfs::vis::VisualizerImplResetTest_CancelExitDuringCloseSaveDoesNotClose_Test;
@@ -372,6 +374,8 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         adoptCompletedTrainingSnapshot(
             bool allow_during_application_close = false);
+        [[nodiscard]] lfs::Result<void>
+        adoptSettledTrainerPublishOntoCurrentMaster();
         [[nodiscard]] lfs::Result<std::vector<std::byte>>
         capturePreviewPng() const;
         [[nodiscard]] lfs::Result<void>

@@ -5751,6 +5751,284 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           AdoptedStepBoundaryPublishRebasesAutosaveBase) {
+        // Trainer step-boundary appends advance the on-disk
+        // master without rebasing the GUI document. Settlement
+        // must adopt so the next autosave binds the new commit.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "step-boundary-adopt.licht";
+        const auto sidecar =
+            lfs::io::project::autosave_sidecar_path(
+                project_path);
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_NE(lifecycle->document_, nullptr);
+            const auto stale_commit =
+                lifecycle->document_
+                    ->source_commit_uuid();
+            ASSERT_TRUE(stale_commit.has_value());
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Train model");
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            trainer->set_trainer_project_save_policy({
+                .on_completion = true,
+                .on_stop_or_error = false,
+                .at_step_boundaries = true,
+            });
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    viewer.getTrainerManager()
+                        ->getStateMachine());
+            if (state_machine.getState() ==
+                TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Running));
+
+            const auto checkpoint_uuid =
+                lfs::core::generate_uuid_v4();
+            const auto training_uuid =
+                lfs::core::generate_uuid_v4();
+            const auto root_uuid =
+                lfs::core::generate_uuid_v4();
+            {
+                auto on_disk =
+                    lfs::test::licht::require_result_ptr(
+                        lfs::io::project::
+                            ProjectDocument::open(
+                                project_path,
+                                {
+                                    .reader = {},
+                                    .geometry = {},
+                                    .defer_geometry_payloads =
+                                        true,
+                                }));
+                lfs::test::licht::require_status(
+                    on_disk->edit_scene_graph()
+                        .upsert_node(
+                            lfs::io::project::
+                                SceneNodeRecord{
+                                    .uuid = root_uuid,
+                                    .type = "group",
+                                    .name = "Root",
+                                    .child_order = 0,
+                                }));
+                lfs::test::licht::require_status(
+                    on_disk->edit_scene_graph()
+                        .upsert_node(
+                            lfs::io::project::
+                                SceneNodeRecord{
+                                    .uuid = training_uuid,
+                                    .type = "splat",
+                                    .name = "Training",
+                                    .parent_uuid = root_uuid,
+                                    .child_order = 0,
+                                    .payload =
+                                        lfs::io::project::
+                                            PayloadBinding{
+                                                .fourcc =
+                                                    "CKPT",
+                                                .instance_uuid =
+                                                    checkpoint_uuid,
+                                                .source_kind =
+                                                    "training",
+                                            },
+                                }));
+                lfs::test::licht::require_status(
+                    on_disk->edit_scene_graph()
+                        .set_training_model_uuid(
+                            training_uuid));
+                lfs::test::licht::require_status(
+                    on_disk->set_checkpoint(
+                        checkpoint_uuid,
+                        make_training_autosave_checkpoint_payload(
+                            checkpoint_uuid)));
+                lfs::test::licht::require_status(
+                    on_disk->edit_view().dom().set(
+                        "step_boundary_marker",
+                        std::string{"appended"}));
+                auto save_options =
+                    lfs::test::licht::
+                        deterministic_document_save_options(
+                            0x76000030, 2, 3);
+                save_options.commit.snapshot_uuid =
+                    checkpoint_uuid;
+                (void)lfs::test::licht::require_result(
+                    on_disk->save(
+                        project_path, save_options));
+            }
+
+            auto disk =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(disk)
+                << lfs::format_for_developer(
+                       disk.error());
+            const auto published_commit =
+                disk->commit().commit_uuid;
+            EXPECT_NE(
+                published_commit, *stale_commit);
+            EXPECT_EQ(
+                *lifecycle->document_
+                     ->source_commit_uuid(),
+                *stale_commit);
+            EXPECT_TRUE(
+                lifecycle->document_->checkpoint_uuids()
+                    .empty());
+            auto premature =
+                lifecycle->document_->save_autosave(
+                    sidecar,
+                    lfs::io::project::
+                        ProjectDocumentAutosaveOptions{
+                            .file_uuid =
+                                lfs::core::
+                                    generate_uuid_v4(),
+                            .base_explicit_commit_uuid =
+                                *stale_commit,
+                            .autosave_sequence = 1,
+                            .snapshot_uuid = {},
+                            .index_compression =
+                                lfs::io::project::
+                                    IndexCompression::
+                                        StoredForDeterministicTests,
+                            .disk_reserve_bytes = 0,
+                        });
+            ASSERT_FALSE(premature);
+            EXPECT_EQ(
+                premature.error().code(),
+                lfs::ErrorCode::FailedPrecondition);
+
+            ASSERT_NE(
+                trainer->project_snapshot_service_,
+                nullptr);
+            const auto bound_master =
+                *lifecycle->document_->source_path();
+            trainer->last_project_snapshot_path_ =
+                bound_master;
+            trainer->last_project_writer_error_
+                .clear();
+            trainer->project_snapshot_service_
+                ->testing_advance_completed_snapshots(
+                    1);
+            constexpr std::uint64_t request_id = 1;
+            {
+                std::lock_guard lock(
+                    trainer->project_snapshot_mutex_);
+                trainer->last_completed_project_request_id_ =
+                    request_id;
+            }
+
+            auto started = lifecycle->startTrainingWrite(
+                project::ProjectLifecycle::
+                    ProjectWritePurpose::
+                        TrainingAutosave,
+                request_id, bound_master,
+                lifecycle->document_->dirty_epoch(),
+                1);
+            ASSERT_TRUE(started)
+                << lfs::format_for_developer(
+                       started.error());
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+
+            ASSERT_NE(lifecycle->document_, nullptr);
+            ASSERT_TRUE(
+                lifecycle->document_
+                    ->source_commit_uuid());
+            EXPECT_EQ(
+                *lifecycle->document_
+                     ->source_commit_uuid(),
+                published_commit);
+            EXPECT_FALSE(
+                lifecycle->document_->checkpoint_uuids()
+                    .empty());
+            const auto marker =
+                lifecycle->document_->view()
+                    .dom()
+                    .get_json("step_boundary_marker");
+            ASSERT_TRUE(marker.has_value());
+            EXPECT_EQ(*marker, "appended");
+
+            lfs::test::licht::require_status(
+                lifecycle->document_->edit_view()
+                    .dom()
+                    .set(
+                        "light_after_adopt",
+                        std::string{"dirty"}));
+            auto saved =
+                lifecycle->document_->save_autosave(
+                    sidecar,
+                    lfs::io::project::
+                        ProjectDocumentAutosaveOptions{
+                            .file_uuid =
+                                lfs::core::
+                                    generate_uuid_v4(),
+                            .base_explicit_commit_uuid =
+                                published_commit,
+                            .autosave_sequence = 1,
+                            .snapshot_uuid = {},
+                            .index_compression =
+                                lfs::io::project::
+                                    IndexCompression::
+                                        StoredForDeterministicTests,
+                            .disk_reserve_bytes = 0,
+                        });
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
            CancelExitDuringCloseSaveDoesNotClose) {
         // CancelExit while CloseSaveState::Saving must
         // drop the close latch without aborting the

@@ -279,6 +279,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
         friend class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
         friend class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
+        friend class VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
         friend class VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
         friend class VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
         friend class VisualizerImplResetTest_CancelExitDuringCloseSaveDoesNotClose_Test;
