@@ -1217,6 +1217,50 @@ namespace fast_lfs::rasterization::kernels {
             min(grid_height, static_cast<uint>(y_max)));
     }
 
+    // Per-row (or per-column) ellipse walk used by both the count path and
+    // create_instances emit. Float math is verbatim on both sides so the
+    // kFastGSForwardStatusInstanceWriteMismatch check cannot fire from a
+    // count/emit divergence. scan_along_x: walk tile rows, span in x.
+    __device__ __forceinline__ uint2 ellipse_touched_tile_span(
+        const float3& conic,
+        const float radius_sq,
+        const float2 mean2d_shifted,
+        const bool scan_along_x,
+        const uint scan_index,
+        const uint cross_min,
+        const uint cross_max) {
+        if (scan_along_x) {
+            const float y0 = static_cast<float>(scan_index * config::tile_height) - mean2d_shifted.y;
+            const float y1 = y0 + static_cast<float>(config::tile_height);
+            const float2 bound = ellipse_range_bound(conic, radius_sq, y0, y1);
+            const uint lo = floor_tile_clamped(bound.x + mean2d_shifted.x, cross_min, cross_max, config::tile_width);
+            const uint hi = ceil_tile_clamped(bound.y + mean2d_shifted.x, cross_min, cross_max, config::tile_width);
+            return make_uint2(lo, hi);
+        }
+        const float3 conic_transposed = make_float3(conic.z, conic.y, conic.x);
+        const float x0 = static_cast<float>(scan_index * config::tile_width) - mean2d_shifted.x;
+        const float x1 = x0 + static_cast<float>(config::tile_width);
+        const float2 bound = ellipse_range_bound(conic_transposed, radius_sq, x0, x1);
+        const uint lo = floor_tile_clamped(bound.x + mean2d_shifted.y, cross_min, cross_max, config::tile_height);
+        const uint hi = ceil_tile_clamped(bound.y + mean2d_shifted.y, cross_min, cross_max, config::tile_height);
+        return make_uint2(lo, hi);
+    }
+
+    __device__ __forceinline__ uint tile_span_count(const uint2 span) {
+        return span.y >= span.x ? span.y - span.x : 0u;
+    }
+
+    __device__ __forceinline__ uint warp_exclusive_scan_uint(uint val) {
+        uint inclusive = val;
+#pragma unroll
+        for (int offset = 1; offset < 32; offset <<= 1) {
+            const uint n = __shfl_up_sync(0xffffffffu, inclusive, offset);
+            if ((threadIdx.x & 31) >= static_cast<unsigned>(offset))
+                inclusive += n;
+        }
+        return inclusive - val;
+    }
+
     __device__ inline uint compute_exact_n_touched_tiles(
         const float2& mean2d,
         const float3& conic,
@@ -1235,30 +1279,18 @@ namespace fast_lfs::rasterization::kernels {
 
         const uint screen_bounds_width = screen_bounds.y - screen_bounds.x;
         const uint screen_bounds_height = screen_bounds.w - screen_bounds.z;
+        const bool scan_along_x = screen_bounds_height <= screen_bounds_width;
+        const uint scan0 = scan_along_x ? screen_bounds.z : screen_bounds.x;
+        const uint scan1 = scan_along_x ? screen_bounds.w : screen_bounds.y;
+        const uint cross0 = scan_along_x ? screen_bounds.x : screen_bounds.z;
+        const uint cross1 = scan_along_x ? screen_bounds.y : screen_bounds.w;
 
         uint n_touched_tiles = 0;
-
-        if (screen_bounds_height <= screen_bounds_width) {
-            for (uint tile_y = screen_bounds.z; tile_y < screen_bounds.w; tile_y++) {
-                const float y0 = static_cast<float>(tile_y * config::tile_height) - mean2d_shifted.y;
-                const float y1 = y0 + static_cast<float>(config::tile_height);
-                const float2 bound = ellipse_range_bound(conic, radius_sq, y0, y1);
-                const uint min_x = floor_tile_clamped(bound.x + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
-                const uint max_x = ceil_tile_clamped(bound.y + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
-                n_touched_tiles += max_x >= min_x ? max_x - min_x : 0;
-            }
-        } else {
-            const float3 conic_transposed = make_float3(conic.z, conic.y, conic.x);
-            for (uint tile_x = screen_bounds.x; tile_x < screen_bounds.y; tile_x++) {
-                const float x0 = static_cast<float>(tile_x * config::tile_width) - mean2d_shifted.x;
-                const float x1 = x0 + static_cast<float>(config::tile_width);
-                const float2 bound = ellipse_range_bound(conic_transposed, radius_sq, x0, x1);
-                const uint min_y = floor_tile_clamped(bound.x + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
-                const uint max_y = ceil_tile_clamped(bound.y + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
-                n_touched_tiles += max_y >= min_y ? max_y - min_y : 0;
-            }
+        for (uint scan_index = scan0; scan_index < scan1; scan_index++) {
+            const uint2 span = ellipse_touched_tile_span(
+                conic, radius_sq, mean2d_shifted, scan_along_x, scan_index, cross0, cross1);
+            n_touched_tiles += tile_span_count(span);
         }
-
         return n_touched_tiles;
     }
 
