@@ -269,27 +269,6 @@ def test_export_panel_closes_when_export_finishes(export_panel_module):
     assert state.set_panel_enabled_calls == [("lfs.export", False)]
 
 
-def test_export_panel_does_not_register_failed_export(export_panel_module):
-    module, state = export_panel_module
-    panel = module.ExportPanel()
-    panel._exporting = True
-    panel._last_export_path = "/tmp/failed.ply"
-    panel._last_export_format = module.ExportFormat.PLY
-    registered = []
-    panel._register_export = lambda path, fmt: registered.append((path, fmt))
-    state.export_state = {
-        "active": False,
-        "stage": "Failed",
-        "error": "disk full",
-        "format": "PLY",
-    }
-
-    assert panel._update_export_progress() is True
-    assert registered == []
-    assert panel._last_export_path is None
-    assert panel._last_export_format is None
-
-
 def test_export_panel_store_subscriptions_mark_panel_dirty(export_panel_module, monkeypatch):
     module, _state = export_panel_module
     scene_signal = _SignalStub()

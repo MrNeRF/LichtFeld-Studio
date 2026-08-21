@@ -227,8 +227,8 @@ class AssetManagerPanel(Panel):
             "selected_folder_asset_count", self.get_selected_folder_asset_count
         )
 
+        model.bind_func("panel_label", lambda: tr("asset_manager.panel_title"))
         labels = {
-            "panel_label": "asset_manager.panel_title",
             "close_label": "common.close",
             "import_project_label": "menu.file.open_project",
             "search_placeholder": "asset_manager.toolbar.search_placeholder",
@@ -991,9 +991,8 @@ class AssetManagerPanel(Panel):
             for asset_id, asset in self._asset_index_assets().items()
             if not asset.get("exists", False)
         ]
-        for asset_id in missing:
-            self._asset_index.delete_asset(asset_id)
-        if missing:
+        removed = self._asset_index.delete_assets(missing) if missing else 0
+        if removed:
             self._selected_asset_ids.difference_update(missing)
             self.refresh_catalog(scan_watched=False)
 

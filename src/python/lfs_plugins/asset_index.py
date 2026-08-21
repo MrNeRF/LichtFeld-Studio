@@ -276,31 +276,38 @@ class AssetIndex:
         self._project_by_path = {}
         self._ensure_default_folder()
 
-    def _load_v2(self, data: Dict[str, Any]) -> None:
+    def _load_v2(self, data: Dict[str, Any]) -> bool:
         folders_data = data.get("folders")
         projects_data = data.get("projects")
         if not isinstance(folders_data, dict) or not isinstance(projects_data, dict):
             raise ValueError("Asset Manager schema v2 requires folders and projects objects")
+        normalized = set(data) != {"schema_version", "folders", "projects"}
 
         folders: Dict[str, Folder] = {}
         for folder_id, value in folders_data.items():
             if not isinstance(folder_id, str) or not isinstance(value, dict):
                 raise ValueError("Invalid Asset Manager folder record")
+            normalized = normalized or set(value) != {"name", "watch_directories"}
+            watch_directories = _normalize_watch_directories(
+                value.get("watch_directories", [])
+            )
+            normalized = normalized or watch_directories != value.get(
+                "watch_directories", []
+            )
             folders[folder_id] = Folder(
                 id=folder_id,
                 name=str(value.get("name") or DEFAULT_FOLDER_NAME),
-                watch_directories=_normalize_watch_directories(
-                    value.get("watch_directories", [])
-                ),
+                watch_directories=watch_directories,
             )
 
         self._folders = folders
-        self._ensure_default_folder()
+        normalized = self._ensure_default_folder() or normalized
         self._projects = {}
         seen_paths = set()
         for project_uuid, value in projects_data.items():
             if not isinstance(value, dict):
                 raise ValueError("Invalid Asset Manager project record")
+            normalized = normalized or set(value) != {"name", "path", "folder_id"}
             try:
                 canonical_uuid = str(uuid.UUID(str(project_uuid)))
             except ValueError as exc:
@@ -308,7 +315,9 @@ class AssetIndex:
             if canonical_uuid != project_uuid:
                 raise ValueError(f"Project UUID is not canonical: {project_uuid}")
 
-            path = _normalize_path(str(value.get("path") or ""))
+            stored_path = str(value.get("path") or "")
+            path = _normalize_path(stored_path)
+            normalized = normalized or path != stored_path
             if not is_supported_asset_path(path):
                 raise ValueError(f"Asset Manager project is not a .licht file: {path}")
             path_key = self._path_key(path)
@@ -319,6 +328,7 @@ class AssetIndex:
             folder_id = str(value.get("folder_id") or DEFAULT_FOLDER_ID)
             if folder_id not in self._folders:
                 folder_id = DEFAULT_FOLDER_ID
+                normalized = True
             project = Project(
                 project_uuid=canonical_uuid,
                 name=str(value.get("name") or self._inspection_name(path)),
@@ -328,6 +338,7 @@ class AssetIndex:
             self._refresh_project(project)
             self._projects[canonical_uuid] = project
         self._rebuild_path_lookup()
+        return normalized
 
     def _migrate_legacy(self, data: Dict[str, Any]) -> None:
         self._initialize_empty()
@@ -458,7 +469,8 @@ class AssetIndex:
 
             is_v2 = data.get("schema_version") == SCHEMA_VERSION
             if is_v2 and not migrating_legacy_location:
-                self._load_v2(data)
+                if self._load_v2(data) and not self.save():
+                    return False
                 self._cleanup_obsolete_storage()
             else:
                 self._migrate_legacy(data)
@@ -595,11 +607,24 @@ class AssetIndex:
 
     @_synchronized
     def delete_asset(self, asset_id: str) -> bool:
-        project = self._projects.pop(asset_id, None)
-        if project is None:
-            return False
-        self._project_by_path.pop(self._path_key(project.path), None)
-        return self.save()
+        return self.delete_assets([asset_id]) == 1
+
+    @_synchronized
+    def delete_assets(self, asset_ids: List[str]) -> int:
+        removed: Dict[str, Project] = {}
+        for asset_id in dict.fromkeys(asset_ids):
+            project = self._projects.pop(asset_id, None)
+            if project is None:
+                continue
+            self._project_by_path.pop(self._path_key(project.path), None)
+            removed[asset_id] = project
+        if not removed:
+            return 0
+        if not self.save():
+            self._projects.update(removed)
+            self._rebuild_path_lookup()
+            return 0
+        return len(removed)
 
     @_synchronized
     def get_asset(self, asset_id: str) -> Optional[Project]:
@@ -608,14 +633,14 @@ class AssetIndex:
     @_synchronized
     def register_licht_asset(
         self,
-        absolute_path: str,
+        project_path: str,
         *,
         folder_id: Optional[str] = None,
         name: Optional[str] = None,
         adopt_existing: bool = True,
         save: bool = True,
     ) -> Tuple[Optional[Project], bool]:
-        path = _normalize_path(absolute_path)
+        path = _normalize_path(project_path)
         if not is_supported_asset_path(path):
             _log.warning("Asset Manager only supports .licht projects: %s", path)
             return None, False
@@ -724,10 +749,10 @@ class AssetIndex:
     @_synchronized
     def find_asset_by_path(
         self,
-        absolute_path: str,
+        project_path: str,
         folder_id: Optional[str] = None,
     ) -> Optional[Project]:
-        project_uuid = self._project_by_path.get(self._path_key(absolute_path))
+        project_uuid = self._project_by_path.get(self._path_key(project_path))
         project = self._projects.get(project_uuid) if project_uuid else None
         if project is not None and (folder_id is None or project.folder_id == folder_id):
             return project

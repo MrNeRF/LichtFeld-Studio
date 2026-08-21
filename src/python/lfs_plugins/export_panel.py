@@ -102,8 +102,6 @@ class ExportPanel(Panel):
         self._rad_streamable = True
         self._include_provenance = True
         self._doc = None  # Document reference for DOM access
-        self._last_export_path = None  # Track last export path for Asset Manager
-        self._last_export_format = None  # Track last export format for Asset Manager
         self._reactive_unsubscribers = []
 
     # ── Data model ────────────────────────────────────────────
@@ -742,11 +740,6 @@ class ExportPanel(Panel):
 
     def _start_export(self, path, selected_nodes):
         if path:
-
-            # Store export info for Asset Manager registration
-            self._last_export_path = path
-            self._last_export_format = self._format
-
             self._exporting = True
             self._last_progress = -1.0
             self._progress_value = "0"
@@ -805,8 +798,6 @@ class ExportPanel(Panel):
         if not state.get("active", False):
             self._exporting = False
             self._selection_seeded = False
-            self._last_export_path = None
-            self._last_export_format = None
             self._last_progress = -1.0
             self._progress_value = "0"
             self._dirty_model(

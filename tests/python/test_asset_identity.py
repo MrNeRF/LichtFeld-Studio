@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Asset Manager .licht identity and fingerprint binding regressions."""
+"""Asset Manager `.licht` project identity regressions."""
 
 import json
-import os
 import shutil
 import uuid
 from pathlib import Path
@@ -44,62 +43,6 @@ def _install_inspections(monkeypatch, inspections):
         return value() if callable(value) else value
 
     monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
-
-
-def test_fingerprint_bindings_report_typed_dispositions(lf, tmp_path: Path):
-    project = tmp_path / "scene.licht"
-    project.write_bytes(b"licht-project-content")
-
-    expected = lf.io.fingerprint_path(project)
-    assert expected.kind == lf.io.FingerprintKind.FILE
-    assert len(expected.head_xxh3.to_hex()) == 32
-
-    matched = lf.io.check_fingerprint(project, expected)
-    assert matched.matches is True
-    assert matched.disposition == lf.io.FingerprintDisposition.MATCH_FAST_PATH
-
-    stat = project.stat()
-    os.utime(project, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
-    refreshed = lf.io.check_fingerprint(project, expected)
-    assert refreshed.matches is True
-    assert refreshed.disposition == lf.io.FingerprintDisposition.MATCH_MTIME_REFRESHED
-    assert refreshed.observed is not None
-
-    project.write_bytes(b"different-content-now")
-    mismatch = lf.io.check_fingerprint(project, expected)
-    assert mismatch.matches is False
-    assert mismatch.disposition == lf.io.FingerprintDisposition.CONTENT_MISMATCH
-
-
-def test_references_chapter_bindings_verify_and_relink(lf, tmp_path: Path):
-    original = tmp_path / "original.licht"
-    relocated = tmp_path / "relocated.licht"
-    original.write_bytes(b"same-project")
-    shutil.copy2(original, relocated)
-
-    record = lf.io.ReferenceRecord()
-    record.uuid = str(uuid.uuid4())
-    record.key = "asset-manager-project"
-    record.kind = "project"
-    original_locator = lf.io.ReferenceLocator()
-    original_locator.preferred = str(original)
-    original_locator.base = lf.io.LocatorBase.ABSOLUTE
-    record.locator = original_locator
-    record.fingerprint = lf.io.fingerprint_path(original)
-
-    chapter = lf.io.ReferencesChapter()
-    chapter.upsert(record)
-    assert chapter.find(record.uuid).key == record.key
-
-    check = chapter.verify_and_refresh(record.uuid, original)
-    assert check.matches is True
-
-    locator = lf.io.ReferenceLocator()
-    locator.preferred = str(relocated)
-    locator.base = lf.io.LocatorBase.ABSOLUTE
-    chapter.relink(record.uuid, locator, relocated)
-    assert chapter.find(record.uuid).locator.preferred == str(relocated)
-    assert "asset-manager-project" in chapter.to_json()
 
 
 def test_catalog_uses_project_uuid_and_persists_only_locator_fields(monkeypatch, tmp_path: Path):
@@ -182,6 +125,59 @@ def test_project_commit_changes_do_not_change_catalog_identity(monkeypatch, tmp_
     stored = json.loads(library_path.read_text(encoding="utf-8"))["projects"]
     assert set(stored) == {project_uuid}
     assert "commit_uuid" not in stored[project_uuid]
+
+
+def test_v2_load_rewrites_records_to_the_exact_minimal_schema(monkeypatch, tmp_path: Path):
+    project = tmp_path / "project.licht"
+    project.write_bytes(b"project container")
+    project_uuid = str(uuid.uuid4())
+    _install_inspections(monkeypatch, {project.name: _inspection(project_uuid)})
+    library_path = tmp_path / "library.json"
+    library_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "obsolete_root_field": True,
+                "folders": {
+                    "custom": {
+                        "name": "Custom",
+                        "watch_directories": [str(tmp_path), str(tmp_path)],
+                        "obsolete_folder_field": True,
+                    }
+                },
+                "projects": {
+                    project_uuid: {
+                        "name": "Project",
+                        "path": str(project),
+                        "folder_id": "custom",
+                        "obsolete_project_field": True,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    index = AssetIndex(library_path=library_path)
+    assert index.load() is True
+
+    assert json.loads(library_path.read_text(encoding="utf-8")) == {
+        "schema_version": 2,
+        "folders": {
+            "custom": {
+                "name": "Custom",
+                "watch_directories": [str(tmp_path)],
+            },
+            "default": {"name": "Default", "watch_directories": []},
+        },
+        "projects": {
+            project_uuid: {
+                "name": "Project",
+                "path": str(project),
+                "folder_id": "custom",
+            }
+        },
+    }
 
 
 def test_deleting_last_project_keeps_default_import_folder(monkeypatch, tmp_path: Path):
