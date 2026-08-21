@@ -25,6 +25,7 @@
 #include "io/loader.hpp"
 #include "io/ply_export_internal.hpp"
 #include "io/project_chapters.hpp"
+#include "io/project_container.hpp"
 #include "training/dataset.hpp"
 
 #include <filesystem>
@@ -179,6 +180,19 @@ namespace lfs::python {
             }
 
             bool is_dataset() const { return !cameras.empty(); }
+        };
+
+        struct PyProjectInspection {
+            std::string project_uuid;
+            std::string file_uuid;
+            std::string commit_uuid;
+            std::uint64_t generation = 0;
+            std::uint64_t created_at_unix_ns = 0;
+            std::uint64_t saved_at_unix_ns = 0;
+            std::uint64_t physical_file_size = 0;
+            io::project::ContainerRole role = io::project::ContainerRole::Master;
+            io::project::OpenState open_state = io::project::OpenState::HardFail;
+            bool has_preview = false;
         };
 
         core::Tensor tensor_from_python_attribute(const nb::handle& value) {
@@ -394,6 +408,50 @@ namespace lfs::python {
                 return unwrap(core::UserPaths::resolve()).assetLibraryDir();
             },
             "Return the canonical user Asset Manager storage directory.");
+
+        nb::enum_<project::ContainerRole>(m, "ProjectContainerRole")
+            .value("MASTER", project::ContainerRole::Master)
+            .value("AUTOSAVE_SIDECAR", project::ContainerRole::AutosaveSidecar);
+
+        nb::enum_<project::OpenState>(m, "ProjectOpenState")
+            .value("OPEN", project::OpenState::Open)
+            .value("UNSUPPORTED_NEWER", project::OpenState::UnsupportedNewer)
+            .value("REPAIR_ONLY", project::OpenState::RepairOnly)
+            .value("HARD_FAIL", project::OpenState::HardFail);
+
+        nb::class_<PyProjectInspection>(m, "ProjectInspection")
+            .def_ro("project_uuid", &PyProjectInspection::project_uuid)
+            .def_ro("file_uuid", &PyProjectInspection::file_uuid)
+            .def_ro("commit_uuid", &PyProjectInspection::commit_uuid)
+            .def_ro("generation", &PyProjectInspection::generation)
+            .def_ro("created_at_unix_ns", &PyProjectInspection::created_at_unix_ns)
+            .def_ro("saved_at_unix_ns", &PyProjectInspection::saved_at_unix_ns)
+            .def_ro("physical_file_size", &PyProjectInspection::physical_file_size)
+            .def_ro("role", &PyProjectInspection::role)
+            .def_ro("open_state", &PyProjectInspection::open_state)
+            .def_ro("has_preview", &PyProjectInspection::has_preview);
+
+        m.def(
+            "inspect_project",
+            [](const std::filesystem::path& path) {
+                project::ReaderOptions options;
+                options.allow_unsupported_inspection = true;
+                auto reader = unwrap(project::ProjectReader::open(path, options));
+                return PyProjectInspection{
+                    .project_uuid = reader.superblock().project_uuid.to_string(),
+                    .file_uuid = reader.superblock().file_uuid.to_string(),
+                    .commit_uuid = reader.commit().commit_uuid.to_string(),
+                    .generation = reader.commit().generation,
+                    .created_at_unix_ns = reader.superblock().creation_time_unix_ns,
+                    .saved_at_unix_ns = reader.commit().wallclock_unix_ns,
+                    .physical_file_size = reader.physical_file_size(),
+                    .role = reader.superblock().role,
+                    .open_state = reader.open_state(),
+                    .has_preview = reader.preview().has_value(),
+                };
+            },
+            nb::arg("path"),
+            "Inspect validated .licht container metadata without reading project payloads.");
 
         nb::class_<PyLoadResult>(m, "LoadResult")
             .def_prop_ro("splat_data", &PyLoadResult::get_splat_data, "Loaded splat data, or None")
