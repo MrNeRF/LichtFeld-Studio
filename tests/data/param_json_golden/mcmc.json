@@ -45,6 +45,7 @@
   "means_noise_weight": 50.0,
   "min_opacity": 0.004999999888241291,
   "mip_filter": false,
+  "morton_reorder_interval": 5000,
   "normal_consistency_weight": 0.05000000074505806,
   "normal_flatten_weight": 1.0,
   "normal_loss_space": "auto",

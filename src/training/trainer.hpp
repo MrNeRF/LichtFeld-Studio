@@ -547,6 +547,8 @@ namespace lfs::training {
         void install_cropbox_step_damping(
             lfs::core::SplatData& model,
             AdamOptimizer& optimizer);
+        [[nodiscard]] bool morton_reorder_due(int iter) const;
+        void maybe_morton_reorder(int iter);
 
         // Cleanup method for re-initialization
         void cleanup();

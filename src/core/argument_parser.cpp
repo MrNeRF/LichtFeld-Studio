@@ -41,6 +41,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--strategy", "strategy", String, false, "; legacy aliases: mnrf, lfs"},
             OptimizationCliBinding{"--sh-degree", "sh_degree", Integer},
             OptimizationCliBinding{"--sh-degree-interval", "sh_degree_interval", Integer},
+            OptimizationCliBinding{"--morton-reorder-interval", "morton_reorder_interval", Integer},
             OptimizationCliBinding{"--max-cap", "max_cap", Integer},
             OptimizationCliBinding{"--min-opacity", "min_opacity", Float},
             OptimizationCliBinding{"--cropbox-lr-scale", "cropbox_lr_scale", Float},
@@ -427,6 +428,7 @@ namespace {
             ::args::ValueFlag<std::string> strategy(training_group, "strategy", lfs::core::args::optimization_cli_help("--strategy"), {"strategy"});
             ::args::ValueFlag<int> sh_degree(training_group, "sh_degree", lfs::core::args::optimization_cli_help("--sh-degree"), {"sh-degree"});
             ::args::ValueFlag<int> sh_degree_interval(training_group, "sh_degree_interval", lfs::core::args::optimization_cli_help("--sh-degree-interval"), {"sh-degree-interval"});
+            ::args::ValueFlag<int> morton_reorder_interval(training_group, "morton_reorder_interval", lfs::core::args::optimization_cli_help("--morton-reorder-interval"), {"morton-reorder-interval"});
             ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::core::args::optimization_cli_help("--max-cap"), {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
@@ -922,6 +924,13 @@ namespace {
                 }
             }
 
+            if (morton_reorder_interval) {
+                const int interval = ::args::get(morton_reorder_interval);
+                if (interval < 0) {
+                    return std::unexpected("ERROR: --morton-reorder-interval must be >= 0 (0 disables)");
+                }
+            }
+
             // Validate min_opacity (0.0-1.0)
             if (min_opacity) {
                 float opacity = ::args::get(min_opacity);
@@ -1003,6 +1012,7 @@ namespace {
                                         test_every_val = cli_option_present({"--test-every"}) ? std::optional<int>(::args::get(test_every)) : std::optional<int>(),
                                         steps_scaler_val = cli_option_present({"--steps-scaler"}) ? std::optional<float>(::args::get(steps_scaler)) : std::optional<float>(),
                                         sh_degree_interval_val = cli_option_present({"--sh-degree-interval"}) ? std::optional<int>(::args::get(sh_degree_interval)) : std::optional<int>(),
+                                        morton_reorder_interval_val = cli_option_present({"--morton-reorder-interval"}) ? std::optional<int>(::args::get(morton_reorder_interval)) : std::optional<int>(),
                                         sh_degree_val = cli_option_present({"--sh-degree"}) ? std::optional<int>(::args::get(sh_degree)) : std::optional<int>(),
                                         min_opacity_val = cli_option_present({"--min-opacity"}) ? std::optional<float>(::args::get(min_opacity)) : std::optional<float>(),
                                         cropbox_lr_scale_val = cli_option_present({"--cropbox-lr-scale"}) ? std::optional<float>(::args::get(cropbox_lr_scale)) : std::optional<float>(),
@@ -1111,6 +1121,9 @@ namespace {
                 setVal(test_every_val, ds.test_every);
                 setVal(steps_scaler_val, opt.steps_scaler);
                 setVal(sh_degree_interval_val, opt.sh_degree_interval);
+                if (morton_reorder_interval_val) {
+                    opt.morton_reorder_interval = static_cast<size_t>(*morton_reorder_interval_val);
+                }
                 setVal(sh_degree_val, opt.sh_degree);
                 setVal(min_opacity_val, opt.min_opacity);
                 setVal(cropbox_lr_scale_val, opt.cropbox_lr_scale);

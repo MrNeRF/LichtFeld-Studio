@@ -191,6 +191,14 @@ namespace lfs::core::param {
             .precision(0)
             .ui_step(1000)
             .all_strategies()
+            .size_prop(&OptimizationParameters::morton_reorder_interval,
+                       "morton_reorder_interval", "Morton Reorder", d.morton_reorder_interval, 0, 30000,
+                       "Reorder Gaussians by 3D Morton code every N iterations (0 disables)")
+            .locale("training.refinement.morton_reorder_interval")
+            .tooltip("training.tooltip.morton_reorder_interval")
+            .precision(0)
+            .ui_step(1000)
+            .all_strategies()
             .float_prop(&OptimizationParameters::min_opacity,
                         "min_opacity", "Min Opacity", d.min_opacity, 0.0f, std::numeric_limits<float>::infinity(),
                         "Minimum opacity for pruning")

@@ -457,6 +457,11 @@ namespace fast_lfs::rasterization::kernels::backward {
         return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     }
 
+    // Reverse-order index into [0, T_eff): high contributor first.
+    __device__ __forceinline__ int reverse_tile_primitive_idx(const int T_eff, const int reverse_i) {
+        return T_eff - reverse_i - 1;
+    }
+
     // ---------------------------------------------------------------------------
     // blend_backward_cu — warp-level sub-tile culling reverse walk.
     //
@@ -660,11 +665,11 @@ namespace fast_lfs::rasterization::kernels::backward {
         float pixel_error1 = 1.0f;
         if constexpr (DENSIFICATION_TYPE != DensificationType::None) {
             if constexpr (DENSIFICATION_TYPE == DensificationType::MCMC) {
-                pixel_error0 = densification_error_map[pixel_idx0];
-                pixel_error1 = densification_error_map[pixel_idx1];
+                pixel_error0 = inside0 ? densification_error_map[pixel_idx0] : 1.0f;
+                pixel_error1 = inside1 ? densification_error_map[pixel_idx1] : 1.0f;
             } else if (densification_error_map != nullptr) {
-                pixel_error0 = densification_error_map[pixel_idx0];
-                pixel_error1 = densification_error_map[pixel_idx1];
+                pixel_error0 = inside0 ? densification_error_map[pixel_idx0] : 1.0f;
+                pixel_error1 = inside1 ? densification_error_map[pixel_idx1] : 1.0f;
             }
         }
 
@@ -695,14 +700,13 @@ namespace fast_lfs::rasterization::kernels::backward {
         const bool stage_depth = grad_depth_map != nullptr;
 
         // Reverse walk: batch_base is reverse-order index into [0, T_eff).
-        // tile_primitive_idx = T_eff - reverse_i - 1  (high index first).
         for (int batch_base = 0; batch_base < T_eff; batch_base += batch_size) {
             const int n_batch = min(batch_size, T_eff - batch_base);
 
             // Collaborative fetch (one block.sync per batch — not per splat).
             if (static_cast<int>(thread_rank) < n_batch) {
                 const int reverse_i = batch_base + static_cast<int>(thread_rank);
-                const int tile_primitive_idx = T_eff - reverse_i - 1;
+                const int tile_primitive_idx = reverse_tile_primitive_idx(T_eff, reverse_i);
                 const uint instance_idx =
                     tile_instance_range.x + static_cast<uint>(tile_primitive_idx);
                 uint primitive_idx = instance_primitive_indices[instance_idx];
@@ -806,7 +810,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                             continue;
                     }
 
-                    const int tile_primitive_idx = T_eff - batch_base - j - 1;
+                    const int tile_primitive_idx = reverse_tile_primitive_idx(T_eff, batch_base + j);
                     const uint primitive_idx = s_prim_idx[j];
                     const float2 mean2d = s_mean2d[j];
                     const float4 conic_opacity = s_conic_opacity[j];

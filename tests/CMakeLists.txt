@@ -271,6 +271,7 @@ set(TEST_FILES
     test_joint_adam_codec.cpp
     test_sh_value_codec.cpp
     test_sh_value_storage.cpp
+    test_morton_reorder.cpp
     test_transform_bake_q16.cpp
     test_splat_data_clone.cpp
     test_tensor_reduction.cpp
