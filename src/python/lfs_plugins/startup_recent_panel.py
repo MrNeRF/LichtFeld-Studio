@@ -259,8 +259,6 @@ class StartupRecentPanel(Panel):
 
         try:
             outcome = lf.project_open(path_text, True)
-            if outcome == lf.ProjectOpenOutcome.RECOVERY_PROMPT_PENDING:
-                return
         except Exception as exc:
             # NotFoundError subclasses FileNotFoundError; other open failures
             # surface their error text on the same user-visible path.
@@ -269,6 +267,15 @@ class StartupRecentPanel(Panel):
             else:
                 message = str(exc).strip() or missing_message
             self._report_open_error(message)
+            return
+
+        # Keep the chooser open while a crash-recovery prompt is pending.
+        recovery_pending = getattr(
+            getattr(lf, "ProjectOpenOutcome", None),
+            "RECOVERY_PROMPT_PENDING",
+            None,
+        )
+        if recovery_pending is not None and outcome == recovery_pending:
             return
 
         self._dismiss()

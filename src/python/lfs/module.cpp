@@ -952,7 +952,9 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "reset_training", []() {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::ResetTraining{}.emit();
+            emit_project_cmd_marshaled(
+                "python.reset_training",
+                [] { lfs::core::events::cmd::ResetTraining{}.emit(); });
         },
         "Reset training state to initial");
     m.def(
@@ -1345,7 +1347,7 @@ NB_MODULE(lichtfeld, m) {
            std::optional<int> min_track_length,
            bool stop_training) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::LoadFile{
+            lfs::core::events::cmd::LoadFile command{
                 .path = python_utf8_path(path),
                 .is_dataset = is_dataset,
                 .output_path = python_utf8_path(output_path),
@@ -1354,8 +1356,10 @@ NB_MODULE(lichtfeld, m) {
                 .max_width = max_width,
                 .min_track_length = min_track_length,
                 .apply_auto_crop = apply_auto_crop,
-                .stop_training = stop_training}
-                .emit();
+                .stop_training = stop_training};
+            emit_project_cmd_marshaled(
+                "python.load_file",
+                [command = std::move(command)] { command.emit(); });
         },
         nb::arg("path"), nb::arg("is_dataset") = false,
         nb::arg("output_path") = "", nb::arg("init_path") = "",
@@ -1377,12 +1381,14 @@ NB_MODULE(lichtfeld, m) {
         "load_checkpoint_for_training",
         [](const std::string& checkpoint_path, const std::string& dataset_path, const std::string& output_path) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::LoadCheckpointForTraining{
+            lfs::core::events::cmd::LoadCheckpointForTraining command{
                 .checkpoint_path = python_utf8_path(checkpoint_path),
                 .dataset_path = python_utf8_path(dataset_path),
                 .output_path = python_utf8_path(output_path),
-            }
-                .emit();
+            };
+            emit_project_cmd_marshaled(
+                "python.load_checkpoint_for_training",
+                [command = std::move(command)] { command.emit(); });
         },
         nb::arg("checkpoint_path"), nb::arg("dataset_path"), nb::arg("output_path"),
         "Load a checkpoint for training with specified dataset and output paths.");
