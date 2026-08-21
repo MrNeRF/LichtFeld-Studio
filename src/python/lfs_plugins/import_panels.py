@@ -144,6 +144,7 @@ from .asset_manager_integration import (
 from .asset_index import resolve_asset_manager_storage_path
 from .types import Panel
 from .rml_keys import KI_ESCAPE, KI_RETURN
+from .training_confirm import _confirm_stop_training_then
 from .ui import RuntimeState
 from .url_downloader import (
     URLDownloadError,
@@ -272,16 +273,6 @@ def _load_watch_dirs_dialog_state(folder_id: str) -> bool:
     return True
 
 
-def _training_is_active() -> bool:
-    probe = getattr(lf, "is_training_active", None)
-    if not callable(probe):
-        return False
-    try:
-        return bool(probe())
-    except Exception:
-        return False
-
-
 def _project_is_dirty() -> bool:
     probe = getattr(lf, "project_is_dirty", None)
     if not callable(probe):
@@ -292,39 +283,14 @@ def _project_is_dirty() -> bool:
         return False
 
 
-def _confirm_stop_training_then(callback) -> None:
-    if not _training_is_active():
-        callback(False)
-        return
-
-    tr = lf.ui.tr
-    yes_label = tr("common.yes")
-    no_label = tr("common.no")
-
-    def _on_result(button):
-        if button == yes_label:
-            callback(True)
-
-    lf.ui.confirm_dialog(
-        tr("project_switch.stop_training_title"),
-        tr("project_switch.stop_training_message"),
-        [yes_label, no_label],
-        _on_result,
-    )
-
-
 def _save_current_project_like_close() -> bool:
     save = getattr(lf, "project_save", None)
     if not callable(save):
         return False
     try:
         result = save(True, False)
-    except TypeError:
-        try:
-            result = save()
-        except Exception:
-            return False
-    except Exception:
+    except Exception as exc:
+        lf.log.error(f"Failed to save current project: {exc}")
         return False
     return result is not False
 

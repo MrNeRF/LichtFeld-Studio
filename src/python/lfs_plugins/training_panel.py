@@ -12,6 +12,7 @@ from . import rml_widgets as w
 from . import property_view
 from .property_view import parse_number as _parse_num
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
+from .training_confirm import _project_has_path
 from .types import Panel
 from .ui import RuntimeState, PanelStateBinding
 
@@ -2262,8 +2263,7 @@ class TrainingPanel(Panel):
         )
 
     def _project_is_bound(self):
-        has_path = getattr(lf, "project_has_path", None)
-        return bool(has_path()) if callable(has_path) else False
+        return _project_has_path()
 
     def _invoke_project_save_as(self):
         save_as = getattr(lf, "project_save_as", None)

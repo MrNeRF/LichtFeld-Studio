@@ -1296,10 +1296,6 @@ namespace lfs::vis {
                 command.stop_training);
         });
 
-        cmd::LoadFile::when([this](const auto& command) {
-            deferDatasetLoadForTraining(command);
-        });
-
         const auto publish_project_error =
             [](std::string action, const auto& value,
                const char* operation) {
@@ -1352,7 +1348,7 @@ namespace lfs::vis {
 
         cmd::ProjectSave::when(
             [this, publish_project_error](const auto& command) {
-                project_save_as_started_ = false;
+                project_save_started_ = false;
                 auto has_path = projectHasPath();
                 if (!has_path) {
                     publish_project_error(
@@ -1378,7 +1374,7 @@ namespace lfs::vis {
                             gui::error_op::kSave);
                         return;
                     }
-                    project_save_as_started_ = true;
+                    project_save_started_ = true;
                     return;
                 }
                 if (auto saved = projectSave(
@@ -1390,13 +1386,13 @@ namespace lfs::vis {
                         gui::error_op::kSave);
                     return;
                 }
-                project_save_as_started_ = true;
+                project_save_started_ = true;
             });
 
         cmd::ProjectSaveAs::when(
             [this, publish_project_error](
                 const auto& command) {
-                project_save_as_started_ = false;
+                project_save_started_ = false;
                 auto path = command.path;
                 if (path.empty()) {
                     std::string default_name =
@@ -1429,7 +1425,7 @@ namespace lfs::vis {
                         gui::error_op::kSave);
                     return;
                 }
-                project_save_as_started_ = true;
+                project_save_started_ = true;
             });
 
         cmd::ProjectOpen::when(
@@ -3454,10 +3450,8 @@ namespace lfs::vis {
         return project_lifecycle_->pollWrite();
     }
 
-    bool VisualizerImpl::consumeProjectSaveAsStarted() {
-        const bool started = project_save_as_started_;
-        project_save_as_started_ = false;
-        return started;
+    bool VisualizerImpl::consumeProjectSaveStarted() {
+        return project_save_started_.exchange(false);
     }
 
     void VisualizerImpl::projectWaitWrite() {

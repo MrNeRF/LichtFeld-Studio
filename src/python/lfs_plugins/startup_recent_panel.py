@@ -11,6 +11,7 @@ from pathlib import Path
 import lichtfeld as lf
 
 from .rml_keys import KI_ESCAPE
+from .training_confirm import _project_has_path
 from .types import Panel
 
 __lfs_panel_classes__ = ["StartupRecentPanel"]
@@ -71,13 +72,8 @@ def should_show_startup_recent() -> bool:
         return False
     if not recent:
         return False
-    has_path = getattr(lf, "project_has_path", None)
-    if callable(has_path):
-        try:
-            if has_path():
-                return False
-        except Exception:
-            pass
+    if _project_has_path():
+        return False
     is_empty = getattr(lf.ui, "is_scene_empty", None)
     if callable(is_empty):
         try:

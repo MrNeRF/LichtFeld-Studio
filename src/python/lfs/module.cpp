@@ -261,7 +261,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -286,6 +286,44 @@ namespace {
             return;
         }
         std::forward<EmitFn>(emit_fn)();
+    }
+
+    bool consume_project_save_started_and_wait(
+        lfs::vis::Visualizer* viewer,
+        bool wait,
+        const char* wait_task_name) {
+        const bool started =
+            viewer->consumeProjectSaveStarted();
+        if (!started || !wait) {
+            return started;
+        }
+        const lfs::core::TaskContext context{
+            .name = wait_task_name,
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id =
+                lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        if (auto posted =
+                lfs::vis::post_guarded_and_wait<
+                    void>(
+                    *viewer, context,
+                    [viewer]()
+                        -> lfs::Result<void> {
+                        viewer
+                            ->projectWaitWrite();
+                        return {};
+                    },
+                    python_viewer_shutdown_error());
+            !posted) {
+            throw std::runtime_error(
+                std::format(
+                    "{} failed: {}",
+                    wait_task_name,
+                    lfs::format_for_developer(
+                        posted.error())));
+        }
+        return started;
     }
 
     std::expected<void, std::string> clear_scene_from_python() {
@@ -958,34 +996,11 @@ NB_MODULE(lichtfeld, m) {
                 return false;
             }
             const bool started =
-                viewer->consumeProjectSaveAsStarted();
+                consume_project_save_started_and_wait(
+                    viewer, wait,
+                    "python.project_save.wait");
             if (!started || !wait) {
                 return started;
-            }
-            const lfs::core::TaskContext context{
-                .name = "python.project_save.wait",
-                .domain = lfs::ErrorDomain::Python,
-                .operation_id =
-                    lfs::OperationId::generate(),
-                .site = LFS_SOURCE_SITE_CURRENT(),
-            };
-            if (auto posted =
-                    lfs::vis::post_guarded_and_wait<
-                        void>(
-                        *viewer, context,
-                        [viewer]()
-                            -> lfs::Result<void> {
-                            viewer
-                                ->projectWaitWrite();
-                            return {};
-                        },
-                        python_viewer_shutdown_error());
-                !posted) {
-                throw std::runtime_error(
-                    std::format(
-                        "python.project_save.wait failed: {}",
-                        lfs::format_for_developer(
-                            posted.error())));
             }
             auto poll = viewer->projectPollWrite();
             if (!poll) {
@@ -1014,38 +1029,9 @@ NB_MODULE(lichtfeld, m) {
             if (!viewer) {
                 return false;
             }
-            const bool started =
-                viewer->consumeProjectSaveAsStarted();
-            if (!started || !wait) {
-                return started;
-            }
-            const lfs::core::TaskContext context{
-                .name =
-                    "python.project_save_as.wait",
-                .domain = lfs::ErrorDomain::Python,
-                .operation_id =
-                    lfs::OperationId::generate(),
-                .site = LFS_SOURCE_SITE_CURRENT(),
-            };
-            if (auto posted =
-                    lfs::vis::post_guarded_and_wait<
-                        void>(
-                        *viewer, context,
-                        [viewer]()
-                            -> lfs::Result<void> {
-                            viewer
-                                ->projectWaitWrite();
-                            return {};
-                        },
-                        python_viewer_shutdown_error());
-                !posted) {
-                throw std::runtime_error(
-                    std::format(
-                        "python.project_save_as.wait failed: {}",
-                        lfs::format_for_developer(
-                            posted.error())));
-            }
-            return started;
+            return consume_project_save_started_and_wait(
+                viewer, wait,
+                "python.project_save_as.wait");
         },
         nb::arg("path") = "",
         nb::arg("wait") = false,

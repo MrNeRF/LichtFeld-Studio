@@ -63,6 +63,7 @@ def training_panel_module(monkeypatch):
     if str(source_python) not in sys.path:
         sys.path.insert(0, str(source_python))
     sys.modules.pop("lfs_plugins.training_panel", None)
+    sys.modules.pop("lfs_plugins.training_confirm", None)
     sys.modules.pop("lfs_plugins", None)
     _install_lf_stub(monkeypatch)
     return import_module("lfs_plugins.training_panel")

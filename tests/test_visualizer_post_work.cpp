@@ -7006,8 +7006,8 @@ namespace lfs::vis {
     TEST_F(VisualizerImplResetTest,
            SaveWhilePausedNoWorkerTrainerCompletes) {
         // Checkpoint-installed paused trainers have
-        // has_active_train_loop() true with no worker
-        // thread. File Save must still route through the
+        // is_paused() true with no live training thread.
+        // File Save must still route through the
         // trainer, inline-flush, and finish the
         // ProjectWrite job.
         if (!cuda_device_available()) {
@@ -7088,8 +7088,8 @@ namespace lfs::vis {
                 << lfs::format_for_developer(
                        snapshot_ready.error());
             trainer->is_paused_.store(true);
-            ASSERT_TRUE(
-                trainer->has_active_train_loop());
+            ASSERT_FALSE(trainer->is_running());
+            ASSERT_TRUE(trainer->is_paused());
             ASSERT_TRUE(
                 trainer->can_flush_project_snapshot());
 

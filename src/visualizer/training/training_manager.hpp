@@ -109,8 +109,10 @@ namespace lfs::vis {
         [[nodiscard]] bool isCompletionPending() const {
             return completion_pending_.load(std::memory_order_acquire);
         }
-        // True while a training worker exists (running or paused mid-run).
-        // Checkpoint-installed paused trainers have no worker.
+        // True while a training completion is pending (running or paused
+        // mid-run). The reaper steals training_thread_ immediately, so
+        // joinable() is not the live-worker signal. Checkpoint-installed
+        // paused trainers have no worker and report false.
         [[nodiscard]] bool hasLiveTrainingThread() const;
         [[nodiscard]] bool isPublishingFinalSnapshot() const {
             return isCompletionPending() && !isTrainingActive();

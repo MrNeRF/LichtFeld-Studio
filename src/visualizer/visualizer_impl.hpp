@@ -118,7 +118,7 @@ namespace lfs::vis {
         projectGetInfo() override;
         lfs::Result<ProjectWritePoll>
         projectPollWrite() override;
-        bool consumeProjectSaveAsStarted() override;
+        bool consumeProjectSaveStarted() override;
         void projectWaitWrite() override;
         lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() override;
@@ -563,7 +563,7 @@ namespace lfs::vis {
         bool startup_plugin_preload_started_ = false;
         bool startup_project_open_attempted_ = false;
         bool close_save_notice_posted_ = false;
-        bool project_save_as_started_ = false;
+        std::atomic<bool> project_save_started_{false};
         std::optional<std::filesystem::path>
             pending_close_save_path_;
         std::jthread force_exit_completion_watcher_;
