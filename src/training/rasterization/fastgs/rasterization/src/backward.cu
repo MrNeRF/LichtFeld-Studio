@@ -36,7 +36,7 @@ void fast_lfs::rasterization::backward(
     float* grad_opacity_helper,
     float3* grad_color_helper,
     float2* grad_mean2d_helper,
-    float* grad_conic_helper,
+    float3* grad_conic_helper,
     float* grad_depth_helper,
     float3* grad_normal_helper,
     float4* grad_w2c,
@@ -134,6 +134,10 @@ void fast_lfs::rasterization::backward(
     // Backward preprocess — runs UNCONDITIONALLY now (handles both visible primitives'
     // backward + Adam, and invisible primitives' Adam-only momentum decay via the
     // vksplat-style fold). Replaces the previous adam_step_invisible launches.
+    const float w_f = static_cast<float>(width);
+    const float h_f = static_cast<float>(height);
+    float clip_left, clip_right, clip_top, clip_bottom;
+    ewa_clip_bounds(w_f, h_f, fx, fy, cx, cy, clip_left, clip_right, clip_top, clip_bottom);
     if (n_primitives > 0) {
         auto launch_preprocess_backward = [&]<bool MIP_FILTER, int ACTIVE_SH_BASES>() {
             kernels::backward::preprocess_backward_cu<MIP_FILTER, ACTIVE_SH_BASES><<<div_round_up(n_primitives, config::block_size_preprocess_backward), config::block_size_preprocess_backward, 0, stream>>>(
@@ -154,12 +158,16 @@ void fast_lfs::rasterization::backward(
                 grad_w2c,
                 (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_info : nullptr,
                 n_primitives,
-                static_cast<float>(width),
-                static_cast<float>(height),
+                w_f,
+                h_f,
                 fx,
                 fy,
                 cx,
                 cy,
+                clip_left,
+                clip_right,
+                clip_top,
+                clip_bottom,
                 sh_layout_slots,
                 fused_adam,
                 shN_value_bounds,

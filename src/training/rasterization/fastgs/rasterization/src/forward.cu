@@ -425,6 +425,10 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                          "cudaMemsetAsync(FastGS forward status)");
 
     // Preprocess primitives
+    const float w_f = static_cast<float>(width);
+    const float h_f = static_cast<float>(height);
+    float clip_left, clip_right, clip_top, clip_bottom;
+    ewa_clip_bounds(w_f, h_f, fx, fy, cx, cy, clip_left, clip_right, clip_top, clip_bottom);
     kernels::forward::preprocess_cu<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
         means,
         scales_raw,
@@ -450,12 +454,16 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         grid.y,
         active_sh_bases,
         sh_layout_slots,
-        static_cast<float>(width),
-        static_cast<float>(height),
+        w_f,
+        h_f,
         fx,
         fy,
         cx,
         cy,
+        clip_left,
+        clip_right,
+        clip_top,
+        clip_bottom,
         near_,
         far_,
         depth_bits,

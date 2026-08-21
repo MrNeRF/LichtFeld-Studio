@@ -84,10 +84,16 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float fy,
         const float cx,
         const float cy,
+        const float clip_left,
+        const float clip_right,
+        const float clip_top,
+        const float clip_bottom,
         const float near_, // near and far are macros in windowns
         const float far_,
         const uint depth_bits,
         const bool mip_filter) {
+        (void)w;
+        (void)h;
         auto primitive_idx = cg::this_grid().thread_rank();
         bool active = true;
         if (primitive_idx >= n_primitives) {
@@ -136,9 +142,10 @@ namespace fast_lfs::rasterization::kernels::forward {
         if (__ballot_sync(0xffffffffu, active) == 0)
             return;
         const float q_norm_sq_safe = fmaxf(q_norm_sq, 1e-8f);
-        const float qxx = 2.0f * qxx_raw / q_norm_sq_safe, qyy = 2.0f * qyy_raw / q_norm_sq_safe, qzz = 2.0f * qzz_raw / q_norm_sq_safe;
-        const float qxy = 2.0f * qx * qy / q_norm_sq_safe, qxz = 2.0f * qx * qz / q_norm_sq_safe, qyz = 2.0f * qy * qz / q_norm_sq_safe;
-        const float qrx = 2.0f * qr * qx / q_norm_sq_safe, qry = 2.0f * qr * qy / q_norm_sq_safe, qrz = 2.0f * qr * qz / q_norm_sq_safe;
+        const float inv_q_norm_sq = 2.0f / q_norm_sq_safe;
+        const float qxx = qxx_raw * inv_q_norm_sq, qyy = qyy_raw * inv_q_norm_sq, qzz = qzz_raw * inv_q_norm_sq;
+        const float qxy = qx * qy * inv_q_norm_sq, qxz = qx * qz * inv_q_norm_sq, qyz = qy * qz * inv_q_norm_sq;
+        const float qrx = qr * qx * inv_q_norm_sq, qry = qr * qy * inv_q_norm_sq, qrz = qr * qz * inv_q_norm_sq;
         const mat3x3 rotation = {
             1.0f - (qyy + qzz), qxy - qrz, qry + qxz,
             qrz + qxy, 1.0f - (qxx + qzz), qyz - qrx,
@@ -157,21 +164,18 @@ namespace fast_lfs::rasterization::kernels::forward {
         };
 
         // compute 2d mean in normalized image coordinates
+        const float inv_depth = 1.0f / depth;
         const float4 w2c_r1 = w2c[0];
-        const float x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) / depth;
+        const float x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) * inv_depth;
         const float4 w2c_r2 = w2c[1];
-        const float y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) / depth;
+        const float y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) * inv_depth;
 
-        // ewa splatting
-        const float clip_left = (-0.15f * w - cx) / fx;
-        const float clip_right = (1.15f * w - cx) / fx;
-        const float clip_top = (-0.15f * h - cy) / fy;
-        const float clip_bottom = (1.15f * h - cy) / fy;
+        // ewa splatting (clip box is grid-uniform; computed once on the host)
         const float tx = clamp(x, clip_left, clip_right);
         const float ty = clamp(y, clip_top, clip_bottom);
-        const float j11 = fx / depth;
+        const float j11 = fx * inv_depth;
         const float j13 = -j11 * tx;
-        const float j22 = fy / depth;
+        const float j22 = fy * inv_depth;
         const float j23 = -j22 * ty;
         const float3 jw_r1 = make_float3(
             j11 * w2c_r1.x + j13 * w2c_r3.x,
