@@ -17,12 +17,14 @@
 #include <cmath>
 #include <cuda_runtime.h>
 #include <exception>
+#include <filesystem>
 #include <functional>
 #include <glm/gtc/quaternion.hpp>
 #include <limits>
 #include <numeric>
 #include <ranges>
 #include <set>
+#include <system_error>
 #include <utility>
 
 namespace lfs::core {
@@ -4707,6 +4709,29 @@ namespace lfs::core {
             ++touched;
         }
         return touched;
+    }
+
+    std::vector<std::string> Scene::revalidateCameraImagePresence() {
+        std::vector<std::string> missing;
+        for (const auto& node : nodes_) {
+            if (node->type != NodeType::CAMERA || !node->camera) {
+                continue;
+            }
+            auto& camera = *node->camera;
+            const auto& image_path = camera.image_path();
+            if (image_path.empty()) {
+                continue;
+            }
+            std::error_code exists_error;
+            const bool exists = std::filesystem::is_regular_file(image_path, exists_error);
+            camera.set_has_image(exists);
+            if (!exists) {
+                missing.push_back(camera.image_name().empty()
+                                      ? path_to_utf8(image_path.filename())
+                                      : camera.image_name());
+            }
+        }
+        return missing;
     }
 
     size_t Scene::getActiveCameraCount() const {

@@ -29,6 +29,7 @@
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
 #include "training/components/ppisp_file.hpp"
+#include "training/dataset.hpp"
 #include "training/strategies/mcmc.hpp"
 #include "training/trainer.hpp"
 #include "training/training_state.hpp"
@@ -487,6 +488,78 @@ namespace {
         options.commit.snapshot_uuid = {};
         (void)lfs::test::licht::require_result(
             document->save(project_path, options));
+    }
+
+    void write_dataset_project_with_named_cameras(
+        const std::filesystem::path& project_path,
+        const std::filesystem::path& dataset_path,
+        const std::vector<std::pair<std::string, bool>>&
+            camera_images) {
+        auto document =
+            lfs::test::licht::make_empty_document(
+                lfs::core::generate_uuid_v4(), 1);
+        lfs::core::Scene source;
+        const auto dataset =
+            source.addDataset("Dataset");
+        const auto cameras = source.addCameraGroup(
+            "Training", dataset, camera_images.size());
+        for (int i = 0;
+             i < static_cast<int>(camera_images.size());
+             ++i) {
+            const auto& [name, has_image] =
+                camera_images[static_cast<size_t>(i)];
+            auto camera =
+                make_project_request_test_camera(
+                    dataset_path / name, i, name);
+            camera->set_has_image(has_image);
+            source.addCamera(name, cameras, camera);
+        }
+        document->edit_scene_graph() =
+            lfs::test::licht::require_result(
+                lfs::io::project::capture_scene_graph(
+                    source, {}));
+
+        auto parameters =
+            lfs::test::licht::require_result(
+                document->parameters().snapshot());
+        parameters.dataset.data_path = dataset_path;
+        parameters.mrnf_session.iterations = 1234;
+        parameters.mrnf_current.iterations = 1234;
+        lfs::test::licht::require_status(
+            document->edit_parameters().set_snapshot(
+                parameters));
+
+        const auto reference =
+            lfs::test::licht::require_result(
+                lfs::io::project::upsert_path_reference(
+                    document->edit_references(),
+                    project_path.parent_path(),
+                    dataset_path, "dataset",
+                    "dataset"));
+        lfs::test::licht::require_status(
+            document->edit_project()
+                .set_dataset_reference(reference));
+
+        auto options =
+            lfs::test::licht::
+                deterministic_document_save_options(
+                    0x76000011, 1, 2);
+        options.commit.snapshot_uuid = {};
+        (void)lfs::test::licht::require_result(
+            document->save(project_path, options));
+    }
+
+    lfs::core::Camera* camera_by_image_name(
+        lfs::core::Scene& scene,
+        const std::string& name) {
+        for (const auto& camera :
+             scene.getAllCameras()) {
+            if (camera &&
+                camera->image_name() == name) {
+                return camera.get();
+            }
+        }
+        return nullptr;
     }
 
     void write_non_dataset_project_with_stale_dataset_params(
@@ -8543,6 +8616,261 @@ namespace lfs::vis {
         EXPECT_EQ(
             viewer.getTrainer()->getParams().optimization.iterations,
             1234);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           HydratedDatasetReopenMarksDeletedImageMissing) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto dataset_path =
+            temporary_.path /
+            "hydrated-deleted-image-source";
+        write_transforms_dataset_with_cameras(
+            dataset_path, 2);
+        const auto project_path =
+            temporary_.path /
+            "hydrated-deleted-image.licht";
+        write_dataset_project_with_named_cameras(
+            project_path, dataset_path,
+            {{"frame_0001.png", true},
+             {"frame_0002.png", true}});
+        std::filesystem::remove(
+            dataset_path / "frame_0002.png");
+
+        CapturingErrorConsumer consumer;
+        auto subscription =
+            lfs::ErrorBus::instance().subscribe(
+                consumer);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                viewer.getGuiManager()
+                    ->asyncTasks()
+                    .pollImportCompletion();
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       viewer.getTrainerManager()
+                           ->hasTrainer() &&
+                       !viewer.jobs().anyRunning(
+                           JobType::Import) &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen);
+            }));
+
+        auto* present = camera_by_image_name(
+            viewer.getScene(), "frame_0001.png");
+        auto* deleted = camera_by_image_name(
+            viewer.getScene(), "frame_0002.png");
+        ASSERT_NE(present, nullptr);
+        ASSERT_NE(deleted, nullptr);
+        EXPECT_TRUE(present->has_image());
+        EXPECT_FALSE(deleted->has_image());
+
+        lfs::training::DatasetConfig config;
+        lfs::training::CameraDataset dataset(
+            viewer.getScene().getAllCameras(), config,
+            lfs::training::CameraDataset::Split::ALL);
+        EXPECT_EQ(dataset.size(), 1u);
+        EXPECT_EQ(dataset.get_camera(0)->image_name(),
+                  "frame_0001.png");
+        EXPECT_EQ(dataset.get_cameras().size(), 2u);
+
+        EXPECT_TRUE(std::ranges::any_of(
+            consumer.user_messages,
+            [](const std::string& message) {
+                return message.find(
+                           "frame_0002.png") !=
+                           std::string::npos &&
+                       message.find("missing") !=
+                           std::string::npos;
+            }));
+        EXPECT_TRUE(std::ranges::none_of(
+            consumer.user_messages,
+            [](const std::string& message) {
+                return message.find(
+                           "frame_0001.png") !=
+                       std::string::npos;
+            }));
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           HydratedDatasetReopenIncludesRestoredImage) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto dataset_path =
+            temporary_.path /
+            "hydrated-restored-image-source";
+        write_transforms_dataset_with_cameras(
+            dataset_path, 2);
+        const auto missing_path =
+            dataset_path / "frame_0002.png";
+        std::filesystem::remove(missing_path);
+        const auto project_path =
+            temporary_.path /
+            "hydrated-restored-image.licht";
+        write_dataset_project_with_named_cameras(
+            project_path, dataset_path,
+            {{"frame_0001.png", true},
+             {"frame_0002.png", false}});
+        lfs::test::licht::write_file_bytes(
+            missing_path,
+            lfs::test::licht::one_pixel_png());
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                viewer.getGuiManager()
+                    ->asyncTasks()
+                    .pollImportCompletion();
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       viewer.getTrainerManager()
+                           ->hasTrainer() &&
+                       !viewer.jobs().anyRunning(
+                           JobType::Import) &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen);
+            }));
+
+        auto* present = camera_by_image_name(
+            viewer.getScene(), "frame_0001.png");
+        auto* restored = camera_by_image_name(
+            viewer.getScene(), "frame_0002.png");
+        ASSERT_NE(present, nullptr);
+        ASSERT_NE(restored, nullptr);
+        EXPECT_TRUE(present->has_image());
+        EXPECT_TRUE(restored->has_image());
+
+        lfs::training::DatasetConfig config;
+        lfs::training::CameraDataset dataset(
+            viewer.getScene().getAllCameras(), config,
+            lfs::training::CameraDataset::Split::ALL);
+        EXPECT_EQ(dataset.size(), 2u);
+        EXPECT_EQ(dataset.get_cameras().size(), 2u);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           HydratedDatasetReopenAllImagesMissingDoesNotCrash) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto dataset_path =
+            temporary_.path /
+            "hydrated-all-missing-source";
+        write_transforms_dataset_with_cameras(
+            dataset_path, 2);
+        const auto project_path =
+            temporary_.path /
+            "hydrated-all-missing.licht";
+        write_dataset_project_with_named_cameras(
+            project_path, dataset_path,
+            {{"frame_0001.png", true},
+             {"frame_0002.png", true}});
+        std::filesystem::remove(
+            dataset_path / "frame_0001.png");
+        std::filesystem::remove(
+            dataset_path / "frame_0002.png");
+
+        CapturingErrorConsumer consumer;
+        auto subscription =
+            lfs::ErrorBus::instance().subscribe(
+                consumer);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                viewer.getGuiManager()
+                    ->asyncTasks()
+                    .pollImportCompletion();
+                const auto info = viewer.projectGetInfo();
+                return info &&
+                       info->hydration_state ==
+                           "complete" &&
+                       viewer.getTrainerManager()
+                           ->hasTrainer() &&
+                       !viewer.jobs().anyRunning(
+                           JobType::Import) &&
+                       !viewer.jobs().anyRunning(
+                           JobType::ProjectOpen);
+            }));
+
+        EXPECT_TRUE(
+            viewer.getScene().hasTrainingData());
+        for (const auto& camera :
+             viewer.getScene().getAllCameras()) {
+            ASSERT_NE(camera, nullptr);
+            EXPECT_FALSE(camera->has_image());
+        }
+
+        lfs::training::DatasetConfig config;
+        lfs::training::CameraDataset dataset(
+            viewer.getScene().getAllCameras(), config,
+            lfs::training::CameraDataset::Split::ALL);
+        EXPECT_EQ(dataset.size(), 0u);
+        EXPECT_EQ(dataset.get_cameras().size(), 2u);
+
+        EXPECT_TRUE(std::ranges::any_of(
+            consumer.user_messages,
+            [](const std::string& message) {
+                return message.find(
+                           "dataset image") !=
+                           std::string::npos &&
+                       message.find("missing") !=
+                           std::string::npos;
+            }));
+
+        auto* const trainer = viewer.getTrainer();
+        ASSERT_NE(trainer, nullptr);
+        auto initialized = trainer->initialize(
+            trainer->getParams());
+        ASSERT_FALSE(initialized);
+        EXPECT_NE(
+            initialized.error().find(
+                "no cameras with image files available for training"),
+            std::string::npos);
     }
 
     TEST_F(VisualizerImplResetTest,

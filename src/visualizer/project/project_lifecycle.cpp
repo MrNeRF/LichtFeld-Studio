@@ -24,6 +24,7 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/loader.hpp"
+#include "io/loaders/missing_dataset_images.hpp"
 #include "io/project_container.hpp"
 #include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
@@ -386,6 +387,15 @@ namespace lfs::vis::project {
             return detail;
         }
 
+        void revalidateHydratedCameraImages(
+            SceneManager& scene_manager) {
+            const auto missing =
+                scene_manager.getScene()
+                    .revalidateCameraImagePresence();
+            lfs::io::notify_missing_dataset_images(
+                missing);
+        }
+
         void installCheckpointTrainerWithDatasetRoot(
             VisualizerImpl& viewer,
             SceneManager& scene_manager,
@@ -411,6 +421,8 @@ namespace lfs::vis::project {
                     lfs::core::path_to_utf8(
                         dataset_root));
             }
+            revalidateHydratedCameraImages(
+                scene_manager);
             ckpt_params.dataset.data_path = dataset_root;
 
             // Reset path authority without re-applying
@@ -529,6 +541,8 @@ namespace lfs::vis::project {
                     lfs::core::path_to_utf8(
                         dataset_root));
             }
+            revalidateHydratedCameraImages(
+                scene_manager);
 
             auto* const parameter_manager =
                 viewer.getParameterManager();
