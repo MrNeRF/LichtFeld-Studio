@@ -105,17 +105,15 @@ def test_save_persists_then_scans_and_refreshes(
     monkeypatch.setattr(module.threading, "Thread", _ImmediateThread)
     monkeypatch.setattr(
         module,
-        "scan_watch_directories",
-        lambda scan_index, folder_id, directories: scans.append(
-            (scan_index, folder_id, list(directories))
-        )
+        "scan_all_watch_directories",
+        lambda scan_index: scans.append(scan_index)
         or module.WatchScanResult(discovered=1, added=1),
     )
 
     panel._on_save()
 
     assert index.saved == [("projects", [str(watched)])]
-    assert scans == [(index, "projects", [str(watched)])]
+    assert scans == [index]
     assert refreshes == [True]
     assert len(state.scheduled) == 1
     assert panel._scan_done is True
@@ -137,7 +135,7 @@ def test_saving_empty_list_clears_watch_directories_without_scan(
     panel._watch_dirs = []
     monkeypatch.setattr(
         module,
-        "scan_watch_directories",
+        "scan_all_watch_directories",
         lambda *_args: pytest.fail("empty watch list must not start a scan"),
     )
 

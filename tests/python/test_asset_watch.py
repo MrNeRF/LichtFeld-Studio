@@ -7,7 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from lfs_plugins.asset_index import AssetIndex, DEFAULT_FOLDER_ID
-from lfs_plugins.asset_watch import discover_licht_projects, scan_watch_directories
+from lfs_plugins.asset_watch import (
+    discover_licht_projects,
+    scan_all_watch_directories,
+    scan_watch_directories,
+)
 
 
 def test_discovery_recurses_and_returns_only_licht_files(tmp_path: Path):
@@ -36,9 +40,14 @@ def test_scan_deduplicates_overlapping_roots_before_registration(tmp_path: Path)
         def __init__(self):
             self.paths = []
 
-        def register_licht_asset(self, path, *, folder_id):
+        def register_licht_asset(self, path, *, folder_id, adopt_existing, save):
+            assert adopt_existing is False
+            assert save is False
             self.paths.append((path, folder_id))
             return SimpleNamespace(id=path), len(self.paths) == 1
+
+        def save(self):
+            return True
 
     index = _Index()
     result = scan_watch_directories(
@@ -73,6 +82,37 @@ def test_watch_directories_are_normalized_deduplicated_and_persisted(tmp_path: P
     assert reloaded.folders[DEFAULT_FOLDER_ID]["watch_directories"] == [
         str(watched.resolve())
     ]
+
+
+def test_global_scan_assigns_new_project_to_most_specific_root(tmp_path: Path):
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    project = nested / "project.licht"
+    project.write_bytes(b"container")
+
+    class _Index:
+        folders = {
+            "broad": {"watch_directories": [str(tmp_path)]},
+            "specific": {"watch_directories": [str(nested)]},
+        }
+
+        def __init__(self):
+            self.paths = []
+
+        def register_licht_asset(self, path, *, folder_id, adopt_existing, save):
+            self.paths.append((path, folder_id, adopt_existing, save))
+            return SimpleNamespace(id=path), True
+
+        def save(self):
+            return True
+
+    index = _Index()
+    result = scan_all_watch_directories(index)
+
+    assert index.paths == [(str(project), "specific", False, False)]
+    assert result.discovered == 1
+    assert result.added == 1
+    assert result.failed == 0
 
 
 def test_missing_watched_directory_discovers_nothing(tmp_path: Path):

@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 import lichtfeld as lf
 
 from . import rml_widgets
-from .asset_watch import WatchScanResult, scan_watch_directories
+from .asset_watch import WatchScanResult, scan_all_watch_directories
 from .types import Panel
 from .ui import RuntimeState
 
@@ -221,8 +221,6 @@ class WatchDirsDialogPanel(Panel):
             target=self._scan_worker,
             args=(
                 index,
-                folder_id,
-                directories,
                 on_catalog_changed,
                 scan_generation,
             ),
@@ -233,13 +231,11 @@ class WatchDirsDialogPanel(Panel):
     def _scan_worker(
         self,
         index: Any,
-        folder_id: str,
-        directories: list[str],
         on_catalog_changed: Optional[Callable[[], None]],
         scan_generation: int,
     ) -> None:
         try:
-            result = scan_watch_directories(index, folder_id, directories)
+            result = scan_all_watch_directories(index)
         except Exception:
             _log.error("Watched-directory scan failed", exc_info=True)
             result = WatchScanResult(failed=1)
