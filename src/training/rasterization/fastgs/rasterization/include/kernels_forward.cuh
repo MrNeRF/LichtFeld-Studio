@@ -541,7 +541,8 @@ namespace fast_lfs::rasterization::kernels::forward {
         batch_size = max(32, min(batch_size, config::block_size_blend_forward));
         batch_size = batch_size & ~31; // force multiple of 32
 
-        __shared__ PackedMeanBBox collected_geom[config::block_size_blend_forward];
+        __shared__ float2 collected_mean2d[config::block_size_blend_forward];
+        __shared__ ushort4 s_bbox[config::block_size_blend_forward];
         __shared__ float4 collected_conic_opacity[config::block_size_blend_forward];
         __shared__ float4 collected_color[config::block_size_blend_forward];
         __shared__ float collected_depth[config::block_size_blend_forward];
@@ -572,11 +573,25 @@ namespace fast_lfs::rasterization::kernels::forward {
                 const int fetch_idx = static_cast<int>(tile_range.x) + batch_base + static_cast<int>(thread_rank);
                 if (fetch_idx < static_cast<int>(tile_range.y)) {
                     const uint primitive_idx = instance_primitive_indices[fetch_idx];
-                    collected_geom[thread_rank] = primitive_mean2d[primitive_idx];
-                    collected_conic_opacity[thread_rank] = primitive_conic_opacity[primitive_idx];
+                    const PackedMeanBBox geom = primitive_mean2d[primitive_idx];
+                    collected_mean2d[thread_rank] = geom.mean2d;
+                    s_bbox[thread_rank] = geom.pixel_bbox;
+                    float4 conic_opacity = primitive_conic_opacity[primitive_idx];
+                    // Fold 0.5 into the diagonal of the staged conic so the per-pixel
+                    // quadric is cxx*dx^2 + cxy*dx*dy + czz*dy^2. The stored primitive
+                    // conic is left unscaled for backward. conic.y is already the 1.0
+                    // coefficient of dx*dy (the 0.5 and the 2 cancel). *0.5 is exact
+                    // for finite normals and commutes with a correctly rounded FMA.
+                    conic_opacity.x *= 0.5f;
+                    conic_opacity.z *= 0.5f;
+                    collected_conic_opacity[thread_rank] = conic_opacity;
                     const float4 raw_c = primitive_color[primitive_idx];
                     const float3 clamped = fminf(fmaxf(make_float3(raw_c), 0.0f), config::max_blend_color);
-                    collected_color[thread_rank] = make_float4(clamped, 0.0f);
+                    // log(opacity*255): skip __expf when sigma/2 is already past the
+                    // alpha=1/255 contour. Dead .w slot; pairs that pass still run the
+                    // exact opacity*exp test.
+                    collected_color[thread_rank] = make_float4(
+                        clamped, logf(conic_opacity.w * config::min_alpha_threshold_rcp));
                     collected_depth[thread_rank] = primitive_depths[primitive_idx];
                     if constexpr (kRenderNormal) {
                         collected_normal[thread_rank] = primitive_normals[primitive_idx];
@@ -592,7 +607,7 @@ namespace fast_lfs::rasterization::kernels::forward {
                 bool intersects0 = false;
                 bool intersects1 = false;
                 if (j_test < current_batch_size) {
-                    const ushort4 bb = collected_geom[j_test].pixel_bbox;
+                    const ushort4 bb = s_bbox[j_test];
                     intersects0 = (static_cast<uint>(bb.x) < sub0_ix1) &&
                                   (static_cast<uint>(bb.y) > sub0_ix0) &&
                                   (static_cast<uint>(bb.z) < sub0_iy1) &&
@@ -628,7 +643,7 @@ namespace fast_lfs::rasterization::kernels::forward {
 
                     const float4 conic_opacity = collected_conic_opacity[j];
                     const float3 conic = make_float3(conic_opacity);
-                    const float2 mean2d = collected_geom[j].mean2d;
+                    const float2 mean2d = collected_mean2d[j];
                     const float opacity = conic_opacity.w;
                     const float4 c = collected_color[j];
                     const float depth = collected_depth[j];
@@ -636,11 +651,18 @@ namespace fast_lfs::rasterization::kernels::forward {
                     if constexpr (kRenderNormal) {
                         normal = collected_normal[j];
                     }
+                    // One-sided slack: skip only when even a 2-ulp-high __expf still
+                    // fails alpha >= 1/255. Bound is ~1.3e-6 (2 ulp __expf ≈ 2^-22 in
+                    // the exponent, 1 ulp logf at log(255)≈5.54 is 2^-20, plus 0.5 ulp
+                    // of opacity*255); 1e-5 is ~8x that. Survivors always take the
+                    // exact test below.
+                    constexpr float kLogAlphaGateEps = 1.0e-5f;
+                    const float log_alpha_pt = c.w;
 
                     if (hit0) {
                         const float2 delta = mean2d - pixel0;
-                        const float sigma_over_2 = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-                        if (!(sigma_over_2 < 0.0f)) {
+                        const float sigma_over_2 = (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
+                        if (!(sigma_over_2 < 0.0f) && !(sigma_over_2 > log_alpha_pt + kLogAlphaGateEps)) {
                             // __expf: -6.7% blend kernel time vs expf at equal 30k PSNR/SSIM (bonsai A/B).
                             const float gaussian = __expf(-sigma_over_2);
                             const float alpha = fminf(opacity * gaussian, config::max_fragment_alpha);
@@ -661,8 +683,8 @@ namespace fast_lfs::rasterization::kernels::forward {
                     }
                     if (hit1) {
                         const float2 delta = mean2d - pixel1;
-                        const float sigma_over_2 = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-                        if (!(sigma_over_2 < 0.0f)) {
+                        const float sigma_over_2 = (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
+                        if (!(sigma_over_2 < 0.0f) && !(sigma_over_2 > log_alpha_pt + kLogAlphaGateEps)) {
                             const float gaussian = __expf(-sigma_over_2);
                             const float alpha = fminf(opacity * gaussian, config::max_fragment_alpha);
                             if (!(alpha < config::min_alpha_threshold)) {
