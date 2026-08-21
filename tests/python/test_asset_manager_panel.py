@@ -40,7 +40,12 @@ def _install_lf_stub(monkeypatch):
             LEFT_DOCK="LEFT_DOCK",
         ),
         PanelHeightMode=SimpleNamespace(FILL="FILL", CONTENT="CONTENT"),
+        PanelOption=SimpleNamespace(
+            DEFAULT_CLOSED="DEFAULT_CLOSED",
+            HIDE_HEADER="HIDE_HEADER",
+        ),
         tr=lambda key: key,
+        set_save_asset_callback=lambda _callback: None,
     )
     lf_stub.log = _LogStub()
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
