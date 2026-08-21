@@ -98,9 +98,7 @@ namespace lfs::vis {
         lfs::Result<void> projectSaveAsExplicit(
             const std::filesystem::path& path,
             bool regenerate_preview = true);
-        // Interactive LoadFile with stop_training: wait for the
-        // trainer, then replay queued loads. Returns true when the
-        // caller must not start the load now.
+        // Returns true when the load was queued behind a trainer stop.
         bool deferLoadFileForTraining(
             const lfs::core::events::cmd::LoadFile& cmd);
         [[nodiscard]] bool loadFileWipeWouldNeedConfirmation(
@@ -112,9 +110,6 @@ namespace lfs::vis {
         [[nodiscard]] bool loadFileWouldReplaceScene(
             bool is_dataset,
             bool replace) const;
-        // Close the current project document without writing it and open a
-        // fresh untitled session. Live ParameterManager / loader params are
-        // restored afterward. No-ops for a blank untitled session.
         bool resetUntitledSessionForReplaceLoad();
         lfs::Result<ProjectOpenOutcome>
         projectOpen(

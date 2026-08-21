@@ -77,14 +77,6 @@ def _open_checkpoint_import_checked(path: str) -> None:
         raise RuntimeError("checkpoint import dialog is unavailable")
 
 
-def _confirm_discard_then(title: str, callback) -> None:
-    confirm_discard_work_then(title, callback)
-
-
-def _confirm_switch_then(title: str, callback) -> None:
-    confirm_discard_work_then(title, callback)
-
-
 def _offer_remove_missing_recent(path: str) -> None:
     tr = lf.ui.tr
     remove_label = tr("menu.file.remove_from_recent")
@@ -132,7 +124,7 @@ def _open_recent_project(path: str) -> None:
     if not Path(path).is_file():
         _offer_remove_missing_recent(path)
         return
-    _confirm_switch_then(
+    confirm_discard_work_then(
         lf.ui.tr("menu.file.open_project"),
         lambda stop_training: _open_recent_checked(path, stop_training),
     )
@@ -160,7 +152,7 @@ class NewProjectOperator(Operator):
     description = "Clear the scene to start a new project"
 
     def execute(self, context) -> set:
-        _confirm_switch_then(
+        confirm_discard_work_then(
             lf.ui.tr("menu.file.new_project"),
             lambda stop_training: _new_project(True, stop_training),
         )
@@ -172,7 +164,7 @@ class OpenProjectOperator(Operator):
     description = "Open a LichtFeld project"
 
     def execute(self, context) -> set:
-        _confirm_switch_then(
+        confirm_discard_work_then(
             lf.ui.tr("menu.file.open_project"),
             lambda stop_training: _open_project("", True, stop_training),
         )
@@ -392,7 +384,7 @@ def _show_project_switch_confirmation(
         callback = lambda stop_training: _open_project(
             path, True, stop_training
         )
-    _confirm_switch_then(title, callback)
+    confirm_discard_work_then(title, callback)
 
 
 def _show_stop_training_confirmation(

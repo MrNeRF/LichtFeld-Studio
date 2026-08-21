@@ -1652,21 +1652,6 @@ namespace lfs::vis::project {
         if (!lfs::io::project::isPublishedLichtPath(path)) {
             return;
         }
-        auto parent_name =
-            path.parent_path().filename().string();
-#ifdef _WIN32
-        std::transform(
-            parent_name.begin(), parent_name.end(),
-            parent_name.begin(), [](const unsigned char character) {
-                return static_cast<char>(std::tolower(character));
-            });
-#endif
-        if ((parent_name == "tmp" ||
-             parent_name == "recovery") &&
-            lfs::io::project::is_scratch_autosave_path(
-                path, path.parent_path())) {
-            return;
-        }
         const auto resolved = resolveProjectMruPath(path);
         settings.mru.erase(
             std::remove_if(
@@ -5692,20 +5677,22 @@ namespace lfs::vis::project {
         // Recovered content is not the durable master yet.
         scene_dirty_.store(
             true, std::memory_order_release);
-        {
-            const std::lock_guard lock(
-                settings_mutex_);
-            rememberProject(
-                settings_,
-                document_->project_uuid(),
-                master_path);
-        }
-        if (auto persisted = persistSettings();
-            !persisted) {
-            LOG_WARN(
-                "Recovered project opened, but MRU settings failed: {}",
-                developerError(
-                    persisted.error()));
+        if (!isScratchPath(master_path)) {
+            {
+                const std::lock_guard lock(
+                    settings_mutex_);
+                rememberProject(
+                    settings_,
+                    document_->project_uuid(),
+                    master_path);
+            }
+            if (auto persisted = persistSettings();
+                !persisted) {
+                LOG_WARN(
+                    "Recovered project opened, but MRU settings failed: {}",
+                    developerError(
+                        persisted.error()));
+            }
         }
         resetMaintenanceClocks();
         LOG_INFO(
