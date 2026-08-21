@@ -2679,12 +2679,13 @@ namespace lfs::io::project {
         const ProjectDocumentAutosaveOptions* autosave) {
         const bool is_autosave = autosave != nullptr;
         if (!options.preview_png.empty() &&
-            (options.commit.kind != CommitKind::Explicit ||
+            ((options.commit.kind != CommitKind::Explicit &&
+              options.commit.kind != CommitKind::Recovered) ||
              is_autosave)) {
             return fail<ProjectDocumentSaveReport>(
                 lfs::ErrorCode::FailedPrecondition,
                 "Only an explicit project save may regenerate the preview.",
-                "Autosave and recovered generations must carry THMB forward",
+                "Automatic saves must carry THMB forward",
                 "save.preview_png");
         }
         auto normalized = normalized_absolute_path(path);
