@@ -287,6 +287,62 @@ namespace {
         return lfs::core::LogLevel::Info; // Default
     }
 
+    std::expected<void, std::string> apply_view_path(
+        lfs::core::param::TrainingParameters& params, const std::string& view_path_str) {
+        const std::filesystem::path view_path = lfs::core::utf8_to_path(view_path_str);
+
+        if (!std::filesystem::exists(view_path)) {
+            return std::unexpected(
+                std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
+        }
+
+        constexpr std::array<std::string_view, 13> SUPPORTED_EXTENSIONS = {
+            ".ply", ".sog", ".spz", ".rad", ".resume",
+            ".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
+        const auto is_supported = [&](const std::filesystem::path& p) {
+            auto ext = p.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            return std::ranges::find(SUPPORTED_EXTENSIONS, ext) != SUPPORTED_EXTENSIONS.end();
+        };
+
+        if (std::filesystem::is_directory(view_path)) {
+            for (const auto& entry : std::filesystem::directory_iterator(view_path)) {
+                if (entry.is_regular_file() && is_supported(entry.path())) {
+                    params.view_paths.push_back(entry.path());
+                }
+            }
+            std::ranges::sort(params.view_paths);
+
+            if (params.view_paths.empty()) {
+                return std::unexpected(std::format(
+                    "No supported files found in: {}", lfs::core::path_to_utf8(view_path)));
+            }
+            LOG_DEBUG("Found {} view files in directory", params.view_paths.size());
+            return {};
+        }
+
+        auto extension = view_path.extension().string();
+        std::ranges::transform(
+            extension, extension.begin(),
+            [](const unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+        if (extension == ".licht") {
+            if (!lfs::io::project::isPublishedLichtPath(view_path)) {
+                return std::unexpected(
+                    lfs::io::project::unpublishedLichtUserMessage(view_path));
+            }
+            params.project_path = view_path;
+            return {};
+        }
+        if (!is_supported(view_path)) {
+            return std::unexpected(std::format(
+                "Unsupported file format: {}", lfs::core::path_to_utf8(view_path)));
+        }
+        params.view_paths.push_back(view_path);
+        return {};
+    }
+
     std::expected<std::tuple<ParseResult, std::function<void()>>, std::string> parse_arguments(
         const std::vector<std::string>& args,
         lfs::core::param::TrainingParameters& params) {
@@ -632,62 +688,14 @@ namespace {
                 return std::make_tuple(ParseResult::Success, std::function<void()>{});
             }
 
-            // Viewer mode: file or directory
+            // Viewer mode: file or directory. Bare positional paths are rewritten to
+            // -v in parse_args_and_params so they share this branch.
             if (view_ply) {
                 const auto& view_path_str = ::args::get(view_ply);
                 if (!view_path_str.empty()) {
-                    const std::filesystem::path view_path = lfs::core::utf8_to_path(view_path_str);
-
-                    if (!std::filesystem::exists(view_path)) {
-                        return std::unexpected(std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
-                    }
-
-                    constexpr std::array<std::string_view, 13> SUPPORTED_EXTENSIONS = {
-                        ".ply", ".sog", ".spz", ".rad", ".resume",
-                        ".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
-                    const auto is_supported = [&](const std::filesystem::path& p) {
-                        auto ext = p.extension().string();
-                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                        return std::ranges::find(SUPPORTED_EXTENSIONS, ext) != SUPPORTED_EXTENSIONS.end();
-                    };
-
-                    if (std::filesystem::is_directory(view_path)) {
-                        for (const auto& entry : std::filesystem::directory_iterator(view_path)) {
-                            if (entry.is_regular_file() && is_supported(entry.path())) {
-                                params.view_paths.push_back(entry.path());
-                            }
-                        }
-                        std::ranges::sort(params.view_paths);
-
-                        if (params.view_paths.empty()) {
-                            return std::unexpected(std::format(
-                                "No supported files found in: {}", lfs::core::path_to_utf8(view_path)));
-                        }
-                        LOG_DEBUG("Found {} view files in directory", params.view_paths.size());
-                    } else {
-                        auto extension = view_path.extension().string();
-                        std::ranges::transform(
-                            extension, extension.begin(),
-                            [](const unsigned char character) {
-                                return static_cast<char>(
-                                    std::tolower(character));
-                            });
-                        if (extension == ".licht") {
-                            if (!lfs::io::project::isPublishedLichtPath(
-                                    view_path)) {
-                                return std::unexpected(
-                                    lfs::io::project::
-                                        unpublishedLichtUserMessage(
-                                            view_path));
-                            }
-                            params.project_path = view_path;
-                        } else if (!is_supported(view_path)) {
-                            return std::unexpected(std::format(
-                                "Unsupported file format: {}", lfs::core::path_to_utf8(view_path)));
-                        } else {
-                            params.view_paths.push_back(view_path);
-                        }
-                    }
+                    const auto applied = apply_view_path(params, view_path_str);
+                    if (!applied)
+                        return std::unexpected(applied.error());
                 }
 
                 if (gut) {

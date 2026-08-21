@@ -80,10 +80,15 @@ namespace lfs::vis {
     class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
     class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
     class VisualizerImplResetTest_UntitledDirtySessionAutosavesToScratch_Test;
+    class VisualizerImplResetTest_AutosaveSkipsUnchangedSelectionCapture_Test;
     class VisualizerImplResetTest_BlankUntitledSessionUpdateMaintenanceWritesNoScratch_Test;
     class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
+    class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWaitsForAutosaveQuietPeriod_Test;
     class VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
     class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+    class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
+    class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
+    class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
     class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
 } // namespace lfs::vis
@@ -112,6 +117,7 @@ namespace lfs::vis::project {
         bool auto_save_on_close = false;
         std::uint64_t autosave_interval_seconds = 5 * 60;
         std::uint64_t autosave_dirty_epoch_threshold = 20;
+        std::uint64_t autosave_quiet_seconds = 2;
         std::uint64_t compaction_idle_seconds = 30;
         std::vector<ProjectMruEntry> mru;
         std::vector<DismissedRecoveryEntry> dismissed_recovery;
@@ -286,10 +292,15 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
         friend class lfs::vis::VisualizerImplResetTest_UntitledDirtySessionAutosavesToScratch_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AutosaveSkipsUnchangedSelectionCapture_Test;
         friend class lfs::vis::VisualizerImplResetTest_BlankUntitledSessionUpdateMaintenanceWritesNoScratch_Test;
         friend class lfs::vis::VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
+        friend class lfs::vis::VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWaitsForAutosaveQuietPeriod_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         enum class Hydration {
@@ -333,6 +344,7 @@ namespace lfs::vis::project {
 
         enum class DocumentSyncMode {
             Default,
+            Autosave,
             LightTrainingAutosave,
         };
 
@@ -496,6 +508,8 @@ namespace lfs::vis::project {
         std::uint64_t active_restore_ticket_ = 0;
         std::atomic<std::uint64_t>
             selection_mutation_serial_{0};
+        std::optional<std::uint64_t>
+            last_captured_selection_serial_;
         std::atomic<Hydration> hydration_{Hydration::Empty};
         std::atomic<bool> scene_dirty_{false};
         std::atomic<bool> payload_dirty_{false};

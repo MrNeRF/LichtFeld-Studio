@@ -11,6 +11,7 @@
 #include "core/error_reporter.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/executable_path.hpp"
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
@@ -33,6 +34,7 @@
 #include "operator/ops/selection_ops.hpp"
 #include "operator/ops/transform_ops.hpp"
 #include "preferences.hpp"
+#include "project/project_switch_error.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -130,25 +132,8 @@ namespace lfs::vis {
             }
         }
 
-        [[nodiscard]] bool
-        isDirtyProjectSwitchError(
-            const lfs::Error& error) noexcept {
-            return error.code() ==
-                       lfs::ErrorCode::
-                           FailedPrecondition &&
-                   error.user_message() ==
-                       "The current project has unsaved changes.";
-        }
-
-        [[nodiscard]] bool
-        isTrainingProjectSwitchError(
-            const lfs::Error& error) noexcept {
-            return error.code() ==
-                       lfs::ErrorCode::
-                           FailedPrecondition &&
-                   error.user_message() ==
-                       "Stop training before switching projects.";
-        }
+        using project::isDirtyProjectSwitchError;
+        using project::isTrainingProjectSwitchError;
 
         void wakeEventLoopViaServices() {
             if (auto* const window_manager = services().windowOrNull()) {
@@ -361,6 +346,10 @@ namespace lfs::vis {
 
         callback_cleanup_.clear();
         stopForceExitCompletionWatcher();
+        UnifiedToolRegistry::instance().clearActiveTool();
+        UnifiedToolRegistry::instance().clearActiveSubmode();
+        editor_context_.setActiveTool(ToolType::None);
+        editor_context_.clearActiveOperator();
         trainer_manager_.reset();
         tool_context_.reset();
         if (gui_manager_) {
@@ -1296,10 +1285,6 @@ namespace lfs::vis {
                 command.stop_training);
         });
 
-        cmd::LoadFile::when([this](const auto& command) {
-            deferDatasetLoadForTraining(command);
-        });
-
         const auto publish_project_error =
             [](std::string action, const auto& value,
                const char* operation) {
@@ -1352,7 +1337,7 @@ namespace lfs::vis {
 
         cmd::ProjectSave::when(
             [this, publish_project_error](const auto& command) {
-                project_save_as_started_ = false;
+                project_save_started_ = false;
                 auto has_path = projectHasPath();
                 if (!has_path) {
                     publish_project_error(
@@ -1378,7 +1363,7 @@ namespace lfs::vis {
                             gui::error_op::kSave);
                         return;
                     }
-                    project_save_as_started_ = true;
+                    project_save_started_ = true;
                     return;
                 }
                 if (auto saved = projectSave(
@@ -1390,13 +1375,13 @@ namespace lfs::vis {
                         gui::error_op::kSave);
                     return;
                 }
-                project_save_as_started_ = true;
+                project_save_started_ = true;
             });
 
         cmd::ProjectSaveAs::when(
             [this, publish_project_error](
                 const auto& command) {
-                project_save_as_started_ = false;
+                project_save_started_ = false;
                 auto path = command.path;
                 if (path.empty()) {
                     std::string default_name =
@@ -1429,7 +1414,7 @@ namespace lfs::vis {
                         gui::error_op::kSave);
                     return;
                 }
-                project_save_as_started_ = true;
+                project_save_started_ = true;
             });
 
         cmd::ProjectOpen::when(
@@ -1890,13 +1875,17 @@ namespace lfs::vis {
         if (scene_manager_)
             scene_manager_->initSelectionService();
 
-        {
-            LOG_TIMER("startup.python.ensure_initialized");
-            (void)python::ensure_initialized();
-        }
-        {
-            LOG_TIMER("startup.python.builtin_ui_registered");
-            python::ensure_builtin_ui_registered();
+        if (lfs::core::getPythonModuleDir().empty()) {
+            LOG_WARN("Python module not found next to executable; skipping Python init");
+        } else {
+            {
+                LOG_TIMER("startup.python.ensure_initialized");
+                (void)python::ensure_initialized();
+            }
+            {
+                LOG_TIMER("startup.python.builtin_ui_registered");
+                python::ensure_builtin_ui_registered();
+            }
         }
         {
             LOG_TIMER("startup.window.showWindow");
@@ -3454,10 +3443,8 @@ namespace lfs::vis {
         return project_lifecycle_->pollWrite();
     }
 
-    bool VisualizerImpl::consumeProjectSaveAsStarted() {
-        const bool started = project_save_as_started_;
-        project_save_as_started_ = false;
-        return started;
+    bool VisualizerImpl::consumeProjectSaveStarted() {
+        return project_save_started_.exchange(false);
     }
 
     void VisualizerImpl::projectWaitWrite() {

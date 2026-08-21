@@ -16,6 +16,7 @@ from .layouts.menus import (
     register_menu,
 )
 from .import_panels import open_dataset_import_panel, open_resume_checkpoint_panel
+from .training_confirm import _confirm_stop_training_then, _project_has_path
 
 __lfs_menu_classes__ = ["FileMenu"]
 
@@ -74,37 +75,6 @@ def _open_checkpoint_import_checked(path: str) -> None:
         )
     if not open_resume_checkpoint_panel(path):
         raise RuntimeError("checkpoint import dialog is unavailable")
-
-
-def _training_is_active() -> bool:
-    probe = getattr(lf, "is_training_active", None)
-    if not callable(probe):
-        return False
-    try:
-        return bool(probe())
-    except Exception:
-        return False
-
-
-def _confirm_stop_training_then(callback) -> None:
-    if not _training_is_active():
-        callback(False)
-        return
-
-    tr = lf.ui.tr
-    yes_label = tr("common.yes")
-    no_label = tr("common.no")
-
-    def _on_result(button):
-        if button == yes_label:
-            callback(True)
-
-    lf.ui.confirm_dialog(
-        tr("project_switch.stop_training_title"),
-        tr("project_switch.stop_training_message"),
-        [yes_label, no_label],
-        _on_result,
-    )
 
 
 def _confirm_discard_then(title: str, callback) -> None:
@@ -402,7 +372,7 @@ def _show_exit_confirmation(training_in_progress: bool = False) -> None:
         )
         return
 
-    has_path = lf.project_has_path()
+    has_path = _project_has_path()
     save_label = (
         tr("common.save")
         if has_path
@@ -476,10 +446,7 @@ def _on_show_resume_checkpoint_popup(path: str):
 
 
 def _can_compact_project() -> bool:
-    try:
-        return bool(lf.project_has_path())
-    except Exception:
-        return False
+    return _project_has_path()
 
 
 @register_menu

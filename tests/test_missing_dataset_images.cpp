@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/scene.hpp"
+#include "core/tensor.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/formats/transforms.hpp"
 #include "io/loaders/blender_loader.hpp"
@@ -186,6 +188,31 @@ namespace {
             EXPECT_EQ(dataset.get_cameras().size(), 2u);
         }
 
+        std::shared_ptr<lfs::core::Camera> make_scene_camera(
+            const std::string& name,
+            const fs::path& image_path,
+            const int uid) {
+            const auto empty_distortion = lfs::core::Tensor::zeros(
+                {0}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+            return std::make_shared<lfs::core::Camera>(
+                lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+                lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
+                1.0f, 1.0f, 0.5f, 0.5f, empty_distortion, empty_distortion,
+                lfs::core::CameraModelType::PINHOLE, name, image_path,
+                fs::path{}, 1, 1, uid);
+        }
+
+        lfs::core::Camera* camera_by_name(
+            lfs::core::Scene& scene,
+            const std::string& name) {
+            for (const auto& camera : scene.getAllCameras()) {
+                if (camera && camera->image_name() == name) {
+                    return camera.get();
+                }
+            }
+            return nullptr;
+        }
+
         fs::path temp_dir_;
     };
 
@@ -368,4 +395,108 @@ TEST_F(MissingDatasetImagesTest, TransformsRawReaderKeepsMissingCameraRecords) {
     EXPECT_TRUE(cameras[0]._has_image);
     EXPECT_FALSE(cameras[1]._has_image);
     EXPECT_EQ(cameras[1]._image_name, "missing.png");
+}
+
+TEST_F(MissingDatasetImagesTest, RevalidateMarksDeletedImageMissing) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    write_png(temp_dir_ / "present.png");
+    write_png(temp_dir_ / "missing.png");
+
+    lfs::core::Scene scene;
+    const auto group = scene.addCameraGroup("Training", scene.addGroup("Cameras"), 2);
+    ASSERT_NE(group, lfs::core::NULL_NODE);
+    ASSERT_NE(scene.addCamera("present.png", group,
+                              make_scene_camera("present.png", temp_dir_ / "present.png", 0)),
+              lfs::core::NULL_NODE);
+    ASSERT_NE(scene.addCamera("missing.png", group,
+                              make_scene_camera("missing.png", temp_dir_ / "missing.png", 1)),
+              lfs::core::NULL_NODE);
+
+    fs::remove(temp_dir_ / "missing.png");
+    const auto missing = scene.revalidateCameraImagePresence();
+    ASSERT_EQ(missing.size(), 1u);
+    EXPECT_EQ(missing.front(), "missing.png");
+
+    auto* present = camera_by_name(scene, "present.png");
+    auto* deleted = camera_by_name(scene, "missing.png");
+    ASSERT_NE(present, nullptr);
+    ASSERT_NE(deleted, nullptr);
+    EXPECT_TRUE(present->has_image());
+    EXPECT_FALSE(deleted->has_image());
+
+    lfs::training::DatasetConfig config;
+    lfs::training::CameraDataset dataset(
+        scene.getAllCameras(), config, lfs::training::CameraDataset::Split::ALL);
+    EXPECT_EQ(dataset.size(), 1u);
+    EXPECT_EQ(dataset.get_camera(0)->image_name(), "present.png");
+    EXPECT_EQ(dataset.get_cameras().size(), 2u);
+}
+
+TEST_F(MissingDatasetImagesTest, RevalidateIncludesRestoredImage) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    write_png(temp_dir_ / "present.png");
+
+    lfs::core::Scene scene;
+    const auto group = scene.addCameraGroup("Training", scene.addGroup("Cameras"), 2);
+    ASSERT_NE(group, lfs::core::NULL_NODE);
+    ASSERT_NE(scene.addCamera("present.png", group,
+                              make_scene_camera("present.png", temp_dir_ / "present.png", 0)),
+              lfs::core::NULL_NODE);
+    auto restored = make_scene_camera("restored.png", temp_dir_ / "restored.png", 1);
+    restored->set_has_image(false);
+    ASSERT_NE(scene.addCamera("restored.png", group, restored), lfs::core::NULL_NODE);
+
+    write_png(temp_dir_ / "restored.png");
+    const auto missing = scene.revalidateCameraImagePresence();
+    EXPECT_TRUE(missing.empty());
+
+    auto* present = camera_by_name(scene, "present.png");
+    auto* included = camera_by_name(scene, "restored.png");
+    ASSERT_NE(present, nullptr);
+    ASSERT_NE(included, nullptr);
+    EXPECT_TRUE(present->has_image());
+    EXPECT_TRUE(included->has_image());
+
+    lfs::training::DatasetConfig config;
+    lfs::training::CameraDataset dataset(
+        scene.getAllCameras(), config, lfs::training::CameraDataset::Split::ALL);
+    EXPECT_EQ(dataset.size(), 2u);
+    EXPECT_EQ(dataset.get_cameras().size(), 2u);
+}
+
+TEST_F(MissingDatasetImagesTest, RevalidateAllMissingExcludesEveryCamera) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    lfs::core::Scene scene;
+    const auto group = scene.addCameraGroup("Training", scene.addGroup("Cameras"), 2);
+    ASSERT_NE(group, lfs::core::NULL_NODE);
+    ASSERT_NE(scene.addCamera("missing_a.png", group,
+                              make_scene_camera("missing_a.png", temp_dir_ / "missing_a.png", 0)),
+              lfs::core::NULL_NODE);
+    ASSERT_NE(scene.addCamera("missing_b.png", group,
+                              make_scene_camera("missing_b.png", temp_dir_ / "missing_b.png", 1)),
+              lfs::core::NULL_NODE);
+
+    const auto missing = scene.revalidateCameraImagePresence();
+    ASSERT_EQ(missing.size(), 2u);
+
+    for (const auto& camera : scene.getAllCameras()) {
+        ASSERT_NE(camera, nullptr);
+        EXPECT_FALSE(camera->has_image());
+    }
+
+    lfs::training::DatasetConfig config;
+    lfs::training::CameraDataset dataset(
+        scene.getAllCameras(), config, lfs::training::CameraDataset::Split::ALL);
+    EXPECT_EQ(dataset.size(), 0u);
+    EXPECT_EQ(dataset.get_cameras().size(), 2u);
+    EXPECT_TRUE(scene.hasTrainingData());
 }

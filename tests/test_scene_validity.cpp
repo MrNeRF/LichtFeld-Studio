@@ -21,6 +21,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
+#include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
@@ -862,6 +863,51 @@ namespace lfs::python {
         EXPECT_EQ(consume_scene_mutation_flags(), combined);
         EXPECT_EQ(get_scene_mutation_flags(), 0u);
         EXPECT_EQ(consume_scene_mutation_flags(), 0u);
+    }
+
+    TEST_F(SceneValidityTest, TransactionBatchesSetNodeTransformIntoSingleSceneChanged) {
+        ASSERT_NE(dummy_scene_.addGroup("Left"), core::NULL_NODE);
+        ASSERT_NE(dummy_scene_.addGroup("Right"), core::NULL_NODE);
+        ASSERT_NE(dummy_scene_.addGroup("Front"), core::NULL_NODE);
+
+        int changed = 0;
+        std::uint32_t flags = 0;
+        auto handler = core::events::state::SceneChanged::when(
+            [&](const auto& event) {
+                ++changed;
+                flags = event.mutation_flags;
+            });
+
+        {
+            core::Scene::Transaction txn(dummy_scene_);
+            dummy_scene_.setNodeTransform(
+                "Left",
+                glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+            dummy_scene_.setNodeTransform(
+                "Right",
+                glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, 0.0f, 0.0f)));
+            dummy_scene_.setNodeTransform(
+                "Front",
+                glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 1.0f)));
+            EXPECT_EQ(changed, 0);
+        }
+
+        EXPECT_EQ(changed, 1);
+        EXPECT_EQ(
+            flags,
+            static_cast<std::uint32_t>(
+                core::Scene::MutationType::TRANSFORM_CHANGED));
+
+        changed = 0;
+        dummy_scene_.setNodeTransform(
+            "Left",
+            glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)));
+        dummy_scene_.setNodeTransform(
+            "Right",
+            glm::translate(glm::mat4(1.0f), glm::vec3(-2.0f, 0.0f, 0.0f)));
+        EXPECT_EQ(changed, 2);
+
+        (void)handler;
     }
 
     TEST_F(SceneValidityTest, SelectionGenerationPublishesToAppStore) {

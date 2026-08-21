@@ -118,7 +118,7 @@ namespace lfs::vis {
         projectGetInfo() override;
         lfs::Result<ProjectWritePoll>
         projectPollWrite() override;
-        bool consumeProjectSaveAsStarted() override;
+        bool consumeProjectSaveStarted() override;
         void projectWaitWrite() override;
         lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() override;
@@ -309,6 +309,9 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
         friend class VisualizerImplResetTest_SelectedGaussiansAndSelectionToolSurviveSaveAndReopen_Test;
         friend class VisualizerImplResetTest_DatasetProjectWithoutCheckpointReloadsTrainer_Test;
+        friend class VisualizerImplResetTest_HydratedDatasetReopenMarksDeletedImageMissing_Test;
+        friend class VisualizerImplResetTest_HydratedDatasetReopenIncludesRestoredImage_Test;
+        friend class VisualizerImplResetTest_HydratedDatasetReopenAllImagesMissingDoesNotCrash_Test;
         friend class VisualizerImplResetTest_MissingDatasetProjectArmsRelocationInsteadOfImport_Test;
         friend class VisualizerImplResetTest_RelocateProjectDatasetRestoresTrainerFromNewRoot_Test;
         friend class VisualizerImplResetTest_RelocateRejectsFolderWithoutDatasetElements_Test;
@@ -333,10 +336,15 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
         friend class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
         friend class VisualizerImplResetTest_UntitledDirtySessionAutosavesToScratch_Test;
+        friend class VisualizerImplResetTest_AutosaveSkipsUnchangedSelectionCapture_Test;
         friend class VisualizerImplResetTest_BlankUntitledSessionUpdateMaintenanceWritesNoScratch_Test;
         friend class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
+        friend class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWaitsForAutosaveQuietPeriod_Test;
         friend class VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
         friend class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+        friend class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
+        friend class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
+        friend class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
         friend class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
         friend class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         friend class VisualizerImplResetTest_LoadFileStopTrainingDefersDatasetLoad_Test;
@@ -556,7 +564,7 @@ namespace lfs::vis {
         bool startup_plugin_preload_started_ = false;
         bool startup_project_open_attempted_ = false;
         bool close_save_notice_posted_ = false;
-        bool project_save_as_started_ = false;
+        std::atomic<bool> project_save_started_{false};
         std::optional<std::filesystem::path>
             pending_close_save_path_;
         std::jthread force_exit_completion_watcher_;

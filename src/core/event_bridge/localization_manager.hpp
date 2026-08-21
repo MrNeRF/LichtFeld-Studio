@@ -21,6 +21,7 @@ namespace lfs::event {
         static LocalizationManager& getInstance();
 
         bool initialize(const std::string& locales_dir);
+        void reset();
         // Returns a pointer into thread-local storage. The pointer remains valid
         // until a subsequent get()/getEnglishFallback() call on the same thread
         // reuses that ring-buffer slot; copy it when retaining the value.

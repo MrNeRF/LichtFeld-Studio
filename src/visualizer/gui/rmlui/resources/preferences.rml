@@ -10,6 +10,7 @@
       <button class="btn preferences-nav-item" data-class-active="show_appearance" data-event-click="show_appearance">@tr:preferences.appearance</button>
       <button class="btn preferences-nav-item" data-class-active="show_input" data-event-click="show_input">@tr:preferences.input</button>
       <button class="btn preferences-nav-item" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
+      <button class="btn preferences-nav-item" data-class-active="show_file_associations" data-event-click="show_file_associations" data-if="has_file_associations">@tr:preferences.file_associations</button>
       <button class="btn preferences-nav-item" data-class-active="show_mcp" data-event-click="show_mcp">@tr:preferences.mcp</button>
     </div>
 
@@ -159,6 +160,23 @@
         </div>
         <div class="section-content" data-if="interface_expanded">
           <span class="preferences-description">@tr:preferences.interface_layout_description</span>
+        </div>
+      </div>
+
+      <div class="preferences-section" data-if="show_file_associations">
+        <div class="section-header text-accent" data-class-is-expanded="file_associations_expanded" data-event-click="toggle_section('file_associations')">
+          <span class="section-arrow text-accent" data-class-is-expanded="file_associations_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.file_associations</span>
+        </div>
+        <div class="section-content" data-if="file_associations_expanded">
+          <span class="preferences-description">@tr:preferences.file_associations_description</span>
+          <div data-for="row : file_associations">
+            <div class="preferences-row preferences-checkbox-row">
+              <span class="preferences-label">{{ row.label }}</span>
+              <input type="checkbox" data-checked="row.registered"
+                     data-event-change="set_file_association(row.extension, row.registered)" />
+            </div>
+          </div>
         </div>
       </div>
 

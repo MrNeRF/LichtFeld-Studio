@@ -33,16 +33,18 @@ namespace lfs::vis::gui {
             L"Software\\LichtFeldStudio\\Capabilities\\FileAssociations";
         constexpr wchar_t REGISTERED_APPLICATIONS_PATH[] = L"Software\\RegisteredApplications";
         constexpr wchar_t APPLICATION_DESCRIPTION[] =
-            L"LichtFeld Studio supports PLY, SOG, SPZ, RAD, USD, USDA, USDC, and USDZ splat files.";
+            L"LichtFeld Studio supports PLY, SOG, SPZ, RAD, USD, USDA, USDC, and USDZ splat files, and LICHT project files.";
 
-        constexpr std::array<ExtInfo, 7> EXTENSIONS = {{
+        constexpr std::array<ExtInfo, 9> EXTENSIONS = {{
             {L".ply", L"LichtFeldStudio.ply", L"PLY Point Cloud"},
             {L".sog", L"LichtFeldStudio.sog", L"SOG Gaussian Splat"},
             {L".spz", L"LichtFeldStudio.spz", L"SPZ Gaussian Splat"},
+            {L".rad", L"LichtFeldStudio.rad", L"RAD Gaussian Splat"},
             {L".usd", L"LichtFeldStudio.usd", L"USD Gaussian Splat"},
             {L".usda", L"LichtFeldStudio.usda", L"USDA Gaussian Splat"},
             {L".usdc", L"LichtFeldStudio.usdc", L"USDC Gaussian Splat"},
             {L".usdz", L"LichtFeldStudio.usdz", L"USDZ Gaussian Splat"},
+            {L".licht", L"LichtFeldStudio.licht", L"LichtFeld Studio Project"},
         }};
 
         bool setRegString(HKEY parent, const std::wstring& subkey, const std::wstring& value_name,
@@ -185,69 +187,98 @@ namespace lfs::vis::gui {
             return getRegString(HKEY_CURRENT_USER, user_choice_key, L"ProgId", out);
         }
 
-    } // namespace
+        struct AssociationPaths {
+            std::wstring exe_name;
+            std::wstring command;
+            std::wstring icon;
+            std::wstring classes;
+            std::wstring application_key;
+        };
 
-    bool registerFileAssociations() {
-        const auto exe_path = lfs::core::getExecutablePath();
-        const auto exe_path_w = exe_path.wstring();
-        const auto exe_name = exe_path.filename().wstring();
-        const auto command = L"\"" + exe_path_w + L"\" \"%1\"";
-        const auto icon = exe_path_w + L",0";
-        const auto classes = std::wstring(L"Software\\Classes\\");
-        const auto application_key = classes + L"Applications\\" + exe_name;
+        AssociationPaths currentAssociationPaths() {
+            const auto exe_path = lfs::core::getExecutablePath();
+            const auto exe_path_w = exe_path.wstring();
+            AssociationPaths paths;
+            paths.exe_name = exe_path.filename().wstring();
+            paths.command = L"\"" + exe_path_w + L"\" \"%1\"";
+            paths.icon = exe_path_w + L",0";
+            paths.classes = L"Software\\Classes\\";
+            paths.application_key = paths.classes + L"Applications\\" + paths.exe_name;
+            return paths;
+        }
 
-        bool ok = true;
-        for (const auto& ext : EXTENSIONS) {
-            const auto prog_key = classes + ext.prog_id;
+        std::string asciiFromWide(const wchar_t* text) {
+            std::string out;
+            for (; text && *text; ++text)
+                out.push_back(static_cast<char>(*text));
+            return out;
+        }
+
+        std::wstring normalizedWideExtension(std::string_view extension) {
+            std::wstring out;
+            if (extension.empty() || extension.front() != '.')
+                out.push_back(L'.');
+            for (const unsigned char character : extension) {
+                if (character >= 'A' && character <= 'Z')
+                    out.push_back(static_cast<wchar_t>(character - 'A' + 'a'));
+                else
+                    out.push_back(static_cast<wchar_t>(character));
+            }
+            return out;
+        }
+
+        const ExtInfo* findExtension(std::string_view extension) {
+            const auto needle = normalizedWideExtension(extension);
+            for (const auto& ext : EXTENSIONS) {
+                if (needle == ext.ext)
+                    return &ext;
+            }
+            return nullptr;
+        }
+
+        bool registerExtensionRows(const ExtInfo& ext, const AssociationPaths& paths) {
+            bool ok = true;
+            const auto prog_key = paths.classes + ext.prog_id;
             ok &= setRegString(HKEY_CURRENT_USER, prog_key, L"", ext.friendly_name);
-            ok &= setRegString(HKEY_CURRENT_USER, prog_key + L"\\DefaultIcon", L"", icon);
+            ok &= setRegString(HKEY_CURRENT_USER, prog_key + L"\\DefaultIcon", L"", paths.icon);
             ok &= setRegString(HKEY_CURRENT_USER, prog_key + L"\\shell\\open\\command", L"",
-                               command);
+                               paths.command);
 
-            const auto ext_key = classes + ext.ext;
+            const auto ext_key = paths.classes + ext.ext;
             // Register as an available handler only. Windows should keep the effective
             // default app decision in the system-managed Default Apps flow.
             ok &= setRegString(HKEY_CURRENT_USER, ext_key + L"\\OpenWithProgids", ext.prog_id,
                                L"");
-            ok &= setRegString(HKEY_CURRENT_USER, application_key + L"\\SupportedTypes", ext.ext,
-                               L"");
+            ok &= setRegString(HKEY_CURRENT_USER, paths.application_key + L"\\SupportedTypes",
+                               ext.ext, L"");
             ok &= setRegString(HKEY_CURRENT_USER, CAPABILITIES_FILE_ASSOCIATIONS_PATH, ext.ext,
                                ext.prog_id);
+            return ok;
         }
 
-        ok &= setRegString(HKEY_CURRENT_USER, CAPABILITIES_PATH, L"ApplicationName",
-                           REGISTERED_APP_NAME);
-        ok &= setRegString(HKEY_CURRENT_USER, CAPABILITIES_PATH, L"ApplicationDescription",
-                           APPLICATION_DESCRIPTION);
-        ok &= setRegString(HKEY_CURRENT_USER, REGISTERED_APPLICATIONS_PATH,
-                           REGISTERED_APP_NAME, CAPABILITIES_PATH);
-        ok &= setRegString(HKEY_CURRENT_USER, application_key, L"FriendlyAppName",
-                           REGISTERED_APP_NAME);
-        ok &= setRegString(HKEY_CURRENT_USER, application_key + L"\\DefaultIcon", L"", icon);
-        ok &= setRegString(HKEY_CURRENT_USER, application_key + L"\\shell\\open\\command", L"",
-                           command);
+        bool writeSharedAppKeys(const AssociationPaths& paths) {
+            bool ok = true;
+            ok &= setRegString(HKEY_CURRENT_USER, CAPABILITIES_PATH, L"ApplicationName",
+                               REGISTERED_APP_NAME);
+            ok &= setRegString(HKEY_CURRENT_USER, CAPABILITIES_PATH, L"ApplicationDescription",
+                               APPLICATION_DESCRIPTION);
+            ok &= setRegString(HKEY_CURRENT_USER, REGISTERED_APPLICATIONS_PATH,
+                               REGISTERED_APP_NAME, CAPABILITIES_PATH);
+            ok &= setRegString(HKEY_CURRENT_USER, paths.application_key, L"FriendlyAppName",
+                               REGISTERED_APP_NAME);
+            ok &= setRegString(HKEY_CURRENT_USER, paths.application_key + L"\\DefaultIcon", L"",
+                               paths.icon);
+            ok &= setRegString(HKEY_CURRENT_USER, paths.application_key + L"\\shell\\open\\command",
+                               L"", paths.command);
+            return ok;
+        }
 
-        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
-
-        if (ok)
-            LOG_INFO("File associations registered successfully");
-        else
-            LOG_WARN("Some file associations failed to register");
-
-        return ok;
-    }
-
-    bool unregisterFileAssociations() {
-        const auto exe_path = lfs::core::getExecutablePath();
-        const auto exe_name = exe_path.filename().wstring();
-        const auto classes = std::wstring(L"Software\\Classes\\");
-        bool ok = true;
-
-        for (const auto& ext : EXTENSIONS) {
-            ok &= deleteRegTree(HKEY_CURRENT_USER, classes + ext.prog_id);
+        bool unregisterExtensionRows(const ExtInfo& ext, const AssociationPaths& paths) {
+            bool ok = true;
+            ok &= deleteRegTree(HKEY_CURRENT_USER, paths.classes + ext.prog_id);
 
             std::wstring current_default;
-            const auto ext_key = classes + ext.ext;
+            const auto ext_key = paths.classes + ext.ext;
             if (getRegString(HKEY_CURRENT_USER, ext_key, L"", current_default) &&
                 current_default == ext.prog_id) {
                 HKEY def_key;
@@ -265,15 +296,129 @@ namespace lfs::vis::gui {
                 RegDeleteValueW(owp_key, ext.prog_id);
                 RegCloseKey(owp_key);
             }
+
+            ok &= deleteRegValue(HKEY_CURRENT_USER, paths.application_key + L"\\SupportedTypes",
+                                 ext.ext);
+            ok &= deleteRegValue(HKEY_CURRENT_USER, CAPABILITIES_FILE_ASSOCIATIONS_PATH, ext.ext);
+            return ok;
         }
 
-        ok &= deleteRegTree(HKEY_CURRENT_USER, CAPABILITIES_FILE_ASSOCIATIONS_PATH);
-        ok &= deleteRegTree(HKEY_CURRENT_USER, CAPABILITIES_PATH);
-        ok &= deleteRegValue(HKEY_CURRENT_USER, REGISTERED_APPLICATIONS_PATH,
-                             REGISTERED_APP_NAME);
-        ok &= deleteRegTree(HKEY_CURRENT_USER, classes + L"Applications\\" + exe_name);
+        bool deleteSharedAppKeys(const AssociationPaths& paths) {
+            bool ok = true;
+            ok &= deleteRegTree(HKEY_CURRENT_USER, CAPABILITIES_FILE_ASSOCIATIONS_PATH);
+            ok &= deleteRegTree(HKEY_CURRENT_USER, CAPABILITIES_PATH);
+            ok &= deleteRegValue(HKEY_CURRENT_USER, REGISTERED_APPLICATIONS_PATH,
+                                 REGISTERED_APP_NAME);
+            ok &= deleteRegTree(HKEY_CURRENT_USER, paths.application_key);
+            return ok;
+        }
 
-        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+        bool capabilitiesHasFileAssociations() {
+            HKEY key;
+            if (RegOpenKeyExW(HKEY_CURRENT_USER, CAPABILITIES_FILE_ASSOCIATIONS_PATH, 0, KEY_READ,
+                              &key) != ERROR_SUCCESS)
+                return false;
+            DWORD value_count = 0;
+            const LONG res =
+                RegQueryInfoKeyW(key, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                 &value_count, nullptr, nullptr, nullptr, nullptr);
+            RegCloseKey(key);
+            return res == ERROR_SUCCESS && value_count > 0;
+        }
+
+        bool isProgIdInstalled(const ExtInfo& ext, const std::wstring& classes) {
+            HKEY key;
+            if (RegOpenKeyExW(HKEY_CURRENT_USER, (classes + ext.prog_id).c_str(), 0, KEY_READ,
+                              &key) != ERROR_SUCCESS)
+                return false;
+            RegCloseKey(key);
+            return true;
+        }
+
+        bool isEffectiveHandler(IApplicationAssociationRegistration* registration,
+                                const ExtInfo& ext, const std::wstring& classes) {
+            std::wstring current;
+            if (!queryEffectiveProgId(registration, ext.ext, current)) {
+                if (!queryUserChoiceProgId(ext.ext, current) &&
+                    !getRegString(HKEY_CURRENT_USER, classes + ext.ext, L"", current))
+                    return false;
+            }
+            return current == ext.prog_id;
+        }
+
+        void notifyAssociationChange() {
+            SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+        }
+
+    } // namespace
+
+    bool registerFileAssociation(std::string_view extension) {
+        const auto* ext = findExtension(extension);
+        if (!ext)
+            return false;
+
+        const auto paths = currentAssociationPaths();
+        bool ok = registerExtensionRows(*ext, paths);
+        ok &= writeSharedAppKeys(paths);
+        notifyAssociationChange();
+
+        if (ok)
+            LOG_INFO("File association registered for {}", asciiFromWide(ext->ext));
+        else
+            LOG_WARN("File association failed to register for {}", asciiFromWide(ext->ext));
+        return ok;
+    }
+
+    bool unregisterFileAssociation(std::string_view extension) {
+        const auto* ext = findExtension(extension);
+        if (!ext)
+            return false;
+
+        const auto paths = currentAssociationPaths();
+        bool ok = unregisterExtensionRows(*ext, paths);
+        if (!capabilitiesHasFileAssociations())
+            ok &= deleteSharedAppKeys(paths);
+        notifyAssociationChange();
+        LOG_INFO("File association unregistered for {}", asciiFromWide(ext->ext));
+        return ok;
+    }
+
+    std::vector<FileAssociationStatus> fileAssociationsStatus() {
+        std::vector<FileAssociationStatus> rows;
+        rows.reserve(EXTENSIONS.size());
+        const auto classes = std::wstring(L"Software\\Classes\\");
+        for (const auto& ext : EXTENSIONS) {
+            rows.push_back(FileAssociationStatus{
+                .extension = asciiFromWide(ext.ext),
+                .registered = isProgIdInstalled(ext, classes),
+            });
+        }
+        return rows;
+    }
+
+    bool registerFileAssociations() {
+        const auto paths = currentAssociationPaths();
+        bool ok = true;
+        for (const auto& ext : EXTENSIONS)
+            ok &= registerExtensionRows(ext, paths);
+        ok &= writeSharedAppKeys(paths);
+        notifyAssociationChange();
+
+        if (ok)
+            LOG_INFO("File associations registered successfully");
+        else
+            LOG_WARN("Some file associations failed to register");
+
+        return ok;
+    }
+
+    bool unregisterFileAssociations() {
+        const auto paths = currentAssociationPaths();
+        bool ok = true;
+        for (const auto& ext : EXTENSIONS)
+            ok &= unregisterExtensionRows(ext, paths);
+        ok &= deleteSharedAppKeys(paths);
+        notifyAssociationChange();
         LOG_INFO("File associations unregistered");
         return ok;
     }
@@ -292,13 +437,7 @@ namespace lfs::vis::gui {
 
         const auto classes = std::wstring(L"Software\\Classes\\");
         for (const auto& ext : EXTENSIONS) {
-            std::wstring current;
-            if (!queryEffectiveProgId(registration.get(), ext.ext, current)) {
-                if (!queryUserChoiceProgId(ext.ext, current) &&
-                    !getRegString(HKEY_CURRENT_USER, classes + ext.ext, L"", current))
-                    return false;
-            }
-            if (current != ext.prog_id)
+            if (!isEffectiveHandler(registration.get(), ext, classes))
                 return false;
         }
         return true;
@@ -334,6 +473,9 @@ namespace lfs::vis::gui {
     bool unregisterFileAssociations() { return false; }
     bool areFileAssociationsRegistered() { return false; }
     bool openFileAssociationSettings() { return false; }
+    bool registerFileAssociation(std::string_view) { return false; }
+    bool unregisterFileAssociation(std::string_view) { return false; }
+    std::vector<FileAssociationStatus> fileAssociationsStatus() { return {}; }
 
 #endif
 

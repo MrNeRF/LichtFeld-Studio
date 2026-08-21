@@ -4683,7 +4683,7 @@ namespace lfs::python {
             "register_file_associations", []() -> bool {
                 return lfs::vis::gui::registerFileAssociations();
             },
-            "Register LichtFeld Studio as a supported handler for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz files (Windows only)");
+            "Register LichtFeld Studio as a supported handler for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht files (Windows only)");
 
         m.def(
             "open_file_association_settings", []() -> bool {
@@ -4695,13 +4695,13 @@ namespace lfs::python {
             "unregister_file_associations", []() -> bool {
                 return lfs::vis::gui::unregisterFileAssociations();
             },
-            "Remove LichtFeld Studio file associations for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz (Windows only)");
+            "Remove LichtFeld Studio file associations for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht (Windows only)");
 
         m.def(
             "are_file_associations_registered", []() -> bool {
                 return lfs::vis::gui::areFileAssociationsRegistered();
             },
-            "Check if LichtFeld Studio is the default handler for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz (Windows only)");
+            "Check if LichtFeld Studio is the default handler for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht (Windows only)");
 
         m.def("get_pivot_mode", &get_pivot_mode, "Get pivot mode (0=Origin, 1=Bounds)");
 

@@ -1751,6 +1751,82 @@ namespace {
             invalid.error().code(),
             lfs::ErrorCode::
                 FailedPrecondition);
+
+        invalid_options.commit.kind =
+            CommitKind::Compaction;
+        auto compaction =
+            reopened->save(
+                path, invalid_options);
+        ASSERT_FALSE(compaction);
+        EXPECT_EQ(
+            compaction.error().code(),
+            lfs::ErrorCode::
+                FailedPrecondition);
+    }
+
+    TEST(ProjectDocumentTest,
+         RecoveredSaveAsRegeneratesPreviewOnDifferentDestination) {
+        TemporaryDirectory temporary;
+        const auto source =
+            temporary.path / "recovered-preview-source.licht";
+        const auto destination =
+            temporary.path / "recovered-preview-dest.licht";
+        auto document = make_empty_document(fixed_uuid(1990), 100);
+        auto first =
+            document->save(source, save_options(1991, 200));
+        ASSERT_TRUE(first)
+            << lfs::format_for_developer(
+                   first.error());
+
+        const auto preview = one_pixel_png();
+        auto recovered_options =
+            save_options(1994, 300);
+        recovered_options.commit.kind =
+            CommitKind::Recovered;
+        recovered_options.preview_png =
+            std::span<const std::byte>(preview);
+        auto saved = document->save_as(
+            destination, recovered_options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+
+        auto reader = ProjectReader::open(destination);
+        ASSERT_TRUE(reader);
+        EXPECT_EQ(
+            reader->commit().kind,
+            CommitKind::Recovered);
+        ASSERT_TRUE(reader->preview());
+        auto bytes = reader->read_preview();
+        ASSERT_TRUE(bytes);
+        EXPECT_EQ(*bytes, preview);
+    }
+
+    TEST(ProjectDocumentTest,
+         RecoveredSaveRegeneratesPreviewOnSamePath) {
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "recovered-preview-same.licht";
+        auto document = make_empty_document(fixed_uuid(2000), 100);
+        const auto preview = one_pixel_png();
+        auto options = save_options(2001, 200);
+        options.commit.kind = CommitKind::Recovered;
+        options.preview_png =
+            std::span<const std::byte>(preview);
+        auto saved = document->save(path, options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader);
+        EXPECT_EQ(
+            reader->commit().kind,
+            CommitKind::Recovered);
+        ASSERT_TRUE(reader->preview());
+        auto bytes = reader->read_preview();
+        ASSERT_TRUE(bytes);
+        EXPECT_EQ(*bytes, preview);
     }
 
     TEST(ProjectDocumentTest,

@@ -62,6 +62,7 @@
 #include "core/session_breadcrumb.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
+#include "gui/utils/file_association.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
@@ -286,6 +287,44 @@ namespace {
             return;
         }
         std::forward<EmitFn>(emit_fn)();
+    }
+
+    bool consume_project_save_started_and_wait(
+        lfs::vis::Visualizer* viewer,
+        bool wait,
+        const char* wait_task_name) {
+        const bool started =
+            viewer->consumeProjectSaveStarted();
+        if (!started || !wait) {
+            return started;
+        }
+        const lfs::core::TaskContext context{
+            .name = wait_task_name,
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id =
+                lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        if (auto posted =
+                lfs::vis::post_guarded_and_wait<
+                    void>(
+                    *viewer, context,
+                    [viewer]()
+                        -> lfs::Result<void> {
+                        viewer
+                            ->projectWaitWrite();
+                        return {};
+                    },
+                    python_viewer_shutdown_error());
+            !posted) {
+            throw std::runtime_error(
+                std::format(
+                    "{} failed: {}",
+                    wait_task_name,
+                    lfs::format_for_developer(
+                        posted.error())));
+        }
+        return started;
     }
 
     std::expected<void, std::string> clear_scene_from_python() {
@@ -958,34 +997,11 @@ NB_MODULE(lichtfeld, m) {
                 return false;
             }
             const bool started =
-                viewer->consumeProjectSaveAsStarted();
+                consume_project_save_started_and_wait(
+                    viewer, wait,
+                    "python.project_save.wait");
             if (!started || !wait) {
                 return started;
-            }
-            const lfs::core::TaskContext context{
-                .name = "python.project_save.wait",
-                .domain = lfs::ErrorDomain::Python,
-                .operation_id =
-                    lfs::OperationId::generate(),
-                .site = LFS_SOURCE_SITE_CURRENT(),
-            };
-            if (auto posted =
-                    lfs::vis::post_guarded_and_wait<
-                        void>(
-                        *viewer, context,
-                        [viewer]()
-                            -> lfs::Result<void> {
-                            viewer
-                                ->projectWaitWrite();
-                            return {};
-                        },
-                        python_viewer_shutdown_error());
-                !posted) {
-                throw std::runtime_error(
-                    std::format(
-                        "python.project_save.wait failed: {}",
-                        lfs::format_for_developer(
-                            posted.error())));
             }
             auto poll = viewer->projectPollWrite();
             if (!poll) {
@@ -1014,38 +1030,9 @@ NB_MODULE(lichtfeld, m) {
             if (!viewer) {
                 return false;
             }
-            const bool started =
-                viewer->consumeProjectSaveAsStarted();
-            if (!started || !wait) {
-                return started;
-            }
-            const lfs::core::TaskContext context{
-                .name =
-                    "python.project_save_as.wait",
-                .domain = lfs::ErrorDomain::Python,
-                .operation_id =
-                    lfs::OperationId::generate(),
-                .site = LFS_SOURCE_SITE_CURRENT(),
-            };
-            if (auto posted =
-                    lfs::vis::post_guarded_and_wait<
-                        void>(
-                        *viewer, context,
-                        [viewer]()
-                            -> lfs::Result<void> {
-                            viewer
-                                ->projectWaitWrite();
-                            return {};
-                        },
-                        python_viewer_shutdown_error());
-                !posted) {
-                throw std::runtime_error(
-                    std::format(
-                        "python.project_save_as.wait failed: {}",
-                        lfs::format_for_developer(
-                            posted.error())));
-            }
-            return started;
+            return consume_project_save_started_and_wait(
+                viewer, wait,
+                "python.project_save_as.wait");
         },
         nb::arg("path") = "",
         nb::arg("wait") = false,
@@ -2185,6 +2172,27 @@ NB_MODULE(lichtfeld, m) {
             lfs::vis::saveCameraViewSnapPreference(enabled);
         },
         nb::arg("enabled"), "Enable or disable camera axis-view snapping");
+    m.def(
+        "file_associations_status", []() {
+            nb::list rows;
+            for (const auto& entry : lfs::vis::gui::fileAssociationsStatus()) {
+                nb::dict row;
+                row["extension"] = entry.extension;
+                row["registered"] = entry.registered;
+                rows.append(row);
+            }
+            return rows;
+        },
+        "Return whether LichtFeld Studio is registered as a handler for each known file extension (Windows only)");
+    m.def(
+        "file_association_set",
+        [](const std::string& extension, bool enabled) -> bool {
+            if (enabled)
+                return lfs::vis::gui::registerFileAssociation(extension);
+            return lfs::vis::gui::unregisterFileAssociation(extension);
+        },
+        nb::arg("extension"), nb::arg("enabled"),
+        "Register or unregister LichtFeld Studio as a handler for one file extension (Windows only)");
     m.def(
         "toggle_fullscreen", []() { lfs::core::events::ui::ToggleFullscreen{}.emit(); },
         "Toggle fullscreen mode");

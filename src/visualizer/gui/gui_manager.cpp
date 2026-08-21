@@ -41,6 +41,7 @@
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/vulkan_ui_texture.hpp"
+#include "tools/unified_tool_registry.hpp"
 
 #include "gui/gpu_memory_query.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -3940,6 +3941,7 @@ namespace lfs::vis::gui {
             lfs::python::acquire_gil_main_thread();
 
         lfs::python::shutdown_python_ui_resources();
+        lfs::python::invoke_python_cleanup();
         lfs::python::set_modal_enqueue_callback({});
         lfs::python::set_global_context_menu(nullptr);
 
@@ -3958,7 +3960,14 @@ namespace lfs::vis::gui {
             if (panel)
                 panel->releaseRendererResources();
         }
-        PanelRegistry::instance().unregister_all_non_native();
+        PanelRegistry::instance().unregister_all();
+        native_scene_panel_.reset();
+        native_panel_storage_.clear();
+        lfs::python::set_rml_manager(nullptr);
+        lfs::vis::setThemeChangeCallback({});
+        lfs::event::LocalizationManager::getInstance().reset();
+        UnifiedToolRegistry::instance().clearActiveTool();
+        UnifiedToolRegistry::instance().clearActiveSubmode();
         rmlui_manager_.shutdown();
 
         if (need_gil)

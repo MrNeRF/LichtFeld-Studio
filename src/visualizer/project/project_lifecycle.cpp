@@ -24,6 +24,7 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/loader.hpp"
+#include "io/loaders/missing_dataset_images.hpp"
 #include "io/project_container.hpp"
 #include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
@@ -31,6 +32,7 @@
 #include "io/selection_chapter.hpp"
 #include "ipc/view_context.hpp"
 #include "operation/undo_history.hpp"
+#include "project/project_switch_error.hpp"
 #include "project/session_state.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
@@ -386,6 +388,15 @@ namespace lfs::vis::project {
             return detail;
         }
 
+        void revalidateHydratedCameraImages(
+            SceneManager& scene_manager) {
+            const auto missing =
+                scene_manager.getScene()
+                    .revalidateCameraImagePresence();
+            lfs::io::notify_missing_dataset_images(
+                missing);
+        }
+
         void installCheckpointTrainerWithDatasetRoot(
             VisualizerImpl& viewer,
             SceneManager& scene_manager,
@@ -411,6 +422,8 @@ namespace lfs::vis::project {
                     lfs::core::path_to_utf8(
                         dataset_root));
             }
+            revalidateHydratedCameraImages(
+                scene_manager);
             ckpt_params.dataset.data_path = dataset_root;
 
             // Reset path authority without re-applying
@@ -529,6 +542,8 @@ namespace lfs::vis::project {
                     lfs::core::path_to_utf8(
                         dataset_root));
             }
+            revalidateHydratedCameraImages(
+                scene_manager);
 
             auto* const parameter_manager =
                 viewer.getParameterManager();
@@ -1086,6 +1101,20 @@ namespace lfs::vis::project {
                 std::span<const std::byte>(rhs));
         }
 
+        [[nodiscard]] bool sameUuidSet(
+            const std::span<const lfs::core::Uuid> lhs,
+            const std::span<const lfs::core::Uuid> rhs) {
+            if (lhs.size() != rhs.size()) {
+                return false;
+            }
+            return std::ranges::all_of(
+                lhs, [&](const auto& uuid) {
+                    return std::ranges::find(
+                               rhs, uuid) !=
+                           rhs.end();
+                });
+        }
+
         [[nodiscard]] bool isSessionSoftDirtyChapter(
             const std::string_view fourcc) {
             return fourcc == "GUIL" || fourcc == "VIEW" ||
@@ -1357,6 +1386,10 @@ namespace lfs::vis::project {
                     json.value(
                         "autosave_dirty_epoch_threshold",
                         std::uint64_t{20}));
+            settings.autosave_quiet_seconds =
+                json.value(
+                    "autosave_quiet_seconds",
+                    std::uint64_t{2});
             settings.compaction_idle_seconds =
                 json.value(
                     "compaction_idle_seconds",
@@ -1486,6 +1519,9 @@ namespace lfs::vis::project {
                 {"autosave_dirty_epoch_threshold",
                  settings
                      .autosave_dirty_epoch_threshold},
+                {"autosave_quiet_seconds",
+                 settings
+                     .autosave_quiet_seconds},
                 {"compaction_idle_seconds",
                  settings
                      .compaction_idle_seconds},
@@ -1649,6 +1685,7 @@ namespace lfs::vis::project {
             document_ =
                 std::make_shared<ProjectDocument>(
                     std::move(*created));
+            last_captured_selection_serial_.reset();
         } else {
             LOG_ERROR(
                 "Cannot create initial project document: {}",
@@ -1784,7 +1821,7 @@ namespace lfs::vis::project {
                     lfs::ErrorCode::FailedPrecondition,
                     "Stop training before switching projects.",
                     "Project switching is blocked while training is active",
-                    "project.training");
+                    kProjectSwitchTrainingActiveField);
             }
         }
         if (disposition ==
@@ -1794,7 +1831,7 @@ namespace lfs::vis::project {
                 lfs::ErrorCode::FailedPrecondition,
                 "The current project has unsaved changes.",
                 "Save the current project or retry with explicit discard authorization",
-                "project.dirty");
+                kProjectSwitchDirtyField);
         }
         return {};
     }
@@ -3130,7 +3167,7 @@ namespace lfs::vis::project {
                         ? DocumentSyncMode::
                               LightTrainingAutosave
                         : DocumentSyncMode::
-                              Default);
+                              Autosave);
             !synchronized) {
             return synchronized;
         }
@@ -3662,6 +3699,7 @@ namespace lfs::vis::project {
                     std::make_shared<
                         ProjectDocument>(
                         std::move(*reopened));
+                last_captured_selection_serial_.reset();
                 cached_bound_checkpoint_iteration_
                     .reset();
             }
@@ -3952,6 +3990,14 @@ namespace lfs::vis::project {
             now < autosave_retry_not_before_) {
             return;
         }
+        if (settings_.autosave_quiet_seconds !=
+                0 &&
+            now - last_mutation_at_ <
+                std::chrono::seconds(
+                    settings_
+                        .autosave_quiet_seconds)) {
+            return;
+        }
         if (auto started = startAutosave();
             !started) {
             last_project_write_error_ =
@@ -4093,6 +4139,7 @@ namespace lfs::vis::project {
         document_ =
             std::make_shared<ProjectDocument>(
                 std::move(*opened));
+        last_captured_selection_serial_.reset();
         cached_project_info_.reset();
         cached_bound_checkpoint_iteration_.reset();
         adopted_training_snapshot_count_ =
@@ -4326,7 +4373,8 @@ namespace lfs::vis::project {
         // retire the formerly resumable CKPT; otherwise validation correctly
         // rejects the now-orphaned checkpoint.  Keep it during lightweight
         // autosaves while a training session is still bound.
-        if (mode == DocumentSyncMode::Default &&
+        if ((mode == DocumentSyncMode::Default ||
+             mode == DocumentSyncMode::Autosave) &&
             training_uuid.is_nil()) {
             const auto checkpoint_uuids =
                 document_->checkpoint_uuids();
@@ -4577,120 +4625,142 @@ namespace lfs::vis::project {
                                    PayloadHydrationState::
                                        Loaded;
                 });
-        const auto selected =
+        const auto selection_serial =
+            selection_mutation_serial_.load(
+                std::memory_order_acquire);
+        const bool automatic_save =
+            mode == DocumentSyncMode::Autosave ||
+            mode == DocumentSyncMode::
+                        LightTrainingAutosave;
+        const auto live_selected_nodes =
             selectedNodeUuids(viewer_);
-        auto captured_selection =
-            lfs::io::project::
-                capture_selection_chapter(
-                    scene, selected,
-                    omit_unbound_training);
-        if (!captured_selection) {
-            return lfs::Status::failure(
-                std::move(captured_selection).error());
-        }
-        lfs::io::project::SelectionChapter
-            selection =
-                all_geometry_loaded
-                    ? std::move(*captured_selection)
-                    : document_->selection();
-        if (!all_geometry_loaded) {
-            if (auto groups = selection.set_groups(
-                    captured_selection->groups(),
-                    captured_selection
-                        ->active_group_id(),
-                    captured_selection
-                        ->next_group_id());
-                !groups) {
-                return groups;
+        // Node selection does not bump
+        // selection_mutation_serial_.
+        const bool skip_selection_capture =
+            automatic_save &&
+            last_captured_selection_serial_ ==
+                selection_serial &&
+            sameUuidSet(
+                live_selected_nodes,
+                document_->selection()
+                    .selected_node_uuids());
+        if (!skip_selection_capture) {
+            auto captured_selection =
+                lfs::io::project::
+                    capture_selection_chapter(
+                        scene, live_selected_nodes,
+                        omit_unbound_training);
+            if (!captured_selection) {
+                return lfs::Status::failure(
+                    std::move(captured_selection)
+                        .error());
             }
-            if (auto selected_result =
-                    selection
-                        .set_selected_node_uuids(
-                            captured_selection
-                                ->selected_node_uuids());
-                !selected_result) {
-                return selected_result;
-            }
+            lfs::io::project::SelectionChapter
+                selection =
+                    all_geometry_loaded
+                        ? std::move(*captured_selection)
+                        : document_->selection();
+            if (!all_geometry_loaded) {
+                if (auto groups = selection.set_groups(
+                        captured_selection->groups(),
+                        captured_selection
+                            ->active_group_id(),
+                        captured_selection
+                            ->next_group_id());
+                    !groups) {
+                    return groups;
+                }
+                if (auto selected_result =
+                        selection
+                            .set_selected_node_uuids(
+                                captured_selection
+                                    ->selected_node_uuids());
+                    !selected_result) {
+                    return selected_result;
+                }
 
-            for (const auto* node :
-                 scene.getNodes()) {
-                if (!node) {
-                    continue;
-                }
-                const bool geometry =
-                    node->type ==
-                        lfs::core::NodeType::SPLAT ||
-                    node->type ==
-                        lfs::core::NodeType::
-                            POINTCLOUD ||
-                    node->type ==
-                        lfs::core::NodeType::MESH;
-                if (!geometry) {
-                    continue;
-                }
-                if (node->payload_hydration !=
-                    lfs::core::
-                        PayloadHydrationState::
-                            Loaded) {
-                    continue;
-                }
-                static_cast<void>(
-                    selection.remove_slice(
-                        node->uuid,
+                for (const auto* node :
+                     scene.getNodes()) {
+                    if (!node) {
+                        continue;
+                    }
+                    const bool geometry =
+                        node->type ==
+                            lfs::core::NodeType::SPLAT ||
+                        node->type ==
+                            lfs::core::NodeType::
+                                POINTCLOUD ||
+                        node->type ==
+                            lfs::core::NodeType::MESH;
+                    if (!geometry) {
+                        continue;
+                    }
+                    if (node->payload_hydration !=
                         lfs::core::
-                            SelectionDomain::Splat));
-                static_cast<void>(
-                    selection.remove_slice(
-                        node->uuid,
-                        lfs::core::
-                            SelectionDomain::
-                                PointCloud));
-                for (const auto& slice :
-                     captured_selection->slices()) {
-                    if (slice.node_uuid ==
-                        node->uuid) {
-                        if (auto upsert =
-                                selection.upsert_slice(
-                                    slice);
-                            !upsert) {
-                            return upsert;
+                            PayloadHydrationState::
+                                Loaded) {
+                        continue;
+                    }
+                    static_cast<void>(
+                        selection.remove_slice(
+                            node->uuid,
+                            lfs::core::
+                                SelectionDomain::Splat));
+                    static_cast<void>(
+                        selection.remove_slice(
+                            node->uuid,
+                            lfs::core::
+                                SelectionDomain::
+                                    PointCloud));
+                    for (const auto& slice :
+                         captured_selection->slices()) {
+                        if (slice.node_uuid ==
+                            node->uuid) {
+                            if (auto upsert =
+                                    selection.upsert_slice(
+                                        slice);
+                                !upsert) {
+                                return upsert;
+                            }
                         }
                     }
                 }
-            }
-            const auto old_slices =
-                selection.slices();
-            for (const auto& slice :
-                 old_slices) {
-                if (!captured_scene_uuids.contains(
-                        slice.node_uuid)) {
-                    static_cast<void>(
-                        selection.remove_slice(
-                            slice.node_uuid,
-                            slice.domain));
+                const auto old_slices =
+                    selection.slices();
+                for (const auto& slice :
+                     old_slices) {
+                    if (!captured_scene_uuids.contains(
+                            slice.node_uuid)) {
+                        static_cast<void>(
+                            selection.remove_slice(
+                                slice.node_uuid,
+                                slice.domain));
+                    }
                 }
             }
-        }
-        auto old_selection =
-            lfs::io::project::
-                encode_selection_chapter(
-                    document_->selection());
-        auto new_selection =
-            lfs::io::project::
-                encode_selection_chapter(
-                    selection);
-        if (!old_selection) {
-            return lfs::Status::failure(
-                std::move(old_selection).error());
-        }
-        if (!new_selection) {
-            return lfs::Status::failure(
-                std::move(new_selection).error());
-        }
-        if (!sameBytes(
-                *old_selection, *new_selection)) {
-            document_->edit_selection() =
-                std::move(selection);
+            auto old_selection =
+                lfs::io::project::
+                    encode_selection_chapter(
+                        document_->selection());
+            auto new_selection =
+                lfs::io::project::
+                    encode_selection_chapter(
+                        selection);
+            if (!old_selection) {
+                return lfs::Status::failure(
+                    std::move(old_selection).error());
+            }
+            if (!new_selection) {
+                return lfs::Status::failure(
+                    std::move(new_selection).error());
+            }
+            if (!sameBytes(
+                    *old_selection, *new_selection)) {
+                document_->edit_selection() =
+                    std::move(selection);
+            }
+            last_captured_selection_serial_ =
+                selection_serial;
         }
 
         const auto project_root =
@@ -5503,6 +5573,9 @@ namespace lfs::vis::project {
             temporary;
         recovery_session_ =
             std::move(*session);
+        // Recovered content is not the durable master yet.
+        scene_dirty_.store(
+            true, std::memory_order_release);
         {
             const std::lock_guard lock(
                 settings_mutex_);
@@ -5677,6 +5750,7 @@ namespace lfs::vis::project {
         cached_project_info_.reset();
         cached_bound_checkpoint_iteration_.reset();
         document_ = candidate;
+        last_captured_selection_serial_.reset();
         bindTrainerSnapshotTarget();
         cleanupRecoverySession();
         // Removal runs only after the replacement
@@ -6316,6 +6390,7 @@ namespace lfs::vis::project {
         document_ =
             std::make_shared<ProjectDocument>(
                 std::move(*created));
+        last_captured_selection_serial_.reset();
         cleanupRecoverySession();
         if (discard_master) {
             removeDiscardedAutosaveArtifacts(

@@ -100,6 +100,7 @@ def _install_lf_stub(monkeypatch, tmp_path):
     lf_stub = ModuleType("lichtfeld")
     lf_stub.log = SimpleNamespace(
         warn=lambda message: state.log_warnings.append(message),
+        error=lambda message: state.log_warnings.append(message),
     )
     lf_stub.ui = SimpleNamespace(
         PanelSpace=panel_space,
@@ -147,6 +148,7 @@ def import_dialog_module(monkeypatch, tmp_path):
         sys.path.insert(0, str(source_python))
 
     sys.modules.pop("lfs_plugins.import_panels", None)
+    sys.modules.pop("lfs_plugins.training_confirm", None)
     sys.modules.pop("lfs_plugins", None)
     state = _install_lf_stub(monkeypatch, tmp_path)
     module = import_module("lfs_plugins.import_panels")

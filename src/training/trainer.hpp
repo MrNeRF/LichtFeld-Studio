@@ -368,9 +368,6 @@ namespace lfs::training {
             std::function<std::optional<
                 ProjectSnapshotDocumentContext>()>
                 context_provider = {});
-        [[nodiscard]] bool has_active_train_loop() const {
-            return is_running_.load() || is_paused_.load();
-        }
         [[nodiscard]] bool can_flush_project_snapshot() const {
             return project_snapshot_service_ && strategy_ &&
                    scene_;
