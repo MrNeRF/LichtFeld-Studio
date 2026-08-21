@@ -20,9 +20,11 @@
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
+#include "core/user_paths.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/ply_export_internal.hpp"
+#include "io/project_chapters.hpp"
 #include "training/dataset.hpp"
 
 #include <filesystem>
@@ -244,9 +246,155 @@ namespace lfs::python {
             return blocks;
         }
 
+        core::Uuid parse_reference_uuid(const std::string& value) {
+            const auto parsed = core::Uuid::from_string(value);
+            if (!parsed) {
+                throw_invalid_io_argument(std::format("Invalid reference UUID: {}", value));
+            }
+            return *parsed;
+        }
+
     } // namespace
 
     void register_io(nb::module_& m) {
+        namespace project = io::project;
+
+        nb::class_<project::Hash128>(m, "Hash128")
+            .def(nb::init<>())
+            .def_static(
+                "from_hex",
+                [](const std::string& value) {
+                    const auto parsed = project::Hash128::from_hex(value);
+                    if (!parsed) {
+                        throw_invalid_io_argument("Hash128 must contain exactly 32 hexadecimal characters");
+                    }
+                    return *parsed;
+                },
+                nb::arg("value"))
+            .def("to_hex", &project::Hash128::to_hex)
+            .def("__str__", &project::Hash128::to_hex);
+
+        nb::enum_<project::LocatorBase>(m, "LocatorBase")
+            .value("PROJECT", project::LocatorBase::Project)
+            .value("DATASET", project::LocatorBase::Dataset)
+            .value("ABSOLUTE", project::LocatorBase::Absolute)
+            .value("SEARCH_ROOT", project::LocatorBase::SearchRoot);
+
+        nb::class_<project::ReferenceLocator>(m, "ReferenceLocator")
+            .def(nb::init<>())
+            .def_rw("preferred", &project::ReferenceLocator::preferred)
+            .def_rw("base", &project::ReferenceLocator::base)
+            .def_rw("absolute_fallback", &project::ReferenceLocator::absolute_fallback);
+
+        nb::enum_<project::FingerprintKind>(m, "FingerprintKind")
+            .value("FILE", project::FingerprintKind::File)
+            .value("DIRECTORY", project::FingerprintKind::Directory);
+
+        nb::class_<project::ReferenceFingerprint>(m, "ReferenceFingerprint")
+            .def(nb::init<>())
+            .def_rw("kind", &project::ReferenceFingerprint::kind)
+            .def_rw("size", &project::ReferenceFingerprint::size)
+            .def_rw("mtime_unix_ns", &project::ReferenceFingerprint::mtime_unix_ns)
+            .def_rw("head_xxh3", &project::ReferenceFingerprint::head_xxh3)
+            .def_rw("tail_xxh3", &project::ReferenceFingerprint::tail_xxh3)
+            .def_rw("full_xxh3", &project::ReferenceFingerprint::full_xxh3);
+
+        nb::enum_<project::FingerprintDisposition>(m, "FingerprintDisposition")
+            .value("MATCH_FAST_PATH", project::FingerprintDisposition::MatchFastPath)
+            .value("MATCH_MTIME_REFRESHED", project::FingerprintDisposition::MatchMtimeRefreshed)
+            .value("MISSING", project::FingerprintDisposition::Missing)
+            .value("CONTENT_MISMATCH", project::FingerprintDisposition::ContentMismatch)
+            .value("TYPE_MISMATCH", project::FingerprintDisposition::TypeMismatch);
+
+        nb::class_<project::FingerprintCheck>(m, "FingerprintCheck")
+            .def_prop_ro("disposition", [](const project::FingerprintCheck& value) { return value.disposition; })
+            .def_prop_ro("observed", [](const project::FingerprintCheck& value) { return value.observed; })
+            .def_prop_ro("diagnostic", [](const project::FingerprintCheck& value) { return value.diagnostic; })
+            .def_prop_ro("matches", &project::FingerprintCheck::matches);
+
+        nb::class_<project::ReferenceRecord>(m, "ReferenceRecord")
+            .def(nb::init<>())
+            .def_prop_rw(
+                "uuid",
+                [](const project::ReferenceRecord& value) { return value.uuid.to_string(); },
+                [](project::ReferenceRecord& value, const std::string& uuid) { value.uuid = parse_reference_uuid(uuid); })
+            .def_rw("key", &project::ReferenceRecord::key)
+            .def_rw("kind", &project::ReferenceRecord::kind)
+            .def_rw("locator", &project::ReferenceRecord::locator)
+            .def_rw("fingerprint", &project::ReferenceRecord::fingerprint)
+            .def_rw("unresolved", &project::ReferenceRecord::unresolved);
+
+        nb::class_<project::ReferencesChapter>(m, "ReferencesChapter")
+            .def(nb::init<>())
+            .def_static(
+                "parse",
+                [](const std::string& value) { return unwrap(project::ReferencesChapter::parse(value)); },
+                nb::arg("value"))
+            .def(
+                "to_json",
+                [](const project::ReferencesChapter& value) {
+                    const auto bytes = value.to_bytes();
+                    return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                })
+            .def("records", [](const project::ReferencesChapter& value) { return unwrap(value.records()); })
+            .def(
+                "find",
+                [](const project::ReferencesChapter& value, const std::string& uuid) {
+                    return unwrap(value.find(parse_reference_uuid(uuid)));
+                },
+                nb::arg("uuid"))
+            .def(
+                "upsert",
+                [](project::ReferencesChapter& value, const project::ReferenceRecord& record) {
+                    unwrap(value.upsert(record));
+                },
+                nb::arg("record"))
+            .def(
+                "remove",
+                [](project::ReferencesChapter& value, const std::string& uuid) {
+                    return unwrap(value.remove(parse_reference_uuid(uuid)));
+                },
+                nb::arg("uuid"))
+            .def(
+                "verify_and_refresh",
+                [](project::ReferencesChapter& value, const std::string& uuid,
+                   const std::filesystem::path& path) {
+                    return unwrap(value.verify_and_refresh(parse_reference_uuid(uuid), path));
+                },
+                nb::arg("uuid"), nb::arg("path"))
+            .def(
+                "relink",
+                [](project::ReferencesChapter& value, const std::string& uuid,
+                   const project::ReferenceLocator& locator, const std::filesystem::path& path,
+                   const bool accept_content_change) {
+                    unwrap(value.relink(parse_reference_uuid(uuid), locator, path, accept_content_change));
+                },
+                nb::arg("uuid"), nb::arg("locator"), nb::arg("path"),
+                nb::arg("accept_content_change") = false);
+
+        m.def(
+            "fingerprint_path",
+            [](const std::filesystem::path& path, const bool include_full_hash) {
+                return unwrap(project::fingerprint_path(path, include_full_hash));
+            },
+            nb::arg("path"), nb::arg("include_full_hash") = false,
+            "Fingerprint a file or directory for durable content identity.");
+
+        m.def(
+            "check_fingerprint",
+            [](const std::filesystem::path& path, const project::ReferenceFingerprint& expected) {
+                return unwrap(project::check_fingerprint(path, expected));
+            },
+            nb::arg("path"), nb::arg("expected"),
+            "Compare a path with a previously stored content fingerprint.");
+
+        m.def(
+            "asset_library_dir",
+            []() {
+                return unwrap(core::UserPaths::resolve()).assetLibraryDir();
+            },
+            "Return the canonical user Asset Manager storage directory.");
+
         nb::class_<PyLoadResult>(m, "LoadResult")
             .def_prop_ro("splat_data", &PyLoadResult::get_splat_data, "Loaded splat data, or None")
             .def_prop_ro(

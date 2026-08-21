@@ -1,9 +1,110 @@
 """File I/O operations"""
 
+import enum
 import os
 
 import lichtfeld
 import lichtfeld.scene
+
+
+class Hash128:
+    def __init__(self) -> None: ...
+
+    @staticmethod
+    def from_hex(value: str) -> Hash128: ...
+
+    def to_hex(self) -> str: ...
+
+
+class LocatorBase(enum.Enum):
+    PROJECT = 0
+    DATASET = 1
+    ABSOLUTE = 2
+    SEARCH_ROOT = 3
+
+
+class ReferenceLocator:
+    def __init__(self) -> None: ...
+
+    preferred: str
+    base: LocatorBase
+    absolute_fallback: str | None
+
+
+class FingerprintKind(enum.Enum):
+    FILE = 0
+    DIRECTORY = 1
+
+
+class ReferenceFingerprint:
+    def __init__(self) -> None: ...
+
+    kind: FingerprintKind
+    size: int
+    mtime_unix_ns: int
+    head_xxh3: Hash128
+    tail_xxh3: Hash128
+    full_xxh3: Hash128 | None
+
+
+class FingerprintDisposition(enum.Enum):
+    MATCH_FAST_PATH = 0
+    MATCH_MTIME_REFRESHED = 1
+    MISSING = 2
+    CONTENT_MISMATCH = 3
+    TYPE_MISMATCH = 4
+
+
+class FingerprintCheck:
+    @property
+    def disposition(self) -> FingerprintDisposition: ...
+
+    @property
+    def observed(self) -> ReferenceFingerprint | None: ...
+
+    @property
+    def diagnostic(self) -> str: ...
+
+    @property
+    def matches(self) -> bool: ...
+
+
+class ReferenceRecord:
+    def __init__(self) -> None: ...
+
+    uuid: str
+    key: str
+    kind: str
+    locator: ReferenceLocator
+    fingerprint: ReferenceFingerprint
+    unresolved: bool
+
+
+class ReferencesChapter:
+    def __init__(self) -> None: ...
+
+    @staticmethod
+    def parse(value: str) -> ReferencesChapter: ...
+
+    def to_json(self) -> str: ...
+    def records(self) -> list[ReferenceRecord]: ...
+    def find(self, uuid: str) -> ReferenceRecord | None: ...
+    def upsert(self, record: ReferenceRecord) -> None: ...
+    def remove(self, uuid: str) -> bool: ...
+    def verify_and_refresh(self, uuid: str, path: str | os.PathLike) -> FingerprintCheck: ...
+    def relink(self, uuid: str, locator: ReferenceLocator, path: str | os.PathLike, accept_content_change: bool = False) -> None: ...
+
+
+def fingerprint_path(path: str | os.PathLike, include_full_hash: bool = False) -> ReferenceFingerprint:
+    """Fingerprint a file or directory for durable content identity."""
+
+
+def check_fingerprint(path: str | os.PathLike, expected: ReferenceFingerprint) -> FingerprintCheck:
+    """Compare a path with a previously stored content fingerprint."""
+
+
+def asset_library_dir() -> os.PathLike:
+    """Return the canonical user Asset Manager storage directory."""
 
 
 class LoadResult:
