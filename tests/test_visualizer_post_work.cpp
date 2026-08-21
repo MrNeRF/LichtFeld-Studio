@@ -941,6 +941,79 @@ namespace {
         (void)lfs::test::licht::require_result(document->save(path, options));
     }
 
+    void append_view_marker_generation(
+        const std::filesystem::path& path,
+        const std::string& marker) {
+        auto on_disk =
+            lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(
+                    path,
+                    {
+                        .reader = {},
+                        .geometry = {},
+                        .defer_geometry_payloads = true,
+                    }));
+        lfs::test::licht::require_status(
+            on_disk->edit_view().dom().set(
+                "ctrl_s_marker", marker));
+        auto save_options =
+            lfs::test::licht::
+                deterministic_document_save_options(
+                    0x76000040, 2, 3);
+        (void)lfs::test::licht::require_result(
+            on_disk->save(path, save_options));
+    }
+
+    void rewrite_project_file_generation(
+        const std::filesystem::path& path) {
+        lfs::test::licht::require_status(
+            lfs::io::project::ProjectWriter::compact(
+                path,
+                lfs::io::project::CompactionOptions{
+                    .new_file_uuid =
+                        lfs::core::generate_uuid_v4(),
+                    .commit_uuid =
+                        lfs::core::generate_uuid_v4(),
+                    .disk_reserve_bytes = 0,
+                }));
+    }
+
+    bool finish_trainer_without_snapshot_flush(
+        lfs::vis::VisualizerImpl& viewer) {
+        auto& scene = viewer.getScene();
+        const auto cameras =
+            scene.addGroup("Train cameras");
+        scene.addCamera(
+            "camera.png", cameras,
+            make_project_request_test_camera());
+        viewer.getTrainerManager()->setTrainer(
+            std::make_unique<lfs::training::Trainer>(
+                scene));
+        auto* const trainer = viewer.getTrainer();
+        if (trainer == nullptr) {
+            return false;
+        }
+        auto& state_machine =
+            const_cast<lfs::vis::TrainingStateMachine&>(
+                viewer.getTrainerManager()
+                    ->getStateMachine());
+        if (state_machine.getState() ==
+            lfs::vis::TrainingState::Idle) {
+            if (!state_machine.transitionTo(
+                    lfs::vis::TrainingState::Ready)) {
+                return false;
+            }
+        }
+        return state_machine.transitionTo(
+                   lfs::vis::TrainingState::Running) &&
+               state_machine.transitionTo(
+                   lfs::vis::TrainingState::Paused) &&
+               state_machine.transitionToFinished(
+                   lfs::vis::FinishReason::UserStopped) &&
+               viewer.getTrainerManager()->isFinished() &&
+               !trainer->can_flush_project_snapshot();
+    }
+
     std::string read_binary_file(const std::filesystem::path& path) {
         std::ifstream in(path, std::ios::binary);
         return std::string(
@@ -9775,6 +9848,310 @@ namespace lfs::vis {
             EXPECT_TRUE(
                 std::filesystem::is_regular_file(
                     sidecar));
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead) {
+        // Ctrl+S after a trainer-like append that the
+        // lifecycle has not adopted. Idle explicit save
+        // used to reuse proofs minted at document open
+        // (project_document.cpp make_clean_proof) against
+        // ProjectWriter::append locked at the new head
+        // (project_writer.cpp reuse_if_clean authority).
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "ctrl-s-unadopted-append.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(finish_trainer_without_snapshot_flush(
+                viewer));
+            ASSERT_NE(lifecycle->document_, nullptr);
+            const auto stale_commit =
+                lifecycle->document_->source_commit_uuid();
+            ASSERT_TRUE(stale_commit.has_value());
+
+            append_view_marker_generation(
+                project_path, "appended");
+            auto disk =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(disk)
+                << lfs::format_for_developer(
+                       disk.error());
+            EXPECT_NE(
+                disk->commit().commit_uuid,
+                *stale_commit);
+            EXPECT_EQ(
+                *lifecycle->document_->source_commit_uuid(),
+                *stale_commit);
+
+            auto saved = lifecycle->save(false);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_TRUE(
+                lifecycle->last_project_write_error_.empty())
+                << lifecycle->last_project_write_error_;
+            ASSERT_NE(lifecycle->document_, nullptr);
+            ASSERT_TRUE(
+                lifecycle->document_->source_commit_uuid());
+            EXPECT_NE(
+                *lifecycle->document_->source_commit_uuid(),
+                *stale_commit);
+            auto reopened =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(reopened)
+                << lfs::format_for_developer(
+                       reopened.error());
+            EXPECT_EQ(
+                reopened->superblock().file_uuid,
+                disk->superblock().file_uuid);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ExplicitSaveAfterTrainerRewriteUsesCurrentHead) {
+        // Compact/save-as rewrite mints a new file UUID
+        // and resets generation to 1. adoptCompletedTrainingSnapshot
+        // used generation() >= opened->generation() to keep
+        // the stale document, so Ctrl+S reused proofs for
+        // the previous file UUID.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "ctrl-s-rewrite.licht";
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(finish_trainer_without_snapshot_flush(
+                viewer));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            ASSERT_NE(lifecycle->document_, nullptr);
+            const auto* stale_reader =
+                lifecycle->document_->source_reader();
+            ASSERT_NE(stale_reader, nullptr);
+            const auto stale_file_uuid =
+                stale_reader->superblock().file_uuid;
+
+            rewrite_project_file_generation(project_path);
+            auto disk =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(disk)
+                << lfs::format_for_developer(
+                       disk.error());
+            EXPECT_NE(
+                disk->superblock().file_uuid,
+                stale_file_uuid);
+            trainer->last_project_snapshot_path_ =
+                project_path;
+            trainer->last_project_writer_error_.clear();
+            ASSERT_NE(
+                trainer->project_snapshot_service_,
+                nullptr);
+            trainer->project_snapshot_service_
+                ->testing_advance_completed_snapshots(1);
+            lifecycle->adopted_training_snapshot_count_ =
+                0;
+
+            auto saved = lifecycle->save(false);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_TRUE(
+                lifecycle->last_project_write_error_.empty())
+                << lifecycle->last_project_write_error_;
+            ASSERT_NE(lifecycle->document_, nullptr);
+            const auto* adopted_reader =
+                lifecycle->document_->source_reader();
+            ASSERT_NE(adopted_reader, nullptr);
+            EXPECT_EQ(
+                adopted_reader->superblock().file_uuid,
+                disk->superblock().file_uuid);
+            auto reopened =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(reopened)
+                << lfs::format_for_developer(
+                       reopened.error());
+            EXPECT_EQ(
+                reopened->superblock().file_uuid,
+                disk->superblock().file_uuid);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead) {
+        // Same rewrite/adopt gap on this branch's temp
+        // master. Save As must rebase onto the rewritten
+        // head before capturing or copying.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto destination =
+            temporary / "temp-rewrite-saveas.licht";
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(finish_trainer_without_snapshot_flush(
+                viewer));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            auto prepared =
+                lifecycle->prepareTrainingStartProject();
+            ASSERT_TRUE(prepared)
+                << lfs::format_for_developer(
+                       prepared.error());
+            EXPECT_FALSE(lifecycle->hasSourcePath());
+            EXPECT_TRUE(lifecycle->isTempProject());
+            const auto bound = trainer->bound_project_path();
+            ASSERT_TRUE(bound.has_value());
+            ASSERT_NE(lifecycle->document_, nullptr);
+            const auto* stale_reader =
+                lifecycle->document_->source_reader();
+            ASSERT_NE(stale_reader, nullptr);
+            const auto stale_file_uuid =
+                stale_reader->superblock().file_uuid;
+
+            lifecycle->scratch_lock_.reset();
+            rewrite_project_file_generation(*bound);
+            auto disk =
+                lfs::io::project::ProjectReader::open(
+                    *bound);
+            ASSERT_TRUE(disk)
+                << lfs::format_for_developer(
+                       disk.error());
+            EXPECT_NE(
+                disk->superblock().file_uuid,
+                stale_file_uuid);
+            trainer->last_project_snapshot_path_ = *bound;
+            trainer->last_project_writer_error_.clear();
+            ASSERT_NE(
+                trainer->project_snapshot_service_,
+                nullptr);
+            trainer->project_snapshot_service_
+                ->testing_advance_completed_snapshots(1);
+            lifecycle->adopted_training_snapshot_count_ =
+                0;
+            auto adopted =
+                lifecycle->adoptCompletedTrainingSnapshot();
+            ASSERT_TRUE(adopted)
+                << lfs::format_for_developer(
+                       adopted.error());
+            ASSERT_NE(lifecycle->document_, nullptr);
+            const auto* adopted_reader =
+                lifecycle->document_->source_reader();
+            ASSERT_NE(adopted_reader, nullptr);
+            EXPECT_EQ(
+                adopted_reader->superblock().file_uuid,
+                disk->superblock().file_uuid);
+
+            auto saved = lifecycle->saveAs(
+                destination, false, true);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            ASSERT_TRUE(std::filesystem::is_regular_file(
+                destination));
+            auto opened =
+                lfs::io::project::ProjectDocument::open(
+                    destination);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            EXPECT_TRUE(lifecycle->hasSourcePath());
+            EXPECT_FALSE(lifecycle->isTempProject());
         }
     }
 

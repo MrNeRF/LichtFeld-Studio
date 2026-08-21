@@ -63,6 +63,7 @@
 #include <ranges>
 #include <span>
 #include <system_error>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -1565,6 +1566,28 @@ namespace lfs::vis::project {
     }
 
     namespace {
+        [[nodiscard]] bool documentMatchesOpenedHead(
+            const lfs::io::project::ProjectDocument& current,
+            const lfs::io::project::ProjectDocument& opened) {
+            const auto* current_reader =
+                current.source_reader();
+            const auto* opened_reader =
+                opened.source_reader();
+            if (!current_reader || !opened_reader) {
+                return false;
+            }
+            return current.project_uuid() ==
+                       opened.project_uuid() &&
+                   current_reader->superblock()
+                           .file_uuid ==
+                       opened_reader->superblock()
+                           .file_uuid &&
+                   current_reader->commit()
+                           .commit_uuid ==
+                       opened_reader->commit()
+                           .commit_uuid;
+        }
+
         [[nodiscard]] bool projectMruPathsEqual(
             const std::filesystem::path& lhs,
             const std::filesystem::path& rhs) {
@@ -2437,6 +2460,85 @@ namespace lfs::vis::project {
         return {};
     }
 
+    lfs::Result<void>
+    ProjectLifecycle::
+        waitOutTrainerPublishForExplicitSave() {
+        auto* trainer = viewer_.getTrainer();
+        if (!trainer) {
+            return {};
+        }
+        for (;;) {
+            trainer->join_finished_project_writer();
+            if (!trainer->get_project_snapshot_metrics()
+                     .writer_in_flight) {
+                return {};
+            }
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(5));
+        }
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::ensureDocumentMatchesBoundMaster() {
+        if (!document_ || !document_->source_path()) {
+            return {};
+        }
+        const auto path = *document_->source_path();
+        auto opened = ProjectDocument::open(
+            path,
+            {
+                .reader = {},
+                .geometry = {},
+                .defer_geometry_payloads = true,
+            });
+        if (!opened) {
+            return lfs::Status::failure(
+                std::move(opened).error());
+        }
+        if (documentMatchesOpenedHead(
+                *document_, *opened)) {
+            return {};
+        }
+        document_ =
+            std::make_shared<ProjectDocument>(
+                std::move(*opened));
+        last_captured_selection_serial_.reset();
+        cached_project_info_.reset();
+        cached_bound_checkpoint_iteration_.reset();
+        hydration_.store(
+            Hydration::Complete,
+            std::memory_order_release);
+        hydration_error_.clear();
+        LOG_INFO(
+            "Rebased project document onto current master head {} generation {}",
+            lfs::core::path_to_utf8(path),
+            document_->generation());
+        bindTrainerSnapshotTarget();
+        return {};
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::rebaseOntoCurrentMasterHead() {
+        if (auto waited =
+                waitOutTrainerPublishForExplicitSave();
+            !waited) {
+            return waited;
+        }
+        if (auto adopted =
+                adoptCompletedTrainingSnapshot();
+            !adopted) {
+            if (canFlushFinishedTrainerSnapshot()) {
+                LOG_WARN(
+                    "Discarding unadoptable training snapshot; a finished trainer can still flush: {}",
+                    developerError(adopted.error()));
+            } else {
+                return lfs::Status::failure(
+                    std::move(adopted).error());
+            }
+        }
+        return ensureDocumentMatchesBoundMaster();
+    }
+
     void ProjectLifecycle::cleanupRecoverySession() {
         if (recovery_session_) {
             const bool document_still_sources_temporary =
@@ -3094,6 +3196,10 @@ namespace lfs::vis::project {
                 "The training snapshot request could not start.",
                 "A live trainer and project path are required",
                 "project.training_snapshot");
+        }
+        if (auto rebased = rebaseOntoCurrentMasterHead();
+            !rebased) {
+            return rebased;
         }
         bindTrainerSnapshotTarget();
         const auto snapshot_destination =
@@ -4147,14 +4253,13 @@ namespace lfs::vis::project {
         }
         if (document_ &&
             document_->source_path() &&
-            document_->source_path()
-                    ->lexically_normal() ==
+            projectMruPathsEqual(
+                document_->source_path()
+                    ->lexically_normal(),
                 metrics.last_path
-                    .lexically_normal() &&
-            document_->project_uuid() ==
-                opened->project_uuid() &&
-            document_->generation() >=
-                opened->generation()) {
+                    .lexically_normal()) &&
+            documentMatchesOpenedHead(
+                *document_, *opened)) {
             adopted_training_snapshot_count_ =
                 metrics.capture
                     .completed_snapshots;
@@ -4220,9 +4325,10 @@ namespace lfs::vis::project {
             adopted_training_snapshot_count_) {
             return {};
         }
-        if (document_->source_path()
-                ->lexically_normal() !=
-            metrics.last_path.lexically_normal()) {
+        if (!projectMruPathsEqual(
+                document_->source_path()
+                    ->lexically_normal(),
+                metrics.last_path.lexically_normal())) {
             return {};
         }
         return adoptCompletedTrainingSnapshot();
@@ -5092,17 +5198,9 @@ namespace lfs::vis::project {
             !waited) {
             return waited;
         }
-        if (auto adopted =
-                adoptCompletedTrainingSnapshot();
-            !adopted) {
-            if (canFlushFinishedTrainerSnapshot()) {
-                LOG_WARN(
-                    "Discarding unadoptable training snapshot; a finished trainer can still flush: {}",
-                    developerError(adopted.error()));
-            } else {
-                return lfs::Status::failure(
-                    std::move(adopted).error());
-            }
+        if (auto rebased = rebaseOntoCurrentMasterHead();
+            !rebased) {
+            return rebased;
         }
         if (!document_ ||
             !document_->source_path() ||
@@ -5227,17 +5325,9 @@ namespace lfs::vis::project {
             !waited) {
             return waited;
         }
-        if (auto adopted =
-                adoptCompletedTrainingSnapshot();
-            !adopted) {
-            if (canFlushFinishedTrainerSnapshot()) {
-                LOG_WARN(
-                    "Discarding unadoptable training snapshot; a finished trainer can still flush: {}",
-                    developerError(adopted.error()));
-            } else {
-                return lfs::Status::failure(
-                    std::move(adopted).error());
-            }
+        if (auto rebased = rebaseOntoCurrentMasterHead();
+            !rebased) {
+            return rebased;
         }
         auto normalized =
             normalizedProjectPath(path);
