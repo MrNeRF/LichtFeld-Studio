@@ -80,8 +80,6 @@ namespace lfs::vis::tools {
         float depth_near_ = 0.0f;
         float depth_far_ = DEFAULT_DEPTH_FAR;
         float window_scale_ = 0.35f;
-        float window_offset_x_ = 0.0f;
-        float window_offset_y_ = 0.0f;
 
         // Crop filter
         bool crop_filter_enabled_ = false;

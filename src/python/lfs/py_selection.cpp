@@ -20,6 +20,7 @@
 #include "visualizer_impl.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <nanobind/nanobind.h>
@@ -28,6 +29,8 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
+#include <optional>
+#include <stdexcept>
 
 namespace nb = nanobind;
 
@@ -35,6 +38,12 @@ namespace lfs::python {
 
     namespace {
         constexpr float DEPTH_FILTER_HALF_HEIGHT = 10000.0f;
+        constexpr float DEFAULT_WINDOW_SCALE = 0.35f;
+        constexpr float MIN_WINDOW_SCALE = 0.05f;
+        constexpr float MAX_WINDOW_SCALE = 1.0f;
+        constexpr float DEFAULT_LEGACY_HALF_WIDTH = 1.35f;
+
+        float g_last_legacy_half_width = DEFAULT_LEGACY_HALF_WIDTH;
 
         vis::RenderingManager* get_rm() { return get_rendering_manager(); }
 
@@ -57,6 +66,71 @@ namespace lfs::python {
             mutator(scene_manager.getScene());
             snapshot->captureAfter();
             vis::op::pushSceneSnapshotIfChanged(std::move(snapshot));
+        }
+
+        [[nodiscard]] bool viewport_available(const std::optional<vis::ViewInfo>& view) {
+            return view.has_value() && view->width > 0 && view->height > 0;
+        }
+
+        // KEEP IN SYNC: this converter pair inverts the far-plane width mapping
+        // that depthWindowFarPlaneHalfExtents (selection_tool.cpp) computes from
+        // pixel focal lengths / ortho scale. Known divergence: the tool honors
+        // viewport.ortho_scale_override; these use the main view's ortho_scale.
+        [[nodiscard]] float convert_legacy_half_width_to_scale(const float half_width,
+                                                               const float depth_far,
+                                                               const vis::RenderSettings& settings) {
+            const auto view = vis::get_current_view_info();
+            if (!viewport_available(view) || settings.equirectangular) {
+                return DEFAULT_WINDOW_SCALE;
+            }
+            if (settings.orthographic) {
+                const float ortho_width =
+                    static_cast<float>(view->width) / std::max(view->ortho_scale, 1.0e-5f);
+                const float denom = 0.5f * ortho_width;
+                if (!(denom > 1.0e-8f)) {
+                    return DEFAULT_WINDOW_SCALE;
+                }
+                return std::clamp(half_width / denom, MIN_WINDOW_SCALE, MAX_WINDOW_SCALE);
+            }
+            if (!(depth_far > 1.0e-3f)) {
+                return DEFAULT_WINDOW_SCALE;
+            }
+            const float vfov_rad = glm::radians(view->fov);
+            const float aspect =
+                static_cast<float>(view->width) / static_cast<float>(view->height);
+            const float tan_hfov_half = std::tan(vfov_rad * 0.5f) * aspect;
+            const float denom = tan_hfov_half * depth_far;
+            if (!(denom > 1.0e-8f)) {
+                return DEFAULT_WINDOW_SCALE;
+            }
+            return std::clamp(half_width / denom, MIN_WINDOW_SCALE, MAX_WINDOW_SCALE);
+        }
+
+        [[nodiscard]] float convert_scale_to_legacy_half_width(const float scale,
+                                                               const float depth_far,
+                                                               const vis::RenderSettings& settings) {
+            const auto view = vis::get_current_view_info();
+            if (!viewport_available(view) || settings.equirectangular) {
+                return g_last_legacy_half_width;
+            }
+            if (settings.orthographic) {
+                const float ortho_width =
+                    static_cast<float>(view->width) / std::max(view->ortho_scale, 1.0e-5f);
+                return scale * 0.5f * ortho_width;
+            }
+            if (!(depth_far > 1.0e-3f)) {
+                return g_last_legacy_half_width;
+            }
+            const float vfov_rad = glm::radians(view->fov);
+            const float aspect =
+                static_cast<float>(view->width) / static_cast<float>(view->height);
+            const float tan_hfov_half = std::tan(vfov_rad * 0.5f) * aspect;
+            return scale * tan_hfov_half * depth_far;
+        }
+
+        [[nodiscard]] float informational_half_width_from_settings(const vis::RenderSettings& settings,
+                                                                   const float depth_far) {
+            return convert_scale_to_legacy_half_width(settings.depth_filter_scale, depth_far, settings);
         }
 
         void configure_depth_filter(vis::RenderSettings& settings, const bool enabled,
@@ -88,6 +162,98 @@ namespace lfs::python {
                               view_info->translation[1],
                               view_info->translation[2]));
             }
+        }
+
+        void write_legacy_window_scale(vis::RenderSettings& settings,
+                                       const float frustum_half_width,
+                                       const float depth_far) {
+            settings.depth_filter_scale =
+                convert_legacy_half_width_to_scale(frustum_half_width, depth_far, settings);
+        }
+
+        void apply_legacy_depth_filter(const bool enabled,
+                                       const float depth_near,
+                                       const float depth_far,
+                                       const float frustum_half_width) {
+            g_last_legacy_half_width = std::max(frustum_half_width, 0.05f);
+            auto* const tool = get_selection_tool();
+            auto* const rm = get_rm();
+            // Skip the scale pre-write when the tool exists but is disabled: the
+            // tool ignores setDepthFilterRange in that state, and a lone scale
+            // write would half-apply the request. Legacy calls defer all values
+            // atomically, matching the pre-window behavior.
+            if (rm && (!tool || tool->isEnabled())) {
+                auto settings = rm->getSettings();
+                write_legacy_window_scale(settings, frustum_half_width, depth_far);
+                rm->updateSettings(settings);
+            }
+            if (tool) {
+                tool->setDepthFilterRange(enabled, depth_near, depth_far, g_last_legacy_half_width);
+                return;
+            }
+            if (!rm) {
+                return;
+            }
+            auto settings = rm->getSettings();
+            configure_depth_filter(settings, enabled, depth_near, depth_far, frustum_half_width);
+            write_legacy_window_scale(settings, frustum_half_width, depth_far);
+            rm->updateSettings(settings);
+        }
+
+        void apply_depth_filter_window(const bool enabled,
+                                       const float depth_near,
+                                       const float depth_far,
+                                       const float scale,
+                                       const float offset_x,
+                                       const float offset_y) {
+            auto* const tool = get_selection_tool();
+            if (tool && !tool->isEnabled()) {
+                // A disable request cannot half-apply; skip everything so the call
+                // stays atomic (the toolbar data-model init passes enabled=false
+                // before any tool is active).
+                if (!enabled) {
+                    return;
+                }
+                // The tool ignores setDepthFilterRange while disabled; writing the window
+                // fields into settings anyway would half-apply the request.
+                // Known residual: this gate cannot see the tool's one-shot
+                // preserve_restored_render_state_ window during project restore. An
+                // enable/modify call there self-heals within one frame (the per-frame
+                // update() stamp is not preserve-gated); only disabling the filter in
+                // that window can leave the restored render-side flag stale until the
+                // tool is next enabled (or another apply path stamps settings).
+                throw std::runtime_error("Selection tool is not active/enabled; activate it before setting the depth filter window");
+            }
+            const float clamped_scale = std::clamp(scale, MIN_WINDOW_SCALE, MAX_WINDOW_SCALE);
+            const float clamped_offset_x = std::clamp(offset_x, -1.0f, 1.0f);
+            const float clamped_offset_y = std::clamp(offset_y, -1.0f, 1.0f);
+            auto* const rm = get_rm();
+            if (rm) {
+                auto settings = rm->getSettings();
+                settings.depth_filter_scale = clamped_scale;
+                settings.depth_filter_offset_x = clamped_offset_x;
+                settings.depth_filter_offset_y = clamped_offset_y;
+                rm->updateSettings(settings);
+            }
+            const float informational_half_width = rm
+                                                       ? informational_half_width_from_settings(
+                                                             rm->getSettings(), std::max(depth_far, 0.0f))
+                                                       : g_last_legacy_half_width;
+            if (tool) {
+                tool->setDepthFilterRange(enabled, depth_near, depth_far,
+                                          std::max(informational_half_width, 0.05f));
+                return;
+            }
+            if (!rm) {
+                return;
+            }
+            auto settings = rm->getSettings();
+            configure_depth_filter(settings, enabled, depth_near, depth_far,
+                                   std::max(informational_half_width, 0.05f));
+            settings.depth_filter_scale = clamped_scale;
+            settings.depth_filter_offset_x = clamped_offset_x;
+            settings.depth_filter_offset_y = clamped_offset_y;
+            rm->updateSettings(settings);
         }
 
         [[nodiscard]] std::tuple<float, float> fallback_depth_near_far(const vis::RenderSettings& settings) {
@@ -296,67 +462,73 @@ namespace lfs::python {
 
         sel.def(
             "set_depth_filter", [](bool enabled, float depth_far, float frustum_half_width, float depth_near) {
-                if (auto* const tool = get_selection_tool()) {
-                    tool->setDepthFilterRange(enabled, depth_near, depth_far, frustum_half_width);
-                    return;
-                }
-                auto* rm = get_rm();
-                if (!rm)
-                    return;
-                auto settings = rm->getSettings();
-                configure_depth_filter(settings, enabled, depth_near, depth_far, frustum_half_width);
-                rm->updateSettings(settings);
+                apply_legacy_depth_filter(enabled, depth_near, depth_far, frustum_half_width);
             },
-            nb::arg("enabled"), nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, nb::arg("depth_near") = 0.0f, "Set selection depth filter in camera space.");
+            nb::arg("enabled"), nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, nb::arg("depth_near") = 0.0f, "Deprecated. Set selection depth filter in camera space.\n"
+                                                                                                                                    "frustum_half_width is converted to a screen-space window scale:\n"
+                                                                                                                                    "- pinhole: scale = clamp(half_width / (tan(hfov/2) * far), 0.05, 1.0) when far > 1e-3 "
+                                                                                                                                    "and a viewport is available; otherwise scale = 0.35\n"
+                                                                                                                                    "- ortho: scale = clamp(half_width / (0.5 * ortho_width), 0.05, 1.0)\n"
+                                                                                                                                    "- equirect or no viewport: scale = 0.35 (no single equivalent exists)\n"
+                                                                                                                                    "Prefer set_depth_filter_window.");
 
         sel.def(
             "set_depth_filter_range", [](bool enabled, float depth_near, float depth_far, float frustum_half_width) {
-                if (auto* const tool = get_selection_tool()) {
-                    tool->setDepthFilterRange(enabled, depth_near, depth_far, frustum_half_width);
-                    return;
-                }
-                auto* rm = get_rm();
-                if (!rm)
-                    return;
-                auto settings = rm->getSettings();
-                configure_depth_filter(settings, enabled, depth_near, depth_far, frustum_half_width);
-                rm->updateSettings(settings);
+                apply_legacy_depth_filter(enabled, depth_near, depth_far, frustum_half_width);
             },
-            nb::arg("enabled"), nb::arg("depth_near") = 0.0f, nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, "Set selection depth filter range in camera space as (near, far, width).");
+            nb::arg("enabled"), nb::arg("depth_near") = 0.0f, nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, "Deprecated. Set selection depth filter range in camera space as (near, far, width).\n"
+                                                                                                                                    "frustum_half_width is converted to a screen-space window scale:\n"
+                                                                                                                                    "- pinhole: scale = clamp(half_width / (tan(hfov/2) * far), 0.05, 1.0) when far > 1e-3 "
+                                                                                                                                    "and a viewport is available; otherwise scale = 0.35\n"
+                                                                                                                                    "- ortho: scale = clamp(half_width / (0.5 * ortho_width), 0.05, 1.0)\n"
+                                                                                                                                    "- equirect or no viewport: scale = 0.35 (no single equivalent exists)\n"
+                                                                                                                                    "Prefer set_depth_filter_window.");
+
+        sel.def(
+            "set_depth_filter_window", [](bool enabled, float depth_near, float depth_far, float scale, float offset_x, float offset_y) {
+                apply_depth_filter_window(enabled, depth_near, depth_far, scale, offset_x, offset_y);
+            },
+            nb::arg("enabled"), nb::arg("depth_near") = 0.0f, nb::arg("depth_far") = 100.0f, nb::arg("scale") = 0.35f, nb::arg("offset_x") = 0.0f, nb::arg("offset_y") = 0.0f, "Set the screen-space selection depth window.\n"
+                                                                                                                                                                               "scale is the on-screen fraction of the viewport (0.05-1.0, default 0.35).\n"
+                                                                                                                                                                               "offset_x/offset_y are fractions of available travel (-1 to 1, default 0).\n"
+                                                                                                                                                                               "When the Selection tool exists but is not active/enabled, enable/modify\n"
+                                                                                                                                                                               "requests (enabled=True) raise RuntimeError because they cannot be applied\n"
+                                                                                                                                                                               "atomically; disable requests (enabled=False) are silent atomic no-ops,\n"
+                                                                                                                                                                               "matching the legacy calls' contract.");
 
         sel.def(
             "get_depth_filter", []() -> std::tuple<bool, float, float> {
                 if (const auto* const tool = get_selection_tool()) {
                     const auto* const rm = get_rm();
                     const float informational_half_width = rm
-                                                               ? std::max(
-                                                                     std::abs(rm->getSettings().depth_filter_min.x),
-                                                                     std::abs(rm->getSettings().depth_filter_max.x))
-                                                               : 0.0f;
+                                                               ? informational_half_width_from_settings(
+                                                                     rm->getSettings(), tool->getDepthFar())
+                                                               : g_last_legacy_half_width;
                     return {tool->isDepthFilterEnabled(),
                             tool->getDepthFar(),
                             informational_half_width};
                 }
                 auto* rm = get_rm();
                 if (!rm)
-                    return {false, 100.0f, 50.0f};
+                    return {false, 100.0f, g_last_legacy_half_width};
                 const auto& settings = rm->getSettings();
                 const auto [depth_near, depth_far] = fallback_depth_near_far(settings);
                 (void)depth_near;
                 return {settings.depth_filter_enabled, depth_far,
-                        settings.depth_filter_max.x};
+                        informational_half_width_from_settings(settings, depth_far)};
             },
-            "Get depth filter state: (enabled, depth_far, frustum_half_width).");
+            "Get depth filter state: (enabled, depth_far, frustum_half_width).\n"
+            "frustum_half_width is a derived informational read-back of the far-plane-equivalent "
+            "window half-width (inverse of the set_depth_filter_range conversion).");
 
         sel.def(
             "get_depth_filter_range", []() -> std::tuple<bool, float, float, float> {
                 if (const auto* const tool = get_selection_tool()) {
                     const auto* const rm = get_rm();
                     const float informational_half_width = rm
-                                                               ? std::max(
-                                                                     std::abs(rm->getSettings().depth_filter_min.x),
-                                                                     std::abs(rm->getSettings().depth_filter_max.x))
-                                                               : 0.0f;
+                                                               ? informational_half_width_from_settings(
+                                                                     rm->getSettings(), tool->getDepthFar())
+                                                               : g_last_legacy_half_width;
                     return {tool->isDepthFilterEnabled(),
                             tool->getDepthNear(),
                             tool->getDepthFar(),
@@ -364,15 +536,50 @@ namespace lfs::python {
                 }
                 auto* rm = get_rm();
                 if (!rm)
-                    return {false, 0.0f, 100.0f, 50.0f};
+                    return {false, 0.0f, 100.0f, g_last_legacy_half_width};
                 const auto& settings = rm->getSettings();
                 const auto [depth_near, depth_far] = fallback_depth_near_far(settings);
                 return {settings.depth_filter_enabled,
                         depth_near,
                         depth_far,
-                        settings.depth_filter_max.x};
+                        informational_half_width_from_settings(settings, depth_far)};
             },
-            "Get selection depth filter state: (enabled, depth_near, depth_far, frustum_half_width).");
+            "Get selection depth filter state: (enabled, depth_near, depth_far, frustum_half_width).\n"
+            "frustum_half_width is a derived informational read-back of the far-plane-equivalent "
+            "window half-width (inverse of the set_depth_filter_range conversion).");
+
+        sel.def(
+            "get_depth_filter_window", []() -> std::tuple<bool, float, float, float, float, float> {
+                if (const auto* const tool = get_selection_tool()) {
+                    const auto* const rm = get_rm();
+                    float scale = DEFAULT_WINDOW_SCALE;
+                    float offset_x = 0.0f;
+                    float offset_y = 0.0f;
+                    if (rm) {
+                        const auto& settings = rm->getSettings();
+                        scale = settings.depth_filter_scale;
+                        offset_x = settings.depth_filter_offset_x;
+                        offset_y = settings.depth_filter_offset_y;
+                    }
+                    return {tool->isDepthFilterEnabled(),
+                            tool->getDepthNear(),
+                            tool->getDepthFar(),
+                            scale, offset_x, offset_y};
+                }
+                auto* rm = get_rm();
+                if (!rm)
+                    return {false, 0.0f, 100.0f, DEFAULT_WINDOW_SCALE, 0.0f, 0.0f};
+                const auto& settings = rm->getSettings();
+                const auto [depth_near, depth_far] = fallback_depth_near_far(settings);
+                return {settings.depth_filter_enabled,
+                        depth_near,
+                        depth_far,
+                        settings.depth_filter_scale,
+                        settings.depth_filter_offset_x,
+                        settings.depth_filter_offset_y};
+            },
+            "Get the screen-space selection depth window:\n"
+            "(enabled, near, far, scale, offset_x, offset_y).");
 
         // ─────────────────────────────────────────────────────────────────────
         // CROP FILTER

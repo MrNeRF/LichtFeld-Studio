@@ -70,19 +70,52 @@ def get_screen_positions() -> lichtfeld.Tensor | None:
     """Get screen positions tensor [N, 2]"""
 
 def set_depth_filter(enabled: bool, depth_far: float = 100.0, frustum_half_width: float = 50.0, depth_near: float = 0.0) -> None:
-    """Set selection depth filter in camera space."""
+    """
+    Deprecated. Set selection depth filter in camera space.
+    frustum_half_width is converted to a screen-space window scale:
+    - pinhole: scale = clamp(half_width / (tan(hfov/2) * far), 0.05, 1.0) when far > 1e-3 and a viewport is available; otherwise scale = 0.35
+    - ortho: scale = clamp(half_width / (0.5 * ortho_width), 0.05, 1.0)
+    - equirect or no viewport: scale = 0.35 (no single equivalent exists)
+    Prefer set_depth_filter_window.
+    """
 
 def set_depth_filter_range(enabled: bool, depth_near: float = 0.0, depth_far: float = 100.0, frustum_half_width: float = 50.0) -> None:
     """
-    Set selection depth filter range in camera space as (near, far, width).
+    Deprecated. Set selection depth filter range in camera space as (near, far, width).
+    frustum_half_width is converted to a screen-space window scale:
+    - pinhole: scale = clamp(half_width / (tan(hfov/2) * far), 0.05, 1.0) when far > 1e-3 and a viewport is available; otherwise scale = 0.35
+    - ortho: scale = clamp(half_width / (0.5 * ortho_width), 0.05, 1.0)
+    - equirect or no viewport: scale = 0.35 (no single equivalent exists)
+    Prefer set_depth_filter_window.
+    """
+
+def set_depth_filter_window(enabled: bool, depth_near: float = 0.0, depth_far: float = 100.0, scale: float = 0.3499999940395355, offset_x: float = 0.0, offset_y: float = 0.0) -> None:
+    """
+    Set the screen-space selection depth window.
+    scale is the on-screen fraction of the viewport (0.05-1.0, default 0.35).
+    offset_x/offset_y are fractions of available travel (-1 to 1, default 0).
+    When the Selection tool exists but is not active/enabled, enable/modify
+    requests (enabled=True) raise RuntimeError because they cannot be applied
+    atomically; disable requests (enabled=False) are silent atomic no-ops,
+    matching the legacy calls' contract.
     """
 
 def get_depth_filter() -> tuple[bool, float, float]:
-    """Get depth filter state: (enabled, depth_far, frustum_half_width)."""
+    """
+    Get depth filter state: (enabled, depth_far, frustum_half_width).
+    frustum_half_width is a derived informational read-back of the far-plane-equivalent window half-width (inverse of the set_depth_filter_range conversion).
+    """
 
 def get_depth_filter_range() -> tuple[bool, float, float, float]:
     """
     Get selection depth filter state: (enabled, depth_near, depth_far, frustum_half_width).
+    frustum_half_width is a derived informational read-back of the far-plane-equivalent window half-width (inverse of the set_depth_filter_range conversion).
+    """
+
+def get_depth_filter_window() -> tuple[bool, float, float, float, float, float]:
+    """
+    Get the screen-space selection depth window:
+    (enabled, near, far, scale, offset_x, offset_y).
     """
 
 def set_crop_filter(enabled: bool) -> None:

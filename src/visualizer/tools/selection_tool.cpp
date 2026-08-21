@@ -42,6 +42,10 @@ namespace lfs::vis::tools {
             return ctx.getViewport();
         }
 
+        // KEEP IN SYNC: the legacy width<->scale converters in py_selection.cpp
+        // (convert_legacy_half_width_to_scale / convert_scale_to_legacy_half_width)
+        // invert this mapping via the vertical fov; they do not see
+        // ortho_scale_override.
         [[nodiscard]] glm::vec2 depthWindowFarPlaneHalfExtents(
             const Viewport& viewport,
             const RenderSettings& settings,
@@ -214,7 +218,19 @@ namespace lfs::vis::tools {
     }
 
     void SelectionTool::adjustWindowScale(const float factor) {
+        if (tool_context_) {
+            if (auto* const rm = tool_context_->getRenderingManager()) {
+                window_scale_ = rm->getSettings().depth_filter_scale;
+            }
+        }
         window_scale_ = std::clamp(window_scale_ * factor, 0.05f, 1.0f);
+        if (tool_context_) {
+            if (auto* const rm = tool_context_->getRenderingManager()) {
+                auto settings = rm->getSettings();
+                settings.depth_filter_scale = window_scale_;
+                rm->updateSettings(settings);
+            }
+        }
         if (tool_context_ && isEnabled() && depth_filter_enabled_) {
             applySelectionFilterSettings(*tool_context_);
         }
@@ -237,12 +253,10 @@ namespace lfs::vis::tools {
             settings.show_ellipsoid = true;
         }
         settings.depth_filter_enabled = depth_filter_enabled_;
-        settings.depth_filter_scale = window_scale_;
-        settings.depth_filter_offset_x = window_offset_x_;
-        settings.depth_filter_offset_y = window_offset_y_;
+        window_scale_ = settings.depth_filter_scale;
         const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
         const glm::vec2 half_extents =
-            depthWindowFarPlaneHalfExtents(viewport, settings, depth_far_, window_scale_);
+            depthWindowFarPlaneHalfExtents(viewport, settings, depth_far_, settings.depth_filter_scale);
         settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);
         settings.depth_filter_min = glm::vec3(-half_extents.x, -half_extents.y, -depth_far_);
         settings.depth_filter_max = glm::vec3(half_extents.x, half_extents.y, -depth_near_);
@@ -273,14 +287,15 @@ namespace lfs::vis::tools {
             settings.show_ellipsoid = true;
         }
         settings.depth_filter_enabled = depth_filter_enabled_;
-        settings.depth_filter_scale = window_scale_;
-        settings.depth_filter_offset_x = window_offset_x_;
-        settings.depth_filter_offset_y = window_offset_y_;
+        // Window scale/offset live on RenderSettings. Read them from settings and
+        // do not stamp tool members — crop-filter toggles and enable/disable
+        // reach this path and would otherwise revert Python/slider/MCP writes.
+        const float window_scale = settings.depth_filter_scale;
         if (depth_filter_enabled_) {
             const auto& viewport = selectionFilterViewport(ctx);
             const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
             glm::vec2 half_extents =
-                depthWindowFarPlaneHalfExtents(viewport, settings, depth_far_, window_scale_);
+                depthWindowFarPlaneHalfExtents(viewport, settings, depth_far_, window_scale);
             if (informational_half_width) {
                 const glm::ivec2 size = glm::max(viewport.windowSize, glm::ivec2(1));
                 const float aspect = std::max(

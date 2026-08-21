@@ -25,7 +25,24 @@ _DEPTH_SLIDER_MIN_SPAN = 1.0
 _DEFAULT_DEPTH_NEAR = 0.0
 _DEFAULT_DEPTH_FAR = 6.0
 _DEFAULT_FRUSTUM_HALF_WIDTH = 1.35
+_DEFAULT_WINDOW_SCALE = 0.35
+_DEFAULT_WINDOW_OFFSET = 0.0
+_DEFAULT_VIZ_MODE = 1
+_SCALE_PERCENT_MIN = 5.0
+_SCALE_PERCENT_MAX = 100.0
+_OFFSET_PERCENT_MIN = -100.0
+_OFFSET_PERCENT_MAX = 100.0
 _MISSING = object()
+_VIZ_MODE_ICONS = {
+    0: "../icon/scene/visible.png",
+    1: "../icon/contrast.png",
+    2: "../icon/scene/hidden.png",
+}
+_VIZ_MODE_LABELS = {
+    0: ("main_panel.depth_filter_viz_mode_off", "Off"),
+    1: ("main_panel.depth_filter_viz_mode_dim", "Dim outside"),
+    2: ("main_panel.depth_filter_viz_mode_hide", "Hide outside"),
+}
 
 
 def _ui_label(key: str, fallback: str) -> str:
@@ -104,7 +121,24 @@ class SelectionControlsController:
         "selection_depth_far_value",
         "selection_depth_far_slider_min",
         "selection_depth_far_slider_max",
+        "selection_depth_scale_str",
+        "selection_depth_scale_value",
+        "selection_depth_scale_slider_min",
+        "selection_depth_scale_slider_max",
+        "selection_depth_offset_x_str",
+        "selection_depth_offset_x_value",
+        "selection_depth_offset_x_slider_min",
+        "selection_depth_offset_x_slider_max",
+        "selection_depth_offset_y_str",
+        "selection_depth_offset_y_value",
+        "selection_depth_offset_y_slider_min",
+        "selection_depth_offset_y_slider_max",
+        "selection_viz_mode_label",
+        "selection_viz_mode_icon",
         "selection_depth_toggle_label",
+        "ui_size_label",
+        "ui_offset_x_label",
+        "ui_offset_y_label",
         "selection_delete_label",
         "selection_undo_label",
         "selection_redo_label",
@@ -126,12 +160,19 @@ class SelectionControlsController:
         self._depth_near = _DEFAULT_DEPTH_NEAR
         self._depth_far = _DEFAULT_DEPTH_FAR
         self._frustum_half_width = _DEFAULT_FRUSTUM_HALF_WIDTH
+        self._window_scale = _DEFAULT_WINDOW_SCALE
+        self._offset_x = _DEFAULT_WINDOW_OFFSET
+        self._offset_y = _DEFAULT_WINDOW_OFFSET
+        self._viz_mode = _DEFAULT_VIZ_MODE
         self._last_state_key = None
         self._last_state_items = None
         self._depth_echo_holdoff = 0
         self._depth_text_bufs = {
             "selection_depth_near_str": None,
             "selection_depth_far_str": None,
+            "selection_depth_scale_str": None,
+            "selection_depth_offset_x_str": None,
+            "selection_depth_offset_y_str": None,
         }
         self._editing_depth_text = set()
         self._escape_revert = w.EscapeRevertController()
@@ -180,6 +221,47 @@ class SelectionControlsController:
         )
         model.bind_func("selection_depth_far_slider_min", lambda: f"{self._far_slider_bounds()[0]:.3f}")
         model.bind_func("selection_depth_far_slider_max", lambda: f"{self._far_slider_bounds()[1]:.3f}")
+        model.bind(
+            "selection_depth_scale_str",
+            lambda: self._depth_text_value("selection_depth_scale_str"),
+            lambda value: self._set_depth_text_value("selection_depth_scale_str", value),
+        )
+        model.bind(
+            "selection_depth_scale_value",
+            lambda: f"{self._scale_percent():.0f}",
+            self._set_depth_scale_percent,
+        )
+        model.bind_func("selection_depth_scale_slider_min", lambda: f"{_SCALE_PERCENT_MIN:.0f}")
+        model.bind_func("selection_depth_scale_slider_max", lambda: f"{_SCALE_PERCENT_MAX:.0f}")
+        model.bind(
+            "selection_depth_offset_x_str",
+            lambda: self._depth_text_value("selection_depth_offset_x_str"),
+            lambda value: self._set_depth_text_value("selection_depth_offset_x_str", value),
+        )
+        model.bind(
+            "selection_depth_offset_x_value",
+            lambda: f"{self._offset_percent(self._offset_x):.0f}",
+            self._set_depth_offset_x_percent,
+        )
+        model.bind_func("selection_depth_offset_x_slider_min", lambda: f"{_OFFSET_PERCENT_MIN:.0f}")
+        model.bind_func("selection_depth_offset_x_slider_max", lambda: f"{_OFFSET_PERCENT_MAX:.0f}")
+        model.bind(
+            "selection_depth_offset_y_str",
+            lambda: self._depth_text_value("selection_depth_offset_y_str"),
+            lambda value: self._set_depth_text_value("selection_depth_offset_y_str", value),
+        )
+        model.bind(
+            "selection_depth_offset_y_value",
+            lambda: f"{self._offset_percent(self._offset_y):.0f}",
+            self._set_depth_offset_y_percent,
+        )
+        model.bind_func("selection_depth_offset_y_slider_min", lambda: f"{_OFFSET_PERCENT_MIN:.0f}")
+        model.bind_func("selection_depth_offset_y_slider_max", lambda: f"{_OFFSET_PERCENT_MAX:.0f}")
+        model.bind_func("selection_viz_mode_label", self._viz_mode_label)
+        model.bind_func("selection_viz_mode_icon", self._viz_mode_icon)
+        model.bind_func("ui_size_label", lambda: _ui_label("ui.selection_depth_size", "Size"))
+        model.bind_func("ui_offset_x_label", lambda: _ui_label("ui.selection_depth_offset_x", "X"))
+        model.bind_func("ui_offset_y_label", lambda: _ui_label("ui.selection_depth_offset_y", "Y"))
         model.bind_event("selection_action", self._on_action)
 
         self._handle = model.get_handle()
@@ -195,6 +277,9 @@ class SelectionControlsController:
 
         self._mount_depth_text_input(doc, "selection-depth-near", "selection_depth_near_str")
         self._mount_depth_text_input(doc, "selection-depth-far", "selection_depth_far_str")
+        self._mount_depth_text_input(doc, "selection-depth-scale", "selection_depth_scale_str")
+        self._mount_depth_text_input(doc, "selection-depth-offset-x", "selection_depth_offset_x_str")
+        self._mount_depth_text_input(doc, "selection-depth-offset-y", "selection_depth_offset_y_str")
 
     def update(self, doc):
         dirty = False
@@ -284,6 +369,25 @@ class SelectionControlsController:
             far = self._depth_far
             width = self._frustum_half_width
 
+        window_getter = getattr(lf.selection, "get_depth_filter_window", None)
+        if callable(window_getter):
+            try:
+                w_enabled, w_near, w_far, scale, offset_x, offset_y = window_getter()
+                enabled = w_enabled
+                near = w_near
+                far = w_far
+                self._window_scale = _clamp(
+                    _parse_float(scale, _DEFAULT_WINDOW_SCALE), 0.05, 1.0
+                )
+                self._offset_x = _clamp(
+                    _parse_float(offset_x, _DEFAULT_WINDOW_OFFSET), -1.0, 1.0
+                )
+                self._offset_y = _clamp(
+                    _parse_float(offset_y, _DEFAULT_WINDOW_OFFSET), -1.0, 1.0
+                )
+            except Exception:
+                pass
+
         self._depth_enabled = bool(enabled)
         self._depth_near = _clamp(_parse_float(near, _DEFAULT_DEPTH_NEAR), _DEPTH_MIN, _DEPTH_MAX - _DEPTH_GAP)
         self._depth_far = _clamp(
@@ -292,6 +396,7 @@ class SelectionControlsController:
             _DEPTH_MAX,
         )
         self._frustum_half_width = max(_parse_float(width, _DEFAULT_FRUSTUM_HALF_WIDTH), 0.05)
+        self._refresh_viz_mode()
 
     def _state_items(self):
         return (
@@ -305,6 +410,10 @@ class SelectionControlsController:
             ("depth_enabled", self._depth_enabled),
             ("depth_near", round(self._depth_near, 3)),
             ("depth_far", round(self._depth_far, 3)),
+            ("window_scale", round(self._window_scale, 4)),
+            ("offset_x", round(self._offset_x, 4)),
+            ("offset_y", round(self._offset_y, 4)),
+            ("viz_mode", int(self._viz_mode)),
         )
 
     def _state_key(self, state_items=None):
@@ -384,18 +493,80 @@ class SelectionControlsController:
         far = _clamp(_parse_float(value, self._depth_far), self._depth_near + _DEPTH_GAP, _DEPTH_MAX)
         self._apply_depth_range(self._depth_enabled, self._depth_near, far)
 
+    def _scale_percent(self):
+        return _clamp(round(self._window_scale * 100.0), _SCALE_PERCENT_MIN, _SCALE_PERCENT_MAX)
+
+    def _offset_percent(self, offset):
+        return _clamp(round(offset * 100.0), _OFFSET_PERCENT_MIN, _OFFSET_PERCENT_MAX)
+
+    def _refresh_viz_mode(self):
+        settings_getter = getattr(lf, "get_render_settings", None)
+        if not callable(settings_getter):
+            return
+        try:
+            settings = settings_getter()
+        except Exception:
+            return
+        if settings is None:
+            return
+        try:
+            self._viz_mode = int(_clamp(int(getattr(settings, "depth_filter_viz_mode", self._viz_mode)), 0, 2))
+        except Exception:
+            pass
+
+    def _viz_mode_label(self):
+        key, fallback = _VIZ_MODE_LABELS.get(int(self._viz_mode), _VIZ_MODE_LABELS[_DEFAULT_VIZ_MODE])
+        return _ui_label(key, fallback)
+
+    def _viz_mode_icon(self):
+        return _VIZ_MODE_ICONS.get(int(self._viz_mode), _VIZ_MODE_ICONS[_DEFAULT_VIZ_MODE])
+
+    def _set_depth_scale_percent(self, value):
+        self._refresh_depth_state()
+        if isinstance(value, str):
+            value = value.strip().rstrip("%")
+        percent = _clamp(_parse_float(value, self._scale_percent()), _SCALE_PERCENT_MIN, _SCALE_PERCENT_MAX)
+        self._apply_depth_window(self._depth_enabled, self._depth_near, self._depth_far, percent / 100.0, self._offset_x, self._offset_y)
+
+    def _set_depth_offset_x_percent(self, value):
+        self._refresh_depth_state()
+        percent = _clamp(_parse_float(value, self._offset_percent(self._offset_x)), _OFFSET_PERCENT_MIN, _OFFSET_PERCENT_MAX)
+        self._apply_depth_window(self._depth_enabled, self._depth_near, self._depth_far, self._window_scale, percent / 100.0, self._offset_y)
+
+    def _set_depth_offset_y_percent(self, value):
+        self._refresh_depth_state()
+        percent = _clamp(_parse_float(value, self._offset_percent(self._offset_y)), _OFFSET_PERCENT_MIN, _OFFSET_PERCENT_MAX)
+        self._apply_depth_window(self._depth_enabled, self._depth_near, self._depth_far, self._window_scale, self._offset_x, percent / 100.0)
+
     def _apply_depth_range(self, enabled, near, far):
+        self._apply_depth_window(enabled, near, far, self._window_scale, self._offset_x, self._offset_y)
+
+    def _apply_depth_window(self, enabled, near, far, scale, offset_x, offset_y):
         self._depth_enabled = bool(enabled)
         self._depth_near = _clamp(near, _DEPTH_MIN, _DEPTH_MAX - _DEPTH_GAP)
         self._depth_far = _clamp(far, self._depth_near + _DEPTH_GAP, _DEPTH_MAX)
+        self._window_scale = _clamp(scale, 0.05, 1.0)
+        self._offset_x = _clamp(offset_x, -1.0, 1.0)
+        self._offset_y = _clamp(offset_y, -1.0, 1.0)
 
+        window_setter = getattr(lf.selection, "set_depth_filter_window", None)
         try:
-            lf.selection.set_depth_filter_range(
-                self._depth_enabled,
-                self._depth_near,
-                self._depth_far,
-                self._frustum_half_width,
-            )
+            if callable(window_setter):
+                window_setter(
+                    self._depth_enabled,
+                    self._depth_near,
+                    self._depth_far,
+                    self._window_scale,
+                    self._offset_x,
+                    self._offset_y,
+                )
+            else:
+                lf.selection.set_depth_filter_range(
+                    self._depth_enabled,
+                    self._depth_near,
+                    self._depth_far,
+                    self._frustum_half_width,
+                )
         except Exception as exc:
             self._report_error(
                 str(exc).strip()
@@ -404,6 +575,25 @@ class SelectionControlsController:
 
         self._sync_depth_text_bufs()
         self._dirty_all()
+
+    def _set_viz_mode(self, mode):
+        self._viz_mode = int(_clamp(int(mode), 0, 2))
+        settings_getter = getattr(lf, "get_render_settings", None)
+        if callable(settings_getter):
+            try:
+                settings = settings_getter()
+                if settings is not None:
+                    settings.depth_filter_viz_mode = self._viz_mode
+            except Exception as exc:
+                self._report_error(
+                    str(exc).strip()
+                    or _ui_label("selection.update_depth_failed", "Could not update selection depth filter.")
+                )
+        self._dirty_all()
+
+    def _cycle_viz_mode(self):
+        self._refresh_viz_mode()
+        self._set_viz_mode((int(self._viz_mode) + 1) % 3)
 
     def _mount_depth_text_input(self, doc, input_id, key):
         w.bind_committed_text_input(
@@ -443,7 +633,8 @@ class SelectionControlsController:
     def _commit_depth_text_key(self, key):
         value = self._depth_text_bufs.get(key)
         if value is not None and value.strip():
-            parsed = _parse_float(value, None)
+            parsed_src = value.strip().rstrip("%") if key == "selection_depth_scale_str" else value
+            parsed = _parse_float(parsed_src, None)
             if parsed is None:
                 self._sync_depth_text_bufs(force=True)
                 return
@@ -451,6 +642,12 @@ class SelectionControlsController:
                 self._set_depth_near(parsed)
             elif key == "selection_depth_far_str":
                 self._set_depth_far(parsed)
+            elif key == "selection_depth_scale_str":
+                self._set_depth_scale_percent(parsed)
+            elif key == "selection_depth_offset_x_str":
+                self._set_depth_offset_x_percent(parsed)
+            elif key == "selection_depth_offset_y_str":
+                self._set_depth_offset_y_percent(parsed)
 
         self._sync_depth_text_bufs(force=True)
 
@@ -470,6 +667,12 @@ class SelectionControlsController:
             return f"{self._depth_near:.2f}"
         if key == "selection_depth_far_str":
             return f"{self._depth_far:.2f}"
+        if key == "selection_depth_scale_str":
+            return f"{self._scale_percent():.0f}%"
+        if key == "selection_depth_offset_x_str":
+            return f"{self._offset_percent(self._offset_x):.0f}"
+        if key == "selection_depth_offset_y_str":
+            return f"{self._offset_percent(self._offset_y):.0f}"
         return ""
 
     def _on_action(self, handle, event, args):
@@ -481,6 +684,8 @@ class SelectionControlsController:
         if action == "toggle_depth":
             self._refresh_depth_state()
             self._apply_depth_range(not self._depth_enabled, self._depth_near, self._depth_far)
+        elif action == "cycle_viz":
+            self._cycle_viz_mode()
         elif action == "delete":
             self._execute_selection_stage(lambda: lf.pipeline.edit.delete_())
         elif action == "select_all":
@@ -566,6 +771,22 @@ class SelectionControlsController:
                 "selection_depth_far_slider_min",
                 "selection_depth_far_slider_max",
                 "selection_depth_near_slider_max",
+            ),
+            "window_scale": (
+                "selection_depth_scale_str",
+                "selection_depth_scale_value",
+            ),
+            "offset_x": (
+                "selection_depth_offset_x_str",
+                "selection_depth_offset_x_value",
+            ),
+            "offset_y": (
+                "selection_depth_offset_y_str",
+                "selection_depth_offset_y_value",
+            ),
+            "viz_mode": (
+                "selection_viz_mode_label",
+                "selection_viz_mode_icon",
             ),
         }
 
