@@ -146,6 +146,8 @@ body {
     min-height: 0;
     display: flex;
     flex-direction: column;
+    margin-left: 6dp;
+    margin-right: 6dp;
 }
 
 #search-icon {
@@ -608,8 +610,10 @@ scene-graph,
 .row-icon.trash-icon {
     width: 14dp;
     height: 14dp;
-    margin-right: 2dp;
-    image-color: rgba(180, 80, 80, 178);
+    margin-left: 6dp;
+    margin-right: 0;
+    flex-shrink: 0;
+    image-color: rgba(230, 90, 90, 210);
 }
 
 .row-icon.trash-icon:hover {
@@ -622,6 +626,9 @@ scene-graph,
 
 .node-name {
     display: block;
+    min-width: 0;
+    flex-grow: 0;
+    flex-shrink: 1;
     color: #cdd6f4;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -636,7 +643,10 @@ scene-graph,
 /* Inline rename input */
 .rename-input {
     display: inline;
-    width: 150dp;
+    min-width: 0;
+    width: auto;
+    flex-grow: 0;
+    flex-shrink: 1;
     padding: 2dp 4dp;
     font-size: 12dp;
     color: #cdd6f4;

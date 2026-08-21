@@ -679,17 +679,18 @@ namespace lfs::vis::gui {
             if (!slot.content)
                 return;
 
+            auto expand = doc->CreateElement("span");
+            expand->SetClass("expand-toggle", true);
+            slot.expand_toggle = slot.content->AppendChild(std::move(expand));
+
+            auto leaf = doc->CreateElement("span");
+            leaf->SetClass("leaf-spacer", true);
+            slot.leaf_spacer = slot.content->AppendChild(std::move(leaf));
+
             auto vis_icon = doc->CreateElement("img");
             vis_icon->SetClass("row-icon", true);
             vis_icon->SetAttribute("data-action", "toggle-vis");
             slot.vis_icon = slot.content->AppendChild(std::move(vis_icon));
-
-            auto trash_icon = doc->CreateElement("img");
-            trash_icon->SetClass("row-icon", true);
-            trash_icon->SetClass("trash-icon", true);
-            trash_icon->SetAttribute("sprite", "icon-trash");
-            trash_icon->SetAttribute("data-action", "delete");
-            slot.delete_icon = slot.content->AppendChild(std::move(trash_icon));
 
             auto type_icon = doc->CreateElement("img");
             type_icon->SetClass("row-icon", true);
@@ -706,14 +707,6 @@ namespace lfs::vis::gui {
             mask_icon->SetAttribute("sprite", "icon-mask");
             slot.mask_icon = slot.content->AppendChild(std::move(mask_icon));
 
-            auto expand = doc->CreateElement("span");
-            expand->SetClass("expand-toggle", true);
-            slot.expand_toggle = slot.content->AppendChild(std::move(expand));
-
-            auto leaf = doc->CreateElement("span");
-            leaf->SetClass("leaf-spacer", true);
-            slot.leaf_spacer = slot.content->AppendChild(std::move(leaf));
-
             auto rename_input = doc->CreateElement("input");
             rename_input->SetAttribute("type", "text");
             rename_input->SetClass("rename-input", true);
@@ -724,6 +717,13 @@ namespace lfs::vis::gui {
             auto node_name = doc->CreateElement("span");
             node_name->SetClass("node-name", true);
             slot.node_name = slot.content->AppendChild(std::move(node_name));
+
+            auto trash_icon = doc->CreateElement("img");
+            trash_icon->SetClass("row-icon", true);
+            trash_icon->SetClass("trash-icon", true);
+            trash_icon->SetAttribute("sprite", "icon-trash");
+            trash_icon->SetAttribute("data-action", "delete");
+            slot.delete_icon = slot.content->AppendChild(std::move(trash_icon));
 
             row_slots_.push_back(slot);
         }

@@ -258,3 +258,41 @@ def test_scene_filter_clear_resets_the_live_input_control():
     assert 'input->SetValue("")' in scene_cpp
     assert "input ? input->GetValue()" in scene_cpp
     assert 'filter_input_el_->SetAttribute("value", "")' not in scene_cpp
+
+
+def test_scene_tree_aligns_hierarchy_and_keeps_delete_action_trailing():
+    scene_rcss = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "scene_tree.rcss"
+    ).read_text(encoding="utf-8")
+    scene_graph_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "elements"
+        / "scene_graph_element.cpp"
+    ).read_text(encoding="utf-8")
+
+    scene_view_rule = _rule_body(scene_rcss, "#scene-view")
+    assert "margin-left: 6dp;" in scene_view_rule
+    assert "margin-right: 6dp;" in scene_view_rule
+
+    node_name_rule = _rule_body(scene_rcss, ".node-name")
+    assert "flex-grow: 0;" in node_name_rule
+    assert "flex-shrink: 1;" in node_name_rule
+    trash_rule = _rule_body(scene_rcss, ".row-icon.trash-icon")
+    assert "margin-left: 6dp;" in trash_rule
+    assert "flex-shrink: 0;" in trash_rule
+
+    expand = scene_graph_cpp.index('expand->SetClass("expand-toggle", true)')
+    visibility = scene_graph_cpp.index('vis_icon->SetAttribute("data-action", "toggle-vis")')
+    name = scene_graph_cpp.index('node_name->SetClass("node-name", true)')
+    delete = scene_graph_cpp.index('trash_icon->SetAttribute("data-action", "delete")')
+    assert expand < visibility < name < delete

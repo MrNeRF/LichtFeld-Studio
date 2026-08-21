@@ -83,6 +83,14 @@
 .row-icon.type-icon.pointcloud   { image-color: @{alpha(secondary,0.80)}; }
 .row-icon.type-icon.mesh         { image-color: @{alpha(success,0.90)}; }
 
+.row-icon.trash-icon {
+    image-color: @{alpha(error,0.82)};
+}
+
+.row-icon.trash-icon:hover {
+    image-color: @{error};
+}
+
 .row-icon.trash-icon.trash-disabled,
 .row-icon.trash-icon.trash-disabled:hover {
     image-color: @{alpha(text_dim,0.50)};
