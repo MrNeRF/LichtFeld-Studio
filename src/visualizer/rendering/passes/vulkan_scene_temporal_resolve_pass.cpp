@@ -4,6 +4,7 @@
 
 #include "vulkan_scene_temporal_resolve_pass.hpp"
 
+#include "rendering/scene_temporal_resolve.hpp"
 #include "vulkan_scene_depth_history_pass.hpp"
 
 #include "core/logger.hpp"
@@ -27,8 +28,9 @@ namespace lfs::vis {
             glm::vec4 control{0.0f};
             glm::vec4 current_uv{1.0f};
             glm::vec4 depth_control{0.0f};
+            glm::vec4 jitter_pixels{0.0f};
         };
-        static_assert(sizeof(ResolvePush) == 64);
+        static_assert(sizeof(ResolvePush) == 80);
 
         constexpr std::size_t viewIndex(const TemporalViewId view) {
             return static_cast<std::size_t>(view);
@@ -333,6 +335,10 @@ namespace lfs::vis {
                     : params.render_extent;
             const glm::vec4 current_uv = temporalCurrentUvTransform(params.render_extent,
                                                                     allocation);
+            const glm::vec2 current_jitter_pixels = sceneTemporalJitterPixels(
+                params.current_jitter_ndc, params.render_extent, params.jitter_flip_y);
+            const glm::vec2 previous_jitter_pixels = sceneTemporalJitterPixels(
+                params.previous_jitter_ndc, params.render_extent, params.jitter_flip_y);
             if (command_buffer == VK_NULL_HANDLE || params.current_color_view == VK_NULL_HANDLE ||
                 params.motion_view == VK_NULL_HANDLE || params.render_extent.x <= 0 ||
                 params.render_extent.y <= 0 || params.output_extent.x <= 0 ||
@@ -432,7 +438,7 @@ namespace lfs::vis {
                             params.output_extent.x,
                             params.output_extent.y},
                 .control = {resource.has_history && params.history_valid ? 1.0f : 0.0f,
-                            std::clamp(params.history_weight, 0.0f, 1.0f),
+                            sceneTemporalHistoryWeight(params.history_weight, params.sequence),
                             std::max(0.0f, params.motion_rejection_pixels),
                             0.0f},
                 .current_uv = current_uv,
@@ -441,6 +447,7 @@ namespace lfs::vis {
                     std::max(0.0f, params.depth_relative_threshold),
                     std::max(0.0f, params.depth_absolute_threshold),
                     0.0f},
+                .jitter_pixels = glm::vec4(current_jitter_pixels, previous_jitter_pixels),
             };
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             context->vkCmdPushDescriptorSet()(command_buffer,

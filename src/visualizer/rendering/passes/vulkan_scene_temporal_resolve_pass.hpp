@@ -60,6 +60,9 @@ namespace lfs::vis {
         glm::ivec2 render_extent{0, 0};
         glm::ivec2 output_extent{0, 0};
         glm::ivec2 current_allocation_extent{0, 0};
+        glm::vec2 current_jitter_ndc{0.0f};
+        glm::vec2 previous_jitter_ndc{0.0f};
+        bool jitter_flip_y = false;
         std::uint64_t sequence = 0;
         bool history_valid = false;
         float history_weight = 0.9f;

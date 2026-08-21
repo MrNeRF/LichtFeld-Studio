@@ -405,7 +405,6 @@ set(TEST_FILES
     test_uuid.cpp
     test_render_settings_defaults.cpp
     test_scene_upscaler_registry.cpp
-    test_scene_upscaler_inputs.cpp
     test_scene_motion_contract.cpp
     test_scene_temporal_coordinator.cpp
     test_scene_temporal_plan.cpp

@@ -18,6 +18,7 @@ layout(push_constant) uniform ResolveParams {
     vec4 control;        // x = history valid, y = weight, z = motion rejection pixels
     vec4 current_uv;     // xy = scale, zw = clamp max
     vec4 depth_control;  // x = enabled, y = relative threshold, z = absolute threshold
+    vec4 jitter_pixels;  // xy = current, zw = previous; render-pixel image convention
 } params;
 
 bool finite2(vec2 value) {
@@ -32,19 +33,28 @@ void main() {
     }
 
     vec2 output_uv = (vec2(pixel) + vec2(0.5)) / vec2(output_extent);
-    vec2 current_uv = min(output_uv * params.current_uv.xy, params.current_uv.zw);
-    vec4 current = texture(u_current, current_uv);
+    vec2 render_extent = vec2(params.extents.xy);
+    vec2 render_half_texel = 0.5 / render_extent;
+    vec2 current_render_uv = output_uv + params.jitter_pixels.xy / render_extent;
+    vec2 motion_uv = clamp(current_render_uv,
+                           render_half_texel,
+                           vec2(1.0) - render_half_texel);
+    vec2 current_color_uv = clamp(current_render_uv * params.current_uv.xy,
+                                  vec2(0.0),
+                                  params.current_uv.zw);
+    vec4 current = texture(u_current, current_color_uv);
     if (params.control.x < 0.5) {
         imageStore(u_output, pixel, current);
         return;
     }
 
-    vec2 motion = texture(u_motion, current_uv).xy;
+    vec2 motion = texture(u_motion, motion_uv).xy;
     if (!finite2(motion) || length(motion) > params.control.z) {
         imageStore(u_output, pixel, current);
         return;
     }
-    vec2 previous_uv = output_uv + motion / vec2(params.extents.xy);
+    vec2 previous_render_uv = current_render_uv + motion / render_extent;
+    vec2 previous_uv = previous_render_uv - params.jitter_pixels.zw / render_extent;
     vec2 history_half_texel = 0.5 / vec2(output_extent);
     if (!finite2(previous_uv) || any(lessThan(previous_uv, history_half_texel)) ||
         any(greaterThan(previous_uv, vec2(1.0) - history_half_texel))) {
@@ -53,8 +63,13 @@ void main() {
     }
 
     if (params.depth_control.x > 0.5) {
-        float current_depth = texture(u_current_depth, output_uv).r;
-        float history_depth = texture(u_history_depth, previous_uv).r;
+        if (any(lessThan(previous_render_uv, render_half_texel)) ||
+            any(greaterThan(previous_render_uv, vec2(1.0) - render_half_texel))) {
+            imageStore(u_output, pixel, current);
+            return;
+        }
+        float current_depth = texture(u_current_depth, motion_uv).r;
+        float history_depth = texture(u_history_depth, previous_render_uv).r;
         float threshold = max(params.depth_control.z,
                               params.depth_control.y * current_depth);
         if (isnan(current_depth) || isinf(current_depth) || !(current_depth > 0.0) ||
@@ -67,10 +82,11 @@ void main() {
 
     vec3 neighborhood_min = current.rgb;
     vec3 neighborhood_max = current.rgb;
-    vec2 texel = 1.0 / vec2(params.extents.xy);
+    vec2 color_texel = params.current_uv.xy / render_extent;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
-            vec2 sample_uv = min(current_uv + vec2(x, y) * texel, params.current_uv.zw);
+            vec2 sample_uv = min(current_color_uv + vec2(x, y) * color_texel,
+                                 params.current_uv.zw);
             vec3 value = texture(u_current, max(sample_uv, vec2(0.0))).rgb;
             neighborhood_min = min(neighborhood_min, value);
             neighborhood_max = max(neighborhood_max, value);

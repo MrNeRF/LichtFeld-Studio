@@ -224,6 +224,7 @@ namespace lfs::vis {
         const auto changed = tracker.prepare(TemporalViewId::Main, input);
         EXPECT_TRUE(hasTemporalResetReason(changed.reset_reasons, TemporalResetReason::Scene));
         EXPECT_TRUE(hasTemporalResetReason(changed.reset_reasons, TemporalResetReason::Backend));
+        EXPECT_EQ(changed.sequence, 0u);
     }
 
     TEST(TemporalFrameTracker, PrepareDoesNotAdvanceAndViewsRemainIndependent) {
@@ -235,6 +236,19 @@ namespace lfs::vis {
         EXPECT_TRUE(hasTemporalResetReason(
             tracker.prepare(TemporalViewId::SplitRight, input).reset_reasons,
             TemporalResetReason::FirstFrame));
+    }
+
+    TEST(TemporalFrameTracker, ExplicitResetRestartsAccumulationSequence) {
+        TemporalFrameTracker tracker;
+        const auto input = frameInput();
+        tracker.commit(TemporalViewId::Main, input);
+        tracker.commit(TemporalViewId::Main, input);
+        ASSERT_EQ(tracker.prepare(TemporalViewId::Main, input).sequence, 2u);
+        tracker.reset(TemporalViewId::Main, TemporalResetReason::Scene);
+        const auto reset = tracker.prepare(TemporalViewId::Main, input);
+        EXPECT_EQ(reset.sequence, 0u);
+        EXPECT_FALSE(reset.history_valid);
+        EXPECT_TRUE(hasTemporalResetReason(reset.reset_reasons, TemporalResetReason::Scene));
     }
 
     TEST(TemporalFrameTracker, InvalidInputCannotBecomeHistory) {

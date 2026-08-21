@@ -143,6 +143,10 @@ namespace lfs::vis {
         EXPECT_FALSE(reset.history.available());
         EXPECT_TRUE(hasTemporalResetReason(reset.frame.reset_reasons,
                                            TemporalResetReason::Scene));
+        ASSERT_TRUE(commitComplete(coordinator, reset));
+        const auto restarted = coordinator.prepare(requestFor());
+        EXPECT_EQ(restarted.frame.sequence, 1u);
+        EXPECT_TRUE(restarted.frame.history_valid);
     }
 
 } // namespace lfs::vis

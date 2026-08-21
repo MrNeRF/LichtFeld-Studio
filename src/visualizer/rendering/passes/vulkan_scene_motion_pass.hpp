@@ -5,7 +5,6 @@
 #pragma once
 
 #include "rendering/scene_depth_contract.hpp"
-#include "rendering/scene_motion_contract.hpp"
 #include "rendering/temporal_frame_tracker.hpp"
 
 #include <cstddef>
@@ -71,7 +70,6 @@ namespace lfs::vis {
 
         [[nodiscard]] VkImageView motionView(std::size_t frame_slot) const;
         [[nodiscard]] VkImage motionImage(std::size_t frame_slot) const;
-        [[nodiscard]] SceneMotionContract contract(std::size_t frame_slot) const;
         [[nodiscard]] bool initialized() const;
 
     private:

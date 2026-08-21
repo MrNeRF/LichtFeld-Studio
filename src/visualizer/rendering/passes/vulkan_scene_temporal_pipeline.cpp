@@ -156,6 +156,9 @@ namespace lfs::vis {
             auto resolve_params = request.resolve;
             resolve_params.motion_view = motion.motionView(*motion_slot);
             resolve_params.motion_layout = VK_IMAGE_LAYOUT_GENERAL;
+            resolve_params.current_jitter_ndc = prepared.frame.current_jitter;
+            resolve_params.previous_jitter_ndc = prepared.frame.previous_jitter;
+            resolve_params.jitter_flip_y = request.motion.flip_y;
             resolve_params.sequence = prepared.frame.sequence;
             resolve_params.history_valid = prepared.history.matches(prepared.plan);
             if (!resolve.record(command_buffer, resolve_params))

@@ -52,6 +52,15 @@ Vulkan image before presentation. Startup and explicit backend transitions may
 produce one native warm-up frame while the first paired color/depth input is
 established; invalid contracts and pipeline failures remain observable errors.
 
+Projection jitter is converted to the render image's pixel convention before
+resolve. Current color and motion are sampled on the jittered render grid;
+motion first locates the previous jittered depth sample, then the previous
+jitter is removed to address the stable full-resolution color history. The
+eight-frame warm-up uses uniform sample accumulation capped by the selected
+preset's history weight. Deterministic synthetic regressions compare PSNR and
+SSIM against a high-resolution reference and exercise moving-history
+reprojection to detect blur and ghosting regressions.
+
 The temporal path is available for the regular and training viewports,
 including orthographic projection, Independent Dual split view, and PLY
 comparison. Orthographic frames explicitly declare that no perspective jitter
@@ -70,7 +79,3 @@ backend or preset identifiers fall back to the registry defaults. Safe mode
 starts native presentation, disables the two Preferences reconstruction
 selects, and neither reads nor writes the preference file; Python and plugins
 can still change the live setting for that session.
-
-Vendor backends use the same registry and effective-state contract while
-keeping their SDK resources and synchronization lifecycles isolated from the
-built-in Native, Spatial, and Temporal paths.

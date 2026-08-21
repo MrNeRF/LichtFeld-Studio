@@ -46,6 +46,27 @@ namespace lfs::vis {
         }
     }
 
+    glm::vec2 sceneTemporalJitterPixels(const glm::vec2 jitter_ndc,
+                                        const glm::ivec2 render_extent,
+                                        const bool flip_y) noexcept {
+        if (!finite(jitter_ndc) || render_extent.x <= 0 || render_extent.y <= 0)
+            return {};
+        glm::vec2 result = jitter_ndc * 0.5f * glm::vec2(render_extent);
+        if (flip_y)
+            result.y = -result.y;
+        return result;
+    }
+
+    float sceneTemporalHistoryWeight(const float configured_weight,
+                                     const std::uint64_t accumulated_frames) noexcept {
+        if (!std::isfinite(configured_weight) || accumulated_frames == 0)
+            return 0.0f;
+        const double frame_count = static_cast<double>(accumulated_frames);
+        const float uniform_accumulation =
+            static_cast<float>(frame_count / (frame_count + 1.0));
+        return std::min(std::clamp(configured_weight, 0.0f, 1.0f), uniform_accumulation);
+    }
+
     SceneTemporalResolveResult resolveSceneTemporalSample(
         const SceneTemporalResolveSample& sample,
         const SceneTemporalResolveSettings& settings) noexcept {
@@ -73,10 +94,14 @@ namespace lfs::vis {
             return result;
         }
 
-        const glm::vec2 current_uv = sample.current_pixel_center /
-                                     glm::vec2(sample.output_extent);
-        result.previous_uv = current_uv + sample.current_to_previous_pixels /
-                                              glm::vec2(sample.motion_extent);
+        const glm::vec2 render_extent(sample.motion_extent);
+        result.current_render_uv =
+            sample.current_pixel_center / glm::vec2(sample.output_extent) +
+            sample.current_jitter_pixels / render_extent;
+        result.previous_render_uv =
+            result.current_render_uv + sample.current_to_previous_pixels / render_extent;
+        result.previous_uv =
+            result.previous_render_uv - sample.previous_jitter_pixels / render_extent;
         const glm::vec2 minimum_uv = 0.5f / glm::vec2(sample.output_extent);
         const glm::vec2 maximum_uv = 1.0f - minimum_uv;
         if (!finite(result.previous_uv) || result.previous_uv.x < minimum_uv.x ||

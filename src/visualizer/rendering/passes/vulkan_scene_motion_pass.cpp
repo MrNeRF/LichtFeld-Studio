@@ -41,7 +41,6 @@ namespace lfs::vis {
             VmaAllocation uniform_allocation = VK_NULL_HANDLE;
             glm::ivec2 extent{0, 0};
             bool image_initialized = false;
-            SceneMotionContract contract{};
             std::string vram_label;
         };
 
@@ -370,9 +369,6 @@ namespace lfs::vis {
                                   const VulkanSceneMotionParams& params,
                                   const std::size_t frame_slot) {
             if (!params.enabled) {
-                if (frame_slot < frames.size()) {
-                    frames[frame_slot].contract = {};
-                }
                 return true;
             }
             const SceneMotionReprojectionParams reprojection{
@@ -470,16 +466,7 @@ namespace lfs::vis {
                              VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
                                  VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
             frame.image_initialized = true;
-            frame.contract = makeSceneMotionContract(
-                true,
-                SceneMotionStorage::VulkanImage,
-                SceneMotionEncoding::PixelDisplacement,
-                SceneMotionDirection::CurrentToPrevious,
-                params.render_extent.x,
-                params.render_extent.y,
-                params.includes_jitter,
-                params.flip_y);
-            return frame.contract.valid();
+            return true;
         }
     };
 
@@ -517,12 +504,6 @@ namespace lfs::vis {
     VkImage VulkanSceneMotionPass::motionImage(const std::size_t frame_slot) const {
         return impl_ && frame_slot < impl_->frames.size() ? impl_->frames[frame_slot].image
                                                           : VK_NULL_HANDLE;
-    }
-
-    SceneMotionContract VulkanSceneMotionPass::contract(const std::size_t frame_slot) const {
-        return impl_ && frame_slot < impl_->frames.size()
-                   ? impl_->frames[frame_slot].contract
-                   : SceneMotionContract{};
     }
 
     bool VulkanSceneMotionPass::initialized() const {

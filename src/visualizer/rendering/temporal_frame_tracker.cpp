@@ -228,6 +228,7 @@ namespace lfs::vis {
         if (!result.history_valid) {
             result.previous = input.view;
             result.previous_jitter = input.jitter;
+            result.sequence = 0;
         }
         return result;
     }
@@ -247,12 +248,14 @@ namespace lfs::vis {
     void TemporalFrameTracker::reset(const TemporalViewId id, const TemporalResetReason reason) {
         auto& entry = entries_.at(index(id));
         entry.committed.reset();
+        entry.sequence = 0;
         entry.pending_reset = reason;
     }
 
     void TemporalFrameTracker::resetAll(const TemporalResetReason reason) {
         for (auto& entry : entries_) {
             entry.committed.reset();
+            entry.sequence = 0;
             entry.pending_reset = reason;
         }
     }

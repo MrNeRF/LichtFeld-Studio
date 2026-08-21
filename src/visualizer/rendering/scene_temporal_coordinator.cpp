@@ -70,6 +70,8 @@ namespace lfs::vis {
             reset(prepared.view, TemporalResetReason::InvalidInput);
             return false;
         }
+        if (transaction.frame.reset_reasons != TemporalResetReason::None)
+            frames_.reset(prepared.view, transaction.frame.reset_reasons);
         frames_.commit(prepared.view, transaction.input);
         return true;
     }

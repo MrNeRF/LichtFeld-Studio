@@ -51,7 +51,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/scene_temporal_coordinator.cpp
         rendering/scene_temporal_plan.cpp
         rendering/scene_temporal_resolve.cpp
-        rendering/scene_upscaler_inputs.cpp
         rendering/temporal_frame_tracker.cpp
         rendering/lod_page_cache.cpp
         rendering/lod_upload_engine.cpp

@@ -38,6 +38,15 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API SceneTemporalResolveSettings sceneTemporalQualitySettings(
         SceneTemporalQuality quality) noexcept;
 
+    // TemporalFrameInput stores projection jitter in NDC. Resolve and motion
+    // operate in render-pixel coordinates, with Y following the image/motion
+    // storage convention selected by flip_y.
+    [[nodiscard]] LFS_VIS_API glm::vec2 sceneTemporalJitterPixels(
+        glm::vec2 jitter_ndc, glm::ivec2 render_extent, bool flip_y) noexcept;
+
+    [[nodiscard]] LFS_VIS_API float sceneTemporalHistoryWeight(
+        float configured_weight, std::uint64_t accumulated_frames) noexcept;
+
     struct SceneTemporalResolveSample {
         glm::vec4 current{0.0f};
         glm::vec4 history{0.0f};
@@ -45,6 +54,8 @@ namespace lfs::vis {
         glm::vec3 neighborhood_max{1.0f};
         glm::vec2 current_pixel_center{0.0f};
         glm::vec2 current_to_previous_pixels{0.0f};
+        glm::vec2 current_jitter_pixels{0.0f};
+        glm::vec2 previous_jitter_pixels{0.0f};
         glm::ivec2 motion_extent{0, 0};
         glm::ivec2 output_extent{0, 0};
         float current_linear_depth = 0.0f;
@@ -55,6 +66,8 @@ namespace lfs::vis {
 
     struct SceneTemporalResolveResult {
         glm::vec4 color{0.0f};
+        glm::vec2 current_render_uv{0.0f};
+        glm::vec2 previous_render_uv{0.0f};
         glm::vec2 previous_uv{0.0f};
         float effective_history_weight = 0.0f;
         SceneHistoryRejection rejection = SceneHistoryRejection::None;
