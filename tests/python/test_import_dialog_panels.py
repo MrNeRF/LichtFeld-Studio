@@ -48,6 +48,11 @@ def _install_lf_stub(monkeypatch, tmp_path):
         load_file_calls=[],
         load_checkpoint_calls=[],
         clear_scene_calls=0,
+        confirm_dialogs=[],
+        project_save_calls=[],
+        dirty=False,
+        training_active=False,
+        project_save_result=True,
         dataset_browse_path=str(tmp_path / "dataset_browse"),
         output_browse_path=str(tmp_path / "output_browse"),
         init_browse_path=str(tmp_path / "seed.ply"),
@@ -69,19 +74,28 @@ def _install_lf_stub(monkeypatch, tmp_path):
         centralize_dataset="off",
         max_width=None,
         min_track_length=None,
+        stop_training=False,
         **_kwargs,
     ):
-        state.load_file_calls.append(
-            {
-                "path": path,
-                "is_dataset": is_dataset,
-                "output_path": output_path,
-                "init_path": init_path,
-                "centralize_dataset": centralize_dataset,
-                "max_width": max_width,
-                "min_track_length": min_track_length,
-            }
-        )
+        recorded = {
+            "path": path,
+            "is_dataset": is_dataset,
+            "output_path": output_path,
+            "init_path": init_path,
+            "centralize_dataset": centralize_dataset,
+            "max_width": max_width,
+            "min_track_length": min_track_length,
+        }
+        if stop_training:
+            recorded["stop_training"] = True
+        state.load_file_calls.append(recorded)
+
+    def _confirm_dialog(title, message, buttons, callback=None):
+        state.confirm_dialogs.append((title, message, buttons, callback))
+
+    def _project_save(*args, **kwargs):
+        state.project_save_calls.append((args, kwargs))
+        return state.project_save_result
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.log = SimpleNamespace(
@@ -97,10 +111,14 @@ def _install_lf_stub(monkeypatch, tmp_path):
         set_save_asset_callback=lambda _callback: None,
         open_dataset_folder_dialog=lambda: state.output_browse_path,
         open_ply_file_dialog=lambda _start_dir="": state.init_browse_path,
+        confirm_dialog=_confirm_dialog,
     )
     lf_stub.detect_dataset_info = lambda path: state.dataset_infos[str(path)]
     lf_stub.is_dataset_path = lambda path: str(path) in state.dataset_infos
     lf_stub.optimization_params = lambda: None
+    lf_stub.project_is_dirty = lambda: state.dirty
+    lf_stub.is_training_active = lambda: state.training_active
+    lf_stub.project_save = _project_save
     lf_stub.clear_scene = lambda: setattr(
         state,
         "clear_scene_calls",
@@ -245,6 +263,164 @@ def test_dataset_import_panel_show_and_load(import_dialog_module):
         }
     ]
     assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", False)
+    assert state.confirm_dialogs == []
+
+
+def test_dataset_import_dirty_project_prompts_before_load(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+    state.dirty = True
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+    panel._on_do_load()
+
+    assert state.load_file_calls == []
+    assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", True)
+    assert len(state.confirm_dialogs) == 1
+    title, message, buttons, callback = state.confirm_dialogs[0]
+    assert title == "load_dataset_popup.save_title"
+    assert message == "load_dataset_popup.save_message"
+    assert buttons == [
+        "load_dataset_popup.save_and_load",
+        "load_dataset_popup.load_without_saving",
+        "common.cancel",
+    ]
+    assert callback is not None
+
+
+def test_dataset_import_save_and_load_saves_then_loads(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+    state.dirty = True
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+    panel._on_do_load()
+    _title, _message, _buttons, callback = state.confirm_dialogs[0]
+    callback("load_dataset_popup.save_and_load")
+
+    assert state.project_save_calls == [((True, False), {})]
+    assert len(state.load_file_calls) == 1
+    assert state.load_file_calls[0]["path"] == str(state.dataset_info.base_path)
+    assert state.load_file_calls[0]["is_dataset"] is True
+    assert "stop_training" not in state.load_file_calls[0]
+    assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", False)
+
+
+def test_dataset_import_load_without_saving_skips_save(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+    state.dirty = True
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+    panel._on_do_load()
+    _title, _message, _buttons, callback = state.confirm_dialogs[0]
+    callback("load_dataset_popup.load_without_saving")
+
+    assert state.project_save_calls == []
+    assert len(state.load_file_calls) == 1
+    assert state.load_file_calls[0]["path"] == str(state.dataset_info.base_path)
+    assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", False)
+
+
+def test_dataset_import_cancel_leaves_project_untouched(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+    state.dirty = True
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+    panel._on_do_load()
+    _title, _message, _buttons, callback = state.confirm_dialogs[0]
+    callback("common.cancel")
+
+    assert state.project_save_calls == []
+    assert state.load_file_calls == []
+    assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", True)
+
+
+def test_dataset_import_failed_save_cancels_load(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+    state.dirty = True
+    state.project_save_result = False
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+    panel._on_do_load()
+    _title, _message, _buttons, callback = state.confirm_dialogs[0]
+    callback("load_dataset_popup.save_and_load")
+
+    assert state.project_save_calls == [((True, False), {})]
+    assert state.load_file_calls == []
+    assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", True)
+
+
+def test_dataset_import_training_prompts_stop_before_save(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+    state.dirty = True
+    state.training_active = True
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+    panel._on_do_load()
+
+    assert state.load_file_calls == []
+    assert len(state.confirm_dialogs) == 1
+    title, message, buttons, stop_callback = state.confirm_dialogs[0]
+    assert title == "project_switch.stop_training_title"
+    assert message == "project_switch.stop_training_message"
+    assert buttons == ["common.yes", "common.no"]
+
+    stop_callback("common.no")
+    assert state.load_file_calls == []
+    assert state.project_save_calls == []
+    assert len(state.confirm_dialogs) == 1
+
+    stop_callback("common.yes")
+    assert len(state.confirm_dialogs) == 2
+    save_title, _save_message, save_buttons, save_callback = state.confirm_dialogs[1]
+    assert save_title == "load_dataset_popup.save_title"
+    assert save_buttons[0] == "load_dataset_popup.save_and_load"
+
+    save_callback("load_dataset_popup.load_without_saving")
+    assert state.project_save_calls == []
+    assert state.load_file_calls == [
+        {
+            "path": str(state.dataset_info.base_path),
+            "is_dataset": True,
+            "output_path": str(Path(state.dataset_info.base_path) / "output"),
+            "init_path": "",
+            "centralize_dataset": "off",
+            "max_width": 3840,
+            "min_track_length": 0,
+            "stop_training": True,
+        }
+    ]
+
+
+def test_dataset_import_load_file_direct_skips_prompt(import_dialog_module):
+    module, state = import_dialog_module
+    state.dirty = True
+    state.training_active = True
+
+    module.lf.load_file("/mcp/dataset", is_dataset=True)
+
+    assert state.confirm_dialogs == []
+    assert state.load_file_calls == [
+        {
+            "path": "/mcp/dataset",
+            "is_dataset": True,
+            "output_path": "",
+            "init_path": "",
+            "centralize_dataset": "off",
+            "max_width": None,
+            "min_track_length": None,
+        }
+    ]
 
 
 def test_dataset_import_panel_can_clear_scene_on_confirm(import_dialog_module):

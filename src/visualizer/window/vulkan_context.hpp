@@ -293,9 +293,11 @@ namespace lfs::vis {
         [[nodiscard]] bool waitForRetiredFrameSubmitSerial(std::uint64_t serial);
         [[nodiscard]] bool waitForImmediateSubmits();
         [[nodiscard]] bool deviceWaitIdle();
-        // Returns false if the wait was rejected (frame inactive / mono violation);
-        // endFrame will refuse submit when any wait fails. Callers that commit
-        // layout optimistically must not do so on false.
+        // Returns false if the wait was rejected (frame inactive / invalid edge);
+        // endFrame will refuse submit when any wait fails. A requested value that
+        // is already covered by a queued or submitted wait on the same semaphore
+        // is treated as already satisfied (success, no extra submit wait). Callers
+        // that commit layout optimistically must not do so on false.
         [[nodiscard]] bool addFrameTimelineWait(
             VkSemaphore semaphore,
             std::uint64_t value,
@@ -503,7 +505,8 @@ namespace lfs::vis {
         std::vector<FrameTimelineWait> frame_timeline_waits_;
         bool frame_timeline_waits_valid_ = true;
         std::mutex timeline_value_tracker_mutex_;
-        std::unordered_map<VkSemaphore, std::uint64_t> last_frame_timeline_wait_values_;
+        std::unordered_map<VkSemaphore, lfs::rendering::FrameTimelineWaitCursor>
+            frame_timeline_wait_cursors_;
         std::unordered_map<VkSemaphore, std::uint64_t> last_immediate_timeline_wait_values_;
         std::unordered_map<VkSemaphore, std::uint64_t> last_immediate_timeline_signal_values_;
         // image_available_ is sized to swapchain image count (not framesInFlight). We must

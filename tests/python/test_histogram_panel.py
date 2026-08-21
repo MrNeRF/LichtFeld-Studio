@@ -179,6 +179,38 @@ def test_histogram_panel_uses_dirty_update_policy(histogram_panel_module):
     assert "update_interval_ms" not in histogram_panel_module.HistogramPanel.__dict__
 
 
+def test_histogram_mode_available_hides_when_paused(histogram_panel_module, monkeypatch):
+    from lfs_plugins import histogram_support as support
+
+    monkeypatch.setattr(
+        support.lf.ui, "get_content_type", lambda: "splat_files", raising=False
+    )
+    monkeypatch.setattr(
+        support.lf.ui, "is_point_cloud_forced", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        support,
+        "RuntimeState",
+        SimpleNamespace(trainer_state=SimpleNamespace(value="idle")),
+    )
+
+    paused = SimpleNamespace(
+        has_scene=True,
+        num_gaussians=8,
+        is_training=False,
+        is_paused=True,
+    )
+    reset = SimpleNamespace(
+        has_scene=True,
+        num_gaussians=8,
+        is_training=False,
+        is_paused=False,
+    )
+
+    assert histogram_panel_module.histogram_mode_available(paused) is False
+    assert histogram_panel_module.histogram_mode_available(reset) is True
+
+
 def test_histogram_panel_requests_update_from_reactive_store(histogram_panel_module, monkeypatch):
     module = histogram_panel_module
     signals = SimpleNamespace(

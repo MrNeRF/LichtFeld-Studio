@@ -32,6 +32,7 @@
 #include "training/components/bilateral_grid.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_file.hpp"
+#include "training/control/command_api.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
@@ -382,6 +383,43 @@ namespace lfs::python {
 
         lfs::event::EventBridge::instance().unsubscribe(
             typeid(lfs::core::events::state::TrainingCompleted), id);
+    }
+
+    TEST(TrainerConstructionTest, ClearTrainerResetsPausedCommandCenterSnapshot) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        manager.setTrainer(std::make_unique<training::Trainer>(scene));
+
+        ASSERT_TRUE(transition_trainer_manager_for_test(manager, lfs::vis::TrainingState::Running));
+        ASSERT_TRUE(transition_trainer_manager_for_test(manager, lfs::vis::TrainingState::Paused));
+
+        auto& command_center = lfs::training::CommandCenter::instance();
+        command_center.reset_snapshot();
+        const lfs::training::HookContext context{.iteration = 8200};
+        command_center.update_snapshot(
+            context, 0, true, false, false, lfs::training::TrainingPhase::Idle);
+        {
+            const auto paused = command_center.snapshot();
+            ASSERT_TRUE(paused.is_paused);
+            EXPECT_FALSE(paused.is_running);
+            EXPECT_EQ(paused.iteration, 8200);
+            EXPECT_EQ(paused.trainer, nullptr);
+        }
+
+        ASSERT_TRUE(manager.clearTrainer());
+
+        const auto snapshot = command_center.snapshot();
+        EXPECT_FALSE(snapshot.is_paused);
+        EXPECT_FALSE(snapshot.is_running);
+        EXPECT_FALSE(snapshot.stop_requested);
+        EXPECT_EQ(snapshot.iteration, 0);
+        EXPECT_EQ(snapshot.max_iterations, 0);
+        EXPECT_EQ(snapshot.trainer, nullptr);
+        EXPECT_EQ(snapshot.phase, lfs::training::TrainingPhase::Idle);
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Idle);
     }
 
     namespace {

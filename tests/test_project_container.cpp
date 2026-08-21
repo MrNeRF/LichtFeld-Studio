@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/uuid.hpp"
 #include "io/project/crc32c.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project_container.hpp"
@@ -169,6 +170,19 @@ namespace {
         require_status(writer.write_chunk(key, payload));
         require_status(writer.commit());
         return read_file_bytes(path);
+    }
+
+    std::string recoverable_scene_graph_payload() {
+        SceneGraphChapter graph;
+        SceneNodeRecord node;
+        node.uuid = lfs::core::generate_uuid_v4();
+        node.type = "group";
+        node.name = "Recoverable";
+        require_status(graph.upsert_node(node));
+        const auto bytes = graph.to_bytes();
+        return std::string(
+            reinterpret_cast<const char*>(bytes.data()),
+            bytes.size());
     }
 
     void publish_complete_sidecar(
@@ -3328,6 +3342,97 @@ namespace {
         ASSERT_TRUE(removed)
             << lfs::format_for_developer(removed.error());
         EXPECT_FALSE(fs::exists(free_temp));
+    }
+
+    TEST(ProjectRecoveryScratch, PathResolutionUsesSessionUuid) {
+        TemporaryDirectory temporary;
+        const auto uuid = lfs::core::generate_uuid_v4();
+        const auto dir = temporary.path / "recovery";
+        const auto path = scratch_autosave_path(dir, uuid);
+        EXPECT_EQ(path.parent_path(), dir);
+        EXPECT_EQ(
+            path.filename().string(),
+            uuid.to_string() + ".licht");
+        EXPECT_TRUE(is_scratch_autosave_path(path, dir));
+        EXPECT_FALSE(is_scratch_autosave_path(
+            dir / "not-a-uuid.licht", dir));
+        EXPECT_FALSE(is_scratch_autosave_path(
+            path, temporary.path));
+    }
+
+    TEST(ProjectRecoveryScratch, ScanFindsScratchCandidate) {
+        TemporaryDirectory temporary;
+        const auto dir = temporary.path / "recovery";
+        fs::create_directories(dir);
+        const auto uuid = lfs::core::generate_uuid_v4();
+        const auto path = scratch_autosave_path(dir, uuid);
+        create_single_chunk_fixture(
+            path, 2001, 2002, 2003,
+            fixed_key("SCNG", 2004),
+            recoverable_scene_graph_payload());
+        auto found = scan_scratch_autosaves(dir);
+        ASSERT_EQ(found.size(), 1u);
+        EXPECT_EQ(
+            found[0].disposition,
+            RecoveryDisposition::Offer);
+        EXPECT_TRUE(found[0].untitled_scratch);
+        ASSERT_TRUE(found[0].selected_path);
+        EXPECT_EQ(
+            found[0].selected_path->lexically_normal(),
+            path.lexically_normal());
+        EXPECT_FALSE(found[0].commit_uuid.is_nil());
+    }
+
+    TEST(ProjectRecoveryScratch, RemoveDeletesUnlockedScratch) {
+        TemporaryDirectory temporary;
+        const auto dir = temporary.path / "recovery";
+        fs::create_directories(dir);
+        const auto uuid = lfs::core::generate_uuid_v4();
+        const auto path = scratch_autosave_path(dir, uuid);
+        create_single_chunk_fixture(
+            path, 2011, 2012, 2013,
+            fixed_key("SCNG", 2014),
+            recoverable_scene_graph_payload());
+        auto removed = remove_scratch_autosave(path);
+        ASSERT_TRUE(removed)
+            << lfs::format_for_developer(removed.error());
+        EXPECT_FALSE(fs::exists(path));
+    }
+
+    TEST(ProjectRecoveryScratch, SweepSkipsLiveLockedScratch) {
+        TemporaryDirectory temporary;
+        const auto dir = temporary.path / "recovery";
+        fs::create_directories(dir);
+        const auto uuid = lfs::core::generate_uuid_v4();
+        const auto path = scratch_autosave_path(dir, uuid);
+        create_single_chunk_fixture(
+            path, 2021, 2022, 2023,
+            fixed_key("SCNG", 2024),
+            recoverable_scene_graph_payload());
+        auto lease = WriterLockLease::acquire(path);
+        ASSERT_TRUE(lease)
+            << lfs::format_for_developer(lease.error());
+        sweep_stale_scratch_autosaves(dir);
+        EXPECT_TRUE(fs::is_regular_file(path));
+        auto found = scan_scratch_autosaves(dir);
+        EXPECT_TRUE(found.empty());
+    }
+
+    TEST(ProjectRecoveryScratch, SweepRemovesEmptyUnlockedScratch) {
+        TemporaryDirectory temporary;
+        const auto dir = temporary.path / "recovery";
+        fs::create_directories(dir);
+        const auto uuid = lfs::core::generate_uuid_v4();
+        const auto path = scratch_autosave_path(dir, uuid);
+        create_single_chunk_fixture(
+            path, 2031, 2032, 2033,
+            fixed_key("PROJ", 2034),
+            R"({"scratch":"empty"})");
+        ASSERT_TRUE(fs::is_regular_file(path));
+        sweep_stale_scratch_autosaves(dir);
+        EXPECT_FALSE(fs::exists(path));
+        auto found = scan_scratch_autosaves(dir);
+        EXPECT_TRUE(found.empty());
     }
 
     TEST(ProjectPathTest, IsPublishedLichtPathTable) {

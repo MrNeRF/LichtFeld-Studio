@@ -21,6 +21,7 @@
 #include "gui/scene_tree_session.hpp"
 #include "gui/ui_context.hpp"
 #include "input/input_controller.hpp"
+#include "io/capture_omit_filter.hpp"
 #include "io/video/video_export_options.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -1899,7 +1900,9 @@ namespace lfs::vis::project {
         const std::vector<
             CameraBookmarkProjectState>& bookmarks,
         lfs::io::project::ReferencesChapter* references,
-        const std::filesystem::path& project_root) {
+        const std::filesystem::path& project_root,
+        const std::span<const lfs::core::Uuid>
+            omit_node_uuids) {
         auto result = retained;
         const auto* gui_manager =
             viewer.getGuiManager();
@@ -1916,6 +1919,9 @@ namespace lfs::vis::project {
                 "GUI session capture requires initialized GUI, window, renderer, and input owners",
                 "session.capture");
         }
+        const lfs::io::project::CaptureOmitFilter
+            omit_filter(
+                viewer.getScene(), omit_node_uuids);
 
         const auto layout =
             gui_manager->panelLayout()
@@ -1940,8 +1946,14 @@ namespace lfs::vis::project {
                 gui_manager->captureSceneTreeChrome(
                     viewer.getScene());
             Json collapsed = Json::array();
-            for (const auto& uuid : tree.collapsed_uuids)
+            for (const auto& uuid : tree.collapsed_uuids) {
+                const auto parsed =
+                    lfs::core::Uuid::from_string(uuid);
+                if (parsed && omit_filter.omits(*parsed)) {
+                    continue;
+                }
                 collapsed.push_back(uuid);
+            }
             fixed_payload["scene_tree"] = Json{
                 {"collapsed_uuids", std::move(collapsed)},
                 {"models_collapsed", tree.models_collapsed},
@@ -2406,7 +2418,9 @@ namespace lfs::vis::project {
             controller.saveToJson().dump());
         Json clips = Json::array();
         if (const auto* clip =
-                controller.plySequence()) {
+                controller.plySequence();
+            clip &&
+            !omit_filter.omits(clip->node_uuid)) {
             const auto retained_clips =
                 result.sequencer.dom()
                     .get_json("ply_sequences");
@@ -2572,7 +2586,9 @@ namespace lfs::vis::project {
             merged_clips->is_array()) {
             Json current_clips = Json::array();
             if (const auto* clip =
-                    controller.plySequence()) {
+                    controller.plySequence();
+                clip &&
+                !omit_filter.omits(clip->node_uuid)) {
                 const auto clip_uuid =
                     clip->node_uuid.to_string();
                 for (auto& entry :

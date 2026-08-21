@@ -15,6 +15,11 @@
     "file.recent_missing_message": "Le fichier de projet est introuvable :\n{path}",
     "file.remove_from_recent": "Retirer des récents",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Importer",
+    "file.import_failed": "Échec de l’importation",
+    "file.import_failed_message": "Impossible d’importer :\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "Le dossier sélectionné n’est pas reconnu comme un dataset pris en charge :\n{path}",
+    "file.checkpoint_not_recognized": "Le fichier sélectionné n’est pas reconnu comme un checkpoint valide :\n{path}",
     "file.import_dataset": "Importer un Dataset",
     "file.import_ply": "Importer un PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Importer un Mesh",
@@ -1265,7 +1270,11 @@
     "min_track_length": "Longueur minimale de piste",
     "min_track_length_hint": "Conserve les points Sparse observés dans au moins ce nombre d'images. 0 désactive le filtrage.",
     "min_track_length_init_warning": "Ignoré lorsqu'un Init PLY est défini.",
-    "apply_auto_crop": "Appliquer le recadrage automatique"
+    "apply_auto_crop": "Appliquer le recadrage automatique",
+    "save_title": "Enregistrer le projet ?",
+    "save_message": "Enregistrer le projet actuel avant de charger le nouveau dataset ?",
+    "save_and_load": "Enregistrer et charger",
+    "load_without_saving": "Charger sans enregistrer"
   },
   "notification": {
     "dropped_not_recognized": "L'élément déposé",
@@ -2395,6 +2404,14 @@
       "title": "Entraîneur non restauré",
       "message": "Le modèle du projet est disponible pour la visualisation, mais l'entraînement n'a pas pu être repris. Vérifiez le chemin du jeu de données et les journaux."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio s'est fermé de façon inattendue",
+    "body": "Un fichier de récupération a été trouvé pour {}. (enregistré {})",
+    "unsaved_session": "une session non enregistrée",
+    "recover": "Récupérer",
+    "open_saved": "Ouvrir l'enregistrement",
+    "skip": "Ignorer et créer un nouveau"
   },
   "startup_recent": {
     "title": "Projets récents",

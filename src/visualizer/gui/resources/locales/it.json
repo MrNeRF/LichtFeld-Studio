@@ -15,6 +15,11 @@
     "file.recent_missing_message": "Impossibile trovare il file di progetto:\n{path}",
     "file.remove_from_recent": "Rimuovi dai recenti",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Importa",
+    "file.import_failed": "Importazione non riuscita",
+    "file.import_failed_message": "Impossibile importare:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "La cartella selezionata non è riconosciuta come dataset supportato:\n{path}",
+    "file.checkpoint_not_recognized": "Il file selezionato non è riconosciuto come checkpoint valido:\n{path}",
     "file.import_dataset": "Importa Dataset",
     "file.import_ply": "Importa PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Importa Mesh",
@@ -1264,7 +1269,11 @@
     "min_track_length": "Lunghezza minima traccia",
     "min_track_length_hint": "Mantiene i punti sparsi osservati in almeno questo numero di immagini. 0 disattiva il filtro.",
     "min_track_length_init_warning": "Ignorato quando è impostato Init PLY.",
-    "apply_auto_crop": "Applica ritaglio automatico"
+    "apply_auto_crop": "Applica ritaglio automatico",
+    "save_title": "Salvare il progetto?",
+    "save_message": "Salvare il progetto corrente prima di caricare il nuovo dataset?",
+    "save_and_load": "Salva e carica",
+    "load_without_saving": "Carica senza salvare"
   },
   "notification": {
     "dropped_not_recognized": "L'elemento trascinato",
@@ -2394,6 +2403,14 @@
       "title": "Trainer non ripristinato",
       "message": "Il modello del progetto è disponibile per la visualizzazione, ma non è stato possibile riprendere l'addestramento. Controlla il percorso del dataset e i log."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio si è chiuso inaspettatamente",
+    "body": "È stato trovato un file di ripristino per {}. (salvato {})",
+    "unsaved_session": "una sessione non salvata",
+    "recover": "Ripristina",
+    "open_saved": "Apri salvato",
+    "skip": "Salta e crea nuovo"
   },
   "startup_recent": {
     "title": "Progetti recenti",

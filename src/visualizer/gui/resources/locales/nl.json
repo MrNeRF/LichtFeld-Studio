@@ -15,6 +15,11 @@
     "file.recent_missing_message": "Het projectbestand kon niet worden gevonden:\n{path}",
     "file.remove_from_recent": "Verwijderen uit recente projecten",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Importeren",
+    "file.import_failed": "Importeren mislukt",
+    "file.import_failed_message": "Kan niet importeren:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "De geselecteerde map wordt niet herkend als een ondersteunde dataset:\n{path}",
+    "file.checkpoint_not_recognized": "Het geselecteerde bestand wordt niet herkend als een geldig checkpoint:\n{path}",
     "file.import_dataset": "Dataset Importeren",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USD Importeren",
     "file.import_mesh": "Mesh Importeren",
@@ -1264,7 +1269,11 @@
     "min_track_length": "Minimale spoorlengte",
     "min_track_length_hint": "Behoudt Sparse-punten die in minstens zoveel afbeeldingen zijn waargenomen. 0 schakelt de filtering uit.",
     "min_track_length_init_warning": "Wordt genegeerd zolang Init PLY is ingesteld.",
-    "apply_auto_crop": "Automatisch bijsnijden toepassen"
+    "apply_auto_crop": "Automatisch bijsnijden toepassen",
+    "save_title": "Project opslaan?",
+    "save_message": "Het huidige project opslaan voordat de nieuwe dataset wordt geladen?",
+    "save_and_load": "Opslaan en laden",
+    "load_without_saving": "Laden zonder opslaan"
   },
   "notification": {
     "dropped_not_recognized": "Het gesleepte",
@@ -2394,6 +2403,14 @@
       "title": "Trainer niet hersteld",
       "message": "Het projectmodel is beschikbaar om te bekijken, maar training kon niet worden hervat. Controleer het datasetpad en de logboeken."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio is onverwacht afgesloten",
+    "body": "Er is een herstelbestand gevonden voor {}. (opgeslagen {})",
+    "unsaved_session": "een niet-opgeslagen sessie",
+    "recover": "Herstellen",
+    "open_saved": "Opgeslagen openen",
+    "skip": "Overslaan en nieuw maken"
   },
   "startup_recent": {
     "title": "Recente projecten",

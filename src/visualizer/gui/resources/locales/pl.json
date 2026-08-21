@@ -15,6 +15,11 @@
     "file.recent_missing_message": "Nie można znaleźć pliku projektu:\n{path}",
     "file.remove_from_recent": "Usuń z ostatnich projektów",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Importuj",
+    "file.import_failed": "Import nie powiódł się",
+    "file.import_failed_message": "Nie można zaimportować:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "Wybrany folder nie został rozpoznany jako obsługiwany zbiór danych:\n{path}",
+    "file.checkpoint_not_recognized": "Wybrany plik nie został rozpoznany jako prawidłowy checkpoint:\n{path}",
     "file.import_dataset": "Importuj Zbiór Danych",
     "file.import_ply": "Importuj PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Importuj Mesh",
@@ -1264,7 +1269,11 @@
     "min_track_length": "Minimalna długość ścieżki",
     "min_track_length_hint": "Zachowuje punkty Sparse obserwowane w co najmniej tylu obrazach. 0 wyłącza filtrowanie.",
     "min_track_length_init_warning": "Ignorowane, gdy ustawiono Init PLY.",
-    "apply_auto_crop": "Zastosuj automatyczne kadrowanie"
+    "apply_auto_crop": "Zastosuj automatyczne kadrowanie",
+    "save_title": "Zapisać projekt?",
+    "save_message": "Zapisać bieżący projekt przed wczytaniem nowego zbioru danych?",
+    "save_and_load": "Zapisz i wczytaj",
+    "load_without_saving": "Wczytaj bez zapisywania"
   },
   "notification": {
     "dropped_not_recognized": "Upuszczony",
@@ -2394,6 +2403,14 @@
       "title": "Nie przywrócono trenera",
       "message": "Model projektu jest dostępny do podglądu, ale nie udało się wznowić treningu. Sprawdź ścieżkę zestawu danych i logi."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio zostało nieoczekiwanie zamknięte",
+    "body": "Znaleziono plik odzyskiwania dla {}. (zapisano {})",
+    "unsaved_session": "niezapisana sesja",
+    "recover": "Odzyskaj",
+    "open_saved": "Otwórz zapisany",
+    "skip": "Pomiń i utwórz nowy"
   },
   "startup_recent": {
     "title": "Ostatnie projekty",

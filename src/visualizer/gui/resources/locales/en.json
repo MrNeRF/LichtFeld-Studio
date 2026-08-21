@@ -15,6 +15,11 @@
     "file.recent_missing_message": "The project file could not be found:\n{path}",
     "file.remove_from_recent": "Remove from Recent",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Import",
+    "file.import_failed": "Import Failed",
+    "file.import_failed_message": "Could not import:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "The selected folder is not recognized as a supported dataset:\n{path}",
+    "file.checkpoint_not_recognized": "The selected file is not recognized as a valid checkpoint:\n{path}",
     "file.import_dataset": "Import Dataset",
     "file.import_ply": "Import PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Import Mesh",
@@ -1264,7 +1269,11 @@
     "min_track_length": "Minimum Track Length",
     "min_track_length_hint": "Keeps sparse points observed in at least this many images. 0 disables filtering.",
     "min_track_length_init_warning": "Ignored while Init PLY is set.",
-    "apply_auto_crop": "Apply Auto Crop"
+    "apply_auto_crop": "Apply Auto Crop",
+    "save_title": "Save Project?",
+    "save_message": "Save the current project before loading the new dataset?",
+    "save_and_load": "Save and Load",
+    "load_without_saving": "Load without saving"
   },
   "notification": {
     "dropped_not_recognized": "The dropped",
@@ -2394,6 +2403,14 @@
       "title": "Trainer not restored",
       "message": "The project model is available for viewing, but training could not be resumed. Check the dataset path and logs."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio closed unexpectedly",
+    "body": "A recovery file was found for {}. (saved {})",
+    "unsaved_session": "an unsaved session",
+    "recover": "Recover",
+    "open_saved": "Open saved",
+    "skip": "Skip and create new"
   },
   "startup_recent": {
     "title": "Recent Projects",

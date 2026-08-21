@@ -1931,6 +1931,9 @@ namespace lfs::vis {
         const auto active_resize = service.handleViewportResize({800, 600});
         EXPECT_EQ(active_resize.dirty, DirtyFlag::OVERLAY);
         EXPECT_FALSE(active_resize.completed);
+        EXPECT_TRUE(active_resize.render_resized_frame);
+        EXPECT_TRUE(active_resize.use_interactive_render_scale);
+        EXPECT_FALSE(active_resize.require_immediate_output_resize);
         EXPECT_TRUE(service.isResizeDeferring());
 
         EXPECT_EQ(service.setViewportResizeActive(false),
@@ -1960,6 +1963,9 @@ namespace lfs::vis {
         const auto passive_resize = service.handleViewportResize({800, 600});
         EXPECT_EQ(passive_resize.dirty, DirtyFlag::OVERLAY);
         EXPECT_FALSE(passive_resize.completed);
+        EXPECT_TRUE(passive_resize.render_resized_frame);
+        EXPECT_TRUE(passive_resize.use_interactive_render_scale);
+        EXPECT_FALSE(passive_resize.require_immediate_output_resize);
         EXPECT_TRUE(service.isResizeDeferring());
 
         EXPECT_EQ(service.handleViewportResize({800, 600}).dirty, DirtyFlag::OVERLAY);
@@ -1970,6 +1976,30 @@ namespace lfs::vis {
         EXPECT_EQ(completed.dirty, DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
         EXPECT_TRUE(completed.completed);
         EXPECT_FALSE(service.isResizeDeferring());
+    }
+
+    TEST(ViewportFrameLifecycleServiceTest, DiscreteLayoutResizeRendersAtFullResolution) {
+        ViewportFrameLifecycleService service;
+
+        EXPECT_EQ(service.handleViewportResize({640, 480}).dirty,
+                  DirtyFlag::VIEWPORT | DirtyFlag::CAMERA | DirtyFlag::OVERLAY);
+        EXPECT_EQ(service.setViewportResizeActive(
+                      true, ViewportResizeRenderPolicy::FullResolution),
+                  0u);
+
+        const auto layout_resize = service.handleViewportResize({960, 480});
+        EXPECT_EQ(layout_resize.dirty, DirtyFlag::OVERLAY);
+        EXPECT_TRUE(layout_resize.render_resized_frame);
+        EXPECT_FALSE(layout_resize.use_interactive_render_scale);
+        EXPECT_TRUE(layout_resize.require_immediate_output_resize);
+        EXPECT_TRUE(service.isResizeDeferring());
+
+        const auto guarded_frame = service.handleViewportResize({960, 480});
+        EXPECT_FALSE(guarded_frame.render_resized_frame);
+        EXPECT_TRUE(guarded_frame.require_immediate_output_resize);
+
+        EXPECT_EQ(service.setViewportResizeActive(false),
+                  DirtyFlag::VIEWPORT | DirtyFlag::CAMERA | DirtyFlag::OVERLAY);
     }
 
     TEST(ViewportFrameLifecycleServiceTest, ExplicitRefreshDeferralCompletesAfterStableFrames) {

@@ -6,6 +6,8 @@
 #include "io/project_recovery.hpp"
 
 #include "core/logger.hpp"
+#include "core/uuid.hpp"
+#include "io/project_chapters.hpp"
 #include "project_container_internal.hpp"
 #include "project_recovery_internal.hpp"
 
@@ -65,6 +67,49 @@ namespace lfs::io::project {
                     code, path, std::move(message),
                     std::move(detail), field);
             }
+        }
+
+        [[nodiscard]] bool is_scratch_payload_fourcc(
+            const Fourcc fourcc) {
+            return fourcc == FOURCC_SPLT ||
+                   fourcc == FOURCC_PCLD ||
+                   fourcc == FOURCC_MESH ||
+                   fourcc == FOURCC_CKPT ||
+                   fourcc == FOURCC_PPIS;
+        }
+
+        // Same content bar as New Project's blank untitled
+        // session: no scene nodes and no payload chapters.
+        [[nodiscard]] bool
+        scratch_has_recoverable_content(
+            const ProjectReader& reader) {
+            for (const auto& chunk : reader.chunks()) {
+                if (!chunk.is_live()) {
+                    continue;
+                }
+                if (is_scratch_payload_fourcc(
+                        chunk.key.fourcc)) {
+                    return true;
+                }
+                if (chunk.key.fourcc != FOURCC_SCNG) {
+                    continue;
+                }
+                auto bytes = reader.read_chunk(chunk);
+                if (!bytes) {
+                    continue;
+                }
+                auto chapter =
+                    SceneGraphChapter::from_bytes(
+                        *bytes);
+                if (!chapter) {
+                    continue;
+                }
+                auto nodes = chapter->nodes();
+                if (nodes && !nodes->empty()) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         [[nodiscard]] bool
@@ -765,6 +810,41 @@ namespace lfs::io::project {
         return result;
     }
 
+    std::filesystem::path scratch_autosave_path(
+        const std::filesystem::path& recovery_directory,
+        const lfs::core::Uuid& session_uuid) {
+        return recovery_directory /
+               (session_uuid.to_string() + ".licht");
+    }
+
+    bool is_scratch_autosave_path(
+        const std::filesystem::path& path,
+        const std::filesystem::path& recovery_directory) {
+        if (path.empty() || recovery_directory.empty()) {
+            return false;
+        }
+        const auto normalized_path =
+            path.lexically_normal();
+        const auto normalized_dir =
+            recovery_directory.lexically_normal();
+        if (normalized_path.parent_path() !=
+            normalized_dir) {
+            return false;
+        }
+        const auto name =
+            normalized_path.filename().string();
+        constexpr std::string_view extension = ".licht";
+        if (name.size() <= extension.size() ||
+            !name.ends_with(extension)) {
+            return false;
+        }
+        const auto stem = name.substr(
+            0, name.size() - extension.size());
+        const auto uuid =
+            lfs::core::Uuid::from_string(stem);
+        return uuid && !uuid->is_nil();
+    }
+
     std::filesystem::path recovery_session_temp_path(
         const std::filesystem::path& master_path) {
         return master_path.parent_path() /
@@ -1065,6 +1145,200 @@ namespace lfs::io::project {
         }
     }
 
+    lfs::Result<void> remove_scratch_autosave(
+        const std::filesystem::path& scratch_path) {
+        if (scratch_path.empty()) {
+            return {};
+        }
+        {
+            auto lock =
+                detail::WriterLock::acquire(
+                    scratch_path);
+            if (!lock) {
+                return lfs::Result<void>::failure(
+                    std::move(lock).error());
+            }
+            if (auto removed = remove_path(scratch_path);
+                !removed) {
+                return removed;
+            }
+        }
+        auto lock_path = scratch_path;
+        lock_path += ".lock";
+        std::error_code ignored;
+        std::filesystem::remove(lock_path, ignored);
+        return {};
+    }
+
+    lfs::Result<RecoveryInspection>
+    inspect_scratch_autosave(
+        const std::filesystem::path& scratch_path) {
+        auto lock =
+            detail::WriterLock::acquire(scratch_path);
+        if (!lock) {
+            return std::move(lock).error();
+        }
+        RecoveryInspection result;
+        result.untitled_scratch = true;
+        ReaderOptions inspection_options;
+        inspection_options
+            .allow_unsupported_inspection = true;
+        auto reader = ProjectReader::open(
+            scratch_path, inspection_options);
+        if (!reader) {
+            result.disposition =
+                RecoveryDisposition::Invalid;
+            result.diagnostics.push_back(
+                std::format(
+                    "{}: {}",
+                    scratch_path.filename().string(),
+                    lfs::format_for_developer(
+                        reader.error())));
+            return result;
+        }
+        if (reader->superblock().role !=
+            ContainerRole::Master) {
+            result.disposition =
+                RecoveryDisposition::Invalid;
+            result.diagnostics.push_back(
+                std::format(
+                    "{}: scratch recovery requires a complete master",
+                    scratch_path.filename().string()));
+            return result;
+        }
+        if (auto verified = reader->verify_all();
+            !verified) {
+            result.disposition =
+                RecoveryDisposition::Invalid;
+            result.diagnostics.push_back(
+                std::format(
+                    "{}: {}",
+                    scratch_path.filename().string(),
+                    lfs::format_for_developer(
+                        verified.error())));
+            return result;
+        }
+        if (!scratch_has_recoverable_content(*reader)) {
+            result.disposition =
+                RecoveryDisposition::Invalid;
+            result.diagnostics.push_back(
+                std::format(
+                    "{}: empty untitled scratch has no recoverable content",
+                    scratch_path.filename().string()));
+            return result;
+        }
+        result.disposition = RecoveryDisposition::Offer;
+        result.selected_path =
+            scratch_path.lexically_normal();
+        result.autosave_sequence =
+            reader->superblock().autosave_sequence;
+        result.snapshot_uuid =
+            reader->commit().snapshot_uuid;
+        result.commit_uuid =
+            reader->commit().commit_uuid;
+        result.wallclock_unix_ns =
+            reader->commit().wallclock_unix_ns;
+        return result;
+    }
+
+    void sweep_stale_scratch_autosaves(
+        const std::filesystem::path& recovery_directory) {
+        if (recovery_directory.empty()) {
+            return;
+        }
+        std::error_code error;
+        if (!std::filesystem::is_directory(
+                recovery_directory, error) ||
+            error) {
+            return;
+        }
+        std::vector<std::filesystem::path> candidates;
+        for (std::filesystem::directory_iterator
+                 iterator(recovery_directory, error),
+             end;
+             !error && iterator != end;
+             iterator.increment(error)) {
+            std::error_code type_error;
+            if (!iterator->is_regular_file(type_error) ||
+                type_error) {
+                continue;
+            }
+            const auto entry = iterator->path();
+            const auto filename =
+                entry.filename().string();
+            if (filename.ends_with(".lock")) {
+                continue;
+            }
+            candidates.push_back(entry);
+        }
+        for (const auto& entry : candidates) {
+            if (!is_scratch_autosave_path(
+                    entry, recovery_directory)) {
+                try_remove_unheld_artifact(entry, true);
+                continue;
+            }
+            auto inspection =
+                inspect_scratch_autosave(entry);
+            if (!inspection) {
+                if (inspection.error().code() ==
+                    lfs::ErrorCode::Unavailable) {
+                    continue;
+                }
+                try_remove_unheld_artifact(entry, true);
+                continue;
+            }
+            if (inspection->disposition ==
+                RecoveryDisposition::Invalid) {
+                try_remove_unheld_artifact(entry, true);
+            }
+        }
+    }
+
+    std::vector<RecoveryInspection>
+    scan_scratch_autosaves(
+        const std::filesystem::path& recovery_directory) {
+        std::vector<RecoveryInspection> result;
+        if (recovery_directory.empty()) {
+            return result;
+        }
+        std::error_code error;
+        if (!std::filesystem::is_directory(
+                recovery_directory, error) ||
+            error) {
+            return result;
+        }
+        for (std::filesystem::directory_iterator
+                 iterator(recovery_directory, error),
+             end;
+             !error && iterator != end;
+             iterator.increment(error)) {
+            std::error_code type_error;
+            if (!iterator->is_regular_file(type_error) ||
+                type_error) {
+                continue;
+            }
+            const auto entry = iterator->path();
+            if (!is_scratch_autosave_path(
+                    entry, recovery_directory)) {
+                continue;
+            }
+            auto inspection =
+                inspect_scratch_autosave(entry);
+            if (!inspection) {
+                continue;
+            }
+            if (inspection->disposition ==
+                RecoveryDisposition::Offer) {
+                result.push_back(std::move(*inspection));
+            } else if (
+                inspection->disposition ==
+                RecoveryDisposition::Invalid) {
+                try_remove_unheld_artifact(entry, true);
+            }
+        }
+        return result;
+    }
+
     namespace detail {
 
         lfs::Result<std::vector<ValidBoundAutosave>>
@@ -1133,6 +1407,7 @@ namespace lfs::io::project {
             std::uint64_t sequence = 0;
             std::uint64_t wallclock_unix_ns = 0;
             lfs::core::Uuid snapshot_uuid;
+            lfs::core::Uuid commit_uuid;
         };
         std::vector<Valid> valid;
         const auto stable =
@@ -1221,6 +1496,8 @@ namespace lfs::io::project {
                 .snapshot_uuid =
                     sidecar->superblock()
                         .sidecar_snapshot_uuid,
+                .commit_uuid =
+                    sidecar->commit().commit_uuid,
             });
         }
 
@@ -1288,6 +1565,10 @@ namespace lfs::io::project {
         result.selected_path = winner.path;
         result.autosave_sequence = winner.sequence;
         result.snapshot_uuid = winner.snapshot_uuid;
+        result.commit_uuid = winner.commit_uuid;
+        result.wallclock_unix_ns =
+            winner.wallclock_unix_ns;
+        result.untitled_scratch = false;
         return result;
     }
 

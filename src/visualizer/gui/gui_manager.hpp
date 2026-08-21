@@ -60,6 +60,11 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
     class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
     class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
+    class VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
+    class VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+    class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+    class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
+    class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
 
     namespace gui {
         class NativeScenePanel;
@@ -118,6 +123,9 @@ namespace lfs::vis {
             // Viewport region access
             glm::vec2 getViewportPos() const;
             glm::vec2 getViewportSize() const;
+            glm::vec2 getSceneRenderViewportPos() const;
+            glm::vec2 getSceneRenderViewportSize() const;
+            void commitUiVisibilityTransitionIfFrameReady(bool frame_ready);
             bool isViewportFocused() const;
             bool isPositionInViewport(double x, double y) const;
             bool isPositionOverFloatingPanel(double x, double y) const;
@@ -202,6 +210,11 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
+            friend class lfs::vis::VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
+            friend class lfs::vis::VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
             [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;
@@ -251,10 +264,15 @@ namespace lfs::vis {
             void queueUiVisibilityToggle();
             void requestUiVisibilityToggle();
             void updateUiVisibilityTransition();
+            void commitUiVisibilityTransition(bool matched_frame);
             void queueFullscreenToggle();
             void requestFullscreenToggle();
             void updateFullscreenTransition();
-            void beginInteractiveTransitionGuard();
+            enum class InteractiveTransitionTrainingPolicy {
+                KeepRunning,
+                PauseAndResume,
+            };
+            void beginInteractiveTransitionGuard(InteractiveTransitionTrainingPolicy training_policy);
             void updateInteractiveTransitionGuard();
             void endInteractiveTransitionGuard();
 
@@ -293,6 +311,11 @@ namespace lfs::vis {
             PerfSampler perf_sampler_;
             std::chrono::steady_clock::time_point ui_toggle_next_allowed_at_{};
             bool ui_toggle_pending_ = false;
+            bool ui_visibility_resize_active_ = false;
+            bool ui_visibility_layout_committed_ = false;
+            bool ui_visibility_target_ready_ = false;
+            bool ui_visibility_target_hidden_ = false;
+            ViewportLayout ui_visibility_target_layout_{};
             std::chrono::steady_clock::time_point fullscreen_toggle_next_allowed_at_{};
             std::chrono::steady_clock::time_point interactive_transition_guard_until_{};
             bool fullscreen_toggle_pending_ = false;
@@ -365,6 +388,7 @@ namespace lfs::vis {
             // Native panel wrapper storage (registered with PanelRegistry)
             std::vector<std::shared_ptr<IPanel>> native_panel_storage_;
             std::shared_ptr<NativeScenePanel> native_scene_panel_;
+            SceneTreeSessionChrome pending_scene_tree_chrome_;
             uint64_t panel_frame_serial_ = 0;
             uint8_t ui_layout_settle_frames_ = 0;
             EditorContextUpdateStamp last_editor_context_update_stamp_;

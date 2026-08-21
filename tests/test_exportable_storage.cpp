@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <string_view>
 #include <vector>
 
@@ -51,6 +52,42 @@ namespace {
         for (std::size_t i = 0; i < floats; ++i) {
             EXPECT_FLOAT_EQ(host[i], base + static_cast<float>(i)) << "index " << i;
         }
+    }
+
+    // SH1 pad-dropped q16 cells (9/prim) != IEEE-f16 floats (12/prim). N is not a
+    // reorder multiple so padding is also exercised. Matches the #1678 prune size class.
+    constexpr std::size_t kQ16Sh1N = 33;
+    constexpr int kQ16Sh1Degree = 1;
+
+    [[nodiscard]] uint32_t q16_sh1_rest() {
+        return static_cast<uint32_t>(sh_rest_coefficients_for_degree(kQ16Sh1Degree));
+    }
+
+    SplatData make_direct_q16_sh1(const bool with_bounds, const int active_sh) {
+        const auto rest = q16_sh1_rest();
+        const size_t cells = sh_value_quant::sh_value_u16_count(kQ16Sh1N, rest);
+        const size_t bounds_n = sh_value_quant::n_bounds_for_prims(kQ16Sh1N) * 2u;
+        Tensor means = Tensor::zeros({kQ16Sh1N, 3}, Device::CUDA);
+        Tensor sh0 = Tensor::zeros({kQ16Sh1N, 1, 3}, Device::CUDA);
+        Tensor scaling = Tensor::zeros({kQ16Sh1N, 3}, Device::CUDA);
+        Tensor rotation = Tensor::zeros({kQ16Sh1N, 4}, Device::CUDA);
+        Tensor opacity = Tensor::zeros({kQ16Sh1N, 1}, Device::CUDA);
+        Tensor shN = Tensor::zeros_direct(
+            TensorShape({cells}), cells, Device::CUDA, DataType::Float16);
+        Tensor bounds = Tensor::zeros({bounds_n}, Device::CUDA, DataType::Float32);
+        SplatData model(kQ16Sh1Degree,
+                        std::move(means),
+                        std::move(sh0),
+                        std::move(shN),
+                        std::move(scaling),
+                        std::move(rotation),
+                        std::move(opacity),
+                        1.0f,
+                        SplatData::ShNLayout::Swizzled);
+        if (with_bounds) {
+            model.set_active_sh_degree(active_sh, std::move(bounds));
+        }
+        return model;
     }
 
 } // namespace
@@ -1272,4 +1309,71 @@ TEST(SplatExportableStorageTest, Q16BindPtrsSurviveGrowUnderHeldView) {
               storage.live_region_ptr(SplatExportableStorage::ShN));
     EXPECT_TRUE(q16.generation_checked);
     EXPECT_EQ(q16.generation, storage.generation());
+}
+
+// #1678: pad-dropped q16 codes whose cell count differs from IEEE-f16 floats
+// (SH1) must not be treated as corrupted when bounds are installed with the
+// degree setter. One-arg set_active_sh_degree is the tripwire; the two-arg
+// helper attaches bounds first.
+TEST(SplatExportableStorageTest, SetActiveShDegreeInstallsQ16BoundsBeforeValidation) {
+    require_cuda();
+
+    const auto rest = q16_sh1_rest();
+    ASSERT_NE(sh_value_quant::sh_value_u16_count(kQ16Sh1N, rest),
+              sh_swizzled_float_count(kQ16Sh1N, rest));
+
+    {
+        SplatData missing_bounds = make_direct_q16_sh1(/*with_bounds=*/false, /*active_sh=*/1);
+        ASSERT_TRUE(missing_bounds.shN_raw().is_valid());
+        ASSERT_EQ(missing_bounds.shN_raw().dtype(), DataType::Float16);
+        ASSERT_EQ(static_cast<size_t>(missing_bounds.shN_raw().numel()),
+                  sh_value_quant::sh_value_u16_count(kQ16Sh1N, rest));
+        ASSERT_FALSE(missing_bounds.shN_value_quantized());
+        EXPECT_THROW(missing_bounds.set_active_sh_degree(1), std::runtime_error);
+    }
+
+    SplatData model = make_direct_q16_sh1(/*with_bounds=*/true, /*active_sh=*/0);
+    EXPECT_EQ(model.get_active_sh_degree(), 0);
+    EXPECT_TRUE(model.shN_value_quantized());
+    EXPECT_NO_THROW(model.set_active_sh_degree(1));
+    EXPECT_EQ(model.get_active_sh_degree(), 1);
+}
+
+// Post-prune path: q16 lives on cuda.direct allocations, then
+// migrateTrainingModelToAllocator copies codes+bounds into exportable storage
+// and restores the active degree. Previously set_active_sh_degree ran before
+// bounds were attached and threw "q16 codes without bounds".
+TEST(SplatExportableStorageTest, MigrateQ16Sh1DirectAllocationsAppliesDegree) {
+    require_cuda();
+
+    const auto rest = q16_sh1_rest();
+    ASSERT_NE(sh_value_quant::sh_value_u16_count(kQ16Sh1N, rest),
+              sh_swizzled_float_count(kQ16Sh1N, rest));
+
+    constexpr std::size_t kCap = 128;
+    constexpr int kActiveSh = 0;
+
+    SplatData model = make_direct_q16_sh1(/*with_bounds=*/true, kActiveSh);
+    ASSERT_TRUE(model.shN_value_quantized());
+    ASSERT_EQ(model.get_active_sh_degree(), kActiveSh);
+    ASSERT_NE(model.means_raw().external_storage_kind(), "splat.exportable");
+
+    auto storage_result = SplatExportableStorage::create(kCap, kQ16Sh1Degree, 0, kCap);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+
+    lfs::core::param::TrainingParameters params;
+    params.optimization.sh_degree = kQ16Sh1Degree;
+    params.optimization.max_cap = static_cast<int>(kCap);
+
+    auto result = lfs::training::migrateTrainingModelToAllocator(
+        params, model, storage.make_allocator());
+    ASSERT_TRUE(result.has_value()) << result.error();
+    EXPECT_EQ(model.get_active_sh_degree(), kActiveSh);
+    EXPECT_TRUE(model.shN_value_quantized());
+    EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+    EXPECT_EQ(static_cast<std::size_t>(model.shN_raw().capacity()),
+              sh_value_quant::sh_value_u16_count(kCap, rest));
 }

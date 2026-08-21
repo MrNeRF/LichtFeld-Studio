@@ -132,13 +132,7 @@ namespace lfs::io {
                                           copy_to_allocator(model.opacity_raw(), "SplatData.opacity"),
                                           scene_scale,
                                           lfs::core::SplatData::ShNLayout::Swizzled);
-            if (shN_q16) {
-                // Codes and bounds are one declared representation. Install the
-                // bounds before active-degree validation so pad-dropped codes are
-                // never reinterpreted as IEEE f16 during a degraded re-home.
-                migrated.shN_value_bounds() = std::move(shN_bounds);
-            }
-            migrated.set_active_sh_degree(active_sh);
+            migrated.set_active_sh_degree(active_sh, std::move(shN_bounds));
             if (deleted.is_valid()) {
                 migrated.deleted() = std::move(deleted);
             }

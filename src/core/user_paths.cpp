@@ -346,7 +346,8 @@ namespace lfs::core {
     lfs::Status UserPaths::ensureDirectories() const {
         const std::filesystem::path directories[] = {
             config_dir_, data_dir_, cache_dir_, log_dir_, plugin_dir_, venv_dir_,
-            keymapDir(), presetDir(), assetLibraryDir(), backupDir()};
+            keymapDir(), presetDir(), assetLibraryDir(), backupDir(),
+            recoveryDir()};
         for (const auto& directory : directories) {
             std::error_code error;
             std::filesystem::create_directories(directory, error);
@@ -413,6 +414,9 @@ namespace lfs::core {
     std::filesystem::path UserPaths::presetDir() const { return data_dir_ / "presets"; }
     std::filesystem::path UserPaths::assetLibraryDir() const { return data_dir_ / "asset_library"; }
     std::filesystem::path UserPaths::backupDir() const { return data_dir_ / "backups"; }
+    std::filesystem::path UserPaths::recoveryDir() const {
+        return config_dir_.parent_path() / "recovery";
+    }
     std::filesystem::path UserPaths::mcpLogDir() const { return log_dir_ / "mcp"; }
     lfs::Status UserPaths::appendMcpLogLine(
         const std::filesystem::path& filename, const std::string& line) const {

@@ -3609,10 +3609,11 @@ namespace lfs::core {
                     src.opacity_raw().clone(),
                     src.get_scene_scale(),
                     lfs::core::SplatData::ShNLayout::Swizzled);
-                result->set_active_sh_degree(active_sh);
-                if (src.shN_value_quantized() && src.shN_value_bounds().is_valid()) {
-                    result->shN_value_bounds() = src.shN_value_bounds().clone();
-                }
+                result->set_active_sh_degree(
+                    active_sh,
+                    (src.shN_value_quantized() && src.shN_value_bounds().is_valid())
+                        ? src.shN_value_bounds().clone()
+                        : lfs::core::Tensor{});
                 return result;
             }
 
@@ -3713,10 +3714,11 @@ namespace lfs::core {
                         src->opacity_raw(),
                         src->get_scene_scale(),
                         lfs::core::SplatData::ShNLayout::Swizzled);
-                    result->set_active_sh_degree(active_sh);
-                    if (src->shN_value_quantized() && src->shN_value_bounds().is_valid()) {
-                        result->shN_value_bounds() = src->shN_value_bounds();
-                    }
+                    result->set_active_sh_degree(
+                        active_sh,
+                        (src->shN_value_quantized() && src->shN_value_bounds().is_valid())
+                            ? src->shN_value_bounds()
+                            : lfs::core::Tensor{});
                     return result;
                 }
 

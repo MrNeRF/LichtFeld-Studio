@@ -49,6 +49,40 @@ namespace {
             loaded->compaction_idle_seconds,
             30u);
         EXPECT_TRUE(loaded->mru.empty());
+        EXPECT_TRUE(loaded->dismissed_recovery.empty());
+    }
+
+    TEST(ProjectLifecycleSettingsTest,
+         RoundTripPersistsDismissedRecoveryIdentity) {
+        TemporaryDirectory temporary;
+        const auto settings_path =
+            temporary.path / "project_lifecycle.json";
+        const auto sidecar =
+            temporary.path / "scene.licht.autosave";
+        ProjectLifecycleSettings settings;
+        settings.dismissed_recovery.push_back({
+            .sidecar_path = sidecar,
+            .autosave_sequence = 4,
+            .commit_uuid = lfs::core::generate_uuid_v4(),
+        });
+        auto saved = saveProjectLifecycleSettings(
+            settings_path, settings);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        auto loaded =
+            loadProjectLifecycleSettings(settings_path);
+        ASSERT_TRUE(loaded)
+            << lfs::format_for_developer(loaded.error());
+        ASSERT_EQ(loaded->dismissed_recovery.size(), 1u);
+        EXPECT_EQ(
+            loaded->dismissed_recovery[0].sidecar_path.lexically_normal(),
+            sidecar.lexically_normal());
+        EXPECT_EQ(
+            loaded->dismissed_recovery[0].autosave_sequence,
+            4u);
+        EXPECT_EQ(
+            loaded->dismissed_recovery[0].commit_uuid,
+            settings.dismissed_recovery[0].commit_uuid);
     }
 
     TEST(ProjectLifecycleSettingsTest,

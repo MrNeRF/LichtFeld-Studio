@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "io/capture_omit_filter.hpp"
+#include "io/scene_chapter_adapter.hpp"
 #include "io/selection_chapter.hpp"
 #include "licht_test_support.hpp"
 
@@ -16,6 +18,7 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -27,6 +30,9 @@ namespace {
     using lfs::core::SelectionDomain;
     using lfs::core::Tensor;
     using lfs::core::Uuid;
+    using lfs::io::project::CaptureOmitFilter;
+    using lfs::io::project::SceneGraphChapter;
+    using lfs::io::project::SceneNodeRecord;
     using lfs::io::project::SelectionChapter;
     using lfs::io::project::SelectionMaskEncoding;
     using lfs::io::project::SelectionMaskSlice;
@@ -384,6 +390,173 @@ namespace {
         EXPECT_EQ(
             omitted->next_group_id(),
             full->next_group_id());
+    }
+
+    TEST(CaptureOmitFilterTest,
+         ClosesRootsOverDescendantsAndKeepsUnresolvableUuids) {
+        const Uuid parent = fixed_uuid(71);
+        const Uuid child = fixed_uuid(72);
+        const Uuid grandchild = fixed_uuid(73);
+        const Uuid sibling = fixed_uuid(74);
+        const Uuid missing = fixed_uuid(75);
+        Scene scene;
+        const auto parent_id = scene.restoreNodeWithUuid(
+            Scene::RestoreNodeDesc{
+                .uuid = parent,
+                .type = NodeType::GROUP,
+                .name = "parent",
+            });
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+        const auto child_id = scene.restoreNodeWithUuid(
+            Scene::RestoreNodeDesc{
+                .uuid = child,
+                .type = NodeType::GROUP,
+                .name = "child",
+                .parent = parent_id,
+            });
+        ASSERT_NE(child_id, lfs::core::NULL_NODE);
+        ASSERT_NE(
+            scene.restoreNodeWithUuid(
+                Scene::RestoreNodeDesc{
+                    .uuid = grandchild,
+                    .type = NodeType::GROUP,
+                    .name = "grandchild",
+                    .parent = child_id,
+                }),
+            lfs::core::NULL_NODE);
+        ASSERT_NE(
+            scene.restoreNodeWithUuid(
+                Scene::RestoreNodeDesc{
+                    .uuid = sibling,
+                    .type = NodeType::GROUP,
+                    .name = "sibling",
+                }),
+            lfs::core::NULL_NODE);
+
+        const std::array roots = {parent, missing};
+        const CaptureOmitFilter filter(scene, roots);
+        EXPECT_TRUE(filter.omits(parent));
+        EXPECT_TRUE(filter.omits(child));
+        EXPECT_TRUE(filter.omits(grandchild));
+        EXPECT_TRUE(filter.omits(missing));
+        EXPECT_FALSE(filter.omits(sibling));
+    }
+
+    TEST(SceneGraphChapterTest,
+         CaptureWithPreClosedOmitSetMatchesOmitRoots) {
+        const Uuid parent = fixed_uuid(81);
+        const Uuid child = fixed_uuid(82);
+        const Uuid grandchild = fixed_uuid(83);
+        const Uuid sibling = fixed_uuid(84);
+        Scene scene;
+        const auto parent_id = scene.restoreNodeWithUuid(
+            Scene::RestoreNodeDesc{
+                .uuid = parent,
+                .type = NodeType::GROUP,
+                .name = "parent",
+            });
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+        const auto child_id = scene.restoreNodeWithUuid(
+            Scene::RestoreNodeDesc{
+                .uuid = child,
+                .type = NodeType::GROUP,
+                .name = "child",
+                .parent = parent_id,
+            });
+        ASSERT_NE(child_id, lfs::core::NULL_NODE);
+        ASSERT_NE(
+            scene.restoreNodeWithUuid(
+                Scene::RestoreNodeDesc{
+                    .uuid = grandchild,
+                    .type = NodeType::GROUP,
+                    .name = "grandchild",
+                    .parent = child_id,
+                }),
+            lfs::core::NULL_NODE);
+        ASSERT_NE(
+            scene.restoreNodeWithUuid(
+                Scene::RestoreNodeDesc{
+                    .uuid = sibling,
+                    .type = NodeType::GROUP,
+                    .name = "sibling",
+                }),
+            lfs::core::NULL_NODE);
+
+        const std::array roots = {parent};
+        const std::array closed = {
+            parent, child, grandchild};
+        auto from_roots =
+            lfs::io::project::capture_scene_graph(
+                scene,
+                lfs::io::project::ScenePayloadBindings{},
+                roots);
+        ASSERT_TRUE(from_roots)
+            << lfs::format_for_developer(
+                   from_roots.error());
+        auto from_closed =
+            lfs::io::project::capture_scene_graph(
+                scene,
+                lfs::io::project::ScenePayloadBindings{},
+                closed);
+        ASSERT_TRUE(from_closed)
+            << lfs::format_for_developer(
+                   from_closed.error());
+        EXPECT_EQ(
+            from_roots->to_bytes(),
+            from_closed->to_bytes());
+        const auto nodes = from_roots->nodes();
+        ASSERT_TRUE(nodes);
+        std::vector<Uuid> uuids;
+        uuids.reserve(nodes->size());
+        for (const auto& node : *nodes) {
+            uuids.push_back(node.uuid);
+        }
+        EXPECT_EQ(uuids, (std::vector<Uuid>{sibling}));
+    }
+
+    TEST(SelectionChapterTest,
+         PartialLoadMergeDropsSlicesAbsentFromCapturedSceneGraph) {
+        const Uuid omitted = fixed_uuid(91);
+        const Uuid kept = fixed_uuid(92);
+        SelectionChapter previous;
+        ASSERT_TRUE(previous.upsert_slice(
+            SelectionMaskSlice{
+                .node_uuid = omitted,
+                .domain = SelectionDomain::Splat,
+                .mask = {0, 0, 0},
+            }));
+        ASSERT_TRUE(previous.upsert_slice(
+            SelectionMaskSlice{
+                .node_uuid = kept,
+                .domain = SelectionDomain::Splat,
+                .mask = {0, 0},
+            }));
+
+        SceneGraphChapter captured_scene;
+        ASSERT_TRUE(captured_scene.upsert_node(
+            SceneNodeRecord{
+                .uuid = kept,
+                .type = "group",
+                .name = "kept",
+                .child_order = 0,
+            }));
+        const auto captured_nodes = captured_scene.nodes();
+        ASSERT_TRUE(captured_nodes);
+        std::unordered_set<Uuid> keep;
+        keep.reserve(captured_nodes->size());
+        for (const auto& node : *captured_nodes) {
+            keep.insert(node.uuid);
+        }
+
+        const auto old_slices = previous.slices();
+        for (const auto& slice : old_slices) {
+            if (!keep.contains(slice.node_uuid)) {
+                static_cast<void>(previous.remove_slice(
+                    slice.node_uuid, slice.domain));
+            }
+        }
+        ASSERT_EQ(previous.slices().size(), 1u);
+        EXPECT_EQ(previous.slices()[0].node_uuid, kept);
     }
 #endif
 

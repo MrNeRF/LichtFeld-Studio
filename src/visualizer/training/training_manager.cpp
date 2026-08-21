@@ -507,6 +507,9 @@ namespace lfs::vis {
         if (completion_reaper_.joinable()) {
             completion_reaper_.join();
         }
+        if (trainer_) {
+            lfs::training::CommandCenter::instance().reset_snapshot();
+        }
     }
 
     void TrainerManager::setTrainer(std::unique_ptr<lfs::training::Trainer> trainer) {
@@ -623,6 +626,9 @@ namespace lfs::vis {
                 return false;
             }
         }
+
+        // Pause events and no-thread stops do not run TrainingEnd's clear_snapshot.
+        lfs::training::CommandCenter::instance().reset_snapshot();
 
         {
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);

@@ -1296,6 +1296,10 @@ namespace lfs::vis {
                 command.stop_training);
         });
 
+        cmd::LoadFile::when([this](const auto& command) {
+            deferDatasetLoadForTraining(command);
+        });
+
         const auto publish_project_error =
             [](std::string action, const auto& value,
                const char* operation) {
@@ -1347,7 +1351,8 @@ namespace lfs::vis {
             });
 
         cmd::ProjectSave::when(
-            [this, publish_project_error](const auto&) {
+            [this, publish_project_error](const auto& command) {
+                project_save_as_started_ = false;
                 auto has_path = projectHasPath();
                 if (!has_path) {
                     publish_project_error(
@@ -1363,22 +1368,29 @@ namespace lfs::vis {
                         return;
                     }
                     if (auto saved =
-                            projectSaveAsFromDialog(path, true);
+                            projectSaveAsFromDialog(
+                                path,
+                                command.regenerate_preview);
                         !saved) {
                         publish_project_error(
                             "Save Project",
                             saved.error(),
                             gui::error_op::kSave);
+                        return;
                     }
+                    project_save_as_started_ = true;
                     return;
                 }
-                if (auto saved = projectSave(true);
+                if (auto saved = projectSave(
+                        command.regenerate_preview);
                     !saved) {
                     publish_project_error(
                         "Save Project",
                         saved.error(),
                         gui::error_op::kSave);
+                    return;
                 }
+                project_save_as_started_ = true;
             });
 
         cmd::ProjectSaveAs::when(
@@ -2241,8 +2253,14 @@ namespace lfs::vis {
         ViewportRegion viewport_region;
         bool has_viewport_region = false;
         if (gui_manager_) {
-            auto pos = gui_manager_->getViewportPos();
-            auto size = gui_manager_->getViewportSize();
+            auto pos = gui_manager_->getSceneRenderViewportPos();
+            auto size = gui_manager_->getSceneRenderViewportSize();
+
+            // A staged UI-visibility transition renders against its target extent
+            // while input and presentation continue using the previous layout.
+            viewport_.windowSize = {
+                std::max(static_cast<int>(std::lround(size.x)), 1),
+                std::max(static_cast<int>(std::lround(size.y)), 1)};
 
             viewport_region.x = pos.x;
             viewport_region.y = pos.y;
@@ -2310,6 +2328,10 @@ namespace lfs::vis {
             project_frame_started =
                 std::chrono::steady_clock::now();
             const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
+            if (gui_manager_) {
+                gui_manager_->commitUiVisibilityTransitionIfFrameReady(
+                    vulkan_frame.matches_viewport_extent);
+            }
             {
                 auto& interop = rendering_manager_->viewportInterop();
                 if (vulkan_frame.external_image != VK_NULL_HANDLE) {
@@ -2771,6 +2793,28 @@ namespace lfs::vis {
         }
     }
 
+    bool VisualizerImpl::deferDatasetLoadForTraining(
+        const lfs::core::events::cmd::LoadFile& cmd) {
+        if (!cmd.is_dataset || !cmd.stop_training) {
+            return false;
+        }
+        if (pending_training_action_ ==
+                PendingTrainingAction::CloseSave ||
+            pending_training_action_ ==
+                PendingTrainingAction::CloseDiscard) {
+            return true;
+        }
+        if (!shouldDeferProjectSwitchForTraining()) {
+            return false;
+        }
+        pending_load_file_ = cmd;
+        pending_load_file_->stop_training = false;
+        pending_training_action_ =
+            PendingTrainingAction::LoadDataset;
+        requestStopThenPendingAction();
+        return true;
+    }
+
     void VisualizerImpl::handleNewProject(
         const ProjectSwitchDisposition disposition,
         const bool stop_training) {
@@ -2996,6 +3040,7 @@ namespace lfs::vis {
         pending_open_path_.clear();
         pending_open_disposition_ =
             ProjectSwitchDisposition::RequireClean;
+        pending_load_file_.reset();
         gui_session_restore_.clear();
         pending_project_tools_restore_.reset();
         hydration_terminal_restore_ticket_.reset();
@@ -3011,12 +3056,13 @@ namespace lfs::vis {
         lfs::io::project::ProjectSessionChapters>
     VisualizerImpl::captureProjectSession(
         lfs::io::project::ReferencesChapter* references,
-        const std::filesystem::path& project_root)
-        const {
+        const std::filesystem::path& project_root,
+        const std::span<const lfs::core::Uuid>
+            omit_node_uuids) const {
         return project::captureGuiSession(
             *this, retained_project_session_,
             camera_bookmarks_, references,
-            project_root);
+            project_root, omit_node_uuids);
     }
 
     project::GuiSessionRestoreTicket VisualizerImpl::
@@ -3619,6 +3665,17 @@ namespace lfs::vis {
             if (!path.empty()) {
                 performOpenProject(
                     path, disposition);
+            }
+            break;
+        }
+        case PendingTrainingAction::LoadDataset: {
+            auto command =
+                std::exchange(
+                    pending_load_file_,
+                    std::nullopt);
+            if (command) {
+                command->stop_training = false;
+                command->emit();
             }
             break;
         }

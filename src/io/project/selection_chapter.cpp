@@ -5,6 +5,7 @@
 #include "io/selection_chapter.hpp"
 
 #include "chapter_binary_utils.hpp"
+#include "io/capture_omit_filter.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1063,29 +1064,8 @@ namespace lfs::io::project {
             selected_node_uuids,
         const std::span<const lfs::core::Uuid>
             omit_node_uuids) {
-        std::unordered_set<lfs::core::Uuid> omitted(
-            omit_node_uuids.begin(), omit_node_uuids.end());
-        const auto collect_descendants =
-            [&](const lfs::core::SceneNode& node,
-                const auto& self) -> void {
-            for (const lfs::core::NodeId child_id :
-                 node.children) {
-                const lfs::core::SceneNode* child =
-                    scene.getNodeById(child_id);
-                if (child == nullptr) {
-                    continue;
-                }
-                omitted.insert(child->uuid);
-                self(*child, self);
-            }
-        };
-        for (const auto& uuid : omit_node_uuids) {
-            const auto* node = scene.getNodeByUuid(uuid);
-            if (node == nullptr) {
-                continue;
-            }
-            collect_descendants(*node, collect_descendants);
-        }
+        const CaptureOmitFilter omit_filter(
+            scene, omit_node_uuids);
 
         CapturedSelectionState state;
         const auto metadata =
@@ -1103,7 +1083,7 @@ namespace lfs::io::project {
             const auto slices =
                 scene.capturePerNodeSelectionSlices(domain);
             for (const auto& [uuid, tensor] : slices) {
-                if (omitted.contains(uuid)) {
+                if (omit_filter.omits(uuid)) {
                     continue;
                 }
                 if (!tensor.is_valid() ||
@@ -1147,7 +1127,7 @@ namespace lfs::io::project {
                  node->type == lfs::core::NodeType::KEYFRAME_GROUP)) {
                 continue;
             }
-            if (omitted.contains(uuid)) {
+            if (omit_filter.omits(uuid)) {
                 continue;
             }
             state.selected_node_uuids.push_back(uuid);
