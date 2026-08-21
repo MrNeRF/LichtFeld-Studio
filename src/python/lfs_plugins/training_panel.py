@@ -303,10 +303,6 @@ class TrainingPanel(Panel):
         )
         model.bind_func("label_reset", lambda: tr("training_panel.reset"))
         model.bind_func("label_clear", lambda: tr("training_panel.clear"))
-        model.bind_func(
-            "pv_search_placeholder",
-            lambda: tr("training.search.placeholder"),
-        )
         model.bind_func("label_pause", lambda: tr("training_panel.pause"))
         model.bind_func("label_resume", lambda: tr("training_panel.resume"))
         model.bind_func("label_stop", lambda: tr("training_panel.stop"))
@@ -591,8 +587,11 @@ class TrainingPanel(Panel):
             "dep_eval", lambda: p() is not None and p().has_params() and p().enable_eval
         )
         model.bind_func(
-            "show_progress",
-            lambda: RuntimeState.max_iterations.value > 0 and _iteration() > 0,
+            "show_training_telemetry",
+            lambda: (
+                _state() in ("running", "paused", "stopping", "completed", "stopped")
+                or _iteration() > 0
+            ),
         )
         model.bind_func("has_dataset", lambda: d() is not None and d().has_params())
         model.bind_func(
@@ -1291,7 +1290,7 @@ class TrainingPanel(Panel):
                 self._last_iteration = it
                 self._handle.dirty("status_iteration")
                 self._handle.dirty("progress_text")
-                self._handle.dirty("show_progress")
+                self._handle.dirty("show_training_telemetry")
                 dirty = True
             if state == "stopping":
                 self._handle.dirty("status_mode")

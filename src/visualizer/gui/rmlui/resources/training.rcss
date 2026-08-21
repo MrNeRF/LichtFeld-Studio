@@ -52,11 +52,16 @@ body {
     flex-grow: 1;
     overflow-x: hidden;
     overflow-y: auto;
+    padding-bottom: 6dp;
 }
 
-/* Keep wheel and trackpad scrolling without reserving a visible scrollbar lane. */
+/* Keep the scroll position legible without taking meaningful panel width. */
 .training-scroll-region scrollbarvertical {
-    width: 0dp;
+    width: 4dp;
+}
+
+.training-scroll-region scrollbarvertical sliderbar {
+    min-height: 12dp;
 }
 
 .training-telemetry {
@@ -67,6 +72,12 @@ body {
 .training-search-input {
     flex-grow: 1;
     min-width: 0;
+}
+
+.training-search-icon {
+    width: 14dp;
+    height: 14dp;
+    flex-shrink: 0;
 }
 
 .training-search-clear {

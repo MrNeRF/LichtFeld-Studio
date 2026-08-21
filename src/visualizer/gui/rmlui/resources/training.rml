@@ -53,14 +53,14 @@
 
   <!-- ── Training Parameters ── -->
   <div class="training-search-row">
-    <input type="text" class="number-input training-search-input"
-           placeholder="{{pv_search_placeholder}}" data-value="pv_search_query" />
+    <img class="training-search-icon" src="../icon/scene/search.png" />
+    <input type="text" class="number-input training-search-input" data-value="pv_search_query" />
     <button type="button" class="btn btn--secondary training-search-clear"
             data-if="pv_search_active" data-event-click="pv_search_clear">{{label_clear}}</button>
   </div>
 
   <!-- Training telemetry remains visible while parameter rows scroll independently. -->
-  <div class="section-gap training-telemetry" data-if="show_progress">
+  <div class="section-gap training-telemetry" data-if="show_training_telemetry">
     <span class="status-text text-default training-status-line">{{status_mode}}</span>
     <span class="status-text text-default training-status-line">{{status_iteration}}</span>
     <span class="status-text text-default training-status-line">{{status_gaussians}}</span>

@@ -9,6 +9,10 @@
     image-color: @{primary};
 }
 
+.training-search-icon {
+    image-color: @{text_dim};
+}
+
 .training-subsection-title {
     color: @{text_dim};
     border-top-color: @{panel.primary_border_faint};

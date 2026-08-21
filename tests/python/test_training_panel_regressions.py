@@ -907,13 +907,15 @@ def test_training_panel_keeps_controls_and_search_outside_scroll_region():
     color_picker = rml.index('id="color-picker-popup"')
 
     assert controls < search < telemetry < scroll_start < parameters < scroll_end < color_picker
-    assert 'class="section-gap training-telemetry" data-if="show_progress"' in rml
+    assert 'class="section-gap training-telemetry" data-if="show_training_telemetry"' in rml
+    assert 'class="training-search-icon" src="../icon/scene/search.png"' in rml
     assert ".training-panel-layout" in rcss
     assert ".training-scroll-region" in rcss
     assert ".training-telemetry" in rcss
     assert "overflow-y: auto" in rcss
     assert ".training-scroll-region scrollbarvertical" in rcss
-    assert "width: 0dp" in rcss
+    assert "padding-bottom: 6dp" in rcss
+    assert "width: 4dp" in rcss
 
 
 def test_set_bool_prop_hasattr_guard(training_panel_module, monkeypatch):
@@ -1001,6 +1003,35 @@ def test_save_steps_editable_in_active_trainer_states(training_panel_module):
         runtime.trainer_state.value = "finished"
         assert save_edit_mode() is False
         assert save_readonly_mode() is True
+    finally:
+        runtime.iteration._fallback = 0
+        runtime.training_state._fallback = "idle"
+
+
+def test_training_telemetry_is_reserved_from_start_until_clear(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    runtime = training_panel_module.RuntimeState
+
+    panel._bind_visibility(model, lambda: params, lambda: dataset)
+    show_telemetry = model.bindings["show_training_telemetry"][0]
+
+    try:
+        runtime.trainer_state.value = "ready"
+        runtime.iteration.value = 0
+        assert show_telemetry() is False
+
+        runtime.trainer_state.value = "running"
+        assert show_telemetry() is True
+
+        runtime.trainer_state.value = "ready"
+        runtime.iteration.value = 1
+        assert show_telemetry() is True
+
+        runtime.iteration.value = 0
+        assert show_telemetry() is False
     finally:
         runtime.iteration._fallback = 0
         runtime.training_state._fallback = "idle"
