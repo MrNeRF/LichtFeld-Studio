@@ -83,6 +83,18 @@ namespace lfs::event {
         return true;
     }
 
+    void LocalizationManager::reset() {
+        const std::lock_guard lock(mutex_);
+        locales_dir_.clear();
+        current_language_.clear();
+        current_strings_.clear();
+        fallback_strings_.clear();
+        warned_missing_keys_.clear();
+        available_languages_.clear();
+        language_names_.clear();
+        overrides_.clear();
+    }
+
     const char* LocalizationManager::get(std::string_view key) const {
         thread_local std::array<std::string, 8> result_buffers;
         thread_local size_t next_result_buffer = 0;

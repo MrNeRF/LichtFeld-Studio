@@ -11,6 +11,7 @@
 #include "core/error_reporter.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/executable_path.hpp"
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
@@ -345,6 +346,10 @@ namespace lfs::vis {
 
         callback_cleanup_.clear();
         stopForceExitCompletionWatcher();
+        UnifiedToolRegistry::instance().clearActiveTool();
+        UnifiedToolRegistry::instance().clearActiveSubmode();
+        editor_context_.setActiveTool(ToolType::None);
+        editor_context_.clearActiveOperator();
         trainer_manager_.reset();
         tool_context_.reset();
         if (gui_manager_) {
@@ -1870,13 +1875,17 @@ namespace lfs::vis {
         if (scene_manager_)
             scene_manager_->initSelectionService();
 
-        {
-            LOG_TIMER("startup.python.ensure_initialized");
-            (void)python::ensure_initialized();
-        }
-        {
-            LOG_TIMER("startup.python.builtin_ui_registered");
-            python::ensure_builtin_ui_registered();
+        if (lfs::core::getPythonModuleDir().empty()) {
+            LOG_WARN("Python module not found next to executable; skipping Python init");
+        } else {
+            {
+                LOG_TIMER("startup.python.ensure_initialized");
+                (void)python::ensure_initialized();
+            }
+            {
+                LOG_TIMER("startup.python.builtin_ui_registered");
+                python::ensure_builtin_ui_registered();
+            }
         }
         {
             LOG_TIMER("startup.window.showWindow");

@@ -398,6 +398,21 @@ apply_registered_chrome:
         }
     }
 
+    void PanelRegistry::unregister_all() {
+        {
+            std::lock_guard lock(mutex_);
+            const bool changed = !panels_.empty() || !floating_interactions_.empty();
+            panels_.clear();
+            floating_interactions_.clear();
+            if (changed)
+                ++registration_revision_;
+        }
+        {
+            std::lock_guard poll_lock(poll_mutex_);
+            poll_cache_.clear();
+        }
+    }
+
     void PanelRegistry::reload_rml_resources() {
         std::vector<std::shared_ptr<IPanel>> panels;
         {
