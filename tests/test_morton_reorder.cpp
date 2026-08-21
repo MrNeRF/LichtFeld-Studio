@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <string>
@@ -167,6 +168,69 @@ namespace {
         return m;
     }
 
+    struct ShValueQuantGuard {
+        explicit ShValueQuantGuard(const bool enabled) {
+            sh_value::set_sh_value_quant_enabled_for_testing(enabled);
+        }
+        ~ShValueQuantGuard() {
+            sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+        }
+        ShValueQuantGuard(const ShValueQuantGuard&) = delete;
+        ShValueQuantGuard& operator=(const ShValueQuantGuard&) = delete;
+    };
+
+    [[nodiscard]] size_t storage_capacity_elems(const Tensor& t) {
+        if (!t.is_valid()) {
+            return 0;
+        }
+        const size_t cap = t.capacity();
+        return cap > 0 ? cap : t.numel();
+    }
+
+    void fill_capacity_tail(Tensor& t, const size_t logical_elems, const std::uint8_t pattern) {
+        ASSERT_TRUE(t.is_valid());
+        const size_t cap = storage_capacity_elems(t);
+        ASSERT_GE(cap, logical_elems);
+        if (cap == logical_elems) {
+            return;
+        }
+        const size_t elem = dtype_size(t.dtype());
+        auto* dst = static_cast<std::uint8_t*>(t.data_ptr()) + logical_elems * elem;
+        ASSERT_EQ(cudaMemset(dst, static_cast<int>(pattern), (cap - logical_elems) * elem),
+                  cudaSuccess);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    }
+
+    [[nodiscard]] std::vector<std::uint8_t> copy_capacity_tail(
+        const Tensor& t, const size_t logical_elems) {
+        std::vector<std::uint8_t> out;
+        if (!t.is_valid()) {
+            return out;
+        }
+        const size_t cap = storage_capacity_elems(t);
+        EXPECT_GE(cap, logical_elems);
+        if (cap <= logical_elems) {
+            return out;
+        }
+        const size_t elem = dtype_size(t.dtype());
+        out.resize((cap - logical_elems) * elem);
+        const auto* src = static_cast<const std::uint8_t*>(t.data_ptr()) + logical_elems * elem;
+        EXPECT_EQ(cudaMemcpy(out.data(), src, out.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        return out;
+    }
+
+    [[nodiscard]] bool bytes_all_equal(
+        const std::vector<std::uint8_t>& bytes, const std::uint8_t v) {
+        return std::all_of(bytes.begin(), bytes.end(),
+                           [v](const std::uint8_t b) { return b == v; });
+    }
+
+    [[nodiscard]] size_t sh_at_u16(const size_t prim, const size_t cell, const size_t n_cells) {
+        constexpr size_t R = 32;
+        return (prim / R) * (n_cells * R) + cell * R + (prim % R);
+    }
+
 } // namespace
 
 TEST(MortonReorderTest, CadenceMatchesStopRefineAndZeroDisables) {
@@ -179,7 +243,7 @@ TEST(MortonReorderTest, CadenceMatchesStopRefineAndZeroDisables) {
 }
 
 TEST(MortonReorderTest, PreservesPerRowAttributesAndAdamMoments) {
-    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    const ShValueQuantGuard quant_guard{true};
     constexpr size_t n = 2048;
     auto splat = make_mixed_splat(n, 3);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -293,11 +357,10 @@ TEST(MortonReorderTest, PreservesPerRowAttributesAndAdamMoments) {
     }
 
     ASSERT_TRUE(splat.shN_value_quantized());
-    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
 TEST(MortonReorderTest, FrozenRangesSkipLeavesRowsUntouched) {
-    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    const ShValueQuantGuard quant_guard{true};
     constexpr size_t n = 512;
     auto splat = make_mixed_splat(n, 3);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -311,8 +374,103 @@ TEST(MortonReorderTest, FrozenRangesSkipLeavesRowsUntouched) {
     EXPECT_FALSE(result.permutation.is_valid());
     EXPECT_LT(max_abs_diff(means_before, splat.means()), 1e-12);
     EXPECT_LT(max_abs_diff(shN_before, splat.shN_canonical()), 1e-12);
+}
 
-    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+TEST(MortonReorderTest, PermuteWritesNPrimsAndLeavesCapacityTailZero) {
+    const ShValueQuantGuard quant_guard{true};
+    constexpr size_t n = 300;
+    constexpr size_t cap = 1024;
+    constexpr std::uint8_t kPoison = 0x5A;
+
+    auto splat = make_mixed_splat(n, 3);
+    splat.reserve_capacity(cap);
+    ASSERT_GE(splat.means().capacity(), cap);
+    ASSERT_EQ(static_cast<size_t>(splat.size()), n);
+
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+    ASSERT_TRUE(splat.shN_value_bounds().is_valid());
+
+    const auto rest = static_cast<std::uint32_t>(splat.max_sh_coeffs_rest());
+    const size_t n_cells = sh_value_quant::sh_value_u16_count(n, rest);
+    const size_t cap_cells = sh_value_quant::sh_value_u16_count(cap, rest);
+    const size_t n_bound_floats = sh_value_quant::n_bounds_for_prims(n) * 2;
+    const size_t cap_bound_floats = sh_value_quant::n_bounds_for_prims(cap) * 2;
+    ASSERT_GT(cap_cells, n_cells);
+    ASSERT_GT(cap_bound_floats, n_bound_floats);
+
+    ASSERT_EQ(splat.shN().numel(), n_cells);
+    ASSERT_GE(storage_capacity_elems(splat.shN()), cap_cells);
+    ASSERT_EQ(splat.shN_value_bounds().numel(), n_bound_floats);
+    ASSERT_GE(storage_capacity_elems(splat.shN_value_bounds()), cap_bound_floats);
+
+    AdamConfig cfg;
+    cfg.initial_capacity = cap;
+    AdamOptimizer opt(splat, cfg);
+
+    fill_capacity_tail(splat.shN(), n_cells, kPoison);
+    fill_capacity_tail(splat.shN_value_bounds(), n_bound_floats, kPoison);
+    const void* const shN_ptr_before = splat.shN().data_ptr();
+    const void* const bounds_ptr_before = splat.shN_value_bounds().data_ptr();
+
+    const auto result = morton::apply_morton_reorder(splat, &opt);
+    ASSERT_TRUE(result.applied);
+    ASSERT_TRUE(result.permutation.is_valid());
+    ASSERT_EQ(result.permutation.numel(), n);
+    ASSERT_EQ(static_cast<size_t>(splat.size()), n);
+
+    const auto perm = result.permutation.cpu().contiguous();
+    const auto* ip = perm.ptr<std::int64_t>();
+    std::vector<unsigned char> seen(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+        const auto src = ip[i];
+        ASSERT_GE(src, 0);
+        ASSERT_LT(src, static_cast<std::int64_t>(n));
+        EXPECT_EQ(seen[static_cast<size_t>(src)], 0) << "perm duplicate src " << src;
+        seen[static_cast<size_t>(src)] = 1;
+    }
+
+    ASSERT_TRUE(splat.shN_value_quantized());
+    ASSERT_EQ(splat.shN().numel(), n_cells);
+    ASSERT_GE(storage_capacity_elems(splat.shN()), cap_cells);
+    ASSERT_EQ(splat.shN_value_bounds().numel(), n_bound_floats);
+    ASSERT_GE(storage_capacity_elems(splat.shN_value_bounds()), cap_bound_floats);
+
+    const auto shN_tail = copy_capacity_tail(splat.shN(), n_cells);
+    const auto bounds_tail = copy_capacity_tail(splat.shN_value_bounds(), n_bound_floats);
+    ASSERT_FALSE(shN_tail.empty());
+    ASSERT_FALSE(bounds_tail.empty());
+
+    const bool shN_same_storage = splat.shN().data_ptr() == shN_ptr_before;
+    const bool bounds_same_storage = splat.shN_value_bounds().data_ptr() == bounds_ptr_before;
+    if (shN_same_storage) {
+        EXPECT_TRUE(bytes_all_equal(shN_tail, kPoison))
+            << "in-place shN capacity tail [n, cap) was overwritten";
+    } else {
+        EXPECT_TRUE(bytes_all_equal(shN_tail, 0))
+            << "replaced shN capacity tail [n, cap) is neither zero nor left untouched";
+    }
+    if (bounds_same_storage) {
+        EXPECT_TRUE(bytes_all_equal(bounds_tail, kPoison))
+            << "in-place shN bounds capacity tail was overwritten";
+    } else {
+        EXPECT_TRUE(bytes_all_equal(bounds_tail, 0))
+            << "replaced shN bounds capacity tail is neither zero nor left untouched";
+    }
+
+    std::vector<std::uint16_t> codes(splat.shN().numel());
+    ASSERT_EQ(cudaMemcpy(codes.data(), splat.shN().data_ptr(),
+                         codes.size() * sizeof(std::uint16_t), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    const size_t n_cells_per = static_cast<size_t>(sh_value_quant::n_value_cells_per_prim(rest));
+    const size_t padded_n = ((n + 31u) / 32u) * 32u;
+    for (size_t p = n; p < padded_n; ++p) {
+        for (size_t c = 0; c < n_cells_per; ++c) {
+            EXPECT_EQ(codes[sh_at_u16(p, c, n_cells_per)], 0)
+                << "dest padded lane prim=" << p << " cell=" << c
+                << " should stay zero when only n_prims rows are written";
+        }
+    }
 }
 
 TEST(MortonReorderTest, TrainingLossStaysContinuousAndCountMatches) {
@@ -396,8 +554,8 @@ TEST(MortonReorderTest, TrainingLossStaysContinuousAndCountMatches) {
 
     ASSERT_GE(on_losses.size(), 4u);
     const size_t reorder_slot = 3; // 1-based iter 4, 0-based if every PostStep fired
-    // Locate the first recorded iter near the reorder step by using the longest
-    // adjacent jump as a spike detector, not as a required failure.
+    ASSERT_GT(on_losses.size(), reorder_slot);
+
     std::vector<float> deltas;
     for (size_t i = 1; i < on_losses.size(); ++i) {
         deltas.push_back(std::abs(on_losses[i] - on_losses[i - 1]));
@@ -411,7 +569,35 @@ TEST(MortonReorderTest, TrainingLossStaysContinuousAndCountMatches) {
             << "loss spike at step " << (i + 1) << " delta=" << deltas[i]
             << " median=" << median;
     }
-    (void)reorder_slot;
+
+    const float reorder_loss = on_losses[reorder_slot];
+    const float prev_loss = on_losses[reorder_slot - 1];
+    EXPECT_TRUE(std::isfinite(reorder_loss))
+        << "loss at reorder step is not finite: " << reorder_loss;
+    EXPECT_TRUE(std::isfinite(prev_loss))
+        << "loss before reorder step is not finite: " << prev_loss;
+    EXPECT_LT(std::abs(reorder_loss - prev_loss), cap)
+        << "loss spike at reorder step slot=" << reorder_slot
+        << " prev=" << prev_loss << " at=" << reorder_loss
+        << " median_delta=" << median;
+    if (reorder_slot + 1 < on_losses.size()) {
+        const float next_loss = on_losses[reorder_slot + 1];
+        EXPECT_TRUE(std::isfinite(next_loss))
+            << "loss after reorder step is not finite: " << next_loss;
+        EXPECT_LT(std::abs(next_loss - reorder_loss), cap)
+            << "loss spike after reorder step slot=" << reorder_slot
+            << " at=" << reorder_loss << " next=" << next_loss
+            << " median_delta=" << median;
+        const float lo = std::min(prev_loss, next_loss);
+        const float hi = std::max(prev_loss, next_loss);
+        const float span = std::max(hi - lo, 1e-4f);
+        EXPECT_GE(reorder_loss, lo - span)
+            << "reorder loss left the neighbor range: prev=" << prev_loss
+            << " at=" << reorder_loss << " next=" << next_loss;
+        EXPECT_LE(reorder_loss, hi + span)
+            << "reorder loss left the neighbor range: prev=" << prev_loss
+            << " at=" << reorder_loss << " next=" << next_loss;
+    }
 
     const size_t cmp = std::min(off_losses.size(), on_losses.size());
     for (size_t i = 0; i < cmp; ++i) {
