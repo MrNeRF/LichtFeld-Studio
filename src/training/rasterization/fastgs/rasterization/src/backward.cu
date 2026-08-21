@@ -79,39 +79,47 @@ void fast_lfs::rasterization::backward(
 
         // Backward blend (template dispatch eliminates densification branch from inner loop)
         auto launch_blend_backward_typed = [&]<DensificationType DENS_TYPE, bool NORMAL_CHANNEL>() {
-            kernels::backward::blend_backward_cu<DENS_TYPE, NORMAL_CHANNEL><<<n_tiles, config::block_size_blend_backward, 0, stream>>>(
-                per_tile_buffers.instance_ranges,
-                sorted_primitive_indices,
-                per_primitive_buffers.mean2d,
-                per_primitive_buffers.conic_opacity,
-                per_primitive_buffers.color,
-                per_primitive_buffers.depths,
-                primitive_normals,
-                grad_image,
-                grad_alpha,
-                grad_depth,
-                grad_normal,
-                image,
-                alpha,
-                per_tile_buffers.n_contributions,
-                per_tile_buffers.final_transmittance,
-                grad_mean2d_helper,
-                grad_conic_helper,
-                grad_depth_helper,
-                grad_normal_helper,
-                grad_opacity_helper,
-                grad_color_helper,
-                densification_info,
-                densification_error_map,
-                fastgs_status,
-                static_cast<uint>(n_instances),
-                n_primitives,
-                width,
-                height,
-                grid.x,
-                warp_cull_mode,
-                blend_batch_override);
-            LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.blend_backward");
+            auto launch_cull = [&]<int WARP_CULL_MODE>() {
+                kernels::backward::blend_backward_cu<DENS_TYPE, NORMAL_CHANNEL, WARP_CULL_MODE>
+                    <<<n_tiles, config::block_size_blend_backward, 0, stream>>>(
+                        per_tile_buffers.instance_ranges,
+                        sorted_primitive_indices,
+                        per_primitive_buffers.mean2d,
+                        per_primitive_buffers.conic_opacity,
+                        per_primitive_buffers.color,
+                        per_primitive_buffers.depths,
+                        primitive_normals,
+                        grad_image,
+                        grad_alpha,
+                        grad_depth,
+                        grad_normal,
+                        image,
+                        alpha,
+                        per_tile_buffers.n_contributions,
+                        per_tile_buffers.final_transmittance,
+                        grad_mean2d_helper,
+                        grad_conic_helper,
+                        grad_depth_helper,
+                        grad_normal_helper,
+                        grad_opacity_helper,
+                        grad_color_helper,
+                        densification_info,
+                        densification_error_map,
+                        fastgs_status,
+                        static_cast<uint>(n_instances),
+                        n_primitives,
+                        width,
+                        height,
+                        grid.x,
+                        blend_batch_override);
+                LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.blend_backward");
+            };
+            if (warp_cull_mode == 1)
+                launch_cull.template operator()<1>();
+            else if (warp_cull_mode == 2)
+                launch_cull.template operator()<2>();
+            else
+                launch_cull.template operator()<0>();
         };
         auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {
             if (grad_normal != nullptr && grad_normal_helper != nullptr) {
