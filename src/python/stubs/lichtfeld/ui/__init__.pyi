@@ -2596,7 +2596,7 @@ def get_default_working_directory() -> str:
 
 def get_temp_project_directory() -> str:
     """
-    Get the temp project directory for the next untitled session (<working folder>/temp).
+    Get the temp project directory for the next untitled session (<working folder>/tmp).
     """
 
 def set_working_directory(path: str) -> str:

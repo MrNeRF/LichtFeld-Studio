@@ -3400,7 +3400,7 @@ namespace lfs::vis {
     TEST_F(VisualizerImplResetTest,
            RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles) {
         auto options = projectOptions();
-        const auto temp_dir = temporary_.path / "temp";
+        const auto temp_dir = temporary_.path / "tmp";
         std::filesystem::create_directories(temp_dir);
         const auto master = lfs::io::project::scratch_autosave_path(
             temp_dir, lfs::core::generate_uuid_v4());
@@ -3575,7 +3575,7 @@ namespace lfs::vis {
            StartupSweepsEmptyScratchAndDoesNotOffer) {
         auto options = projectOptions();
         const auto recovery_dir =
-            temporary_.path / "temp";
+            temporary_.path / "tmp";
         std::filesystem::create_directories(recovery_dir);
         const auto empty_scratch =
             lfs::io::project::scratch_autosave_path(
@@ -7679,10 +7679,10 @@ namespace lfs::vis {
             ASSERT_TRUE(bound.has_value());
             EXPECT_EQ(
                 bound->parent_path().lexically_normal(),
-                (temporary / "temp").lexically_normal());
+                (temporary / "tmp").lexically_normal());
             EXPECT_TRUE(
                 lfs::io::project::is_scratch_autosave_path(
-                    *bound, temporary / "temp"));
+                    *bound, temporary / "tmp"));
             EXPECT_EQ(
                 bound->lexically_normal(),
                 lifecycle->document_->source_path()
@@ -7811,7 +7811,7 @@ namespace lfs::vis {
             ASSERT_TRUE(bound.has_value());
             EXPECT_TRUE(
                 lfs::io::project::is_scratch_autosave_path(
-                    *bound, temporary / "temp"));
+                    *bound, temporary / "tmp"));
             EXPECT_FALSE(std::filesystem::exists(
                 output_path / "project.licht"));
 
@@ -8192,7 +8192,7 @@ namespace lfs::vis {
             first_bound = *bound;
             EXPECT_EQ(
                 bound->parent_path().lexically_normal(),
-                (first_root / "temp").lexically_normal());
+                (first_root / "tmp").lexically_normal());
             ASSERT_TRUE(
                 lfs::vis::setWorkingDirectoryPreference(second_root));
             EXPECT_EQ(
@@ -8220,7 +8220,7 @@ namespace lfs::vis {
             ASSERT_TRUE(bound.has_value());
             EXPECT_EQ(
                 bound->parent_path().lexically_normal(),
-                (second_root / "temp").lexically_normal());
+                (second_root / "tmp").lexically_normal());
             EXPECT_NE(
                 bound->lexically_normal(),
                 first_bound.lexically_normal());
@@ -8231,7 +8231,7 @@ namespace lfs::vis {
     TEST_F(VisualizerImplResetTest,
            StartupPrunesOlderUnlockedScratchFilesAfterOffer) {
         auto options = projectOptions();
-        const auto temp_dir = temporary_.path / "temp";
+        const auto temp_dir = temporary_.path / "tmp";
         std::filesystem::create_directories(temp_dir);
         const auto older = lfs::io::project::scratch_autosave_path(
             temp_dir, lfs::core::generate_uuid_v4());

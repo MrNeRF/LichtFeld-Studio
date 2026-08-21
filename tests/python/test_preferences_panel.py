@@ -108,7 +108,7 @@ def preferences_panel_module(monkeypatch):
         get_working_directory=lambda: state.working_directory or "/home/tester/.lichtfeld",
         get_working_directory_preference=lambda: state.working_directory,
         get_default_working_directory=lambda: "/home/tester/.lichtfeld",
-        get_temp_project_directory=lambda: (state.working_directory or "/home/tester/.lichtfeld") + "/temp",
+        get_temp_project_directory=lambda: (state.working_directory or "/home/tester/.lichtfeld") + "/tmp",
         set_working_directory=set_working_directory,
         clear_working_directory=clear_working_directory,
         open_folder_dialog=lambda title, start: "",

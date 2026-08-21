@@ -256,7 +256,7 @@ def _install_lf_stub(monkeypatch):
         get_working_directory=lambda: "/home/tester/.lichtfeld",
         get_working_directory_preference=lambda: "",
         get_default_working_directory=lambda: "/home/tester/.lichtfeld",
-        get_temp_project_directory=lambda: "/home/tester/.lichtfeld/temp",
+        get_temp_project_directory=lambda: "/home/tester/.lichtfeld/tmp",
         set_working_directory=lambda path: "",
         clear_working_directory=lambda: None,
         open_folder_dialog=lambda title, start: "",

@@ -120,7 +120,7 @@ must be an absolute, writable directory; LichtFeld creates it if needed and
 rejects the change without persisting when the write probe fails.
 
 Untitled crash files and untitled training snapshots live in
-`<working folder>/temp/<session-uuid>.licht`, not under `dataset.output_path`.
+`<working folder>/tmp/<session-uuid>.licht`, not under `dataset.output_path`.
 The temp directory is created lazily on first scratch write. Changing the
 working folder applies to the next untitled session (New Project or restart);
 a live session keeps the temp file it already bound. Cache, logs, plugins,
@@ -128,7 +128,7 @@ the venv, and ONNX models stay on the unified root and do not follow the
 working folder.
 
 The legacy `<root>/recovery` directory is no longer created up front. Startup
-still scans it, if it exists and differs from `<working folder>/temp`, so
+still scans it, if it exists and differs from `<working folder>/tmp`, so
 crash files from older builds can be offered and then pruned.
 
 A GUI load that **replaces** the scene (dataset import, Asset Manager Load New,

@@ -5023,7 +5023,7 @@ namespace lfs::python {
                 nb::gil_scoped_release release;
                 return lfs::core::path_to_utf8(vis::tempProjectDirectoryPreference());
             },
-            "Get the temp project directory for the next untitled session (<working folder>/temp).");
+            "Get the temp project directory for the next untitled session (<working folder>/tmp).");
 
         m.def(
             "set_working_directory",

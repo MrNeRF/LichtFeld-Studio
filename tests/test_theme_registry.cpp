@@ -326,7 +326,7 @@ TEST(ThemePreferencesContract, WorkingDirectoryRoundTripAndRejectsUnwritable) {
         paths->rootDir().lexically_normal());
     EXPECT_EQ(
         lfs::vis::tempProjectDirectoryPreference().lexically_normal(),
-        (paths->rootDir() / "temp").lexically_normal());
+        (paths->rootDir() / "tmp").lexically_normal());
 
     const auto custom = root / "custom-working";
     auto set = lfs::vis::setWorkingDirectoryPreference(custom);

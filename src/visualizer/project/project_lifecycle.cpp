@@ -1638,7 +1638,7 @@ namespace lfs::vis::project {
                 return static_cast<char>(std::tolower(character));
             });
 #endif
-        if ((parent_name == "temp" ||
+        if ((parent_name == "tmp" ||
              parent_name == "recovery") &&
             lfs::io::project::is_scratch_autosave_path(
                 path, path.parent_path())) {
@@ -7658,7 +7658,7 @@ namespace lfs::vis::project {
     void ProjectLifecycle::freezeTempProjectDirectory() {
         if (isolated_scratch_storage_) {
             temp_project_directory_ = freezeNormalizedPath(
-                settings_path_.parent_path() / "temp");
+                settings_path_.parent_path() / "tmp");
             legacy_recovery_directory_ = freezeNormalizedPath(
                 settings_path_.parent_path() / "recovery");
             return;
@@ -7667,7 +7667,7 @@ namespace lfs::vis::project {
         temp_project_directory_ =
             working.empty()
                 ? std::filesystem::path{}
-                : freezeNormalizedPath(working / "temp");
+                : freezeNormalizedPath(working / "tmp");
         const auto paths = lfs::core::UserPaths::resolve();
         legacy_recovery_directory_ =
             paths ? freezeNormalizedPath(paths->recoveryDir())

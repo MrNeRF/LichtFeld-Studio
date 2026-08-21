@@ -10,7 +10,7 @@ Status: frozen spec v2 (2026-08-21, after design critique `.codex_tmp/temp_proje
 ## Owner decisions (not negotiable)
 
 1. A configurable **Working folder** preference. Default on both OSes is the existing `.lichtfeld` root: `~/.lichtfeld` (Linux), `%USERPROFILE%\.lichtfeld` (Windows); `LFS_HOME` and portable mode keep overriding the default root exactly as `UserPaths::resolve` does today.
-2. The **temp project** lives in `<working folder>/temp`. It is always overwritten without asking (autosave, training snapshots, new sessions). No dialog is ever shown for writes into it.
+2. The **temp project** lives in `<working folder>/tmp`. It is always overwritten without asking (autosave, training snapshots, new sessions). No dialog is ever shown for writes into it.
 3. Training start never creates a project and never asks. An untitled session trains into the temp project. Only the user creates a project (Save / Save As). An explicitly created or opened project has priority: once the session is titled, everything routes to that project as today and the temp file is removed.
 4. The user is informed (and offered Save) on application close and on every action that wipes the current work, if the work is dirty. Nothing else prompts.
 
@@ -30,7 +30,7 @@ Status: frozen spec v2 (2026-08-21, after design critique `.codex_tmp/temp_proje
 
 ### B. Temp project directory
 
-- `ProjectLifecycle::scratchAutosaveDirectory()` returns `<working folder>/temp` resolved from `UserPreferences` at bind time, unless the lifecycle was constructed with an explicit `settings_path` (tests), in which case it stays `{settings.parent}/temp`. Rename the member `recovery_directory_` to `temp_project_directory_` and the test fixture directory from `recovery` to `temp`.
+- `ProjectLifecycle::scratchAutosaveDirectory()` returns `<working folder>/tmp` resolved from `UserPreferences` at bind time, unless the lifecycle was constructed with an explicit `settings_path` (tests), in which case it stays `{settings.parent}/tmp`. Rename the member `recovery_directory_` to `temp_project_directory_` and the test fixture directory from `recovery` to `tmp`.
 - Once `scratch_autosave_path_` is bound for a session it is never re-resolved for that session, even if the preference changes.
 - File naming stays `<project_uuid>.licht` with the `.lock` sibling (multi-instance safe). Locks, sweep, scan, `is_scratch_autosave_path` keep working against the resolved temp directory.
 - The directory is created before the first scratch write or trainer bind.
@@ -125,7 +125,7 @@ Exit: unchanged. It already prompts for dirty work (Save / Save As, Discard, Can
 
 gtest (`tests/test_visualizer_post_work.cpp`, `VisualizerImplResetTest`):
 
-1. `StartTrainingUntitledBindsTempProjectAndStaysUntitled`: replaces `StartTrainingPreparesProjectAndGrantsSaves`. After prepare: `!hasSourcePath()`, `trainer->bound_project_path()` equals the scratch path inside `{settings.parent}/temp`, policy granted, no `project.licht` under `output_path`.
+1. `StartTrainingUntitledBindsTempProjectAndStaysUntitled`: replaces `StartTrainingPreparesProjectAndGrantsSaves`. After prepare: `!hasSourcePath()`, `trainer->bound_project_path()` equals the scratch path inside `{settings.parent}/tmp`, policy granted, no `project.licht` under `output_path`.
 2. `UntitledTrainingSnapshotAdoptionKeepsSessionUntitledAndOutOfMru`: trainer publishes one snapshot into the temp file; after adoption `!hasSourcePath()`, `document_->checkpoint_uuids()` non-empty, MRU unchanged, trainer still bound to the scratch path.
 3. `SaveAsAfterUntitledTrainingMigratesTempIncludingCheckpoint`: Save As after a published temp snapshot; destination contains CKPT; temp file and `.lock` gone.
 4. `UntitledStartConflictNeverReportsExistingOutputProject`: `<output>/project.licht` exists, `trainingStartOverwriteConflict()` is `nullopt`.
@@ -149,4 +149,4 @@ cmake --build build -j16
 clang-format on every touched C++ file
 ```
 
-GUI validation (Claude): launch, load `data/bicycle` via the import panel, start training, confirm no dialog, confirm `~/.lichtfeld/temp/<uuid>.licht` grows at a save step, stop, File > Exit → prompt with Save As / Discard / Cancel; Save As → temp gone, project has checkpoint. Change the working folder in Preferences, New Project, train again → new temp location used. Zero error noise in the log.
+GUI validation (Claude): launch, load `data/bicycle` via the import panel, start training, confirm no dialog, confirm `~/.lichtfeld/tmp/<uuid>.licht` grows at a save step, stop, File > Exit → prompt with Save As / Discard / Cancel; Save As → temp gone, project has checkpoint. Change the working folder in Preferences, New Project, train again → new temp location used. Zero error noise in the log.

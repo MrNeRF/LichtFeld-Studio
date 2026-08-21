@@ -522,7 +522,7 @@ namespace lfs::vis {
         const auto root = UserPreferences::instance().workingDirectory();
         if (root.empty())
             return {};
-        return root / "temp";
+        return root / "tmp";
     }
 
 } // namespace lfs::vis
