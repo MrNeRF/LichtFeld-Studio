@@ -198,7 +198,6 @@
     "info_panel.asset_details": "资源详情",
     "info_panel.folder_details": "文件夹详情",
     "info_panel.file_not_found": "未找到文件",
-    "property.type": "类型",
     "property.path": "路径",
     "property.size": "大小",
     "property.created": "创建时间",

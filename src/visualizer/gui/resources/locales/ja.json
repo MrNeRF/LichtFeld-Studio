@@ -198,7 +198,6 @@
     "info_panel.asset_details": "アセット詳細",
     "info_panel.folder_details": "フォルダ詳細",
     "info_panel.file_not_found": "ファイルが見つかりません",
-    "property.type": "タイプ",
     "property.path": "パス",
     "property.size": "サイズ",
     "property.created": "作成日",

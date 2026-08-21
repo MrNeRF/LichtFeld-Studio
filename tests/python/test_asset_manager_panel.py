@@ -232,6 +232,11 @@ def test_rml_and_panel_have_no_scene_or_disk_thumbnail_model():
     assert "absolute_path" not in source
     assert "fingerprint" not in source
     assert "thumbnails" not in source
+    assert "LICHT" not in rml
+    assert "asset-col-type" not in rml
+    assert "asset-pill-licht" not in rcss
+    assert "asset-card-overlay" not in rcss
+    assert "col_type_label" not in source
     assert 'data-style-decorator="asset.thumbnail_decorator"' in rml
 
 

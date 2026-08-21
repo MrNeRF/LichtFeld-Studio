@@ -241,7 +241,6 @@ class AssetManagerPanel(Panel):
             "refresh_label": "asset_manager.action.refresh",
             "clean_missing_label": "asset_manager.action.clean_missing",
             "col_name_label": "asset_manager.property.name",
-            "col_type_label": "asset_manager.property.type",
             "col_folder_label": "asset_manager.property.folder",
             "col_size_label": "asset_manager.property.size",
             "col_modified_label": "asset_manager.property.modified",

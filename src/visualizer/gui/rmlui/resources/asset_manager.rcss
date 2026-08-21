@@ -585,28 +585,11 @@
 }
 
 
-.asset-card-overlay {
-    position: absolute;
-    top: 6dp;
-    left: 6dp;
-    right: 6dp;
-    display: flex;
-    flex-direction: row;
-    justify-content: space-between;
-    align-items: flex-start;
-}
-
-
 .asset-pill {
     font-size: 12dp;
     font-weight: bold;
     padding: 2dp 6dp;
     border-radius: 3dp;
-}
-
-.asset-pill-licht {
-    background-color: #315a58;
-    color: #a8e4df;
 }
 
 .asset-pill-folder {
@@ -829,12 +812,6 @@
     min-width: 88dp;
     flex-shrink: 1;
 }
-
-.asset-col-type {
-    width: 58dp;
-    flex-shrink: 0;
-}
-
 
 .asset-col-folder {
     width: 58dp;

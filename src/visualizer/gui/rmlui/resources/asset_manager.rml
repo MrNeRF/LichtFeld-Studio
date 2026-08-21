@@ -92,9 +92,6 @@
                   <div class="asset-card-slot" data-style-width="asset_card_slot_width" data-for="asset : assets">
                     <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <div class="asset-card-thumb asset-thumb-project" data-style-decorator="asset.thumbnail_decorator">
-                        <div class="asset-card-overlay">
-                          <span class="asset-pill asset-pill-licht">LICHT</span>
-                        </div>
                       </div>
                       <div class="asset-card-body">
                         <div class="asset-card-title-row">
@@ -120,7 +117,6 @@
             <div class="asset-scroll-shell asset-scroll-shell-list" data-if="is_list_view">
               <div class="asset-list-header">
                 <span class="asset-col asset-col-name">{{col_name_label}}</span>
-                <span class="asset-col asset-col-type">{{col_type_label}}</span>
                 <span class="asset-col asset-col-folder">{{col_folder_label}}</span>
                 <span class="asset-col asset-col-size">{{col_size_label}}</span>
                 <span class="asset-col asset-col-modified">{{col_modified_label}}</span>
@@ -134,7 +130,6 @@
                         <span class="asset-list-primary">{{asset.display_name}}</span>
                         <span class="asset-list-secondary">{{asset.display_subtitle}}</span>
                       </span>
-                      <span class="asset-col asset-col-type">LICHT</span>
                       <span class="asset-col asset-col-folder">{{asset.folder_name}}</span>
                       <span class="asset-col asset-col-size">{{asset.size_label}}</span>
                       <span class="asset-col asset-col-modified">{{asset.saved_label}}</span>
@@ -171,7 +166,6 @@
             <div data-if="show_selection_asset">
               <div class="asset-info-header">
                 <span class="asset-info-name">{{selected_asset_name}}</span>
-                <span class="asset-pill asset-pill-licht">LICHT</span>
               </div>
 
               <div class="asset-info-section">

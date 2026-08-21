@@ -198,7 +198,6 @@
     "info_panel.asset_details": "에셋 세부정보",
     "info_panel.folder_details": "폴더 세부정보",
     "info_panel.file_not_found": "파일을 찾을 수 없음",
-    "property.type": "유형",
     "property.path": "경로",
     "property.size": "크기",
     "property.created": "생성됨",

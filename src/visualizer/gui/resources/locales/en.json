@@ -198,7 +198,6 @@
     "info_panel.asset_details": "Asset Details",
     "info_panel.folder_details": "Folder Details",
     "info_panel.file_not_found": "File Not Found",
-    "property.type": "Type",
     "property.path": "Path",
     "property.size": "Size",
     "property.created": "Created",

@@ -199,7 +199,6 @@
     "info_panel.asset_details": "Détails de la ressource",
     "info_panel.folder_details": "Détails du dossier",
     "info_panel.file_not_found": "Fichier Non Trouvé",
-    "property.type": "Type",
     "property.path": "Chemin",
     "property.size": "Taille",
     "property.created": "Créé",
