@@ -49,6 +49,7 @@ class PreferencesPanel(Panel):
         "view_snap",
         "key_bindings",
         "interface",
+        "file_associations",
         "mcp",
     )
 
@@ -70,6 +71,7 @@ class PreferencesPanel(Panel):
         self._mcp_safe_mode = False
         self._last_mcp_runtime_config = None
         self._document = None
+        self._file_associations = []
 
     def on_bind_model(self, ctx):
         self._read_mcp_preferences()
@@ -82,6 +84,8 @@ class PreferencesPanel(Panel):
         model.bind_func("show_appearance", lambda: self._section == "appearance")
         model.bind_func("show_input", lambda: self._section == "input")
         model.bind_func("show_interface", lambda: self._section == "interface")
+        model.bind_func("show_file_associations", self._show_file_associations)
+        model.bind_func("has_file_associations", self._has_file_associations)
         model.bind_func("show_mcp", lambda: self._section == "mcp")
         model.bind_func("show_section_reset", lambda: True)
         model.bind_func("reset_section_label", self._reset_section_label)
@@ -129,7 +133,9 @@ class PreferencesPanel(Panel):
         model.bind_event("show_appearance", lambda *_: self._set_section("appearance"))
         model.bind_event("show_input", lambda *_: self._set_section("input"))
         model.bind_event("show_interface", lambda *_: self._set_section("interface"))
+        model.bind_event("show_file_associations", lambda *_: self._set_section("file_associations"))
         model.bind_event("show_mcp", lambda *_: self._set_section("mcp"))
+        model.bind_event("set_file_association", self._on_set_file_association)
         model.bind_event("toggle_mcp_enabled", self._on_toggle_mcp_enabled)
         model.bind_event("mcp_port_change", self._on_mcp_port_change)
         model.bind_event("confirm_mcp_port", self._on_confirm_mcp_port)
@@ -141,8 +147,10 @@ class PreferencesPanel(Panel):
         model.bind_record_list("scene_upscaler_presets")
         model.bind_record_list("languages")
         model.bind_record_list("navigation_modes")
+        model.bind_record_list("file_associations")
         self._handle = model.get_handle()
         self._keymap.bind(model)
+        self._reload_file_associations()
 
     def on_mount(self, doc):
         # The title bar is a cancellation boundary for the drafted MCP port,
@@ -245,6 +253,7 @@ class PreferencesPanel(Panel):
                 for index, (_mode, label) in enumerate(self.NAVIGATION_OPTIONS)
             ],
         )
+        self._reload_file_associations()
 
     def _theme_index(self):
         current = lf.ui.get_theme()
@@ -635,9 +644,76 @@ class PreferencesPanel(Panel):
     def _on_open_mcp_log_folder(self, _handle, _event, _args):
         lf.ui.open_url(lf.ui.get_mcp_log_directory())
 
+    @staticmethod
+    def _coerce_bool(value):
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _file_association_status_rows(self):
+        getter = getattr(lf, "file_associations_status", None)
+        if not callable(getter):
+            return []
+        rows = getter()
+        if not rows:
+            return []
+        result = []
+        for row in rows:
+            extension = str(row.get("extension", "")).strip()
+            if not extension:
+                continue
+            result.append(
+                {
+                    "extension": extension,
+                    "registered": bool(row.get("registered", False)),
+                    "label": extension,
+                }
+            )
+        return result
+
+    def _reload_file_associations(self):
+        self._file_associations = self._file_association_status_rows()
+        if self._handle:
+            self._handle.update_record_list(
+                "file_associations",
+                [
+                    {
+                        "extension": row["extension"],
+                        "registered": row["registered"],
+                        "label": row["label"],
+                    }
+                    for row in self._file_associations
+                ],
+            )
+            dirty = getattr(self._handle, "dirty", None)
+            if callable(dirty):
+                dirty("has_file_associations")
+                dirty("show_file_associations")
+
+    def _has_file_associations(self):
+        return bool(self._file_associations)
+
+    def _show_file_associations(self):
+        return self._section == "file_associations" and self._has_file_associations()
+
+    def _on_set_file_association(self, _handle, _event, args):
+        if not args or len(args) < 2:
+            return
+        self._set_file_association(args[0], args[1])
+
+    def _set_file_association(self, extension, enabled):
+        setter = getattr(lf, "file_association_set", None)
+        if not callable(setter):
+            return False
+        ok = bool(setter(str(extension), self._coerce_bool(enabled)))
+        self._reload_file_associations()
+        return ok
+
     def _consume_section_request(self):
         section = lf.ui.take_preferences_section_request()
-        if section in ("general", "appearance", "input", "interface", "mcp"):
+        if section in ("general", "appearance", "input", "interface", "file_associations", "mcp"):
+            if section == "file_associations" and not self._has_file_associations():
+                return
             self._set_section(section)
 
     def _dirty_mcp(self):
@@ -679,8 +755,17 @@ class PreferencesPanel(Panel):
             return
         self._section = section
         if self._handle:
-            for name in ("show_general", "show_appearance", "show_input", "show_interface", "show_mcp",
-                          "show_section_reset", "reset_section_label"):
+            for name in (
+                "show_general",
+                "show_appearance",
+                "show_input",
+                "show_interface",
+                "show_file_associations",
+                "has_file_associations",
+                "show_mcp",
+                "show_section_reset",
+                "reset_section_label",
+            ):
                 self._handle.dirty(name)
 
     def _on_toggle_section(self, _handle, _event, args):

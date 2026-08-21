@@ -785,6 +785,8 @@
     "language": "Język:",
     "select_language": "Wybierz Język",
     "interface": "Interfejs",
+    "file_associations": "Skojarzenia plików",
+    "file_associations_description": "Zarejestruj lub usuń LichtFeld Studio jako program obsługujący każdy typ pliku.",
     "general": "Ogólne",
     "appearance": "Wygląd",
     "scene_rendering": "Renderowanie sceny",
@@ -2007,7 +2009,7 @@
   },
   "file_association": {
     "title": "Ustaw jako domyślną aplikację",
-    "message": "Czy chcesz ustawić LichtFeld Studio jako domyślną aplikację dla plików splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)?",
+    "message": "Czy chcesz ustawić LichtFeld Studio jako domyślną aplikację dla plików splat i projektów (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)?",
     "yes": "Tak",
     "not_now": "Nie teraz",
     "dont_ask": "Nie pytaj ponownie",

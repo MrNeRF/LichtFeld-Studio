@@ -785,6 +785,8 @@
     "language": "Sprache:",
     "select_language": "Sprache auswählen",
     "interface": "Oberfläche",
+    "file_associations": "Dateizuordnungen",
+    "file_associations_description": "LichtFeld Studio als Handler für jeden Dateityp registrieren oder entfernen.",
     "general": "Allgemein",
     "appearance": "Erscheinungsbild",
     "scene_rendering": "Szenen-Rendering",
@@ -2007,7 +2009,7 @@
   },
   "file_association": {
     "title": "Als Standardanwendung festlegen",
-    "message": "Möchten Sie LichtFeld Studio als Standardanwendung für Splat-Dateien (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) festlegen?",
+    "message": "Möchten Sie LichtFeld Studio als Standardanwendung für Splat- und Projektdateien (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht) festlegen?",
     "yes": "Ja",
     "not_now": "Nicht jetzt",
     "dont_ask": "Nicht mehr fragen",

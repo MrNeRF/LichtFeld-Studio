@@ -21,7 +21,7 @@ class GettingStartedOperator(Operator):
 
 class SetDefaultAppOperator(Operator):
     label = "file_association.menu_register"
-    description = "Open Windows default app settings for splat files (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)"
+    description = "Open Windows default app settings for splat and project files (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)"
 
     def execute(self, context) -> set:
         lf.ui.register_file_associations()

@@ -785,6 +785,8 @@
     "language": "Taal:",
     "select_language": "Selecteer Taal",
     "interface": "Interface",
+    "file_associations": "Bestandskoppelingen",
+    "file_associations_description": "LichtFeld Studio als programma voor elk bestandstype registreren of verwijderen.",
     "general": "Algemeen",
     "appearance": "Uiterlijk",
     "scene_rendering": "Scènerendering",
@@ -2007,7 +2009,7 @@
   },
   "file_association": {
     "title": "Instellen als standaardtoepassing",
-    "message": "Wilt u LichtFeld Studio instellen als de standaardtoepassing voor splat-bestanden (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)?",
+    "message": "Wilt u LichtFeld Studio instellen als de standaardtoepassing voor splat- en projectbestanden (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)?",
     "yes": "Ja",
     "not_now": "Niet nu",
     "dont_ask": "Niet meer vragen",

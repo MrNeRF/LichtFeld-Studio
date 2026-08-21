@@ -785,6 +785,8 @@
     "language": "Lingua:",
     "select_language": "Seleziona Lingua",
     "interface": "Interfaccia",
+    "file_associations": "Associazioni file",
+    "file_associations_description": "Registra o rimuovi LichtFeld Studio come gestore per ogni tipo di file.",
     "general": "Generale",
     "appearance": "Aspetto",
     "scene_rendering": "Rendering della scena",
@@ -2007,7 +2009,7 @@
   },
   "file_association": {
     "title": "Imposta come applicazione predefinita",
-    "message": "Vuoi impostare LichtFeld Studio come applicazione predefinita per i file splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)?",
+    "message": "Vuoi impostare LichtFeld Studio come applicazione predefinita per i file splat e di progetto (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)?",
     "yes": "Sì",
     "not_now": "Non ora",
     "dont_ask": "Non chiedere più",

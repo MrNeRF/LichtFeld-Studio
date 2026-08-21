@@ -62,6 +62,7 @@
 #include "core/session_breadcrumb.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
+#include "gui/utils/file_association.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
@@ -2171,6 +2172,27 @@ NB_MODULE(lichtfeld, m) {
             lfs::vis::saveCameraViewSnapPreference(enabled);
         },
         nb::arg("enabled"), "Enable or disable camera axis-view snapping");
+    m.def(
+        "file_associations_status", []() {
+            nb::list rows;
+            for (const auto& entry : lfs::vis::gui::fileAssociationsStatus()) {
+                nb::dict row;
+                row["extension"] = entry.extension;
+                row["registered"] = entry.registered;
+                rows.append(row);
+            }
+            return rows;
+        },
+        "Return whether LichtFeld Studio is registered as a handler for each known file extension (Windows only)");
+    m.def(
+        "file_association_set",
+        [](const std::string& extension, bool enabled) -> bool {
+            if (enabled)
+                return lfs::vis::gui::registerFileAssociation(extension);
+            return lfs::vis::gui::unregisterFileAssociation(extension);
+        },
+        nb::arg("extension"), nb::arg("enabled"),
+        "Register or unregister LichtFeld Studio as a handler for one file extension (Windows only)");
     m.def(
         "toggle_fullscreen", []() { lfs::core::events::ui::ToggleFullscreen{}.emit(); },
         "Toggle fullscreen mode");

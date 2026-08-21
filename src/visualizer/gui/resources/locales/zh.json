@@ -785,6 +785,8 @@
     "language": "语言：",
     "select_language": "选择语言",
     "interface": "界面",
+    "file_associations": "文件关联",
+    "file_associations_description": "为每种文件类型注册或取消 LichtFeld Studio 作为打开程序。",
     "general": "常规",
     "appearance": "外观",
     "scene_rendering": "场景渲染",
@@ -2007,7 +2009,7 @@
   },
   "file_association": {
     "title": "设为默认应用程序",
-    "message": "是否要将 LichtFeld Studio 设为 splat 文件（.ply、.sog、.spz、.rad、.usd、.usda、.usdc、.usdz）的默认应用程序？",
+    "message": "是否要将 LichtFeld Studio 设为 splat 和项目文件（.ply、.sog、.spz、.rad、.usd、.usda、.usdc、.usdz、.licht）的默认应用程序？",
     "yes": "是",
     "not_now": "暂不",
     "dont_ask": "不再询问",

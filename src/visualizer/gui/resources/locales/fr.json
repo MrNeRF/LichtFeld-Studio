@@ -786,6 +786,8 @@
     "language": "Langue :",
     "select_language": "Sélectionner la Langue",
     "interface": "Interface",
+    "file_associations": "Associations de fichiers",
+    "file_associations_description": "Enregistrer ou retirer LichtFeld Studio comme gestionnaire pour chaque type de fichier.",
     "general": "Général",
     "appearance": "Apparence",
     "scene_rendering": "Rendu de la scène",
@@ -2008,7 +2010,7 @@
   },
   "file_association": {
     "title": "Définir comme application par défaut",
-    "message": "Souhaitez-vous définir LichtFeld Studio comme application par défaut pour les fichiers splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) ?",
+    "message": "Souhaitez-vous définir LichtFeld Studio comme application par défaut pour les fichiers splat et projet (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht) ?",
     "yes": "Oui",
     "not_now": "Pas maintenant",
     "dont_ask": "Ne plus demander",

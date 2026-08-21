@@ -785,6 +785,8 @@
     "language": "Language:",
     "select_language": "Select Language",
     "interface": "Interface",
+    "file_associations": "File Associations",
+    "file_associations_description": "Register or remove LichtFeld Studio as a handler for each file type.",
     "general": "General",
     "appearance": "Appearance",
     "scene_rendering": "Scene Rendering",
@@ -2007,7 +2009,7 @@
   },
   "file_association": {
     "title": "Set as Default Application",
-    "message": "Would you like to set LichtFeld Studio as the default application for splat files (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)?",
+    "message": "Would you like to set LichtFeld Studio as the default application for splat and project files (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)?",
     "yes": "Yes",
     "not_now": "Not Now",
     "dont_ask": "Don't Ask Again",

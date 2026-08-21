@@ -785,6 +785,8 @@
     "language": "言語:",
     "select_language": "言語を選択",
     "interface": "インターフェース",
+    "file_associations": "ファイルの関連付け",
+    "file_associations_description": "ファイルの種類ごとに LichtFeld Studio を関連付けるか解除します。",
     "general": "一般",
     "appearance": "外観",
     "scene_rendering": "シーンレンダリング",
@@ -2007,7 +2009,7 @@
   },
   "file_association": {
     "title": "既定のアプリケーションに設定",
-    "message": "LichtFeld Studioをスプラットファイル（.ply、.sog、.spz、.rad、.usd、.usda、.usdc、.usdz）の既定のアプリケーションに設定しますか？",
+    "message": "LichtFeld Studioをスプラットおよびプロジェクトファイル（.ply、.sog、.spz、.rad、.usd、.usda、.usdc、.usdz、.licht）の既定のアプリケーションに設定しますか？",
     "yes": "はい",
     "not_now": "後で",
     "dont_ask": "今後表示しない",

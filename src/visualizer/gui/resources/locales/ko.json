@@ -785,6 +785,8 @@
     "language": "언어:",
     "select_language": "언어 선택",
     "interface": "인터페이스",
+    "file_associations": "파일 연결",
+    "file_associations_description": "각 파일 형식별 LichtFeld Studio 연결을 등록하거나 해제합니다.",
     "general": "일반",
     "appearance": "모양",
     "scene_rendering": "장면 렌더링",
@@ -2007,7 +2009,7 @@
   },
   "file_association": {
     "title": "기본 응용 프로그램으로 설정",
-    "message": "LichtFeld Studio를 스플랫 파일(.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)의 기본 응용 프로그램으로 설정하시겠습니까?",
+    "message": "LichtFeld Studio를 스플랫 및 프로젝트 파일(.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)의 기본 응용 프로그램으로 설정하시겠습니까?",
     "yes": "예",
     "not_now": "나중에",
     "dont_ask": "다시 묻지 않기",
