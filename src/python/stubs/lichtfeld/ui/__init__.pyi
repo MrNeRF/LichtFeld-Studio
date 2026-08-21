@@ -1845,6 +1845,11 @@ def open_folder_dialog(title: str = 'Select Folder', start_dir: str = '') -> str
     Open a folder selection dialog. Returns empty string if cancelled. title is accepted for compatibility and currently ignored.
     """
 
+def open_project_file_dialog(start_dir: str = '') -> str:
+    """
+    Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.
+    """
+
 def open_ply_file_dialog(start_dir: str = '') -> str:
     """
     Open a file dialog to select a splat file (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
@@ -2499,9 +2504,6 @@ def free_plugin_icons(plugin_name: str) -> None:
 
 def free_plugin_textures(plugin_name: str) -> None:
     """Free all dynamic textures associated with a plugin"""
-
-def set_save_asset_callback(save_cb: Callable) -> None:
-    """Set callback for Save Asset operation from scene graph"""
 
 class DynamicTexture:
     @overload

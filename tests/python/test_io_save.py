@@ -291,31 +291,6 @@ class TestSaveSPZ:
         assert b"export_id" not in data
 
 
-class TestAssetScannerSpzHeader:
-    """asset_scanner._parse_spz_header coverage for generated v3/v4 files."""
-
-    def test_parse_spz_header_v3_and_v4(self, lf, benchmark_ply, tmp_output):
-        from lfs_plugins.asset_scanner import AssetScanner
-
-        result = lf.io.load(str(benchmark_ply))
-        v3_path = tmp_output / "header_v3.spz"
-        v4_path = tmp_output / "header_v4.spz"
-        lf.io.save_spz(result.splat_data, str(v3_path), version=3)
-        lf.io.save_spz(result.splat_data, str(v4_path), version=4)
-
-        scanner = AssetScanner()
-        v3 = scanner._parse_spz_header(str(v3_path))
-        v4 = scanner._parse_spz_header(str(v4_path))
-
-        assert v3 is not None
-        assert v3["version"] == 3
-        assert v3["vertex_count"] == result.splat_data.num_points
-
-        assert v4 is not None
-        assert v4["version"] == 4
-        assert v4["vertex_count"] == result.splat_data.num_points
-
-
 class TestSaveSOG:
     """Tests for SOG (SuperSplat) save functionality."""
 

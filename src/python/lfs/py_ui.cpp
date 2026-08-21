@@ -254,8 +254,6 @@ namespace lfs::python {
         nb::object
             g_project_switch_confirmation_callback;
         nb::object g_open_camera_preview_callback;
-        nb::object g_save_asset_callback;
-
         constexpr std::string_view LEGACY_POPUP_PANEL = "__legacy_popup__";
         constexpr std::string_view LEGACY_POPUP_SECTION = "draw";
         const std::string LEGACY_POPUP_PANEL_STR{LEGACY_POPUP_PANEL};
@@ -3206,6 +3204,19 @@ namespace lfs::python {
             "title is accepted for compatibility and currently ignored.");
 
         m.def(
+            "open_project_file_dialog",
+            [](const std::string& start_dir) -> std::string {
+                std::filesystem::path start_path;
+                if (!start_dir.empty()) {
+                    start_path = lfs::core::utf8_to_path(start_dir);
+                }
+                auto result = lfs::vis::gui::OpenProjectFileDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("start_dir") = "",
+            "Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.");
+
+        m.def(
             "open_ply_file_dialog",
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;
@@ -4716,22 +4727,6 @@ namespace lfs::python {
 
         m.def("free_plugin_textures", &free_plugin_textures, nb::arg("plugin_name"),
               "Free all dynamic textures associated with a plugin");
-
-        // Asset Manager save callback
-        m.def(
-            "set_save_asset_callback", [](nb::callable save_cb) {
-                  g_save_asset_callback = std::move(save_cb);
-                  set_save_asset_callback(
-                      [](const char* node_name) {
-                          if (g_save_asset_callback) {
-                              try {
-                                  nb::gil_scoped_acquire gil;
-                                  g_save_asset_callback(node_name);
-                              } catch (const std::exception& e) {
-                                  LOG_ERROR("Save asset callback failed: {}", e.what());
-                              }
-                          }
-                      }); }, nb::arg("save_cb"), "Set callback for Save Asset operation from scene graph");
 
         nb::class_<PyDynamicTexture>(m, "DynamicTexture")
             .def(nb::init<>())

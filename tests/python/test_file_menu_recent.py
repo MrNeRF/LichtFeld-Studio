@@ -71,14 +71,6 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     types_stub.Operator = Operator
     monkeypatch.setitem(sys.modules, "lfs_plugins.types", types_stub)
 
-    asset_stub = ModuleType("lfs_plugins.asset_manager_integration")
-    asset_stub.register_catalog_asset_path = lambda *_args, **_kwargs: None
-    monkeypatch.setitem(
-        sys.modules,
-        "lfs_plugins.asset_manager_integration",
-        asset_stub,
-    )
-
     imports_stub = ModuleType("lfs_plugins.import_panels")
     imports_stub.open_dataset_import_panel = lambda _path: None
     imports_stub.open_resume_checkpoint_panel = lambda _path: None
@@ -219,4 +211,3 @@ def test_open_recent_existing_other_error_shows_message(monkeypatch, tmp_path):
     _title, message, style = file_menu.lf.message_dialogs[0]
     assert style == "error"
     assert "boom" in message
-

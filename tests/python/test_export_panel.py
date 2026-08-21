@@ -62,7 +62,6 @@ def _install_lf_stub(monkeypatch):
         get_export_state=lambda: dict(state.export_state),
         set_panel_enabled=lambda panel_id, enabled: state.set_panel_enabled_calls.append((panel_id, enabled)),
         cancel_export=lambda: setattr(state, "cancel_calls", state.cancel_calls + 1),
-        set_save_asset_callback=lambda _callback: None,
         save_ply_file_dialog=lambda default_name: f"/tmp/{default_name}.ply",
         save_sog_file_dialog=lambda default_name: f"/tmp/{default_name}.sog",
         save_spz_file_dialog=lambda default_name: f"/tmp/{default_name}.spz",

@@ -782,9 +782,6 @@ namespace lfs::vis {
             }
         });
         callback_cleanup_.add([] { python::set_export_callback(nullptr); });
-
-        // Asset Manager save callback - implementation handled by Python runtime
-        callback_cleanup_.add([] { python::set_save_asset_callback(nullptr); });
     }
 
     void VisualizerImpl::setupViewContextBridge() {
@@ -1781,19 +1778,6 @@ namespace lfs::vis {
         state::SceneCleared::when([](const auto&) {
             app_store().scene_generation.set(python::get_scene_generation());
             python::update_scene(false, "");
-        });
-
-        // Asset Manager save event handler
-        cmd::SaveAsset::when([this](const auto& cmd) {
-            python::invoke_save_asset(cmd.node_name);
-        });
-
-        cmd::SaveAssetById::when([this](const auto& cmd) {
-            if (!scene_manager_)
-                return;
-            const auto* node = scene_manager_->getScene().getNodeById(static_cast<core::NodeId>(cmd.node_id));
-            if (node)
-                python::invoke_save_asset(node->name);
         });
     }
 
