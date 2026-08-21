@@ -65,6 +65,7 @@
                   </div>
                 </div>
                 <div class="asset-folder-dropdown" data-class-is-visible="folder.menu_open">
+                  <div class="asset-dropdown-item" data-attr-data-folder-id="folder.id" data-folder-action="watch_dirs">{{edit_watch_dirs_label}}</div>
                   <div class="asset-dropdown-item" data-attr-data-folder-id="folder.id" data-folder-action="rename">{{rename_folder_label}}</div>
                   <div class="asset-dropdown-item is-danger" data-attr-data-folder-id="folder.id" data-folder-action="delete">{{delete_folder_label}}</div>
                 </div>

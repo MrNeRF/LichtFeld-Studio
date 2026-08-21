@@ -227,6 +227,7 @@
     "action.show_in_folder": "フォルダに表示",
     "action.move_to_folder": "フォルダに移動",
     "action.new_folder": "+ 新規フォルダ",
+    "action.edit_watch_dirs": "監視ディレクトリを編集",
     "action.rename_folder": "フォルダ名を変更",
     "action.delete_folder": "フォルダを削除",
     "action.create_new_folder": "新規フォルダを作成",
@@ -1556,6 +1557,16 @@
     "cleanup_error": "[クリーンアップ] {}",
     "open_failed": "開けませんでした: {}",
     "save_failed": "保存できませんでした: {}"
+  },
+  "watch_dirs": {
+    "title": "監視フォルダー",
+    "subtitle": "これらのフォルダーから .licht プロジェクトを再帰的にインポートします。",
+    "add_directory": "+ フォルダーを追加",
+    "empty": "監視フォルダーはありません。",
+    "save_scan": "保存してスキャン",
+    "scanning": "スキャン中...",
+    "done": "完了",
+    "scan_complete_summary": "スキャン完了。{discovered} 件検出、{added} 件追加。"
   },
   "axis": {
     "x": "X:",

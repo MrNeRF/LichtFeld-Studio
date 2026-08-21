@@ -20,10 +20,28 @@ _log = logging.getLogger(__name__)
 _T = TypeVar("_T")
 _ASSET_INDEX_LOCK = threading.RLock()
 
-LIBRARY_VERSION = "1.1.0"
+LIBRARY_VERSION = "1.2.0"
 SUPPORTED_ASSET_EXTENSION = ".licht"
 DEFAULT_FOLDER_ID = "default"
 DEFAULT_FOLDER_NAME = "Default"
+
+
+def _normalize_watch_directories(paths: Any) -> List[str]:
+    if not isinstance(paths, (list, tuple)):
+        return []
+    normalized_paths: List[str] = []
+    seen = set()
+    for path in paths:
+        text = str(path).strip()
+        if not text:
+            continue
+        normalized = os.path.abspath(os.path.expanduser(text))
+        key = os.path.normcase(normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized_paths.append(normalized)
+    return normalized_paths
 
 
 def _synchronized(method: Callable[..., _T]) -> Callable[..., _T]:
@@ -104,6 +122,7 @@ class Folder:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     modified_at: str = field(default_factory=lambda: datetime.now().isoformat())
     scene_ids: List[str] = field(default_factory=list)
+    watch_directories: List[str] = field(default_factory=list)
     notes: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
@@ -120,6 +139,9 @@ class Folder:
             created_at=data.get("created_at", datetime.now().isoformat()),
             modified_at=data.get("modified_at", datetime.now().isoformat()),
             scene_ids=data.get("scene_ids", []),
+            watch_directories=_normalize_watch_directories(
+                data.get("watch_directories", [])
+            ),
             notes=data.get("notes", ""),
         )
 
@@ -590,10 +612,37 @@ class AssetIndex:
         if folder_id == DEFAULT_FOLDER_ID:
             folder = self._folders[folder_id]
             folder.scene_ids = []
+            folder.watch_directories = []
             folder.modified_at = now
         else:
             del self._folders[folder_id]
         return self.save()
+
+    @_synchronized
+    def get_watch_dirs(self, folder_id: str) -> List[str]:
+        """Return the directories scanned for .licht projects in a folder."""
+        folder = self._folders.get(folder_id)
+        return list(folder.watch_directories) if folder is not None else []
+
+    @_synchronized
+    def set_watch_dirs(self, folder_id: str, paths: List[str]) -> bool:
+        """Persist normalized, unique .licht discovery roots for a folder."""
+        folder = self._folders.get(folder_id)
+        if folder is None:
+            return False
+
+        normalized_paths = _normalize_watch_directories(paths)
+
+        previous_paths = folder.watch_directories
+        previous_modified_at = folder.modified_at
+        folder.watch_directories = normalized_paths
+        folder.modified_at = datetime.now().isoformat()
+        if self.save():
+            return True
+
+        folder.watch_directories = previous_paths
+        folder.modified_at = previous_modified_at
+        return False
 
 
     # -------------------------------------------------------------------------

@@ -227,6 +227,7 @@
     "action.show_in_folder": "Pokaż w Folderze",
     "action.move_to_folder": "Przenieś do Folderu",
     "action.new_folder": "+ Nowy folder",
+    "action.edit_watch_dirs": "Edytuj Obserwowane Katalogi",
     "action.rename_folder": "Zmień Nazwę Folderu",
     "action.delete_folder": "Usuń Folder",
     "action.create_new_folder": "Utwórz nowy Folder",
@@ -1556,6 +1557,16 @@
     "cleanup_error": "[Czyszczenie] {}",
     "open_failed": "Nie udało się otworzyć: {}",
     "save_failed": "Nie udało się zapisać: {}"
+  },
+  "watch_dirs": {
+    "title": "Obserwowane katalogi",
+    "subtitle": "Importuj rekursywnie projekty .licht z tych katalogów.",
+    "add_directory": "+ Dodaj katalog",
+    "empty": "Brak obserwowanych katalogów.",
+    "save_scan": "Zapisz i skanuj",
+    "scanning": "Skanowanie...",
+    "done": "Gotowe",
+    "scan_complete_summary": "Skanowanie ukończone. Znaleziono {discovered}, dodano {added}."
   },
   "axis": {
     "x": "X:",

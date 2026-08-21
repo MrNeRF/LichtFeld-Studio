@@ -227,6 +227,7 @@
     "action.show_in_folder": "Show in Folder",
     "action.move_to_folder": "Move to Folder",
     "action.new_folder": "+ New folder",
+    "action.edit_watch_dirs": "Edit Watched Directories",
     "action.rename_folder": "Rename Folder",
     "action.delete_folder": "Delete Folder",
     "action.create_new_folder": "Create new Folder",
@@ -1556,6 +1557,16 @@
     "cleanup_error": "[Cleanup] {}",
     "open_failed": "Failed to open: {}",
     "save_failed": "Failed to save: {}"
+  },
+  "watch_dirs": {
+    "title": "Watched Directories",
+    "subtitle": "Recursively import .licht projects from these directories.",
+    "add_directory": "+ Add Directory",
+    "empty": "No watched directories.",
+    "save_scan": "Save & Scan",
+    "scanning": "Scanning...",
+    "done": "Done",
+    "scan_complete_summary": "Scan complete. Found {discovered}, added {added}."
   },
   "axis": {
     "x": "X:",

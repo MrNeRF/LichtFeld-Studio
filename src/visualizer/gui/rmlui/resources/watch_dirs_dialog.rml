@@ -1,0 +1,29 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="import_dialog.rcss"/>
+  <link type="text/rcss" href="watch_dirs_dialog.rcss"/>
+</head>
+<body template="floating-window" data-model="watch_dirs_dialog">
+  <span class="impdlg-subtitle text-muted">{{subtitle}}</span>
+
+  <div class="watchdirs-toolbar">
+    <button class="btn btn--secondary" data-event-click="on_browse_add">{{add_directory_label}}</button>
+  </div>
+
+  <div class="watchdirs-list">
+    <div class="watchdirs-row" data-for="dir : watch_dirs_list">
+      <span class="impdlg-value watchdirs-path">{{dir.path}}</span>
+      <button class="btn btn--secondary watchdirs-remove" data-event-click="on_remove_dir(it_index)">{{remove_label}}</button>
+    </div>
+    <span class="status-text status-muted" data-if="is_empty">{{empty_label}}</span>
+  </div>
+
+  <span class="watchdirs-status text-muted" data-if="scan_status_visible">{{scan_status}}</span>
+
+  <div class="impdlg-buttons">
+    <button type="button" class="btn btn--secondary impdlg-action-btn" data-event-click="on_cancel" data-attrif-disabled="scan_active">{{cancel_label}}</button>
+    <button type="button" class="btn btn--primary impdlg-action-btn" data-event-click="on_save" data-attrif-disabled="scan_active">{{save_scan_label}}</button>
+  </div>
+</body>
+</rml>

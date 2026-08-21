@@ -228,6 +228,7 @@
     "action.show_in_folder": "Afficher dans le Dossier",
     "action.move_to_folder": "Déplacer vers Dossier",
     "action.new_folder": "+ Nouveau dossier",
+    "action.edit_watch_dirs": "Modifier les Répertoires Surveillés",
     "action.rename_folder": "Renommer le Dossier",
     "action.delete_folder": "Supprimer le Dossier",
     "action.create_new_folder": "Créer un nouveau Dossier",
@@ -1557,6 +1558,16 @@
     "cleanup_error": "[Nettoyage] {}",
     "open_failed": "Impossible d’ouvrir : {}",
     "save_failed": "Impossible d’enregistrer : {}"
+  },
+  "watch_dirs": {
+    "title": "Répertoires surveillés",
+    "subtitle": "Importe récursivement les projets .licht depuis ces répertoires.",
+    "add_directory": "+ Ajouter un répertoire",
+    "empty": "Aucun répertoire surveillé.",
+    "save_scan": "Enregistrer et analyser",
+    "scanning": "Analyse...",
+    "done": "Terminé",
+    "scan_complete_summary": "Analyse terminée. {discovered} trouvées, {added} ajoutées."
   },
   "axis": {
     "x": "X :",

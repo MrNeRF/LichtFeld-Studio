@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from lfs_plugins.asset_index import AssetIndex
+from lfs_plugins.asset_watch import scan_watch_directories
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -142,6 +143,31 @@ def test_deleting_last_project_keeps_default_import_folder(lf, tmp_path: Path):
     assert replacement is not None
 
 
+def test_watched_directory_scan_registers_only_licht_projects(lf, tmp_path: Path):
+    watched = tmp_path / "watched"
+    nested = watched / "nested"
+    nested.mkdir(parents=True)
+    first = watched / "a.licht"
+    duplicate = watched / "b.licht"
+    second = nested / "c.LICHT"
+    first.write_bytes(b"first project")
+    shutil.copy2(first, duplicate)
+    second.write_bytes(b"second project")
+    (watched / "legacy.ply").write_bytes(b"legacy splat")
+    (nested / "checkpoint.ckpt").write_bytes(b"legacy checkpoint")
+
+    index = AssetIndex(library_path=tmp_path / "library.json")
+    index.ensure_default_catalog()
+    result = scan_watch_directories(index, "default", [str(watched)])
+
+    assert result.discovered == 3
+    assert result.added == 2
+    assert result.already_cataloged == 1
+    assert result.failed == 0
+    assert len(index.list_projects()) == 2
+    assert all(Path(asset.absolute_path).suffix.lower() == ".licht" for asset in index.list_projects())
+
+
 def test_asset_library_binding_returns_canonical_path(lf):
     assert Path(lf.io.asset_library_dir()).name == "asset_library"
 
@@ -153,4 +179,5 @@ def test_asset_manager_ui_exposes_only_project_import_and_open_actions():
 
     assert 'data-event-click="on_import_project"' in rml
     assert 'data-asset-action="load"' in rml
+    assert 'data-folder-action="watch_dirs"' in rml
     assert rml.count('data-event-click="on_import_project"') == 1

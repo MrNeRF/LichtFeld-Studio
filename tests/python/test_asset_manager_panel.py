@@ -223,6 +223,35 @@ def test_builtin_registration_keeps_asset_manager_closed_by_default():
     ).read_text(encoding="utf-8")
 
     assert 'set_panel_enabled("lfs.asset_manager", False)' in panels_source
+    assert 'set_panel_enabled("lfs.watch_dirs_dialog", False)' in panels_source
+
+
+def test_edit_watch_directories_opens_for_clicked_folder(
+    asset_manager_panel_module, monkeypatch
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = object()
+    panel._open_menu_folder_id = "projects"
+    calls = []
+    monkeypatch.setattr(
+        asset_manager_panel_module,
+        "open_watch_dirs_dialog",
+        lambda index, folder_id, callback: calls.append(
+            (index, folder_id, callback)
+        )
+        or True,
+    )
+
+    event = _EventStub()
+    panel.on_edit_watch_dirs(None, event, ["projects"])
+
+    assert len(calls) == 1
+    assert calls[0][0] is panel._asset_index
+    assert calls[0][1] == "projects"
+    assert calls[0][2].__self__ is panel
+    assert panel._open_menu_folder_id is None
+    assert event.stopped is True
 
 
 def test_asset_manager_requests_update_from_reactive_store(asset_manager_panel_module, monkeypatch):

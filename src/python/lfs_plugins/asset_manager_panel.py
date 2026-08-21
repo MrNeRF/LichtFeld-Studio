@@ -17,6 +17,7 @@ from . import rml_widgets
 from .localization import localized_count
 from .types import Panel
 from .ui import RuntimeState
+from .watch_dirs_panel import open_watch_dirs_dialog
 
 _logger = logging.getLogger(__name__)
 _active_asset_manager_panel = None
@@ -364,6 +365,10 @@ class AssetManagerPanel(Panel):
         model.bind_func(
             "asset_results_summary_visible",
             self.get_asset_results_summary_visible,
+        )
+        model.bind_func(
+            "edit_watch_dirs_label",
+            lambda: tr("asset_manager.action.edit_watch_dirs"),
         )
         model.bind_func("rename_folder_label", lambda: tr("asset_manager.action.rename_folder"))
         model.bind_func("delete_folder_label", lambda: tr("asset_manager.action.delete_folder"))
@@ -2611,6 +2616,29 @@ class AssetManagerPanel(Panel):
 
         self._dirty_model("folders")
 
+    def on_edit_watch_dirs(self, _handle, _ev, args):
+        """Open .licht-only watched-directory settings for a folder."""
+        folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
+        if not folder_id or self._asset_index is None:
+            return
+
+        if _ev:
+            try:
+                _ev.stop_propagation()
+            except Exception:
+                pass
+
+        self._open_menu_folder_id = None
+        self._dirty_model("folders")
+        if not open_watch_dirs_dialog(
+            self._asset_index,
+            folder_id,
+            self.refresh_catalog,
+        ):
+            self._log_warn(
+                "Failed to open watched directories for folder %s", folder_id
+            )
+
     def on_rename_folder(self, _handle, _ev, args):
         """Open rename dialog for a folder."""
         folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
@@ -3086,6 +3114,10 @@ class AssetManagerPanel(Panel):
 
                 if action == "menu":
                     self.on_toggle_folder_menu(None, event, [folder_id])
+                    self._stop_event(event)
+                    return
+                elif action == "watch_dirs":
+                    self.on_edit_watch_dirs(None, event, [folder_id])
                     self._stop_event(event)
                     return
                 elif action == "rename":

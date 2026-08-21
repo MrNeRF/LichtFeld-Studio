@@ -227,6 +227,7 @@
     "action.show_in_folder": "Toon in Map",
     "action.move_to_folder": "Verplaats naar Map",
     "action.new_folder": "+ Nieuwe map",
+    "action.edit_watch_dirs": "Bewaakte Mappen Bewerken",
     "action.rename_folder": "Map Hernoemen",
     "action.delete_folder": "Map Verwijderen",
     "action.create_new_folder": "Nieuwe Map aanmaken",
@@ -1556,6 +1557,16 @@
     "cleanup_error": "[Opschonen] {}",
     "open_failed": "Openen mislukt: {}",
     "save_failed": "Opslaan mislukt: {}"
+  },
+  "watch_dirs": {
+    "title": "Bewaakte mappen",
+    "subtitle": "Importeer .licht-projecten recursief uit deze mappen.",
+    "add_directory": "+ Map toevoegen",
+    "empty": "Geen bewaakte mappen.",
+    "save_scan": "Opslaan en scannen",
+    "scanning": "Scannen...",
+    "done": "Gereed",
+    "scan_complete_summary": "Scan voltooid. {discovered} gevonden, {added} toegevoegd."
   },
   "axis": {
     "x": "X:",

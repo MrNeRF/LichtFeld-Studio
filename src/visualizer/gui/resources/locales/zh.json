@@ -227,6 +227,7 @@
     "action.show_in_folder": "在文件夹中显示",
     "action.move_to_folder": "移动到文件夹",
     "action.new_folder": "+ 新建文件夹",
+    "action.edit_watch_dirs": "编辑监视目录",
     "action.rename_folder": "重命名文件夹",
     "action.delete_folder": "删除文件夹",
     "action.create_new_folder": "创建新文件夹",
@@ -1556,6 +1557,16 @@
     "cleanup_error": "[清理] {}",
     "open_failed": "无法打开：{}",
     "save_failed": "无法保存：{}"
+  },
+  "watch_dirs": {
+    "title": "监视的目录",
+    "subtitle": "从这些目录递归导入 .licht 项目。",
+    "add_directory": "+ 添加目录",
+    "empty": "没有监视的目录。",
+    "save_scan": "保存并扫描",
+    "scanning": "扫描中...",
+    "done": "完成",
+    "scan_complete_summary": "扫描完成。找到 {discovered} 个，添加 {added} 个。"
   },
   "axis": {
     "x": "X:",

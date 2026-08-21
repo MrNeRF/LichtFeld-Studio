@@ -227,6 +227,7 @@
     "action.show_in_folder": "폴더에 표시",
     "action.move_to_folder": "폴더로 이동",
     "action.new_folder": "+ 새 폴더",
+    "action.edit_watch_dirs": "감시 디렉터리 편집",
     "action.rename_folder": "폴더 이름 바꾸기",
     "action.delete_folder": "폴더 삭제",
     "action.create_new_folder": "새 폴더 만들기",
@@ -1556,6 +1557,16 @@
     "cleanup_error": "[정리] {}",
     "open_failed": "열지 못했습니다: {}",
     "save_failed": "저장하지 못했습니다: {}"
+  },
+  "watch_dirs": {
+    "title": "감시 중인 디렉터리",
+    "subtitle": "이 디렉터리에서 .licht 프로젝트를 재귀적으로 가져옵니다.",
+    "add_directory": "+ 디렉터리 추가",
+    "empty": "감시 중인 디렉터리가 없습니다.",
+    "save_scan": "저장 및 검색",
+    "scanning": "검색 중...",
+    "done": "완료",
+    "scan_complete_summary": "검사 완료. {discovered}개 발견, {added}개 추가됨."
   },
   "axis": {
     "x": "X:",

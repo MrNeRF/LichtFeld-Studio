@@ -227,6 +227,7 @@
     "action.show_in_folder": "Im Ordner anzeigen",
     "action.move_to_folder": "Zu Ordner verschieben",
     "action.new_folder": "+ Neuer Ordner",
+    "action.edit_watch_dirs": "Überwachte Verzeichnisse bearbeiten",
     "action.rename_folder": "Ordner umbenennen",
     "action.delete_folder": "Ordner löschen",
     "action.create_new_folder": "Neuen Ordner erstellen",
@@ -1556,6 +1557,16 @@
     "cleanup_error": "[Bereinigung] {}",
     "open_failed": "Öffnen fehlgeschlagen: {}",
     "save_failed": "Speichern fehlgeschlagen: {}"
+  },
+  "watch_dirs": {
+    "title": "Überwachte Verzeichnisse",
+    "subtitle": ".licht-Projekte rekursiv aus diesen Verzeichnissen importieren.",
+    "add_directory": "+ Verzeichnis hinzufügen",
+    "empty": "Keine überwachten Verzeichnisse.",
+    "save_scan": "Speichern und durchsuchen",
+    "scanning": "Wird durchsucht...",
+    "done": "Fertig",
+    "scan_complete_summary": "Scan abgeschlossen. {discovered} gefunden, {added} hinzugefügt."
   },
   "axis": {
     "x": "X:",

@@ -227,6 +227,7 @@
     "action.show_in_folder": "Mostrar en carpeta",
     "action.move_to_folder": "Mover a carpeta",
     "action.new_folder": "+ Nueva carpeta",
+    "action.edit_watch_dirs": "Editar Directorios Vigilados",
     "action.rename_folder": "Renombrar carpeta",
     "action.delete_folder": "Eliminar carpeta",
     "action.create_new_folder": "Crear nueva Carpeta",
@@ -1556,6 +1557,16 @@
     "cleanup_error": "[Limpieza] {}",
     "open_failed": "No se pudo abrir: {}",
     "save_failed": "No se pudo guardar: {}"
+  },
+  "watch_dirs": {
+    "title": "Directorios supervisados",
+    "subtitle": "Importa recursivamente proyectos .licht desde estos directorios.",
+    "add_directory": "+ Añadir directorio",
+    "empty": "No hay directorios supervisados.",
+    "save_scan": "Guardar y analizar",
+    "scanning": "Analizando...",
+    "done": "Listo",
+    "scan_complete_summary": "Escaneo completado. Se encontraron {discovered}, se añadieron {added}."
   },
   "axis": {
     "x": "X:",

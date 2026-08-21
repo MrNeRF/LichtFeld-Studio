@@ -227,6 +227,7 @@
     "action.show_in_folder": "Mostra nella Cartella",
     "action.move_to_folder": "Sposta in Cartella",
     "action.new_folder": "+ Nuova cartella",
+    "action.edit_watch_dirs": "Modifica directory osservate",
     "action.rename_folder": "Rinomina Cartella",
     "action.delete_folder": "Elimina Cartella",
     "action.create_new_folder": "Crea nuova Cartella",
@@ -1556,6 +1557,16 @@
     "cleanup_error": "[Pulizia] {}",
     "open_failed": "Impossibile aprire: {}",
     "save_failed": "Impossibile salvare: {}"
+  },
+  "watch_dirs": {
+    "title": "Cartelle monitorate",
+    "subtitle": "Importa ricorsivamente i progetti .licht da queste cartelle.",
+    "add_directory": "+ Aggiungi cartella",
+    "empty": "Nessuna cartella monitorata.",
+    "save_scan": "Salva e scansiona",
+    "scanning": "Scansione...",
+    "done": "Fatto",
+    "scan_complete_summary": "Scansione completata. Trovati {discovered}, aggiunti {added}."
   },
   "axis": {
     "x": "X:",

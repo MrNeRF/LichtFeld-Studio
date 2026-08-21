@@ -167,9 +167,12 @@ def _build_builtin_panel_steps(lf):
 
     def asset_manager_panel():
         from .asset_manager_panel import AssetManagerPanel
+        from .watch_dirs_panel import WatchDirsDialogPanel
 
         lf.register_class(AssetManagerPanel)
         lf.ui.set_panel_enabled("lfs.asset_manager", False)
+        lf.register_class(WatchDirsDialogPanel)
+        lf.ui.set_panel_enabled("lfs.watch_dirs_dialog", False)
 
     def overlays():
         from .overlays import register as register_overlays

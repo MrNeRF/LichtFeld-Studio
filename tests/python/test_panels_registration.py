@@ -368,6 +368,7 @@ def test_all_good_registers_in_order_with_rendering_first(panels_module):
         "Mesh2SplatPanel",
         "PluginMarketplacePanel",
         "AssetManagerPanel",
+        "WatchDirsDialogPanel",
     ]
     for panel_name in expected_panels:
         assert panel_name in state.registered, f"missing register_class for {panel_name}"
