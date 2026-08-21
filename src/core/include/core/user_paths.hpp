@@ -67,6 +67,8 @@ namespace lfs::core {
         resetProjectLifecycle() const;
 
         [[nodiscard]] const std::filesystem::path& configDir() const noexcept { return config_dir_; }
+        /** Unified user-storage root: `configDir().parent_path()`. */
+        [[nodiscard]] std::filesystem::path rootDir() const;
         [[nodiscard]] const std::filesystem::path& dataDir() const noexcept { return data_dir_; }
         [[nodiscard]] const std::filesystem::path& cacheDir() const noexcept { return cache_dir_; }
         [[nodiscard]] const std::filesystem::path& logDir() const noexcept { return log_dir_; }
@@ -89,7 +91,7 @@ namespace lfs::core {
         [[nodiscard]] std::filesystem::path presetDir() const;
         [[nodiscard]] std::filesystem::path assetLibraryDir() const;
         [[nodiscard]] std::filesystem::path backupDir() const;
-        /** App-private crash-recovery files: `<root>/recovery`. */
+        /** Legacy untitled crash files: `<root>/recovery`. Kept for startup scan. */
         [[nodiscard]] std::filesystem::path recoveryDir() const;
         [[nodiscard]] std::filesystem::path mcpLogDir() const;
         /** Append one complete JSONL record to an MCP session log below logs/mcp. */

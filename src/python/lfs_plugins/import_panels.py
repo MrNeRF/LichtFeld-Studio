@@ -144,7 +144,7 @@ from .asset_manager_integration import (
 from .asset_index import resolve_asset_manager_storage_path
 from .types import Panel
 from .rml_keys import KI_ESCAPE, KI_RETURN
-from .training_confirm import _confirm_stop_training_then
+from .training_confirm import confirm_discard_work_then
 from .ui import RuntimeState
 from .url_downloader import (
     URLDownloadError,
@@ -271,48 +271,6 @@ def _load_watch_dirs_dialog_state(folder_id: str) -> bool:
         _index_library_path(index),
     )
     return True
-
-
-def _project_is_dirty() -> bool:
-    probe = getattr(lf, "project_is_dirty", None)
-    if not callable(probe):
-        return False
-    try:
-        return bool(probe())
-    except Exception:
-        return False
-
-
-def _save_current_project_like_close() -> bool:
-    save = getattr(lf, "project_save", None)
-    if not callable(save):
-        return False
-    try:
-        result = save(True, False)
-    except Exception as exc:
-        lf.log.error(f"Failed to save current project: {exc}")
-        return False
-    return result is not False
-
-
-def _confirm_save_before_dataset_load(on_save, on_discard) -> None:
-    tr = lf.ui.tr
-    save_label = tr("load_dataset_popup.save_and_load")
-    discard_label = tr("load_dataset_popup.load_without_saving")
-    cancel_label = tr("common.cancel")
-
-    def _on_result(button):
-        if button == save_label:
-            on_save()
-        elif button == discard_label:
-            on_discard()
-
-    lf.ui.confirm_dialog(
-        tr("load_dataset_popup.save_title"),
-        tr("load_dataset_popup.save_message"),
-        [save_label, discard_label, cancel_label],
-        _on_result,
-    )
 
 
 def _tr(key: str) -> str:
@@ -1256,26 +1214,16 @@ class DatasetImportPanel(_ImportDialogPanel):
                 "max_width": max_width,
                 "apply_auto_crop": apply_auto_crop,
                 "min_track_length": min_track_length,
+                "discard_changes": True,
             }
             if stop_training:
                 load_kwargs["stop_training"] = True
             lf.load_file(**load_kwargs)
 
-        def _save_then_commit(stop_training: bool) -> None:
-            if not _save_current_project_like_close():
-                return
-            _commit(stop_training)
-
-        def _after_stop(stop_training: bool) -> None:
-            if not _project_is_dirty():
-                _commit(stop_training)
-                return
-            _confirm_save_before_dataset_load(
-                lambda: _save_then_commit(stop_training),
-                lambda: _commit(stop_training),
-            )
-
-        _confirm_stop_training_then(_after_stop)
+        confirm_discard_work_then(
+            lf.ui.tr("load_dataset_popup.save_title"),
+            _commit,
+        )
 
     def _on_do_cancel(self, _handle=None, _ev=None, _args=None):
         self._clear_scene_on_load = False
@@ -1432,18 +1380,29 @@ class ResumeCheckpointPanel(_ImportDialogPanel):
         if not self._dataset_valid or not self._checkpoint_path:
             return
 
-        lf.ui.set_panel_enabled(self.id, False)
-        register_catalog_asset_path(self._dataset_path, is_dataset=True)
-        register_catalog_asset_path(
-            self._checkpoint_path,
-            asset_type="checkpoint",
-            role="training_checkpoint",
-            select=True,
-        )
-        lf.load_checkpoint_for_training(
-            self._checkpoint_path,
-            self._dataset_path,
-            self._output_path,
+        checkpoint_path = self._checkpoint_path
+        dataset_path = self._dataset_path
+        output_path = self._output_path
+
+        def _commit(stop_training: bool) -> None:
+            del stop_training
+            lf.ui.set_panel_enabled(self.id, False)
+            register_catalog_asset_path(dataset_path, is_dataset=True)
+            register_catalog_asset_path(
+                checkpoint_path,
+                asset_type="checkpoint",
+                role="training_checkpoint",
+                select=True,
+            )
+            lf.load_checkpoint_for_training(
+                checkpoint_path,
+                dataset_path,
+                output_path,
+            )
+
+        confirm_discard_work_then(
+            lf.ui.tr("resume_checkpoint_popup.title"),
+            _commit,
         )
 
     def _on_do_cancel(self, _handle=None, _ev=None, _args=None):

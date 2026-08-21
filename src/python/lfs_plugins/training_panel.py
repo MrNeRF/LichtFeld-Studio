@@ -12,7 +12,7 @@ from . import rml_widgets as w
 from . import property_view
 from .property_view import parse_number as _parse_num
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
-from .training_confirm import _project_has_path
+from .training_confirm import confirm_discard_work_then, _project_has_path
 from .types import Panel
 from .ui import RuntimeState, PanelStateBinding
 
@@ -2146,7 +2146,7 @@ class TrainingPanel(Panel):
         elif action == "stop":
             lf.stop_training()
         elif action == "reset":
-            lf.reset_training()
+            self._action_reset()
         elif action == "clear":
             lf.new_project()
         elif action == "switch_edit":
@@ -2195,6 +2195,13 @@ class TrainingPanel(Panel):
                 if params.enable_eval:
                     self._sync_eval_steps_with_save_steps(params)
                 self._refresh_save_steps_model(params)
+
+    def _action_reset(self):
+        confirm_discard_work_then(
+            tr("training_panel.reset"),
+            lambda stop_training: lf.reset_training(),
+            ask_stop_training=False,
+        )
 
     def _action_start(self):
         params = lf.optimization_params()

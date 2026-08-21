@@ -1343,7 +1343,9 @@ NB_MODULE(lichtfeld, m) {
            std::optional<int> max_width,
            bool apply_auto_crop,
            std::optional<int> min_track_length,
-           bool stop_training) {
+           bool stop_training,
+           bool discard_changes,
+           bool replace) {
             nb::gil_scoped_release release;
             lfs::core::events::cmd::LoadFile{
                 .path = python_utf8_path(path),
@@ -1354,7 +1356,9 @@ NB_MODULE(lichtfeld, m) {
                 .max_width = max_width,
                 .min_track_length = min_track_length,
                 .apply_auto_crop = apply_auto_crop,
-                .stop_training = stop_training}
+                .stop_training = stop_training,
+                .discard_changes = discard_changes,
+                .replace = replace}
                 .emit();
         },
         nb::arg("path"), nb::arg("is_dataset") = false,
@@ -1364,6 +1368,8 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("apply_auto_crop") = false,
         nb::arg("min_track_length") = nb::none(),
         nb::arg("stop_training") = false,
+        nb::arg("discard_changes") = false,
+        nb::arg("replace") = false,
         "Load a file (PLY, checkpoint) or dataset into the scene.");
 
     m.def(

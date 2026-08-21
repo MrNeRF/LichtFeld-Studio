@@ -68,6 +68,10 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
     class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
+    class VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
+    class VisualizerImplResetTest_StartupScansLegacyRecoveryDirectory_Test;
+    class VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
+    class VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
 
     namespace gui {
         class NativeScenePanel;
@@ -221,6 +225,10 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupScansLegacyRecoveryDirectory_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
             [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;

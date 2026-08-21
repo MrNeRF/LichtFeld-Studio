@@ -99,6 +99,22 @@ body.floating-panel {
     margin-left: auto;
 }
 
+.preferences-path-control {
+    display: flex;
+    flex: 1 1 360dp;
+    align-items: center;
+    gap: 6dp;
+    margin-left: auto;
+    min-width: 220dp;
+}
+
+.preferences-path-input {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 160dp;
+    margin-left: 0;
+}
+
 .preferences-port-input {
     flex: 1 1 auto;
     width: auto;

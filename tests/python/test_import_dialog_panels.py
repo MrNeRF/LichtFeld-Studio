@@ -47,12 +47,16 @@ def _install_lf_stub(monkeypatch, tmp_path):
         log_warnings=[],
         load_file_calls=[],
         load_checkpoint_calls=[],
+        new_project_calls=[],
         clear_scene_calls=0,
         confirm_dialogs=[],
         project_save_calls=[],
+        project_save_as_calls=[],
         dirty=False,
+        has_path=False,
         training_active=False,
         project_save_result=True,
+        project_save_as_result=True,
         dataset_browse_path=str(tmp_path / "dataset_browse"),
         output_browse_path=str(tmp_path / "output_browse"),
         init_browse_path=str(tmp_path / "seed.ply"),
@@ -75,6 +79,8 @@ def _install_lf_stub(monkeypatch, tmp_path):
         max_width=None,
         min_track_length=None,
         stop_training=False,
+        discard_changes=False,
+        replace=False,
         **_kwargs,
     ):
         recorded = {
@@ -88,6 +94,10 @@ def _install_lf_stub(monkeypatch, tmp_path):
         }
         if stop_training:
             recorded["stop_training"] = True
+        if discard_changes:
+            recorded["discard_changes"] = True
+        if replace:
+            recorded["replace"] = True
         state.load_file_calls.append(recorded)
 
     def _confirm_dialog(title, message, buttons, callback=None):
@@ -96,6 +106,10 @@ def _install_lf_stub(monkeypatch, tmp_path):
     def _project_save(*args, **kwargs):
         state.project_save_calls.append((args, kwargs))
         return state.project_save_result
+
+    def _project_save_as(path="", wait=False):
+        state.project_save_as_calls.append((path, wait))
+        return state.project_save_as_result
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.log = SimpleNamespace(
@@ -118,14 +132,17 @@ def _install_lf_stub(monkeypatch, tmp_path):
     lf_stub.is_dataset_path = lambda path: str(path) in state.dataset_infos
     lf_stub.optimization_params = lambda: None
     lf_stub.project_is_dirty = lambda: state.dirty
+    lf_stub.project_has_path = lambda: state.has_path
     lf_stub.is_training_active = lambda: state.training_active
     lf_stub.project_save = _project_save
+    lf_stub.project_save_as = _project_save_as
     lf_stub.clear_scene = lambda: setattr(
         state,
         "clear_scene_calls",
         state.clear_scene_calls + 1,
     )
     lf_stub.load_file = _load_file
+    lf_stub.new_project = lambda *args, **kwargs: state.new_project_calls.append((args, kwargs))
     lf_stub.read_checkpoint_header = lambda _path: state.checkpoint_header
     lf_stub.read_checkpoint_params = lambda _path: state.checkpoint_params
     lf_stub.load_checkpoint_for_training = lambda checkpoint_path, dataset_path, output_path: state.load_checkpoint_calls.append(
@@ -262,8 +279,11 @@ def test_dataset_import_panel_show_and_load(import_dialog_module):
             "centralize_dataset": "off",
             "max_width": 3840,
             "min_track_length": 0,
+            "discard_changes": True,
         }
     ]
+    # Session reset is owned by the C++ LoadFile consumer (after this emit).
+    assert state.new_project_calls == []
     assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", False)
     assert state.confirm_dialogs == []
 
@@ -282,10 +302,10 @@ def test_dataset_import_dirty_project_prompts_before_load(import_dialog_module):
     assert len(state.confirm_dialogs) == 1
     title, message, buttons, callback = state.confirm_dialogs[0]
     assert title == "load_dataset_popup.save_title"
-    assert message == "load_dataset_popup.save_message"
+    assert message == "exit_popup.unsaved_warning"
     assert buttons == [
-        "load_dataset_popup.save_and_load",
-        "load_dataset_popup.load_without_saving",
+        "menu.file.save_project_as",
+        "unsaved_work.continue_without_saving",
         "common.cancel",
     ]
     assert callback is not None
@@ -296,16 +316,18 @@ def test_dataset_import_save_and_load_saves_then_loads(import_dialog_module):
     panel = module.DatasetImportPanel()
     panel._handle = _HandleStub()
     state.dirty = True
+    state.has_path = True
 
     assert panel.show(str(state.dataset_info.base_path)) is True
     panel._on_do_load()
     _title, _message, _buttons, callback = state.confirm_dialogs[0]
-    callback("load_dataset_popup.save_and_load")
+    callback("common.save")
 
-    assert state.project_save_calls == [((True, False), {})]
+    assert state.project_save_calls == [((), {"wait": True})]
     assert len(state.load_file_calls) == 1
     assert state.load_file_calls[0]["path"] == str(state.dataset_info.base_path)
     assert state.load_file_calls[0]["is_dataset"] is True
+    assert state.load_file_calls[0]["discard_changes"] is True
     assert "stop_training" not in state.load_file_calls[0]
     assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", False)
 
@@ -319,11 +341,13 @@ def test_dataset_import_load_without_saving_skips_save(import_dialog_module):
     assert panel.show(str(state.dataset_info.base_path)) is True
     panel._on_do_load()
     _title, _message, _buttons, callback = state.confirm_dialogs[0]
-    callback("load_dataset_popup.load_without_saving")
+    callback("unsaved_work.continue_without_saving")
 
     assert state.project_save_calls == []
+    assert state.new_project_calls == []
     assert len(state.load_file_calls) == 1
     assert state.load_file_calls[0]["path"] == str(state.dataset_info.base_path)
+    assert state.load_file_calls[0]["discard_changes"] is True
     assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", False)
 
 
@@ -348,14 +372,15 @@ def test_dataset_import_failed_save_cancels_load(import_dialog_module):
     panel = module.DatasetImportPanel()
     panel._handle = _HandleStub()
     state.dirty = True
+    state.has_path = True
     state.project_save_result = False
 
     assert panel.show(str(state.dataset_info.base_path)) is True
     panel._on_do_load()
     _title, _message, _buttons, callback = state.confirm_dialogs[0]
-    callback("load_dataset_popup.save_and_load")
+    callback("common.save")
 
-    assert state.project_save_calls == [((True, False), {})]
+    assert state.project_save_calls == [((), {"wait": True})]
     assert state.load_file_calls == []
     assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", True)
 
@@ -372,23 +397,28 @@ def test_dataset_import_training_prompts_stop_before_save(import_dialog_module):
 
     assert state.load_file_calls == []
     assert len(state.confirm_dialogs) == 1
-    title, message, buttons, stop_callback = state.confirm_dialogs[0]
-    assert title == "project_switch.stop_training_title"
-    assert message == "project_switch.stop_training_message"
-    assert buttons == ["common.yes", "common.no"]
+    title, message, buttons, dirty_callback = state.confirm_dialogs[0]
+    assert title == "load_dataset_popup.save_title"
+    assert message == "exit_popup.unsaved_warning"
+    assert buttons == [
+        "menu.file.save_project_as",
+        "unsaved_work.continue_without_saving",
+        "common.cancel",
+    ]
 
-    stop_callback("common.no")
+    dirty_callback("common.cancel")
     assert state.load_file_calls == []
     assert state.project_save_calls == []
     assert len(state.confirm_dialogs) == 1
 
-    stop_callback("common.yes")
+    dirty_callback("unsaved_work.continue_without_saving")
     assert len(state.confirm_dialogs) == 2
-    save_title, _save_message, save_buttons, save_callback = state.confirm_dialogs[1]
-    assert save_title == "load_dataset_popup.save_title"
-    assert save_buttons[0] == "load_dataset_popup.save_and_load"
+    stop_title, stop_message, stop_buttons, stop_callback = state.confirm_dialogs[1]
+    assert stop_title == "project_switch.stop_training_title"
+    assert stop_message == "project_switch.stop_training_message"
+    assert stop_buttons == ["common.yes", "common.no"]
 
-    save_callback("load_dataset_popup.load_without_saving")
+    stop_callback("common.yes")
     assert state.project_save_calls == []
     assert state.load_file_calls == [
         {
@@ -399,9 +429,11 @@ def test_dataset_import_training_prompts_stop_before_save(import_dialog_module):
             "centralize_dataset": "off",
             "max_width": 3840,
             "min_track_length": 0,
+            "discard_changes": True,
             "stop_training": True,
         }
     ]
+    assert state.new_project_calls == []
 
 
 def test_dataset_import_load_file_direct_skips_prompt(import_dialog_module):
@@ -568,6 +600,7 @@ def test_dataset_import_panel_preserves_unicode_paths(import_dialog_module):
             "centralize_dataset": "off",
             "max_width": 3840,
             "min_track_length": 0,
+            "discard_changes": True,
         }
     ]
     assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", False)
@@ -604,6 +637,7 @@ def test_dataset_import_panel_loads_updated_dataset_path(import_dialog_module, t
             "centralize_dataset": "off",
             "max_width": 3840,
             "min_track_length": 0,
+            "discard_changes": True,
         }
     ]
 
@@ -828,6 +862,7 @@ def test_dataset_import_panel_clears_init_and_sidecar_on_dataset_change(import_d
             "centralize_dataset": "off",
             "max_width": 3840,
             "min_track_length": 0,
+            "discard_changes": True,
         }
     ]
 
@@ -860,6 +895,38 @@ def test_resume_checkpoint_panel_validates_dataset_and_loads(import_dialog_modul
             "checkpoint_path": state.checkpoint_path,
             "dataset_path": valid_path,
             "output_path": state.output_browse_path,
+        }
+    ]
+    assert state.panel_enabled_calls[-1] == ("lfs.resume_checkpoint", False)
+
+
+def test_resume_checkpoint_panel_prompts_when_dirty(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.ResumeCheckpointPanel()
+    panel._handle = _HandleStub()
+    state.dirty = True
+
+    assert panel.show(state.checkpoint_path) is True
+    panel._on_do_load()
+
+    assert state.load_checkpoint_calls == []
+    assert state.panel_enabled_calls[-1] == ("lfs.resume_checkpoint", True)
+    assert len(state.confirm_dialogs) == 1
+    title, message, buttons, callback = state.confirm_dialogs[0]
+    assert title == "resume_checkpoint_popup.title"
+    assert message == "exit_popup.unsaved_warning"
+    assert buttons == [
+        "menu.file.save_project_as",
+        "unsaved_work.continue_without_saving",
+        "common.cancel",
+    ]
+
+    callback("unsaved_work.continue_without_saving")
+    assert state.load_checkpoint_calls == [
+        {
+            "checkpoint_path": state.checkpoint_path,
+            "dataset_path": str(state.dataset_info.base_path),
+            "output_path": str(Path(state.dataset_info.base_path) / "output"),
         }
     ]
     assert state.panel_enabled_calls[-1] == ("lfs.resume_checkpoint", False)
@@ -947,6 +1014,7 @@ def test_dataset_import_panel_binds_enter_and_escape(import_dialog_module):
             "centralize_dataset": "off",
             "max_width": 3840,
             "min_track_length": 0,
+            "discard_changes": True,
         }
     ]
     assert enter_event.propagation_stopped is True

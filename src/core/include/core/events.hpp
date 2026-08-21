@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 class Viewport;
 
@@ -58,7 +59,7 @@ namespace lfs::core {
             EVENT(ResumeTraining, );
             EVENT(StopTraining, );
             EVENT(ResetTraining, );
-            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false; bool stop_training = false;);
+            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false; bool stop_training = false; bool discard_changes = false; bool replace = false;);
             EVENT(LoadCheckpointForTraining, std::filesystem::path checkpoint_path; std::filesystem::path dataset_path; std::filesystem::path output_path;);
             EVENT(ImportColmapCameras, std::filesystem::path sparse_path;);
             EVENT(LoadConfigFile, std::filesystem::path path;);
@@ -71,6 +72,7 @@ namespace lfs::core {
             EVENT(ProjectOpen, std::filesystem::path path; bool discard_changes = false; bool stop_training = false;);
             EVENT(ProjectCompact, );
             EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path;);
+            EVENT(ShowLoadFileConfirmation, std::vector<std::filesystem::path> paths; bool is_dataset = false; bool replace = false;);
             EVENT(ShowStopTrainingConfirmation, bool new_project = false; std::filesystem::path path; bool discard_changes = false;);
             EVENT(SetReopenLastProject, bool enabled;);
             EVENT(SetAutoSaveOnClose, bool enabled;);
@@ -172,7 +174,7 @@ namespace lfs::core {
             EVENT(SetSelectionSubMode, int selection_mode;);
             EVENT(ExecuteMirror, int axis;); // 0=X, 1=Y, 2=Z
             EVENT(CancelActiveOperator, );   // Cancel and revert current operator
-        } // namespace tools
+        }                                    // namespace tools
 
         // ============================================================================
         // State - Notifications about what has happened (broadcasts)
@@ -328,8 +330,8 @@ namespace lfs::core {
             EVENT(WindowFocusLost, );
             EVENT(DisplayScaleChanged, float scale;);
             EVENT(UiScaleChangeRequested, float scale;); // 0 = auto (from OS)
-        } // namespace internal
-    } // namespace events
+        }                                                // namespace internal
+    }                                                    // namespace events
 
     // ============================================================================
     // Convenience functions

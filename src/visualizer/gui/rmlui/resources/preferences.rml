@@ -28,6 +28,24 @@
             </select>
           </div>
         </div>
+        <div class="section-header text-accent" data-class-is-expanded="working_directory_expanded" data-event-click="toggle_section('working_directory')">
+          <span class="section-arrow text-accent" data-class-is-expanded="working_directory_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.working_directory</span>
+        </div>
+        <div class="section-content" data-if="working_directory_expanded">
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.working_directory</span>
+            <div class="preferences-path-control">
+              <input class="preferences-select preferences-path-input" type="text" data-value="working_directory"
+                     data-event-change="working_directory_change(ev.value)" />
+              <button class="btn btn--primary" data-event-click="confirm_working_directory">@tr:common.ok</button>
+              <button class="btn btn--secondary" data-event-click="browse_working_directory">@tr:common.browse</button>
+              <button class="btn btn--secondary" data-event-click="use_default_working_directory">@tr:preferences.working_directory_use_default</button>
+            </div>
+          </div>
+          <span class="preferences-description">{{ working_directory_hint }}</span>
+          <span class="preferences-description">@tr:preferences.working_directory_applies_next_session</span>
+        </div>
       </div>
 
       <div class="preferences-section" data-if="show_appearance">

@@ -34,6 +34,7 @@
 #include "training/training_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
+#include "visualizer/visualizer.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cctype>
@@ -2362,13 +2363,26 @@ namespace lfs::vis {
         }
 
         // Load splat and mesh files supported by the generic loader path.
-        for (const auto& splat : splat_files) {
-            auto event = cmd::LoadFile{};
-            event.path = splat;
-            event.is_dataset = false;
-            event.emit();
-            LOG_INFO("Loading {} via drag-and-drop: {}",
-                     lfs::core::path_to_utf8(splat.extension()), lfs::core::path_to_utf8(splat.filename()));
+        if (!splat_files.empty() && viewer_ &&
+            viewer_->loadFileWipeWouldNeedConfirmation(
+                false, false, false)) {
+            cmd::ShowLoadFileConfirmation{
+                .paths = splat_files,
+                .is_dataset = false,
+                .replace = false}
+                .emit();
+            LOG_INFO(
+                "Requesting confirmation before loading {} dropped splat/mesh file(s)",
+                splat_files.size());
+        } else {
+            for (const auto& splat : splat_files) {
+                auto event = cmd::LoadFile{};
+                event.path = splat;
+                event.is_dataset = false;
+                event.emit();
+                LOG_INFO("Loading {} via drag-and-drop: {}",
+                         lfs::core::path_to_utf8(splat.extension()), lfs::core::path_to_utf8(splat.filename()));
+            }
         }
 
         if (dataset_path) {

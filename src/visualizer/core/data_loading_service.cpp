@@ -10,6 +10,7 @@
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer_impl.hpp"
 #include <algorithm>
 #include <chrono>
 #include <stdexcept>
@@ -44,7 +45,7 @@ namespace lfs::vis {
 
         // Listen for file load commands
         cmd::LoadFile::when([this](const auto& cmd) {
-            handleLoadFileCommand(cmd.is_dataset, cmd.path);
+            handleLoadFileCommand(cmd);
         });
 
         // Listen for checkpoint load for training commands
@@ -53,21 +54,36 @@ namespace lfs::vis {
         });
     }
 
-    void DataLoadingService::handleLoadFileCommand(const bool is_dataset, const std::filesystem::path& path) {
-        if (is_dataset) {
+    void DataLoadingService::handleLoadFileCommand(
+        const lfs::core::events::cmd::LoadFile& cmd) {
+        if (viewer_ && viewer_->preflightLoadFileWipe(cmd)) {
+            return;
+        }
+        if (cmd.is_dataset) {
             return; // Handled async by GuiManager
         }
-
-        // Checkpoint files get special handling - redirect to training resume flow
-        if (isCheckpointFile(path)) {
-            handleLoadCheckpointForTrainingCommand(path, {}, {});
+        if (viewer_ && viewer_->deferLoadFileForTraining(cmd)) {
             return;
         }
 
-        if (scene_manager_->getContentType() == SceneManager::ContentType::Dataset) {
+        // Checkpoint files get special handling - redirect to training resume flow
+        if (isCheckpointFile(cmd.path)) {
+            handleLoadCheckpointForTrainingCommand(cmd.path, {}, {});
+            return;
+        }
+
+        const bool replace_scene =
+            viewer_ ? viewer_->loadFileWouldReplaceScene(false, cmd.replace)
+                    : (cmd.replace ||
+                       scene_manager_->getContentType() ==
+                           SceneManager::ContentType::Dataset);
+        if (replace_scene) {
+            if (viewer_ && !viewer_->resetUntitledSessionForReplaceLoad()) {
+                return;
+            }
             if (!scene_manager_->clear()) {
                 lfs::core::events::state::FileDropFailed{
-                    .files = {lfs::core::path_to_utf8(path)},
+                    .files = {lfs::core::path_to_utf8(cmd.path)},
                     .error = LOC("file_drop.blocked_during_training")}
                     .emit();
                 return;
@@ -75,18 +91,19 @@ namespace lfs::vis {
         }
 
         try {
-            if (scene_manager_->getContentType() == SceneManager::ContentType::SplatFiles) {
-                const std::string name = lfs::core::path_to_utf8(path.stem());
-                scene_manager_->addSplatFile(path, name);
+            if (!cmd.replace &&
+                scene_manager_->getContentType() == SceneManager::ContentType::SplatFiles) {
+                const std::string name = lfs::core::path_to_utf8(cmd.path.stem());
+                scene_manager_->addSplatFile(cmd.path, name);
                 return;
             }
 
             // First import into an empty scene must take the full load path so SceneLoaded,
             // application-scene binding, and UI state all refresh together.
-            scene_manager_->loadSplatFile(path);
+            scene_manager_->loadSplatFile(cmd.path);
         } catch (const std::exception& e) {
-            LOG_ERROR("Failed to load {}: {}", lfs::core::path_to_utf8(path), e.what());
-            lfs::core::events::state::SplatFileLoadFailed{.path = path, .error = e.what()}.emit();
+            LOG_ERROR("Failed to load {}: {}", lfs::core::path_to_utf8(cmd.path), e.what());
+            lfs::core::events::state::SplatFileLoadFailed{.path = cmd.path, .error = e.what()}.emit();
         }
     }
 
@@ -95,6 +112,9 @@ namespace lfs::vis {
         const std::filesystem::path& dataset_path,
         const std::filesystem::path& output_path) {
         LOG_INFO("Loading checkpoint for training: {}", lfs::core::path_to_utf8(checkpoint_path));
+        if (viewer_ && !viewer_->resetUntitledSessionForReplaceLoad()) {
+            return;
+        }
         if (auto result = loadCheckpointForTraining(checkpoint_path, dataset_path, output_path); !result) {
             LOG_ERROR("Failed to load checkpoint for training: {}", result.error());
             lfs::core::events::state::SplatFileLoadFailed{

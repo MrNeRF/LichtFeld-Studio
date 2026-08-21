@@ -788,6 +788,11 @@
     "file_associations": "文件关联",
     "file_associations_description": "为每种文件类型注册或取消 LichtFeld Studio 作为打开程序。",
     "general": "常规",
+    "working_directory": "工作文件夹",
+    "working_directory_hint": "临时项目：{path}",
+    "working_directory_use_default": "使用默认值",
+    "working_directory_applies_next_session": "应用于新会话",
+    "working_directory_invalid": "无法将此文件夹用作工作文件夹。",
     "appearance": "外观",
     "scene_rendering": "场景渲染",
     "scene_reconstruction": "场景重建",
@@ -1249,6 +1254,10 @@
   "project_switch": {
     "stop_training_title": "停止训练？",
     "stop_training_message": "切换项目前必须停止训练。是否停止当前会话？"
+  },
+  "unsaved_work": {
+    "title": "未保存的更改",
+    "continue_without_saving": "不保存并继续"
   },
   "load_dataset_popup": {
     "title": "加载数据集",
